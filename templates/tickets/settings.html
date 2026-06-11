@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Configuracoes - Night Owl Desk{% endblock %}
+{% block body_class %}page-tickets{% endblock %}
+
+{% block content %}
+<section class="desk-shell">
+    <header class="desk-hero page-header">
+        <div class="page-header-icon"><i data-lucide="settings"></i></div>
+        <div>
+            <p class="desk-kicker">Night Owl Desk / Configuracoes</p>
+            <h1 class="page-title">Configuracoes futuras</h1>
+            <p class="page-subtitle">Mapa visual das proximas areas de administracao do modulo de chamados.</p>
+        </div>
+    </header>
+
+    {% include "tickets/_desk_nav.html" %}
+
+    <section class="desk-settings-grid">
+        {% for card in settings_cards %}
+            <article class="desk-panel desk-setting-card">
+                <div class="desk-setting-icon"><i data-lucide="{{ card.icon }}"></i></div>
+                <h2>{{ card.title }}</h2>
+                <p>{{ card.description }}</p>
+                <span class="desk-badge neutral">Futuro</span>
+            </article>
+        {% endfor %}
+    </section>
+
+    <section class="desk-preview-callout">
+        <i data-lucide="map"></i>
+        <div>
+            <strong>Roadmap do Desk</strong>
+            <span>Esta tela ainda e apenas preview. SLA real, e-mail, AD, popup do agente e automacoes ficam para fases posteriores.</span>
+        </div>
+    </section>
+</section>
+{% endblock %}

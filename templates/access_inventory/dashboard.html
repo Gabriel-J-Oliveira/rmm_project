@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Access Inventory{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Acessos</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+{% include "access_inventory/_header.html" with title="Inventario de acessos" subtitle="Usuarios, grupos, file servers, shares, pastas e ACLs importados por JSON." icon="folder-key" %}
+
+<section class="metric-grid endpoint-metrics">
+    <article class="metric-card"><span class="metric-label">Usuarios AD</span><strong class="metric-value">{{ user_count }}</strong></article>
+    <article class="metric-card"><span class="metric-label">Usuarios ativos</span><strong class="metric-value status-text-online">{{ enabled_user_count }}</strong></article>
+    <article class="metric-card"><span class="metric-label">Grupos AD</span><strong class="metric-value">{{ group_count }}</strong></article>
+    <article class="metric-card"><span class="metric-label">File servers</span><strong class="metric-value">{{ file_server_count }}</strong></article>
+    <article class="metric-card"><span class="metric-label">Pastas</span><strong class="metric-value">{{ folder_count }}</strong></article>
+    <article class="metric-card"><span class="metric-label">ACLs explicitas</span><strong class="metric-value status-text-warning">{{ explicit_acl_count }}</strong></article>
+</section>
+
+<section class="dashboard-grid">
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="users"></i></span>Consultas principais</h2>
+                <p>Atalhos para responder as primeiras perguntas de acesso.</p>
+            </div>
+        </div>
+        <div class="endpoint-alert-list">
+            <a class="endpoint-alert-item" href="{% url 'access_inventory:user-list' %}"><i data-lucide="user"></i><div><strong>Usuarios AD</strong><p>Grupos diretos e dados basicos.</p></div></a>
+            <a class="endpoint-alert-item" href="{% url 'access_inventory:group-list' %}"><i data-lucide="users"></i><div><strong>Grupos AD</strong><p>Membros e ACLs vinculadas.</p></div></a>
+            <a class="endpoint-alert-item" href="{% url 'access_inventory:file-server-list' %}"><i data-lucide="server"></i><div><strong>File servers</strong><p>Shares e pastas relacionadas.</p></div></a>
+        </div>
+    </article>
+
+    <article class="panel">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="shield-check"></i></span>ACLs recentes</h2>
+                <p>Ultimas entradas importadas ou atualizadas.</p>
+            </div>
+        </div>
+        <div class="endpoint-alert-list">
+            {% for acl in recent_acl_entries %}
+            <article class="endpoint-alert-item">
+                <span class="severity-badge severity-{% if acl.access_type == 'deny' %}critical{% else %}info{% endif %}">{{ acl.get_access_type_display }}</span>
+                <div>
+                    <strong>{{ acl.identity_name }}</strong>
+                    <p>{{ acl.rights }} em <a class="panel-link inline" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a></p>
+                    <small>{% if acl.inherited %}Herdado{% else %}Explicito{% endif %} &middot; {{ acl.folder.share.file_server.name }}</small>
+                </div>
+            </article>
+            {% empty %}
+            <div class="empty-state padded">Nenhuma ACL importada ainda.</div>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+{% endblock %}

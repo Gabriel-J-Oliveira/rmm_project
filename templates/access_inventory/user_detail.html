@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | {{ user.sam_account_name }}{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:user-list' %}">Usuarios</a><i data-lucide="chevron-right"></i><strong>{{ user.sam_account_name }}</strong></nav>
+{% endblock %}
+
+{% block content %}
+{% include "access_inventory/_header.html" with title=user.sam_account_name subtitle=user.display_name icon="user-check" %}
+<section class="detail-summary-grid">
+    <article class="summary-card"><span>SID</span><strong class="mono">{{ user.sid }}</strong></article>
+    <article class="summary-card"><span>UPN</span><strong>{{ user.user_principal_name|default:"--" }}</strong></article>
+    <article class="summary-card"><span>E-mail</span><strong>{{ user.email|default:"--" }}</strong></article>
+    <article class="summary-card"><span>OU</span><strong>{{ user.ou|default:"--" }}</strong></article>
+    <article class="summary-card"><span>Status</span><strong>{% if user.enabled %}Ativo{% else %}Desabilitado{% endif %}</strong></article>
+</section>
+<section class="panel">
+    <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="users"></i></span>Grupos diretos</h2><p>TODO: resolver e exibir grupos herdados/aninhados.</p></div></div>
+    <div class="endpoint-alert-list">
+        {% for membership in direct_memberships %}
+        <a class="endpoint-alert-item" href="{% url 'access_inventory:group-detail' membership.parent_group.id %}">
+            <i data-lucide="users"></i><div><strong>{{ membership.parent_group.name }}</strong><p class="mono">{{ membership.parent_group.sid }}</p></div>
+        </a>
+        {% empty %}
+        <div class="empty-state padded">Nenhum grupo direto importado para este usuario.</div>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

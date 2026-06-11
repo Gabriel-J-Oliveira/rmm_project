@@ -1,0 +1,59 @@
+{
+  "file_servers": [
+    {
+      "name": "FS01",
+      "fqdn": "fs01.example.local",
+      "description": "Servidor de arquivos principal"
+    }
+  ],
+  "shares": [
+    {
+      "file_server": "FS01",
+      "name": "Dados",
+      "unc_path": "\\\\FS01\\Dados",
+      "description": "Share de dados corporativos"
+    }
+  ],
+  "folders": [
+    {
+      "share_unc_path": "\\\\FS01\\Dados",
+      "path": "Financeiro",
+      "parent_path": "",
+      "inheritance_enabled": true
+    },
+    {
+      "share_unc_path": "\\\\FS01\\Dados",
+      "path": "Financeiro\\Relatorios",
+      "parent_path": "Financeiro",
+      "inheritance_enabled": true
+    }
+  ],
+  "acl_entries": [
+    {
+      "share_unc_path": "\\\\FS01\\Dados",
+      "folder_path": "Financeiro",
+      "identity_sid": "S-1-5-21-1000-1000-1000-2102",
+      "identity_name": "EXAMPLE\\GG_Financeiro_Leitura",
+      "identity_type": "group",
+      "rights": "ReadAndExecute, Synchronize",
+      "access_type": "allow",
+      "inherited": false,
+      "inheritance_flags": "ContainerInherit,ObjectInherit",
+      "propagation_flags": "None",
+      "source": "sample"
+    },
+    {
+      "share_unc_path": "\\\\FS01\\Dados",
+      "folder_path": "Financeiro\\Relatorios",
+      "identity_sid": "S-1-5-21-1000-1000-1000-1101",
+      "identity_name": "EXAMPLE\\j.silva",
+      "identity_type": "user",
+      "rights": "Modify, Synchronize",
+      "access_type": "allow",
+      "inherited": true,
+      "inheritance_flags": "ContainerInherit,ObjectInherit",
+      "propagation_flags": "None",
+      "source": "sample"
+    }
+  ]
+}

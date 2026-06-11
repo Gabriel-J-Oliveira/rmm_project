@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Políticas de Software | Night Owl{% endblock %}
+{% block body_class %}page-software-policies{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><span>Softwares</span><i data-lucide="chevron-right"></i><strong>Políticas</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="hero software-policy-hero page-header">
+    <div>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="shield-check"></i></span>Políticas de Software</h1>
+        <p class="page-subtitle">Defina regras para softwares permitidos, proibidos, obrigatórios ou restritos no parque.</p>
+    </div>
+    <div class="page-actions policy-header-actions">
+        <a class="refresh-button" href="{% url 'software-policies' %}"><i data-lucide="refresh-cw"></i>Recarregar</a>
+        <button class="primary-action" type="button" data-open-policy-create><i data-lucide="plus"></i>Nova política</button>
+    </div>
+</section>
+
+<section class="metric-grid software-policy-metrics">
+    <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield-check"></i></span><span class="metric-label">Políticas ativas</span><strong class="metric-value">{{ summary.active }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="pause-circle"></i></span><span class="metric-label">Políticas inativas</span><strong class="metric-value">{{ summary.inactive }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="eye"></i></span><span class="metric-label">Monitoramento</span><strong class="metric-value">{{ summary.monitoring }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="list-plus"></i></span><span class="metric-label">Exceções ativas</span><strong class="metric-value">{{ summary.exceptions }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon warning"><i data-lucide="clock-alert"></i></span><span class="metric-label">Exceções expiradas</span><strong class="metric-value">{{ summary.expired_exceptions }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield"></i></span><span class="metric-label">Total de políticas</span><strong class="metric-value">{{ summary.total }}</strong></article>
+</section>
+
+<section class="panel filter-panel software-policy-filter-panel">
+    <form class="endpoint-filters software-policy-filters" data-policy-filters>
+        <label class="filter-field filter-search">
+            <span><i data-lucide="search"></i>Busca</span>
+            <input type="search" name="q" placeholder="Nome da política ou software">
+        </label>
+        <label class="filter-field">
+            <span>Tipo</span>
+            <select name="type">
+                <option value="">Todos</option>
+                <option value="prohibited">Proibido</option>
+                <option value="required">Obrigatório</option>
+                <option value="restricted">Restrito</option>
+                <option value="observed">Observado</option>
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Severidade</span>
+            <select name="severity">
+                <option value="">Todas</option>
+                <option value="critical">Critical</option>
+                <option value="security">Security</option>
+                <option value="warning">Warning</option>
+                <option value="info">Info</option>
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Status</span>
+            <select name="status">
+                <option value="">Todos</option>
+                <option value="active">Ativa</option>
+                <option value="monitor_only">Monitoramento</option>
+                <option value="inactive">Inativa</option>
+            </select>
+        </label>
+        <label class="policy-check-filter"><input type="checkbox" name="violations">Somente com violações</label>
+        <label class="policy-check-filter"><input type="checkbox" name="exceptions">Somente com exceções</label>
+        <div class="filter-actions">
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <button class="ghost-button" type="reset" data-policy-clear>Limpar</button>
+        </div>
+    </form>
+</section>
+
+<section class="policy-workspace">
+    <div class="policy-list" data-policy-list>
+        {% for policy in policies %}
+        <article class="policy-card {% if not policy.is_active %}policy-card-inactive{% endif %}" data-policy-card data-policy-id="{{ policy.id }}" data-name="{{ policy.name|lower }} {{ policy.software|lower }}" data-type="{{ policy.type }}" data-severity="{{ policy.severity }}" data-status="{{ policy.status }}" data-violations="{{ policy.violations_open }}" data-exceptions="{{ policy.exceptions_active }}">
+            <div class="policy-card-main">
+                <div class="policy-icon type-{{ policy.type }}"><i data-lucide="{% if policy.type == 'prohibited' %}ban{% elif policy.type == 'required' %}package-check{% elif policy.type == 'restricted' %}shield-alert{% else %}eye{% endif %}"></i></div>
+                <div>
+                    <div class="policy-title-row">
+                        <h2>{{ policy.name }}</h2>
+                        <span class="policy-badge type-{{ policy.type }}">{{ policy.type_label }}</span>
+                        <span class="severity-badge severity-{{ policy.severity }}">{{ policy.severity_label }}</span>
+                        <span class="policy-status status-{{ policy.status }}" data-policy-status-badge>{{ policy.status_label }}</span>
+                    </div>
+                    <p>{{ policy.description }}</p>
+                    <div class="policy-meta-grid">
+                        <span><strong>Software</strong>{{ policy.software }}</span>
+                        <span><strong>Correspondência</strong>{{ policy.match_type }}</span>
+                        <span><strong>Escopo</strong>{{ policy.scope }}</span>
+                        <span><strong>Atualizada</strong>{{ policy.updated_at }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="policy-card-side">
+                <div class="policy-counts">
+                    <span><strong>{{ policy.violations_open }}</strong>violações</span>
+                    <span><strong>{{ policy.exceptions_active }}</strong>exceções</span>
+                </div>
+                <div class="policy-actions">
+                    <button type="button" data-open-policy-detail="{{ policy.id }}">Ver detalhes</button>
+                    <button type="button" data-edit-policy="{{ policy.id }}">Editar</button>
+                    <form method="post" action="{% url 'software-policy-toggle-active' policy.id %}" data-policy-toggle-form>
+                        {% csrf_token %}
+                        <button type="submit" data-policy-toggle-button><i data-lucide="{% if policy.is_active %}pause-circle{% else %}play-circle{% endif %}"></i><span>{% if policy.is_active %}Desativar{% else %}Reativar{% endif %}</span></button>
+                    </form>
+                    <form method="post" action="{% url 'software-policy-delete' policy.id %}">
+                        {% csrf_token %}
+                        <button type="submit" data-confirm="Excluir esta política? As exceções vinculadas também serão removidas.">Excluir</button>
+                    </form>
+                    <button type="button" data-open-policy-detail="{{ policy.id }}" data-detail-tab="exceptions">Ver exceções</button>
+                </div>
+            </div>
+        </article>
+        {% empty %}
+        <div class="policy-empty">
+            <i data-lucide="shield-check"></i>
+            <strong>Nenhuma política cadastrada ainda.</strong>
+            <span>Use “Nova política” para criar a primeira regra persistida.</span>
+        </div>
+        {% endfor %}
+        <div class="policy-empty" data-policy-empty hidden>
+            <i data-lucide="check-circle"></i>
+            <strong>Nenhuma política encontrada com os filtros atuais.</strong>
+            <span>Ajuste os filtros ou cadastre uma nova política.</span>
+        </div>
+    </div>
+
+    <aside class="panel policy-side-preview">
+        <div class="panel-header compact-header">
+            <div>
+                <h2><i data-lucide="activity"></i>Prévia operacional</h2>
+                <p>Persistência real ativa. Avaliação automática ficará para a próxima fase.</p>
+            </div>
+        </div>
+        <div class="policy-side-section">
+            <h3>Violações</h3>
+            <div class="side-empty">Motor de avaliação ainda não ativado.</div>
+        </div>
+        <div class="policy-side-section">
+            <h3>Exceções</h3>
+            {% for exception in exceptions %}
+            <button type="button" class="policy-mini-row" data-open-policy-detail="{{ exception.policy_id }}" data-detail-tab="exceptions">
+                <span class="policy-exception-dot status-{{ exception.status }}"></span>
+                <strong>{{ exception.endpoint }}</strong>
+                <small>{{ exception.reason }} · {{ exception.expires_at }}</small>
+            </button>
+            {% empty %}
+            <div class="side-empty">Nenhuma exceção cadastrada ainda.</div>
+            {% endfor %}
+        </div>
+    </aside>
+</section>
+
+{{ policies|json_script:"policy-data" }}
+{{ violations|json_script:"policy-violations-data" }}
+{{ exceptions|json_script:"policy-exceptions-data" }}
+{{ logs_by_policy|json_script:"policy-logs-data" }}
+{{ endpoint_options_data|json_script:"policy-endpoint-options" }}
+
+<div class="policy-overlay" data-policy-overlay hidden></div>
+
+<aside class="policy-drawer" data-policy-create-drawer aria-hidden="true">
+    <div class="policy-drawer-header">
+        <div>
+            <span class="section-kicker">Política</span>
+            <h2 data-policy-form-title>Nova política</h2>
+            <p>Cadastre regras persistidas para a futura avaliação automática.</p>
+        </div>
+        <button type="button" data-close-policy-drawers aria-label="Fechar"><i data-lucide="x"></i></button>
+    </div>
+    <form class="policy-form" method="post" action="{% url 'software-policy-create' %}" data-policy-create-form data-create-action="{% url 'software-policy-create' %}">
+        {% csrf_token %}
+        <section><h3>1. Identidade</h3><label>Nome da política<input name="name" required placeholder="TeamViewer proibido"></label><label>Descrição<textarea name="description" rows="3" placeholder="Explique o objetivo da regra"></textarea></label><div class="policy-form-row"><label>Status<select name="is_active"><option value="on">Ativa</option><option value="">Inativa</option></select></label><label>Severidade<select name="severity">{% for value,label in severity_options %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label></div></section>
+        <section><h3>2. Tipo de regra</h3><div class="policy-segment">{% for value,label in policy_type_options %}<label><input type="radio" name="policy_type" value="{{ value }}" {% if forloop.first %}checked{% endif %}>{{ label }}</label>{% endfor %}</div></section>
+        <section><h3>3. Software alvo</h3><div class="policy-form-row"><label>Nome do software<input name="software_name" required placeholder="AnyDesk"></label><label>Correspondência<select name="match_type">{% for value,label in match_type_options %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label></div><div class="policy-form-row"><label>Fabricante<input name="publisher" placeholder="Opcional"></label><label>Versão<input name="version_rule" placeholder="Opcional"></label></div></section>
+        <section>
+            <h3>4. Escopo</h3>
+            <label>Tipo de escopo<select name="scope_type" data-scope-select>{% for value,label in scope_type_options %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+            <label data-scope-value-wrap hidden>Valor do escopo<input name="scope_value" data-scope-value placeholder="TI-"></label>
+            <div class="policy-target-scope" data-target-scope hidden>
+                <div class="exception-section-header">
+                    <div>
+                        <strong>Endpoints-alvo</strong>
+                        <small>Onde a política será aplicada. Isto não é uma exceção.</small>
+                    </div>
+                    <button class="ghost-button compact" type="button" data-add-target-row><i data-lucide="plus"></i>Adicionar endpoint</button>
+                </div>
+                <div class="exception-builder-list" data-target-builder-list>
+                    <div class="exception-builder policy-target-row" data-target-row>
+                        <select name="target_endpoint">
+                            <option value="">Endpoint</option>
+                            {% for endpoint in endpoint_options %}
+                            <option value="{{ endpoint.id }}">{{ endpoint.hostname }} · {{ endpoint.domain|default:"sem domínio" }} · {{ endpoint.status }}</option>
+                            {% endfor %}
+                        </select>
+                        <button class="icon-danger-button" type="button" data-remove-target-row aria-label="Remover endpoint"><i data-lucide="trash-2"></i></button>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section><h3>5. Comportamento</h3><div class="policy-checkbox-grid"><label><input name="create_alert" type="checkbox" checked>Gerar alerta</label><label><input name="show_in_noc" type="checkbox" checked>Mostrar no NOC</label><label><input name="create_audit_event" type="checkbox" checked>Criar auditoria</label><label><input name="monitor_only" type="checkbox">Modo somente monitoramento</label></div></section>
+        <section>
+            <div class="exception-section-header">
+                <h3>6. Exceções iniciais</h3>
+                <button class="ghost-button compact" type="button" data-add-exception-row><i data-lucide="plus"></i>Adicionar endpoint</button>
+            </div>
+            <div class="exception-builder-list" data-exception-builder-list>
+                <div class="exception-builder" data-exception-row>
+                    <select name="exception_endpoint">
+                        <option value="">Endpoint</option>
+                        {% for endpoint in endpoint_options %}
+                        <option value="{{ endpoint.id }}">{{ endpoint.hostname }} · {{ endpoint.domain|default:"sem domínio" }} · {{ endpoint.status }}</option>
+                        {% endfor %}
+                    </select>
+                    <input name="exception_reason" placeholder="Motivo">
+                    <select name="exception_type"><option value="temporary">Temporária</option><option value="permanent">Permanente</option></select>
+                    <input name="exception_expires_at" type="date">
+                    <button class="icon-danger-button" type="button" data-remove-exception-row aria-label="Remover endpoint"><i data-lucide="trash-2"></i></button>
+                </div>
+            </div>
+        </section>
+        <div class="policy-drawer-actions"><button class="primary-action" type="submit">Salvar política</button><button class="ghost-button" type="button" data-close-policy-drawers>Cancelar</button></div>
+    </form>
+</aside>
+
+<aside class="policy-drawer policy-detail-drawer" data-policy-detail-drawer aria-hidden="true">
+    <div class="policy-drawer-header">
+        <div>
+            <span class="section-kicker">Detalhe</span>
+            <h2 data-detail-title>Política</h2>
+            <p data-detail-description>Visualização rica da política selecionada.</p>
+        </div>
+        <button type="button" data-close-policy-drawers aria-label="Fechar"><i data-lucide="x"></i></button>
+    </div>
+    <div class="policy-tabs" role="tablist">
+        <button class="active" type="button" data-policy-tab="overview">Visão geral</button>
+        <button type="button" data-policy-tab="violations">Violações</button>
+        <button type="button" data-policy-tab="exceptions">Exceções</button>
+        <button type="button" data-policy-tab="history">Histórico</button>
+    </div>
+    <div class="policy-tab-panel active" data-policy-panel="overview">
+        <div class="policy-detail-grid" data-detail-overview></div>
+    </div>
+    <div class="policy-tab-panel" data-policy-panel="violations">
+        <div class="policy-table-like" data-detail-violations></div>
+    </div>
+    <div class="policy-tab-panel" data-policy-panel="exceptions">
+        <div class="policy-table-like" data-detail-exceptions></div>
+    </div>
+    <div class="policy-tab-panel" data-policy-panel="history">
+        <ol class="policy-timeline" data-detail-logs></ol>
+    </div>
+</aside>
+
+<div id="policy-toast" class="copy-feedback" hidden>Políticas atualizadas</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/software_policies.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+db.sqlite3
+
+# Virtualenv
+venv/
+.venv/
+env/
+
+# Django/local
+.env
+.env.*
+local_settings.py
+media/
+staticfiles/
+logs/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Night Owl local/runtime
+C:/RMM/
+RMM/
+*.log
+last_payload.json
+agent.state.json
+RmmAgent.config.ps1
+
+# Secrets/tokens
+*.key
+*.pem
+*.crt
+*.pfx
+secrets.json
+
+# Node/build, if ever used
+node_modules/
+dist/
+build/

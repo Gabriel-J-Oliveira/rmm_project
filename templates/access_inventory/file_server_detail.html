@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | {{ file_server.name }}{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:file-server-list' %}">File servers</a><i data-lucide="chevron-right"></i><strong>{{ file_server.name }}</strong></nav>
+{% endblock %}
+
+{% block content %}
+{% include "access_inventory/_header.html" with title=file_server.name subtitle=file_server.fqdn|default:"Servidor de arquivos" icon="server" %}
+<section class="detail-summary-grid">
+    <article class="summary-card"><span>FQDN</span><strong class="mono">{{ file_server.fqdn|default:"--" }}</strong></article>
+    <article class="summary-card"><span>Endpoint RMM</span><strong>{{ file_server.rmm_agent|default:"--" }}</strong></article>
+    <article class="summary-card"><span>Descricao</span><strong>{{ file_server.description|default:"--" }}</strong></article>
+</section>
+<section class="detail-grid">
+    <article class="panel">
+        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="share-2"></i></span>Shares</h2><p>Compartilhamentos associados a este servidor.</p></div></div>
+        <div class="endpoint-alert-list">
+            {% for share in shares %}
+            <article class="endpoint-alert-item"><i data-lucide="folder-open"></i><div><strong class="mono">{{ share.unc_path }}</strong><p>{{ share.folder_count }} pasta(s)</p></div></article>
+            {% empty %}
+            <div class="empty-state padded">Nenhuma share importada.</div>
+            {% endfor %}
+        </div>
+    </article>
+    <article class="panel">
+        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="folder-tree"></i></span>Pastas</h2><p>Primeiras 200 pastas importadas para consulta.</p></div></div>
+        <div class="endpoint-alert-list">
+            {% for folder in folders %}
+            <a class="endpoint-alert-item" href="{% url 'access_inventory:folder-detail' folder.id %}"><i data-lucide="folder"></i><div><strong class="mono">{{ folder.path }}</strong><p>{{ folder.share.unc_path }} &middot; {% if folder.inheritance_enabled %}Heranca habilitada{% else %}Heranca bloqueada{% endif %}</p></div></a>
+            {% empty %}
+            <div class="empty-state padded">Nenhuma pasta importada.</div>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+{% endblock %}

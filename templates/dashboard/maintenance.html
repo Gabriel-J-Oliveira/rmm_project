@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% load nightowl_time %}
+
+{% block title %}Night Owl | Manuten&ccedil;&atilde;o{% endblock %}
+{% block body_class %}page-maintenance{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Manuten&ccedil;&atilde;o</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="alerts-command-header maintenance-hero page-header">
+    <div class="alerts-command-title">
+        <span class="command-icon page-header-icon"><i data-lucide="wrench"></i></span>
+        <div>
+            <h1 class="page-title">Manuten&ccedil;&atilde;o</h1>
+            <p class="page-subtitle">Rotinas operacionais centralizadas do Night Owl.</p>
+        </div>
+    </div>
+    <div class="alerts-header-actions page-actions">
+        {% if latest_run %}
+        <span class="refresh-meta">Última execução {{ latest_run.started_at|relative_time }}</span>
+        <span class="auto-refresh-chip module-badge"><i data-lucide="terminal"></i>manage.py run_maintenance_tasks</span>
+        {% else %}
+        <span class="auto-refresh-chip module-badge"><i data-lucide="terminal"></i>Aguardando primeira execução</span>
+        {% endif %}
+    </div>
+</section>
+
+<section class="metric-grid events-metrics" aria-label="Resumo de manutenções">
+    <article class="metric-card command-metric">
+        <span class="metric-icon"><i data-lucide="activity"></i></span>
+        <span class="metric-label">Em execução</span>
+        <strong class="metric-value">{{ running_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon online"><i data-lucide="check-circle"></i></span>
+        <span class="metric-label">Sucesso</span>
+        <strong class="metric-value status-text-online">{{ success_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon warning"><i data-lucide="alert-triangle"></i></span>
+        <span class="metric-label">Parcial</span>
+        <strong class="metric-value status-text-unknown">{{ partial_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon critical"><i data-lucide="circle-alert"></i></span>
+        <span class="metric-label">Falhas</span>
+        <strong class="metric-value status-text-critical">{{ failed_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon"><i data-lucide="clock"></i></span>
+        <span class="metric-label">Duração última</span>
+        <strong class="metric-value">{% if latest_run.duration_seconds %}{{ latest_run.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</strong>
+    </article>
+</section>
+
+<section class="dashboard-grid maintenance-grid">
+    <article class="panel content-panel">
+        <div class="panel-header">
+            <div>
+                <span class="panel-kicker">Última execução</span>
+                <h2>Status operacional</h2>
+            </div>
+            {% if latest_run %}
+            <span class="severity-badge severity-{{ latest_run.status }}">{{ latest_run.get_status_display }}</span>
+            {% endif %}
+        </div>
+
+        {% if latest_run %}
+        <div class="maintenance-summary">
+            <div>
+                <span>Início</span>
+                <strong>{{ latest_run.started_at|date:"d/m/Y H:i:s" }}</strong>
+            </div>
+            <div>
+                <span>Fim</span>
+                <strong>{{ latest_run.finished_at|date:"d/m/Y H:i:s"|default:"Em execução" }}</strong>
+            </div>
+            <div>
+                <span>Dry-run</span>
+                <strong>{% if latest_run.dry_run %}Sim{% else %}Não{% endif %}</strong>
+            </div>
+            <div>
+                <span>Tarefas</span>
+                <strong>{{ latest_run.successful_tasks }} ok · {{ latest_run.failed_tasks }} falha(s) · {{ latest_run.skipped_tasks }} skipped</strong>
+            </div>
+        </div>
+
+        <div class="maintenance-task-list">
+            {% for task in latest_run.task_results.all %}
+            <details class="maintenance-task">
+                <summary>
+                    <span class="severity-badge severity-{{ task.status }}">{{ task.status }}</span>
+                    <strong class="mono">{{ task.task_name }}</strong>
+                    <span>{{ task.duration_seconds|default:0|floatformat:2 }}s</span>
+                </summary>
+                {% if task.output %}
+                <pre>{{ task.output }}</pre>
+                {% endif %}
+                {% if task.error %}
+                <pre class="is-error">{{ task.error }}</pre>
+                {% endif %}
+            </details>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-alert-state">
+            <i data-lucide="moon"></i>
+            <strong>Nenhuma manutenção registrada ainda.</strong>
+            <p>Execute <span class="mono">python manage.py run_maintenance_tasks</span> para criar o primeiro registro.</p>
+        </div>
+        {% endif %}
+    </article>
+
+    <aside class="panel timeline-panel">
+        <div class="panel-header">
+            <div>
+                <span class="panel-kicker">Falhas recentes</span>
+                <h2>Atenção</h2>
+            </div>
+        </div>
+        <div class="mini-list">
+            {% for run in recent_failures %}
+            <div class="mini-list-item">
+                <span class="severity-badge severity-{{ run.status }}">{{ run.get_status_display }}</span>
+                <strong>{{ run.started_at|date:"d/m H:i" }}</strong>
+                <small>{{ run.failed_tasks }} falha(s), {{ run.skipped_tasks }} skipped</small>
+            </div>
+            {% empty %}
+            <div class="empty-muted">Nenhuma falha recente registrada.</div>
+            {% endfor %}
+        </div>
+    </aside>
+</section>
+
+<section class="panel content-panel">
+    <div class="panel-header">
+        <div>
+            <span class="panel-kicker">Histórico</span>
+            <h2>Últimas execuções</h2>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table class="endpoint-table maintenance-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Início</th>
+                    <th>Duração</th>
+                    <th>Modo</th>
+                    <th>Tarefas</th>
+                    <th>Resultados</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td><span class="severity-badge severity-{{ run.status }}">{{ run.get_status_display }}</span></td>
+                    <td>{{ run.started_at|date:"d/m/Y H:i:s" }}</td>
+                    <td>{% if run.duration_seconds %}{{ run.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</td>
+                    <td>{% if run.dry_run %}<span class="mono">dry-run</span>{% else %}<span class="mono">{{ run.triggered_by }}</span>{% endif %}</td>
+                    <td>{{ run.total_tasks }}</td>
+                    <td>{{ run.successful_tasks }} ok · {{ run.failed_tasks }} falha(s) · {{ run.skipped_tasks }} skipped</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="empty-cell">Nenhuma execução encontrada.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

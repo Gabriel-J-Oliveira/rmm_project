@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% load nightowl_time %}
+
+{% block title %}Night Owl | Endpoints{% endblock %}
+{% block body_class %}page-endpoints{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Endpoints</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="hero endpoints-hero page-header">
+    <div>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor"></i></span>Endpoints</h1>
+        <p class="page-subtitle">Invent&aacute;rio vivo das m&aacute;quinas monitoradas pelo Night Owl.</p>
+    </div>
+    <div class="hero-chip module-badge">Parque monitorado</div>
+</section>
+
+<section class="metric-grid endpoint-metrics" aria-label="Resumo dos endpoints filtrados">
+    <article class="metric-card">
+        <span class="metric-label">Total de endpoints</span>
+        <strong class="metric-value">{{ total_endpoints }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Online</span>
+        <strong class="metric-value status-text-online">{{ online_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Offline</span>
+        <strong class="metric-value status-text-offline">{{ offline_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Unknown</span>
+        <strong class="metric-value {% if unknown_count > 0 %}status-text-unknown{% else %}status-text-muted{% endif %}">{{ unknown_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Com aten&ccedil;&atilde;o</span>
+        <strong class="metric-value {% if attention_count > 0 %}status-text-critical{% else %}status-text-muted{% endif %}">{{ attention_count }}</strong>
+    </article>
+</section>
+
+<section class="panel filter-panel">
+    <form class="endpoint-filters" method="get">
+        <label class="filter-field filter-search">
+            <span>Busca</span>
+            <input type="search" name="q" value="{{ filters.q }}" placeholder="Hostname, usu&aacute;rio, IP, dom&iacute;nio ou sistema">
+        </label>
+
+        <label class="filter-field">
+            <span>Status</span>
+            <select name="status">
+                <option value="">Todos</option>
+                {% for value, label in status_options %}
+                <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Sistema</span>
+            <select name="os">
+                <option value="">Todos</option>
+                {% for os in os_options %}
+                <option value="{{ os }}" {% if filters.os == os %}selected{% endif %}>{{ os }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Dom&iacute;nio</span>
+            <select name="domain">
+                <option value="">Todos</option>
+                {% for domain in domain_options %}
+                <option value="{{ domain }}" {% if filters.domain == domain %}selected{% endif %}>{{ domain }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Defender</span>
+            <select name="defender">
+                <option value="">Todos</option>
+                <option value="ok" {% if filters.defender == "ok" %}selected{% endif %}>OK</option>
+                <option value="attention" {% if filters.defender == "attention" %}selected{% endif %}>Aten&ccedil;&atilde;o</option>
+                <option value="unknown" {% if filters.defender == "unknown" %}selected{% endif %}>Desconhecido</option>
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Disco</span>
+            <select name="disk">
+                <option value="">Todos</option>
+                <option value="normal" {% if filters.disk == "normal" %}selected{% endif %}>Normal</option>
+                <option value="warning" {% if filters.disk == "warning" %}selected{% endif %}>Warning</option>
+                <option value="critical" {% if filters.disk == "critical" %}selected{% endif %}>Critical</option>
+            </select>
+        </label>
+
+        <div class="filter-actions">
+            <button type="submit">Filtrar</button>
+            <a href="{% url 'endpoint-list' %}">Limpar</a>
+        </div>
+    </form>
+</section>
+
+<section class="panel endpoints-list-panel">
+    <div class="panel-header">
+        <div>
+            <h2>Endpoints</h2>
+            <p>Lista operacional com status, sa&uacute;de b&aacute;sica e &uacute;ltima comunica&ccedil;&atilde;o.</p>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="endpoint-table endpoint-list-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Endpoint</th>
+                    <th>Usu&aacute;rio</th>
+                    <th>Rede</th>
+                    <th>Sistema</th>
+                    <th>Agente</th>
+                    <th>&Uacute;ltima comunica&ccedil;&atilde;o</th>
+                    <th>Disco</th>
+                    <th>Defender</th>
+                    <th>Softwares</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>
+                        <span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span>
+                    </td>
+                    <td>
+                        <a class="endpoint-name table-link mono" href="{% url 'endpoint-detail' row.endpoint.id %}">
+                            {% if row.hostname %}{{ row.hostname }}{% else %}&mdash;{% endif %}
+                        </a>
+                        <span class="endpoint-subtext">{% if row.domain %}{{ row.domain }}{% else %}&mdash;{% endif %}</span>
+                    </td>
+                    <td>{% if row.logged_user %}{{ row.logged_user }}{% else %}&mdash;{% endif %}</td>
+                    <td class="mono">{% if row.primary_ip %}{{ row.primary_ip }}{% else %}&mdash;{% endif %}</td>
+                    <td>{% if row.os_name %}{{ row.os_name }}{% else %}&mdash;{% endif %}</td>
+                    <td>
+                        <span class="agent-version-pill agent-{{ row.agent_version_state }}">
+                            {% if row.agent_version %}
+                            {{ row.agent_version }} &middot; {% if row.agent_version_state == "current" %}Atual{% elif row.agent_version_state == "outdated" %}Desatualizado{% else %}Sem vers&atilde;o{% endif %}
+                            {% else %}
+                            Sem vers&atilde;o
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td>
+                        {% if row.last_seen_at %}
+                        <span title="{{ row.last_seen_at|date:'d/m/Y H:i:s' }}">{{ row.last_seen_at|date:"d/m/Y H:i" }}</span>
+                        <span class="endpoint-subtext">{{ row.last_seen_at|relative_time }}</span>
+                        {% else %}
+                        &mdash;
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if row.primary_disk.has_data %}
+                        <span class="disk-pill disk-pill-{{ row.primary_disk.level }}">{{ row.primary_disk.summary }}</span>
+                        {% else %}
+                        &mdash;
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="defender-pill defender-{{ row.defender_key }}">
+                            {% if row.defender_key == "ok" %}OK{% elif row.defender_key == "attention" %}Cr&iacute;tico{% else %}Desconhecido{% endif %}
+                        </span>
+                    </td>
+                    <td>{% if row.software_count != None %}{{ row.software_count }}{% else %}&mdash;{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="10" class="empty-state endpoint-empty">Nenhum endpoint encontrado com os filtros atuais.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

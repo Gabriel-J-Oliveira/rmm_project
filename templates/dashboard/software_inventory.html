@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Central de Softwares | Night Owl{% endblock %}
+{% block body_class %}page-software{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Softwares</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="hero software-hero page-header">
+    <div>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="package"></i></span>Central de Softwares</h1>
+        <p class="page-subtitle">Inventário consolidado dos programas detectados nos endpoints.</p>
+    </div>
+    <div class="noc-actions page-actions">
+        <span class="topbar-status"><i data-lucide="clock"></i>Atualizado em {{ updated_at|date:"H:i" }}</span>
+        <a class="refresh-button" href="{% url 'software-inventory' %}?{{ request.GET.urlencode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
+    </div>
+</section>
+
+<section class="metric-grid software-metrics">
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="boxes"></i></span><span class="metric-label">Softwares únicos</span><strong class="metric-value">{{ summary.unique_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="package"></i></span><span class="metric-label">Instalações</span><strong class="metric-value">{{ summary.install_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield-alert"></i></span><span class="metric-label">Acesso remoto</span><strong class="metric-value">{{ summary.remote_access_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon warning"><i data-lucide="network"></i></span><span class="metric-label">Admin/Rede</span><strong class="metric-value">{{ summary.admin_network_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon success"><i data-lucide="shield"></i></span><span class="metric-label">Segurança</span><strong class="metric-value">{{ summary.security_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="circle-help"></i></span><span class="metric-label">Desconhecidos</span><strong class="metric-value">{{ summary.unknown_count }}</strong></article>
+</section>
+
+<section class="panel filter-panel software-filter-panel">
+    <form class="endpoint-filters software-filters" method="get">
+        <label class="filter-field">
+            <span><i data-lucide="search"></i>Busca</span>
+            <input type="search" name="q" value="{{ filters.q }}" placeholder="Software, fabricante, versão ou endpoint">
+        </label>
+        <label class="filter-field">
+            <span>Categoria</span>
+            <select name="category">
+                {% for value,label in category_options %}
+                <option value="{{ value }}" {% if filters.category == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Risco</span>
+            <select name="risk">
+                {% for value,label in risk_options %}
+                <option value="{{ value }}" {% if filters.risk == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Sensível</span>
+            <select name="sensitive">
+                <option value="all" {% if filters.sensitive == "all" %}selected{% endif %}>Todos</option>
+                <option value="yes" {% if filters.sensitive == "yes" %}selected{% endif %}>Sim</option>
+                <option value="no" {% if filters.sensitive == "no" %}selected{% endif %}>Não</option>
+            </select>
+        </label>
+        <div class="filter-actions">
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a href="{% url 'software-inventory' %}">Limpar</a>
+            <a href="{% url 'software-export' %}?{{ request.GET.urlencode }}"><i data-lucide="download"></i>CSV</a>
+        </div>
+    </form>
+</section>
+
+<section class="software-list">
+    {% for software in rows %}
+    <article class="software-card software-risk-{{ software.risk_level }}">
+        <div class="software-icon"><i data-lucide="{% if software.category == 'remote_access' %}shield-alert{% elif software.category == 'admin_network' %}network{% elif software.category == 'security' %}shield{% elif software.category == 'browser' %}globe{% elif software.category == 'office' %}file-text{% elif software.category == 'development' %}code{% else %}package{% endif %}"></i></div>
+        <div class="software-main">
+            <div class="software-title-row">
+                <div>
+                    <h2>{{ software.name }}</h2>
+                    <p>{{ software.publisher|default:"Fabricante não informado" }}</p>
+                </div>
+                <div class="software-badges">
+                    <span class="software-badge category-{{ software.category }}">{{ software.category_label }}</span>
+                    <span class="software-badge risk-{{ software.risk_level }}">{{ software.risk_label }}</span>
+                </div>
+            </div>
+            <div class="software-meta-grid">
+                <div><span>Endpoints</span><strong>{{ software.endpoint_count }}</strong></div>
+                <div><span>Versões</span><strong>{{ software.versions_display }}</strong></div>
+                <div><span>Última detecção</span><strong>{{ software.latest_seen_at|date:"d/m/Y H:i" }}</strong></div>
+            </div>
+            <div class="software-examples">
+                {% for item in software.example_endpoints %}
+                <a href="{% url 'endpoint-detail' item.endpoint.id %}">{{ item.endpoint.hostname }}</a>
+                {% empty %}
+                <span>Sem endpoints associados.</span>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="software-actions">
+            <a class="copy-btn link-btn" href="{% url 'software-detail' %}?name={{ software.name|urlencode }}&publisher={{ software.publisher|urlencode }}">Ver endpoints</a>
+        </div>
+    </article>
+    {% empty %}
+    <div class="panel empty-state padded">Nenhum software encontrado com os filtros atuais.</div>
+    {% endfor %}
+</section>
+{% endblock %}

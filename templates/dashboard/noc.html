@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% load static nightowl_time %}
+
+{% block title %}Night Owl | NOC{% endblock %}
+{% block body_class %}page-noc{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>NOC</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="noc-hero page-header">
+    <div class="noc-title-wrap">
+        <span class="noc-mark page-header-icon"><i data-lucide="activity"></i></span>
+        <div>
+            <h1 class="page-title">Night Owl NOC</h1>
+            <p class="page-subtitle">Monitoramento operacional dos endpoints internos.</p>
+        </div>
+    </div>
+    <div class="noc-actions page-actions">
+        <span>Atualizado em {{ last_updated_at|date:"H:i:s" }}</span>
+        <span class="noc-refresh-chip"><i data-lucide="refresh-cw"></i>Auto-refresh <span data-noc-countdown>30s</span></span>
+        <button type="button" data-noc-refresh><i data-lucide="refresh-cw"></i>Atualizar agora</button>
+    </div>
+</section>
+
+<section class="noc-kpi-grid" aria-label="Estado geral do ambiente">
+    <article class="noc-kpi">
+        <i data-lucide="monitor"></i>
+        <span>Total de endpoints</span>
+        <strong>{{ total_endpoints }}</strong>
+    </article>
+    <article class="noc-kpi kpi-online">
+        <i data-lucide="check-circle"></i>
+        <span>Online</span>
+        <strong>{{ online_count }}</strong>
+    </article>
+    <article class="noc-kpi kpi-offline">
+        <i data-lucide="wifi-off"></i>
+        <span>Offline</span>
+        <strong>{{ offline_count }}</strong>
+    </article>
+    <article class="noc-kpi kpi-unknown">
+        <i data-lucide="circle-help"></i>
+        <span>Unknown</span>
+        <strong>{{ unknown_count }}</strong>
+    </article>
+    <article class="noc-kpi kpi-critical">
+        <i data-lucide="alert-triangle"></i>
+        <span>Cr&iacute;ticos abertos</span>
+        <strong>{{ open_critical_count }}</strong>
+    </article>
+    <article class="noc-kpi kpi-warning">
+        <i data-lucide="alert-triangle"></i>
+        <span>Warnings abertos</span>
+        <strong>{{ open_warning_count }}</strong>
+    </article>
+    <article class="noc-kpi kpi-security">
+        <i data-lucide="shield"></i>
+        <span>Seguran&ccedil;a abertos</span>
+        <strong>{{ open_security_count }}</strong>
+    </article>
+    <article class="noc-kpi">
+        <i data-lucide="server"></i>
+        <span>Endpoints afetados</span>
+        <strong>{{ affected_endpoints_count }}</strong>
+    </article>
+</section>
+
+<section class="noc-grid">
+    <article class="panel noc-panel noc-panel-critical">
+        <div class="noc-panel-header">
+            <div>
+                <h2><i data-lucide="alert-triangle"></i>Cr&iacute;ticos agora</h2>
+                <p>Alertas critical abertos mais recentes.</p>
+            </div>
+            <span class="severity-badge severity-critical">{{ open_critical_count }}</span>
+        </div>
+        <div class="noc-list">
+            {% for alert in critical_alerts %}
+            <a class="noc-alert-row" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                <span class="noc-row-icon severity-critical"><i data-lucide="alert-triangle"></i></span>
+                <span>
+                    <strong>{{ alert.title }}</strong>
+                    <small>{{ alert.endpoint.hostname|default:"-" }} &middot; {{ alert.last_seen_at|relative_time }}</small>
+                    <em>{{ alert.description|truncatechars:92 }}</em>
+                </span>
+            </a>
+            {% empty %}
+            <div class="noc-positive">
+                <i data-lucide="check-circle"></i>
+                <strong>Nenhum alerta cr&iacute;tico aberto.</strong>
+                <span>O ambiente n&atilde;o apresenta cr&iacute;ticos neste momento.</span>
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+
+    <article class="panel noc-panel">
+        <div class="noc-panel-header">
+            <div>
+                <h2><i data-lucide="wifi-off"></i>Endpoints offline</h2>
+                <p>Mais tempo sem comunica&ccedil;&atilde;o primeiro.</p>
+            </div>
+            <span class="status-badge status-offline">{{ offline_count }}</span>
+        </div>
+        <div class="noc-list">
+            {% for endpoint in offline_endpoints %}
+            <a class="noc-endpoint-row" href="{% url 'endpoint-detail' endpoint.id %}">
+                <span>
+                    <strong class="mono">{{ endpoint.hostname|default:"-" }}</strong>
+                    <small>{{ endpoint.last_seen_at|relative_time }} &middot; {{ endpoint.last_ip|default:"IP -" }}</small>
+                </span>
+                <span>{{ endpoint.last_logged_user|default:"Usu&aacute;rio -" }}</span>
+            </a>
+            {% empty %}
+            <div class="noc-positive muted-positive">
+                <i data-lucide="check-circle"></i>
+                <strong>Nenhum endpoint offline.</strong>
+                <span>Todos os endpoints acompanhados est&atilde;o fora da fila offline.</span>
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+
+    <article class="panel noc-panel">
+        <div class="noc-panel-header">
+            <div>
+                <h2><i data-lucide="shield"></i>Seguran&ccedil;a</h2>
+                <p>Sinais de seguran&ccedil;a e ferramentas sens&iacute;veis.</p>
+            </div>
+            <span class="severity-badge severity-security">{{ open_security_count }}</span>
+        </div>
+        <div class="noc-list">
+            {% for alert in security_alerts %}
+            <a class="noc-alert-row" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                <span class="noc-row-icon severity-security"><i data-lucide="shield"></i></span>
+                <span>
+                    <strong>{{ alert.title }}</strong>
+                    <small>{{ alert.endpoint.hostname|default:"-" }} &middot; {{ alert.last_seen_at|relative_time }}</small>
+                    <em>{{ alert.description|truncatechars:96 }}</em>
+                </span>
+            </a>
+            {% empty %}
+            <div class="noc-positive">
+                <i data-lucide="check-circle"></i>
+                <strong>Nenhum alerta de seguran&ccedil;a aberto.</strong>
+                <span>Sem novos sinais de seguran&ccedil;a operacional.</span>
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+
+    <article class="panel noc-panel">
+        <div class="noc-panel-header">
+            <div>
+                <h2><i data-lucide="hard-drive"></i>Disco e capacidade</h2>
+                <p>Capacidade com pouco espa&ccedil;o livre.</p>
+            </div>
+            <span class="severity-badge severity-warning">{{ disk_alerts|length }}</span>
+        </div>
+        <div class="noc-list">
+            {% for alert in disk_alerts %}
+            <a class="noc-disk-row" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                <span class="noc-disk-main">
+                    <strong>{{ alert.metadata.disk_name|default:"Disco" }} em {{ alert.endpoint.hostname|default:"-" }}</strong>
+                    <small>{{ alert.metadata.free_percent|default:"-" }}% livre &middot; {{ alert.last_seen_at|relative_time }}</small>
+                </span>
+                <span class="noc-mini-bar" aria-hidden="true">
+                    <span class="disk-{{ alert.severity }}" style="width: {{ alert.metadata.used_percent|default:0 }}%"></span>
+                </span>
+            </a>
+            {% empty %}
+            <div class="noc-positive">
+                <i data-lucide="check-circle"></i>
+                <strong>Nenhum alerta de disco baixo.</strong>
+                <span>Capacidade sem sinal cr&iacute;tico na fila atual.</span>
+            </div>
+            {% endfor %}
+        </div>
+    </article>
+
+    <article class="panel noc-panel noc-panel-wide">
+        <div class="noc-panel-header">
+            <div>
+                <h2><i data-lucide="activity"></i>Atividade recente</h2>
+                <p>Eventos mais recentes de alertas.</p>
+            </div>
+        </div>
+        <ol class="noc-timeline">
+            {% for event in recent_activity %}
+            <li>
+                <span class="severity-dot severity-dot-{{ event.severity }}"></span>
+                <div>
+                    <strong>{{ event.title }}</strong>
+                    <p>{{ event.endpoint.hostname|default:"-" }} &middot; {{ event.event_type }} &middot; {{ event.created_at|relative_time }}</p>
+                </div>
+            </li>
+            {% empty %}
+            <li>
+                <span class="severity-dot"></span>
+                <div>
+                    <strong>Nenhuma atividade recente</strong>
+                    <p>Os alertas aparecer&atilde;o aqui ap&oacute;s a pr&oacute;xima avalia&ccedil;&atilde;o.</p>
+                </div>
+            </li>
+            {% endfor %}
+        </ol>
+    </article>
+</section>
+
+<footer class="noc-footer">
+    <span>Night Owl observando {{ total_endpoints }} endpoints</span>
+    {% if last_alert_evaluation %}
+    <span>&Uacute;ltima avalia&ccedil;&atilde;o de alertas: {{ last_alert_evaluation|date:"H:i" }}</span>
+    {% endif %}
+</footer>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/noc.js' %}"></script>
+{% endblock %}

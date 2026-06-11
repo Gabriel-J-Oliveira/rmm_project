@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Chamado #{{ ticket.number }} - Night Owl Desk{% endblock %}
+{% block body_class %}page-tickets{% endblock %}
+
+{% block content %}
+<section class="desk-shell">
+    <header class="desk-hero page-header">
+        <div class="page-header-icon"><i data-lucide="ticket"></i></div>
+        <div>
+            <p class="desk-kicker">Night Owl Desk / Chamado #{{ ticket.number }}</p>
+            <h1 class="page-title">{{ ticket.title }}</h1>
+            <p class="page-subtitle">{{ ticket.requester }} · {{ ticket.sector }} · aberto ha {{ ticket.opened_for }}</p>
+        </div>
+        <div class="page-actions">
+            <a class="desk-btn" href="{% url 'tickets:list' %}"><i data-lucide="arrow-left"></i>Voltar</a>
+            <form method="post" action="{% url 'tickets:fake-action' ticket.number 'pegar-chamado' %}">
+                {% csrf_token %}
+                <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="hand"></i>Pegar chamado</button>
+            </form>
+        </div>
+    </header>
+
+    {% include "tickets/_desk_nav.html" %}
+
+    <div class="desk-ticket-state">
+        <span class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</span>
+        <span class="desk-badge priority-{{ ticket.priority }}">{{ ticket.priority_label }}</span>
+        {% if ticket.partner %}<span class="desk-badge critical">Socio / VIP</span>{% endif %}
+        <span class="desk-badge neutral">{{ ticket.category }}</span>
+        <span class="desk-badge neutral">Preview</span>
+    </div>
+
+    <div class="desk-detail-grid">
+        <main class="desk-detail-main">
+            <article class="desk-panel">
+                <h2><i data-lucide="align-left"></i>Descricao</h2>
+                <p class="desk-description">{{ ticket.description }}</p>
+            </article>
+
+            <article class="desk-panel">
+                <h2><i data-lucide="settings-2"></i>Acoes visuais</h2>
+                <div class="desk-action-grid">
+                    <form method="post" action="{% url 'tickets:fake-action' ticket.number 'status-alterado' %}">{% csrf_token %}<button class="desk-btn" type="submit"><i data-lucide="shuffle"></i>Alterar status</button></form>
+                    <form method="post" action="{% url 'tickets:fake-action' ticket.number 'prioridade-alterada' %}">{% csrf_token %}<button class="desk-btn" type="submit"><i data-lucide="alert-triangle"></i>Alterar prioridade</button></form>
+                    <form method="post" action="{% url 'tickets:fake-action' ticket.number 'resolvido' %}">{% csrf_token %}<button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="check-circle"></i>Resolver</button></form>
+                    <form method="post" action="{% url 'tickets:fake-action' ticket.number 'fechado' %}">{% csrf_token %}<button class="desk-btn" type="submit"><i data-lucide="archive"></i>Fechar</button></form>
+                </div>
+            </article>
+
+            <article class="desk-panel">
+                <h2><i data-lucide="message-square"></i>Timeline de comentarios</h2>
+                <div class="desk-comments">
+                    {% for comment in ticket.comments %}
+                        <div class="desk-comment">
+                            <div>
+                                <strong>{{ comment.author }}</strong>
+                                <span>{{ comment.visibility }} · {{ comment.when }}</span>
+                            </div>
+                            <p>{{ comment.body }}</p>
+                        </div>
+                    {% empty %}
+                        <div class="desk-empty compact"><i data-lucide="message-circle"></i><span>Nenhum comentario neste preview.</span></div>
+                    {% endfor %}
+                </div>
+                <form class="desk-comment-form" method="post" action="{% url 'tickets:fake-action' ticket.number 'comentario-adicionado' %}">
+                    {% csrf_token %}
+                    <textarea rows="4" placeholder="Adicionar comentario interno..."></textarea>
+                    <div class="desk-comment-actions">
+                        <select><option>Interno</option><option>Publico futuro</option></select>
+                        <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Adicionar comentario</button>
+                    </div>
+                </form>
+            </article>
+
+            <article class="desk-panel">
+                <h2><i data-lucide="activity"></i>Alertas relacionados</h2>
+                <div class="desk-comments">
+                    {% for alert in related_alerts %}
+                        <div class="desk-comment">
+                            <div><strong>{{ alert.title }}</strong><span>Futuro</span></div>
+                            <p>{{ alert.description }}</p>
+                        </div>
+                    {% empty %}
+                        <div class="desk-empty compact"><i data-lucide="moon"></i><span>Nenhum alerta relacionado neste chamado.</span></div>
+                    {% endfor %}
+                </div>
+            </article>
+        </main>
+
+        <aside class="desk-detail-side">
+            <article class="desk-panel">
+                <h2><i data-lucide="user"></i>Solicitante</h2>
+                <dl class="desk-data-list">
+                    <div><dt>Nome</dt><dd>{{ ticket.requester }}</dd></div>
+                    <div><dt>Setor</dt><dd>{{ ticket.sector }}</dd></div>
+                    <div><dt>Funcao</dt><dd>{{ ticket.role }}</dd></div>
+                    <div><dt>Socio/VIP</dt><dd>{% if ticket.partner %}Sim{% else %}Nao{% endif %}</dd></div>
+                </dl>
+            </article>
+
+            <article class="desk-panel">
+                <h2><i data-lucide="sliders-horizontal"></i>Resumo</h2>
+                <dl class="desk-data-list">
+                    <div><dt>Status</dt><dd>{{ ticket.status_label }}</dd></div>
+                    <div><dt>Prioridade</dt><dd>{{ ticket.priority_label }}</dd></div>
+                    <div><dt>Categoria</dt><dd>{{ ticket.category }}</dd></div>
+                    <div><dt>Responsavel</dt><dd>{{ ticket.assigned_to|default:"Sem responsavel" }}</dd></div>
+                </dl>
+            </article>
+
+            {% if ticket.endpoint %}
+                <article class="desk-panel desk-endpoint-card">
+                    <h2><i data-lucide="monitor"></i>Endpoint relacionado</h2>
+                    <strong>{{ ticket.endpoint.hostname }}</strong>
+                    <span>{{ ticket.endpoint.domain }}</span>
+                    <span>Status: {{ ticket.endpoint.status|title }}</span>
+                    <span>Ultimo usuario: {{ ticket.endpoint.last_user }}</span>
+                    <span>Ultimo heartbeat: {{ ticket.endpoint.last_heartbeat }}</span>
+                    <a class="desk-btn" href="{{ ticket.endpoint.url }}"><i data-lucide="external-link"></i>Ver endpoint</a>
+                </article>
+            {% endif %}
+
+            <article class="desk-panel">
+                <h2><i data-lucide="clock"></i>Tempos</h2>
+                <dl class="desk-data-list">
+                    <div><dt>Criado em</dt><dd>{{ ticket.created_at }}</dd></div>
+                    <div><dt>Primeira resposta</dt><dd>{{ ticket.first_response_at }}</dd></div>
+                    <div><dt>Atribuido em</dt><dd>{{ ticket.assigned_at }}</dd></div>
+                    <div><dt>Resolvido em</dt><dd>{{ ticket.resolved_at }}</dd></div>
+                    <div><dt>Atualizado</dt><dd>{{ ticket.updated_for }}</dd></div>
+                </dl>
+            </article>
+        </aside>
+    </div>
+</section>
+{% endblock %}

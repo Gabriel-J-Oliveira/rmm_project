@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% load nightowl_time %}
+
+{% block title %}Software | Night Owl{% endblock %}
+{% block body_class %}page-software page-software-detail{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'software-inventory' %}">Softwares</a><i data-lucide="chevron-right"></i><strong>{{ software.name|default:"Software" }}</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+{% if not software %}
+<section class="panel empty-state padded">
+    <h1>Software não encontrado</h1>
+    <p>Nenhum software foi encontrado com os parâmetros informados.</p>
+    <a class="copy-btn link-btn" href="{% url 'software-inventory' %}">Voltar para softwares</a>
+</section>
+{% else %}
+<section class="endpoint-hero-card software-detail-hero page-header">
+    <div class="endpoint-hero-main">
+        <a class="back-link" href="{% url 'software-inventory' %}">&larr; Voltar para softwares</a>
+        <div class="detail-title-row">
+            <h1 class="page-title"><span class="page-header-icon"><i data-lucide="package"></i></span>{{ software.name }}</h1>
+            <span class="software-badge risk-{{ software.risk_level }}">{{ software.risk_label }}</span>
+        </div>
+        <div class="endpoint-hero-meta">
+            <span>{{ software.publisher|default:"Fabricante não informado" }}</span>
+            <span>{{ software.category_label }}</span>
+            <span>{{ software.endpoint_count }} endpoint{{ software.endpoint_count|pluralize }}</span>
+            <span>{{ software.latest_seen_at|date:"d/m/Y H:i" }}</span>
+        </div>
+    </div>
+</section>
+
+<section class="detail-summary-grid endpoint-summary-grid">
+    <article class="summary-card"><span>Categoria</span><strong>{{ software.category_label }}</strong></article>
+    <article class="summary-card"><span>Risco</span><strong>{{ software.risk_label }}</strong></article>
+    <article class="summary-card"><span>Endpoints</span><strong>{{ software.endpoint_count }}</strong></article>
+    <article class="summary-card"><span>Instalações</span><strong>{{ software.install_count }}</strong></article>
+    <article class="summary-card"><span>Versões</span><strong>{{ software.versions_display }}</strong></article>
+</section>
+
+<section class="panel filter-panel">
+    <form class="endpoint-filters software-detail-filters" method="get">
+        <input type="hidden" name="name" value="{{ software.name }}">
+        <input type="hidden" name="publisher" value="{{ software.publisher }}">
+        <label class="filter-field">
+            <span>Busca</span>
+            <input type="search" name="q" value="{{ filters.q }}" placeholder="Hostname, domínio ou usuário">
+        </label>
+        <label class="filter-field">
+            <span>Versão</span>
+            <select name="version">
+                <option value="">Todas</option>
+                {% for version in software.versions %}
+                <option value="{{ version }}" {% if filters.version == version %}selected{% endif %}>{{ version }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Status</span>
+            <select name="status">
+                <option value="">Todos</option>
+                {% for value,label in status_options %}
+                <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="filter-actions">
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a href="{% url 'software-detail' %}?name={{ software.name|urlencode }}&publisher={{ software.publisher|urlencode }}">Limpar</a>
+        </div>
+    </form>
+</section>
+
+<section class="panel">
+    <div class="table-wrap">
+        <table class="endpoint-table software-detail-table">
+            <thead>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Domínio</th>
+                    <th>Usuário</th>
+                    <th>IP</th>
+                    <th>Versão</th>
+                    <th>Última comunicação</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in endpoint_rows %}
+                <tr>
+                    <td><a class="table-link" href="{% url 'endpoint-detail' item.endpoint.id %}">{{ item.endpoint.hostname }}</a></td>
+                    <td>{{ item.endpoint.domain|default:"—" }}</td>
+                    <td>{{ item.endpoint.last_logged_user|default:"—" }}</td>
+                    <td class="mono">{{ item.endpoint.last_ip|default:"—" }}</td>
+                    <td class="mono">{{ item.version|default:"—" }}</td>
+                    <td>
+                        {% if item.endpoint.last_seen_at %}
+                        <span title="{{ item.endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ item.endpoint.last_seen_at|relative_time }}</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td><span class="status-badge status-{{ item.endpoint.status }}">{{ item.endpoint.get_status_display|default:"Unknown" }}</span></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="7" class="empty-state">Nenhum endpoint encontrado para os filtros atuais.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+{% endblock %}

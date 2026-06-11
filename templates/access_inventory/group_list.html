@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Grupos AD{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Grupos</strong></nav>
+{% endblock %}
+
+{% block content %}
+{% include "access_inventory/_header.html" with title="Grupos AD" subtitle="Consulta de grupos, membros e ACLs relacionadas." icon="users" %}
+<section class="panel filter-panel">
+    <form class="endpoint-filters" method="get">
+        <label class="filter-field filter-search"><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, login, SID, descricao ou DN"></label>
+        <div class="filter-actions"><button type="submit">Filtrar</button><a href="{% url 'access_inventory:group-list' %}">Limpar</a></div>
+    </form>
+</section>
+<section class="panel">
+    <div class="table-wrap">
+        <table class="endpoint-table">
+            <thead><tr><th>Grupo</th><th>SamAccountName</th><th>OU</th><th>Membros diretos</th><th>Descricao</th></tr></thead>
+            <tbody>
+                {% for group in groups %}
+                <tr>
+                    <td><a class="table-link" href="{% url 'access_inventory:group-detail' group.id %}">{{ group.name }}</a><span class="endpoint-subtext mono">{{ group.sid }}</span></td>
+                    <td class="mono">{{ group.sam_account_name }}</td>
+                    <td>{{ group.ou|default:"--" }}</td>
+                    <td>{{ group.member_count }}</td>
+                    <td>{{ group.description|default:"--"|truncatechars:90 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="empty-state">Nenhum grupo encontrado.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

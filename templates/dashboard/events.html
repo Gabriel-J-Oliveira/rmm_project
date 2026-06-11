@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% load nightowl_time %}
+
+{% block title %}Night Owl | Eventos{% endblock %}
+{% block body_class %}page-events{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Eventos</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="alerts-command-header events-hero page-header">
+    <div class="alerts-command-title">
+        <span class="command-icon page-header-icon"><i data-lucide="history"></i></span>
+        <div>
+            <h1 class="page-title">Eventos</h1>
+            <p class="page-subtitle">Linha do tempo operacional e auditoria do Night Owl.</p>
+        </div>
+    </div>
+    <div class="alerts-header-actions page-actions">
+        <span class="auto-refresh-chip module-badge"><i data-lucide="activity"></i>Auditoria operacional</span>
+    </div>
+</section>
+
+<section class="metric-grid events-metrics" aria-label="Resumo de eventos">
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="clock"></i></span><span class="metric-label">Eventos 24h</span><strong class="metric-value">{{ events_24h_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon critical"><i data-lucide="alert-triangle"></i></span><span class="metric-label">Cr&iacute;ticos</span><strong class="metric-value status-text-critical">{{ critical_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield"></i></span><span class="metric-label">Seguran&ccedil;a</span><strong class="metric-value status-text-security">{{ security_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="bot"></i></span><span class="metric-label">Sistema</span><strong class="metric-value">{{ system_count }}</strong></article>
+    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="user"></i></span><span class="metric-label">Usu&aacute;rios</span><strong class="metric-value">{{ user_count }}</strong></article>
+</section>
+
+<section class="panel command-filter-panel">
+    <form class="endpoint-filters events-filters" method="get">
+        <label class="filter-field filter-search">
+            <span><i data-lucide="search"></i>Busca</span>
+            <input type="search" name="q" value="{{ filters.q }}" placeholder="Evento, endpoint, ator ou descri&ccedil;&atilde;o">
+        </label>
+        <label class="filter-field">
+            <span>Severidade</span>
+            <select name="severity">
+                <option value="all" {% if filters.severity == "all" %}selected{% endif %}>Todas</option>
+                {% for value, label in severity_options %}
+                <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Evento</span>
+            <select name="event_type">
+                <option value="all" {% if filters.event_type == "all" %}selected{% endif %}>Todos</option>
+                {% for event_type in event_type_options %}
+                <option value="{{ event_type }}" {% if filters.event_type == event_type %}selected{% endif %}>{{ event_type }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Ator</span>
+            <select name="actor_type">
+                <option value="all" {% if filters.actor_type == "all" %}selected{% endif %}>Todos</option>
+                {% for value, label in actor_type_options %}
+                <option value="{{ value }}" {% if filters.actor_type == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Endpoint</span>
+            <select name="endpoint">
+                <option value="">Todos</option>
+                {% for endpoint in endpoint_options %}
+                <option value="{{ endpoint.id }}" {% if filters.endpoint == endpoint.id|stringformat:"s" %}selected{% endif %}>{{ endpoint.hostname }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="filter-field">
+            <span>Per&iacute;odo</span>
+            <select name="period">
+                {% for value, label in period_options %}
+                <option value="{{ value }}" {% if filters.period == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="filter-actions">
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a href="{% url 'events-list' %}">Limpar</a>
+        </div>
+    </form>
+</section>
+
+<section class="event-list" aria-label="Linha do tempo de auditoria">
+    {% for event in events %}
+    <article class="event-row">
+        <div class="event-time">
+            <strong>{{ event.created_at|date:"H:i" }}</strong>
+            <span>{{ event.created_at|date:"d/m/Y" }}</span>
+        </div>
+        <div class="event-icon severity-{{ event.severity }}">
+            {% if event.severity == "success" %}
+            <i data-lucide="check-circle"></i>
+            {% elif event.severity == "security" %}
+            <i data-lucide="shield"></i>
+            {% elif event.severity == "critical" or event.severity == "warning" %}
+            <i data-lucide="alert-triangle"></i>
+            {% elif event.actor_type == "user" %}
+            <i data-lucide="user"></i>
+            {% else %}
+            <i data-lucide="activity"></i>
+            {% endif %}
+        </div>
+        <div class="event-main">
+            <div class="event-title-line">
+                <span class="severity-badge severity-{{ event.severity }}">{{ event.get_severity_display }}</span>
+                <strong>{{ event.title }}</strong>
+                <span class="mono">{{ event.event_type }}</span>
+            </div>
+            <p>{{ event.description|default:"Sem descri&ccedil;&atilde;o."|truncatechars:180 }}</p>
+            <div class="event-meta">
+                {% if event.endpoint %}
+                <a class="table-link mono" href="{% url 'endpoint-detail' event.endpoint.id %}"><i data-lucide="monitor"></i>{{ event.endpoint.hostname }}</a>
+                {% else %}
+                <span><i data-lucide="monitor"></i>Endpoint -</span>
+                {% endif %}
+                {% if event.alert %}
+                {% if event.endpoint %}
+                <a class="table-link" href="{% url 'alerts-list' %}?q={{ event.endpoint.hostname }}"><i data-lucide="alert-triangle"></i>Ver alerta</a>
+                {% else %}
+                <a class="table-link" href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i>Ver alerta</a>
+                {% endif %}
+                {% endif %}
+                <span><i data-lucide="{% if event.actor_type == 'user' %}user{% else %}bot{% endif %}"></i>{{ event.get_actor_type_display }}{% if event.actor_name %}: {{ event.actor_name }}{% endif %}</span>
+                <span>{{ event.created_at|relative_time }}</span>
+            </div>
+        </div>
+    </article>
+    {% empty %}
+    <div class="panel empty-alert-state">
+        <i data-lucide="check-circle"></i>
+        <strong>Nenhum evento encontrado com os filtros atuais.</strong>
+        <p>A auditoria registra mudan&ccedil;as e a&ccedil;&otilde;es relevantes, n&atilde;o heartbeats normais.</p>
+    </div>
+    {% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | File Servers{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>File servers</strong></nav>
+{% endblock %}
+
+{% block content %}
+{% include "access_inventory/_header.html" with title="File servers" subtitle="Servidores de arquivos, shares e pastas importadas." icon="server" %}
+<section class="panel filter-panel">
+    <form class="endpoint-filters" method="get">
+        <label class="filter-field filter-search"><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, FQDN, descricao ou endpoint RMM"></label>
+        <div class="filter-actions"><button type="submit">Filtrar</button><a href="{% url 'access_inventory:file-server-list' %}">Limpar</a></div>
+    </form>
+</section>
+<section class="panel">
+    <div class="table-wrap">
+        <table class="endpoint-table">
+            <thead><tr><th>Servidor</th><th>FQDN</th><th>RMM</th><th>Shares</th><th>Pastas</th><th>Descricao</th></tr></thead>
+            <tbody>
+                {% for file_server in file_servers %}
+                <tr>
+                    <td><a class="table-link mono" href="{% url 'access_inventory:file-server-detail' file_server.id %}">{{ file_server.name }}</a></td>
+                    <td class="mono">{{ file_server.fqdn|default:"--" }}</td>
+                    <td>{{ file_server.rmm_agent|default:"--" }}</td>
+                    <td>{{ file_server.share_count }}</td>
+                    <td>{{ file_server.folder_count }}</td>
+                    <td>{{ file_server.description|default:"--"|truncatechars:90 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="empty-state">Nenhum file server encontrado.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

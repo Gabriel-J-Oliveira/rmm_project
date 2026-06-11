@@ -1,0 +1,452 @@
+{% extends "base.html" %}
+{% load nightowl_time %}
+
+{% block title %}Night Owl | {{ endpoint.hostname }}{% endblock %}
+{% block body_class %}page-endpoint-detail{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'endpoint-list' %}">Endpoints</a><i data-lucide="chevron-right"></i><strong>{{ endpoint.hostname|default:"Endpoint" }}</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="endpoint-hero-card page-header">
+    <div class="endpoint-hero-main">
+        <a class="back-link" href="{% url 'endpoint-list' %}">&larr; Voltar para endpoints</a>
+        <div class="detail-title-row">
+            <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor-cog"></i></span>{% if endpoint.hostname %}{{ endpoint.hostname }}{% else %}&mdash;{% endif %}</h1>
+            <span class="status-badge status-{{ endpoint.status }}">{{ endpoint.get_status_display|default:"Unknown" }}</span>
+        </div>
+        <div class="endpoint-hero-meta">
+            <span>{% if endpoint.domain %}{{ endpoint.domain }}{% else %}&mdash;{% endif %}</span>
+            <span>{% if endpoint.last_logged_user %}{{ endpoint.last_logged_user }}{% else %}&mdash;{% endif %}</span>
+            <span>{% if endpoint.os_name %}{{ endpoint.os_name }}{% else %}&mdash;{% endif %}</span>
+            <span>
+                {% if endpoint.last_seen_at %}
+                <span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>
+                {% else %}
+                &mdash;
+                {% endif %}
+            </span>
+        </div>
+        <div class="smart-badges">
+            {% for badge in smart_badges %}
+            <span class="smart-badge {{ badge.class }}">{{ badge.label|safe }}</span>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="endpoint-hero-actions">
+        <button class="copy-btn" type="button" data-copy="{{ endpoint.hostname }}">Copiar hostname</button>
+        <button class="copy-btn" type="button" data-copy="{{ primary_ip|default:'' }}">Copiar IP</button>
+        <a class="copy-btn link-btn" href="{% url 'endpoint-list' %}">Endpoints</a>
+    </div>
+</section>
+
+<section class="detail-summary-grid endpoint-summary-grid" aria-label="Resumo do endpoint">
+    <article class="summary-card">
+        <span>Dom&iacute;nio</span>
+        <strong>{% if endpoint.domain %}{{ endpoint.domain }}{% else %}&mdash;{% endif %}</strong>
+    </article>
+    <article class="summary-card">
+        <span>Usu&aacute;rio logado</span>
+        <strong>{% if endpoint.last_logged_user %}{{ endpoint.last_logged_user }}{% else %}&mdash;{% endif %}</strong>
+    </article>
+    <article class="summary-card">
+        <span>IP principal</span>
+        <strong class="mono">{% if primary_ip %}{{ primary_ip }}{% else %}&mdash;{% endif %}</strong>
+    </article>
+    <article class="summary-card">
+        <span>Sistema operacional</span>
+        <strong>{% if endpoint.os_name %}{{ endpoint.os_name }}{% else %}&mdash;{% endif %}</strong>
+    </article>
+    <article class="summary-card">
+        <span>&Uacute;ltima comunica&ccedil;&atilde;o</span>
+        <strong>
+            {% if endpoint.last_seen_at %}
+            <span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>
+            {% else %}
+            &mdash;
+            {% endif %}
+        </strong>
+    </article>
+</section>
+
+<section class="endpoint-overview-grid">
+    <article class="panel endpoint-health-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="activity"></i></span>Sa&uacute;de do endpoint</h2>
+                <p>Score simples calculado por status, disco e seguran&ccedil;a.</p>
+            </div>
+        </div>
+        {% if health.score != None %}
+        <div class="health-score-row">
+            <strong>{{ health.score }}</strong>
+            <span>/100</span>
+            <em class="{{ health.class }}">{{ health.label|safe }}</em>
+        </div>
+        <div class="health-bar">
+            <span class="health-fill {{ health.class }}" style="width: {{ health.score }}%"></span>
+        </div>
+        {% else %}
+        <div class="health-insufficient">{{ health.label }}</div>
+        {% endif %}
+    </article>
+
+    <article class="panel technical-summary-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="monitor"></i></span>Resumo t&eacute;cnico</h2>
+                <p>Campos de identifica&ccedil;&atilde;o para suporte e triagem.</p>
+            </div>
+        </div>
+        <dl class="technical-list">
+            <div>
+                <dt>Hostname</dt>
+                <dd><span class="mono">{% if endpoint.hostname %}{{ endpoint.hostname }}{% else %}&mdash;{% endif %}</span><button class="mini-copy" type="button" data-copy="{{ endpoint.hostname }}">Copiar</button></dd>
+            </div>
+            <div>
+                <dt>IP principal</dt>
+                <dd><span class="mono">{% if primary_ip %}{{ primary_ip }}{% else %}&mdash;{% endif %}</span><button class="mini-copy" type="button" data-copy="{{ primary_ip|default:'' }}">Copiar</button></dd>
+            </div>
+            <div>
+                <dt>Serial</dt>
+                <dd><span class="mono">{% if snapshot.serial_number %}{{ snapshot.serial_number }}{% else %}&mdash;{% endif %}</span><button class="mini-copy" type="button" data-copy="{{ snapshot.serial_number|default:'' }}">Copiar</button></dd>
+            </div>
+            <div><dt>Fabricante/modelo</dt><dd>{% if snapshot.manufacturer or snapshot.model %}{{ snapshot.manufacturer }} {{ snapshot.model }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>Sistema</dt><dd>{% if snapshot.os_name %}{{ snapshot.os_name }}{% else %}&mdash;{% endif %}</dd></div>
+        </dl>
+    </article>
+
+    <article class="panel activity-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="activity"></i></span>Atividade recente</h2>
+                <p>Linha do tempo baseada nos dados atuais.</p>
+            </div>
+        </div>
+        {% if endpoint.last_seen_at or snapshot %}
+        <ol class="timeline">
+            <li>
+                <span></span>
+                <div>
+                    <strong>&Uacute;ltimo heartbeat recebido</strong>
+                    <p>{% if endpoint.last_seen_at %}{{ endpoint.last_seen_at|relative_time }} · {{ endpoint.last_seen_at|date:"d/m/Y H:i:s" }}{% else %}&mdash;{% endif %}</p>
+                </div>
+            </li>
+            <li>
+                <span></span>
+                <div>
+                    <strong>&Uacute;ltimo snapshot criado</strong>
+                    <p>{% if snapshot.received_at %}{{ snapshot.received_at|relative_time }} · {{ snapshot.received_at|date:"d/m/Y H:i:s" }}{% else %}&mdash;{% endif %}</p>
+                </div>
+            </li>
+            <li>
+                <span></span>
+                <div>
+                    <strong>Status atual</strong>
+                    <p>{{ endpoint.get_status_display|default:"Unknown" }}</p>
+                </div>
+            </li>
+        </ol>
+        {% else %}
+        <div class="empty-state padded">Hist&oacute;rico insuficiente para montar a atividade recente.</div>
+        {% endif %}
+    </article>
+</section>
+
+<section class="panel agent-card">
+    <div class="panel-header">
+        <div>
+            <h2><span class="section-icon"><i data-lucide="bot"></i></span>Agente Night Owl</h2>
+            <p>Vers&atilde;o e metadados reportados pelo agente no heartbeat.</p>
+        </div>
+        <span class="agent-version-pill agent-{{ agent_version_state }}">
+            {% if agent_version_state == "current" %}Atual{% elif agent_version_state == "outdated" %}Desatualizado{% else %}Sem informa&ccedil;&atilde;o{% endif %}
+        </span>
+    </div>
+    <dl class="agent-detail-grid">
+        <div>
+            <dt>Vers&atilde;o instalada</dt>
+            <dd class="mono">{% if endpoint.agent_version %}{{ endpoint.agent_version }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Vers&atilde;o recomendada</dt>
+            <dd class="mono">{% if recommended_agent_version %}{{ recommended_agent_version }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Modo</dt>
+            <dd>{% if endpoint.agent_mode %}{{ endpoint.agent_mode }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Caminho</dt>
+            <dd class="mono">{% if endpoint.agent_install_path %}{{ endpoint.agent_install_path }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Tarefa agendada</dt>
+            <dd>{% if endpoint.agent_task_name %}{{ endpoint.agent_task_name }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Runtime</dt>
+            <dd>{% if endpoint.agent_runtime %}{{ endpoint.agent_runtime }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Update source</dt>
+            <dd class="mono">{% if endpoint.agent_update_source %}{{ endpoint.agent_update_source }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>Vers&atilde;o do runtime</dt>
+            <dd class="mono">{% if endpoint.agent_runtime_version %}{{ endpoint.agent_runtime_version }}{% else %}&mdash;{% endif %}</dd>
+        </div>
+        <div>
+            <dt>&Uacute;ltimo reporte</dt>
+            <dd>
+                {% if endpoint.agent_reported_at %}
+                <span title="{{ endpoint.agent_reported_at|date:'d/m/Y H:i:s' }}">{{ endpoint.agent_reported_at|relative_time }}</span>
+                {% else %}
+                &mdash;
+                {% endif %}
+            </dd>
+        </div>
+    </dl>
+</section>
+
+<section class="detail-grid">
+    <article class="panel detail-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="monitor"></i></span>Sistema</h2>
+                <p>Vers&atilde;o e build do Windows.</p>
+            </div>
+        </div>
+        <dl class="detail-list">
+            <div><dt>Nome</dt><dd>{% if snapshot.os_name %}{{ snapshot.os_name }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>Vers&atilde;o</dt><dd class="mono">{% if snapshot.os_version %}{{ snapshot.os_version }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>Build</dt><dd class="mono">{% if snapshot.windows_build %}{{ snapshot.windows_build }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>IPs</dt><dd class="mono">{% if snapshot.ips %}{{ snapshot.ips|join:", " }}{% else %}&mdash;{% endif %}</dd></div>
+        </dl>
+    </article>
+
+    <article class="panel detail-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="cpu"></i></span>Hardware</h2>
+                <p>Identifica&ccedil;&atilde;o e recursos principais.</p>
+            </div>
+        </div>
+        <dl class="detail-list">
+            <div><dt>Fabricante</dt><dd>{% if snapshot.manufacturer %}{{ snapshot.manufacturer }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>Modelo</dt><dd>{% if snapshot.model %}{{ snapshot.model }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>Serial</dt><dd class="mono">{% if snapshot.serial_number %}{{ snapshot.serial_number }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>CPU</dt><dd>{% if snapshot.cpu %}{{ snapshot.cpu }}{% else %}&mdash;{% endif %}</dd></div>
+            <div><dt>Mem&oacute;ria</dt><dd>{% if memory_total_gb %}{{ memory_total_gb }} GB{% else %}&mdash;{% endif %}</dd></div>
+        </dl>
+    </article>
+
+    <article class="panel detail-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="shield"></i></span>Seguran&ccedil;a</h2>
+                <p>Interpreta&ccedil;&atilde;o b&aacute;sica de prote&ccedil;&atilde;o local.</p>
+            </div>
+        </div>
+        <div class="security-state {{ defender.class }}">
+            <span>{{ defender.label|safe }}</span>
+            <p>{{ defender.detail|safe }}</p>
+        </div>
+        <dl class="detail-list compact security-facts">
+            {% if snapshot.defender_status.engine_version %}
+            <div><dt>Engine</dt><dd class="mono">{{ snapshot.defender_status.engine_version }}</dd></div>
+            {% endif %}
+            {% if snapshot.defender_status.antivirus_signature_last_updated %}
+            <div><dt>Assinatura</dt><dd class="mono">{{ snapshot.defender_status.antivirus_signature_last_updated }}</dd></div>
+            {% endif %}
+        </dl>
+    </article>
+
+    <article class="panel detail-card">
+        <div class="panel-header">
+            <div>
+                <h2><span class="section-icon"><i data-lucide="clock"></i></span>Uptime</h2>
+                <p>Tempo aproximado desde o &uacute;ltimo boot.</p>
+            </div>
+        </div>
+        <div class="uptime-value">{% if uptime_display %}{{ uptime_display }}{% else %}&mdash;{% endif %}</div>
+    </article>
+</section>
+
+<section class="panel disks-panel">
+    <div class="panel-header">
+        <div>
+            <h2><span class="section-icon"><i data-lucide="hard-drive"></i></span>Disco</h2>
+            <p>Uso dos discos locais informados pelo agente.</p>
+        </div>
+    </div>
+    <div class="disk-list">
+        {% for disk in disks %}
+        <div class="disk-row">
+            <div class="disk-row-header">
+                <strong class="mono">{{ disk.name }}</strong>
+                <span class="disk-pill disk-pill-{{ disk.level }}">{{ disk.used_percent }}% usado</span>
+            </div>
+            <div class="disk-meta">
+                <span>Total: {% if disk.size_gb %}{{ disk.size_gb }} GB{% else %}&mdash;{% endif %}</span>
+                <span>Livre: {% if disk.free_gb %}{{ disk.free_gb }} GB{% else %}&mdash;{% endif %}</span>
+            </div>
+            <div class="disk-bar" aria-hidden="true">
+                <span class="disk-fill disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></span>
+            </div>
+        </div>
+        {% empty %}
+        <div class="empty-state padded">Nenhum disco informado.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="panel software-panel">
+    <div class="panel-header software-header">
+        <div>
+            <h2><span class="section-icon"><i data-lucide="package"></i></span>Softwares</h2>
+            <p>Programas instalados no &uacute;ltimo invent&aacute;rio.</p>
+        </div>
+        <label class="software-search">
+            <span>Buscar</span>
+            <input id="softwareSearch" type="search" placeholder="Nome, vers&atilde;o ou fabricante">
+        </label>
+    </div>
+    <div class="software-chip-row" role="group" aria-label="Filtros de software">
+        <button class="software-chip active" type="button" data-category="all">Todos</button>
+        <button class="software-chip" type="button" data-category="microsoft">Microsoft</button>
+        <button class="software-chip" type="button" data-category="remote">Acesso remoto</button>
+        <button class="software-chip" type="button" data-category="security">Seguran&ccedil;a</button>
+        <button class="software-chip" type="button" data-category="admin">Admin/Rede</button>
+    </div>
+    <div class="table-wrap software-table-wrap">
+        <table class="endpoint-table software-table" id="softwareTable">
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Categoria</th>
+                    <th>Risco</th>
+                    <th>Vers&atilde;o</th>
+                    <th>Fabricante</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for software in installed_software %}
+                <tr data-category="{{ software.category }}">
+                    <td>{% if software.name %}{{ software.name }}{% else %}&mdash;{% endif %}</td>
+                    <td><span class="software-badge category-{{ software.category }}">{{ software.category_label }}</span></td>
+                    <td><span class="software-badge risk-{{ software.risk_level }}">{{ software.risk_label }}</span></td>
+                    <td class="mono">{% if software.version %}{{ software.version }}{% else %}&mdash;{% endif %}</td>
+                    <td>{% if software.publisher %}{{ software.publisher }}{% else %}&mdash;{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" class="empty-state">Nenhum software informado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel endpoint-timeline-panel">
+    <div class="panel-header">
+        <div>
+            <h2><span class="section-icon"><i data-lucide="history"></i></span>Linha do tempo</h2>
+            <p>Eventos operacionais recentes deste endpoint.</p>
+        </div>
+        <a class="panel-link inline" href="{% url 'events-list' %}?endpoint={{ endpoint.id }}">Ver eventos</a>
+    </div>
+    <ol class="noc-timeline endpoint-audit-timeline">
+        {% for event in audit_events %}
+        <li>
+            <span class="severity-dot severity-dot-{{ event.severity }}"></span>
+            <div>
+                <strong>{{ event.title }}</strong>
+                <p>
+                    {% if event.event_type == "software.installed" %}Software instalado
+                    {% elif event.event_type == "software.removed" %}Software removido
+                    {% elif event.event_type == "software.updated" %}Software atualizado
+                    {% elif event.event_type == "network.ip_changed" %}IP alterado
+                    {% elif event.event_type == "user.logged_user_changed" %}Usu&aacute;rio alterado
+                    {% elif event.event_type == "security.defender_changed" %}Seguran&ccedil;a alterada
+                    {% elif event.event_type == "disk.state_changed" %}Disco alterado
+                    {% elif event.event_type == "os.build_changed" %}Windows atualizado
+                    {% else %}{{ event.event_type }}{% endif %}
+                    &middot; {{ event.created_at|relative_time }}
+                </p>
+            </div>
+        </li>
+        {% empty %}
+        <li>
+            <span class="severity-dot"></span>
+            <div>
+                <strong>Nenhum evento recente para este endpoint.</strong>
+                <p>A linha do tempo aparecer&aacute; quando houver mudan&ccedil;as ou a&ccedil;&otilde;es relevantes.</p>
+            </div>
+        </li>
+        {% endfor %}
+    </ol>
+</section>
+
+<section class="panel endpoint-tickets-panel">
+    <div class="panel-header">
+        <div>
+            <h2><span class="section-icon"><i data-lucide="inbox"></i></span>Chamados relacionados</h2>
+            <p>Atendimentos do Night Owl Desk vinculados a este endpoint.</p>
+        </div>
+        <a class="panel-link inline" href="{% url 'tickets:list' %}?q={{ endpoint.hostname }}">Ver fila</a>
+    </div>
+    <div class="endpoint-alert-list">
+        {% for ticket in related_tickets %}
+        <article class="endpoint-alert-item">
+            <span class="severity-badge severity-{{ ticket.priority }}">{{ ticket.get_priority_display }}</span>
+            <div>
+                <strong><a class="panel-link inline" href="{% url 'tickets:detail' ticket.number %}">#{{ ticket.number }} - {{ ticket.title }}</a></strong>
+                <p>{{ ticket.requester_name|default:"Solicitante nao informado" }} &middot; {{ ticket.get_status_display }}</p>
+                <small>Atualizado {{ ticket.updated_at|relative_time }}</small>
+            </div>
+        </article>
+        {% empty %}
+        <div class="positive-empty">Nenhum chamado aberto para este endpoint.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="panel endpoint-alerts-panel">
+    <div class="panel-header">
+        <div>
+            <h2><span class="section-icon"><i data-lucide="alert-triangle"></i></span>Alertas deste endpoint</h2>
+            <p>Sinais abertos ou reconhecidos para esta m&aacute;quina.</p>
+        </div>
+        <a class="panel-link inline" href="{% url 'alerts-list' %}?q={{ endpoint.hostname }}">Ver em alertas</a>
+    </div>
+    <div class="endpoint-alert-list">
+        {% for alert in endpoint_alerts %}
+        <article class="endpoint-alert-item">
+            <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
+            <div>
+                <strong>{{ alert.title }}</strong>
+                <p>{{ alert.description|truncatechars:150 }}</p>
+                <small>
+                    {{ alert.get_status_display }} · {{ alert.last_seen_at|relative_time }}
+                    {% if alert.is_muted %}
+                    · Silenciado at&eacute; {{ alert.muted_until|date:"d/m H:i" }}
+                    {% endif %}
+                </small>
+            </div>
+        </article>
+        {% empty %}
+        <div class="positive-empty">Nenhum alerta aberto para este endpoint.</div>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/endpoint_detail.js"></script>
+{% endblock %}

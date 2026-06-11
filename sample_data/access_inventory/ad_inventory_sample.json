@@ -1,0 +1,64 @@
+{
+  "ous": [
+    {
+      "distinguished_name": "OU=TI,DC=example,DC=local",
+      "name": "TI",
+      "parent_distinguished_name": "DC=example,DC=local"
+    },
+    {
+      "distinguished_name": "OU=Financeiro,DC=example,DC=local",
+      "name": "Financeiro",
+      "parent_distinguished_name": "DC=example,DC=local"
+    }
+  ],
+  "users": [
+    {
+      "sid": "S-1-5-21-1000-1000-1000-1101",
+      "sam_account_name": "j.silva",
+      "display_name": "Joao Silva",
+      "user_principal_name": "j.silva@example.local",
+      "email": "joao.silva@example.local",
+      "distinguished_name": "CN=Joao Silva,OU=TI,DC=example,DC=local",
+      "ou_distinguished_name": "OU=TI,DC=example,DC=local",
+      "enabled": true
+    },
+    {
+      "sid": "S-1-5-21-1000-1000-1000-1102",
+      "sam_account_name": "m.souza",
+      "display_name": "Maria Souza",
+      "user_principal_name": "m.souza@example.local",
+      "email": "maria.souza@example.local",
+      "distinguished_name": "CN=Maria Souza,OU=Financeiro,DC=example,DC=local",
+      "ou_distinguished_name": "OU=Financeiro,DC=example,DC=local",
+      "enabled": true
+    }
+  ],
+  "groups": [
+    {
+      "sid": "S-1-5-21-1000-1000-1000-2101",
+      "sam_account_name": "GG_TI_Admins",
+      "name": "GG TI Admins",
+      "description": "Administradores da TI",
+      "distinguished_name": "CN=GG TI Admins,OU=TI,DC=example,DC=local",
+      "ou_distinguished_name": "OU=TI,DC=example,DC=local"
+    },
+    {
+      "sid": "S-1-5-21-1000-1000-1000-2102",
+      "sam_account_name": "GG_Financeiro_Leitura",
+      "name": "GG Financeiro Leitura",
+      "description": "Leitura em pastas financeiras",
+      "distinguished_name": "CN=GG Financeiro Leitura,OU=Financeiro,DC=example,DC=local",
+      "ou_distinguished_name": "OU=Financeiro,DC=example,DC=local"
+    }
+  ],
+  "memberships": [
+    {
+      "parent_group_sid": "S-1-5-21-1000-1000-1000-2101",
+      "member_user_sid": "S-1-5-21-1000-1000-1000-1101"
+    },
+    {
+      "parent_group_sid": "S-1-5-21-1000-1000-1000-2102",
+      "member_user_sid": "S-1-5-21-1000-1000-1000-1102"
+    }
+  ]
+}

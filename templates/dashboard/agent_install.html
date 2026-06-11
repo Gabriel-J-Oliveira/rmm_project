@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+
+{% block title %}Instalação de Agentes | Night Owl{% endblock %}
+{% block body_class %}page-agent-install{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><span>Agentes</span><i data-lucide="chevron-right"></i><strong>Instala&ccedil;&atilde;o</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="hero agent-install-hero page-header">
+    <div>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="key-round"></i></span>Instalação de Agentes</h1>
+        <p class="page-subtitle">Gere tokens de instalação e comandos PowerShell para cadastrar endpoints no Night Owl.</p>
+    </div>
+    <span class="badge badge-security module-badge">Enrollment seguro</span>
+</section>
+
+<section class="metric-grid agent-install-metrics">
+    <article class="metric-card command-metric">
+        <span class="metric-icon security"><i data-lucide="key-round"></i></span>
+        <span class="metric-label">Tokens ativos</span>
+        <strong class="metric-value">{{ active_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon warning"><i data-lucide="clock"></i></span>
+        <span class="metric-label">Expirados</span>
+        <strong class="metric-value">{{ expired_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon"><i data-lucide="activity"></i></span>
+        <span class="metric-label">Usos nas últimas 24h</span>
+        <strong class="metric-value">{{ uses_24h_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon success"><i data-lucide="check-circle"></i></span>
+        <span class="metric-label">Instalações com sucesso</span>
+        <strong class="metric-value">{{ success_24h_count }}</strong>
+    </article>
+</section>
+
+{% if created_token %}
+<section class="panel enrollment-created-panel">
+    <div class="panel-heading">
+        <div>
+            <span class="section-kicker">Token criado</span>
+            <h2>Copie este token agora</h2>
+            <p>Ele não será exibido novamente.</p>
+        </div>
+    </div>
+    <div class="created-token-box" data-copy-value="{{ created_token }}">
+        <div class="copy-value-content">
+            <span>Enrollment token</span>
+            <code>{{ created_token }}</code>
+        </div>
+        <button class="copy-button" type="button" data-copy-target=".created-token-box"><i data-lucide="copy"></i>Copiar token</button>
+    </div>
+    <div class="terminal-block" data-copy-value="{{ created_command }}">
+        <div class="copy-value-content">
+            <span>Comando PowerShell</span>
+            <code>{{ created_command }}</code>
+        </div>
+        <button class="copy-button" type="button" data-copy-target=".terminal-block"><i data-lucide="copy"></i>Copiar comando</button>
+    </div>
+</section>
+{% endif %}
+
+<section class="agent-install-grid">
+    <article class="panel agent-form-panel">
+        <div class="panel-heading">
+            <div>
+                <span class="section-kicker">Novo token</span>
+                <h2>Gerar Enrollment Token</h2>
+                <p>Use validade curta e limite de uso para pilotos controlados.</p>
+            </div>
+        </div>
+        <form method="post" class="agent-token-form">
+            {% csrf_token %}
+            <label class="filter-field">
+                <span>Nome</span>
+                <input name="name" required placeholder="Piloto TI">
+            </label>
+            <label class="filter-field">
+                <span>Domínio permitido</span>
+                <input name="allowed_domain" value="{{ default_allowed_domain }}" placeholder="control.local">
+            </label>
+            <div class="agent-form-row">
+                <label class="filter-field">
+                    <span>Validade em horas</span>
+                    <input name="expires_hours" type="number" min="1" value="168">
+                </label>
+                <label class="filter-field">
+                    <span>Limite de usos</span>
+                    <input name="max_uses" type="number" min="1" placeholder="20">
+                </label>
+            </div>
+            <label class="filter-field">
+                <span>Notas</span>
+                <textarea name="notes" rows="4" placeholder="Uso interno, lote piloto, responsável..."></textarea>
+            </label>
+            <div class="agent-form-actions">
+                <button type="submit"><i data-lucide="plus"></i>Gerar token</button>
+            </div>
+        </form>
+    </article>
+
+    <aside class="panel how-to-panel">
+        <div class="panel-heading">
+            <div>
+                <span class="section-kicker">Como usar</span>
+                <h2>Instalação rápida</h2>
+            </div>
+        </div>
+
+        <div class="how-to-steps" aria-label="Passos de instalação">
+            <div class="how-to-step"><span>1</span><p>Gere um token de instalação.</p></div>
+            <div class="how-to-step"><span>2</span><p>Copie o comando PowerShell.</p></div>
+            <div class="how-to-step"><span>3</span><p>Execute em uma máquina do domínio permitido.</p></div>
+            <div class="how-to-step"><span>4</span><p>O servidor gera automaticamente um <code>agent_token</code> único.</p></div>
+            <div class="how-to-step"><span>5</span><p>O agente cria <code>C:\RMM\RmmAgent.config.ps1</code> e inicia o heartbeat.</p></div>
+        </div>
+
+        <div class="note-box">
+            Máquinas fora do domínio podem exigir validação manual. O refinamento para download HTTPS/443 será uma etapa futura.
+        </div>
+
+        <dl class="agent-settings-list">
+            <div>
+                <dt>Server URL</dt>
+                <dd>{{ heartbeat_url }}</dd>
+            </div>
+            <div>
+                <dt>Pacote</dt>
+                <dd>{{ source_path }}</dd>
+            </div>
+        </dl>
+    </aside>
+</section>
+
+<section class="panel agent-token-list-panel">
+    <div class="panel-heading">
+        <div>
+            <span class="section-kicker">Tokens</span>
+            <h2>Enrollment Tokens</h2>
+            <p>O token completo só aparece no momento da criação.</p>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table class="endpoint-table agent-token-table">
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Prefixo</th>
+                    <th>Domínio</th>
+                    <th>Status</th>
+                    <th>Expira em</th>
+                    <th>Usos</th>
+                    <th>Último uso</th>
+                    <th>Criado em</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>
+                        <strong>{{ row.token.name }}</strong>
+                        {% if row.token.notes %}<small>{{ row.token.notes|truncatechars:60 }}</small>{% endif %}
+                    </td>
+                    <td><code>{{ row.token.prefix|default:"—" }}</code></td>
+                    <td>{{ row.token.allowed_domain|default:"—" }}</td>
+                    <td><span class="status-badge status-{{ row.state.key }}">{{ row.state.label }}</span></td>
+                    <td>{{ row.token.expires_at|date:"d/m/Y H:i"|default:"—" }}</td>
+                    <td>{{ row.token.used_count }}{% if row.token.max_uses %}/{{ row.token.max_uses }}{% else %}/∞{% endif %}</td>
+                    <td>{{ row.token.last_used_at|date:"d/m/Y H:i"|default:"—" }}</td>
+                    <td>{{ row.token.created_at|date:"d/m/Y H:i" }}</td>
+                    <td>
+                        <div class="agent-row-actions">
+                            <button class="copy-button subtle" type="button" data-copy-value="{{ row.command_without_token }}"><i data-lucide="copy"></i>Copiar comando</button>
+                            <details class="logs-details">
+                                <summary><i data-lucide="history"></i>Ver usos</summary>
+                                <div class="logs-popover">
+                                    {% for log in row.logs %}
+                                    <div class="log-mini-row">
+                                        <span>{{ log.created_at|date:"d/m H:i" }}</span>
+                                        <strong>{{ log.hostname|default:"—" }}</strong>
+                                        <em>{{ log.status }}</em>
+                                        <small>{{ log.message|truncatechars:90 }}</small>
+                                    </div>
+                                    {% empty %}
+                                    <p>Nenhum uso registrado.</p>
+                                    {% endfor %}
+                                </div>
+                            </details>
+                            {% if row.token.is_active %}
+                            <form method="post" action="{% url 'agent-enrollment-revoke' row.token.id %}">
+                                {% csrf_token %}
+                                <button class="danger-subtle" type="submit"><i data-lucide="ban"></i>Revogar</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9">Nenhum enrollment token criado ainda.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<div id="copy-feedback" class="copy-feedback" hidden>Copiado</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.addEventListener("DOMContentLoaded", function () {
+        if (window.lucide && typeof window.lucide.createIcons === "function") {
+            window.lucide.createIcons();
+        }
+
+        const feedback = document.getElementById("copy-feedback");
+        function showFeedback(text) {
+            feedback.textContent = text || "Copiado";
+            feedback.hidden = false;
+            feedback.classList.add("is-visible");
+            window.setTimeout(function () {
+                feedback.classList.remove("is-visible");
+                feedback.hidden = true;
+            }, 1800);
+        }
+
+        document.querySelectorAll(".copy-button").forEach(function (button) {
+            button.addEventListener("click", async function () {
+                let value = button.dataset.copyValue || "";
+                if (!value && button.dataset.copyTarget) {
+                    const target = document.querySelector(button.dataset.copyTarget);
+                    value = target ? (target.dataset.copyValue || target.textContent || "") : "";
+                }
+                value = value.trim();
+                if (!value) {
+                    return;
+                }
+                try {
+                    await navigator.clipboard.writeText(value);
+                    showFeedback("Comando copiado");
+                } catch (error) {
+                    const textarea = document.createElement("textarea");
+                    textarea.value = value;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand("copy");
+                    textarea.remove();
+                    showFeedback("Comando copiado");
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

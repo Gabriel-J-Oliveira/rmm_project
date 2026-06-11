@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | {{ group.name }}{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:group-list' %}">Grupos</a><i data-lucide="chevron-right"></i><strong>{{ group.name }}</strong></nav>
+{% endblock %}
+
+{% block content %}
+{% include "access_inventory/_header.html" with title=group.name subtitle=group.description|default:"Grupo do Active Directory" icon="users" %}
+<section class="detail-summary-grid">
+    <article class="summary-card"><span>SID</span><strong class="mono">{{ group.sid }}</strong></article>
+    <article class="summary-card"><span>SamAccountName</span><strong class="mono">{{ group.sam_account_name }}</strong></article>
+    <article class="summary-card"><span>OU</span><strong>{{ group.ou|default:"--" }}</strong></article>
+</section>
+<section class="detail-grid">
+    <article class="panel">
+        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="users"></i></span>Membros diretos</h2><p>Usuarios e grupos diretamente associados.</p></div></div>
+        <div class="endpoint-alert-list">
+            {% for membership in memberships %}
+            {% if membership.member_user %}
+            <a class="endpoint-alert-item" href="{% url 'access_inventory:user-detail' membership.member_user.id %}"><i data-lucide="user"></i><div><strong>{{ membership.member_user.display_name }}</strong><p class="mono">{{ membership.member_user.sam_account_name }}</p></div></a>
+            {% else %}
+            <a class="endpoint-alert-item" href="{% url 'access_inventory:group-detail' membership.member_group.id %}"><i data-lucide="users"></i><div><strong>{{ membership.member_group.name }}</strong><p class="mono">{{ membership.member_group.sid }}</p></div></a>
+            {% endif %}
+            {% empty %}
+            <div class="empty-state padded">Nenhum membro importado.</div>
+            {% endfor %}
+        </div>
+    </article>
+    <article class="panel">
+        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="shield"></i></span>Permissoes em pastas</h2><p>ACLs onde este grupo foi identificado pelo SID.</p></div></div>
+        <div class="endpoint-alert-list">
+            {% for acl in acl_entries %}
+            <article class="endpoint-alert-item">
+                <span class="severity-badge severity-{% if acl.access_type == 'deny' %}critical{% else %}info{% endif %}">{{ acl.get_access_type_display }}</span>
+                <div><strong><a class="panel-link inline" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a></strong><p>{{ acl.rights }} &middot; {% if acl.inherited %}Herdado{% else %}Explicito{% endif %}</p></div>
+            </article>
+            {% empty %}
+            <div class="empty-state padded">Nenhuma ACL vinculada a este grupo.</div>
+            {% endfor %}
+        </div>
+    </article>
+</section>
+{% endblock %}

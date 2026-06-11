@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% load nightowl_time %}
+
+{% block title %}Night Owl | Dashboard{% endblock %}
+{% block body_class %}page-dashboard{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Dashboard</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="hero page-header dashboard-hero">
+    <div>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="layout-dashboard"></i></span>Night Owl</h1>
+        <p class="page-subtitle">O pulso silencioso da infraestrutura.</p>
+    </div>
+    <div class="hero-chip module-badge">Dark-only MVP</div>
+</section>
+
+<section class="metric-grid dashboard-metrics" aria-label="Resumo dos endpoints">
+    <article class="metric-card">
+        <span class="metric-label">Total de endpoints</span>
+        <strong class="metric-value">{{ total_endpoints }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Online</span>
+        <strong class="metric-value status-text-online">{{ online_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Offline</span>
+        <strong class="metric-value status-text-offline">{{ offline_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Unknown</span>
+        <strong class="metric-value {% if unknown_count > 0 %}status-text-unknown{% else %}status-text-muted{% endif %}">{{ unknown_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Alertas abertos</span>
+        <strong class="metric-value {% if open_alerts_count > 0 %}status-text-security{% else %}status-text-muted{% endif %}">{{ open_alerts_count }}</strong>
+    </article>
+    <article class="metric-card">
+        <span class="metric-label">Cr&iacute;ticos</span>
+        <strong class="metric-value {% if critical_alerts_count > 0 %}status-text-critical{% else %}status-text-muted{% endif %}">{{ critical_alerts_count }}</strong>
+    </article>
+</section>
+
+<section class="dashboard-grid">
+    <article class="panel endpoints-panel" id="endpoints">
+        <div class="panel-header">
+            <div>
+                <h2>Endpoints</h2>
+                <p>&Uacute;ltimas comunica&ccedil;&otilde;es recebidas pelos agentes.</p>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table class="endpoint-table">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Endpoint</th>
+                        <th>Usu&aacute;rio</th>
+                        <th>IP</th>
+                        <th>Sistema</th>
+                        <th>&Uacute;ltima comunica&ccedil;&atilde;o</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for endpoint in endpoints %}
+                    <tr>
+                        <td>
+                            <span class="status-badge status-{{ endpoint.status }}">
+                                {{ endpoint.get_status_display|default:"Unknown" }}
+                            </span>
+                        </td>
+                        <td class="mono strong">
+                            <a class="table-link" href="{% url 'endpoint-detail' endpoint.id %}">
+                                {% if endpoint.hostname %}{{ endpoint.hostname }}{% else %}&mdash;{% endif %}
+                            </a>
+                        </td>
+                        <td>{% if endpoint.last_logged_user %}{{ endpoint.last_logged_user }}{% else %}&mdash;{% endif %}</td>
+                        <td class="mono">{% if endpoint.last_ip %}{{ endpoint.last_ip }}{% else %}&mdash;{% endif %}</td>
+                        <td>{% if endpoint.os_name %}{{ endpoint.os_name }}{% else %}&mdash;{% endif %}</td>
+                        <td>
+                            {% if endpoint.last_seen_at %}
+                            <span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>
+                            {% else %}
+                            &mdash;
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6" class="empty-state">Nenhum endpoint registrado ainda.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+
+    <aside class="panel alerts-panel">
+        <div class="panel-header">
+            <div>
+                <h2>Aten&ccedil;&atilde;o agora</h2>
+                <p>Alertas operacionais recentes.</p>
+            </div>
+        </div>
+        <div class="mini-alert-list">
+            {% for alert in recent_alerts %}
+            <a class="mini-alert" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
+                <strong>{{ alert.title }}</strong>
+                <small>{{ alert.endpoint.hostname }} · {{ alert.last_seen_at|relative_time }}</small>
+            </a>
+            {% empty %}
+            <div class="alert-placeholder">
+                <span class="alert-dot"></span>
+                <div>
+                    <strong>Nenhum alerta aberto no momento</strong>
+                    <p>Monitoramento em fase piloto</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <a class="panel-link" href="{% url 'alerts-list' %}">Ver todos os alertas</a>
+    </aside>
+</section>
+{% endblock %}
