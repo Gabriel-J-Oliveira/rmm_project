@@ -14,6 +14,7 @@ env/
 # Django/local
 .env
 .env.*
+!.env.example
 local_settings.py
 media/
 staticfiles/
