@@ -8,6 +8,8 @@ from .models import (
     AclEntry,
     FileServer,
     Folder,
+    InventoryAgent,
+    InventoryAgentRun,
     Share,
 )
 
@@ -17,6 +19,45 @@ class ADOrganizationalUnitAdmin(admin.ModelAdmin):
     list_display = ('name', 'distinguished_name', 'parent_distinguished_name', 'updated_at')
     search_fields = ('name', 'distinguished_name', 'parent_distinguished_name')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(InventoryAgent)
+class InventoryAgentAdmin(admin.ModelAdmin):
+    list_display = ('name', 'hostname', 'enabled', 'version', 'last_seen_at', 'updated_at')
+    list_filter = ('enabled', 'created_at', 'last_seen_at')
+    search_fields = ('name', 'hostname', 'description', 'version')
+    readonly_fields = ('token_hash', 'last_seen_at', 'created_at', 'updated_at')
+
+
+@admin.register(InventoryAgentRun)
+class InventoryAgentRunAdmin(admin.ModelAdmin):
+    list_display = (
+        'started_at',
+        'agent',
+        'run_type',
+        'status',
+        'items_created',
+        'items_updated',
+        'items_ignored',
+        'errors_count',
+        'finished_at',
+    )
+    list_filter = ('run_type', 'status', 'started_at', 'agent')
+    search_fields = ('agent__name', 'agent__hostname', 'message')
+    readonly_fields = (
+        'agent',
+        'run_type',
+        'status',
+        'started_at',
+        'finished_at',
+        'message',
+        'items_created',
+        'items_updated',
+        'items_ignored',
+        'errors_count',
+        'created_at',
+        'updated_at',
+    )
 
 
 @admin.register(ADUser)

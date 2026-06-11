@@ -3424,8 +3424,8 @@ a {
 
 .page-header {
     position: relative;
-    margin-bottom: 20px;
-    padding: 22px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
     border: 1px solid rgba(var(--module-accent-rgb), 0.2);
     border-top-color: rgba(var(--module-accent-rgb), 0.44);
     border-radius: 12px;
@@ -3438,8 +3438,8 @@ a {
 .page-header::before {
     content: "";
     position: absolute;
-    left: 22px;
-    right: 22px;
+    left: 16px;
+    right: 16px;
     top: 0;
     height: 2px;
     border-radius: 999px;
@@ -3452,27 +3452,33 @@ a {
 .noc-mark.page-header-icon {
     display: inline-grid;
     place-items: center;
-    width: 44px;
-    height: 44px;
+    width: 36px;
+    height: 36px;
     border: 1px solid rgba(var(--module-accent-rgb), 0.32);
-    border-radius: 12px;
+    border-radius: 10px;
     color: var(--module-accent);
     background: rgba(var(--module-accent-rgb), 0.12);
     box-shadow: 0 0 28px rgba(var(--module-accent-rgb), 0.1);
 }
 
 .page-header-icon svg {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
     color: currentColor;
 }
 
 .page-title {
     color: var(--text-primary);
+    font-size: 26px;
+    line-height: 1.08;
+    margin: 0;
 }
 
 .page-subtitle {
     color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.4;
+    margin: 6px 0 0;
 }
 
 .page-actions {
@@ -3490,17 +3496,17 @@ a {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 18px;
-    margin-bottom: 24px;
+    gap: 14px;
+    margin-bottom: 16px;
 }
 
 .hero h1 {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     position: relative;
     margin: 0;
-    font-size: 42px;
+    font-size: 28px;
     line-height: 1;
 }
 
@@ -3510,7 +3516,7 @@ a {
 
 .hero.page-header h1 {
     align-items: center;
-    font-size: 38px;
+    font-size: 26px;
 }
 
 .hero.page-header h1::after {
@@ -3518,8 +3524,8 @@ a {
 }
 
 .hero h1 svg {
-    width: 34px;
-    height: 34px;
+    width: 22px;
+    height: 22px;
     color: var(--soft-purple);
 }
 
@@ -3534,9 +3540,9 @@ a {
 }
 
 .hero p {
-    margin: 10px 0 0;
+    margin: 6px 0 0;
     color: var(--text-secondary);
-    font-size: 17px;
+    font-size: 13px;
 }
 
 .hero-chip {
@@ -3565,6 +3571,7 @@ a {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 8px;
+    min-width: 0;
     transition: border-color 180ms ease, background-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
 }
 
@@ -3577,17 +3584,22 @@ a {
 }
 
 .metric-card {
-    padding: 18px;
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    min-height: 80px;
+    padding: 14px 16px;
 }
 
 .metric-label {
     display: block;
-    margin-bottom: 10px;
+    margin-bottom: 0;
     font-size: 13px;
+    line-height: 1.25;
 }
 
 .metric-value {
-    font-size: 30px;
+    font-size: 28px;
     line-height: 1;
 }
 
@@ -3626,18 +3638,34 @@ a {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    padding: 18px 18px 14px;
+    gap: 14px;
+    padding: 14px 16px 12px;
 }
 
 .panel h2 {
     margin: 0;
-    font-size: 17px;
+    font-size: 16px;
 }
 
 .panel p {
-    margin: 6px 0 0;
+    margin: 5px 0 0;
     font-size: 13px;
+}
+
+.panel > .mini-list,
+.panel > .maintenance-summary,
+.panel > .maintenance-task-list,
+.panel > .empty-alert-state,
+.panel > .empty-muted {
+    margin-left: 16px;
+    margin-right: 16px;
+}
+
+.panel > .mini-list,
+.panel > .maintenance-task-list,
+.panel > .empty-alert-state,
+.panel > .empty-muted {
+    margin-bottom: 16px;
 }
 
 .table-wrap {
@@ -4039,9 +4067,9 @@ a {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 20px;
-    margin-bottom: 18px;
-    padding: 22px;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background:
@@ -4168,16 +4196,16 @@ a {
 .detail-title-row h1 {
     position: relative;
     margin: 0;
-    font-size: 38px;
+    font-size: 26px;
     line-height: 1.05;
 }
 
 .detail-title-row h1::after {
     content: "";
     display: block;
-    width: 68px;
-    height: 3px;
-    margin-top: 13px;
+    width: 56px;
+    height: 2px;
+    margin-top: 8px;
     border-radius: 999px;
     background: linear-gradient(90deg, var(--owl-purple), var(--glow-purple), transparent);
 }
@@ -4859,9 +4887,9 @@ a {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 18px;
-    margin-bottom: 18px;
-    padding: 22px;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background:
@@ -4882,46 +4910,47 @@ a {
 }
 
 .alerts-command-title {
-    gap: 14px;
+    gap: 12px;
     min-width: 0;
 }
 
 .command-icon {
     display: grid;
     place-items: center;
-    width: 46px;
-    height: 46px;
+    width: 36px;
+    height: 36px;
     border: 1px solid rgba(192, 132, 252, 0.28);
-    border-radius: 12px;
+    border-radius: 10px;
     color: var(--glow-purple);
     background: rgba(124, 58, 237, 0.12);
     box-shadow: 0 0 28px rgba(124, 58, 237, 0.12);
 }
 
 .command-icon svg {
-    width: 23px;
-    height: 23px;
+    width: 18px;
+    height: 18px;
 }
 
 .alerts-command-title h1 {
     margin: 0;
-    font-size: 34px;
+    font-size: 26px;
     line-height: 1;
 }
 
 .alerts-command-title h1::after {
     content: "";
     display: block;
-    width: 72px;
-    height: 3px;
-    margin-top: 12px;
+    width: 56px;
+    height: 2px;
+    margin-top: 8px;
     border-radius: 999px;
     background: linear-gradient(90deg, var(--owl-purple), var(--glow-purple), transparent);
 }
 
 .alerts-command-title p {
-    margin: 11px 0 0;
+    margin: 6px 0 0;
     color: var(--text-secondary);
+    font-size: 13px;
 }
 
 .alerts-header-actions {
@@ -4985,18 +5014,23 @@ a {
 }
 
 .command-metric {
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    min-height: 80px;
+    padding-right: 58px;
     position: relative;
     overflow: hidden;
 }
 
 .command-metric .metric-icon {
     position: absolute;
-    top: 14px;
-    right: 14px;
+    top: 12px;
+    right: 12px;
     display: grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     border: 1px solid rgba(167, 139, 250, 0.18);
     border-radius: 10px;
     color: var(--soft-purple);
@@ -5004,8 +5038,8 @@ a {
 }
 
 .command-metric .metric-icon svg {
-    width: 17px;
-    height: 17px;
+    width: 15px;
+    height: 15px;
 }
 
 .command-metric .metric-icon.critical {
@@ -5523,9 +5557,9 @@ a {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 20px;
-    margin-bottom: 18px;
-    padding: 24px;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
     border: 1px solid var(--border);
     border-radius: 12px;
     background:
@@ -5544,45 +5578,46 @@ a {
 }
 
 .noc-title-wrap {
-    gap: 15px;
+    gap: 12px;
 }
 
 .noc-mark {
     display: grid;
     place-items: center;
-    width: 52px;
-    height: 52px;
+    width: 36px;
+    height: 36px;
     border: 1px solid rgba(192, 132, 252, 0.3);
-    border-radius: 14px;
+    border-radius: 10px;
     color: var(--glow-purple);
     background: rgba(124, 58, 237, 0.12);
     box-shadow: 0 0 32px rgba(124, 58, 237, 0.11);
 }
 
 .noc-mark svg {
-    width: 26px;
-    height: 26px;
+    width: 18px;
+    height: 18px;
 }
 
 .noc-hero h1 {
     margin: 0;
-    font-size: 36px;
+    font-size: 26px;
     line-height: 1;
 }
 
 .noc-hero h1::after {
     content: "";
     display: block;
-    width: 76px;
-    height: 3px;
-    margin-top: 12px;
+    width: 56px;
+    height: 2px;
+    margin-top: 8px;
     border-radius: 999px;
     background: linear-gradient(90deg, var(--owl-purple), var(--glow-purple), transparent);
 }
 
 .noc-hero p {
-    margin: 12px 0 0;
+    margin: 6px 0 0;
     color: var(--text-secondary);
+    font-size: 13px;
 }
 
 .noc-actions {
@@ -6060,8 +6095,8 @@ a {
 .endpoint-hero-card.page-header .page-header-icon svg,
 .alerts-command-header.page-header .page-header-icon svg,
 .noc-hero.page-header .page-header-icon svg {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
     color: currentColor;
 }
 
@@ -6181,7 +6216,7 @@ a {
     }
 
     .hero h1 {
-        font-size: 34px;
+        font-size: 28px;
     }
 
     .metric-grid,

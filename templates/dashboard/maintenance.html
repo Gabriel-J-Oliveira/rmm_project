@@ -21,18 +21,18 @@
     </div>
     <div class="alerts-header-actions page-actions">
         {% if latest_run %}
-        <span class="refresh-meta">Última execução {{ latest_run.started_at|relative_time }}</span>
+        <span class="refresh-meta">&Uacute;ltima execu&ccedil;&atilde;o {{ latest_run.started_at|relative_time }}</span>
         <span class="auto-refresh-chip module-badge"><i data-lucide="terminal"></i>manage.py run_maintenance_tasks</span>
         {% else %}
-        <span class="auto-refresh-chip module-badge"><i data-lucide="terminal"></i>Aguardando primeira execução</span>
+        <span class="auto-refresh-chip module-badge"><i data-lucide="terminal"></i>Aguardando primeira execu&ccedil;&atilde;o</span>
         {% endif %}
     </div>
 </section>
 
-<section class="metric-grid events-metrics" aria-label="Resumo de manutenções">
+<section class="metric-grid events-metrics" aria-label="Resumo de manuten&ccedil;&otilde;es">
     <article class="metric-card command-metric">
         <span class="metric-icon"><i data-lucide="activity"></i></span>
-        <span class="metric-label">Em execução</span>
+        <span class="metric-label">Em execu&ccedil;&atilde;o</span>
         <strong class="metric-value">{{ running_count }}</strong>
     </article>
     <article class="metric-card command-metric">
@@ -52,8 +52,8 @@
     </article>
     <article class="metric-card command-metric">
         <span class="metric-icon"><i data-lucide="clock"></i></span>
-        <span class="metric-label">Duração última</span>
-        <strong class="metric-value">{% if latest_run.duration_seconds %}{{ latest_run.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</strong>
+        <span class="metric-label">Dura&ccedil;&atilde;o &uacute;ltima</span>
+        <strong class="metric-value">{% if latest_run.duration_seconds %}{{ latest_run.duration_seconds|floatformat:1 }}s{% else %}&mdash;{% endif %}</strong>
     </article>
 </section>
 
@@ -61,7 +61,7 @@
     <article class="panel content-panel">
         <div class="panel-header">
             <div>
-                <span class="panel-kicker">Última execução</span>
+                <span class="panel-kicker">&Uacute;ltima execu&ccedil;&atilde;o</span>
                 <h2>Status operacional</h2>
             </div>
             {% if latest_run %}
@@ -72,20 +72,20 @@
         {% if latest_run %}
         <div class="maintenance-summary">
             <div>
-                <span>Início</span>
+                <span>In&iacute;cio</span>
                 <strong>{{ latest_run.started_at|date:"d/m/Y H:i:s" }}</strong>
             </div>
             <div>
                 <span>Fim</span>
-                <strong>{{ latest_run.finished_at|date:"d/m/Y H:i:s"|default:"Em execução" }}</strong>
+                <strong>{{ latest_run.finished_at|date:"d/m/Y H:i:s"|default:"Em execu&ccedil;&atilde;o" }}</strong>
             </div>
             <div>
                 <span>Dry-run</span>
-                <strong>{% if latest_run.dry_run %}Sim{% else %}Não{% endif %}</strong>
+                <strong>{% if latest_run.dry_run %}Sim{% else %}N&atilde;o{% endif %}</strong>
             </div>
             <div>
                 <span>Tarefas</span>
-                <strong>{{ latest_run.successful_tasks }} ok · {{ latest_run.failed_tasks }} falha(s) · {{ latest_run.skipped_tasks }} skipped</strong>
+                <strong>{{ latest_run.successful_tasks }} ok &middot; {{ latest_run.failed_tasks }} falha(s) &middot; {{ latest_run.skipped_tasks }} skipped</strong>
             </div>
         </div>
 
@@ -109,7 +109,7 @@
         {% else %}
         <div class="empty-alert-state">
             <i data-lucide="moon"></i>
-            <strong>Nenhuma manutenção registrada ainda.</strong>
+            <strong>Nenhuma manuten&ccedil;&atilde;o registrada ainda.</strong>
             <p>Execute <span class="mono">python manage.py run_maintenance_tasks</span> para criar o primeiro registro.</p>
         </div>
         {% endif %}
@@ -119,7 +119,7 @@
         <div class="panel-header">
             <div>
                 <span class="panel-kicker">Falhas recentes</span>
-                <h2>Atenção</h2>
+                <h2>Aten&ccedil;&atilde;o</h2>
             </div>
         </div>
         <div class="mini-list">
@@ -139,8 +139,8 @@
 <section class="panel content-panel">
     <div class="panel-header">
         <div>
-            <span class="panel-kicker">Histórico</span>
-            <h2>Últimas execuções</h2>
+            <span class="panel-kicker">Hist&oacute;rico</span>
+            <h2>&Uacute;ltimas execu&ccedil;&otilde;es</h2>
         </div>
     </div>
     <div class="table-wrap">
@@ -148,8 +148,8 @@
             <thead>
                 <tr>
                     <th>Status</th>
-                    <th>Início</th>
-                    <th>Duração</th>
+                    <th>In&iacute;cio</th>
+                    <th>Dura&ccedil;&atilde;o</th>
                     <th>Modo</th>
                     <th>Tarefas</th>
                     <th>Resultados</th>
@@ -160,14 +160,14 @@
                 <tr>
                     <td><span class="severity-badge severity-{{ run.status }}">{{ run.get_status_display }}</span></td>
                     <td>{{ run.started_at|date:"d/m/Y H:i:s" }}</td>
-                    <td>{% if run.duration_seconds %}{{ run.duration_seconds|floatformat:1 }}s{% else %}—{% endif %}</td>
+                    <td>{% if run.duration_seconds %}{{ run.duration_seconds|floatformat:1 }}s{% else %}&mdash;{% endif %}</td>
                     <td>{% if run.dry_run %}<span class="mono">dry-run</span>{% else %}<span class="mono">{{ run.triggered_by }}</span>{% endif %}</td>
                     <td>{{ run.total_tasks }}</td>
-                    <td>{{ run.successful_tasks }} ok · {{ run.failed_tasks }} falha(s) · {{ run.skipped_tasks }} skipped</td>
+                    <td>{{ run.successful_tasks }} ok &middot; {{ run.failed_tasks }} falha(s) &middot; {{ run.skipped_tasks }} skipped</td>
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="6" class="empty-cell">Nenhuma execução encontrada.</td>
+                    <td colspan="6" class="empty-cell">Nenhuma execu&ccedil;&atilde;o encontrada.</td>
                 </tr>
                 {% endfor %}
             </tbody>

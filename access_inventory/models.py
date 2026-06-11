@@ -2,6 +2,74 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 
+class InventoryAgent(models.Model):
+    name = models.CharField(max_length=150)
+    hostname = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    token_hash = models.CharField(max_length=128, unique=True)
+    enabled = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    version = models.CharField(max_length=50, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name', 'hostname']
+        indexes = [
+            models.Index(fields=['enabled', 'hostname']),
+            models.Index(fields=['last_seen_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.name} ({self.hostname})'
+
+
+class InventoryAgentRun(models.Model):
+    RUN_FILE_ACL = 'file_acl'
+    RUN_AD_INVENTORY = 'ad_inventory'
+    RUN_HEARTBEAT = 'heartbeat'
+    RUN_TYPE_CHOICES = [
+        (RUN_FILE_ACL, 'File ACL'),
+        (RUN_AD_INVENTORY, 'AD Inventory'),
+        (RUN_HEARTBEAT, 'Heartbeat'),
+    ]
+
+    STATUS_RUNNING = 'running'
+    STATUS_SUCCESS = 'success'
+    STATUS_PARTIAL_SUCCESS = 'partial_success'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, 'Running'),
+        (STATUS_SUCCESS, 'Success'),
+        (STATUS_PARTIAL_SUCCESS, 'Partial success'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    agent = models.ForeignKey(InventoryAgent, on_delete=models.CASCADE, related_name='runs')
+    run_type = models.CharField(max_length=30, choices=RUN_TYPE_CHOICES)
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_RUNNING)
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+    message = models.TextField(blank=True)
+    items_created = models.PositiveIntegerField(default=0)
+    items_updated = models.PositiveIntegerField(default=0)
+    items_ignored = models.PositiveIntegerField(default=0)
+    errors_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['agent', '-started_at']),
+            models.Index(fields=['run_type', 'status']),
+            models.Index(fields=['status', '-started_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.agent} - {self.run_type} - {self.status}'
+
+
 class ADOrganizationalUnit(models.Model):
     distinguished_name = models.CharField(max_length=1024, unique=True)
     name = models.CharField(max_length=255)

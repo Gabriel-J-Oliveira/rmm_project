@@ -9,6 +9,9 @@ from .api_views import (
     AclEntryViewSet,
     FileServerViewSet,
     FolderViewSet,
+    InventoryAgentAdInventoryView,
+    InventoryAgentFileAclView,
+    InventoryAgentHeartbeatView,
     ShareViewSet,
 )
 
@@ -24,5 +27,8 @@ router.register('folders', FolderViewSet)
 router.register('acl-entries', AclEntryViewSet)
 
 urlpatterns = [
+    path('agent/heartbeat/', InventoryAgentHeartbeatView.as_view(), name='access-inventory-agent-heartbeat'),
+    path('agent/file-acl/', InventoryAgentFileAclView.as_view(), name='access-inventory-agent-file-acl'),
+    path('agent/ad-inventory/', InventoryAgentAdInventoryView.as_view(), name='access-inventory-agent-ad-inventory'),
     path('', include(router.urls)),
 ]

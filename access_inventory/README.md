@@ -52,6 +52,57 @@ O projeto ja usa Django REST Framework, entao este app fornece endpoints read-on
 - `/api/access-inventory/folders/`
 - `/api/access-inventory/acl-entries/`
 
+## Agent API
+
+A primeira versao da comunicacao Agent -> Django usa token simples no header `X-Nightowl-Agent-Token`.
+O token nunca e salvo em texto puro; o banco guarda apenas o hash.
+
+### Criar agente
+
+```powershell
+venv\Scripts\python.exe manage.py create_inventory_agent --name "FS01 Collector" --hostname "FS01"
+```
+
+O comando exibe o token uma unica vez. Guarde-o em local seguro.
+
+### Heartbeat
+
+```powershell
+curl -X POST http://localhost:8000/api/access-inventory/agent/heartbeat/ ^
+  -H "Content-Type: application/json" ^
+  -H "X-Nightowl-Agent-Token: SEU_TOKEN" ^
+  -d "{\"version\":\"0.1.0\"}"
+```
+
+### Enviar file-acl
+
+O payload aceito e o mesmo do comando `import_file_acl`.
+
+```powershell
+curl -X POST http://localhost:8000/api/access-inventory/agent/file-acl/ ^
+  -H "Content-Type: application/json" ^
+  -H "X-Nightowl-Agent-Token: SEU_TOKEN" ^
+  --data-binary "@sample_data/access_inventory/file_acl_sample.json"
+```
+
+### Enviar ad-inventory
+
+O payload aceito e o mesmo do comando `import_ad_inventory`.
+
+```powershell
+curl -X POST http://localhost:8000/api/access-inventory/agent/ad-inventory/ ^
+  -H "Content-Type: application/json" ^
+  -H "X-Nightowl-Agent-Token: SEU_TOKEN" ^
+  --data-binary "@sample_data/access_inventory/ad_inventory_sample.json"
+```
+
+### Revogar ou desativar agente
+
+No Django Admin, abra `Access Inventory > Inventory agents` e desmarque `enabled`.
+Um agente desativado passa a receber `401` nos endpoints.
+
+Cada chamada cria um `InventoryAgentRun` com status, contadores e mensagem.
+
 ## Proximos passos
 
 - Criar script PowerShell para exportar ACLs NTFS.
