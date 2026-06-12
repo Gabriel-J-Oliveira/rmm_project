@@ -350,7 +350,9 @@ if (-not [string]::IsNullOrWhiteSpace($outputDirectory) -and -not (Test-Path -Li
 }
 
 $json = $result | ConvertTo-Json -Depth 8
-$json | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$resolvedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
+[System.IO.File]::WriteAllText($resolvedOutputPath, $json, $utf8NoBom)
 
 $duration = New-TimeSpan -Start $startedAt -End (Get-Date)
 Write-Log "Export finished."
