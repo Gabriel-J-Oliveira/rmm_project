@@ -6449,7 +6449,7 @@ body.page-access-inventory .topbar-status {
 
 .ai-shell {
     display: grid;
-    gap: 18px;
+    gap: 14px;
 }
 
 .ai-hero {
@@ -6460,13 +6460,13 @@ body.page-access-inventory .topbar-status {
         var(--ai-card);
     border-color: var(--ai-border);
     border-top-color: rgba(56, 189, 248, 0.42);
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18);
     display: flex;
-    gap: 14px;
+    gap: 12px;
     justify-content: space-between;
     margin-bottom: 0;
     min-height: 0;
-    padding: 14px 16px;
+    padding: 12px 14px;
 }
 
 body.page-access-inventory .ai-hero.page-header::before {
@@ -6476,7 +6476,7 @@ body.page-access-inventory .ai-hero.page-header::before {
 .ai-hero-title {
     align-items: center;
     display: flex;
-    gap: 14px;
+    gap: 12px;
     min-width: 0;
 }
 
@@ -6486,13 +6486,14 @@ body.page-access-inventory .ai-hero.page-header::before {
         radial-gradient(circle at 50% 20%, rgba(56, 189, 248, 0.16), transparent 42%),
         #111827;
     border: 1px solid rgba(56, 189, 248, 0.34);
-    border-radius: 10px;
-    box-shadow: 0 0 24px rgba(56, 189, 248, 0.12);
+    border-radius: 9px;
+    box-shadow: 0 0 18px rgba(56, 189, 248, 0.1);
     color: var(--ai-blue-soft);
     display: inline-flex;
-    height: 38px;
+    flex: 0 0 34px;
+    height: 34px;
     justify-content: center;
-    width: 38px;
+    width: 34px;
 }
 
 .ai-hero-icon svg,
@@ -6507,16 +6508,16 @@ body.page-access-inventory .ai-hero.page-header::before {
 
 .ai-kicker {
     color: var(--ai-blue-soft);
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 900;
     letter-spacing: 0;
-    margin: 0 0 4px;
+    margin: 0 0 3px;
     text-transform: uppercase;
 }
 
 body.page-access-inventory .page-title {
     color: var(--ai-text);
-    font-size: 24px;
+    font-size: 21px;
     line-height: 1.12;
     margin: 0;
 }
@@ -6524,8 +6525,8 @@ body.page-access-inventory .page-title {
 body.page-access-inventory .page-subtitle {
     color: var(--ai-muted);
     font-size: 13px;
-    line-height: 1.4;
-    margin: 6px 0 0;
+    line-height: 1.35;
+    margin: 5px 0 0;
 }
 
 .ai-hero-chip,
@@ -6535,12 +6536,12 @@ body.page-access-inventory .page-subtitle {
     align-items: center;
     border-radius: 10px;
     display: inline-flex;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 900;
     gap: 8px;
     justify-content: center;
-    min-height: 38px;
-    padding: 0 14px;
+    min-height: 32px;
+    padding: 0 10px;
     text-decoration: none;
 }
 
