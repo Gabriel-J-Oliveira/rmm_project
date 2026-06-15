@@ -16,6 +16,7 @@ from .models import (
     InventoryAgentRun,
     Share,
 )
+from .services.resolve_acl_identities import resolve_acl_identities
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -108,3 +109,73 @@ class InventoryAgentApiTests(TestCase):
         run = InventoryAgentRun.objects.get(run_type=InventoryAgentRun.RUN_AD_INVENTORY)
         self.assertEqual(run.status, InventoryAgentRun.STATUS_SUCCESS)
         self.assertGreater(run.items_created, 0)
+
+
+class ResolveAclIdentityTests(TestCase):
+    def create_folder(self):
+        file_server = FileServer.objects.create(name='FS01')
+        share = Share.objects.create(file_server=file_server, name='Dados', unc_path='\\\\FS01\\Dados')
+        return Folder.objects.create(share=share, path='Financeiro')
+
+    def test_resolves_acl_identity_to_user(self):
+        folder = self.create_folder()
+        user = ADUser.objects.create(
+            sid='S-1-5-21-1-1001',
+            sam_account_name='j.silva',
+            display_name='Joao Silva',
+        )
+        acl = AclEntry.objects.create(
+            folder=folder,
+            identity_sid=user.sid,
+            identity_name='CONTROL\\j.silva',
+            rights='ReadAndExecute',
+            access_type=AclEntry.ACCESS_ALLOW,
+        )
+
+        result = resolve_acl_identities()
+
+        acl.refresh_from_db()
+        self.assertEqual(result.resolved_users, 1)
+        self.assertEqual(acl.resolved_ad_user, user)
+        self.assertEqual(acl.resolved_identity_type, AclEntry.IDENTITY_USER)
+        self.assertIsNotNone(acl.resolved_at)
+
+    def test_resolves_acl_identity_to_group(self):
+        folder = self.create_folder()
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-1-2001',
+            sam_account_name='GG_FINANCEIRO_RW',
+            name='GG Financeiro RW',
+        )
+        acl = AclEntry.objects.create(
+            folder=folder,
+            identity_sid=group.sid,
+            identity_name='CONTROL\\GG_FINANCEIRO_RW',
+            rights='Modify',
+            access_type=AclEntry.ACCESS_ALLOW,
+        )
+
+        result = resolve_acl_identities()
+
+        acl.refresh_from_db()
+        self.assertEqual(result.resolved_groups, 1)
+        self.assertEqual(acl.resolved_ad_group, group)
+        self.assertEqual(acl.resolved_identity_type, AclEntry.IDENTITY_GROUP)
+
+    def test_marks_unknown_when_sid_does_not_match(self):
+        folder = self.create_folder()
+        acl = AclEntry.objects.create(
+            folder=folder,
+            identity_sid='S-1-5-21-1-9999',
+            identity_name='CONTROL\\UNKNOWN',
+            rights='Read',
+            access_type=AclEntry.ACCESS_ALLOW,
+        )
+
+        result = resolve_acl_identities()
+
+        acl.refresh_from_db()
+        self.assertEqual(result.unknown, 1)
+        self.assertEqual(acl.resolved_identity_type, AclEntry.IDENTITY_UNKNOWN)
+        self.assertIsNone(acl.resolved_ad_user)
+        self.assertIsNone(acl.resolved_ad_group)

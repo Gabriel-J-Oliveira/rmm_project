@@ -31,6 +31,23 @@ venv\Scripts\python.exe manage.py import_file_acl sample_data\access_inventory\f
 
 Os comandos sao idempotentes e fazem upsert. Ao final, mostram quantos registros foram criados, atualizados e ignorados.
 
+## Resolver identidades das ACLs
+
+Depois de importar o inventario do AD e as ACLs dos file servers, use o comando abaixo para cruzar `AclEntry.identity_sid` com usuarios e grupos do AD. Neste projeto, o SID dos objetos AD fica nos campos `ADUser.sid` e `ADGroup.sid`.
+
+```powershell
+venv\Scripts\python.exe manage.py resolve_acl_identities
+```
+
+Opcoes uteis:
+
+```powershell
+venv\Scripts\python.exe manage.py resolve_acl_identities --dry-run --limit 100
+venv\Scripts\python.exe manage.py resolve_acl_identities --only-unknown --force
+```
+
+O comando preenche `resolved_ad_user`, `resolved_ad_group`, `resolved_identity_type` e `resolved_at`. As ACLs sem SID correspondente ficam como `unknown`.
+
 ## Telas
 
 - Dashboard: `/access-inventory/`

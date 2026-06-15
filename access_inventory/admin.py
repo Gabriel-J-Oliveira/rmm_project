@@ -135,14 +135,16 @@ class FolderAdmin(admin.ModelAdmin):
 class AclEntryAdmin(admin.ModelAdmin):
     list_display = (
         'identity_name',
-        'identity_type',
-        'access_type',
-        'inherited',
+        'identity_sid',
+        'resolved_identity_type',
+        'resolved_ad_user',
+        'resolved_ad_group',
         'rights',
+        'is_inherited',
         'folder',
         'updated_at',
     )
-    list_filter = ('identity_type', 'access_type', 'inherited', 'folder__share__file_server')
+    list_filter = ('resolved_identity_type', 'inherited', 'access_type', 'folder__share', 'folder__share__file_server')
     search_fields = (
         'identity_sid',
         'identity_name',
@@ -151,6 +153,14 @@ class AclEntryAdmin(admin.ModelAdmin):
         'folder__share__unc_path',
         'ad_user__sam_account_name',
         'ad_group__name',
+        'resolved_ad_user__sam_account_name',
+        'resolved_ad_user__display_name',
+        'resolved_ad_group__sam_account_name',
+        'resolved_ad_group__name',
     )
-    autocomplete_fields = ('folder', 'ad_user', 'ad_group')
-    readonly_fields = ('created_at', 'updated_at')
+    autocomplete_fields = ('folder', 'ad_user', 'ad_group', 'resolved_ad_user', 'resolved_ad_group')
+    readonly_fields = ('created_at', 'updated_at', 'resolved_at')
+
+    @admin.display(boolean=True, ordering='inherited', description='Inherited')
+    def is_inherited(self, obj):
+        return obj.inherited

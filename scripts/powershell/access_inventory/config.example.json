@@ -1,21 +1,20 @@
 {
   "server_url": "https://nightowl.control.local",
   "agent_token": "COLE_AQUI_O_TOKEN_GERADO_PELO_DJANGO",
-  "hostname": "SRV-FS01",
-  "collector_name": "SRV-FS01 ACL Collector",
+  "hostname": "DC01",
+  "collector_name": "DC01 AD Inventory Collector",
   "timeout_sec": 60,
   "log_path": "C:\\Nightowl\\AccessInventory\\logs\\agent.log",
   "temp_directory": "C:\\Nightowl\\AccessInventory\\tmp",
-  "file_acl_targets": [
-    {
-      "name": "Financeiro",
-      "file_server_name": "SRV-FS01",
-      "share_name": "Financeiro",
-      "path": "\\\\SRV-FS01\\Financeiro",
-      "max_depth": 1,
-      "include_inherited": true,
-      "verbose_log": false,
-      "export_json_path": "C:\\Nightowl\\AccessInventory\\last_file_acl_financeiro.json"
-    }
-  ]
+  "ad_inventory": {
+    "enabled": true,
+    "domain": "control.local",
+    "search_base": "",
+    "include_disabled_users": true,
+    "collect_group_memberships": true,
+    "verbose_skipped_members": false,
+    "verbose_log": false,
+    "export_json_path": "C:\\Nightowl\\AccessInventory\\last_ad_inventory_payload.json"
+  },
+  "file_acl_targets": []
 }

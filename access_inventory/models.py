@@ -304,6 +304,22 @@ class AclEntry(models.Model):
         blank=True,
         related_name='acl_entries',
     )
+    resolved_ad_user = models.ForeignKey(
+        ADUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='resolved_acl_entries',
+    )
+    resolved_ad_group = models.ForeignKey(
+        ADGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='resolved_acl_entries',
+    )
+    resolved_identity_type = models.CharField(max_length=20, choices=IDENTITY_TYPE_CHOICES, default=IDENTITY_UNKNOWN)
+    resolved_at = models.DateTimeField(null=True, blank=True)
     rights = models.TextField()
     access_type = models.CharField(max_length=10, choices=ACCESS_TYPE_CHOICES, default=ACCESS_ALLOW)
     inherited = models.BooleanField(default=False)
@@ -335,6 +351,8 @@ class AclEntry(models.Model):
             models.Index(fields=['identity_sid']),
             models.Index(fields=['identity_name']),
             models.Index(fields=['identity_type']),
+            models.Index(fields=['resolved_identity_type']),
+            models.Index(fields=['resolved_at']),
             models.Index(fields=['access_type']),
             models.Index(fields=['inherited']),
         ]
