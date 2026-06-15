@@ -8,32 +8,36 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title="File servers" subtitle="Servidores de arquivos, shares e pastas importadas." icon="server" %}
-<section class="panel filter-panel">
-    <form class="endpoint-filters" method="get">
-        <label class="filter-field filter-search"><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, FQDN, descricao ou endpoint RMM"></label>
-        <div class="filter-actions"><button type="submit">Filtrar</button><a href="{% url 'access_inventory:file-server-list' %}">Limpar</a></div>
-    </form>
-</section>
-<section class="panel">
-    <div class="table-wrap">
-        <table class="endpoint-table">
-            <thead><tr><th>Servidor</th><th>FQDN</th><th>RMM</th><th>Shares</th><th>Pastas</th><th>Descricao</th></tr></thead>
-            <tbody>
-                {% for file_server in file_servers %}
-                <tr>
-                    <td><a class="table-link mono" href="{% url 'access_inventory:file-server-detail' file_server.id %}">{{ file_server.name }}</a></td>
-                    <td class="mono">{{ file_server.fqdn|default:"--" }}</td>
-                    <td>{{ file_server.rmm_agent|default:"--" }}</td>
-                    <td>{{ file_server.share_count }}</td>
-                    <td>{{ file_server.folder_count }}</td>
-                    <td>{{ file_server.description|default:"--"|truncatechars:90 }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="6" class="empty-state">Nenhum file server encontrado.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="File servers" subtitle="Servidores, shares e pastas coletadas pelos agentes ou imports JSON." icon="server" %}
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, FQDN, descricao ou endpoint RMM"></label>
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a class="ai-btn" href="{% url 'access_inventory:file-server-list' %}">Limpar</a>
+        </form>
+    </section>
+    <section class="ai-panel">
+        <h2><i data-lucide="server"></i>File servers</h2>
+        <div class="ai-table-wrap">
+            <table class="ai-table">
+                <thead><tr><th>Servidor</th><th>FQDN</th><th>RMM</th><th>Shares</th><th>Pastas</th><th>Descricao</th></tr></thead>
+                <tbody>
+                    {% for file_server in file_servers %}
+                    <tr>
+                        <td><a class="ai-link mono" href="{% url 'access_inventory:file-server-detail' file_server.id %}">{{ file_server.name }}</a></td>
+                        <td class="mono">{{ file_server.fqdn|default:"--" }}</td>
+                        <td>{{ file_server.rmm_agent|default:"--" }}</td>
+                        <td>{{ file_server.share_count }}</td>
+                        <td>{{ file_server.folder_count }}</td>
+                        <td>{{ file_server.description|default:"--"|truncatechars:90 }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="6" class="ai-empty">Nenhum file server encontrado.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </section>
 {% endblock %}

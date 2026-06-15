@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Pastas{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Pastas</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Pastas inventariadas" subtitle="Escolha uma pasta para ver ACLs, heranca e identidades relacionadas." icon="folder-tree" %}
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Caminho, share, UNC, file server ou parent path"></label>
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a class="ai-btn" href="{% url 'access_inventory:folder-list' %}">Limpar</a>
+        </form>
+    </section>
+    <section class="ai-panel">
+        <h2><i data-lucide="folder-lock"></i>Pastas</h2>
+        <div class="ai-table-wrap">
+            <table class="ai-table">
+                <thead><tr><th>Pasta</th><th>Share</th><th>File server</th><th>Heranca</th><th>ACLs</th></tr></thead>
+                <tbody>
+                    {% for folder in folders %}
+                    <tr>
+                        <td><a class="ai-link mono" href="{% url 'access_inventory:folder-detail' folder.id %}">{{ folder.path }}</a><span class="ai-subtext">{{ folder.parent_path|default:"sem parent path" }}</span></td>
+                        <td class="mono">{{ folder.share.unc_path }}</td>
+                        <td><a class="ai-link" href="{% url 'access_inventory:file-server-detail' folder.share.file_server.id %}">{{ folder.share.file_server.name }}</a></td>
+                        <td><span class="ai-badge {% if folder.inheritance_enabled %}ai-badge-inherited{% else %}ai-badge-explicit{% endif %}">{% if folder.inheritance_enabled %}Habilitada{% else %}Bloqueada{% endif %}</span></td>
+                        <td>{{ folder.acl_count }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="ai-empty">Nenhuma pasta encontrada.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</section>
+{% endblock %}

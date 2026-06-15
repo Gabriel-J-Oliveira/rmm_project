@@ -1,0 +1,9 @@
+<nav class="ai-module-nav" aria-label="Navegacao do Access Inventory">
+    <a class="{% if access_active_section == 'overview' %}active{% endif %}" href="{% url 'access_inventory:dashboard' %}"><i data-lucide="layout-dashboard"></i>Visao geral</a>
+    <a class="{% if access_active_section == 'explorer' %}active{% endif %}" href="{% url 'access_inventory:explorer' %}"><i data-lucide="search"></i>Explorador</a>
+    <a class="{% if access_active_section == 'folders' %}active{% endif %}" href="{% url 'access_inventory:folder-list' %}"><i data-lucide="folder-tree"></i>Pastas</a>
+    <a class="{% if access_active_section == 'users' %}active{% endif %}" href="{% url 'access_inventory:user-list' %}"><i data-lucide="user"></i>Usuarios</a>
+    <a class="{% if access_active_section == 'groups' %}active{% endif %}" href="{% url 'access_inventory:group-list' %}"><i data-lucide="users"></i>Grupos</a>
+    <a class="{% if access_active_section == 'ous' %}active{% endif %}" href="{% url 'access_inventory:ou-list' %}"><i data-lucide="building-2"></i>OUs</a>
+    <a class="{% if access_active_section == 'unknown' %}active{% endif %}" href="{% url 'access_inventory:unknown-identities' %}"><i data-lucide="circle-help"></i>Identidades desconhecidas</a>
+</nav>

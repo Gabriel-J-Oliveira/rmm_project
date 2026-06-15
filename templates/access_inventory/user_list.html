@@ -8,32 +8,36 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title="Usuarios AD" subtitle="Consulta de usuarios importados do Active Directory." icon="user" %}
-<section class="panel filter-panel">
-    <form class="endpoint-filters" method="get">
-        <label class="filter-field filter-search"><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, login, e-mail, SID ou DN"></label>
-        <div class="filter-actions"><button type="submit">Filtrar</button><a href="{% url 'access_inventory:user-list' %}">Limpar</a></div>
-    </form>
-</section>
-<section class="panel">
-    <div class="table-wrap">
-        <table class="endpoint-table">
-            <thead><tr><th>Usuario</th><th>Display name</th><th>E-mail</th><th>OU</th><th>Status</th><th>Grupos diretos</th></tr></thead>
-            <tbody>
-                {% for user in users %}
-                <tr>
-                    <td><a class="table-link mono" href="{% url 'access_inventory:user-detail' user.id %}">{{ user.sam_account_name }}</a><span class="endpoint-subtext">{{ user.sid }}</span></td>
-                    <td>{{ user.display_name|default:"--" }}</td>
-                    <td>{{ user.email|default:"--" }}</td>
-                    <td>{{ user.ou|default:"--" }}</td>
-                    <td><span class="status-badge status-{% if user.enabled %}online{% else %}offline{% endif %}">{% if user.enabled %}Ativo{% else %}Desabilitado{% endif %}</span></td>
-                    <td>{{ user.group_count }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="6" class="empty-state">Nenhum usuario encontrado.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Usuarios AD" subtitle="Escolha um usuario para ver grupos diretos, acessos diretos e acessos por grupo." icon="user" %}
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, login, e-mail, SID ou DN"></label>
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a class="ai-btn" href="{% url 'access_inventory:user-list' %}">Limpar</a>
+        </form>
+    </section>
+    <section class="ai-panel">
+        <h2><i data-lucide="user-search"></i>Usuarios encontrados</h2>
+        <div class="ai-table-wrap">
+            <table class="ai-table">
+                <thead><tr><th>Usuario</th><th>Display name</th><th>E-mail</th><th>OU</th><th>Status</th><th>Grupos diretos</th></tr></thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td><a class="ai-link mono" href="{% url 'access_inventory:user-detail' user.id %}">{{ user.sam_account_name }}</a><span class="ai-subtext mono">{{ user.sid }}</span></td>
+                        <td>{{ user.display_name|default:"--" }}</td>
+                        <td>{{ user.email|default:"--" }}</td>
+                        <td>{% if user.ou %}<a class="ai-link" href="{% url 'access_inventory:ou-detail' user.ou.id %}">{{ user.ou.name }}</a>{% else %}<span class="ai-muted">--</span>{% endif %}</td>
+                        <td><span class="ai-badge {% if user.enabled %}ai-badge-enabled{% else %}ai-badge-disabled{% endif %}">{% if user.enabled %}Ativo{% else %}Inativo{% endif %}</span></td>
+                        <td>{{ user.group_count }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="6" class="ai-empty">Nenhum usuario encontrado.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </section>
 {% endblock %}

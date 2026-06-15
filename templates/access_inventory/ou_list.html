@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | OUs{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>OUs</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Organizational Units" subtitle="Navegue por OUs para encontrar usuarios, grupos e acessos relacionados." icon="building-2" %}
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, distinguishedName ou parent DN"></label>
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a class="ai-btn" href="{% url 'access_inventory:ou-list' %}">Limpar</a>
+        </form>
+    </section>
+    <section class="ai-panel">
+        <h2><i data-lucide="building-2"></i>OUs encontradas</h2>
+        <div class="ai-table-wrap">
+            <table class="ai-table">
+                <thead><tr><th>OU</th><th>Distinguished name</th><th>Parent</th><th>Usuarios</th><th>Grupos</th></tr></thead>
+                <tbody>
+                    {% for ou in ous %}
+                    <tr>
+                        <td><a class="ai-link" href="{% url 'access_inventory:ou-detail' ou.id %}">{{ ou.name }}</a></td>
+                        <td class="mono">{{ ou.distinguished_name }}</td>
+                        <td class="mono">{{ ou.parent_distinguished_name|default:"--" }}</td>
+                        <td>{{ ou.user_count }}</td>
+                        <td>{{ ou.group_count }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="ai-empty">Nenhuma OU encontrada.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</section>
+{% endblock %}

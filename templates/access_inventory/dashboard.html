@@ -10,53 +10,79 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title="Inventario de acessos" subtitle="Usuarios, grupos, file servers, shares, pastas e ACLs importados por JSON." icon="folder-key" %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Mapa de relacoes de acesso" subtitle="Comece por uma pasta, OU, grupo ou usuario e navegue pelas entidades adjacentes." icon="folder-key" %}
 
-<section class="metric-grid endpoint-metrics">
-    <article class="metric-card"><span class="metric-label">Usuarios AD</span><strong class="metric-value">{{ user_count }}</strong></article>
-    <article class="metric-card"><span class="metric-label">Usuarios ativos</span><strong class="metric-value status-text-online">{{ enabled_user_count }}</strong></article>
-    <article class="metric-card"><span class="metric-label">Grupos AD</span><strong class="metric-value">{{ group_count }}</strong></article>
-    <article class="metric-card"><span class="metric-label">File servers</span><strong class="metric-value">{{ file_server_count }}</strong></article>
-    <article class="metric-card"><span class="metric-label">Pastas</span><strong class="metric-value">{{ folder_count }}</strong></article>
-    <article class="metric-card"><span class="metric-label">ACLs explicitas</span><strong class="metric-value status-text-warning">{{ explicit_acl_count }}</strong></article>
-</section>
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="user"></i><strong>{{ user_count }}</strong><span>Usuarios AD</span></article>
+        <article class="ai-metric"><i data-lucide="user-check"></i><strong>{{ enabled_user_count }}</strong><span>Usuarios ativos</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ group_count }}</strong><span>Grupos AD</span></article>
+        <article class="ai-metric"><i data-lucide="building-2"></i><strong>{{ ou_count }}</strong><span>OUs</span></article>
+        <article class="ai-metric"><i data-lucide="folder-tree"></i><strong>{{ folder_count }}</strong><span>Pastas</span></article>
+        <article class="ai-metric"><i data-lucide="shield-check"></i><strong>{{ acl_count }}</strong><span>ACLs NTFS</span></article>
+        <article class="ai-metric"><i data-lucide="link"></i><strong>{{ resolved_acl_count }}</strong><span>Identidades resolvidas</span></article>
+        <article class="ai-metric ai-warning"><i data-lucide="circle-help"></i><strong>{{ unknown_acl_count }}</strong><span>Identidades desconhecidas</span></article>
+    </section>
 
-<section class="dashboard-grid">
-    <article class="panel">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="users"></i></span>Consultas principais</h2>
-                <p>Atalhos para responder as primeiras perguntas de acesso.</p>
+    <section class="ai-explorer-card">
+        <div>
+            <p class="ai-kicker">Explorador de acessos</p>
+            <h2>Localize um no e abra suas conexoes</h2>
+            <p>Busque usuarios, grupos, OUs, pastas, shares ou file servers. A partir do detalhe, a tela mostra permissoes, membros, caminhos e adjacencias.</p>
+        </div>
+        <form class="ai-search" action="{% url 'access_inventory:explorer' %}" method="get">
+            <input type="search" name="q" placeholder="Ex.: GG_FINANCEIRO_RW, Gabriel, \\FS\\Share, OU=Financeiro">
+            <button type="submit"><i data-lucide="search"></i>Explorar</button>
+        </form>
+    </section>
+
+    <section class="ai-card-grid">
+        <a class="ai-object-card" href="{% url 'access_inventory:folder-list' %}">
+            <i data-lucide="folder-lock"></i>
+            <strong>Comecar por pasta</strong>
+            <span>Veja ACLs, Allow/Deny, heranca e identidades resolvidas.</span>
+        </a>
+        <a class="ai-object-card" href="{% url 'access_inventory:group-list' %}">
+            <i data-lucide="users"></i>
+            <strong>Comecar por grupo</strong>
+            <span>Descubra quais pastas recebem acesso por esse grupo.</span>
+        </a>
+        <a class="ai-object-card" href="{% url 'access_inventory:user-list' %}">
+            <i data-lucide="user-search"></i>
+            <strong>Comecar por usuario</strong>
+            <span>Veja grupos diretos e acessos diretos ou via grupo.</span>
+        </a>
+        <a class="ai-object-card" href="{% url 'access_inventory:ou-list' %}">
+            <i data-lucide="building-2"></i>
+            <strong>Comecar por OU</strong>
+            <span>Liste usuarios, grupos e acessos relacionados ao container.</span>
+        </a>
+    </section>
+
+    <section class="ai-grid-2">
+        <article class="ai-panel">
+            <h2><i data-lucide="activity"></i>Resumo de ACLs</h2>
+            <div class="ai-stat-list">
+                <div><span>Explicitas</span><strong>{{ explicit_acl_count }}</strong></div>
+                <div><span>Herdadas</span><strong>{{ inherited_acl_count }}</strong></div>
+                <div><span>Shares</span><strong>{{ share_count }}</strong></div>
+                <div><span>File servers</span><strong>{{ file_server_count }}</strong></div>
             </div>
-        </div>
-        <div class="endpoint-alert-list">
-            <a class="endpoint-alert-item" href="{% url 'access_inventory:user-list' %}"><i data-lucide="user"></i><div><strong>Usuarios AD</strong><p>Grupos diretos e dados basicos.</p></div></a>
-            <a class="endpoint-alert-item" href="{% url 'access_inventory:group-list' %}"><i data-lucide="users"></i><div><strong>Grupos AD</strong><p>Membros e ACLs vinculadas.</p></div></a>
-            <a class="endpoint-alert-item" href="{% url 'access_inventory:file-server-list' %}"><i data-lucide="server"></i><div><strong>File servers</strong><p>Shares e pastas relacionadas.</p></div></a>
-        </div>
-    </article>
-
-    <article class="panel">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="shield-check"></i></span>ACLs recentes</h2>
-                <p>Ultimas entradas importadas ou atualizadas.</p>
-            </div>
-        </div>
-        <div class="endpoint-alert-list">
-            {% for acl in recent_acl_entries %}
-            <article class="endpoint-alert-item">
-                <span class="severity-badge severity-{% if acl.access_type == 'deny' %}critical{% else %}info{% endif %}">{{ acl.get_access_type_display }}</span>
-                <div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="shield"></i>ACLs recentes</h2>
+            <div class="ai-mini-list">
+                {% for acl in recent_acl_entries %}
+                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}">
+                    <span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span>
                     <strong>{{ acl.identity_name }}</strong>
-                    <p>{{ acl.rights }} em <a class="panel-link inline" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a></p>
-                    <small>{% if acl.inherited %}Herdado{% else %}Explicito{% endif %} &middot; {{ acl.folder.share.file_server.name }}</small>
-                </div>
-            </article>
-            {% empty %}
-            <div class="empty-state padded">Nenhuma ACL importada ainda.</div>
-            {% endfor %}
-        </div>
-    </article>
+                    <em>{{ acl.folder.path }}</em>
+                </a>
+                {% empty %}
+                <div class="ai-empty">Nenhuma ACL importada ainda.</div>
+                {% endfor %}
+            </div>
+        </article>
+    </section>
 </section>
 {% endblock %}

@@ -8,39 +8,61 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title=group.name subtitle=group.description|default:"Grupo do Active Directory" icon="users" %}
-<section class="detail-summary-grid">
-    <article class="summary-card"><span>SID</span><strong class="mono">{{ group.sid }}</strong></article>
-    <article class="summary-card"><span>SamAccountName</span><strong class="mono">{{ group.sam_account_name }}</strong></article>
-    <article class="summary-card"><span>OU</span><strong>{{ group.ou|default:"--" }}</strong></article>
-</section>
-<section class="detail-grid">
-    <article class="panel">
-        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="users"></i></span>Membros diretos</h2><p>Usuarios e grupos diretamente associados.</p></div></div>
-        <div class="endpoint-alert-list">
-            {% for membership in memberships %}
-            {% if membership.member_user %}
-            <a class="endpoint-alert-item" href="{% url 'access_inventory:user-detail' membership.member_user.id %}"><i data-lucide="user"></i><div><strong>{{ membership.member_user.display_name }}</strong><p class="mono">{{ membership.member_user.sam_account_name }}</p></div></a>
-            {% else %}
-            <a class="endpoint-alert-item" href="{% url 'access_inventory:group-detail' membership.member_group.id %}"><i data-lucide="users"></i><div><strong>{{ membership.member_group.name }}</strong><p class="mono">{{ membership.member_group.sid }}</p></div></a>
-            {% endif %}
-            {% empty %}
-            <div class="empty-state padded">Nenhum membro importado.</div>
-            {% endfor %}
-        </div>
-    </article>
-    <article class="panel">
-        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="shield"></i></span>Permissoes em pastas</h2><p>ACLs onde este grupo foi identificado pelo SID.</p></div></div>
-        <div class="endpoint-alert-list">
-            {% for acl in acl_entries %}
-            <article class="endpoint-alert-item">
-                <span class="severity-badge severity-{% if acl.access_type == 'deny' %}critical{% else %}info{% endif %}">{{ acl.get_access_type_display }}</span>
-                <div><strong><a class="panel-link inline" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a></strong><p>{{ acl.rights }} &middot; {% if acl.inherited %}Herdado{% else %}Explicito{% endif %}</p></div>
-            </article>
-            {% empty %}
-            <div class="empty-state padded">Nenhuma ACL vinculada a este grupo.</div>
-            {% endfor %}
-        </div>
-    </article>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=group.name subtitle="Esse grupo da acesso a quais pastas?" icon="users" %}
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="user"></i><strong>{{ user_members|length }}</strong><span>Usuarios membros</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ group_members|length }}</strong><span>Subgrupos membros</span></article>
+        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ acl_count }}</strong><span>ACLs com este grupo</span></article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="id-card"></i>Dados do grupo</h2>
+        <dl class="ai-data-list">
+            <div><dt>Nome</dt><dd>{{ group.name }}</dd></div>
+            <div><dt>samAccountName</dt><dd class="mono">{{ group.sam_account_name }}</dd></div>
+            <div><dt>Object SID</dt><dd class="mono">{{ group.sid }}</dd></div>
+            <div><dt>OU</dt><dd>{% if group.ou %}<a class="ai-link" href="{% url 'access_inventory:ou-detail' group.ou.id %}">{{ group.ou.name }}</a>{% else %}--{% endif %}</dd></div>
+            <div><dt>Distinguished name</dt><dd class="mono">{{ group.distinguished_name|default:"--" }}</dd></div>
+            <div><dt>Descricao</dt><dd>{{ group.description|default:"--" }}</dd></div>
+        </dl>
+    </section>
+
+    <section class="ai-grid-2">
+        <article class="ai-panel">
+            <h2><i data-lucide="user"></i>Usuarios membros diretos</h2>
+            <div class="ai-mini-list">
+                {% for membership in user_members %}
+                <a href="{% url 'access_inventory:user-detail' membership.member_user.id %}">
+                    <span class="ai-badge ai-badge-user">user</span>
+                    <strong>{{ membership.member_user.display_name|default:membership.member_user.sam_account_name }}</strong>
+                    <em>{{ membership.member_user.sam_account_name }}</em>
+                </a>
+                {% empty %}
+                <div class="ai-empty">Nenhum usuario membro direto importado.</div>
+                {% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="users"></i>Subgrupos membros diretos</h2>
+            <div class="ai-mini-list">
+                {% for membership in group_members %}
+                <a href="{% url 'access_inventory:group-detail' membership.member_group.id %}">
+                    <span class="ai-badge ai-badge-group">group</span>
+                    <strong>{{ membership.member_group.name }}</strong>
+                    <em>{{ membership.member_group.sam_account_name }}</em>
+                </a>
+                {% empty %}
+                <div class="ai-empty">Nenhum subgrupo membro direto importado.</div>
+                {% endfor %}
+            </div>
+        </article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="folder-lock"></i>Permissoes concedidas por pasta</h2>
+        {% include "access_inventory/_acl_table.html" %}
+    </section>
 </section>
 {% endblock %}

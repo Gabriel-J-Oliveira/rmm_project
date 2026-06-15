@@ -8,31 +8,35 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title="Grupos AD" subtitle="Consulta de grupos, membros e ACLs relacionadas." icon="users" %}
-<section class="panel filter-panel">
-    <form class="endpoint-filters" method="get">
-        <label class="filter-field filter-search"><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, login, SID, descricao ou DN"></label>
-        <div class="filter-actions"><button type="submit">Filtrar</button><a href="{% url 'access_inventory:group-list' %}">Limpar</a></div>
-    </form>
-</section>
-<section class="panel">
-    <div class="table-wrap">
-        <table class="endpoint-table">
-            <thead><tr><th>Grupo</th><th>SamAccountName</th><th>OU</th><th>Membros diretos</th><th>Descricao</th></tr></thead>
-            <tbody>
-                {% for group in groups %}
-                <tr>
-                    <td><a class="table-link" href="{% url 'access_inventory:group-detail' group.id %}">{{ group.name }}</a><span class="endpoint-subtext mono">{{ group.sid }}</span></td>
-                    <td class="mono">{{ group.sam_account_name }}</td>
-                    <td>{{ group.ou|default:"--" }}</td>
-                    <td>{{ group.member_count }}</td>
-                    <td>{{ group.description|default:"--"|truncatechars:90 }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="5" class="empty-state">Nenhum grupo encontrado.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Grupos AD" subtitle="Escolha um grupo para responder: esse grupo da acesso a quais pastas?" icon="users" %}
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="Nome, samAccountName, SID, descricao ou DN"></label>
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a class="ai-btn" href="{% url 'access_inventory:group-list' %}">Limpar</a>
+        </form>
+    </section>
+    <section class="ai-panel">
+        <h2><i data-lucide="users"></i>Grupos encontrados</h2>
+        <div class="ai-table-wrap">
+            <table class="ai-table">
+                <thead><tr><th>Grupo</th><th>SamAccountName</th><th>OU</th><th>Membros diretos</th><th>Descricao</th></tr></thead>
+                <tbody>
+                    {% for group in groups %}
+                    <tr>
+                        <td><a class="ai-link" href="{% url 'access_inventory:group-detail' group.id %}">{{ group.name }}</a><span class="ai-subtext mono">{{ group.sid }}</span></td>
+                        <td class="mono">{{ group.sam_account_name }}</td>
+                        <td>{% if group.ou %}<a class="ai-link" href="{% url 'access_inventory:ou-detail' group.ou.id %}">{{ group.ou.name }}</a>{% else %}<span class="ai-muted">--</span>{% endif %}</td>
+                        <td>{{ group.member_count }}</td>
+                        <td>{{ group.description|default:"--"|truncatechars:90 }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="5" class="ai-empty">Nenhum grupo encontrado.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </section>
 {% endblock %}

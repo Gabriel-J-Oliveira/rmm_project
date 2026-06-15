@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Identidades desconhecidas{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Identidades desconhecidas</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Identidades desconhecidas" subtitle="ACLs cujo SID ainda nao foi relacionado com usuario ou grupo do AD." icon="circle-help" %}
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label><span>Busca</span><input type="search" name="q" value="{{ filters.q }}" placeholder="SID, identity_name, pasta ou share"></label>
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+            <a class="ai-btn" href="{% url 'access_inventory:unknown-identities' %}">Limpar</a>
+        </form>
+    </section>
+    <section class="ai-panel ai-alert-panel">
+        <h2><i data-lucide="alert-triangle"></i>Fila de resolucao</h2>
+        <p class="ai-note">Use `python manage.py resolve_acl_identities --only-unknown --force` depois de importar o AD para tentar resolver novamente.</p>
+        {% include "access_inventory/_acl_table.html" %}
+    </section>
+</section>
+{% endblock %}

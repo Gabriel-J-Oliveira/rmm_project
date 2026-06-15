@@ -1,7 +1,13 @@
-<section class="hero endpoints-hero page-header">
-    <div>
-        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="{{ icon|default:'folder-key' }}"></i></span>{{ title }}</h1>
-        <p class="page-subtitle">{{ subtitle }}</p>
+<header class="ai-hero page-header">
+    <div class="ai-hero-title">
+        <span class="ai-hero-icon"><i data-lucide="{{ icon|default:'folder-key' }}"></i></span>
+        <div>
+            <p class="ai-kicker">Access Inventory / Relacoes de acesso</p>
+            <h1 class="page-title">{{ title }}</h1>
+            <p class="page-subtitle">{{ subtitle }}</p>
+        </div>
     </div>
-    <div class="hero-chip module-badge">Access Inventory</div>
-</section>
+    <div class="ai-hero-chip"><i data-lucide="network"></i>Nos e adjacencias</div>
+</header>
+
+{% include "access_inventory/_module_nav.html" %}

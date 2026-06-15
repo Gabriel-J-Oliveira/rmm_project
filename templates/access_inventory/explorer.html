@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Explorador de acessos{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Explorador</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Explorador de acessos" subtitle="Busque um no do inventario e abra suas relacoes adjacentes." icon="search" %}
+
+    <section class="ai-panel">
+        <form class="ai-filter-bar" method="get">
+            <label>
+                <span>Busca global</span>
+                <input type="search" name="q" value="{{ filters.q }}" placeholder="Usuario, grupo, OU, pasta, share ou file server">
+            </label>
+            <div>
+                <span>Tipo</span>
+                <div class="ai-segmented">
+                    <button name="type" value="all" class="{% if filters.type == 'all' %}active{% endif %}">Todos</button>
+                    <button name="type" value="users" class="{% if filters.type == 'users' %}active{% endif %}">Usuarios</button>
+                    <button name="type" value="groups" class="{% if filters.type == 'groups' %}active{% endif %}">Grupos</button>
+                    <button name="type" value="ous" class="{% if filters.type == 'ous' %}active{% endif %}">OUs</button>
+                    <button name="type" value="folders" class="{% if filters.type == 'folders' %}active{% endif %}">Pastas</button>
+                </div>
+            </div>
+        </form>
+    </section>
+
+    {% if filters.q %}
+    <section class="ai-grid-2">
+        <article class="ai-panel">
+            <h2><i data-lucide="user"></i>Usuarios</h2>
+            <div class="ai-mini-list">
+                {% for user in users %}
+                <a href="{% url 'access_inventory:user-detail' user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ user.display_name|default:user.sam_account_name }}</strong><em>{{ user.sam_account_name }} &middot; {{ user.ou|default:"sem OU" }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum usuario encontrado.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="users"></i>Grupos</h2>
+            <div class="ai-mini-list">
+                {% for group in groups %}
+                <a href="{% url 'access_inventory:group-detail' group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ group.name }}</strong><em>{{ group.sam_account_name }} &middot; {{ group.ou|default:"sem OU" }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum grupo encontrado.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="building-2"></i>OUs</h2>
+            <div class="ai-mini-list">
+                {% for ou in ous %}
+                <a href="{% url 'access_inventory:ou-detail' ou.id %}"><span class="ai-badge ai-badge-ou">ou</span><strong>{{ ou.name }}</strong><em>{{ ou.distinguished_name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhuma OU encontrada.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="folder-tree"></i>Pastas, shares e file servers</h2>
+            <div class="ai-mini-list">
+                {% for folder in folders %}
+                <a href="{% url 'access_inventory:folder-detail' folder.id %}"><span class="ai-badge ai-badge-folder">folder</span><strong>{{ folder.path }}</strong><em>{{ folder.share.unc_path }} &middot; {{ folder.share.file_server.name }}</em></a>
+                {% endfor %}
+                {% for file_server in file_servers %}
+                <a href="{% url 'access_inventory:file-server-detail' file_server.id %}"><span class="ai-badge ai-badge-server">server</span><strong>{{ file_server.name }}</strong><em>{{ file_server.fqdn|default:"sem FQDN" }}</em></a>
+                {% empty %}
+                    {% if not folders %}<div class="ai-empty">Nenhuma pasta ou servidor encontrado.</div>{% endif %}
+                {% endfor %}
+            </div>
+        </article>
+    </section>
+    {% else %}
+    <section class="ai-empty ai-empty-large">
+        <i data-lucide="search"></i>
+        <strong>Digite uma busca para comecar</strong>
+        <p>Procure por um usuario, grupo, OU ou caminho de pasta. A proxima tela mostra as conexoes daquele objeto.</p>
+    </section>
+    {% endif %}
+</section>
+{% endblock %}

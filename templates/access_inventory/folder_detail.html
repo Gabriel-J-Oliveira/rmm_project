@@ -4,46 +4,37 @@
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:file-server-detail' folder.share.file_server.id %}">{{ folder.share.file_server.name }}</a><i data-lucide="chevron-right"></i><strong>{{ folder.path }}</strong></nav>
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:folder-list' %}">Pastas</a><i data-lucide="chevron-right"></i><strong>{{ folder.path }}</strong></nav>
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title=folder.path subtitle=folder.share.unc_path icon="folder-lock" %}
-<section class="detail-summary-grid">
-    <article class="summary-card"><span>File server</span><strong>{{ folder.share.file_server.name }}</strong></article>
-    <article class="summary-card"><span>Share</span><strong class="mono">{{ folder.share.unc_path }}</strong></article>
-    <article class="summary-card"><span>Heranca</span><strong>{% if folder.inheritance_enabled %}Habilitada{% else %}Bloqueada{% endif %}</strong></article>
-    <article class="summary-card"><span>Parent path</span><strong class="mono">{{ folder.parent_path|default:"--" }}</strong></article>
-</section>
-<section class="panel">
-    <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="shield-check"></i></span>Entradas de ACL</h2><p>Permissoes NTFS importadas para esta pasta.</p></div></div>
-    <div class="table-wrap">
-        <table class="endpoint-table">
-            <thead><tr><th>Identidade</th><th>Tipo</th><th>Acesso</th><th>Origem</th><th>Permissoes</th><th>Flags</th></tr></thead>
-            <tbody>
-                {% for acl in acl_entries %}
-                <tr>
-                    <td>
-                        {% if acl.ad_user %}
-                        <a class="table-link" href="{% url 'access_inventory:user-detail' acl.ad_user.id %}">{{ acl.identity_name }}</a>
-                        {% elif acl.ad_group %}
-                        <a class="table-link" href="{% url 'access_inventory:group-detail' acl.ad_group.id %}">{{ acl.identity_name }}</a>
-                        {% else %}
-                        {{ acl.identity_name }}
-                        {% endif %}
-                        <span class="endpoint-subtext mono">{{ acl.identity_sid|default:"SID desconhecido" }}</span>
-                    </td>
-                    <td>{{ acl.get_identity_type_display }}</td>
-                    <td><span class="severity-badge severity-{% if acl.access_type == 'deny' %}critical{% else %}info{% endif %}">{{ acl.get_access_type_display }}</span></td>
-                    <td><span class="status-badge status-{% if acl.inherited %}unknown{% else %}online{% endif %}">{% if acl.inherited %}Herdado{% else %}Explicito{% endif %}</span></td>
-                    <td>{{ acl.rights }}</td>
-                    <td><span class="endpoint-subtext">{{ acl.inheritance_flags|default:"--" }} / {{ acl.propagation_flags|default:"--" }}</span></td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="6" class="empty-state">Nenhuma ACL importada para esta pasta.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=folder.path subtitle="Pasta selecionada: ACLs, heranca, identidades e permissoes NTFS." icon="folder-lock" %}
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="server"></i><strong>{{ folder.share.file_server.name }}</strong><span>File server</span></article>
+        <article class="ai-metric"><i data-lucide="share-2"></i><strong>{{ folder.share.name }}</strong><span>Share</span></article>
+        <article class="ai-metric"><i data-lucide="shield"></i><strong>{{ acl_count }}</strong><span>Total de ACLs</span></article>
+        <article class="ai-metric"><i data-lucide="unlock"></i><strong>{{ explicit_acl_count }}</strong><span>Explicitas</span></article>
+        <article class="ai-metric"><i data-lucide="corner-down-right"></i><strong>{{ inherited_acl_count }}</strong><span>Herdadas</span></article>
+        <article class="ai-metric"><i data-lucide="link"></i><strong>{{ resolved_acl_count }}</strong><span>Resolvidas</span></article>
+        <article class="ai-metric ai-warning"><i data-lucide="circle-help"></i><strong>{{ unknown_acl_count }}</strong><span>Desconhecidas</span></article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="info"></i>Contexto da pasta</h2>
+        <dl class="ai-data-list">
+            <div><dt>Caminho</dt><dd class="mono">{{ folder.path }}</dd></div>
+            <div><dt>UNC da share</dt><dd class="mono">{{ folder.share.unc_path }}</dd></div>
+            <div><dt>File server</dt><dd><a class="ai-link" href="{% url 'access_inventory:file-server-detail' folder.share.file_server.id %}">{{ folder.share.file_server.name }}</a></dd></div>
+            <div><dt>Heranca da pasta</dt><dd>{% if folder.inheritance_enabled %}Habilitada{% else %}Bloqueada/protegida{% endif %}</dd></div>
+            <div><dt>Parent path</dt><dd class="mono">{{ folder.parent_path|default:"--" }}</dd></div>
+        </dl>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="shield-check"></i>Tabela de permissoes NTFS</h2>
+        {% include "access_inventory/_acl_table.html" %}
+    </section>
 </section>
 {% endblock %}

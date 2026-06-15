@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | {{ ou.name }}{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:ou-list' %}">OUs</a><i data-lucide="chevron-right"></i><strong>{{ ou.name }}</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=ou.name subtitle="Usuarios, grupos e acessos relacionados a esta OU." icon="building-2" %}
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="building"></i><strong>{{ child_ous|length }}</strong><span>OUs filhas</span></article>
+        <article class="ai-metric"><i data-lucide="user"></i><strong>{{ users|length }}</strong><span>Usuarios</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ groups|length }}</strong><span>Grupos</span></article>
+        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ related_acl_entries|length }}</strong><span>ACLs relacionadas</span></article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="id-card"></i>Dados da OU</h2>
+        <dl class="ai-data-list">
+            <div><dt>Nome</dt><dd>{{ ou.name }}</dd></div>
+            <div><dt>Distinguished name</dt><dd class="mono">{{ ou.distinguished_name }}</dd></div>
+            <div><dt>Parent distinguished name</dt><dd class="mono">{{ ou.parent_distinguished_name|default:"--" }}</dd></div>
+        </dl>
+    </section>
+
+    <section class="ai-grid-3">
+        <article class="ai-panel">
+            <h2><i data-lucide="building"></i>OUs filhas</h2>
+            <div class="ai-mini-list">
+                {% for child in child_ous %}
+                <a href="{% url 'access_inventory:ou-detail' child.id %}"><span class="ai-badge ai-badge-ou">ou</span><strong>{{ child.name }}</strong><em>{{ child.distinguished_name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhuma OU filha importada.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="user"></i>Usuarios nesta OU</h2>
+            <div class="ai-mini-list">
+                {% for user in users %}
+                <a href="{% url 'access_inventory:user-detail' user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ user.display_name|default:user.sam_account_name }}</strong><em>{{ user.sam_account_name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum usuario nesta OU.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="users"></i>Grupos nesta OU</h2>
+            <div class="ai-mini-list">
+                {% for group in groups %}
+                <a href="{% url 'access_inventory:group-detail' group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ group.name }}</strong><em>{{ group.sam_account_name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum grupo nesta OU.</div>{% endfor %}
+            </div>
+        </article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="network"></i>Acessos principais relacionados</h2>
+        <p class="ai-note">ACLs ligadas aos usuarios e grupos diretamente contidos nesta OU.</p>
+        {% include "access_inventory/_acl_table.html" with acl_entries=related_acl_entries %}
+    </section>
+</section>
+{% endblock %}

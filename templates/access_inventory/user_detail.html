@@ -8,24 +8,55 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title=user.sam_account_name subtitle=user.display_name icon="user-check" %}
-<section class="detail-summary-grid">
-    <article class="summary-card"><span>SID</span><strong class="mono">{{ user.sid }}</strong></article>
-    <article class="summary-card"><span>UPN</span><strong>{{ user.user_principal_name|default:"--" }}</strong></article>
-    <article class="summary-card"><span>E-mail</span><strong>{{ user.email|default:"--" }}</strong></article>
-    <article class="summary-card"><span>OU</span><strong>{{ user.ou|default:"--" }}</strong></article>
-    <article class="summary-card"><span>Status</span><strong>{% if user.enabled %}Ativo{% else %}Desabilitado{% endif %}</strong></article>
-</section>
-<section class="panel">
-    <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="users"></i></span>Grupos diretos</h2><p>TODO: resolver e exibir grupos herdados/aninhados.</p></div></div>
-    <div class="endpoint-alert-list">
-        {% for membership in direct_memberships %}
-        <a class="endpoint-alert-item" href="{% url 'access_inventory:group-detail' membership.parent_group.id %}">
-            <i data-lucide="users"></i><div><strong>{{ membership.parent_group.name }}</strong><p class="mono">{{ membership.parent_group.sid }}</p></div>
-        </a>
-        {% empty %}
-        <div class="empty-state padded">Nenhum grupo direto importado para este usuario.</div>
-        {% endfor %}
-    </div>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=user.sam_account_name subtitle="A quais pastas esse usuario tem acesso e por que?" icon="user-check" %}
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="badge-check"></i><strong>{% if user.enabled %}Ativo{% else %}Inativo{% endif %}</strong><span>Status</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ direct_memberships|length }}</strong><span>Grupos diretos</span></article>
+        <article class="ai-metric"><i data-lucide="user-lock"></i><strong>{{ direct_acl_count }}</strong><span>ACLs diretas</span></article>
+        <article class="ai-metric"><i data-lucide="route"></i><strong>{{ group_acl_count }}</strong><span>ACLs via grupos diretos</span></article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="id-card"></i>Dados do usuario</h2>
+        <dl class="ai-data-list">
+            <div><dt>Display name</dt><dd>{{ user.display_name|default:"--" }}</dd></div>
+            <div><dt>samAccountName</dt><dd class="mono">{{ user.sam_account_name }}</dd></div>
+            <div><dt>Object SID</dt><dd class="mono">{{ user.sid }}</dd></div>
+            <div><dt>UPN</dt><dd>{{ user.user_principal_name|default:"--" }}</dd></div>
+            <div><dt>E-mail</dt><dd>{{ user.email|default:"--" }}</dd></div>
+            <div><dt>OU</dt><dd>{% if user.ou %}<a class="ai-link" href="{% url 'access_inventory:ou-detail' user.ou.id %}">{{ user.ou.name }}</a>{% else %}--{% endif %}</dd></div>
+            <div><dt>Distinguished name</dt><dd class="mono">{{ user.distinguished_name|default:"--" }}</dd></div>
+        </dl>
+    </section>
+
+    <section class="ai-grid-2">
+        <article class="ai-panel">
+            <h2><i data-lucide="users"></i>Grupos diretos</h2>
+            <p class="ai-note">Considerando grupos diretos importados. Grupos aninhados ainda nao entram no calculo desta fase.</p>
+            <div class="ai-mini-list">
+                {% for membership in direct_memberships %}
+                <a href="{% url 'access_inventory:group-detail' membership.parent_group.id %}">
+                    <span class="ai-badge ai-badge-group">group</span>
+                    <strong>{{ membership.parent_group.name }}</strong>
+                    <em>{{ membership.parent_group.sam_account_name }}</em>
+                </a>
+                {% empty %}
+                <div class="ai-empty">Nenhum grupo direto importado para este usuario.</div>
+                {% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="fingerprint"></i>Permissoes diretas em ACL</h2>
+            {% include "access_inventory/_acl_table.html" with acl_entries=direct_acl_entries %}
+        </article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="route"></i>Pastas acessiveis por grupos diretos</h2>
+        <p class="ai-note">Este quadro mostra caminhos onde os grupos diretos do usuario aparecem em ACL. Ainda nao calcula grupos aninhados nem permissao efetiva final.</p>
+        {% include "access_inventory/_acl_table.html" with acl_entries=group_acl_entries %}
+    </section>
 </section>
 {% endblock %}

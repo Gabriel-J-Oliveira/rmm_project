@@ -1,0 +1,62 @@
+<div class="ai-table-wrap">
+    <table class="ai-table">
+        <thead>
+            <tr>
+                <th>Identidade</th>
+                <th>Tipo resolvido</th>
+                <th>Usuario</th>
+                <th>Grupo</th>
+                <th>Permissao</th>
+                <th>Access control</th>
+                <th>Heranca</th>
+                <th>Flags</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for acl in acl_entries %}
+            <tr class="{% if acl.resolved_identity_type == 'unknown' %}ai-row-warning{% endif %}">
+                <td>
+                    <strong>{{ acl.identity_name }}</strong>
+                    <span class="ai-subtext mono">{{ acl.identity_sid|default:"SID nao resolvido" }}</span>
+                </td>
+                <td>
+                    <span class="ai-badge ai-badge-{{ acl.resolved_identity_type|default:acl.identity_type }}">
+                        {{ acl.resolved_identity_type|default:acl.identity_type }}
+                    </span>
+                </td>
+                <td>
+                    {% if acl.resolved_ad_user %}
+                    <a class="ai-link" href="{% url 'access_inventory:user-detail' acl.resolved_ad_user.id %}">{{ acl.resolved_ad_user.sam_account_name }}</a>
+                    {% elif acl.ad_user %}
+                    <a class="ai-link" href="{% url 'access_inventory:user-detail' acl.ad_user.id %}">{{ acl.ad_user.sam_account_name }}</a>
+                    {% else %}
+                    <span class="ai-muted">--</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if acl.resolved_ad_group %}
+                    <a class="ai-link" href="{% url 'access_inventory:group-detail' acl.resolved_ad_group.id %}">{{ acl.resolved_ad_group.name }}</a>
+                    {% elif acl.ad_group %}
+                    <a class="ai-link" href="{% url 'access_inventory:group-detail' acl.ad_group.id %}">{{ acl.ad_group.name }}</a>
+                    {% else %}
+                    <span class="ai-muted">--</span>
+                    {% endif %}
+                </td>
+                <td>{{ acl.rights }}</td>
+                <td><span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span></td>
+                <td>
+                    <span class="ai-badge {% if acl.inherited %}ai-badge-inherited{% else %}ai-badge-explicit{% endif %}">
+                        {% if acl.inherited %}Herdada{% else %}Explicita{% endif %}
+                    </span>
+                </td>
+                <td>
+                    <span class="ai-subtext">{{ acl.inheritance_flags|default:"--" }}</span>
+                    <span class="ai-subtext">{{ acl.propagation_flags|default:"--" }}</span>
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="8" class="ai-empty">Nenhuma ACL encontrada.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

@@ -8,32 +8,54 @@
 {% endblock %}
 
 {% block content %}
-{% include "access_inventory/_header.html" with title=file_server.name subtitle=file_server.fqdn|default:"Servidor de arquivos" icon="server" %}
-<section class="detail-summary-grid">
-    <article class="summary-card"><span>FQDN</span><strong class="mono">{{ file_server.fqdn|default:"--" }}</strong></article>
-    <article class="summary-card"><span>Endpoint RMM</span><strong>{{ file_server.rmm_agent|default:"--" }}</strong></article>
-    <article class="summary-card"><span>Descricao</span><strong>{{ file_server.description|default:"--" }}</strong></article>
-</section>
-<section class="detail-grid">
-    <article class="panel">
-        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="share-2"></i></span>Shares</h2><p>Compartilhamentos associados a este servidor.</p></div></div>
-        <div class="endpoint-alert-list">
-            {% for share in shares %}
-            <article class="endpoint-alert-item"><i data-lucide="folder-open"></i><div><strong class="mono">{{ share.unc_path }}</strong><p>{{ share.folder_count }} pasta(s)</p></div></article>
-            {% empty %}
-            <div class="empty-state padded">Nenhuma share importada.</div>
-            {% endfor %}
-        </div>
-    </article>
-    <article class="panel">
-        <div class="panel-header"><div><h2><span class="section-icon"><i data-lucide="folder-tree"></i></span>Pastas</h2><p>Primeiras 200 pastas importadas para consulta.</p></div></div>
-        <div class="endpoint-alert-list">
-            {% for folder in folders %}
-            <a class="endpoint-alert-item" href="{% url 'access_inventory:folder-detail' folder.id %}"><i data-lucide="folder"></i><div><strong class="mono">{{ folder.path }}</strong><p>{{ folder.share.unc_path }} &middot; {% if folder.inheritance_enabled %}Heranca habilitada{% else %}Heranca bloqueada{% endif %}</p></div></a>
-            {% empty %}
-            <div class="empty-state padded">Nenhuma pasta importada.</div>
-            {% endfor %}
-        </div>
-    </article>
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=file_server.name subtitle="Shares e pastas relacionadas ao file server." icon="server" %}
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="server"></i><strong>{{ file_server.name }}</strong><span>File server</span></article>
+        <article class="ai-metric"><i data-lucide="share-2"></i><strong>{{ shares|length }}</strong><span>Shares</span></article>
+        <article class="ai-metric"><i data-lucide="folder-tree"></i><strong>{{ folders|length }}</strong><span>Pastas listadas</span></article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="id-card"></i>Dados do servidor</h2>
+        <dl class="ai-data-list">
+            <div><dt>Nome</dt><dd class="mono">{{ file_server.name }}</dd></div>
+            <div><dt>FQDN</dt><dd class="mono">{{ file_server.fqdn|default:"--" }}</dd></div>
+            <div><dt>Endpoint RMM</dt><dd>{{ file_server.rmm_agent|default:"--" }}</dd></div>
+            <div><dt>Descricao</dt><dd>{{ file_server.description|default:"--" }}</dd></div>
+        </dl>
+    </section>
+
+    <section class="ai-grid-2">
+        <article class="ai-panel">
+            <h2><i data-lucide="share-2"></i>Shares</h2>
+            <div class="ai-mini-list">
+                {% for share in shares %}
+                <div class="ai-list-row">
+                    <span class="ai-badge ai-badge-folder">share</span>
+                    <strong class="mono">{{ share.unc_path }}</strong>
+                    <em>{{ share.folder_count }} pasta(s)</em>
+                </div>
+                {% empty %}
+                <div class="ai-empty">Nenhuma share importada.</div>
+                {% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="folder-tree"></i>Pastas</h2>
+            <div class="ai-mini-list">
+                {% for folder in folders %}
+                <a href="{% url 'access_inventory:folder-detail' folder.id %}">
+                    <span class="ai-badge ai-badge-folder">folder</span>
+                    <strong class="mono">{{ folder.path }}</strong>
+                    <em>{{ folder.share.unc_path }} &middot; {% if folder.inheritance_enabled %}heranca habilitada{% else %}heranca bloqueada{% endif %}</em>
+                </a>
+                {% empty %}
+                <div class="ai-empty">Nenhuma pasta importada.</div>
+                {% endfor %}
+            </div>
+        </article>
+    </section>
 </section>
 {% endblock %}
