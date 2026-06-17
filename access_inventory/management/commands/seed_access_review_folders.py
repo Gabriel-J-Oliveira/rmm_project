@@ -13,6 +13,7 @@ class Command(BaseCommand):
         plan_group.add_argument('--plan-name', help='Nome exato do AccessReviewPlan.')
         parser.add_argument('--root-path', default='', help='Limita e normaliza a partir de uma raiz logica.')
         parser.add_argument('--share', default='', help='Limita por nome da share ou UNC path.')
+        parser.add_argument('--share-id', type=int, help='Limita exatamente pelo ID da share.')
         parser.add_argument('--area-name', default='', help='Area fixa para todas as pastas importadas.')
         parser.add_argument(
             '--area-mode',
@@ -45,6 +46,7 @@ class Command(BaseCommand):
             plan=plan,
             root_path=options['root_path'],
             share=options['share'],
+            share_id=options.get('share_id'),
             area_name=options['area_name'],
             area_mode=options['area_mode'],
             dry_run=options['dry_run'],
@@ -66,6 +68,8 @@ class Command(BaseCommand):
         self.stdout.write(f'ignorados: {result.ignored}')
         self.stdout.write(f'erros: {len(result.errors)}')
         self.stdout.write(f'parent warnings: {len(result.parent_warnings)}')
+        self.stdout.write(f'dedup warnings: {len(result.dedup_warnings)}')
+        self.stdout.write(f'duplicados existentes no plano: {len(result.existing_duplicate_warnings)}')
 
         if result.examples:
             self.stdout.write('exemplos:')
@@ -75,4 +79,8 @@ class Command(BaseCommand):
                 )
 
         for warning in result.parent_warnings[:10]:
+            self.stdout.write(self.style.WARNING(warning))
+        for warning in result.dedup_warnings[:20]:
+            self.stdout.write(self.style.WARNING(warning))
+        for warning in result.existing_duplicate_warnings[:20]:
             self.stdout.write(self.style.WARNING(warning))

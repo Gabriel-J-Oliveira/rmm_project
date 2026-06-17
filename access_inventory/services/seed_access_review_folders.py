@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
 
-from django.db.models import Q
 from django.db import transaction
+from django.db.models import Count, Q
 
 from access_inventory.models import AccessReviewFolder, AccessReviewPlan, Folder
 
@@ -28,6 +28,8 @@ class FolderSeedResult:
     ignored: int = 0
     errors: list[str] = field(default_factory=list)
     parent_warnings: list[str] = field(default_factory=list)
+    dedup_warnings: list[str] = field(default_factory=list)
+    existing_duplicate_warnings: list[str] = field(default_factory=list)
     examples: list[FolderSeedItem] = field(default_factory=list)
     dry_run: bool = False
 
@@ -100,6 +102,78 @@ def area_for_path(value, folder, root_path='', area_name='', area_mode='simple')
     return 'Geral'
 
 
+def acl_count_for_folder(folder):
+    return getattr(folder, 'acl_count', None) or folder.acl_entries.count()
+
+
+def dedup_reason(chosen, candidates, child_counts):
+    chosen_children = child_counts.get(chosen.source_folder.id, 0)
+    chosen_acl_count = acl_count_for_folder(chosen.source_folder)
+    if chosen_children:
+        return f'tem {chosen_children} filhos no conjunto filtrado'
+    if chosen_acl_count:
+        return f'tem {chosen_acl_count} ACLs'
+    if chosen.source_folder.updated_at:
+        return f'updated_at={chosen.source_folder.updated_at.isoformat()}'
+    return f'maior id={chosen.source_folder.id}'
+
+
+def choose_canonical_item(candidates, child_counts):
+    return sorted(
+        candidates,
+        key=lambda item: (
+            child_counts.get(item.source_folder.id, 0) > 0,
+            acl_count_for_folder(item.source_folder),
+            item.source_folder.updated_at,
+            item.source_folder.id,
+        ),
+        reverse=True,
+    )[0]
+
+
+def deduplicate_folder_seed_items(items):
+    by_path = {}
+    for item in items:
+        by_path.setdefault(item.proposed_path.lower(), []).append(item)
+
+    child_counts = {item.source_folder.id: 0 for item in items}
+    item_by_share_and_path = {
+        (item.source_folder.share_id, normalize_path(item.source_folder.path).lower()): item
+        for item in items
+    }
+    item_by_share_and_proposed_path = {
+        (item.source_folder.share_id, item.proposed_path.lower()): item
+        for item in items
+    }
+    for item in items:
+        parent_path = normalize_path(item.source_folder.parent_path).lower()
+        parent = (
+            item_by_share_and_path.get((item.source_folder.share_id, parent_path))
+            or item_by_share_and_proposed_path.get((item.source_folder.share_id, item.parent_path.lower()))
+        )
+        if parent:
+            child_counts[parent.source_folder.id] = child_counts.get(parent.source_folder.id, 0) + 1
+
+    canonical_items = []
+    warnings = []
+    for proposed_path, candidates in by_path.items():
+        if len(candidates) == 1:
+            canonical_items.append(candidates[0])
+            continue
+        chosen = choose_canonical_item(candidates, child_counts)
+        ids = ', '.join(str(item.source_folder.id) for item in candidates)
+        warnings.append(
+            f'Path duplicado "{chosen.proposed_path}": ids encontrados=[{ids}], '
+            f'id escolhido={chosen.source_folder.id}, motivo={dedup_reason(chosen, candidates, child_counts)}.'
+        )
+        canonical_items.append(chosen)
+
+    canonical_items.sort(key=lambda item: (item.level, item.proposed_path.lower(), item.name.lower()))
+    for index, item in enumerate(canonical_items, start=1):
+        item.sort_order = index
+    return canonical_items, warnings
+
+
 def build_folder_seed_items(folders, root_path='', area_name='', area_mode='simple'):
     items = []
     for source_folder in folders:
@@ -123,17 +197,34 @@ def build_folder_seed_items(folders, root_path='', area_name='', area_mode='simp
             notes=notes,
         ))
 
-    items.sort(key=lambda item: (item.level, item.proposed_path.lower(), item.name.lower()))
-    for index, item in enumerate(items, start=1):
-        item.sort_order = index
     return items
 
 
-def folders_for_seed(root_path='', share=''):
-    queryset = Folder.objects.select_related('share', 'share__file_server').order_by('share__unc_path', 'path')
+def folders_for_seed(root_path='', share='', share_id=None):
+    queryset = Folder.objects.select_related('share', 'share__file_server').annotate(
+        acl_count=Count('acl_entries'),
+    ).order_by('share__unc_path', 'path', 'id')
+    if share_id:
+        queryset = queryset.filter(share_id=share_id)
     if share:
         queryset = queryset.filter(Q(share__name__iexact=share) | Q(share__unc_path__iexact=share))
     return queryset
+
+
+def existing_duplicate_warnings(plan):
+    warnings = []
+    duplicate_rows = (
+        plan.folders.values('proposed_path')
+        .annotate(total=Count('id'))
+        .filter(total__gt=1)
+        .order_by('proposed_path')
+    )
+    for row in duplicate_rows:
+        warnings.append(
+            f'AccessReviewFolder duplicado ja existente no plano: proposed_path="{row["proposed_path"]}" total={row["total"]}. '
+            'Nao foi removido automaticamente.'
+        )
+    return warnings
 
 
 @transaction.atomic
@@ -141,6 +232,7 @@ def seed_access_review_folders(
     plan,
     root_path='',
     share='',
+    share_id=None,
     area_name='',
     area_mode='simple',
     dry_run=False,
@@ -148,8 +240,11 @@ def seed_access_review_folders(
     force_replace=False,
 ):
     result = FolderSeedResult(plan=plan, dry_run=dry_run)
-    source_folders = folders_for_seed(root_path=root_path, share=share)
-    items = build_folder_seed_items(source_folders, root_path=root_path, area_name=area_name, area_mode=area_mode)
+    source_folders = folders_for_seed(root_path=root_path, share=share, share_id=share_id)
+    raw_items = build_folder_seed_items(source_folders, root_path=root_path, area_name=area_name, area_mode=area_mode)
+    items, dedup_warnings = deduplicate_folder_seed_items(raw_items)
+    result.dedup_warnings = dedup_warnings
+    result.existing_duplicate_warnings = existing_duplicate_warnings(plan)
     result.found = len(items)
     result.examples = items[:10]
 

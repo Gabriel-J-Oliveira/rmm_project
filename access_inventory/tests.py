@@ -191,21 +191,21 @@ class ResolveAclIdentityTests(TestCase):
 class AccessReviewTests(TestCase):
     def setUp(self):
         self.plan = AccessReviewPlan.objects.create(
-            name='Reestruturação Administrativo e Jurídico - 2026',
-            description='Proposta executiva de reorganização de acessos.',
+            name='Plano dinamico de acessos - 2026',
+            description='Proposta executiva baseada em dados do plano.',
             status=AccessReviewPlan.STATUS_DRAFT,
         )
         self.folder = AccessReviewFolder.objects.create(
             plan=self.plan,
-            area_name='Administrativo',
-            name='Financeiro',
-            proposed_path='Administrativo\\Financeiro',
+            area_name='controlsul',
+            name='Pasta de teste',
+            proposed_path='controlsul\\Pasta de teste',
         )
         self.principal = AccessReviewPrincipal.objects.create(
             plan=self.plan,
             principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
-            display_name='GG Administrativo RW',
-            proposed_group_name='GG_ADMINISTRATIVO_RW',
+            display_name='Grupo tecnico RW',
+            proposed_group_name='GG_CONTROLSUL_RW',
         )
         self.rule = AccessReviewRule.objects.create(
             plan=self.plan,
@@ -223,7 +223,7 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.plan.name)
-        self.assertContains(response, 'Abrir análise')
+        self.assertContains(response, 'Abrir an&aacute;lise')
 
     def test_review_plan_detail_view(self):
         response = self.client.get(reverse('access_inventory:review-plan-detail', args=[self.plan.id]))
@@ -318,3 +318,42 @@ class SeedAccessReviewFoldersCommandTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'controlsul\\Financeiro\\Dividendos')
         self.assertContains(response, 'snapshot atual vinculado')
+
+    def test_seed_deduplicates_duplicate_logical_roots_and_keeps_canonical_tree(self):
+        other_share = Share.objects.create(
+            file_server=self.file_server,
+            name='controlsul',
+            unc_path='\\\\FS01\\controlsul-legacy',
+        )
+        duplicate_root = Folder.objects.create(
+            share=other_share,
+            path='controlsul',
+            parent_path='',
+        )
+
+        output = self.call_seed('--share', 'controlsul')
+
+        self.assertIn('Path duplicado "controlsul"', output)
+        self.assertEqual(AccessReviewFolder.objects.filter(plan=self.plan, proposed_path='controlsul').count(), 1)
+        review_root = AccessReviewFolder.objects.get(plan=self.plan, proposed_path='controlsul')
+        self.assertEqual(review_root.current_folder, self.root)
+        self.assertNotEqual(review_root.current_folder, duplicate_root)
+        finance = AccessReviewFolder.objects.get(plan=self.plan, proposed_path='controlsul\\Financeiro')
+        self.assertEqual(finance.parent, review_root)
+
+    def test_seed_share_id_filters_exact_share(self):
+        other_share = Share.objects.create(
+            file_server=self.file_server,
+            name='controlsul',
+            unc_path='\\\\FS01\\controlsul-legacy',
+        )
+        Folder.objects.create(
+            share=other_share,
+            path='controlsul',
+            parent_path='',
+        )
+
+        output = self.call_seed('--share-id', str(self.share.id), '--dry-run')
+
+        self.assertIn('folders encontrados: 3', output)
+        self.assertIn('dedup warnings: 0', output)

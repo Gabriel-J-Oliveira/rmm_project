@@ -64,7 +64,10 @@
                 {% endfor %}
             </div>
         {% else %}
-            <div class="ai-empty">Nenhuma pessoa foi cadastrada nominalmente para esta pasta ainda.</div>
+            <div class="ai-empty">
+                <strong>Nenhuma permiss&atilde;o proposta cadastrada para esta pasta.</strong>
+                <p>As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.</p>
+            </div>
         {% endif %}
     </section>
 
@@ -72,9 +75,9 @@
         <h2>Compara&ccedil;&atilde;o com acesso atual</h2>
         <p class="ai-note">A compara&ccedil;&atilde;o autom&aacute;tica entre permiss&otilde;es atuais e proposta ser&aacute; calculada na pr&oacute;xima etapa.</p>
         <div class="ai-review-person-compare">
-            <article><span>Pessoa</span><strong>Nome do colaborador</strong><p>Exemplo: Gabriel Oliveira</p></article>
-            <article><span>Antes</span><strong>Acesso atual</strong><p>Tinha modifica&ccedil;&atilde;o via grupo antigo.</p></article>
-            <article><span>Depois</span><strong>Acesso proposto</strong><p>Leitura e escrita no grupo novo.</p></article>
+            <article><span>Pessoa</span><strong>Identidade avaliada</strong><p>Ser&aacute; preenchido quando houver regras propostas.</p></article>
+            <article><span>Antes</span><strong>Acesso atual</strong><p>Ser&aacute; calculado a partir das ACLs atuais resolvidas.</p></article>
+            <article><span>Depois</span><strong>Acesso proposto</strong><p>Ser&aacute; calculado a partir das regras cadastradas no plano.</p></article>
             <article><span>Resultado</span><strong>Mant&eacute;m / remove / adiciona</strong><p>Classifica&ccedil;&atilde;o executiva da mudan&ccedil;a.</p></article>
         </div>
     </section>

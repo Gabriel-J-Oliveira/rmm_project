@@ -7826,6 +7826,16 @@ body.page-access-inventory .ai-pagination a:hover {
     margin: 0 10px;
 }
 
+.ai-review-empty-note {
+    background: rgba(15, 23, 42, 0.42);
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 10px;
+    color: var(--ai-secondary-text);
+    font-size: 0.88rem;
+    margin-top: 4px;
+    padding: 10px 12px;
+}
+
 .ai-review-executive-note-plain {
     background: rgba(7, 13, 21, 0.72);
     border-color: rgba(148, 163, 184, 0.12);

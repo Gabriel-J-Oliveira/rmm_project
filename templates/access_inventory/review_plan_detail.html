@@ -26,13 +26,13 @@
     <section class="ai-panel ai-review-plan-summary">
         <h2>Resumo do plano</h2>
         <p>
-            Este plano organiza a nova estrutura de acesso por &aacute;rea e pasta, usando permiss&otilde;es
-            padronizadas de somente leitura e leitura/escrita. A compara&ccedil;&atilde;o ser&aacute; feita contra
-            o snapshot atual coletado do servidor de arquivos.
+            Este plano apresenta a estrutura de pastas que ser&aacute; usada como base para a proposta de
+            reestrutura&ccedil;&atilde;o de acessos. As &aacute;reas e pastas exibidas abaixo v&ecirc;m dos dados
+            cadastrados no pr&oacute;prio plano.
         </p>
         <p>
-            Nesta etapa, a tela apoia a an&aacute;lise e a valida&ccedil;&atilde;o executiva. Nenhuma permiss&atilde;o
-            real &eacute; aplicada no file server.
+            A compara&ccedil;&atilde;o ser&aacute; feita contra o snapshot atual coletado do servidor de arquivos.
+            Nesta etapa, nenhuma permiss&atilde;o real &eacute; aplicada no file server.
         </p>
         <div class="ai-review-inline-stats">
             <span>{{ folder_count }} pastas planejadas</span>
@@ -41,17 +41,20 @@
             <span>{{ rw_count }} acessos RW</span>
             <span>{{ full_custom_count }} full/custom</span>
         </div>
+        {% if not rule_count %}
+        <div class="ai-review-empty-note">As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.</div>
+        {% endif %}
     </section>
 
     <section class="ai-review-executive-note ai-review-executive-note-plain">
         <div>
             <strong>Leitura executiva</strong>
-            <p>Esta tela foi criada para apresentar, de forma simples, quem mant&eacute;m acesso, quem perde acesso, quem ganha acesso e quais permiss&otilde;es passam a ser somente leitura ou leitura/escrita.</p>
+            <p>Esta tela apresenta a estrutura de pastas que ser&aacute; usada como base para a proposta de reestrutura&ccedil;&atilde;o de acessos. As permiss&otilde;es propostas ser&atilde;o associadas a essas pastas na pr&oacute;xima etapa.</p>
         </div>
     </section>
 
     <section class="ai-panel ai-review-areas-panel">
-        <h2>&Aacute;reas da reestrutura&ccedil;&atilde;o</h2>
+        <h2>&Aacute;reas encontradas</h2>
         <div class="ai-review-area-strip">
             {% for area in area_rows %}
             <article>
@@ -68,7 +71,7 @@
         <div class="ai-section-heading">
             <div>
                 <h2>Pastas planejadas</h2>
-                <p>Estrutura prevista para a nova organiza&ccedil;&atilde;o de acessos. Abra uma pasta para revisar as permiss&otilde;es propostas.</p>
+                <p>Estrutura real vinculada a este plano. Abra uma pasta para revisar o contexto atual e, quando existirem, as permiss&otilde;es propostas.</p>
             </div>
         </div>
 
