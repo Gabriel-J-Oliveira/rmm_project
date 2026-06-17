@@ -4,59 +4,74 @@
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:user-list' %}">Usuarios</a><i data-lucide="chevron-right"></i><strong>{{ user.sam_account_name }}</strong></nav>
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:explorer' %}">Explorador</a><i data-lucide="chevron-right"></i><span>Usuario</span><i data-lucide="chevron-right"></i><strong>{{ user.sam_account_name }}</strong></nav>
 {% endblock %}
 
 {% block content %}
 <section class="ai-shell">
-    {% include "access_inventory/_header.html" with title=user.sam_account_name subtitle="A quais pastas esse usuario tem acesso e por que?" icon="user-check" %}
+    {% include "access_inventory/_header.html" with title=user.display_name|default:user.sam_account_name subtitle="A quais pastas este usuario tem acesso?" icon="user-check" %}
+
+    <section class="ai-object-header">
+        <div>
+            <span class="ai-object-type">Usuario AD</span>
+            <h2>{{ user.display_name|default:user.sam_account_name }}</h2>
+            <p><strong>sAMAccountName:</strong> <span class="mono">{{ user.sam_account_name }}</span>{% if user.ou %} &middot; <strong>OU:</strong> <a class="ai-link" href="{% url 'access_inventory:ou-detail' user.ou.id %}">{{ user.ou.name }}</a>{% endif %}</p>
+        </div>
+        <div class="ai-object-badges">
+            <span class="ai-badge {% if user.enabled %}ai-badge-enabled{% else %}ai-badge-disabled{% endif %}">{% if user.enabled %}ativo{% else %}inativo{% endif %}</span>
+            <span class="ai-badge ai-badge-user">user</span>
+        </div>
+    </section>
 
     <section class="ai-metrics">
-        <article class="ai-metric"><i data-lucide="badge-check"></i><strong>{% if user.enabled %}Ativo{% else %}Inativo{% endif %}</strong><span>Status</span></article>
         <article class="ai-metric"><i data-lucide="users"></i><strong>{{ direct_memberships|length }}</strong><span>Grupos diretos</span></article>
-        <article class="ai-metric"><i data-lucide="user-lock"></i><strong>{{ direct_acl_count }}</strong><span>ACLs diretas</span></article>
-        <article class="ai-metric"><i data-lucide="route"></i><strong>{{ group_acl_count }}</strong><span>ACLs via grupos diretos</span></article>
+        <article class="ai-metric"><i data-lucide="fingerprint"></i><strong>{{ direct_acl_count }}</strong><span>ACLs diretas</span></article>
+        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ direct_folder_count }}</strong><span>Pastas com acesso direto</span></article>
+        <article class="ai-metric"><i data-lucide="route"></i><strong>{{ group_folder_count }}</strong><span>Pastas via grupo direto</span></article>
     </section>
 
     <section class="ai-panel">
         <h2><i data-lucide="id-card"></i>Dados do usuario</h2>
         <dl class="ai-data-list">
-            <div><dt>Display name</dt><dd>{{ user.display_name|default:"--" }}</dd></div>
-            <div><dt>samAccountName</dt><dd class="mono">{{ user.sam_account_name }}</dd></div>
             <div><dt>Object SID</dt><dd class="mono">{{ user.sid }}</dd></div>
             <div><dt>UPN</dt><dd>{{ user.user_principal_name|default:"--" }}</dd></div>
             <div><dt>E-mail</dt><dd>{{ user.email|default:"--" }}</dd></div>
-            <div><dt>OU</dt><dd>{% if user.ou %}<a class="ai-link" href="{% url 'access_inventory:ou-detail' user.ou.id %}">{{ user.ou.name }}</a>{% else %}--{% endif %}</dd></div>
             <div><dt>Distinguished name</dt><dd class="mono">{{ user.distinguished_name|default:"--" }}</dd></div>
         </dl>
     </section>
 
+    <section class="ai-panel">
+        <h2><i data-lucide="users"></i>Grupos do usuario</h2>
+        <p class="ai-note">Somente memberships diretos importados. Expansao recursiva de grupos ainda nao esta habilitada.</p>
+        <div class="ai-mini-list">
+            {% for membership in direct_memberships %}
+            <a href="{% url 'access_inventory:group-detail' membership.parent_group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ membership.parent_group.name }}</strong><em>{{ membership.parent_group.sam_account_name }}</em></a>
+            {% empty %}<div class="ai-empty">Nenhum grupo direto importado para este usuario.</div>{% endfor %}
+        </div>
+    </section>
+
     <section class="ai-grid-2">
         <article class="ai-panel">
-            <h2><i data-lucide="users"></i>Grupos diretos</h2>
-            <p class="ai-note">Considerando grupos diretos importados. Grupos aninhados ainda nao entram no calculo desta fase.</p>
+            <h2><i data-lucide="fingerprint"></i>Acesso direto</h2>
             <div class="ai-mini-list">
-                {% for membership in direct_memberships %}
-                <a href="{% url 'access_inventory:group-detail' membership.parent_group.id %}">
-                    <span class="ai-badge ai-badge-group">group</span>
-                    <strong>{{ membership.parent_group.name }}</strong>
-                    <em>{{ membership.parent_group.sam_account_name }}</em>
-                </a>
-                {% empty %}
-                <div class="ai-empty">Nenhum grupo direto importado para este usuario.</div>
-                {% endfor %}
+                {% for acl in direct_acl_entries %}
+                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}"><span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span><strong>{{ acl.folder.path }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
+                {% empty %}<div class="ai-empty">Nenhuma pasta com ACL direta para este usuario.</div>{% endfor %}
             </div>
         </article>
         <article class="ai-panel">
-            <h2><i data-lucide="fingerprint"></i>Permissoes diretas em ACL</h2>
-            {% include "access_inventory/_acl_table.html" with acl_entries=direct_acl_entries %}
+            <h2><i data-lucide="route"></i>Acesso via grupo direto</h2>
+            <div class="ai-mini-list">
+                {% for acl in group_acl_entries %}
+                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}"><span class="ai-badge ai-badge-group">{{ acl.resolved_ad_group.sam_account_name|default:"group" }}</span><strong>{{ acl.folder.path }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
+                {% empty %}<div class="ai-empty">Nenhuma pasta encontrada via grupos diretos.</div>{% endfor %}
+            </div>
         </article>
     </section>
 
     <section class="ai-panel">
-        <h2><i data-lucide="route"></i>Pastas acessiveis por grupos diretos</h2>
-        <p class="ai-note">Este quadro mostra caminhos onde os grupos diretos do usuario aparecem em ACL. Ainda nao calcula grupos aninhados nem permissao efetiva final.</p>
-        {% include "access_inventory/_acl_table.html" with acl_entries=group_acl_entries %}
+        <h2><i data-lucide="table"></i>ACLs relacionadas</h2>
+        {% include "access_inventory/_acl_table.html" with acl_entries=direct_acl_entries %}
     </section>
 </section>
 {% endblock %}

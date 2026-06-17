@@ -6738,12 +6738,17 @@ body.page-access-inventory .page-subtitle {
 
 .ai-card-grid,
 .ai-grid-2,
-.ai-grid-3 {
+.ai-grid-3,
+.ai-investigation-grid {
     display: grid;
     gap: 14px;
 }
 
 .ai-card-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ai-investigation-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -6764,6 +6769,46 @@ body.page-access-inventory .page-subtitle {
     text-decoration: none;
 }
 
+.ai-investigation-card {
+    background:
+        radial-gradient(circle at 0% 0%, rgba(56, 189, 248, 0.1), transparent 34%),
+        var(--ai-card);
+    border: 1px solid var(--ai-border);
+    border-radius: 14px;
+    color: var(--ai-subtle);
+    display: grid;
+    gap: 10px;
+    min-height: 176px;
+    padding: 18px;
+    text-decoration: none;
+    transition: border-color 180ms ease, background-color 180ms ease, transform 180ms ease;
+}
+
+.ai-investigation-card:hover {
+    background: var(--ai-card-hover);
+    border-color: var(--ai-border-strong);
+    transform: translateY(-1px);
+}
+
+.ai-investigation-card > svg {
+    color: var(--ai-blue-soft);
+    height: 24px;
+    width: 24px;
+}
+
+.ai-investigation-card strong {
+    color: var(--ai-text);
+    font-size: 16px;
+    line-height: 1.25;
+}
+
+.ai-investigation-card em {
+    color: var(--ai-muted);
+    font-size: 13px;
+    font-style: normal;
+    line-height: 1.45;
+}
+
 .ai-object-card strong {
     color: var(--ai-text);
     font-size: 16px;
@@ -6776,6 +6821,49 @@ body.page-access-inventory .page-subtitle {
 
 .ai-panel {
     padding: 18px;
+}
+
+.ai-object-header {
+    align-items: center;
+    background:
+        linear-gradient(135deg, rgba(13, 19, 32, 0.98), rgba(7, 13, 21, 0.98)),
+        var(--ai-card);
+    border: 1px solid var(--ai-border);
+    border-left: 3px solid var(--ai-blue);
+    border-radius: 14px;
+    display: flex;
+    gap: 14px;
+    justify-content: space-between;
+    padding: 16px;
+}
+
+.ai-object-header h2 {
+    color: var(--ai-text);
+    font-size: 20px;
+    margin: 4px 0 6px;
+    overflow-wrap: anywhere;
+}
+
+.ai-object-header p {
+    color: var(--ai-muted);
+    font-size: 13px;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.ai-object-type {
+    color: var(--ai-blue-soft);
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.ai-object-badges {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
 }
 
 .ai-stat-list,
@@ -6853,6 +6941,114 @@ body.page-access-inventory .page-subtitle {
     text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.ai-result-list {
+    display: grid;
+    gap: 10px;
+}
+
+.ai-result-item {
+    align-items: center;
+    background: #070d15;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    color: var(--ai-subtle);
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 36px auto minmax(0, 1fr) minmax(180px, 0.8fr);
+    padding: 12px;
+    text-decoration: none;
+}
+
+.ai-result-item:hover {
+    border-color: var(--ai-border-strong);
+    background: rgba(56, 189, 248, 0.05);
+}
+
+.ai-result-icon {
+    align-items: center;
+    background: rgba(56, 189, 248, 0.1);
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    border-radius: 10px;
+    color: var(--ai-blue-soft);
+    display: inline-flex;
+    height: 36px;
+    justify-content: center;
+    width: 36px;
+}
+
+.ai-result-icon svg {
+    height: 18px;
+    width: 18px;
+}
+
+.ai-result-item strong {
+    color: var(--ai-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-result-item em {
+    color: var(--ai-muted);
+    font-size: 12px;
+    font-style: normal;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-group-access-list {
+    display: grid;
+    gap: 12px;
+}
+
+.ai-group-access-card {
+    background: #070d15;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 12px;
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+}
+
+.ai-group-access-card header {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.ai-group-access-card header div,
+.ai-chip-list {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ai-chip {
+    background: rgba(56, 189, 248, 0.09);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: 999px;
+    color: var(--ai-blue-soft);
+    font-size: 12px;
+    font-weight: 800;
+    padding: 6px 9px;
+    text-decoration: none;
+}
+
+.ai-chip:hover {
+    border-color: rgba(56, 189, 248, 0.4);
+    color: var(--ai-text);
+}
+
+.ai-chip-muted {
+    background: rgba(148, 163, 184, 0.08);
+    border-color: rgba(148, 163, 184, 0.18);
+    color: var(--ai-muted);
 }
 
 .ai-table-wrap {
@@ -6993,13 +7189,49 @@ body.page-access-inventory .page-subtitle {
     border-color: rgba(245, 158, 11, 0.24);
 }
 
+.ai-filter-bar-wide {
+    grid-template-columns: minmax(260px, 1fr) minmax(320px, auto);
+}
+
+.ai-pagination {
+    align-items: center;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 14px;
+    padding-top: 14px;
+}
+
+.ai-pagination a,
+.ai-pagination span,
+.ai-pagination strong {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 999px;
+    color: var(--ai-muted);
+    font-size: 12px;
+    font-weight: 800;
+    padding: 7px 10px;
+    text-decoration: none;
+}
+
+.ai-pagination a {
+    color: var(--ai-blue-soft);
+}
+
+.ai-pagination a:hover {
+    border-color: var(--ai-border-strong);
+    color: var(--ai-text);
+}
+
 .mono {
     font-family: var(--font-mono);
 }
 
 @media (max-width: 1180px) {
     .ai-metrics,
-    .ai-card-grid {
+    .ai-card-grid,
+    .ai-investigation-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -7018,6 +7250,7 @@ body.page-access-inventory .page-subtitle {
 
     .ai-metrics,
     .ai-card-grid,
+    .ai-investigation-grid,
     .ai-grid-2,
     .ai-filter-bar,
     .ai-search {
@@ -7025,12 +7258,24 @@ body.page-access-inventory .page-subtitle {
     }
 
     .ai-mini-list a,
-    .ai-list-row {
+    .ai-list-row,
+    .ai-result-item {
         grid-template-columns: 1fr;
     }
 
     .ai-mini-list em,
-    .ai-list-row em {
+    .ai-list-row em,
+    .ai-result-item em {
         text-align: left;
+    }
+
+    .ai-object-header,
+    .ai-group-access-card header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .ai-object-badges {
+        justify-content: flex-start;
     }
 }

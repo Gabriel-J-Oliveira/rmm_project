@@ -4,27 +4,31 @@
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:ou-list' %}">OUs</a><i data-lucide="chevron-right"></i><strong>{{ ou.name }}</strong></nav>
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:explorer' %}">Explorador</a><i data-lucide="chevron-right"></i><span>OU</span><i data-lucide="chevron-right"></i><strong>{{ ou.name }}</strong></nav>
 {% endblock %}
 
 {% block content %}
 <section class="ai-shell">
-    {% include "access_inventory/_header.html" with title=ou.name subtitle="Usuarios, grupos e acessos relacionados a esta OU." icon="building-2" %}
+    {% include "access_inventory/_header.html" with title=ou.name subtitle="Quais usuarios e grupos desta OU possuem acessos?" icon="building-2" %}
 
-    <section class="ai-metrics">
-        <article class="ai-metric"><i data-lucide="building"></i><strong>{{ child_ous|length }}</strong><span>OUs filhas</span></article>
-        <article class="ai-metric"><i data-lucide="user"></i><strong>{{ users|length }}</strong><span>Usuarios</span></article>
-        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ groups|length }}</strong><span>Grupos</span></article>
-        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ related_acl_entries|length }}</strong><span>ACLs relacionadas</span></article>
+    <section class="ai-object-header">
+        <div>
+            <span class="ai-object-type">OU</span>
+            <h2>{{ ou.name }}</h2>
+            <p class="mono">{{ ou.distinguished_name }}</p>
+        </div>
+        <div class="ai-object-badges">
+            <span class="ai-badge ai-badge-user">{{ users|length }} usuarios</span>
+            <span class="ai-badge ai-badge-group">{{ groups|length }} grupos</span>
+            <span class="ai-badge ai-badge-ou">{{ child_ous|length }} OUs filhas</span>
+        </div>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="id-card"></i>Dados da OU</h2>
-        <dl class="ai-data-list">
-            <div><dt>Nome</dt><dd>{{ ou.name }}</dd></div>
-            <div><dt>Distinguished name</dt><dd class="mono">{{ ou.distinguished_name }}</dd></div>
-            <div><dt>Parent distinguished name</dt><dd class="mono">{{ ou.parent_distinguished_name|default:"--" }}</dd></div>
-        </dl>
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="user"></i><strong>{{ users|length }}</strong><span>Usuarios na OU</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ groups|length }}</strong><span>Grupos na OU</span></article>
+        <article class="ai-metric"><i data-lucide="fingerprint"></i><strong>{{ user_acl_count }}</strong><span>Usuarios com ACL direta</span></article>
+        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ group_acl_count }}</strong><span>Grupos com ACL</span></article>
     </section>
 
     <section class="ai-grid-3">
@@ -37,7 +41,7 @@
             </div>
         </article>
         <article class="ai-panel">
-            <h2><i data-lucide="user"></i>Usuarios nesta OU</h2>
+            <h2><i data-lucide="user"></i>Usuarios da OU</h2>
             <div class="ai-mini-list">
                 {% for user in users %}
                 <a href="{% url 'access_inventory:user-detail' user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ user.display_name|default:user.sam_account_name }}</strong><em>{{ user.sam_account_name }}</em></a>
@@ -45,7 +49,7 @@
             </div>
         </article>
         <article class="ai-panel">
-            <h2><i data-lucide="users"></i>Grupos nesta OU</h2>
+            <h2><i data-lucide="users"></i>Grupos da OU</h2>
             <div class="ai-mini-list">
                 {% for group in groups %}
                 <a href="{% url 'access_inventory:group-detail' group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ group.name }}</strong><em>{{ group.sam_account_name }}</em></a>
@@ -55,8 +59,8 @@
     </section>
 
     <section class="ai-panel">
-        <h2><i data-lucide="network"></i>Acessos principais relacionados</h2>
-        <p class="ai-note">ACLs ligadas aos usuarios e grupos diretamente contidos nesta OU.</p>
+        <h2><i data-lucide="network"></i>Pastas relacionadas por ACL</h2>
+        <p class="ai-note">Relações simples baseadas em usuarios e grupos diretamente contidos nesta OU. Expansao recursiva e permissao efetiva ficam para a proxima etapa.</p>
         {% include "access_inventory/_acl_table.html" with acl_entries=related_acl_entries %}
     </section>
 </section>

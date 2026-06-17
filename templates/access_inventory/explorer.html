@@ -1,80 +1,120 @@
 {% extends "base.html" %}
 
-{% block title %}Night Owl | Explorador de acessos{% endblock %}
+{% block title %}Night Owl | Explorador de Acessos{% endblock %}
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Explorador</strong></nav>
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Explorador</strong></nav>
 {% endblock %}
 
 {% block content %}
 <section class="ai-shell">
-    {% include "access_inventory/_header.html" with title="Explorador de acessos" subtitle="Busque um no do inventario e abra suas relacoes adjacentes." icon="search" %}
+    {% include "access_inventory/_header.html" with title="Explorador de Acessos" subtitle="Investigue permissoes partindo de uma pasta, usuario, grupo ou OU." icon="search" %}
+
+    <section class="ai-investigation-grid">
+        <a class="ai-investigation-card" href="{% url 'access_inventory:folder-list' %}">
+            <i data-lucide="folder-lock"></i>
+            <span class="ai-badge ai-badge-folder">Pasta</span>
+            <strong>Quem tem acesso a esta pasta?</strong>
+            <em>Usuarios, grupos, desconhecidos, heranca e ACLs.</em>
+        </a>
+        <a class="ai-investigation-card" href="{% url 'access_inventory:user-list' %}">
+            <i data-lucide="user-search"></i>
+            <span class="ai-badge ai-badge-user">Usuario</span>
+            <strong>A quais pastas este usuario tem acesso?</strong>
+            <em>Acesso direto e via grupos diretos importados.</em>
+        </a>
+        <a class="ai-investigation-card" href="{% url 'access_inventory:group-list' %}">
+            <i data-lucide="users"></i>
+            <span class="ai-badge ai-badge-group">Grupo</span>
+            <strong>Este grupo concede acesso a quais pastas?</strong>
+            <em>Membros diretos e ACLs onde o grupo aparece.</em>
+        </a>
+        <a class="ai-investigation-card" href="{% url 'access_inventory:ou-list' %}">
+            <i data-lucide="building-2"></i>
+            <span class="ai-badge ai-badge-ou">OU</span>
+            <strong>Quais usuarios e grupos desta OU possuem acessos?</strong>
+            <em>Objetos da OU e relacoes por ACL quando disponiveis.</em>
+        </a>
+    </section>
 
     <section class="ai-panel">
-        <form class="ai-filter-bar" method="get">
+        <form class="ai-filter-bar ai-filter-bar-wide" method="get">
             <label>
                 <span>Busca global</span>
-                <input type="search" name="q" value="{{ filters.q }}" placeholder="Usuario, grupo, OU, pasta, share ou file server">
+                <input type="search" name="q" value="{{ filters.q }}" placeholder="Digite um usuario, grupo, OU ou caminho de pasta">
             </label>
             <div>
                 <span>Tipo</span>
                 <div class="ai-segmented">
                     <button name="type" value="all" class="{% if filters.type == 'all' %}active{% endif %}">Todos</button>
+                    <button name="type" value="folders" class="{% if filters.type == 'folders' %}active{% endif %}">Pastas</button>
                     <button name="type" value="users" class="{% if filters.type == 'users' %}active{% endif %}">Usuarios</button>
                     <button name="type" value="groups" class="{% if filters.type == 'groups' %}active{% endif %}">Grupos</button>
                     <button name="type" value="ous" class="{% if filters.type == 'ous' %}active{% endif %}">OUs</button>
-                    <button name="type" value="folders" class="{% if filters.type == 'folders' %}active{% endif %}">Pastas</button>
                 </div>
             </div>
         </form>
     </section>
 
     {% if filters.q %}
-    <section class="ai-grid-2">
-        <article class="ai-panel">
-            <h2><i data-lucide="user"></i>Usuarios</h2>
-            <div class="ai-mini-list">
-                {% for user in users %}
-                <a href="{% url 'access_inventory:user-detail' user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ user.display_name|default:user.sam_account_name }}</strong><em>{{ user.sam_account_name }} &middot; {{ user.ou|default:"sem OU" }}</em></a>
-                {% empty %}<div class="ai-empty">Nenhum usuario encontrado.</div>{% endfor %}
-            </div>
-        </article>
-        <article class="ai-panel">
-            <h2><i data-lucide="users"></i>Grupos</h2>
-            <div class="ai-mini-list">
-                {% for group in groups %}
-                <a href="{% url 'access_inventory:group-detail' group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ group.name }}</strong><em>{{ group.sam_account_name }} &middot; {{ group.ou|default:"sem OU" }}</em></a>
-                {% empty %}<div class="ai-empty">Nenhum grupo encontrado.</div>{% endfor %}
-            </div>
-        </article>
-        <article class="ai-panel">
-            <h2><i data-lucide="building-2"></i>OUs</h2>
-            <div class="ai-mini-list">
-                {% for ou in ous %}
-                <a href="{% url 'access_inventory:ou-detail' ou.id %}"><span class="ai-badge ai-badge-ou">ou</span><strong>{{ ou.name }}</strong><em>{{ ou.distinguished_name }}</em></a>
-                {% empty %}<div class="ai-empty">Nenhuma OU encontrada.</div>{% endfor %}
-            </div>
-        </article>
-        <article class="ai-panel">
-            <h2><i data-lucide="folder-tree"></i>Pastas, shares e file servers</h2>
-            <div class="ai-mini-list">
-                {% for folder in folders %}
-                <a href="{% url 'access_inventory:folder-detail' folder.id %}"><span class="ai-badge ai-badge-folder">folder</span><strong>{{ folder.path }}</strong><em>{{ folder.share.unc_path }} &middot; {{ folder.share.file_server.name }}</em></a>
-                {% endfor %}
-                {% for file_server in file_servers %}
-                <a href="{% url 'access_inventory:file-server-detail' file_server.id %}"><span class="ai-badge ai-badge-server">server</span><strong>{{ file_server.name }}</strong><em>{{ file_server.fqdn|default:"sem FQDN" }}</em></a>
-                {% empty %}
-                    {% if not folders %}<div class="ai-empty">Nenhuma pasta ou servidor encontrado.</div>{% endif %}
-                {% endfor %}
-            </div>
-        </article>
+    <section class="ai-panel">
+        <h2><i data-lucide="list-search"></i>Resultados da busca</h2>
+        <div class="ai-result-list">
+            {% for result in results %}
+            {% if result.type == 'folder' %}
+            <a class="ai-result-item" href="{% url 'access_inventory:folder-detail' result.id %}">
+            {% elif result.type == 'user' %}
+            <a class="ai-result-item" href="{% url 'access_inventory:user-detail' result.id %}">
+            {% elif result.type == 'group' %}
+            <a class="ai-result-item" href="{% url 'access_inventory:group-detail' result.id %}">
+            {% else %}
+            <a class="ai-result-item" href="{% url 'access_inventory:ou-detail' result.id %}">
+            {% endif %}
+                <span class="ai-result-icon"><i data-lucide="{{ result.icon }}"></i></span>
+                <span class="ai-badge ai-badge-{{ result.badge }}">{{ result.badge }}</span>
+                <strong>{{ result.name }}</strong>
+                <em>{{ result.secondary }}</em>
+            </a>
+            {% empty %}
+            <div class="ai-empty">Nenhum objeto encontrado para esta busca.</div>
+            {% endfor %}
+        </div>
     </section>
     {% else %}
-    <section class="ai-empty ai-empty-large">
-        <i data-lucide="search"></i>
-        <strong>Digite uma busca para comecar</strong>
-        <p>Procure por um usuario, grupo, OU ou caminho de pasta. A proxima tela mostra as conexoes daquele objeto.</p>
+    <section class="ai-grid-2">
+        <article class="ai-panel">
+            <h2><i data-lucide="folder-clock"></i>Pastas recentes</h2>
+            <div class="ai-mini-list">
+                {% for folder in recent_folders %}
+                <a href="{% url 'access_inventory:folder-detail' folder.id %}"><span class="ai-badge ai-badge-folder">folder</span><strong>{{ folder.path }}</strong><em>{{ folder.share.file_server.name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhuma pasta importada ainda.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="users"></i>Grupos com ACLs</h2>
+            <div class="ai-mini-list">
+                {% for group in groups_with_acl %}
+                <a href="{% url 'access_inventory:group-detail' group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ group.name }}</strong><em>{{ group.sam_account_name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum grupo resolvido em ACL ainda.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="user-check"></i>Usuarios encontrados em ACL</h2>
+            <div class="ai-mini-list">
+                {% for user in users_in_acl %}
+                <a href="{% url 'access_inventory:user-detail' user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ user.display_name|default:user.sam_account_name }}</strong><em>{{ user.sam_account_name }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum usuario resolvido em ACL ainda.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel ai-alert-panel">
+            <h2><i data-lucide="circle-help"></i>Identidades desconhecidas</h2>
+            <div class="ai-mini-list">
+                {% for acl in unknown_acl_entries %}
+                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}"><span class="ai-badge ai-badge-unknown">unknown</span><strong>{{ acl.identity_name }}</strong><em>{{ acl.folder.path }}</em></a>
+                {% empty %}<div class="ai-empty">Nenhuma identidade desconhecida.</div>{% endfor %}
+            </div>
+        </article>
     </section>
     {% endif %}
 </section>

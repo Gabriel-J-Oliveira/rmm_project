@@ -118,6 +118,31 @@ Falhas de certificado, DNS, token, endpoint e coleta retornam erro claro no cons
 O agente retorna codigo de saida `0` em sucesso e diferente de zero quando uma falha geral, a coleta AD ou algum alvo de ACL falhar. Se a coleta AD falhar, o agente ainda tenta executar os `file_acl_targets`.
 Quando `file_acl_targets=[]` e AD esta habilitado, o agente registra `No file ACL targets configured; skipping file ACL collection.` e finaliza com sucesso se o envio de AD tambem for bem-sucedido.
 
+## Execucao agendada
+
+Para rodar pelo Agendador de Tarefas do Windows, use uma acao como:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\NightowlAgent\scripts\powershell\access_inventory\NightowlAccessInventoryAgent.ps1" -ConfigPath "C:\NightowlAgent\scripts\powershell\access_inventory\config.json"
+```
+
+Recomendacoes:
+
+- configure a tarefa para nao iniciar uma nova instancia se a anterior ainda estiver em execucao;
+- use uma conta com permissao de leitura no AD e nas ACLs NTFS necessarias;
+- mantenha `log_path` e `temp_directory` em disco local, fora das shares inventariadas;
+- monitore `LastTaskResult`: `0` indica sucesso, `1` falha geral e `2` falha em uma ou mais coletas/envios.
+
+O agente tambem cria uma trava simples em:
+
+```text
+C:\Nightowl\AccessInventory\tmp\nightowl_access_inventory_agent.lock
+```
+
+O caminho exato segue `temp_directory` do `config.json`. Se a trava existir e o PID ainda estiver rodando, o agente sai com mensagem clara para evitar duas coletas simultaneas. Se a trava for antiga e o processo nao existir mais, ela e removida automaticamente.
+
+O log do agente e tolerante a lock de arquivo: se `agent.log` estiver em uso por outro processo, o agente tenta gravar algumas vezes e, se nao conseguir, escreve apenas no console e continua a coleta/envio. Falha de log nao derruba o agente nem invalida o JSON gerado.
+
 ## Validar no Django Admin
 
 Depois da execucao, acesse o Admin do Django:

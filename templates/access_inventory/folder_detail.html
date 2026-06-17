@@ -4,36 +4,94 @@
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><span>Night Owl</span><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:folder-list' %}">Pastas</a><i data-lucide="chevron-right"></i><strong>{{ folder.path }}</strong></nav>
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:explorer' %}">Explorador</a><i data-lucide="chevron-right"></i><span>Pasta</span><i data-lucide="chevron-right"></i><strong>{{ folder.path }}</strong></nav>
 {% endblock %}
 
 {% block content %}
 <section class="ai-shell">
-    {% include "access_inventory/_header.html" with title=folder.path subtitle="Pasta selecionada: ACLs, heranca, identidades e permissoes NTFS." icon="folder-lock" %}
+    {% include "access_inventory/_header.html" with title=folder.path subtitle="Quem tem acesso a esta pasta?" icon="folder-lock" %}
+
+    <section class="ai-object-header">
+        <div>
+            <span class="ai-object-type">Pasta</span>
+            <h2 class="mono">{{ folder.path }}</h2>
+            <p><strong>Share:</strong> {{ folder.share.unc_path }} &middot; <strong>File server:</strong> <a class="ai-link" href="{% url 'access_inventory:file-server-detail' folder.share.file_server.id %}">{{ folder.share.file_server.name }}</a></p>
+        </div>
+        <div class="ai-object-badges">
+            <span class="ai-badge ai-badge-inherited">{{ inherited_acl_count }} herdadas</span>
+            <span class="ai-badge ai-badge-explicit">{{ explicit_acl_count }} explicitas</span>
+            <span class="ai-badge ai-badge-user">{{ direct_user_count }} usuarios</span>
+            <span class="ai-badge ai-badge-group">{{ group_count }} grupos</span>
+            <span class="ai-badge ai-badge-unknown">{{ unknown_acl_count }} unknown</span>
+        </div>
+    </section>
 
     <section class="ai-metrics">
-        <article class="ai-metric"><i data-lucide="server"></i><strong>{{ folder.share.file_server.name }}</strong><span>File server</span></article>
-        <article class="ai-metric"><i data-lucide="share-2"></i><strong>{{ folder.share.name }}</strong><span>Share</span></article>
         <article class="ai-metric"><i data-lucide="shield"></i><strong>{{ acl_count }}</strong><span>Total de ACLs</span></article>
-        <article class="ai-metric"><i data-lucide="unlock"></i><strong>{{ explicit_acl_count }}</strong><span>Explicitas</span></article>
-        <article class="ai-metric"><i data-lucide="corner-down-right"></i><strong>{{ inherited_acl_count }}</strong><span>Herdadas</span></article>
-        <article class="ai-metric"><i data-lucide="link"></i><strong>{{ resolved_acl_count }}</strong><span>Resolvidas</span></article>
-        <article class="ai-metric ai-warning"><i data-lucide="circle-help"></i><strong>{{ unknown_acl_count }}</strong><span>Desconhecidas</span></article>
+        <article class="ai-metric"><i data-lucide="user"></i><strong>{{ direct_user_count }}</strong><span>Usuarios diretos</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ group_count }}</strong><span>Grupos com acesso</span></article>
+        <article class="ai-metric ai-warning"><i data-lucide="circle-help"></i><strong>{{ unknown_acl_count }}</strong><span>Identidades desconhecidas</span></article>
+        <article class="ai-metric"><i data-lucide="corner-down-right"></i><strong>{{ inherited_acl_count }}</strong><span>Permissoes herdadas</span></article>
+        <article class="ai-metric"><i data-lucide="unlock"></i><strong>{{ explicit_acl_count }}</strong><span>Permissoes explicitas</span></article>
+    </section>
+
+    <section class="ai-grid-3">
+        <article class="ai-panel">
+            <h2><i data-lucide="user"></i>Usuarios diretos</h2>
+            <div class="ai-mini-list">
+                {% for acl in direct_user_acl_entries %}
+                <a href="{% url 'access_inventory:user-detail' acl.resolved_ad_user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ acl.resolved_ad_user.display_name|default:acl.resolved_ad_user.sam_account_name }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum usuario direto resolvido nesta pasta.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel">
+            <h2><i data-lucide="users"></i>Grupos com acesso</h2>
+            <div class="ai-mini-list">
+                {% for acl in group_acl_entries %}
+                <a href="{% url 'access_inventory:group-detail' acl.resolved_ad_group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ acl.resolved_ad_group.name }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
+                {% empty %}<div class="ai-empty">Nenhum grupo resolvido nesta pasta.</div>{% endfor %}
+            </div>
+        </article>
+        <article class="ai-panel ai-alert-panel">
+            <h2><i data-lucide="circle-help"></i>Identidades desconhecidas</h2>
+            <div class="ai-mini-list">
+                {% for acl in unknown_acl_entries %}
+                <div class="ai-list-row"><span class="ai-badge ai-badge-unknown">unknown</span><strong>{{ acl.identity_name }}</strong><em>{{ acl.rights }}</em></div>
+                {% empty %}<div class="ai-empty">Nenhuma identidade desconhecida nesta pasta.</div>{% endfor %}
+            </div>
+        </article>
     </section>
 
     <section class="ai-panel">
-        <h2><i data-lucide="info"></i>Contexto da pasta</h2>
-        <dl class="ai-data-list">
-            <div><dt>Caminho</dt><dd class="mono">{{ folder.path }}</dd></div>
-            <div><dt>UNC da share</dt><dd class="mono">{{ folder.share.unc_path }}</dd></div>
-            <div><dt>File server</dt><dd><a class="ai-link" href="{% url 'access_inventory:file-server-detail' folder.share.file_server.id %}">{{ folder.share.file_server.name }}</a></dd></div>
-            <div><dt>Heranca da pasta</dt><dd>{% if folder.inheritance_enabled %}Habilitada{% else %}Bloqueada/protegida{% endif %}</dd></div>
-            <div><dt>Parent path</dt><dd class="mono">{{ folder.parent_path|default:"--" }}</dd></div>
-        </dl>
+        <h2><i data-lucide="route"></i>Usuarios por grupos</h2>
+        <p class="ai-note">Considerando somente memberships diretos importados. Grupos aninhados entram em uma etapa futura.</p>
+        <div class="ai-group-access-list">
+            {% for item in group_accesses %}
+            <article class="ai-group-access-card">
+                <header>
+                    <div>
+                        <span class="ai-badge ai-badge-group">group</span>
+                        <a class="ai-link" href="{% url 'access_inventory:group-detail' item.group.id %}">{{ item.group.name }}</a>
+                    </div>
+                    <span class="ai-muted">{{ item.member_count }} membro(s) direto(s)</span>
+                </header>
+                <div class="ai-chip-list">
+                    {% for membership in item.members %}
+                    <a class="ai-chip" href="{% url 'access_inventory:user-detail' membership.member_user.id %}">{{ membership.member_user.sam_account_name }}</a>
+                    {% empty %}
+                    <span class="ai-muted">Nenhum usuario direto neste grupo.</span>
+                    {% endfor %}
+                    {% if item.extra_count %}<span class="ai-chip ai-chip-muted">+{{ item.extra_count }} membros</span>{% endif %}
+                </div>
+            </article>
+            {% empty %}
+            <div class="ai-empty">Nenhum grupo resolvido para expandir membros diretos.</div>
+            {% endfor %}
+        </div>
     </section>
 
     <section class="ai-panel">
-        <h2><i data-lucide="shield-check"></i>Tabela de permissoes NTFS</h2>
+        <h2><i data-lucide="shield-check"></i>Tabela de ACLs</h2>
         {% include "access_inventory/_acl_table.html" %}
     </section>
 </section>

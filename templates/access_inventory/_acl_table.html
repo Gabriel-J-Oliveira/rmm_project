@@ -2,6 +2,7 @@
     <table class="ai-table">
         <thead>
             <tr>
+                <th>Pasta</th>
                 <th>Identidade</th>
                 <th>Tipo resolvido</th>
                 <th>Usuario</th>
@@ -15,6 +16,10 @@
         <tbody>
             {% for acl in acl_entries %}
             <tr class="{% if acl.resolved_identity_type == 'unknown' %}ai-row-warning{% endif %}">
+                <td>
+                    <a class="ai-link" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a>
+                    <span class="ai-subtext mono">{{ acl.folder.share.unc_path }}</span>
+                </td>
                 <td>
                     <strong>{{ acl.identity_name }}</strong>
                     <span class="ai-subtext mono">{{ acl.identity_sid|default:"SID nao resolvido" }}</span>
@@ -55,7 +60,7 @@
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="8" class="ai-empty">Nenhuma ACL encontrada.</td></tr>
+            <tr><td colspan="9" class="ai-empty">Nenhuma ACL encontrada.</td></tr>
             {% endfor %}
         </tbody>
     </table>

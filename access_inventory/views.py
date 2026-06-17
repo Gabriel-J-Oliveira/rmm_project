@@ -1,3 +1,4 @@
+from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, render
 
@@ -30,6 +31,19 @@ def acl_for_group(group):
 
 def acl_for_user(user):
     return acl_with_relations().filter(Q(resolved_ad_user=user) | Q(ad_user=user)).distinct()
+
+
+def paginate(request, queryset, per_page=50):
+    paginator = Paginator(queryset, per_page)
+    return paginator.get_page(request.GET.get('page'))
+
+
+def distinct_folder_count(queryset):
+    return queryset.values('folder_id').distinct().count()
+
+
+def direct_group_ids_for_user(user):
+    return list(user.group_memberships.values_list('parent_group_id', flat=True))
 
 
 def dashboard(request):
@@ -66,6 +80,7 @@ def explorer(request):
     ous = ADOrganizationalUnit.objects.none()
     folders = Folder.objects.none()
     file_servers = FileServer.objects.none()
+    results = []
 
     if q:
         if show_all or entity_type == 'users':
@@ -76,6 +91,18 @@ def explorer(request):
                 | Q(email__icontains=q)
                 | Q(distinguished_name__icontains=q)
             )[:20]
+            results.extend([
+                {
+                    'type': 'user',
+                    'badge': 'user',
+                    'icon': 'user',
+                    'name': user.display_name or user.sam_account_name,
+                    'secondary': f'{user.sam_account_name} · {user.ou.name if user.ou else "sem OU"}',
+                    'url_name': 'access_inventory:user-detail',
+                    'id': user.id,
+                }
+                for user in users
+            ])
         if show_all or entity_type == 'groups':
             groups = ADGroup.objects.select_related('ou').filter(
                 Q(sid__icontains=q)
@@ -84,12 +111,36 @@ def explorer(request):
                 | Q(description__icontains=q)
                 | Q(distinguished_name__icontains=q)
             )[:20]
+            results.extend([
+                {
+                    'type': 'group',
+                    'badge': 'group',
+                    'icon': 'users',
+                    'name': group.name,
+                    'secondary': f'{group.sam_account_name} · {group.ou.name if group.ou else "sem OU"}',
+                    'url_name': 'access_inventory:group-detail',
+                    'id': group.id,
+                }
+                for group in groups
+            ])
         if show_all or entity_type == 'ous':
             ous = ADOrganizationalUnit.objects.filter(
                 Q(name__icontains=q)
                 | Q(distinguished_name__icontains=q)
                 | Q(parent_distinguished_name__icontains=q)
             )[:20]
+            results.extend([
+                {
+                    'type': 'ou',
+                    'badge': 'ou',
+                    'icon': 'building-2',
+                    'name': ou.name,
+                    'secondary': ou.distinguished_name,
+                    'url_name': 'access_inventory:ou-detail',
+                    'id': ou.id,
+                }
+                for ou in ous
+            ])
         if show_all or entity_type == 'folders':
             folders = Folder.objects.select_related('share', 'share__file_server').filter(
                 Q(path__icontains=q)
@@ -102,15 +153,43 @@ def explorer(request):
             file_servers = FileServer.objects.filter(
                 Q(name__icontains=q) | Q(fqdn__icontains=q) | Q(description__icontains=q)
             )[:10]
+            results.extend([
+                {
+                    'type': 'folder',
+                    'badge': 'folder',
+                    'icon': 'folder-lock',
+                    'name': folder.path,
+                    'secondary': f'{folder.share.unc_path} · {folder.share.file_server.name}',
+                    'url_name': 'access_inventory:folder-detail',
+                    'id': folder.id,
+                }
+                for folder in folders
+            ])
+    else:
+        recent_folders = Folder.objects.select_related('share', 'share__file_server').order_by('-updated_at')[:6]
+        groups_with_acl = ADGroup.objects.filter(
+            Q(resolved_acl_entries__isnull=False) | Q(acl_entries__isnull=False)
+        ).distinct().annotate(acl_count=Count('resolved_acl_entries', distinct=True)).order_by('name')[:6]
+        users_in_acl = ADUser.objects.filter(
+            Q(resolved_acl_entries__isnull=False) | Q(acl_entries__isnull=False)
+        ).distinct().order_by('sam_account_name')[:6]
+        unknown_acl_entries = acl_with_relations().filter(
+            resolved_identity_type=AclEntry.IDENTITY_UNKNOWN
+        ).order_by('-updated_at')[:6]
 
     context = {
         **base_context('explorer'),
         'filters': {'q': q, 'type': entity_type},
+        'results': results,
         'users': users,
         'groups': groups,
         'ous': ous,
         'folders': folders,
         'file_servers': file_servers,
+        'recent_folders': locals().get('recent_folders', []),
+        'groups_with_acl': locals().get('groups_with_acl', []),
+        'users_in_acl': locals().get('users_in_acl', []),
+        'unknown_acl_entries': locals().get('unknown_acl_entries', []),
     }
     return render(request, 'access_inventory/explorer.html', context)
 
@@ -126,9 +205,11 @@ def user_list(request):
             | Q(email__icontains=q)
             | Q(distinguished_name__icontains=q)
         )
+    page_obj = paginate(request, users.order_by('sam_account_name'))
     context = {
         **base_context('users'),
-        'users': users,
+        'page_obj': page_obj,
+        'users': page_obj.object_list,
         'filters': {'q': q},
     }
     return render(request, 'access_inventory/user_list.html', context)
@@ -142,6 +223,10 @@ def user_detail(request, pk):
     group_acl_entries = acl_with_relations().filter(
         Q(resolved_ad_group_id__in=direct_group_ids) | Q(ad_group_id__in=direct_group_ids)
     ).distinct().order_by('folder__path', 'identity_name', 'rights')[:200]
+    direct_folder_count = distinct_folder_count(direct_acl_entries)
+    group_folder_count = acl_with_relations().filter(
+        Q(resolved_ad_group_id__in=direct_group_ids) | Q(ad_group_id__in=direct_group_ids)
+    ).values('folder_id').distinct().count()
     context = {
         **base_context('users'),
         'user': user,
@@ -150,6 +235,8 @@ def user_detail(request, pk):
         'group_acl_entries': group_acl_entries,
         'direct_acl_count': direct_acl_entries.count(),
         'group_acl_count': group_acl_entries.count(),
+        'direct_folder_count': direct_folder_count,
+        'group_folder_count': group_folder_count,
     }
     return render(request, 'access_inventory/user_detail.html', context)
 
@@ -165,9 +252,11 @@ def group_list(request):
             | Q(description__icontains=q)
             | Q(distinguished_name__icontains=q)
         )
+    page_obj = paginate(request, groups.order_by('name'))
     context = {
         **base_context('groups'),
-        'groups': groups,
+        'page_obj': page_obj,
+        'groups': page_obj.object_list,
         'filters': {'q': q},
     }
     return render(request, 'access_inventory/group_list.html', context)
@@ -181,7 +270,8 @@ def group_detail(request, pk):
     )
     user_members = memberships.filter(member_user__isnull=False)
     group_members = memberships.filter(member_group__isnull=False)
-    acl_entries = acl_for_group(group).order_by('folder__path', 'access_type', 'rights')[:200]
+    group_acl_queryset = acl_for_group(group)
+    acl_entries = group_acl_queryset.order_by('folder__path', 'access_type', 'rights')[:200]
     context = {
         **base_context('groups'),
         'group': group,
@@ -189,7 +279,10 @@ def group_detail(request, pk):
         'user_members': user_members,
         'group_members': group_members,
         'acl_entries': acl_entries,
-        'acl_count': acl_for_group(group).count(),
+        'user_member_count': user_members.count(),
+        'group_member_count': group_members.count(),
+        'folder_count': distinct_folder_count(group_acl_queryset),
+        'acl_count': group_acl_queryset.count(),
     }
     return render(request, 'access_inventory/group_detail.html', context)
 
@@ -206,9 +299,11 @@ def ou_list(request):
             | Q(distinguished_name__icontains=q)
             | Q(parent_distinguished_name__icontains=q)
         )
+    page_obj = paginate(request, ous.order_by('distinguished_name'))
     context = {
         **base_context('ous'),
-        'ous': ous,
+        'page_obj': page_obj,
+        'ous': page_obj.object_list,
         'filters': {'q': q},
     }
     return render(request, 'access_inventory/ou_list.html', context)
@@ -227,6 +322,8 @@ def ou_detail(request, pk):
         | Q(resolved_ad_group_id__in=group_ids)
         | Q(ad_group_id__in=group_ids)
     ).distinct().order_by('folder__path', 'identity_name')[:200]
+    user_acl_count = acl_with_relations().filter(Q(resolved_ad_user_id__in=user_ids) | Q(ad_user_id__in=user_ids)).distinct().count()
+    group_acl_count = acl_with_relations().filter(Q(resolved_ad_group_id__in=group_ids) | Q(ad_group_id__in=group_ids)).distinct().count()
     context = {
         **base_context('ous'),
         'ou': ou,
@@ -234,6 +331,8 @@ def ou_detail(request, pk):
         'users': users,
         'groups': groups,
         'related_acl_entries': related_acl_entries,
+        'user_acl_count': user_acl_count,
+        'group_acl_count': group_acl_count,
     }
     return render(request, 'access_inventory/ou_detail.html', context)
 
@@ -251,9 +350,11 @@ def file_server_list(request):
             | Q(description__icontains=q)
             | Q(rmm_agent__hostname__icontains=q)
         )
+    page_obj = paginate(request, file_servers.order_by('name'))
     context = {
         **base_context('folders'),
-        'file_servers': file_servers,
+        'page_obj': page_obj,
+        'file_servers': page_obj.object_list,
         'filters': {'q': q},
     }
     return render(request, 'access_inventory/file_server_list.html', context)
@@ -284,9 +385,11 @@ def folder_list(request):
             | Q(share__file_server__name__icontains=q)
             | Q(share__file_server__fqdn__icontains=q)
         )
+    page_obj = paginate(request, folders.order_by('share__file_server__name', 'path'))
     context = {
         **base_context('folders'),
-        'folders': folders[:500],
+        'page_obj': page_obj,
+        'folders': page_obj.object_list,
         'filters': {'q': q},
     }
     return render(request, 'access_inventory/folder_list.html', context)
@@ -302,15 +405,36 @@ def folder_detail(request, pk):
         'identity_name',
         'rights',
     )
+    direct_user_acl_entries = acl_entries.filter(resolved_ad_user__isnull=False)
+    group_acl_entries = acl_entries.filter(resolved_ad_group__isnull=False)
+    unknown_acl_entries = acl_entries.filter(resolved_identity_type=AclEntry.IDENTITY_UNKNOWN)
+    groups = ADGroup.objects.filter(resolved_acl_entries__folder=folder).distinct().order_by('name')
+    group_accesses = []
+    for group in groups:
+        memberships = ADGroupMembership.objects.filter(parent_group=group, member_user__isnull=False).select_related('member_user').order_by('member_user__sam_account_name')
+        member_count = memberships.count()
+        group_accesses.append({
+            'group': group,
+            'members': memberships[:10],
+            'member_count': member_count,
+            'extra_count': max(member_count - 10, 0),
+            'acl_entries': group_acl_entries.filter(resolved_ad_group=group),
+        })
     context = {
         **base_context('folders'),
         'folder': folder,
         'acl_entries': acl_entries,
+        'direct_user_acl_entries': direct_user_acl_entries,
+        'group_acl_entries': group_acl_entries,
+        'unknown_acl_entries': unknown_acl_entries,
+        'group_accesses': group_accesses,
         'acl_count': acl_entries.count(),
         'explicit_acl_count': acl_entries.filter(inherited=False).count(),
         'inherited_acl_count': acl_entries.filter(inherited=True).count(),
         'resolved_acl_count': acl_entries.exclude(resolved_identity_type=AclEntry.IDENTITY_UNKNOWN).count(),
         'unknown_acl_count': acl_entries.filter(resolved_identity_type=AclEntry.IDENTITY_UNKNOWN).count(),
+        'direct_user_count': direct_user_acl_entries.values('resolved_ad_user_id').distinct().count(),
+        'group_count': group_acl_entries.values('resolved_ad_group_id').distinct().count(),
     }
     return render(request, 'access_inventory/folder_detail.html', context)
 

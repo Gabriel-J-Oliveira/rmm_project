@@ -1,0 +1,15 @@
+{% if page_obj and page_obj.paginator.num_pages > 1 %}
+<nav class="ai-pagination" aria-label="Paginacao">
+    {% if page_obj.has_previous %}
+    <a href="?q={{ filters.q }}&page={{ page_obj.previous_page_number }}">Anterior</a>
+    {% else %}
+    <span>Anterior</span>
+    {% endif %}
+    <strong>Pagina {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</strong>
+    {% if page_obj.has_next %}
+    <a href="?q={{ filters.q }}&page={{ page_obj.next_page_number }}">Proxima</a>
+    {% else %}
+    <span>Proxima</span>
+    {% endif %}
+</nav>
+{% endif %}

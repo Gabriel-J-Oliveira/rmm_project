@@ -20,9 +20,11 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$AgentVersion = '0.3.0'
+$AgentVersion = '0.3.2'
 $script:LogPath = $null
 $script:HadFailure = $false
+$script:LockFilePath = $null
+$script:LockAcquired = $false
 
 function Write-AgentLog {
     param(
@@ -39,11 +41,33 @@ function Write-AgentLog {
     Write-Host $line
 
     if ($script:LogPath) {
-        $logDirectory = Split-Path -Parent $script:LogPath
-        if (-not [string]::IsNullOrWhiteSpace($logDirectory) -and -not (Test-Path -LiteralPath $logDirectory)) {
-            New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        try {
+            $logDirectory = Split-Path -Parent $script:LogPath
+            if (-not [string]::IsNullOrWhiteSpace($logDirectory) -and -not (Test-Path -LiteralPath $logDirectory)) {
+                New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+            }
+
+            $written = $false
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+                try {
+                    Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+                    $written = $true
+                    break
+                }
+                catch {
+                    if ($attempt -lt 5) {
+                        Start-Sleep -Milliseconds 200
+                    }
+                }
+            }
+
+            if (-not $written) {
+                Write-Host "[WARN] Could not write to log file after retries; continuing without file log: $script:LogPath"
+            }
         }
-        Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8
+        catch {
+            Write-Host "[WARN] Could not write to log file; continuing without file log: $script:LogPath. $($_.Exception.Message)"
+        }
     }
 }
 
@@ -75,6 +99,87 @@ function Read-AgentConfig {
     }
     catch {
         throw "Could not read or parse config JSON '$Path': $($_.Exception.Message)"
+    }
+}
+
+function Get-AgentTempDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Config
+    )
+
+    return [string](Get-ConfigValue -Object $Config -Names @('temp_directory', 'TempDirectory') -Default (Join-Path $env:TEMP 'NightowlAccessInventory'))
+}
+
+function Test-ProcessRunning {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ProcessId
+    )
+
+    try {
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+        return ($null -ne $process)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Acquire-AgentLock {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TempDirectory
+    )
+
+    if (-not (Test-Path -LiteralPath $TempDirectory)) {
+        New-Item -ItemType Directory -Path $TempDirectory -Force | Out-Null
+    }
+
+    $script:LockFilePath = Join-Path $TempDirectory 'nightowl_access_inventory_agent.lock'
+
+    if (Test-Path -LiteralPath $script:LockFilePath -PathType Leaf) {
+        $existingPid = $null
+        try {
+            $lockContent = Get-Content -LiteralPath $script:LockFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($lockContent.PSObject.Properties.Name -contains 'pid') {
+                $existingPid = [int]$lockContent.pid
+            }
+        }
+        catch {
+            $existingPid = $null
+        }
+
+        if ($existingPid -and (Test-ProcessRunning -ProcessId $existingPid)) {
+            throw "Another Night Owl Access Inventory Agent instance is already running. Lock file: $script:LockFilePath; PID: $existingPid"
+        }
+
+        Write-AgentLog "Removing orphaned agent lock file: $script:LockFilePath" -Level 'WARN'
+        Remove-Item -LiteralPath $script:LockFilePath -Force -ErrorAction SilentlyContinue
+    }
+
+    $lockData = [ordered]@{
+        pid = $PID
+        started_at = (Get-Date).ToUniversalTime().ToString('o')
+        script = $PSCommandPath
+    } | ConvertTo-Json -Depth 3
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($script:LockFilePath, $lockData, $utf8NoBom)
+    $script:LockAcquired = $true
+    Write-AgentLog "Agent lock acquired: $script:LockFilePath"
+}
+
+function Release-AgentLock {
+    if ($script:LockAcquired -and $script:LockFilePath -and (Test-Path -LiteralPath $script:LockFilePath -PathType Leaf)) {
+        try {
+            Remove-Item -LiteralPath $script:LockFilePath -Force -ErrorAction Stop
+            Write-AgentLog "Agent lock released: $script:LockFilePath"
+        }
+        catch {
+            Write-AgentLog "Could not remove agent lock file '$script:LockFilePath': $($_.Exception.Message)" -Level 'WARN'
+        }
+        $script:LockAcquired = $false
     }
 }
 
@@ -219,14 +324,22 @@ function Get-FriendlyWebError {
             $responseBody = ''
         }
 
+        if ([string]::IsNullOrWhiteSpace($responseBody) -and $ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+            $responseBody = [string]$ErrorRecord.ErrorDetails.Message
+        }
+
         if (-not [string]::IsNullOrWhiteSpace($responseBody)) {
             $message = "$message Response body: $responseBody"
         }
 
         if ($statusCode -eq 401 -or $statusCode -eq 403) {
-            return "$EndpointLabel rejected the token or permission: HTTP $statusCode. $responseBody"
+            return "$EndpointLabel rejected the token or permission: HTTP $statusCode. Response body: $responseBody"
         }
         return "$EndpointLabel returned HTTP ${statusCode}: $message"
+    }
+
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        return "$EndpointLabel request failed: $message Response body: $($ErrorRecord.ErrorDetails.Message)"
     }
 
     if ($message -match 'trust relationship|certificate|SSL|TLS|Could not establish secure channel') {
@@ -276,7 +389,7 @@ function Invoke-NightowlPostJsonBody {
     $headers = New-NightowlHeaders -Token $Token
 
     try {
-        return Invoke-RestMethod -Uri $Uri -Method Post -Headers $headers -Body $JsonBody -ContentType 'application/json' -TimeoutSec $TimeoutSec
+        return Invoke-RestMethod -Method Post -Uri $Uri -Headers $headers -Body $JsonBody -ContentType 'application/json' -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     catch {
         throw (Get-FriendlyWebError -ErrorRecord $_ -EndpointLabel $EndpointLabel)
@@ -306,9 +419,11 @@ function Invoke-NightowlPostJsonFile {
     }
 
     $headers = New-NightowlHeaders -Token $Token
+    $payloadItem = Get-Item -LiteralPath $PayloadPath -ErrorAction Stop
+    Write-AgentLog "Posting JSON file to $EndpointLabel. Payload path: $($payloadItem.FullName); size bytes: $($payloadItem.Length)"
 
     try {
-        return Invoke-RestMethod -Uri $Uri -Method Post -Headers $headers -ContentType 'application/json' -InFile $PayloadPath -TimeoutSec $TimeoutSec
+        return Invoke-RestMethod -Method Post -Uri $Uri -Headers $headers -ContentType 'application/json' -InFile $payloadItem.FullName -TimeoutSec $TimeoutSec -ErrorAction Stop
     }
     catch {
         throw (Get-FriendlyWebError -ErrorRecord $_ -EndpointLabel $EndpointLabel)
@@ -377,7 +492,7 @@ function New-TempPayloadPath {
         [string]$TargetName
     )
 
-    $tempDirectory = Get-ConfigValue -Object $Config -Names @('temp_directory', 'TempDirectory') -Default (Join-Path $env:TEMP 'NightowlAccessInventory')
+    $tempDirectory = Get-AgentTempDirectory -Config $Config
     if (-not (Test-Path -LiteralPath $tempDirectory)) {
         New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
     }
@@ -392,7 +507,7 @@ function New-TempAdInventoryPath {
         [object]$Config
     )
 
-    $tempDirectory = Get-ConfigValue -Object $Config -Names @('temp_directory', 'TempDirectory') -Default (Join-Path $env:TEMP 'NightowlAccessInventory')
+    $tempDirectory = Get-AgentTempDirectory -Config $Config
     if (-not (Test-Path -LiteralPath $tempDirectory)) {
         New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
     }
@@ -500,24 +615,26 @@ function Invoke-AdInventoryFlow {
 
     Invoke-AdInventoryExport -AdConfig $adConfig -ExportPath ([string]$exportPath)
 
-    Write-AgentLog "Reading AD inventory payload: $exportPath"
-    $payloadJson = Get-Content -LiteralPath ([string]$exportPath) -Raw -Encoding UTF8
+    $payloadPath = [string]$exportPath
+    Write-AgentLog "Reading AD inventory payload: $payloadPath"
 
     try {
+        $payloadJson = Get-Content -LiteralPath $payloadPath -Raw -Encoding UTF8
         $payloadCheck = $payloadJson | ConvertFrom-Json
         $ouCount = @($payloadCheck.ous).Count
         $userCount = @($payloadCheck.users).Count
         $groupCount = @($payloadCheck.groups).Count
         $membershipCount = @($payloadCheck.memberships).Count
         $errorCount = @($payloadCheck.errors).Count
-        Write-AgentLog "AD payload ready. OUs: $ouCount; Users: $userCount; Groups: $groupCount; Memberships: $membershipCount; collection errors: $errorCount"
     }
     catch {
-        throw "Generated AD inventory JSON is invalid: $($_.Exception.Message)"
+        throw "Generated AD inventory JSON is invalid. Payload path: $payloadPath. Error: $($_.Exception.Message)"
     }
 
+    Write-AgentLog "AD payload ready. Payload path: $payloadPath. OUs: $ouCount; Users: $userCount; Groups: $groupCount; Memberships: $membershipCount; collection errors: $errorCount"
+
     Write-AgentLog "Sending AD inventory payload to $Uri with -InFile"
-    $adResponse = Invoke-NightowlPostJsonFile -Uri $Uri -Token $Token -PayloadPath ([string]$exportPath) -EndpointLabel 'ad-inventory endpoint' -TimeoutSec $TimeoutSec
+    $adResponse = Invoke-NightowlPostJsonFile -Uri $Uri -Token $Token -PayloadPath $payloadPath -EndpointLabel 'ad-inventory endpoint' -TimeoutSec $TimeoutSec
     Write-AgentLog "AD inventory payload accepted. Run ID: $($adResponse.run_id)"
     Write-AgentLog "AD import summary: created=$($adResponse.summary.created); updated=$($adResponse.summary.updated); ignored=$($adResponse.summary.ignored); errors=$($adResponse.summary.errors)"
 }
@@ -579,8 +696,13 @@ try {
     $defaultLogPath = Join-Path $PSScriptRoot 'logs\NightowlAccessInventoryAgent.log'
     $script:LogPath = [string](Get-ConfigValue -Object $config -Names @('log_path', 'LogPath') -Default $defaultLogPath)
 
+    $agentTempDirectory = Get-AgentTempDirectory -Config $config
+    Acquire-AgentLock -TempDirectory $agentTempDirectory
+
     Write-AgentLog "Night Owl Access Inventory Agent starting. Version: $AgentVersion"
     Write-AgentLog "Config path: $ConfigPath"
+    Write-AgentLog "Payload temp directory: $agentTempDirectory"
+    Write-AgentLog "Agent log path: $script:LogPath"
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -640,22 +762,24 @@ try {
 
             Invoke-AclExportForTarget -Target $target -ExportPath ([string]$exportPath)
 
-            Write-AgentLog "Reading ACL payload for target '$targetName': $exportPath"
-            $payloadJson = Get-Content -LiteralPath ([string]$exportPath) -Raw -Encoding UTF8
+            $payloadPath = [string]$exportPath
+            Write-AgentLog "Reading ACL payload for target '$targetName': $payloadPath"
 
             try {
+                $payloadJson = Get-Content -LiteralPath $payloadPath -Raw -Encoding UTF8
                 $payloadCheck = $payloadJson | ConvertFrom-Json
                 $folderCount = @($payloadCheck.folders).Count
                 $aclCount = @($payloadCheck.acl_entries).Count
                 $errorCount = @($payloadCheck.errors).Count
-                Write-AgentLog "ACL payload ready for target '$targetName'. Folders: $folderCount; ACL entries: $aclCount; collection errors: $errorCount"
             }
             catch {
-                throw "Generated ACL JSON is invalid for target '$targetName': $($_.Exception.Message)"
+                throw "Generated ACL JSON is invalid for target '$targetName'. Payload path: $payloadPath. Error: $($_.Exception.Message)"
             }
 
+            Write-AgentLog "ACL payload ready for target '$targetName'. Payload path: $payloadPath. Folders: $folderCount; ACL entries: $aclCount; collection errors: $errorCount"
+
             Write-AgentLog "Sending ACL payload for target '$targetName' to $fileAclUrl with -InFile"
-            $fileAclResponse = Invoke-NightowlPostJsonFile -Uri $fileAclUrl -Token $agentToken -PayloadPath ([string]$exportPath) -EndpointLabel 'file-acl endpoint' -TimeoutSec $timeoutSec
+            $fileAclResponse = Invoke-NightowlPostJsonFile -Uri $fileAclUrl -Token $agentToken -PayloadPath $payloadPath -EndpointLabel 'file-acl endpoint' -TimeoutSec $timeoutSec
             Write-AgentLog "File ACL payload accepted for target '$targetName'. Run ID: $($fileAclResponse.run_id)"
             Write-AgentLog "Import summary for target '$targetName': created=$($fileAclResponse.summary.created); updated=$($fileAclResponse.summary.updated); ignored=$($fileAclResponse.summary.ignored); errors=$($fileAclResponse.summary.errors)"
         }
@@ -674,4 +798,7 @@ try {
 }
 catch {
     Fail-Agent -Message $_.Exception.Message -ExitCode 1
+}
+finally {
+    Release-AgentLock
 }
