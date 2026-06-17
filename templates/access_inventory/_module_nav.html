@@ -6,4 +6,5 @@
     <a class="{% if access_active_section == 'groups' %}active{% endif %}" href="{% url 'access_inventory:group-list' %}"><i data-lucide="users"></i>Grupos</a>
     <a class="{% if access_active_section == 'ous' %}active{% endif %}" href="{% url 'access_inventory:ou-list' %}"><i data-lucide="building-2"></i>OUs</a>
     <a class="{% if access_active_section == 'unknown' %}active{% endif %}" href="{% url 'access_inventory:unknown-identities' %}"><i data-lucide="circle-help"></i>Identidades desconhecidas</a>
+    <a class="{% if access_active_section == 'reviews' %}active{% endif %}" href="{% url 'access_inventory:review-plan-list' %}"><i data-lucide="clipboard-check"></i>Reestruturação</a>
 </nav>

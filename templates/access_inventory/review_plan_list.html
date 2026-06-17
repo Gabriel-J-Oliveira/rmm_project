@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Reestruturação de Acessos{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><strong>Reestruturação</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title="Reestruturação de Acessos" subtitle="Compare a estrutura atual de permissoes com a nova proposta de acesso." icon="clipboard-check" %}
+
+    <section class="ai-review-intro">
+        <div>
+            <span class="ai-object-type">Base executiva</span>
+            <h2>Planos para validação de diretoria</h2>
+            <p>Organize a proposta por áreas, pastas, pessoas, grupos e permissões em linguagem simples, sem alterar ACLs reais.</p>
+        </div>
+        <span class="ai-badge ai-badge-folder">importação Excel/CSV futura</span>
+    </section>
+
+    <section class="ai-review-plan-grid">
+        {% for plan in plans %}
+        <article class="ai-review-plan-card">
+            <header>
+                <span class="ai-badge ai-badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
+                <small>Atualizado em {{ plan.updated_at|date:"d/m/Y H:i" }}</small>
+            </header>
+            <h2>{{ plan.name }}</h2>
+            <p>{{ plan.description|default:"Plano de reestruturação de acessos." }}</p>
+            <div class="ai-review-card-metrics">
+                <span><strong>{{ plan.folder_count }}</strong> pastas propostas</span>
+                <span><strong>{{ plan.rule_count }}</strong> regras propostas</span>
+            </div>
+            <a class="ai-review-action" href="{% url 'access_inventory:review-plan-detail' plan.id %}">Abrir análise</a>
+        </article>
+        {% empty %}
+        <section class="ai-empty ai-empty-large">
+            <i data-lucide="clipboard-check"></i>
+            <strong>Nenhum plano de reestruturação criado ainda.</strong>
+            <p>Crie um AccessReviewPlan pelo Admin para iniciar a preparação da proposta.</p>
+        </section>
+        {% endfor %}
+    </section>
+</section>
+{% endblock %}

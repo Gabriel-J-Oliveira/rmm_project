@@ -2,7 +2,20 @@ from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, render
 
-from .models import ADGroup, ADGroupMembership, ADOrganizationalUnit, ADUser, AclEntry, FileServer, Folder, Share
+from .models import (
+    ADGroup,
+    ADGroupMembership,
+    ADOrganizationalUnit,
+    ADUser,
+    AccessReviewFolder,
+    AccessReviewPlan,
+    AccessReviewRule,
+    AclEntry,
+    FileServer,
+    Folder,
+    Share,
+)
+from .services.access_review import rule_explanation
 
 
 def base_context(section='overview'):
@@ -455,3 +468,79 @@ def unknown_identities(request):
         'filters': {'q': q},
     }
     return render(request, 'access_inventory/unknown_identities.html', context)
+
+
+def review_plan_list(request):
+    plans = AccessReviewPlan.objects.annotate(
+        folder_count=Count('folders', distinct=True),
+        rule_count=Count('rules', distinct=True),
+    ).select_related('created_by')
+    context = {
+        **base_context('reviews'),
+        'plans': plans,
+    }
+    return render(request, 'access_inventory/review_plan_list.html', context)
+
+
+def review_plan_detail(request, plan_id):
+    plan = get_object_or_404(AccessReviewPlan.objects.select_related('created_by'), pk=plan_id)
+    folders = plan.folders.annotate(rule_count=Count('rules')).order_by('area_name', 'sort_order', 'proposed_path')
+    area_rows = folders.values('area_name').annotate(
+        folder_count=Count('id', distinct=True),
+        rule_count=Count('rules', distinct=True),
+        ro_count=Count('rules', filter=Q(rules__permission_level=AccessReviewRule.PERMISSION_RO), distinct=True),
+        rw_count=Count('rules', filter=Q(rules__permission_level=AccessReviewRule.PERMISSION_RW), distinct=True),
+    ).order_by('area_name')
+    rules = plan.rules.all()
+    context = {
+        **base_context('reviews'),
+        'plan': plan,
+        'folders': folders,
+        'area_rows': area_rows,
+        'folder_count': folders.count(),
+        'principal_count': plan.principals.count(),
+        'rule_count': rules.count(),
+        'ro_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RO).count(),
+        'rw_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RW).count(),
+        'full_custom_count': rules.filter(
+            permission_level__in=[AccessReviewRule.PERMISSION_FULL, AccessReviewRule.PERMISSION_CUSTOM],
+        ).count(),
+        'current_folder_count': Folder.objects.count(),
+        'current_acl_count': AclEntry.objects.count(),
+        'ad_user_count': ADUser.objects.count(),
+        'ad_group_count': ADGroup.objects.count(),
+    }
+    return render(request, 'access_inventory/review_plan_detail.html', context)
+
+
+def review_folder_detail(request, plan_id, folder_id):
+    plan = get_object_or_404(AccessReviewPlan, pk=plan_id)
+    folder = get_object_or_404(
+        AccessReviewFolder.objects.select_related('plan', 'parent', 'current_folder'),
+        pk=folder_id,
+        plan=plan,
+    )
+    rules = folder.rules.select_related('principal', 'principal__ad_user', 'principal__ad_group').order_by(
+        'permission_level',
+        'principal__display_name',
+    )
+    rule_cards = [
+        {
+            'rule': rule,
+            'explanation': rule_explanation(rule),
+        }
+        for rule in rules
+    ]
+    context = {
+        **base_context('reviews'),
+        'plan': plan,
+        'folder': folder,
+        'rule_cards': rule_cards,
+        'rule_count': rules.count(),
+        'ro_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RO).count(),
+        'rw_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RW).count(),
+        'custom_count': rules.filter(
+            permission_level__in=[AccessReviewRule.PERMISSION_FULL, AccessReviewRule.PERMISSION_CUSTOM],
+        ).count(),
+    }
+    return render(request, 'access_inventory/review_folder_detail.html', context)

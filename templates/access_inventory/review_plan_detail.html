@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | {{ plan.name }}{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-list' %}">Reestruturação</a><i data-lucide="chevron-right"></i><strong>{{ plan.name }}</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=plan.name subtitle=plan.description|default:"Plano de reestruturação de acessos." icon="clipboard-check" %}
+
+    <section class="ai-object-header">
+        <div>
+            <span class="ai-object-type">Plano de reestruturação</span>
+            <h2>{{ plan.name }}</h2>
+            <p>{{ plan.current_snapshot_label|default:"Comparação preparada para snapshot atual de permissões." }}</p>
+        </div>
+        <div class="ai-object-badges">
+            <span class="ai-badge ai-badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
+            <span class="ai-badge ai-badge-folder">sem alteração real de ACL</span>
+        </div>
+    </section>
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="folder-tree"></i><strong>{{ folder_count }}</strong><span>Pastas planejadas</span></article>
+        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ principal_count }}</strong><span>Pessoas/grupos na proposta</span></article>
+        <article class="ai-metric"><i data-lucide="shield-check"></i><strong>{{ rule_count }}</strong><span>Regras propostas</span></article>
+        <article class="ai-metric"><i data-lucide="eye"></i><strong>{{ ro_count }}</strong><span>Acessos RO</span></article>
+        <article class="ai-metric"><i data-lucide="pencil"></i><strong>{{ rw_count }}</strong><span>Acessos RW</span></article>
+        <article class="ai-metric"><i data-lucide="settings"></i><strong>{{ full_custom_count }}</strong><span>Full/Custom</span></article>
+    </section>
+
+    <section class="ai-review-context">
+        <article><strong>{{ current_folder_count }}</strong><span>Pastas atuais coletadas</span></article>
+        <article><strong>{{ current_acl_count }}</strong><span>ACLs atuais coletadas</span></article>
+        <article><strong>{{ ad_user_count }}</strong><span>Usuários AD</span></article>
+        <article><strong>{{ ad_group_count }}</strong><span>Grupos AD</span></article>
+    </section>
+
+    <section class="ai-review-executive-note">
+        <i data-lucide="presentation"></i>
+        <div>
+            <strong>Leitura executiva</strong>
+            <p>Esta tela foi criada para apresentar, de forma simples, quem mantém acesso, quem perde acesso, quem ganha acesso e quais permissões passam a ser somente leitura ou leitura/escrita.</p>
+        </div>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="layout-grid"></i>Áreas da reestruturação</h2>
+        <div class="ai-review-area-grid">
+            {% for area in area_rows %}
+            <article class="ai-review-area-card">
+                <h3>{{ area.area_name|default:"Sem área" }}</h3>
+                <div>
+                    <span><strong>{{ area.folder_count }}</strong> pastas</span>
+                    <span><strong>{{ area.rule_count }}</strong> regras</span>
+                    <span><strong>{{ area.ro_count }}</strong> RO</span>
+                    <span><strong>{{ area.rw_count }}</strong> RW</span>
+                </div>
+            </article>
+            {% empty %}
+            <div class="ai-empty">Nenhuma área planejada ainda.</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="folder-tree"></i>Pastas planejadas</h2>
+        <div class="ai-review-folder-grid">
+            {% for folder in folders %}
+            <article class="ai-review-folder-card">
+                <span class="ai-badge ai-badge-folder">{{ folder.area_name|default:"Área" }}</span>
+                <h3>{{ folder.name }}</h3>
+                <p class="mono">{{ folder.proposed_path }}</p>
+                <div><strong>{{ folder.rule_count }}</strong><span> regras propostas</span></div>
+                <a href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">Ver comparação</a>
+            </article>
+            {% empty %}
+            <div class="ai-empty">Nenhuma pasta planejada ainda.</div>
+            {% endfor %}
+        </div>
+    </section>
+</section>
+{% endblock %}

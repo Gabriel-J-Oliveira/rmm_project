@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError
+from django.conf import settings
 from django.db import models
 
 
@@ -359,3 +360,172 @@ class AclEntry(models.Model):
 
     def __str__(self) -> str:
         return f'{self.identity_name} {self.access_type} {self.rights}'
+
+
+class AccessReviewPlan(models.Model):
+    STATUS_DRAFT = 'draft'
+    STATUS_REVIEW = 'review'
+    STATUS_APPROVED = 'approved'
+    STATUS_ARCHIVED = 'archived'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_REVIEW, 'Review'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_ARCHIVED, 'Archived'),
+    ]
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='access_review_plans',
+    )
+    current_snapshot_label = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at', 'name']
+        indexes = [
+            models.Index(fields=['status', '-updated_at']),
+            models.Index(fields=['name']),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class AccessReviewFolder(models.Model):
+    plan = models.ForeignKey(AccessReviewPlan, on_delete=models.CASCADE, related_name='folders')
+    area_name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    proposed_path = models.CharField(max_length=2048)
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children',
+    )
+    current_folder = models.ForeignKey(
+        Folder,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='review_folders',
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['plan', 'area_name', 'sort_order', 'proposed_path']
+        constraints = [
+            models.UniqueConstraint(fields=['plan', 'proposed_path'], name='unique_review_folder_per_plan_path'),
+        ]
+        indexes = [
+            models.Index(fields=['plan', 'area_name']),
+            models.Index(fields=['plan', 'sort_order']),
+            models.Index(fields=['proposed_path']),
+        ]
+
+    def __str__(self) -> str:
+        return self.proposed_path
+
+
+class AccessReviewPrincipal(models.Model):
+    PRINCIPAL_USER = 'user'
+    PRINCIPAL_GROUP = 'group'
+    PRINCIPAL_TYPE_CHOICES = [
+        (PRINCIPAL_USER, 'User'),
+        (PRINCIPAL_GROUP, 'Group'),
+    ]
+
+    plan = models.ForeignKey(AccessReviewPlan, on_delete=models.CASCADE, related_name='principals')
+    principal_type = models.CharField(max_length=20, choices=PRINCIPAL_TYPE_CHOICES)
+    display_name = models.CharField(max_length=255)
+    sam_account_name = models.CharField(max_length=255, blank=True)
+    proposed_group_name = models.CharField(max_length=255, blank=True)
+    ad_user = models.ForeignKey(
+        ADUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='review_principals',
+    )
+    ad_group = models.ForeignKey(
+        ADGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='review_principals',
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['plan', 'principal_type', 'display_name']
+        indexes = [
+            models.Index(fields=['plan', 'principal_type']),
+            models.Index(fields=['display_name']),
+            models.Index(fields=['sam_account_name']),
+            models.Index(fields=['proposed_group_name']),
+        ]
+
+    def __str__(self) -> str:
+        return self.display_name
+
+
+class AccessReviewRule(models.Model):
+    PERMISSION_NONE = 'none'
+    PERMISSION_RO = 'ro'
+    PERMISSION_RW = 'rw'
+    PERMISSION_FULL = 'full'
+    PERMISSION_CUSTOM = 'custom'
+    PERMISSION_LEVEL_CHOICES = [
+        (PERMISSION_NONE, 'Sem acesso'),
+        (PERMISSION_RO, 'Somente leitura'),
+        (PERMISSION_RW, 'Leitura e escrita'),
+        (PERMISSION_FULL, 'Controle total'),
+        (PERMISSION_CUSTOM, 'Personalizada'),
+    ]
+
+    SOURCE_MANUAL = 'manual'
+    SOURCE_SPREADSHEET = 'spreadsheet'
+    SOURCE_IMPORTED = 'imported'
+    SOURCE_CHOICES = [
+        (SOURCE_MANUAL, 'Manual'),
+        (SOURCE_SPREADSHEET, 'Spreadsheet'),
+        (SOURCE_IMPORTED, 'Imported'),
+    ]
+
+    plan = models.ForeignKey(AccessReviewPlan, on_delete=models.CASCADE, related_name='rules')
+    folder = models.ForeignKey(AccessReviewFolder, on_delete=models.CASCADE, related_name='rules')
+    principal = models.ForeignKey(AccessReviewPrincipal, on_delete=models.CASCADE, related_name='rules')
+    permission_level = models.CharField(max_length=20, choices=PERMISSION_LEVEL_CHOICES, default=PERMISSION_NONE)
+    permission_label = models.CharField(max_length=255, blank=True)
+    permission_explanation = models.TextField(blank=True)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_MANUAL)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['plan', 'folder__proposed_path', 'principal__display_name']
+        constraints = [
+            models.UniqueConstraint(fields=['plan', 'folder', 'principal'], name='unique_review_rule_per_plan_folder_principal'),
+        ]
+        indexes = [
+            models.Index(fields=['plan', 'permission_level']),
+            models.Index(fields=['source']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.principal} -> {self.folder} ({self.permission_level})'

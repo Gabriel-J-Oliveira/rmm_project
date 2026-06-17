@@ -19,4 +19,7 @@ urlpatterns = [
     path('file-servers/', views.file_server_list, name='file-server-list'),
     path('file-servers/<int:pk>/', views.file_server_detail, name='file-server-detail'),
     path('unknown-identities/', views.unknown_identities, name='unknown-identities'),
+    path('reviews/', views.review_plan_list, name='review-plan-list'),
+    path('reviews/<int:plan_id>/', views.review_plan_detail, name='review-plan-detail'),
+    path('reviews/<int:plan_id>/folders/<int:folder_id>/', views.review_folder_detail, name='review-folder-detail'),
 ]

@@ -5,6 +5,10 @@ from .models import (
     ADGroupMembership,
     ADOrganizationalUnit,
     ADUser,
+    AccessReviewFolder,
+    AccessReviewPlan,
+    AccessReviewPrincipal,
+    AccessReviewRule,
     AclEntry,
     FileServer,
     Folder,
@@ -58,6 +62,78 @@ class InventoryAgentRunAdmin(admin.ModelAdmin):
         'created_at',
         'updated_at',
     )
+
+
+class AccessReviewFolderInline(admin.TabularInline):
+    model = AccessReviewFolder
+    extra = 0
+    fields = ('area_name', 'name', 'proposed_path', 'parent', 'current_folder', 'sort_order')
+    autocomplete_fields = ('parent', 'current_folder')
+
+
+class AccessReviewPrincipalInline(admin.TabularInline):
+    model = AccessReviewPrincipal
+    extra = 0
+    fields = ('principal_type', 'display_name', 'sam_account_name', 'proposed_group_name', 'ad_user', 'ad_group')
+    autocomplete_fields = ('ad_user', 'ad_group')
+
+
+class AccessReviewRuleInline(admin.TabularInline):
+    model = AccessReviewRule
+    extra = 0
+    fields = ('folder', 'principal', 'permission_level', 'permission_label', 'source')
+    autocomplete_fields = ('folder', 'principal')
+
+
+@admin.register(AccessReviewPlan)
+class AccessReviewPlanAdmin(admin.ModelAdmin):
+    list_display = ('name', 'status', 'current_snapshot_label', 'created_by', 'updated_at')
+    list_filter = ('status', 'created_at', 'updated_at')
+    search_fields = ('name', 'description', 'current_snapshot_label', 'notes')
+    readonly_fields = ('created_at', 'updated_at')
+    inlines = (AccessReviewFolderInline, AccessReviewPrincipalInline, AccessReviewRuleInline)
+
+
+@admin.register(AccessReviewFolder)
+class AccessReviewFolderAdmin(admin.ModelAdmin):
+    list_display = ('name', 'area_name', 'plan', 'proposed_path', 'current_folder', 'sort_order', 'updated_at')
+    list_filter = ('plan', 'area_name')
+    search_fields = ('name', 'area_name', 'proposed_path', 'notes', 'current_folder__path')
+    autocomplete_fields = ('plan', 'parent', 'current_folder')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(AccessReviewPrincipal)
+class AccessReviewPrincipalAdmin(admin.ModelAdmin):
+    list_display = ('display_name', 'principal_type', 'plan', 'sam_account_name', 'proposed_group_name', 'ad_user', 'ad_group')
+    list_filter = ('plan', 'principal_type')
+    search_fields = (
+        'display_name',
+        'sam_account_name',
+        'proposed_group_name',
+        'notes',
+        'ad_user__sam_account_name',
+        'ad_group__sam_account_name',
+    )
+    autocomplete_fields = ('plan', 'ad_user', 'ad_group')
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(AccessReviewRule)
+class AccessReviewRuleAdmin(admin.ModelAdmin):
+    list_display = ('folder', 'principal', 'permission_level', 'permission_label', 'source', 'plan', 'updated_at')
+    list_filter = ('plan', 'permission_level', 'source', 'folder__area_name')
+    search_fields = (
+        'folder__name',
+        'folder__proposed_path',
+        'principal__display_name',
+        'principal__sam_account_name',
+        'permission_label',
+        'permission_explanation',
+        'notes',
+    )
+    autocomplete_fields = ('plan', 'folder', 'principal')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(ADUser)

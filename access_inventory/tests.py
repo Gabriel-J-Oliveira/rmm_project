@@ -9,6 +9,10 @@ from .models import (
     ADGroup,
     ADOrganizationalUnit,
     ADUser,
+    AccessReviewFolder,
+    AccessReviewPlan,
+    AccessReviewPrincipal,
+    AccessReviewRule,
     AclEntry,
     FileServer,
     Folder,
@@ -16,6 +20,7 @@ from .models import (
     InventoryAgentRun,
     Share,
 )
+from .services.access_review import explain_permission
 from .services.resolve_acl_identities import resolve_acl_identities
 
 
@@ -179,3 +184,55 @@ class ResolveAclIdentityTests(TestCase):
         self.assertEqual(acl.resolved_identity_type, AclEntry.IDENTITY_UNKNOWN)
         self.assertIsNone(acl.resolved_ad_user)
         self.assertIsNone(acl.resolved_ad_group)
+
+
+class AccessReviewTests(TestCase):
+    def setUp(self):
+        self.plan = AccessReviewPlan.objects.create(
+            name='Reestruturação Administrativo e Jurídico - 2026',
+            description='Proposta executiva de reorganização de acessos.',
+            status=AccessReviewPlan.STATUS_DRAFT,
+        )
+        self.folder = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='Financeiro',
+            proposed_path='Administrativo\\Financeiro',
+        )
+        self.principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name='GG Administrativo RW',
+            proposed_group_name='GG_ADMINISTRATIVO_RW',
+        )
+        self.rule = AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=self.principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+    def test_permission_explanation_is_executive_friendly(self):
+        self.assertIn('criar', explain_permission(AccessReviewRule.PERMISSION_RW))
+        self.assertIn('Sem acesso', explain_permission(AccessReviewRule.PERMISSION_NONE))
+
+    def test_review_plan_list_view(self):
+        response = self.client.get(reverse('access_inventory:review-plan-list'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.plan.name)
+        self.assertContains(response, 'Abrir análise')
+
+    def test_review_plan_detail_view(self):
+        response = self.client.get(reverse('access_inventory:review-plan-detail', args=[self.plan.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Pastas planejadas')
+        self.assertContains(response, self.folder.proposed_path)
+
+    def test_review_folder_detail_view(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.principal.display_name)
+        self.assertContains(response, 'Pode abrir, criar, editar e excluir arquivos.')

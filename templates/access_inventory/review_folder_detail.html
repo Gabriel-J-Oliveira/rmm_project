@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | {{ folder.name }}{% endblock %}
+{% block body_class %}{{ body_class }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-list' %}">Reestruturação</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-detail' plan.id %}">{{ plan.name }}</a><i data-lucide="chevron-right"></i><strong>{{ folder.name }}</strong></nav>
+{% endblock %}
+
+{% block content %}
+<section class="ai-shell">
+    {% include "access_inventory/_header.html" with title=folder.name subtitle=folder.proposed_path icon="folder-cog" %}
+
+    <section class="ai-object-header">
+        <div>
+            <span class="ai-object-type">Pasta planejada</span>
+            <h2>{{ folder.name }}</h2>
+            <p><strong>Área:</strong> {{ folder.area_name|default:"Sem área" }} &middot; <strong>Caminho:</strong> <span class="mono">{{ folder.proposed_path }}</span></p>
+        </div>
+        <div class="ai-object-badges">
+            <span class="ai-badge ai-badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
+            <span class="ai-badge ai-badge-folder">{{ folder.area_name|default:"Área" }}</span>
+        </div>
+    </section>
+
+    <section class="ai-metrics">
+        <article class="ai-metric"><i data-lucide="shield-check"></i><strong>{{ rule_count }}</strong><span>Regras propostas</span></article>
+        <article class="ai-metric"><i data-lucide="eye"></i><strong>{{ ro_count }}</strong><span>Usuários/grupos com RO</span></article>
+        <article class="ai-metric"><i data-lucide="pencil"></i><strong>{{ rw_count }}</strong><span>Usuários/grupos com RW</span></article>
+        <article class="ai-metric"><i data-lucide="settings"></i><strong>{{ custom_count }}</strong><span>Full ou personalizadas</span></article>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="users"></i>Permissões propostas</h2>
+        <div class="ai-review-rule-grid">
+            {% for item in rule_cards %}
+            <article class="ai-review-rule-card">
+                <header>
+                    <span class="ai-badge ai-badge-{{ item.rule.principal.principal_type }}">{{ item.rule.principal.get_principal_type_display }}</span>
+                    <span class="ai-permission-chip ai-permission-{{ item.rule.permission_level }}">{{ item.rule.get_permission_level_display }}</span>
+                </header>
+                <h3>{{ item.rule.principal.display_name }}</h3>
+                <p>{{ item.explanation }}</p>
+                {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
+            </article>
+            {% empty %}
+            <div class="ai-empty">Nenhuma permissão proposta para esta pasta.</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="ai-panel">
+        <h2><i data-lucide="git-compare"></i>Comparação com situação atual</h2>
+        <p class="ai-note">Comparação atual vs proposta será calculada na próxima etapa.</p>
+        <div class="ai-review-compare-grid">
+            <article><span>Antes</span><strong>Acesso atual via grupos e ACLs coletadas</strong><p>Será preenchido a partir das ACLs atuais resolvidas.</p></article>
+            <article><span>Depois</span><strong>Acesso proposto pela nova estrutura</strong><p>Será preenchido a partir das regras deste plano.</p></article>
+            <article><span>Resultado</span><strong>Mantém / remove / adiciona / reduz / amplia</strong><p>Classificação executiva preparada para validação.</p></article>
+        </div>
+        <div class="ai-change-badges">
+            <span class="ai-badge ai-change-keep">Mantém</span>
+            <span class="ai-badge ai-change-remove">Remove</span>
+            <span class="ai-badge ai-change-add">Adiciona</span>
+            <span class="ai-badge ai-change-reduce">Reduz</span>
+            <span class="ai-badge ai-change-expand">Amplia</span>
+            <span class="ai-badge ai-change-change">Alterado</span>
+        </div>
+    </section>
+
+    <section class="ai-panel ai-compact-panel">
+        <h2><i data-lucide="wrench"></i>Detalhes técnicos</h2>
+        <dl class="ai-data-list ai-data-list-compact">
+            <div><dt>ID do plano</dt><dd>{{ plan.id }}</dd></div>
+            <div><dt>ID da pasta planejada</dt><dd>{{ folder.id }}</dd></div>
+            <div><dt>Pasta atual vinculada</dt><dd>{% if folder.current_folder %}<a class="ai-link" href="{% url 'access_inventory:folder-detail' folder.current_folder.id %}">{{ folder.current_folder.path }}</a>{% else %}--{% endif %}</dd></div>
+            <div><dt>Observações</dt><dd>{{ folder.notes|default:"--" }}</dd></div>
+        </dl>
+    </section>
+</section>
+{% endblock %}
