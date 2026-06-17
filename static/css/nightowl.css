@@ -7780,6 +7780,183 @@ body.page-access-inventory .ai-pagination a:hover {
     color: #fde68a !important;
 }
 
+.ai-review-plan-hero {
+    margin-bottom: 14px;
+}
+
+.ai-review-plan-summary {
+    display: grid;
+    gap: 10px;
+}
+
+.ai-review-plan-summary h2,
+.ai-review-areas-panel h2,
+.ai-review-structure-panel h2 {
+    color: var(--ai-primary-text);
+    font-size: 1.02rem;
+    margin: 0;
+}
+
+.ai-review-plan-summary p,
+.ai-review-structure-panel .ai-section-heading p {
+    color: var(--ai-secondary-text);
+    line-height: 1.6;
+    margin: 0;
+    max-width: 980px;
+}
+
+.ai-review-inline-stats {
+    align-items: center;
+    color: var(--ai-tertiary-text);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.82rem;
+    gap: 8px 0;
+    margin-top: 4px;
+}
+
+.ai-review-inline-stats span {
+    align-items: center;
+    display: inline-flex;
+}
+
+.ai-review-inline-stats span:not(:last-child)::after {
+    color: rgba(148, 163, 184, 0.42);
+    content: "\00b7";
+    margin: 0 10px;
+}
+
+.ai-review-executive-note-plain {
+    background: rgba(7, 13, 21, 0.72);
+    border-color: rgba(148, 163, 184, 0.12);
+}
+
+.ai-review-area-strip {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.ai-review-area-strip article {
+    align-items: center;
+    background: rgba(2, 6, 12, 0.24);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    border-radius: 10px;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 11px 13px;
+}
+
+.ai-review-area-strip strong {
+    color: var(--ai-primary-text);
+}
+
+.ai-review-area-strip span {
+    color: var(--ai-tertiary-text);
+    font-size: 0.82rem;
+}
+
+.ai-review-structure-panel .ai-section-heading {
+    margin-bottom: 14px;
+}
+
+.ai-review-folder-tree {
+    display: grid;
+    gap: 18px;
+}
+
+.ai-review-folder-area {
+    display: grid;
+    gap: 9px;
+}
+
+.ai-review-folder-area h3 {
+    color: var(--ai-secondary-text);
+    font-size: 0.78rem;
+    font-weight: 900;
+    letter-spacing: 0.05em;
+    margin: 0;
+    text-transform: uppercase;
+}
+
+.ai-review-folder-lines {
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.ai-review-folder-lines article {
+    align-items: center;
+    background: rgba(2, 6, 12, 0.22);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+    display: grid;
+    gap: 14px;
+    grid-template-columns: minmax(260px, 1fr) auto auto auto;
+    padding: 13px 15px;
+}
+
+.ai-review-folder-lines article:last-child {
+    border-bottom: 0;
+}
+
+.ai-review-folder-lines article:hover {
+    background: rgba(15, 23, 42, 0.5);
+}
+
+.ai-review-folder-title {
+    color: var(--ai-primary-text);
+    display: block;
+    font-size: 0.98rem;
+    font-weight: 800;
+    line-height: 1.25;
+    text-decoration: none;
+}
+
+.ai-review-folder-node {
+    padding-left: calc(var(--ai-folder-level, 0) * 18px);
+    position: relative;
+}
+
+.ai-review-folder-node::before {
+    background: rgba(148, 163, 184, 0.18);
+    content: "";
+    height: 1px;
+    left: calc((var(--ai-folder-level, 0) * 18px) - 12px);
+    position: absolute;
+    top: 11px;
+    width: 8px;
+}
+
+.ai-review-folder-root::before {
+    display: none;
+}
+
+.ai-review-folder-title:hover,
+.ai-review-folder-link:hover {
+    color: var(--ai-accent-muted);
+}
+
+.ai-review-folder-lines .mono,
+.ai-review-folder-lines article > span {
+    color: var(--ai-tertiary-text);
+    font-size: 0.78rem;
+}
+
+.ai-review-linked-snapshot {
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 999px;
+    padding: 4px 8px;
+    white-space: nowrap;
+}
+
+.ai-review-folder-link {
+    color: var(--ai-secondary-text);
+    font-size: 0.82rem;
+    font-weight: 800;
+    text-decoration: none;
+}
+
 .ai-review-folder-hero {
     margin-bottom: 14px;
 }
@@ -7945,6 +8122,42 @@ body.page-access-inventory .ai-pagination a:hover {
     padding: 12px 14px;
 }
 
+.ai-review-current-folder {
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 12px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-bottom: 14px;
+    overflow: hidden;
+}
+
+.ai-review-current-folder article {
+    background: rgba(2, 6, 12, 0.24);
+    border-right: 1px solid rgba(148, 163, 184, 0.08);
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+}
+
+.ai-review-current-folder article:last-child {
+    border-right: 0;
+}
+
+.ai-review-current-folder span {
+    color: var(--ai-tertiary-text);
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ai-review-current-folder strong {
+    color: var(--ai-primary-text);
+    font-size: 0.9rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
 .ai-review-technical-groups {
     display: grid;
     gap: 10px;
@@ -7991,6 +8204,7 @@ body.page-access-inventory .ai-pagination a:hover {
     .ai-review-rule-grid,
     .ai-review-compare-grid,
     .ai-review-person-compare,
+    .ai-review-current-folder,
     .ai-review-context {
         grid-template-columns: 1fr;
     }
@@ -8000,6 +8214,7 @@ body.page-access-inventory .ai-pagination a:hover {
     }
 
     .ai-review-person-row,
+    .ai-review-folder-lines article,
     .ai-review-technical-groups article {
         grid-template-columns: 1fr;
     }
@@ -8024,12 +8239,14 @@ body.page-access-inventory .ai-pagination a:hover {
     }
 
     .ai-review-summary-bar article,
+    .ai-review-current-folder article,
     .ai-review-person-compare article {
         border-right: 0;
         border-bottom: 1px solid rgba(148, 163, 184, 0.08);
     }
 
     .ai-review-summary-bar article:last-child,
+    .ai-review-current-folder article:last-child,
     .ai-review-person-compare article:last-child {
         border-bottom: 0;
     }
@@ -8051,6 +8268,11 @@ body.page-access-inventory .ai-pagination a:hover {
 
     .ai-object-header,
     .ai-group-access-card header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .ai-review-area-strip article {
         align-items: flex-start;
         flex-direction: column;
     }

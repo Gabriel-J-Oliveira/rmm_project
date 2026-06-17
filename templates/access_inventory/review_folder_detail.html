@@ -81,6 +81,27 @@
 
     <section class="ai-panel ai-compact-panel ai-review-technical-panel">
         <h2>Detalhes t&eacute;cnicos</h2>
+        {% if folder.current_folder %}
+        <div class="ai-review-current-folder">
+            <article>
+                <span>Pasta atual vinculada</span>
+                <strong>{{ folder.current_folder.path }}</strong>
+            </article>
+            <article>
+                <span>Share atual</span>
+                <strong>{{ folder.current_folder.share.name }}</strong>
+            </article>
+            <article>
+                <span>File server</span>
+                <strong>{{ folder.current_folder.share.file_server.name }}</strong>
+            </article>
+            <article>
+                <span>ACLs atuais</span>
+                <strong>{{ current_acl_count }}</strong>
+            </article>
+        </div>
+        {% endif %}
+
         {% if technical_group_rules %}
         <div class="ai-review-technical-note">
             Esta pasta usar&aacute; grupos t&eacute;cnicos pr&oacute;prios. A lista nominal de pessoas ser&aacute; preenchida ap&oacute;s a importa&ccedil;&atilde;o da planilha de usu&aacute;rios.

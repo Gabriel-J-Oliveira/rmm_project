@@ -4,83 +4,100 @@
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-list' %}">Reestruturação</a><i data-lucide="chevron-right"></i><strong>{{ plan.name }}</strong></nav>
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-list' %}">Reestrutura&ccedil;&atilde;o</a><i data-lucide="chevron-right"></i><strong>{{ plan.name }}</strong></nav>
 {% endblock %}
 
 {% block content %}
 <section class="ai-shell">
-    {% include "access_inventory/_header.html" with title=plan.name subtitle=plan.description|default:"Plano de reestruturação de acessos." icon="clipboard-check" %}
+    {% include "access_inventory/_header.html" with title=plan.name subtitle=plan.description|default:"Plano de reestruturacao de acessos." icon="clipboard-check" %}
 
-    <section class="ai-object-header">
+    <section class="ai-object-header ai-review-plan-hero">
         <div>
-            <span class="ai-object-type">Plano de reestruturação</span>
+            <span class="ai-object-type">Plano de reestrutura&ccedil;&atilde;o</span>
             <h2>{{ plan.name }}</h2>
-            <p>{{ plan.current_snapshot_label|default:"Comparação preparada para snapshot atual de permissões." }}</p>
+            <p>{{ plan.current_snapshot_label|default:"Comparacao preparada para o snapshot atual de permissoes." }}</p>
         </div>
         <div class="ai-object-badges">
             <span class="ai-badge ai-badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
-            <span class="ai-badge ai-badge-folder">sem alteração real de ACL</span>
+            <span class="ai-badge ai-badge-folder">sem altera&ccedil;&atilde;o real de ACL</span>
         </div>
     </section>
 
-    <section class="ai-metrics">
-        <article class="ai-metric"><i data-lucide="folder-tree"></i><strong>{{ folder_count }}</strong><span>Pastas planejadas</span></article>
-        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ principal_count }}</strong><span>Pessoas/grupos na proposta</span></article>
-        <article class="ai-metric"><i data-lucide="shield-check"></i><strong>{{ rule_count }}</strong><span>Regras propostas</span></article>
-        <article class="ai-metric"><i data-lucide="eye"></i><strong>{{ ro_count }}</strong><span>Acessos RO</span></article>
-        <article class="ai-metric"><i data-lucide="pencil"></i><strong>{{ rw_count }}</strong><span>Acessos RW</span></article>
-        <article class="ai-metric"><i data-lucide="settings"></i><strong>{{ full_custom_count }}</strong><span>Full/Custom</span></article>
+    <section class="ai-panel ai-review-plan-summary">
+        <h2>Resumo do plano</h2>
+        <p>
+            Este plano organiza a nova estrutura de acesso por &aacute;rea e pasta, usando permiss&otilde;es
+            padronizadas de somente leitura e leitura/escrita. A compara&ccedil;&atilde;o ser&aacute; feita contra
+            o snapshot atual coletado do servidor de arquivos.
+        </p>
+        <p>
+            Nesta etapa, a tela apoia a an&aacute;lise e a valida&ccedil;&atilde;o executiva. Nenhuma permiss&atilde;o
+            real &eacute; aplicada no file server.
+        </p>
+        <div class="ai-review-inline-stats">
+            <span>{{ folder_count }} pastas planejadas</span>
+            <span>{{ rule_count }} regras propostas</span>
+            <span>{{ ro_count }} acessos RO</span>
+            <span>{{ rw_count }} acessos RW</span>
+            <span>{{ full_custom_count }} full/custom</span>
+        </div>
     </section>
 
-    <section class="ai-review-context">
-        <article><strong>{{ current_folder_count }}</strong><span>Pastas atuais coletadas</span></article>
-        <article><strong>{{ current_acl_count }}</strong><span>ACLs atuais coletadas</span></article>
-        <article><strong>{{ ad_user_count }}</strong><span>Usuários AD</span></article>
-        <article><strong>{{ ad_group_count }}</strong><span>Grupos AD</span></article>
-    </section>
-
-    <section class="ai-review-executive-note">
-        <i data-lucide="presentation"></i>
+    <section class="ai-review-executive-note ai-review-executive-note-plain">
         <div>
             <strong>Leitura executiva</strong>
-            <p>Esta tela foi criada para apresentar, de forma simples, quem mantém acesso, quem perde acesso, quem ganha acesso e quais permissões passam a ser somente leitura ou leitura/escrita.</p>
+            <p>Esta tela foi criada para apresentar, de forma simples, quem mant&eacute;m acesso, quem perde acesso, quem ganha acesso e quais permiss&otilde;es passam a ser somente leitura ou leitura/escrita.</p>
         </div>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="layout-grid"></i>Áreas da reestruturação</h2>
-        <div class="ai-review-area-grid">
+    <section class="ai-panel ai-review-areas-panel">
+        <h2>&Aacute;reas da reestrutura&ccedil;&atilde;o</h2>
+        <div class="ai-review-area-strip">
             {% for area in area_rows %}
-            <article class="ai-review-area-card">
-                <h3>{{ area.area_name|default:"Sem área" }}</h3>
-                <div>
-                    <span><strong>{{ area.folder_count }}</strong> pastas</span>
-                    <span><strong>{{ area.rule_count }}</strong> regras</span>
-                    <span><strong>{{ area.ro_count }}</strong> RO</span>
-                    <span><strong>{{ area.rw_count }}</strong> RW</span>
-                </div>
+            <article>
+                <strong>{{ area.area_name|default:"Sem area" }}</strong>
+                <span>{{ area.folder_count }} pastas &middot; {{ area.rule_count }} regras &middot; {{ area.ro_count }} RO &middot; {{ area.rw_count }} RW</span>
             </article>
             {% empty %}
-            <div class="ai-empty">Nenhuma área planejada ainda.</div>
+            <div class="ai-empty">Nenhuma &aacute;rea planejada ainda.</div>
             {% endfor %}
         </div>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="folder-tree"></i>Pastas planejadas</h2>
-        <div class="ai-review-folder-grid">
-            {% for folder in folders %}
-            <article class="ai-review-folder-card">
-                <span class="ai-badge ai-badge-folder">{{ folder.area_name|default:"Área" }}</span>
-                <h3>{{ folder.name }}</h3>
-                <p class="mono">{{ folder.proposed_path }}</p>
-                <div><strong>{{ folder.rule_count }}</strong><span> regras propostas</span></div>
-                <a href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">Ver comparação</a>
-            </article>
-            {% empty %}
-            <div class="ai-empty">Nenhuma pasta planejada ainda.</div>
+    <section class="ai-panel ai-review-structure-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Pastas planejadas</h2>
+                <p>Estrutura prevista para a nova organiza&ccedil;&atilde;o de acessos. Abra uma pasta para revisar as permiss&otilde;es propostas.</p>
+            </div>
+        </div>
+
+        {% if folder_sections %}
+        <div class="ai-review-folder-tree">
+            {% for section in folder_sections %}
+            <section class="ai-review-folder-area">
+                <h3>{{ section.area_name }}</h3>
+                <div class="ai-review-folder-lines">
+                    {% for folder in section.folders %}
+                    <article style="--ai-folder-level: {{ folder.tree_level }};">
+                        <div class="ai-review-folder-node{% if not folder.tree_level %} ai-review-folder-root{% endif %}">
+                            <a class="ai-review-folder-title" href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">{{ folder.name }}</a>
+                            <span class="mono">{{ folder.proposed_path }}</span>
+                        </div>
+                        <span>{{ folder.rule_count }} regras</span>
+                        {% if folder.current_folder_id %}
+                        <span class="ai-review-linked-snapshot">snapshot atual vinculado</span>
+                        {% endif %}
+                        <a class="ai-review-folder-link" href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">Ver compara&ccedil;&atilde;o</a>
+                    </article>
+                    {% endfor %}
+                </div>
+            </section>
             {% endfor %}
         </div>
+        {% else %}
+        <div class="ai-empty">Nenhuma pasta planejada ainda.</div>
+        {% endif %}
     </section>
 </section>
 {% endblock %}

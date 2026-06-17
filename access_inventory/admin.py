@@ -96,7 +96,7 @@ class AccessReviewPlanAdmin(admin.ModelAdmin):
 
 @admin.register(AccessReviewFolder)
 class AccessReviewFolderAdmin(admin.ModelAdmin):
-    list_display = ('name', 'area_name', 'plan', 'proposed_path', 'current_folder', 'sort_order', 'updated_at')
+    list_display = ('plan', 'area_name', 'name', 'proposed_path', 'parent', 'current_folder', 'sort_order', 'updated_at')
     list_filter = ('plan', 'area_name')
     search_fields = ('name', 'area_name', 'proposed_path', 'notes', 'current_folder__path')
     autocomplete_fields = ('plan', 'parent', 'current_folder')

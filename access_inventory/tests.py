@@ -1,6 +1,8 @@
 import json
+from io import StringIO
 from pathlib import Path
 
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
@@ -236,3 +238,83 @@ class AccessReviewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.principal.display_name)
         self.assertContains(response, 'Pode abrir, criar, editar e excluir arquivos.')
+
+
+class SeedAccessReviewFoldersCommandTests(TestCase):
+    def setUp(self):
+        self.plan = AccessReviewPlan.objects.create(
+            name='Plano piloto',
+            description='Plano para popular pastas reais.',
+        )
+        self.file_server = FileServer.objects.create(name='FS01')
+        self.share = Share.objects.create(
+            file_server=self.file_server,
+            name='controlsul',
+            unc_path='\\\\FS01\\controlsul',
+        )
+        self.root = Folder.objects.create(
+            share=self.share,
+            path='controlsul',
+            parent_path='',
+        )
+        self.finance = Folder.objects.create(
+            share=self.share,
+            path='controlsul\\Financeiro',
+            parent_path='controlsul',
+        )
+        self.dividendos = Folder.objects.create(
+            share=self.share,
+            path='controlsul\\Financeiro\\Dividendos',
+            parent_path='controlsul\\Financeiro',
+        )
+
+    def call_seed(self, *args):
+        output = StringIO()
+        call_command(
+            'seed_access_review_folders',
+            '--plan-id',
+            str(self.plan.id),
+            *args,
+            stdout=output,
+        )
+        return output.getvalue()
+
+    def test_seed_dry_run_does_not_create_review_folders(self):
+        output = self.call_seed('--dry-run')
+
+        self.assertIn('DRY-RUN', output)
+        self.assertEqual(AccessReviewFolder.objects.filter(plan=self.plan).count(), 0)
+
+    def test_seed_creates_review_folders_from_current_folders(self):
+        self.call_seed()
+
+        self.assertEqual(AccessReviewFolder.objects.filter(plan=self.plan).count(), 3)
+        review_folder = AccessReviewFolder.objects.get(plan=self.plan, current_folder=self.finance)
+        self.assertEqual(review_folder.name, 'Financeiro')
+        self.assertEqual(review_folder.proposed_path, 'controlsul\\Financeiro')
+        self.assertEqual(review_folder.area_name, 'controlsul')
+
+    def test_seed_preserves_parent_hierarchy(self):
+        self.call_seed()
+
+        root = AccessReviewFolder.objects.get(plan=self.plan, current_folder=self.root)
+        finance = AccessReviewFolder.objects.get(plan=self.plan, current_folder=self.finance)
+        dividendos = AccessReviewFolder.objects.get(plan=self.plan, current_folder=self.dividendos)
+        self.assertIsNone(root.parent)
+        self.assertEqual(finance.parent, root)
+        self.assertEqual(dividendos.parent, finance)
+
+    def test_seed_is_idempotent(self):
+        self.call_seed()
+        self.call_seed()
+
+        self.assertEqual(AccessReviewFolder.objects.filter(plan=self.plan).count(), 3)
+
+    def test_review_plan_view_shows_seeded_folder_structure(self):
+        self.call_seed()
+
+        response = self.client.get(reverse('access_inventory:review-plan-detail', args=[self.plan.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'controlsul\\Financeiro\\Dividendos')
+        self.assertContains(response, 'snapshot atual vinculado')
