@@ -9,6 +9,7 @@ from .models import (
     ADUser,
     AccessReviewFolder,
     AccessReviewPlan,
+    AccessReviewPrincipal,
     AccessReviewRule,
     AclEntry,
     FileServer,
@@ -524,23 +525,52 @@ def review_folder_detail(request, plan_id, folder_id):
         'permission_level',
         'principal__display_name',
     )
-    rule_cards = [
+    user_rules = rules.filter(principal__principal_type=AccessReviewPrincipal.PRINCIPAL_USER)
+    group_rules = rules.filter(principal__principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP)
+    permission_order = [
+        AccessReviewRule.PERMISSION_RO,
+        AccessReviewRule.PERMISSION_RW,
+        AccessReviewRule.PERMISSION_NONE,
+        AccessReviewRule.PERMISSION_FULL,
+        AccessReviewRule.PERMISSION_CUSTOM,
+    ]
+    permission_sections = []
+    for permission_level in permission_order:
+        section_rules = [
+            {
+                'rule': rule,
+                'explanation': rule_explanation(rule),
+            }
+            for rule in user_rules.filter(permission_level=permission_level)
+        ]
+        if section_rules:
+            permission_sections.append({
+                'level': permission_level,
+                'label': dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level),
+                'rules': section_rules,
+            })
+
+    technical_group_rules = [
         {
             'rule': rule,
             'explanation': rule_explanation(rule),
         }
-        for rule in rules
+        for rule in group_rules
     ]
     context = {
         **base_context('reviews'),
         'plan': plan,
         'folder': folder,
-        'rule_cards': rule_cards,
+        'permission_sections': permission_sections,
+        'technical_group_rules': technical_group_rules,
         'rule_count': rules.count(),
-        'ro_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RO).count(),
-        'rw_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RW).count(),
-        'custom_count': rules.filter(
+        'people_with_access_count': user_rules.exclude(permission_level=AccessReviewRule.PERMISSION_NONE).count(),
+        'ro_count': user_rules.filter(permission_level=AccessReviewRule.PERMISSION_RO).count(),
+        'rw_count': user_rules.filter(permission_level=AccessReviewRule.PERMISSION_RW).count(),
+        'none_count': user_rules.filter(permission_level=AccessReviewRule.PERMISSION_NONE).count(),
+        'exception_count': user_rules.filter(
             permission_level__in=[AccessReviewRule.PERMISSION_FULL, AccessReviewRule.PERMISSION_CUSTOM],
         ).count(),
+        'technical_group_count': group_rules.count(),
     }
     return render(request, 'access_inventory/review_folder_detail.html', context)

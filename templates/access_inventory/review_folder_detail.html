@@ -4,76 +4,107 @@
 {% block body_class %}{{ body_class }}{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-list' %}">Reestruturação</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-detail' plan.id %}">{{ plan.name }}</a><i data-lucide="chevron-right"></i><strong>{{ folder.name }}</strong></nav>
+<nav class="breadcrumbs"><a href="{% url 'access_inventory:dashboard' %}">Acessos</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-list' %}">Reestrutura&ccedil;&atilde;o</a><i data-lucide="chevron-right"></i><a href="{% url 'access_inventory:review-plan-detail' plan.id %}">{{ plan.name }}</a><i data-lucide="chevron-right"></i><strong>{{ folder.name }}</strong></nav>
 {% endblock %}
 
 {% block content %}
 <section class="ai-shell">
     {% include "access_inventory/_header.html" with title=folder.name subtitle=folder.proposed_path icon="folder-cog" %}
 
-    <section class="ai-object-header">
+    <section class="ai-object-header ai-review-folder-hero">
         <div>
             <span class="ai-object-type">Pasta planejada</span>
             <h2>{{ folder.name }}</h2>
-            <p><strong>Área:</strong> {{ folder.area_name|default:"Sem área" }} &middot; <strong>Caminho:</strong> <span class="mono">{{ folder.proposed_path }}</span></p>
+            <p><strong>&Aacute;rea:</strong> {{ folder.area_name|default:"Sem area" }} &middot; <strong>Caminho:</strong> <span class="mono">{{ folder.proposed_path }}</span></p>
         </div>
         <div class="ai-object-badges">
             <span class="ai-badge ai-badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
-            <span class="ai-badge ai-badge-folder">{{ folder.area_name|default:"Área" }}</span>
+            {% if technical_group_count %}
+            <span class="ai-badge ai-badge-group">{{ technical_group_count }} grupos t&eacute;cnicos</span>
+            {% endif %}
         </div>
     </section>
 
-    <section class="ai-metrics">
-        <article class="ai-metric"><i data-lucide="shield-check"></i><strong>{{ rule_count }}</strong><span>Regras propostas</span></article>
-        <article class="ai-metric"><i data-lucide="eye"></i><strong>{{ ro_count }}</strong><span>Usuários/grupos com RO</span></article>
-        <article class="ai-metric"><i data-lucide="pencil"></i><strong>{{ rw_count }}</strong><span>Usuários/grupos com RW</span></article>
-        <article class="ai-metric"><i data-lucide="settings"></i><strong>{{ custom_count }}</strong><span>Full ou personalizadas</span></article>
+    <section class="ai-review-summary-bar">
+        <article><span>Pessoas com acesso</span><strong>{{ people_with_access_count }}</strong></article>
+        <article><span>Somente leitura</span><strong>{{ ro_count }}</strong></article>
+        <article><span>Leitura e escrita</span><strong>{{ rw_count }}</strong></article>
+        <article><span>Sem acesso</span><strong>{{ none_count }}</strong></article>
+        <article><span>Exce&ccedil;&otilde;es</span><strong>{{ exception_count }}</strong></article>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="users"></i>Permissões propostas</h2>
-        <div class="ai-review-rule-grid">
-            {% for item in rule_cards %}
-            <article class="ai-review-rule-card">
-                <header>
-                    <span class="ai-badge ai-badge-{{ item.rule.principal.principal_type }}">{{ item.rule.principal.get_principal_type_display }}</span>
-                    <span class="ai-permission-chip ai-permission-{{ item.rule.permission_level }}">{{ item.rule.get_permission_level_display }}</span>
-                </header>
-                <h3>{{ item.rule.principal.display_name }}</h3>
+    <section class="ai-panel ai-review-people-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Pessoas com acesso proposto</h2>
+                <p>Leitura executiva das permiss&otilde;es previstas para esta pasta. Grupos t&eacute;cnicos aparecem apenas nos detalhes.</p>
+            </div>
+        </div>
+
+        {% if permission_sections %}
+            <div class="ai-review-person-list">
+                {% for section in permission_sections %}
+                <section class="ai-review-permission-section">
+                    <h3><span class="ai-permission-chip ai-permission-{{ section.level }}">{{ section.label }}</span></h3>
+                    <div class="ai-review-person-rows">
+                        {% for item in section.rules %}
+                        <article class="ai-review-person-row">
+                            <div>
+                                <strong>{{ item.rule.principal.display_name }}</strong>
+                                {% if item.rule.principal.sam_account_name %}
+                                <span>{{ item.rule.principal.sam_account_name }}</span>
+                                {% endif %}
+                            </div>
+                            <p>{{ item.explanation }}</p>
+                            {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
+                        </article>
+                        {% endfor %}
+                    </div>
+                </section>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="ai-empty">Nenhuma pessoa foi cadastrada nominalmente para esta pasta ainda.</div>
+        {% endif %}
+    </section>
+
+    <section class="ai-panel ai-review-compare-panel">
+        <h2>Compara&ccedil;&atilde;o com acesso atual</h2>
+        <p class="ai-note">A compara&ccedil;&atilde;o autom&aacute;tica entre permiss&otilde;es atuais e proposta ser&aacute; calculada na pr&oacute;xima etapa.</p>
+        <div class="ai-review-person-compare">
+            <article><span>Pessoa</span><strong>Nome do colaborador</strong><p>Exemplo: Gabriel Oliveira</p></article>
+            <article><span>Antes</span><strong>Acesso atual</strong><p>Tinha modifica&ccedil;&atilde;o via grupo antigo.</p></article>
+            <article><span>Depois</span><strong>Acesso proposto</strong><p>Leitura e escrita no grupo novo.</p></article>
+            <article><span>Resultado</span><strong>Mant&eacute;m / remove / adiciona</strong><p>Classifica&ccedil;&atilde;o executiva da mudan&ccedil;a.</p></article>
+        </div>
+    </section>
+
+    <section class="ai-panel ai-compact-panel ai-review-technical-panel">
+        <h2>Detalhes t&eacute;cnicos</h2>
+        {% if technical_group_rules %}
+        <div class="ai-review-technical-note">
+            Esta pasta usar&aacute; grupos t&eacute;cnicos pr&oacute;prios. A lista nominal de pessoas ser&aacute; preenchida ap&oacute;s a importa&ccedil;&atilde;o da planilha de usu&aacute;rios.
+        </div>
+        <div class="ai-review-technical-groups">
+            {% for item in technical_group_rules %}
+            <article>
+                <div>
+                    <strong>Grupo t&eacute;cnico: {{ item.rule.principal.proposed_group_name|default:item.rule.principal.display_name }}</strong>
+                    <span>{{ item.rule.principal.display_name }}</span>
+                </div>
+                <span class="ai-permission-chip ai-permission-{{ item.rule.permission_level }}">{{ item.rule.get_permission_level_display }}</span>
                 <p>{{ item.explanation }}</p>
                 {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
             </article>
-            {% empty %}
-            <div class="ai-empty">Nenhuma permissão proposta para esta pasta.</div>
             {% endfor %}
         </div>
-    </section>
+        {% endif %}
 
-    <section class="ai-panel">
-        <h2><i data-lucide="git-compare"></i>Comparação com situação atual</h2>
-        <p class="ai-note">Comparação atual vs proposta será calculada na próxima etapa.</p>
-        <div class="ai-review-compare-grid">
-            <article><span>Antes</span><strong>Acesso atual via grupos e ACLs coletadas</strong><p>Será preenchido a partir das ACLs atuais resolvidas.</p></article>
-            <article><span>Depois</span><strong>Acesso proposto pela nova estrutura</strong><p>Será preenchido a partir das regras deste plano.</p></article>
-            <article><span>Resultado</span><strong>Mantém / remove / adiciona / reduz / amplia</strong><p>Classificação executiva preparada para validação.</p></article>
-        </div>
-        <div class="ai-change-badges">
-            <span class="ai-badge ai-change-keep">Mantém</span>
-            <span class="ai-badge ai-change-remove">Remove</span>
-            <span class="ai-badge ai-change-add">Adiciona</span>
-            <span class="ai-badge ai-change-reduce">Reduz</span>
-            <span class="ai-badge ai-change-expand">Amplia</span>
-            <span class="ai-badge ai-change-change">Alterado</span>
-        </div>
-    </section>
-
-    <section class="ai-panel ai-compact-panel">
-        <h2><i data-lucide="wrench"></i>Detalhes técnicos</h2>
         <dl class="ai-data-list ai-data-list-compact">
             <div><dt>ID do plano</dt><dd>{{ plan.id }}</dd></div>
             <div><dt>ID da pasta planejada</dt><dd>{{ folder.id }}</dd></div>
             <div><dt>Pasta atual vinculada</dt><dd>{% if folder.current_folder %}<a class="ai-link" href="{% url 'access_inventory:folder-detail' folder.current_folder.id %}">{{ folder.current_folder.path }}</a>{% else %}--{% endif %}</dd></div>
-            <div><dt>Observações</dt><dd>{{ folder.notes|default:"--" }}</dd></div>
+            <div><dt>Observa&ccedil;&otilde;es</dt><dd>{{ folder.notes|default:"--" }}</dd></div>
         </dl>
     </section>
 </section>
