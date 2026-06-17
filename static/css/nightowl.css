@@ -7051,6 +7051,108 @@ body.page-access-inventory .page-subtitle {
     color: var(--ai-muted);
 }
 
+.ai-access-line-list,
+.ai-compact-list {
+    display: grid;
+    gap: 8px;
+}
+
+.ai-access-line {
+    align-items: center;
+    background: #070d15;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 10px;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(150px, 0.75fr) minmax(220px, 1.2fr) minmax(150px, 0.85fr) auto auto;
+    min-height: 46px;
+    padding: 9px 11px;
+}
+
+.ai-access-line:hover {
+    background: rgba(56, 189, 248, 0.04);
+    border-color: var(--ai-border-strong);
+}
+
+.ai-access-group,
+.ai-access-folder {
+    color: var(--ai-blue-soft);
+    font-weight: 900;
+    overflow: hidden;
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-access-folder {
+    color: var(--ai-text);
+}
+
+.ai-access-group:hover,
+.ai-access-folder:hover {
+    text-decoration: underline;
+}
+
+.ai-access-rights {
+    color: var(--ai-subtle);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-compact-panel {
+    background: rgba(13, 19, 32, 0.72);
+}
+
+.ai-compact-panel h2 {
+    font-size: 15px;
+}
+
+.ai-secondary-grid {
+    align-items: start;
+}
+
+.ai-compact-list a {
+    align-items: center;
+    background: #070d15;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 10px;
+    color: var(--ai-subtle);
+    display: grid;
+    gap: 10px;
+    grid-template-columns: auto minmax(0, 1fr) minmax(120px, auto);
+    min-height: 42px;
+    padding: 8px 10px;
+    text-decoration: none;
+}
+
+.ai-compact-list a:hover {
+    border-color: var(--ai-border-strong);
+}
+
+.ai-compact-list strong,
+.ai-compact-list em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-compact-list strong {
+    color: var(--ai-text);
+}
+
+.ai-compact-list em {
+    color: var(--ai-muted);
+    font-size: 12px;
+    font-style: normal;
+    text-align: right;
+}
+
+.ai-data-list-compact div {
+    padding: 9px 10px;
+}
+
 .ai-table-wrap {
     overflow-x: auto;
 }
@@ -7259,13 +7361,16 @@ body.page-access-inventory .page-subtitle {
 
     .ai-mini-list a,
     .ai-list-row,
-    .ai-result-item {
+    .ai-result-item,
+    .ai-access-line,
+    .ai-compact-list a {
         grid-template-columns: 1fr;
     }
 
     .ai-mini-list em,
     .ai-list-row em,
-    .ai-result-item em {
+    .ai-result-item em,
+    .ai-compact-list em {
         text-align: left;
     }
 

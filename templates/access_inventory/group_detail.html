@@ -19,6 +19,7 @@
         </div>
         <div class="ai-object-badges">
             <span class="ai-badge ai-badge-group">group</span>
+            <span class="ai-badge ai-badge-user">{{ user_member_count }} usuarios</span>
             <span class="ai-badge ai-badge-folder">{{ folder_count }} pastas</span>
             <span class="ai-badge ai-badge-allow">{{ acl_count }} ACLs</span>
         </div>
@@ -26,51 +27,61 @@
 
     <section class="ai-metrics">
         <article class="ai-metric"><i data-lucide="user"></i><strong>{{ user_member_count }}</strong><span>Usuarios membros diretos</span></article>
-        <article class="ai-metric"><i data-lucide="users"></i><strong>{{ group_member_count }}</strong><span>Grupos membros diretos</span></article>
         <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ folder_count }}</strong><span>Pastas onde aparece em ACL</span></article>
         <article class="ai-metric"><i data-lucide="shield"></i><strong>{{ acl_count }}</strong><span>ACLs concedidas</span></article>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="id-card"></i>Dados do grupo</h2>
-        <dl class="ai-data-list">
-            <div><dt>Object SID</dt><dd class="mono">{{ group.sid }}</dd></div>
-            <div><dt>Distinguished name</dt><dd class="mono">{{ group.distinguished_name|default:"--" }}</dd></div>
-            <div><dt>Descricao</dt><dd>{{ group.description|default:"--" }}</dd></div>
-        </dl>
-    </section>
-
     <section class="ai-grid-2">
         <article class="ai-panel">
-            <h2><i data-lucide="user"></i>Usuarios diretos</h2>
+            <h2><i data-lucide="user"></i>Usuarios membros diretos</h2>
             <div class="ai-mini-list">
                 {% for membership in user_members %}
                 <a href="{% url 'access_inventory:user-detail' membership.member_user.id %}"><span class="ai-badge ai-badge-user">user</span><strong>{{ membership.member_user.display_name|default:membership.member_user.sam_account_name }}</strong><em>{{ membership.member_user.sam_account_name }}</em></a>
                 {% empty %}<div class="ai-empty">Nenhum usuario membro direto importado.</div>{% endfor %}
             </div>
         </article>
+
         <article class="ai-panel">
-            <h2><i data-lucide="users"></i>Grupos diretos</h2>
-            <div class="ai-mini-list">
-                {% for membership in group_members %}
-                <a href="{% url 'access_inventory:group-detail' membership.member_group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ membership.member_group.name }}</strong><em>{{ membership.member_group.sam_account_name }}</em></a>
-                {% empty %}<div class="ai-empty">Nenhum grupo membro direto importado.</div>{% endfor %}
+            <h2><i data-lucide="folder-lock"></i>Pastas onde este grupo concede acesso</h2>
+            <div class="ai-access-line-list">
+                {% for acl in acl_entries %}
+                <article class="ai-access-line">
+                    <a class="ai-access-folder" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a>
+                    <span class="ai-access-rights">{{ acl.rights }}</span>
+                    <span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span>
+                    <span class="ai-badge {% if acl.inherited %}ai-badge-inherited{% else %}ai-badge-explicit{% endif %}">{% if acl.inherited %}herdada{% else %}explicita{% endif %}</span>
+                </article>
+                {% empty %}<div class="ai-empty">Nenhuma pasta relacionada a este grupo em ACL.</div>{% endfor %}
             </div>
         </article>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="folder-lock"></i>Pastas onde este grupo concede acesso</h2>
-        <div class="ai-mini-list">
-            {% for acl in acl_entries %}
-            <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}"><span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span><strong>{{ acl.folder.path }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
-            {% empty %}<div class="ai-empty">Nenhuma pasta relacionada a este grupo em ACL.</div>{% endfor %}
+    {% if group_members %}
+    <section class="ai-panel ai-compact-panel">
+        <h2><i data-lucide="users"></i>Grupos membros diretos</h2>
+        <p class="ai-note">Exibido apenas como inventario direto. A expansao recursiva de grupos ainda nao esta habilitada.</p>
+        <div class="ai-compact-list">
+            {% for membership in group_members %}
+            <a href="{% url 'access_inventory:group-detail' membership.member_group.id %}"><span class="ai-badge ai-badge-group">group</span><strong>{{ membership.member_group.name }}</strong><em>{{ membership.member_group.sam_account_name }}</em></a>
+            {% endfor %}
         </div>
     </section>
+    {% endif %}
 
-    <section class="ai-panel">
-        <h2><i data-lucide="table"></i>ACLs concedidas</h2>
-        {% include "access_inventory/_acl_table.html" %}
+    <section class="ai-grid-2 ai-secondary-grid">
+        <article class="ai-panel ai-compact-panel">
+            <h2><i data-lucide="id-card"></i>Dados do grupo</h2>
+            <dl class="ai-data-list ai-data-list-compact">
+                <div><dt>Object SID</dt><dd class="mono">{{ group.sid }}</dd></div>
+                <div><dt>Distinguished name</dt><dd class="mono">{{ group.distinguished_name|default:"--" }}</dd></div>
+                <div><dt>Descricao</dt><dd>{{ group.description|default:"--" }}</dd></div>
+            </dl>
+        </article>
+
+        <article class="ai-panel ai-compact-panel">
+            <h2><i data-lucide="table"></i>ACLs relacionadas</h2>
+            {% include "access_inventory/_acl_table.html" %}
+        </article>
     </section>
 </section>
 {% endblock %}

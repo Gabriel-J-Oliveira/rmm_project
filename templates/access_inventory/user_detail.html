@@ -9,7 +9,7 @@
 
 {% block content %}
 <section class="ai-shell">
-    {% include "access_inventory/_header.html" with title=user.display_name|default:user.sam_account_name subtitle="A quais pastas este usuario tem acesso?" icon="user-check" %}
+    {% include "access_inventory/_header.html" with title=user.display_name|default:user.sam_account_name subtitle="A quais pastas este usuario tem acesso por seus grupos diretos?" icon="user-check" %}
 
     <section class="ai-object-header">
         <div>
@@ -25,23 +25,13 @@
 
     <section class="ai-metrics">
         <article class="ai-metric"><i data-lucide="users"></i><strong>{{ direct_memberships|length }}</strong><span>Grupos diretos</span></article>
-        <article class="ai-metric"><i data-lucide="fingerprint"></i><strong>{{ direct_acl_count }}</strong><span>ACLs diretas</span></article>
-        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ direct_folder_count }}</strong><span>Pastas com acesso direto</span></article>
         <article class="ai-metric"><i data-lucide="route"></i><strong>{{ group_folder_count }}</strong><span>Pastas via grupo direto</span></article>
+        <article class="ai-metric"><i data-lucide="fingerprint"></i><strong>{{ direct_acl_count }}</strong><span>ACLs diretas</span></article>
+        <article class="ai-metric"><i data-lucide="folder-lock"></i><strong>{{ direct_folder_count }}</strong><span>Pastas com ACL direta</span></article>
     </section>
 
     <section class="ai-panel">
-        <h2><i data-lucide="id-card"></i>Dados do usuario</h2>
-        <dl class="ai-data-list">
-            <div><dt>Object SID</dt><dd class="mono">{{ user.sid }}</dd></div>
-            <div><dt>UPN</dt><dd>{{ user.user_principal_name|default:"--" }}</dd></div>
-            <div><dt>E-mail</dt><dd>{{ user.email|default:"--" }}</dd></div>
-            <div><dt>Distinguished name</dt><dd class="mono">{{ user.distinguished_name|default:"--" }}</dd></div>
-        </dl>
-    </section>
-
-    <section class="ai-panel">
-        <h2><i data-lucide="users"></i>Grupos do usuario</h2>
+        <h2><i data-lucide="users"></i>Grupos diretos do usuario</h2>
         <p class="ai-note">Somente memberships diretos importados. Expansao recursiva de grupos ainda nao esta habilitada.</p>
         <div class="ai-mini-list">
             {% for membership in direct_memberships %}
@@ -50,28 +40,56 @@
         </div>
     </section>
 
-    <section class="ai-grid-2">
-        <article class="ai-panel">
-            <h2><i data-lucide="fingerprint"></i>Acesso direto</h2>
-            <div class="ai-mini-list">
-                {% for acl in direct_acl_entries %}
-                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}"><span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span><strong>{{ acl.folder.path }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
-                {% empty %}<div class="ai-empty">Nenhuma pasta com ACL direta para este usuario.</div>{% endfor %}
-            </div>
-        </article>
-        <article class="ai-panel">
-            <h2><i data-lucide="route"></i>Acesso via grupo direto</h2>
-            <div class="ai-mini-list">
-                {% for acl in group_acl_entries %}
-                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}"><span class="ai-badge ai-badge-group">{{ acl.resolved_ad_group.sam_account_name|default:"group" }}</span><strong>{{ acl.folder.path }}</strong><em>{{ acl.rights }} · {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em></a>
-                {% empty %}<div class="ai-empty">Nenhuma pasta encontrada via grupos diretos.</div>{% endfor %}
-            </div>
-        </article>
+    <section class="ai-panel">
+        <h2><i data-lucide="route"></i>Acesso via grupos diretos</h2>
+        <p class="ai-note">Leitura principal da auditoria: este usuario acessa as pastas abaixo porque pertence diretamente aos grupos listados.</p>
+        <div class="ai-access-line-list">
+            {% for acl in group_acl_entries %}
+            <article class="ai-access-line">
+                {% if acl.resolved_ad_group %}
+                <a class="ai-access-group" href="{% url 'access_inventory:group-detail' acl.resolved_ad_group.id %}">{{ acl.resolved_ad_group.sam_account_name|default:acl.identity_name }}</a>
+                {% elif acl.ad_group %}
+                <a class="ai-access-group" href="{% url 'access_inventory:group-detail' acl.ad_group.id %}">{{ acl.ad_group.sam_account_name|default:acl.identity_name }}</a>
+                {% else %}
+                <span class="ai-access-group">{{ acl.identity_name }}</span>
+                {% endif %}
+                <a class="ai-access-folder" href="{% url 'access_inventory:folder-detail' acl.folder.id %}">{{ acl.folder.path }}</a>
+                <span class="ai-access-rights">{{ acl.rights }}</span>
+                <span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span>
+                <span class="ai-badge {% if acl.inherited %}ai-badge-inherited{% else %}ai-badge-explicit{% endif %}">{% if acl.inherited %}herdada{% else %}explicita{% endif %}</span>
+            </article>
+            {% empty %}
+            <div class="ai-empty">Nenhuma pasta encontrada via grupos diretos.</div>
+            {% endfor %}
+        </div>
     </section>
 
-    <section class="ai-panel">
-        <h2><i data-lucide="table"></i>ACLs relacionadas</h2>
-        {% include "access_inventory/_acl_table.html" with acl_entries=direct_acl_entries %}
+    <section class="ai-grid-2 ai-secondary-grid">
+        <article class="ai-panel ai-compact-panel">
+            <h2><i data-lucide="fingerprint"></i>ACLs diretas do usuario</h2>
+            <p class="ai-note">Permissoes atribuidas diretamente ao usuario, sem passar por grupo.</p>
+            <div class="ai-compact-list">
+                {% for acl in direct_acl_entries %}
+                <a href="{% url 'access_inventory:folder-detail' acl.folder.id %}">
+                    <span class="ai-badge ai-badge-{{ acl.access_type }}">{{ acl.get_access_type_display }}</span>
+                    <strong>{{ acl.folder.path }}</strong>
+                    <em>{{ acl.rights }} &middot; {% if acl.inherited %}herdada{% else %}explicita{% endif %}</em>
+                </a>
+                {% empty %}
+                <div class="ai-empty">Nenhuma ACL direta encontrada para este usuario.</div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="ai-panel ai-compact-panel">
+            <h2><i data-lucide="id-card"></i>Dados do usuario</h2>
+            <dl class="ai-data-list ai-data-list-compact">
+                <div><dt>Object SID</dt><dd class="mono">{{ user.sid }}</dd></div>
+                <div><dt>UPN</dt><dd>{{ user.user_principal_name|default:"--" }}</dd></div>
+                <div><dt>E-mail</dt><dd>{{ user.email|default:"--" }}</dd></div>
+                <div><dt>Distinguished name</dt><dd class="mono">{{ user.distinguished_name|default:"--" }}</dd></div>
+            </dl>
+        </article>
     </section>
 </section>
 {% endblock %}
