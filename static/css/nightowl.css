@@ -7326,6 +7326,181 @@ body.page-access-inventory .page-subtitle {
     color: var(--ai-text);
 }
 
+/* Access Inventory readability refinement */
+body.page-access-inventory {
+    --ai-primary-text: #f8fafc;
+    --ai-secondary-text: #9fb1c7;
+    --ai-tertiary-text: #7f93ad;
+    --ai-accent-muted: #7dd3fc;
+    --ai-row-hover: rgba(15, 23, 42, 0.72);
+}
+
+body.page-access-inventory .ai-link,
+body.page-access-inventory .ai-mini-list strong,
+body.page-access-inventory .ai-list-row strong,
+body.page-access-inventory .ai-result-item strong,
+body.page-access-inventory .ai-access-folder,
+body.page-access-inventory .ai-compact-list strong,
+body.page-access-inventory .ai-table td strong,
+body.page-access-inventory .ai-table .ai-link {
+    color: var(--ai-primary-text);
+    font-size: 0.95rem;
+    font-weight: 750;
+    line-height: 1.35;
+}
+
+body.page-access-inventory .ai-link:hover,
+body.page-access-inventory .ai-table .ai-link:hover,
+body.page-access-inventory .ai-mini-list a:hover strong,
+body.page-access-inventory .ai-result-item:hover strong,
+body.page-access-inventory .ai-compact-list a:hover strong,
+body.page-access-inventory .ai-access-folder:hover {
+    color: var(--ai-accent-muted);
+    text-decoration: none;
+}
+
+body.page-access-inventory .ai-access-group {
+    color: #dbeafe;
+    font-size: 0.9rem;
+    font-weight: 750;
+}
+
+body.page-access-inventory .ai-access-group:hover {
+    color: var(--ai-accent-muted);
+    text-decoration: none;
+}
+
+body.page-access-inventory .ai-subtext,
+body.page-access-inventory .ai-muted,
+body.page-access-inventory .ai-mini-list em,
+body.page-access-inventory .ai-list-row em,
+body.page-access-inventory .ai-result-item em,
+body.page-access-inventory .ai-access-rights,
+body.page-access-inventory .ai-compact-list em,
+body.page-access-inventory .ai-table td,
+body.page-access-inventory .ai-data-list dt,
+body.page-access-inventory .ai-stat-list span {
+    color: var(--ai-secondary-text);
+}
+
+body.page-access-inventory .ai-subtext,
+body.page-access-inventory .ai-table .mono,
+body.page-access-inventory .ai-data-list .mono {
+    color: var(--ai-tertiary-text);
+    font-size: 0.76rem;
+    font-weight: 500;
+}
+
+body.page-access-inventory .ai-table th {
+    color: var(--ai-tertiary-text);
+    font-size: 0.72rem;
+    font-weight: 750;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+body.page-access-inventory .ai-table td {
+    font-size: 0.9rem;
+    line-height: 1.45;
+    padding-bottom: 15px;
+    padding-top: 15px;
+}
+
+body.page-access-inventory .ai-table tr:hover td {
+    background: var(--ai-row-hover);
+    box-shadow: inset 2px 0 0 rgba(56, 189, 248, 0.26);
+}
+
+body.page-access-inventory .ai-mini-list a,
+body.page-access-inventory .ai-list-row,
+body.page-access-inventory .ai-result-item,
+body.page-access-inventory .ai-access-line,
+body.page-access-inventory .ai-compact-list a,
+body.page-access-inventory .ai-group-access-card {
+    border-color: rgba(148, 163, 184, 0.11);
+}
+
+body.page-access-inventory .ai-mini-list a,
+body.page-access-inventory .ai-list-row,
+body.page-access-inventory .ai-result-item {
+    padding-bottom: 14px;
+    padding-top: 14px;
+}
+
+body.page-access-inventory .ai-mini-list a:hover,
+body.page-access-inventory .ai-result-item:hover,
+body.page-access-inventory .ai-compact-list a:hover,
+body.page-access-inventory .ai-access-line:hover {
+    background: var(--ai-row-hover);
+    border-color: rgba(56, 189, 248, 0.2);
+    box-shadow: inset 2px 0 0 rgba(56, 189, 248, 0.28);
+}
+
+body.page-access-inventory .ai-result-icon {
+    background: rgba(56, 189, 248, 0.07);
+    border-color: rgba(56, 189, 248, 0.16);
+    color: #bae6fd;
+}
+
+body.page-access-inventory .ai-badge {
+    background: rgba(15, 23, 42, 0.72);
+    border-color: rgba(125, 211, 252, 0.18);
+    color: #dbeafe;
+    font-size: 0.67rem;
+    font-weight: 800;
+    min-height: 22px;
+    padding: 0 8px;
+}
+
+body.page-access-inventory .ai-badge-user,
+body.page-access-inventory .ai-badge-group,
+body.page-access-inventory .ai-badge-folder,
+body.page-access-inventory .ai-badge-server,
+body.page-access-inventory .ai-badge-ou,
+body.page-access-inventory .ai-badge-allow,
+body.page-access-inventory .ai-badge-enabled {
+    background: rgba(14, 116, 144, 0.12);
+    border-color: rgba(125, 211, 252, 0.18);
+    color: #bfdbfe;
+}
+
+body.page-access-inventory .ai-badge-deny {
+    background: rgba(127, 29, 29, 0.18);
+    border-color: rgba(248, 113, 113, 0.2);
+    color: #fecaca;
+}
+
+body.page-access-inventory .ai-badge-unknown,
+body.page-access-inventory .ai-badge-disabled {
+    background: rgba(120, 53, 15, 0.18);
+    border-color: rgba(251, 191, 36, 0.2);
+    color: #fde68a;
+}
+
+body.page-access-inventory .ai-badge-inherited {
+    background: rgba(51, 65, 85, 0.22);
+    border-color: rgba(148, 163, 184, 0.18);
+    color: #cbd5e1;
+}
+
+body.page-access-inventory .ai-badge-explicit {
+    background: rgba(14, 116, 144, 0.13);
+    border-color: rgba(125, 211, 252, 0.2);
+    color: #dbeafe;
+}
+
+body.page-access-inventory .ai-row-warning td {
+    background: rgba(120, 53, 15, 0.06);
+}
+
+body.page-access-inventory .ai-pagination a {
+    color: #dbeafe;
+}
+
+body.page-access-inventory .ai-pagination a:hover {
+    color: var(--ai-accent-muted);
+}
+
 .mono {
     font-family: var(--font-mono);
 }
