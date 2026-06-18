@@ -8238,6 +8238,75 @@ body.page-access-inventory .ai-review-technical-panel:hover {
     overflow-wrap: anywhere;
 }
 
+.ai-current-access-list {
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.ai-current-access-head,
+.ai-current-access-row {
+    align-items: center;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.7fr) minmax(240px, 1fr);
+}
+
+.ai-current-access-head {
+    background: rgba(15, 23, 42, 0.48);
+    color: var(--ai-tertiary-text);
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    padding: 10px 14px;
+    text-transform: uppercase;
+}
+
+.ai-current-access-row {
+    background: rgba(2, 6, 12, 0.24);
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+    padding: 12px 14px;
+}
+
+.ai-current-access-row strong {
+    color: var(--ai-primary-text);
+    display: block;
+    line-height: 1.3;
+}
+
+.ai-current-access-row span:not(.ai-permission-chip):not(.ai-badge) {
+    color: var(--ai-tertiary-text);
+    font-size: 0.8rem;
+}
+
+.ai-permission-current {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(147, 197, 253, 0.18);
+    color: #e0f2fe;
+    margin-right: 6px;
+}
+
+.ai-review-unknown-inline {
+    background: rgba(15, 23, 42, 0.4);
+    border: 1px solid rgba(251, 191, 36, 0.14);
+    border-radius: 10px;
+    color: var(--ai-secondary-text);
+    display: grid;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 12px 14px;
+}
+
+.ai-review-unknown-inline strong {
+    color: var(--ai-primary-text);
+}
+
+.ai-review-unknown-inline ul {
+    color: var(--ai-tertiary-text);
+    margin: 0;
+    padding-left: 18px;
+}
+
 .ai-review-technical-groups {
     display: grid;
     gap: 10px;
@@ -8295,6 +8364,8 @@ body.page-access-inventory .ai-review-technical-panel:hover {
     }
 
     .ai-review-person-row,
+    .ai-current-access-head,
+    .ai-current-access-row,
     .ai-review-folder-lines article,
     .ai-review-technical-groups article {
         grid-template-columns: 1fr;

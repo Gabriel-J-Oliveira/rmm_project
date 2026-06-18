@@ -18,6 +18,7 @@ from .models import (
 )
 from .services.access_review import (
     get_executive_review_plans,
+    get_current_effective_user_access,
     get_folder_breadcrumb,
     get_folder_children,
     get_plan_visible_roots,
@@ -555,12 +556,14 @@ def review_folder_detail(request, plan_id, folder_id):
     ]
     child_folders = get_folder_children(folder)
     review_breadcrumb = get_folder_breadcrumb(folder)
+    current_access = get_current_effective_user_access(folder)
     context = {
         **base_context('reviews'),
         'plan': plan,
         'folder': folder,
         'child_folders': child_folders,
         'review_breadcrumb': review_breadcrumb,
+        'current_access': current_access,
         'permission_sections': permission_sections,
         'technical_group_rules': technical_group_rules,
         'rule_count': rules.count(),

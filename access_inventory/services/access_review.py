@@ -120,34 +120,118 @@ def access_level_from_rights(rights):
     return rights or 'Permissao registrada'
 
 
-def get_current_effective_user_access(folder):
-    """Prepara a expansao executiva Pasta -> Usuario -> Permissao a partir das ACLs atuais.
+def acl_permission_label(acl):
+    if acl.access_type == AclEntry.ACCESS_DENY:
+        return 'Negado'
+    return access_level_from_rights(acl.rights)
 
-    Ainda nao e usado na UI de comparacao. Mantem grupos apenas como detalhe "via grupo".
+
+def current_folder_from_review_folder(review_folder):
+    return getattr(review_folder, 'current_folder', review_folder)
+
+
+def get_current_effective_user_access(review_folder, limit=200):
+    """Expande ACLs atuais em linhas executivas Pasta -> Usuario -> Permissao.
+
+    Mantem grupos apenas como detalhe "via grupo" e usa identidades ja resolvidas.
     """
+    current_folder = current_folder_from_review_folder(review_folder)
+    result = {
+        'current_folder': current_folder,
+        'rows': [],
+        'unknown_acl_entries': [],
+        'groups_without_members': [],
+        'total_rows': 0,
+        'is_limited': False,
+        'empty_reason': '',
+    }
+    if not current_folder:
+        result['empty_reason'] = 'Pasta planejada sem vinculo com snapshot atual.'
+        return result
+
     rows = []
-    acl_entries = AclEntry.objects.filter(folder=folder).select_related('resolved_ad_user', 'resolved_ad_group')
+    unknown_acl_entries = []
+    groups_without_members = []
+    seen = set()
+    acl_entries = list(
+        AclEntry.objects.filter(folder=current_folder)
+        .select_related('resolved_ad_user', 'resolved_ad_group')
+        .order_by('identity_name', 'rights', 'access_type', 'inherited')
+    )
+    group_ids = [
+        acl.resolved_ad_group_id
+        for acl in acl_entries
+        if acl.resolved_identity_type == AclEntry.IDENTITY_GROUP and acl.resolved_ad_group_id
+    ]
+    memberships_by_group = {}
+    if group_ids:
+        memberships = (
+            ADGroupMembership.objects.filter(
+                parent_group_id__in=group_ids,
+                member_user__isnull=False,
+            )
+            .select_related('parent_group', 'member_user')
+            .order_by('member_user__display_name', 'member_user__sam_account_name')
+        )
+        for membership in memberships:
+            memberships_by_group.setdefault(membership.parent_group_id, []).append(membership)
+
     for acl in acl_entries:
-        access_label = access_level_from_rights(acl.rights)
-        if acl.resolved_ad_user_id:
+        permission_label = acl_permission_label(acl)
+        permission_level = permission_label.lower().replace(' ', '_')
+        inheritance_label = 'herdado' if acl.inherited else 'direto'
+        if acl.resolved_identity_type == AclEntry.IDENTITY_USER and acl.resolved_ad_user_id:
+            key = (acl.resolved_ad_user_id, permission_label, 'direct', acl.id)
+            if key in seen:
+                continue
+            seen.add(key)
             rows.append({
                 'user': acl.resolved_ad_user,
-                'permission': access_label,
+                'display_name': acl.resolved_ad_user.display_name or acl.resolved_ad_user.sam_account_name,
+                'username': acl.resolved_ad_user.sam_account_name,
+                'permission': permission_label,
+                'permission_level': permission_level,
+                'origin_type': 'direct',
+                'origin_label': 'acesso direto na pasta',
                 'via_group': None,
                 'acl_entry': acl,
+                'is_inherited': acl.inherited,
+                'inheritance_label': inheritance_label,
             })
             continue
 
-        if acl.resolved_ad_group_id:
-            memberships = ADGroupMembership.objects.filter(
-                parent_group=acl.resolved_ad_group,
-                member_user__isnull=False,
-            ).select_related('member_user')
-            for membership in memberships:
+        if acl.resolved_identity_type == AclEntry.IDENTITY_GROUP and acl.resolved_ad_group_id:
+            memberships = memberships_by_group.get(acl.resolved_ad_group_id, [])
+            if not memberships:
+                groups_without_members.append(acl.resolved_ad_group)
+            for membership in memberships[:limit]:
+                key = (membership.member_user_id, permission_label, 'group', acl.resolved_ad_group_id, acl.id)
+                if key in seen:
+                    continue
+                seen.add(key)
                 rows.append({
                     'user': membership.member_user,
-                    'permission': access_label,
+                    'display_name': membership.member_user.display_name or membership.member_user.sam_account_name,
+                    'username': membership.member_user.sam_account_name,
+                    'permission': permission_label,
+                    'permission_level': permission_level,
+                    'origin_type': 'group',
+                    'origin_label': f'via grupo {acl.resolved_ad_group.name or acl.resolved_ad_group.sam_account_name}',
                     'via_group': acl.resolved_ad_group,
                     'acl_entry': acl,
+                    'is_inherited': acl.inherited,
+                    'inheritance_label': inheritance_label,
                 })
-    return rows
+            continue
+
+        unknown_acl_entries.append(acl)
+
+    rows.sort(key=lambda item: ((item['display_name'] or '').lower(), item['permission'], item['origin_label']))
+    result['total_rows'] = len(rows)
+    result['rows'] = rows[:limit]
+    result['is_limited'] = len(rows) > limit
+    result['unknown_acl_entries'] = unknown_acl_entries
+    result['groups_without_members'] = groups_without_members
+    if not rows:
+        result['empty_reason'] = 'Nenhuma permissao atual resolvida para usuarios nesta pasta.'
+    return result

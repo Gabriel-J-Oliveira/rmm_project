@@ -68,6 +68,64 @@
         {% endif %}
     </section>
 
+    <section class="ai-panel ai-review-current-access-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Permiss&otilde;es atuais encontradas</h2>
+                <p>Usu&aacute;rios que hoje possuem acesso nesta pasta, diretamente ou por grupos resolvidos do Active Directory.</p>
+            </div>
+        </div>
+
+        {% if current_access.rows %}
+        {% if current_access.is_limited %}
+        <div class="ai-review-empty-note">Exibindo os primeiros 200 usu&aacute;rios. Refine a pasta ou exporte para an&aacute;lise completa.</div>
+        {% endif %}
+        <div class="ai-current-access-list">
+            <div class="ai-current-access-head">
+                <span>Usu&aacute;rio</span>
+                <span>Permiss&atilde;o atual</span>
+                <span>Origem</span>
+            </div>
+            {% for item in current_access.rows %}
+            <article class="ai-current-access-row">
+                <div>
+                    <strong>{{ item.display_name }}</strong>
+                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
+                </div>
+                <div>
+                    <span class="ai-permission-chip ai-permission-current">{{ item.permission }}</span>
+                    <span class="ai-badge {% if item.is_inherited %}ai-badge-inherited{% else %}ai-badge-explicit{% endif %}">{{ item.inheritance_label }}</span>
+                </div>
+                <div>
+                    <strong>{{ item.origin_label }}</strong>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="ai-empty">
+            <strong>Nenhuma permiss&atilde;o atual resolvida para usu&aacute;rios nesta pasta.</strong>
+            <p>{{ current_access.empty_reason|default:"Execute a resolu&ccedil;&atilde;o de identidades das ACLs ou verifique o snapshot atual." }}</p>
+        </div>
+        {% endif %}
+
+        {% if current_access.groups_without_members %}
+        <div class="ai-review-technical-note">H&aacute; grupos com acesso, mas sem membros AD resolvidos.</div>
+        {% endif %}
+
+        {% if current_access.unknown_acl_entries %}
+        <div class="ai-review-unknown-inline">
+            <strong>Identidades n&atilde;o resolvidas</strong>
+            <span>{{ current_access.unknown_acl_entries|length }} ACLs n&atilde;o foram associadas a usu&aacute;rios ou grupos.</span>
+            <ul>
+                {% for acl in current_access.unknown_acl_entries|slice:":5" %}
+                <li>{{ acl.identity_name }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </section>
+
     <section class="ai-panel ai-review-people-panel">
         <div class="ai-section-heading">
             <div>

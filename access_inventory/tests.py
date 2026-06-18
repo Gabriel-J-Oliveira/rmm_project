@@ -291,7 +291,14 @@ class AccessReviewTests(TestCase):
     def test_current_effective_user_access_expands_group_acl_to_users(self):
         file_server = FileServer.objects.create(name='FS-ACL')
         share = Share.objects.create(file_server=file_server, name='Dados', unc_path='\\\\FS-ACL\\Dados')
-        folder = Folder.objects.create(share=share, path='controlsul\\Administrativo')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo')
+        review_folder = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            current_folder=current_folder,
+        )
         user = ADUser.objects.create(
             sid='S-1-5-21-5001',
             sam_account_name='ana',
@@ -304,7 +311,7 @@ class AccessReviewTests(TestCase):
         )
         ADGroupMembership.objects.create(parent_group=group, member_user=user)
         AclEntry.objects.create(
-            folder=folder,
+            folder=current_folder,
             identity_sid=group.sid,
             identity_name='CONTROL\\GG_ADMIN_RW',
             resolved_ad_group=group,
@@ -312,12 +319,101 @@ class AccessReviewTests(TestCase):
             rights='Modify, Synchronize',
         )
 
-        rows = get_current_effective_user_access(folder)
+        result = get_current_effective_user_access(review_folder)
 
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['user'], user)
-        self.assertEqual(rows[0]['via_group'], group)
-        self.assertEqual(rows[0]['permission'], 'Leitura e escrita')
+        self.assertEqual(len(result['rows']), 1)
+        self.assertEqual(result['rows'][0]['user'], user)
+        self.assertEqual(result['rows'][0]['via_group'], group)
+        self.assertEqual(result['rows'][0]['permission'], 'Leitura e escrita')
+
+    def test_review_folder_detail_shows_direct_current_user_access(self):
+        file_server = FileServer.objects.create(name='FS-DIRECT')
+        share = Share.objects.create(file_server=file_server, name='Dados Direct', unc_path='\\\\FS-DIRECT\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        user = ADUser.objects.create(
+            sid='S-1-5-21-7001',
+            sam_account_name='gabriel',
+            display_name='Gabriel Oliveira',
+        )
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=user.sid,
+            identity_name='CONTROL\\gabriel',
+            resolved_ad_user=user,
+            resolved_identity_type=AclEntry.IDENTITY_USER,
+            rights='ReadAndExecute, Synchronize',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Permiss&otilde;es atuais encontradas')
+        self.assertContains(response, 'Gabriel Oliveira')
+        self.assertContains(response, 'Somente leitura')
+        self.assertContains(response, 'acesso direto na pasta')
+
+    def test_review_folder_detail_shows_group_current_access_as_users(self):
+        file_server = FileServer.objects.create(name='FS-GROUP')
+        share = Share.objects.create(file_server=file_server, name='Dados Group', unc_path='\\\\FS-GROUP\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Juridico')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        user = ADUser.objects.create(
+            sid='S-1-5-21-7002',
+            sam_account_name='ana',
+            display_name='Ana Souza',
+        )
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-8002',
+            sam_account_name='GG_JURIDICO_RW',
+            name='GG Juridico RW',
+        )
+        ADGroupMembership.objects.create(parent_group=group, member_user=user)
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=group.sid,
+            identity_name='CONTROL\\GG_JURIDICO_RW',
+            resolved_ad_group=group,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='Modify, Synchronize',
+            inherited=True,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Ana Souza')
+        self.assertContains(response, 'Leitura e escrita')
+        self.assertContains(response, 'via grupo GG Juridico RW')
+        self.assertContains(response, 'herdado')
+
+    def test_review_folder_detail_keeps_unknown_acl_discreet(self):
+        file_server = FileServer.objects.create(name='FS-UNKNOWN')
+        share = Share.objects.create(file_server=file_server, name='Dados Unknown', unc_path='\\\\FS-UNKNOWN\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\SemResolucao')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid='S-1-5-21-unknown',
+            identity_name='CONTROL\\DESCONHECIDO',
+            resolved_identity_type=AclEntry.IDENTITY_UNKNOWN,
+            rights='Read',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Identidades n&atilde;o resolvidas')
+        self.assertContains(response, 'CONTROL\\DESCONHECIDO')
+
+    def test_review_folder_detail_without_current_folder_shows_empty_state(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Nenhuma permiss&atilde;o atual resolvida para usu&aacute;rios nesta pasta.')
 
 
 class SeedAccessReviewFoldersCommandTests(TestCase):
