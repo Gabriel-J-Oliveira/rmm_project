@@ -300,8 +300,16 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, finance.id]))
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Subpastas')
         self.assertContains(response, 'CAFOFO')
         self.assertContains(response, 'CAIXA')
+
+    def test_final_review_folder_detail_does_not_render_empty_subfolders_panel(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, '<h2>Subpastas</h2>', html=True)
+        self.assertNotContains(response, 'Nenhuma subpasta direta cadastrada neste ramo.')
 
     def test_review_folder_detail_final_result_is_after_current_access(self):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
@@ -838,6 +846,8 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertContains(response, 'ai-review-partner-grid')
+        self.assertContains(response, 'ai-review-partner-grid-item')
         self.assertContains(response, 'Ana Partner')
         self.assertContains(response, 'Bruna Regular')
         self.assertNotIn('Ana Partner', current_access_section)

@@ -37,6 +37,7 @@
         </div>
     </section>
 
+    {% if child_folders %}
     <section class="ai-panel ai-review-structure-panel">
         <div class="ai-section-heading">
             <div>
@@ -45,7 +46,6 @@
             </div>
         </div>
 
-        {% if child_folders %}
         <div class="ai-review-folder-card-grid">
             {% for child in child_folders %}
             <article class="ai-review-folder-nav-card">
@@ -63,10 +63,8 @@
             </article>
             {% endfor %}
         </div>
-        {% else %}
-        <div class="ai-empty">Nenhuma subpasta direta cadastrada neste ramo.</div>
-        {% endif %}
     </section>
+    {% endif %}
 
     <section class="ai-panel ai-review-partner-panel">
         <div class="ai-section-heading">
@@ -78,9 +76,9 @@
         {% if partner_users %}
         <div class="ai-review-partner-list">
             <span>S&oacute;cios contemplados nesta regra:</span>
-            <div>
+            <div class="ai-review-partner-grid">
                 {% for user in partner_users %}
-                <span class="ai-review-partner-chip">{{ user.display_name|default:user.sam_account_name }}</span>
+                <span class="ai-review-partner-grid-item">{{ user.display_name|default:user.sam_account_name }}</span>
                 {% endfor %}
             </div>
         </div>
