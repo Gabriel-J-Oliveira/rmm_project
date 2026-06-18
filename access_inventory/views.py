@@ -22,6 +22,7 @@ from .services.access_review import (
     get_folder_breadcrumb,
     get_folder_children,
     get_plan_visible_roots,
+    get_review_folder_executive_rules,
     rule_explanation,
 )
 
@@ -557,6 +558,7 @@ def review_folder_detail(request, plan_id, folder_id):
     child_folders = get_folder_children(folder)
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
+    executive_rules = get_review_folder_executive_rules(folder)
     context = {
         **base_context('reviews'),
         'plan': plan,
@@ -564,6 +566,9 @@ def review_folder_detail(request, plan_id, folder_id):
         'child_folders': child_folders,
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
+        'inherited_scope_rules': executive_rules['inherited_scope_rules'],
+        'removed_review_rules': executive_rules['removed_rules'],
+        'final_access_rules': executive_rules['final_access_rules'],
         'permission_sections': permission_sections,
         'technical_group_rules': technical_group_rules,
         'rule_count': rules.count(),

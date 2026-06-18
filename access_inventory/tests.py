@@ -351,7 +351,7 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Permiss&otilde;es atuais encontradas')
+        self.assertContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
         self.assertContains(response, 'Gabriel Oliveira')
         self.assertContains(response, 'Somente leitura')
         self.assertContains(response, 'Pode abrir, listar e visualizar arquivos.')
@@ -418,6 +418,121 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Nenhuma permiss&atilde;o atual resolvida para usu&aacute;rios nesta pasta.')
+
+    def test_current_effective_user_access_hides_disabled_ad_users(self):
+        file_server = FileServer.objects.create(name='FS-DISABLED')
+        share = Share.objects.create(file_server=file_server, name='Dados Disabled', unc_path='\\\\FS-DISABLED\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo')
+        review_folder = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='Administrativo disabled',
+            proposed_path='controlsul\\Administrativo disabled',
+            current_folder=current_folder,
+        )
+        user = ADUser.objects.create(
+            sid='S-1-5-21-7100',
+            sam_account_name='usuario.inativo',
+            display_name='Usuario Inativo',
+            enabled=False,
+        )
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=user.sid,
+            identity_name='CONTROL\\usuario.inativo',
+            resolved_ad_user=user,
+            resolved_identity_type=AclEntry.IDENTITY_USER,
+            rights='ReadAndExecute',
+        )
+
+        result = get_current_effective_user_access(review_folder)
+
+        self.assertEqual(result['rows'], [])
+        self.assertEqual(result['inactive_users_hidden'], 1)
+
+    def test_review_folder_detail_shows_partners_general_access_card(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertContains(response, 'exce&ccedil;&atilde;o executiva')
+
+    def test_review_folder_detail_shows_inherited_scope_rules(self):
+        parent = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+        )
+        child = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+            parent=parent,
+        )
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Kelly C. Padovim',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=parent,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+            notes='acao=manter',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, child.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Acessos herdados do escopo')
+        self.assertContains(response, 'Kelly C. Padovim')
+        self.assertContains(response, 'herdado de Administrativo')
+
+    def test_review_folder_detail_highlights_removed_users(self):
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Roseli Salete Rech Branco',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_NONE,
+            notes='acao=remover; observacao=Tirar das demais pastas',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Usu&aacute;rios removidos')
+        self.assertContains(response, 'Roseli Salete Rech Branco')
+        self.assertContains(response, 'Tirar das demais pastas')
+
+    def test_review_folder_detail_shows_final_reviewed_access_result(self):
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Ana Paula Schwann',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RO,
+            notes='acao=adicionar',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Resultado final dos acessos revistos')
+        self.assertContains(response, 'Ana Paula Schwann')
+        self.assertContains(response, 'Somente leitura')
+        self.assertContains(response, 'Novo acesso')
 
     def create_acl_for_rights(self, rights, access_type=AclEntry.ACCESS_ALLOW):
         file_server = FileServer.objects.create(name=f'FS-RIGHTS-{Folder.objects.count()}')

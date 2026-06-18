@@ -120,8 +120,11 @@ Comportamento atual:
 
 Tela individual da pasta:
 - mostra subpastas diretas;
-- mostra permissoes atuais encontradas;
-- mostra permissoes propostas quando importadas.
+- mostra card informativo "Socios tem acesso geral";
+- mostra acessos herdados do escopo quando houver regras propostas em ancestrais;
+- destaca usuarios removidos quando a regra proposta for `NONE` ou `acao=remover`;
+- mostra "Resultado final dos acessos revistos" com regras positivas diretas e herdadas;
+- mantem acessos atuais antes da reestruturacao como referencia.
 
 ## 6. Permissoes Atuais
 
@@ -160,6 +163,17 @@ Permissoes especiais devem explicar direitos tecnicos como:
 - `TakeOwnership`
 
 A tabela de permissoes atuais nao deve ter hover.
+
+Usuarios inativos do AD:
+- o model `ADUser` possui campo booleano `enabled`;
+- a visualizacao executiva de permissoes atuais oculta usuarios com `enabled=False`;
+- quando houver usuarios ocultados, a tela exibe nota discreta informando que usuarios inativos foram ocultados.
+
+Resultado executivo da pasta:
+- regras positivas (`RO`, `RW`, `FULL`, `CUSTOM`) aparecem no resultado final;
+- regras em ancestrais aparecem como herdadas do escopo;
+- regras `NONE` ou com `acao=remover` aparecem no card "Usuarios removidos";
+- a tabela de acessos atuais fica abaixo desses blocos executivos.
 
 Helper relevante:
 - `access_inventory/services/access_review.py`
