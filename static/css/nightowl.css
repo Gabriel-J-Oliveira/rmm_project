@@ -8011,6 +8011,32 @@ body.page-access-inventory .ai-pagination a:hover {
     padding: 5px 8px;
 }
 
+body.page-access-inventory .ai-review-plan-card:hover,
+body.page-access-inventory .ai-review-folder-card:hover,
+body.page-access-inventory .ai-review-area-card:hover,
+body.page-access-inventory .ai-review-rule-card:hover {
+    background: #070d15;
+    border-color: rgba(148, 163, 184, 0.12);
+    box-shadow: none;
+    transform: none;
+}
+
+body.page-access-inventory .ai-review-folder-nav-card:hover {
+    background: rgba(2, 6, 12, 0.28);
+    border-color: rgba(148, 163, 184, 0.1);
+    box-shadow: none;
+    transform: none;
+}
+
+body.page-access-inventory .ai-review-structure-panel:hover,
+body.page-access-inventory .ai-review-people-panel:hover,
+body.page-access-inventory .ai-review-technical-panel:hover {
+    background: var(--ai-card);
+    border-color: var(--ai-border);
+    box-shadow: none;
+    transform: none;
+}
+
 .ai-review-folder-hero {
     margin-bottom: 14px;
 }

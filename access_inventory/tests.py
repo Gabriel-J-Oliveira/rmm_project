@@ -9,6 +9,7 @@ from django.urls import reverse
 from .agent_auth import create_inventory_agent_with_token
 from .models import (
     ADGroup,
+    ADGroupMembership,
     ADOrganizationalUnit,
     ADUser,
     AccessReviewFolder,
@@ -22,7 +23,7 @@ from .models import (
     InventoryAgentRun,
     Share,
 )
-from .services.access_review import explain_permission
+from .services.access_review import explain_permission, get_current_effective_user_access
 from .services.resolve_acl_identities import resolve_acl_identities
 
 
@@ -219,10 +220,21 @@ class AccessReviewTests(TestCase):
         self.assertIn('Sem acesso', explain_permission(AccessReviewRule.PERMISSION_NONE))
 
     def test_review_plan_list_view(self):
+        older_plan = AccessReviewPlan.objects.create(
+            name='Plano antigo',
+            description='Nao deve aparecer na listagem executiva.',
+        )
+        current_plan = AccessReviewPlan.objects.create(
+            name='Plano mais recente',
+            description='Deve aparecer na listagem executiva.',
+        )
+
         response = self.client.get(reverse('access_inventory:review-plan-list'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, self.plan.name)
+        self.assertContains(response, current_plan.name)
+        self.assertNotContains(response, older_plan.name)
+        self.assertNotContains(response, self.plan.name)
         self.assertContains(response, 'Abrir an&aacute;lise')
 
     def test_review_plan_detail_view(self):
@@ -238,6 +250,74 @@ class AccessReviewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.principal.display_name)
         self.assertContains(response, 'Pode abrir, criar, editar e excluir arquivos.')
+
+    def test_review_plan_detail_applies_temporary_executive_scope_when_paths_exist(self):
+        current_plan = AccessReviewPlan.objects.create(name='Plano executivo atual')
+        root = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        admin = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            parent=root,
+        )
+        juridico = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='Juridico',
+            proposed_path='controlsul\\Juridico',
+            parent=root,
+        )
+        AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='Comum',
+            proposed_path='controlsul\\Comum',
+            parent=root,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-plan-detail', args=[current_plan.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, admin.proposed_path)
+        self.assertContains(response, juridico.proposed_path)
+        self.assertNotContains(response, 'controlsul\\Comum')
+
+    def test_current_effective_user_access_expands_group_acl_to_users(self):
+        file_server = FileServer.objects.create(name='FS-ACL')
+        share = Share.objects.create(file_server=file_server, name='Dados', unc_path='\\\\FS-ACL\\Dados')
+        folder = Folder.objects.create(share=share, path='controlsul\\Administrativo')
+        user = ADUser.objects.create(
+            sid='S-1-5-21-5001',
+            sam_account_name='ana',
+            display_name='Ana',
+        )
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-6001',
+            sam_account_name='GG_ADMIN_RW',
+            name='GG Admin RW',
+        )
+        ADGroupMembership.objects.create(parent_group=group, member_user=user)
+        AclEntry.objects.create(
+            folder=folder,
+            identity_sid=group.sid,
+            identity_name='CONTROL\\GG_ADMIN_RW',
+            resolved_ad_group=group,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='Modify, Synchronize',
+        )
+
+        rows = get_current_effective_user_access(folder)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['user'], user)
+        self.assertEqual(rows[0]['via_group'], group)
+        self.assertEqual(rows[0]['permission'], 'Leitura e escrita')
 
 
 class SeedAccessReviewFoldersCommandTests(TestCase):

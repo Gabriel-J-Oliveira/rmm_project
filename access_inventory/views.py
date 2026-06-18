@@ -16,7 +16,13 @@ from .models import (
     Folder,
     Share,
 )
-from .services.access_review import get_business_roots, get_folder_breadcrumb, get_folder_children, rule_explanation
+from .services.access_review import (
+    get_executive_review_plans,
+    get_folder_breadcrumb,
+    get_folder_children,
+    get_plan_visible_roots,
+    rule_explanation,
+)
 
 
 def base_context(section='overview'):
@@ -472,7 +478,7 @@ def unknown_identities(request):
 
 
 def review_plan_list(request):
-    plans = AccessReviewPlan.objects.annotate(
+    plans = get_executive_review_plans().annotate(
         folder_count=Count('folders', distinct=True),
         rule_count=Count('rules', distinct=True),
     ).select_related('created_by')
@@ -486,7 +492,7 @@ def review_plan_list(request):
 def review_plan_detail(request, plan_id):
     plan = get_object_or_404(AccessReviewPlan.objects.select_related('created_by'), pk=plan_id)
     rules = plan.rules.all()
-    business_roots = get_business_roots(plan)
+    business_roots = get_plan_visible_roots(plan)
 
     context = {
         **base_context('reviews'),
