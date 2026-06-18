@@ -229,7 +229,7 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-plan-detail', args=[self.plan.id]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Pastas planejadas')
+        self.assertContains(response, 'Pastas principais')
         self.assertContains(response, self.folder.proposed_path)
 
     def test_review_folder_detail_view(self):
@@ -316,8 +316,39 @@ class SeedAccessReviewFoldersCommandTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-plan-detail', args=[self.plan.id]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'controlsul\\Financeiro\\Dividendos')
+        self.assertContains(response, 'controlsul\\Financeiro')
+        self.assertNotContains(response, 'controlsul\\Financeiro\\Dividendos')
         self.assertContains(response, 'snapshot atual vinculado')
+
+    def test_review_folder_view_shows_only_direct_children(self):
+        self.call_seed()
+        finance = AccessReviewFolder.objects.get(plan=self.plan, proposed_path='controlsul\\Financeiro')
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, finance.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'controlsul\\Financeiro\\Dividendos')
+
+    def test_review_folder_view_does_not_mix_sibling_branches(self):
+        sibling = Folder.objects.create(
+            share=self.share,
+            path='controlsul\\Juridico',
+            parent_path='controlsul',
+        )
+        Folder.objects.create(
+            share=self.share,
+            path='controlsul\\Juridico\\Contratos',
+            parent_path='controlsul\\Juridico',
+        )
+        self.call_seed()
+        finance = AccessReviewFolder.objects.get(plan=self.plan, proposed_path='controlsul\\Financeiro')
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, finance.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'controlsul\\Financeiro\\Dividendos')
+        self.assertNotContains(response, 'controlsul\\Juridico')
+        self.assertNotContains(response, sibling.path)
 
     def test_seed_deduplicates_duplicate_logical_roots_and_keeps_canonical_tree(self):
         other_share = Share.objects.create(

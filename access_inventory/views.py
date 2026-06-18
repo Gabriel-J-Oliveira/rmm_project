@@ -16,7 +16,7 @@ from .models import (
     Folder,
     Share,
 )
-from .services.access_review import rule_explanation
+from .services.access_review import get_business_roots, get_folder_breadcrumb, get_folder_children, rule_explanation
 
 
 def base_context(section='overview'):
@@ -485,47 +485,15 @@ def review_plan_list(request):
 
 def review_plan_detail(request, plan_id):
     plan = get_object_or_404(AccessReviewPlan.objects.select_related('created_by'), pk=plan_id)
-    folders = plan.folders.select_related('parent', 'current_folder').annotate(
-        rule_count=Count('rules'),
-    ).order_by('area_name', 'sort_order', 'proposed_path')
-    area_rows = folders.values('area_name').annotate(
-        folder_count=Count('id', distinct=True),
-        rule_count=Count('rules', distinct=True),
-        ro_count=Count('rules', filter=Q(rules__permission_level=AccessReviewRule.PERMISSION_RO), distinct=True),
-        rw_count=Count('rules', filter=Q(rules__permission_level=AccessReviewRule.PERMISSION_RW), distinct=True),
-    ).order_by('area_name')
     rules = plan.rules.all()
-    folder_sections = []
-    current_area = object()
-    for folder in folders:
-        area_name = folder.area_name or 'Sem area'
-        folder.tree_level = max(len([segment for segment in folder.proposed_path.split('\\') if segment]) - 1, 0)
-        if area_name != current_area:
-            folder_sections.append({
-                'area_name': area_name,
-                'folders': [],
-            })
-            current_area = area_name
-        folder_sections[-1]['folders'].append(folder)
+    business_roots = get_business_roots(plan)
 
     context = {
         **base_context('reviews'),
         'plan': plan,
-        'folders': folders,
-        'folder_sections': folder_sections,
-        'area_rows': area_rows,
-        'folder_count': folders.count(),
-        'principal_count': plan.principals.count(),
+        'business_roots': business_roots,
+        'folder_count': plan.folders.count(),
         'rule_count': rules.count(),
-        'ro_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RO).count(),
-        'rw_count': rules.filter(permission_level=AccessReviewRule.PERMISSION_RW).count(),
-        'full_custom_count': rules.filter(
-            permission_level__in=[AccessReviewRule.PERMISSION_FULL, AccessReviewRule.PERMISSION_CUSTOM],
-        ).count(),
-        'current_folder_count': Folder.objects.count(),
-        'current_acl_count': AclEntry.objects.count(),
-        'ad_user_count': ADUser.objects.count(),
-        'ad_group_count': ADGroup.objects.count(),
     }
     return render(request, 'access_inventory/review_plan_detail.html', context)
 
@@ -579,10 +547,14 @@ def review_folder_detail(request, plan_id, folder_id):
         }
         for rule in group_rules
     ]
+    child_folders = get_folder_children(folder)
+    review_breadcrumb = get_folder_breadcrumb(folder)
     context = {
         **base_context('reviews'),
         'plan': plan,
         'folder': folder,
+        'child_folders': child_folders,
+        'review_breadcrumb': review_breadcrumb,
         'permission_sections': permission_sections,
         'technical_group_rules': technical_group_rules,
         'rule_count': rules.count(),

@@ -7967,6 +7967,50 @@ body.page-access-inventory .ai-pagination a:hover {
     text-decoration: none;
 }
 
+.ai-review-folder-card-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ai-review-folder-nav-card {
+    background: rgba(2, 6, 12, 0.28);
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 12px;
+    display: grid;
+    gap: 14px;
+    padding: 15px;
+}
+
+.ai-review-folder-nav-card h3 {
+    color: var(--ai-primary-text);
+    font-size: 1.02rem;
+    line-height: 1.25;
+    margin: 4px 0 5px;
+}
+
+.ai-review-folder-nav-card .mono {
+    color: var(--ai-tertiary-text);
+    display: block;
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+}
+
+.ai-review-folder-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.ai-review-folder-card-meta span {
+    background: rgba(15, 23, 42, 0.48);
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 999px;
+    color: var(--ai-secondary-text);
+    font-size: 0.75rem;
+    padding: 5px 8px;
+}
+
 .ai-review-folder-hero {
     margin-bottom: 14px;
 }
@@ -8211,6 +8255,7 @@ body.page-access-inventory .ai-pagination a:hover {
     .ai-review-plan-grid,
     .ai-review-area-grid,
     .ai-review-folder-grid,
+    .ai-review-folder-card-grid,
     .ai-review-rule-grid,
     .ai-review-compare-grid,
     .ai-review-person-compare,

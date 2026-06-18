@@ -15,7 +15,7 @@
         <div>
             <span class="ai-object-type">Plano de reestrutura&ccedil;&atilde;o</span>
             <h2>{{ plan.name }}</h2>
-            <p>{{ plan.current_snapshot_label|default:"Comparacao preparada para o snapshot atual de permissoes." }}</p>
+            <p>{{ folder_count }} pastas planejadas &middot; {{ rule_count }} regras propostas</p>
         </div>
         <div class="ai-object-badges">
             <span class="ai-badge ai-badge-{{ plan.status }}">{{ plan.get_status_display }}</span>
@@ -23,79 +23,34 @@
         </div>
     </section>
 
-    <section class="ai-panel ai-review-plan-summary">
-        <h2>Resumo do plano</h2>
-        <p>
-            Este plano apresenta a estrutura de pastas que ser&aacute; usada como base para a proposta de
-            reestrutura&ccedil;&atilde;o de acessos. As &aacute;reas e pastas exibidas abaixo v&ecirc;m dos dados
-            cadastrados no pr&oacute;prio plano.
-        </p>
-        <p>
-            A compara&ccedil;&atilde;o ser&aacute; feita contra o snapshot atual coletado do servidor de arquivos.
-            Nesta etapa, nenhuma permiss&atilde;o real &eacute; aplicada no file server.
-        </p>
-        <div class="ai-review-inline-stats">
-            <span>{{ folder_count }} pastas planejadas</span>
-            <span>{{ rule_count }} regras propostas</span>
-            <span>{{ ro_count }} acessos RO</span>
-            <span>{{ rw_count }} acessos RW</span>
-            <span>{{ full_custom_count }} full/custom</span>
-        </div>
-        {% if not rule_count %}
-        <div class="ai-review-empty-note">As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.</div>
-        {% endif %}
-    </section>
-
-    <section class="ai-review-executive-note ai-review-executive-note-plain">
-        <div>
-            <strong>Leitura executiva</strong>
-            <p>Esta tela apresenta a estrutura de pastas que ser&aacute; usada como base para a proposta de reestrutura&ccedil;&atilde;o de acessos. As permiss&otilde;es propostas ser&atilde;o associadas a essas pastas na pr&oacute;xima etapa.</p>
-        </div>
-    </section>
-
-    <section class="ai-panel ai-review-areas-panel">
-        <h2>&Aacute;reas encontradas</h2>
-        <div class="ai-review-area-strip">
-            {% for area in area_rows %}
-            <article>
-                <strong>{{ area.area_name|default:"Sem area" }}</strong>
-                <span>{{ area.folder_count }} pastas &middot; {{ area.rule_count }} regras &middot; {{ area.ro_count }} RO &middot; {{ area.rw_count }} RW</span>
-            </article>
-            {% empty %}
-            <div class="ai-empty">Nenhuma &aacute;rea planejada ainda.</div>
-            {% endfor %}
-        </div>
-    </section>
+    {% if not rule_count %}
+    <div class="ai-review-empty-note">As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.</div>
+    {% endif %}
 
     <section class="ai-panel ai-review-structure-panel">
         <div class="ai-section-heading">
             <div>
-                <h2>Pastas planejadas</h2>
-                <p>Estrutura real vinculada a este plano. Abra uma pasta para revisar o contexto atual e, quando existirem, as permiss&otilde;es propostas.</p>
+                <h2>Pastas principais</h2>
+                <p>Escolha uma pasta de neg&oacute;cio para navegar pela estrutura. Cada tela mostra apenas os filhos diretos do ramo selecionado.</p>
             </div>
         </div>
 
-        {% if folder_sections %}
-        <div class="ai-review-folder-tree">
-            {% for section in folder_sections %}
-            <section class="ai-review-folder-area">
-                <h3>{{ section.area_name }}</h3>
-                <div class="ai-review-folder-lines">
-                    {% for folder in section.folders %}
-                    <article style="--ai-folder-level: {{ folder.tree_level }};">
-                        <div class="ai-review-folder-node{% if not folder.tree_level %} ai-review-folder-root{% endif %}">
-                            <a class="ai-review-folder-title" href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">{{ folder.name }}</a>
-                            <span class="mono">{{ folder.proposed_path }}</span>
-                        </div>
-                        <span>{{ folder.rule_count }} regras</span>
-                        {% if folder.current_folder_id %}
-                        <span class="ai-review-linked-snapshot">snapshot atual vinculado</span>
-                        {% endif %}
-                        <a class="ai-review-folder-link" href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">Ver compara&ccedil;&atilde;o</a>
-                    </article>
-                    {% endfor %}
+        {% if business_roots %}
+        <div class="ai-review-folder-card-grid">
+            {% for folder in business_roots %}
+            <article class="ai-review-folder-nav-card">
+                <div>
+                    <span class="ai-object-type">{{ folder.area_name|default:"Pasta" }}</span>
+                    <h3>{{ folder.name }}</h3>
+                    <p class="mono">{{ folder.proposed_path }}</p>
                 </div>
-            </section>
+                <div class="ai-review-folder-card-meta">
+                    <span>{{ folder.direct_child_count }} subpastas diretas</span>
+                    <span>{{ folder.direct_rule_count }} regras propostas</span>
+                    {% if folder.current_folder_id %}<span>snapshot atual vinculado</span>{% endif %}
+                </div>
+                <a class="ai-review-action" href="{% url 'access_inventory:review-folder-detail' plan.id folder.id %}">Abrir pasta</a>
+            </article>
             {% endfor %}
         </div>
         {% else %}
