@@ -19,6 +19,38 @@ PERMISSION_EXPLANATIONS = {
     AccessReviewRule.PERMISSION_CUSTOM: 'Permissao personalizada. Requer analise tecnica.',
 }
 
+ACL_RIGHT_TRANSLATIONS = {
+    'readdata': 'Listar conteudo da pasta ou ler dados de arquivos',
+    'listdirectory': 'Listar conteudo da pasta ou ler dados de arquivos',
+    'readattributes': 'Ler atributos, como data de criacao e propriedades',
+    'readextendedattributes': 'Ler atributos estendidos',
+    'createfiles': 'Criar arquivos ou gravar dados',
+    'writedata': 'Criar arquivos ou gravar dados',
+    'createdirectories': 'Criar subpastas ou adicionar dados',
+    'appenddata': 'Criar subpastas ou adicionar dados',
+    'writeattributes': 'Alterar atributos, como propriedades e datas',
+    'writeextendedattributes': 'Alterar atributos estendidos',
+    'delete': 'Excluir a pasta ou arquivo',
+    'deletesubdirectoriesandfiles': 'Excluir subpastas e arquivos dentro desta pasta',
+    'readpermissions': 'Visualizar permissoes',
+    'changepermissions': 'Alterar permissoes',
+    'takeownership': 'Assumir propriedade',
+    'fullcontrol': 'Controle total sobre a pasta',
+    'modify': 'Modificar conteudo, incluindo criacao, alteracao e exclusao',
+    'readandexecute': 'Ler e executar arquivos',
+    'read': 'Ler conteudo',
+    'write': 'Gravar ou alterar conteudo',
+    'synchronize': 'Sincronizacao tecnica usada pelo Windows',
+}
+
+PERMISSION_SUMMARIES = {
+    'Controle total': 'Pode abrir, criar, alterar, excluir e administrar permissoes desta pasta.',
+    'Leitura e escrita': 'Pode abrir, criar, alterar e excluir arquivos nesta pasta.',
+    'Somente leitura': 'Pode abrir, listar e visualizar arquivos. Nao pode criar, alterar ou excluir.',
+    'Negado': 'Acesso negado explicitamente por uma regra de permissao.',
+    'Personalizada': 'Permissao especial com acoes especificas. Requer atencao antes de alterar.',
+}
+
 
 def explain_permission(permission_level):
     return PERMISSION_EXPLANATIONS.get(
@@ -109,21 +141,66 @@ def count_rules_for_folder(folder):
     return folder.rules.count()
 
 
-def access_level_from_rights(rights):
-    normalized = (rights or '').lower()
-    if 'fullcontrol' in normalized:
+def split_acl_rights(rights):
+    return [
+        item.strip()
+        for item in (rights or '').replace(';', ',').split(',')
+        if item.strip()
+    ]
+
+
+def normalize_acl_right(value):
+    return ''.join(character for character in value.lower() if character.isalnum())
+
+
+def translated_acl_rights(rights):
+    details = []
+    seen = set()
+    for right in split_acl_rights(rights):
+        normalized = normalize_acl_right(right)
+        detail = ACL_RIGHT_TRANSLATIONS.get(normalized)
+        if detail and detail not in seen:
+            details.append(detail)
+            seen.add(detail)
+    return details
+
+
+def classify_acl_rights(rights):
+    normalized_rights = {normalize_acl_right(item) for item in split_acl_rights(rights)}
+    if not normalized_rights:
+        return 'Personalizada'
+    if 'fullcontrol' in normalized_rights:
         return 'Controle total'
-    if any(item in normalized for item in ['modify', 'write', 'create', 'delete']):
+    if 'modify' in normalized_rights or {'readandexecute', 'write'}.issubset(normalized_rights):
         return 'Leitura e escrita'
-    if any(item in normalized for item in ['read', 'listexecute', 'readandexecute']):
+    if normalized_rights and normalized_rights.issubset({
+        'read',
+        'readandexecute',
+        'listdirectory',
+        'readdata',
+        'readattributes',
+        'readextendedattributes',
+        'readpermissions',
+        'synchronize',
+    }):
         return 'Somente leitura'
-    return rights or 'Permissao registrada'
+    return 'Personalizada'
 
 
-def acl_permission_label(acl):
+def describe_acl_rights(acl):
     if acl.access_type == AclEntry.ACCESS_DENY:
-        return 'Negado'
-    return access_level_from_rights(acl.rights)
+        label = 'Negado'
+    else:
+        label = classify_acl_rights(acl.rights)
+    details = translated_acl_rights(acl.rights)
+    return {
+        'permission_label': label,
+        'permission_summary': PERMISSION_SUMMARIES[label],
+        'permission_details': details,
+        'technical_rights': acl.rights or '',
+        'is_custom': label == 'Personalizada',
+        'is_special_permission': label == 'Personalizada' or bool(details),
+    }
 
 
 def current_folder_from_review_folder(review_folder):
@@ -177,9 +254,11 @@ def get_current_effective_user_access(review_folder, limit=200):
             memberships_by_group.setdefault(membership.parent_group_id, []).append(membership)
 
     for acl in acl_entries:
-        permission_label = acl_permission_label(acl)
+        permission_description = describe_acl_rights(acl)
+        permission_label = permission_description['permission_label']
         permission_level = permission_label.lower().replace(' ', '_')
         inheritance_label = 'herdado' if acl.inherited else 'direto'
+        inheritance_summary = 'vem de uma pasta acima' if acl.inherited else 'definido nesta pasta'
         if acl.resolved_identity_type == AclEntry.IDENTITY_USER and acl.resolved_ad_user_id:
             key = (acl.resolved_ad_user_id, permission_label, 'direct', acl.id)
             if key in seen:
@@ -191,12 +270,14 @@ def get_current_effective_user_access(review_folder, limit=200):
                 'username': acl.resolved_ad_user.sam_account_name,
                 'permission': permission_label,
                 'permission_level': permission_level,
+                **permission_description,
                 'origin_type': 'direct',
                 'origin_label': 'acesso direto na pasta',
                 'via_group': None,
                 'acl_entry': acl,
                 'is_inherited': acl.inherited,
                 'inheritance_label': inheritance_label,
+                'inheritance_summary': inheritance_summary,
             })
             continue
 
@@ -215,12 +296,14 @@ def get_current_effective_user_access(review_folder, limit=200):
                     'username': membership.member_user.sam_account_name,
                     'permission': permission_label,
                     'permission_level': permission_level,
+                    **permission_description,
                     'origin_type': 'group',
                     'origin_label': f'via grupo {acl.resolved_ad_group.name or acl.resolved_ad_group.sam_account_name}',
                     'via_group': acl.resolved_ad_group,
                     'acl_entry': acl,
                     'is_inherited': acl.inherited,
                     'inheritance_label': inheritance_label,
+                    'inheritance_summary': inheritance_summary,
                 })
             continue
 

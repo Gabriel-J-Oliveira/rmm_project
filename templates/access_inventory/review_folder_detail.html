@@ -95,6 +95,17 @@
                 <div>
                     <span class="ai-permission-chip ai-permission-current">{{ item.permission }}</span>
                     <span class="ai-badge {% if item.is_inherited %}ai-badge-inherited{% else %}ai-badge-explicit{% endif %}">{{ item.inheritance_label }}</span>
+                    <p class="ai-current-permission-summary">{{ item.permission_summary }}</p>
+                    <small class="ai-current-inheritance-note">{{ item.inheritance_summary }}</small>
+                    {% if item.permission_details %}
+                    <p class="ai-current-permission-details">
+                        Detalhes:
+                        {% for detail in item.permission_details|slice:":4" %}
+                            {{ detail }}{% if not forloop.last %}; {% endif %}
+                        {% endfor %}
+                        {% if item.permission_details|length > 4 %}+ {{ item.permission_details|length|add:"-4" }} permiss&otilde;es t&eacute;cnicas{% endif %}
+                    </p>
+                    {% endif %}
                 </div>
                 <div>
                     <strong>{{ item.origin_label }}</strong>

@@ -23,7 +23,7 @@ from .models import (
     InventoryAgentRun,
     Share,
 )
-from .services.access_review import explain_permission, get_current_effective_user_access
+from .services.access_review import describe_acl_rights, explain_permission, get_current_effective_user_access
 from .services.resolve_acl_identities import resolve_acl_identities
 
 
@@ -352,6 +352,7 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'Permiss&otilde;es atuais encontradas')
         self.assertContains(response, 'Gabriel Oliveira')
         self.assertContains(response, 'Somente leitura')
+        self.assertContains(response, 'Pode abrir, listar e visualizar arquivos.')
         self.assertContains(response, 'acesso direto na pasta')
 
     def test_review_folder_detail_shows_group_current_access_as_users(self):
@@ -386,6 +387,7 @@ class AccessReviewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Ana Souza')
         self.assertContains(response, 'Leitura e escrita')
+        self.assertContains(response, 'Pode abrir, criar, alterar e excluir arquivos nesta pasta.')
         self.assertContains(response, 'via grupo GG Juridico RW')
         self.assertContains(response, 'herdado')
 
@@ -414,6 +416,61 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Nenhuma permiss&atilde;o atual resolvida para usu&aacute;rios nesta pasta.')
+
+    def create_acl_for_rights(self, rights, access_type=AclEntry.ACCESS_ALLOW):
+        file_server = FileServer.objects.create(name=f'FS-RIGHTS-{Folder.objects.count()}')
+        share = Share.objects.create(
+            file_server=file_server,
+            name=f'Dados Rights {Folder.objects.count()}',
+            unc_path=f'\\\\{file_server.name}\\Dados',
+        )
+        folder = Folder.objects.create(share=share, path=f'Pasta {Folder.objects.count()}')
+        return AclEntry.objects.create(
+            folder=folder,
+            identity_name='CONTROL\\user',
+            rights=rights,
+            access_type=access_type,
+        )
+
+    def test_full_control_rights_are_described(self):
+        description = describe_acl_rights(self.create_acl_for_rights('FullControl'))
+
+        self.assertEqual(description['permission_label'], 'Controle total')
+        self.assertIn('administrar permissoes', description['permission_summary'])
+
+    def test_modify_write_delete_rights_are_read_write(self):
+        description = describe_acl_rights(self.create_acl_for_rights('Modify, Synchronize'))
+
+        self.assertEqual(description['permission_label'], 'Leitura e escrita')
+        self.assertTrue(any('Modificar conteudo' in detail for detail in description['permission_details']))
+
+    def test_read_list_directory_rights_are_read_only(self):
+        description = describe_acl_rights(self.create_acl_for_rights('ListDirectory, ReadAttributes, Synchronize'))
+
+        self.assertEqual(description['permission_label'], 'Somente leitura')
+        self.assertIn('Listar conteudo da pasta ou ler dados de arquivos', description['permission_details'])
+
+    def test_special_partial_rights_are_custom_and_translated(self):
+        description = describe_acl_rights(
+            self.create_acl_for_rights('WriteAttributes, DeleteSubdirectoriesAndFiles, ReadPermissions')
+        )
+
+        self.assertEqual(description['permission_label'], 'Personalizada')
+        self.assertIn('Alterar atributos, como propriedades e datas', description['permission_details'])
+        self.assertIn('Excluir subpastas e arquivos dentro desta pasta', description['permission_details'])
+        self.assertIn('Visualizar permissoes', description['permission_details'])
+
+    def test_empty_rights_are_custom_without_breaking(self):
+        description = describe_acl_rights(self.create_acl_for_rights(''))
+
+        self.assertEqual(description['permission_label'], 'Personalizada')
+        self.assertEqual(description['technical_rights'], '')
+
+    def test_deny_acl_is_described_as_denied(self):
+        description = describe_acl_rights(self.create_acl_for_rights('Read', access_type=AclEntry.ACCESS_DENY))
+
+        self.assertEqual(description['permission_label'], 'Negado')
+        self.assertIn('Acesso negado', description['permission_summary'])
 
 
 class SeedAccessReviewFoldersCommandTests(TestCase):

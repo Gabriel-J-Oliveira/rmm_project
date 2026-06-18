@@ -8268,6 +8268,14 @@ body.page-access-inventory .ai-review-technical-panel:hover {
     padding: 12px 14px;
 }
 
+.ai-current-access-row:hover {
+    background: rgba(2, 6, 12, 0.24);
+    border-color: rgba(148, 163, 184, 0.08);
+    box-shadow: none;
+    color: inherit;
+    transform: none;
+}
+
 .ai-current-access-row strong {
     color: var(--ai-primary-text);
     display: block;
@@ -8284,6 +8292,26 @@ body.page-access-inventory .ai-review-technical-panel:hover {
     border: 1px solid rgba(147, 197, 253, 0.18);
     color: #e0f2fe;
     margin-right: 6px;
+}
+
+.ai-current-permission-summary,
+.ai-current-permission-details,
+.ai-current-inheritance-note {
+    display: block;
+    margin: 6px 0 0;
+}
+
+.ai-current-permission-summary {
+    color: var(--ai-secondary-text);
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
+.ai-current-permission-details,
+.ai-current-inheritance-note {
+    color: var(--ai-tertiary-text);
+    font-size: 0.76rem;
+    line-height: 1.4;
 }
 
 .ai-review-unknown-inline {
