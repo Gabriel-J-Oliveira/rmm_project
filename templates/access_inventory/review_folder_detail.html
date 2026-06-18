@@ -207,6 +207,32 @@
         {% endif %}
     </section>
 
+    <section class="ai-panel ai-review-revoked-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Usu&aacute;rios com acesso revogado</h2>
+                <p>Acessos que n&atilde;o devem permanecer como permiss&atilde;o de neg&oacute;cio ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
+            </div>
+        </div>
+        {% if revoked_access_rows %}
+        <div class="ai-review-person-rows">
+            {% for item in revoked_access_rows %}
+            <article class="ai-review-person-row">
+                <div>
+                    <strong>{{ item.display_name }}</strong>
+                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
+                </div>
+                <p>{{ item.message }}</p>
+                <span class="ai-permission-chip ai-permission-none">{{ item.badge }}</span>
+                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="ai-empty">Nenhum acesso revogado cadastrado para esta pasta.</div>
+        {% endif %}
+    </section>
+
     <section class="ai-panel ai-review-people-panel">
         <div class="ai-section-heading">
             <div>
@@ -243,6 +269,7 @@
                 <p>As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.</p>
             </div>
         {% endif %}
+        <div class="ai-review-technical-note">Acessos administrativos s&atilde;o tratados no card de revoga&ccedil;&atilde;o e n&atilde;o comp&otilde;em o resultado final de acesso de neg&oacute;cio.</div>
     </section>
 </section>
 {% endblock %}

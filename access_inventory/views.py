@@ -17,6 +17,7 @@ from .models import (
     Share,
 )
 from .services.access_review import (
+    build_revoked_review_access_rows,
     get_executive_review_plans,
     get_current_effective_user_access,
     get_folder_breadcrumb,
@@ -24,6 +25,7 @@ from .services.access_review import (
     get_plan_visible_roots,
     get_partner_review_users,
     is_displayable_review_user,
+    is_removal_review_rule,
     rule_explanation,
 )
 
@@ -539,6 +541,8 @@ def review_folder_detail(request, plan_id, folder_id):
         section_rules_queryset = user_rules.filter(permission_level=permission_level)
         section_rules = []
         for rule in section_rules_queryset:
+            if is_removal_review_rule(rule):
+                continue
             if rule.principal.ad_user_id and not is_displayable_review_user(rule.principal.ad_user):
                 hidden_rule_users_count += 1
                 continue
@@ -564,6 +568,7 @@ def review_folder_detail(request, plan_id, folder_id):
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     partner_users = get_partner_review_users()
+    revoked_access_rows = build_revoked_review_access_rows(current_access.get('rows', []), user_rules)
     context = {
         **base_context('reviews'),
         'plan': plan,
@@ -572,6 +577,7 @@ def review_folder_detail(request, plan_id, folder_id):
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
         'partner_users': partner_users,
+        'revoked_access_rows': revoked_access_rows,
         'permission_sections': permission_sections,
         'technical_group_rules': technical_group_rules,
         'rule_count': rules.count(),

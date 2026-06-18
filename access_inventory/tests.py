@@ -531,6 +531,169 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'via grupo GG Juridico RW')
         self.assertContains(response, 'herdado')
 
+    def test_domain_admins_current_access_is_visible_and_revoked_from_business_access(self):
+        file_server = FileServer.objects.create(name='FS-DA')
+        share = Share.objects.create(file_server=file_server, name='Dados DA', unc_path='\\\\FS-DA\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\DA')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        user = ADUser.objects.create(
+            sid='S-1-5-21-8201',
+            sam_account_name='carlos.lima',
+            display_name='Carlos Lima',
+        )
+        domain_admins = ADGroup.objects.create(
+            sid='S-1-5-21-8202',
+            sam_account_name='Domain Admins',
+            name='Domain Admins',
+            distinguished_name='CN=Domain Admins,CN=Users,DC=control,DC=local',
+        )
+        ADGroupMembership.objects.create(parent_group=domain_admins, member_user=user)
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=domain_admins.sid,
+            identity_name='CONTROL\\Domain Admins',
+            resolved_ad_group=domain_admins,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='FullControl',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        current_access_section = content[
+            content.index('Permiss&otilde;es atuais encontradas'):
+            content.index('Usu&aacute;rios com acesso revogado')
+        ]
+        revoked_section = content[
+            content.index('Usu&aacute;rios com acesso revogado'):
+            content.index('Resultado final dos acessos revistos')
+        ]
+        final_result_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Carlos Lima', current_access_section)
+        self.assertIn('acesso administrativo via Domain Admins', current_access_section)
+        self.assertIn('Carlos Lima', revoked_section)
+        self.assertIn('ACESSO ADMINISTRATIVO SERA REMOVIDO', revoked_section)
+        self.assertNotIn('Carlos Lima', final_result_section)
+        self.assertNotIn('Domain Admins', final_result_section)
+
+    def test_domain_admins_revoked_card_filters_partners_technical_and_inactive_users(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Sócios,DC=control,DC=local',
+            name='Sócios',
+        )
+        file_server = FileServer.objects.create(name='FS-DA-FILTER')
+        share = Share.objects.create(file_server=file_server, name='Dados DA Filter', unc_path='\\\\FS-DA-FILTER\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\DAFilter')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        common_user = ADUser.objects.create(
+            sid='S-1-5-21-8301',
+            sam_account_name='bruna',
+            display_name='Bruna Regular',
+        )
+        partner_user = ADUser.objects.create(
+            sid='S-1-5-21-8302',
+            sam_account_name='socio',
+            display_name='Socio Regular',
+            distinguished_name='CN=Socio Regular,OU=Sócios,DC=control,DC=local',
+            ou=socios_ou,
+        )
+        technical_user = ADUser.objects.create(
+            sid='S-1-5-21-8303',
+            sam_account_name='administrator',
+            display_name='Administrator',
+        )
+        inactive_user = ADUser.objects.create(
+            sid='S-1-5-21-8304',
+            sam_account_name='inactive',
+            display_name='Inactive User',
+            enabled=False,
+        )
+        domain_admins = ADGroup.objects.create(
+            sid='S-1-5-21-8305',
+            sam_account_name='DOMAIN ADMINS',
+            name='DOMAIN ADMINS',
+        )
+        for user in (common_user, partner_user, technical_user, inactive_user):
+            ADGroupMembership.objects.create(parent_group=domain_admins, member_user=user)
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=domain_admins.sid,
+            identity_name='CN=Domain Admins,CN=Users,DC=control,DC=local',
+            resolved_ad_group=domain_admins,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='FullControl',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        revoked_section = content[
+            content.index('Usu&aacute;rios com acesso revogado'):
+            content.index('Resultado final dos acessos revistos')
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Bruna Regular', revoked_section)
+        self.assertNotIn('Socio Regular', revoked_section)
+        self.assertNotIn('Administrator', revoked_section)
+        self.assertNotIn('Inactive User', revoked_section)
+
+    def test_explicit_removal_has_priority_over_domain_admins_revocation(self):
+        file_server = FileServer.objects.create(name='FS-DA-DEDUP')
+        share = Share.objects.create(file_server=file_server, name='Dados DA Dedup', unc_path='\\\\FS-DA-DEDUP\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\DADedup')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        user = ADUser.objects.create(
+            sid='S-1-5-21-8401',
+            sam_account_name='ana.remover',
+            display_name='Ana Remover',
+        )
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Ana Remover',
+            sam_account_name='ana.remover',
+            ad_user=user,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_NONE,
+            notes='acao=remover; remover na revisao',
+        )
+        domain_admins = ADGroup.objects.create(
+            sid='S-1-5-21-8402',
+            sam_account_name='Domain Admins',
+            name='Domain Admins',
+        )
+        ADGroupMembership.objects.create(parent_group=domain_admins, member_user=user)
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=domain_admins.sid,
+            identity_name='CONTROL\\Domain Admins',
+            resolved_ad_group=domain_admins,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='FullControl',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        revoked_section = content[
+            content.index('Usu&aacute;rios com acesso revogado'):
+            content.index('Resultado final dos acessos revistos')
+        ]
+        final_result_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(revoked_section.count('Ana Remover'), 1)
+        self.assertIn('ACESSO SERA REVOGADO', revoked_section)
+        self.assertIn('Acesso sera revogado nesta pasta.', revoked_section)
+        self.assertNotIn('Ana Remover', final_result_section)
+
     def test_review_folder_detail_keeps_unknown_acl_discreet(self):
         file_server = FileServer.objects.create(name='FS-UNKNOWN')
         share = Share.objects.create(file_server=file_server, name='Dados Unknown', unc_path='\\\\FS-UNKNOWN\\Dados')

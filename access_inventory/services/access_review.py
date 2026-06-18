@@ -188,6 +188,100 @@ def get_partner_review_users():
     return [user for user in users if can_show_in_partner_review_card(user)]
 
 
+def domain_admins_identity_values(value_or_group):
+    if not value_or_group:
+        return []
+    if isinstance(value_or_group, str):
+        return [value_or_group]
+    values = []
+    for field_name in ('name', 'sam_account_name', 'display_name', 'distinguished_name', 'sid'):
+        if hasattr(value_or_group, field_name):
+            value = getattr(value_or_group, field_name, '')
+            if value:
+                values.append(value)
+    return values
+
+
+def is_domain_admins_principal(value_or_group):
+    for value in domain_admins_identity_values(value_or_group):
+        normalized = normalize_review_user_value(value)
+        if not normalized:
+            continue
+        short_name = normalized.split('\\')[-1]
+        if short_name == 'domain admins':
+            return True
+        if 'cn=domain admins' in normalized:
+            return True
+    return False
+
+
+def is_removal_review_rule(rule):
+    notes = normalize_review_user_value(getattr(rule, 'notes', ''))
+    return (
+        rule.permission_level == AccessReviewRule.PERMISSION_NONE
+        or 'acao=remover' in notes
+        or 'acao: remover' in notes
+    )
+
+
+def review_person_key_from_user(ad_user):
+    if ad_user and getattr(ad_user, 'id', None):
+        return ('user', ad_user.id)
+    if ad_user:
+        return ('name', normalize_review_user_value(ad_user.display_name or ad_user.sam_account_name))
+    return None
+
+
+def review_person_key_from_name(name):
+    return ('name', normalize_review_user_value(name))
+
+
+def build_revoked_review_access_rows(current_access_rows, user_rules):
+    revoked_by_key = {}
+
+    for rule in user_rules:
+        if not is_removal_review_rule(rule):
+            continue
+        principal = rule.principal
+        ad_user = principal.ad_user
+        if ad_user and not is_displayable_review_user(ad_user):
+            continue
+        display_name = principal.display_name
+        username = principal.sam_account_name
+        key = review_person_key_from_user(ad_user) if ad_user else review_person_key_from_name(display_name)
+        revoked_by_key[key] = {
+            'display_name': display_name,
+            'username': username,
+            'badge': 'ACESSO SERA REVOGADO',
+            'message': 'Acesso sera revogado nesta pasta.',
+            'source': 'regra proposta de remocao',
+            'priority': 0,
+        }
+
+    for row in current_access_rows:
+        if not row.get('is_domain_admins_access'):
+            continue
+        user = row.get('user')
+        if not is_displayable_review_user(user):
+            continue
+        key = review_person_key_from_user(user)
+        if key in revoked_by_key:
+            continue
+        revoked_by_key[key] = {
+            'display_name': row.get('display_name'),
+            'username': row.get('username'),
+            'badge': 'ACESSO ADMINISTRATIVO SERA REMOVIDO',
+            'message': 'Acesso administrativo via Domain Admins sera removido da permissao de negocio desta pasta.',
+            'source': row.get('origin_label'),
+            'priority': 1,
+        }
+
+    return sorted(
+        revoked_by_key.values(),
+        key=lambda item: (item['priority'], normalize_review_user_value(item.get('display_name'))),
+    )
+
+
 def get_executive_review_plans():
     latest_plan = (
         AccessReviewPlan.objects.exclude(status=AccessReviewPlan.STATUS_ARCHIVED)
@@ -403,6 +497,7 @@ def get_current_effective_user_access(review_folder, limit=200):
                 'origin_type': 'direct',
                 'origin_label': 'acesso direto na pasta',
                 'via_group': None,
+                'is_domain_admins_access': False,
                 'acl_entry': acl,
                 'is_inherited': acl.inherited,
                 'inheritance_label': inheritance_label,
@@ -412,6 +507,12 @@ def get_current_effective_user_access(review_folder, limit=200):
 
         if acl.resolved_identity_type == AclEntry.IDENTITY_GROUP and acl.resolved_ad_group_id:
             memberships = memberships_by_group.get(acl.resolved_ad_group_id, [])
+            is_domain_admins_access = is_domain_admins_principal(acl.resolved_ad_group) or is_domain_admins_principal(acl.identity_name)
+            origin_label = (
+                'acesso administrativo via Domain Admins'
+                if is_domain_admins_access
+                else f'via grupo {acl.resolved_ad_group.name or acl.resolved_ad_group.sam_account_name}'
+            )
             if not memberships:
                 groups_without_members.append(acl.resolved_ad_group)
             for membership in memberships[:limit]:
@@ -430,8 +531,9 @@ def get_current_effective_user_access(review_folder, limit=200):
                     'permission_level': permission_level,
                     **permission_description,
                     'origin_type': 'group',
-                    'origin_label': f'via grupo {acl.resolved_ad_group.name or acl.resolved_ad_group.sam_account_name}',
+                    'origin_label': origin_label,
                     'via_group': acl.resolved_ad_group,
+                    'is_domain_admins_access': is_domain_admins_access,
                     'acl_entry': acl,
                     'is_inherited': acl.inherited,
                     'inheritance_label': inheritance_label,
