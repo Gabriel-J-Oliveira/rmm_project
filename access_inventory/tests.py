@@ -253,6 +253,59 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, self.principal.display_name)
         self.assertContains(response, 'Pode abrir, criar, editar e excluir arquivos.')
 
+    def test_review_folder_detail_renders_first_direct_child(self):
+        root = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        area = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            parent=root,
+        )
+        finance = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+            parent=area,
+        )
+        AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAFOFO',
+            parent=finance,
+            sort_order=1,
+        )
+        AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAIXA',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAIXA',
+            parent=finance,
+            sort_order=2,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, finance.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'CAFOFO')
+        self.assertContains(response, 'CAIXA')
+
+    def test_review_folder_detail_final_result_is_after_current_access(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        content = response.content.decode()
+        self.assertLess(
+            content.index('Permiss&otilde;es atuais encontradas'),
+            content.index('Resultado final dos acessos revistos'),
+        )
+
     def test_review_plan_detail_applies_temporary_executive_scope_when_paths_exist(self):
         current_plan = AccessReviewPlan.objects.create(name='Plano executivo atual')
         root = AccessReviewFolder.objects.create(

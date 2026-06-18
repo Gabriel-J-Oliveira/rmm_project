@@ -554,7 +554,7 @@ def review_folder_detail(request, plan_id, folder_id):
         }
         for rule in group_rules
     ]
-    child_folders = get_folder_children(folder)
+    child_folders = list(get_folder_children(folder))
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     context = {
