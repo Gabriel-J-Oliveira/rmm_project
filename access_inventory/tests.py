@@ -24,7 +24,13 @@ from .models import (
     InventoryAgentRun,
     Share,
 )
-from .services.access_review import describe_acl_rights, explain_permission, get_current_effective_user_access
+from .services.access_review import (
+    describe_acl_rights,
+    explain_permission,
+    get_current_effective_user_access,
+    is_partner_review_user,
+    is_displayable_review_user,
+)
 from .services.import_access_review_rules import import_access_review_rules_from_rows
 from .services.resolve_acl_identities import resolve_acl_identities
 
@@ -410,6 +416,85 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'Pode abrir, listar e visualizar arquivos.')
         self.assertContains(response, 'acesso direto na pasta')
 
+    def test_review_folder_detail_hides_technical_direct_current_user(self):
+        file_server = FileServer.objects.create(name='FS-TECH-DIRECT')
+        share = Share.objects.create(file_server=file_server, name='Dados Tech Direct', unc_path='\\\\FS-TECH-DIRECT\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\Tecnica')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        technical_user = ADUser.objects.create(
+            sid='S-1-5-21-7101',
+            sam_account_name='administrador',
+            display_name='  ÁDMINISTRADOR  ',
+        )
+        normal_user = ADUser.objects.create(
+            sid='S-1-5-21-7102',
+            sam_account_name='ana.souza',
+            display_name='Ana Souza',
+        )
+        for user in (technical_user, normal_user):
+            AclEntry.objects.create(
+                folder=current_folder,
+                identity_sid=user.sid,
+                identity_name=f'CONTROL\\{user.sam_account_name}',
+                resolved_ad_user=user,
+                resolved_identity_type=AclEntry.IDENTITY_USER,
+                rights='ReadAndExecute, Synchronize',
+            )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Ana Souza')
+        self.assertNotContains(response, 'ÁDMINISTRADOR')
+        self.assertContains(response, 'Contas t&eacute;cnicas, usu&aacute;rios inativos e s&oacute;cios com acesso geral foram ocultados')
+
+    def test_review_folder_detail_hides_backup_cs_and_inactive_users_from_group_access(self):
+        file_server = FileServer.objects.create(name='FS-TECH-GROUP')
+        share = Share.objects.create(file_server=file_server, name='Dados Tech Group', unc_path='\\\\FS-TECH-GROUP\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\Grupo')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-8101',
+            sam_account_name='GG_TESTE_RW',
+            name='GG Teste RW',
+        )
+        backup_user = ADUser.objects.create(
+            sid='S-1-5-21-8102',
+            sam_account_name='backup.cs',
+            display_name='Backup   CS',
+        )
+        inactive_user = ADUser.objects.create(
+            sid='S-1-5-21-8103',
+            sam_account_name='usuario.inativo',
+            display_name='Usuario Inativo',
+            enabled=False,
+        )
+        normal_user = ADUser.objects.create(
+            sid='S-1-5-21-8104',
+            sam_account_name='carlos.lima',
+            display_name='Carlos Lima',
+        )
+        for user in (backup_user, inactive_user, normal_user):
+            ADGroupMembership.objects.create(parent_group=group, member_user=user)
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=group.sid,
+            identity_name='CONTROL\\GG_TESTE_RW',
+            resolved_ad_group=group,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='Modify, Synchronize',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Carlos Lima')
+        self.assertNotContains(response, 'Backup   CS')
+        self.assertNotContains(response, 'Usuario Inativo')
+        self.assertContains(response, 'via grupo GG Teste RW')
+
     def test_review_folder_detail_shows_group_current_access_as_users(self):
         file_server = FileServer.objects.create(name='FS-GROUP')
         share = Share.objects.create(file_server=file_server, name='Dados Group', unc_path='\\\\FS-GROUP\\Dados')
@@ -471,6 +556,182 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Nenhuma permiss&atilde;o atual resolvida para usu&aacute;rios nesta pasta.')
+
+    def test_displayable_review_user_helper_handles_service_and_inactive_accounts(self):
+        service_user = ADUser.objects.create(
+            sid='S-1-5-21-9001',
+            sam_account_name='wts.1',
+            display_name='WTS 1',
+        )
+        inactive_user = ADUser.objects.create(
+            sid='S-1-5-21-9002',
+            sam_account_name='inativo',
+            display_name='Usuario Inativo',
+            enabled=False,
+        )
+        normal_user = ADUser.objects.create(
+            sid='S-1-5-21-9003',
+            sam_account_name='bruna',
+            display_name='Bruna',
+        )
+
+        self.assertFalse(is_displayable_review_user(service_user))
+        self.assertFalse(is_displayable_review_user(inactive_user))
+        self.assertTrue(is_displayable_review_user(normal_user))
+
+    def test_partner_review_user_is_detected_by_ou(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Sócios,DC=control,DC=local',
+            name='Sócios',
+        )
+        socios_plain_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Socios,DC=control,DC=local',
+            name='Socios',
+        )
+        other_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Administrativo,DC=control,DC=local',
+            name='Administrativo',
+        )
+        partner_with_accent = ADUser.objects.create(
+            sid='S-1-5-21-9101',
+            sam_account_name='ana.partner',
+            display_name='Ana Partner',
+            distinguished_name='CN=Ana Partner,OU=Sócios,DC=control,DC=local',
+            ou=socios_ou,
+        )
+        partner_without_accent = ADUser.objects.create(
+            sid='S-1-5-21-9102',
+            sam_account_name='carlos.partner',
+            display_name='Carlos Partner',
+            distinguished_name='CN=Carlos Partner,OU=Socios,DC=control,DC=local',
+            ou=socios_plain_ou,
+        )
+        regular_user = ADUser.objects.create(
+            sid='S-1-5-21-9103',
+            sam_account_name='regular',
+            display_name='Regular User',
+            distinguished_name='CN=Regular User,OU=Administrativo,DC=control,DC=local',
+            ou=other_ou,
+        )
+
+        self.assertTrue(is_partner_review_user(partner_with_accent))
+        self.assertTrue(is_partner_review_user(partner_without_accent))
+        self.assertFalse(is_partner_review_user(regular_user))
+        self.assertFalse(is_displayable_review_user(partner_with_accent))
+
+    def test_review_folder_detail_shows_partners_only_in_general_access_card(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Sócios,DC=control,DC=local',
+            name='Sócios',
+        )
+        file_server = FileServer.objects.create(name='FS-PARTNER')
+        share = Share.objects.create(file_server=file_server, name='Dados Partner', unc_path='\\\\FS-PARTNER\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\Partner')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        partner = ADUser.objects.create(
+            sid='S-1-5-21-9201',
+            sam_account_name='ana.partner',
+            display_name='Ana Partner',
+            distinguished_name='CN=Ana Partner,OU=Sócios,DC=control,DC=local',
+            ou=socios_ou,
+        )
+        regular_user = ADUser.objects.create(
+            sid='S-1-5-21-9202',
+            sam_account_name='bruna',
+            display_name='Bruna Regular',
+        )
+        for user in (partner, regular_user):
+            AclEntry.objects.create(
+                folder=current_folder,
+                identity_sid=user.sid,
+                identity_name=f'CONTROL\\{user.sam_account_name}',
+                resolved_ad_user=user,
+                resolved_identity_type=AclEntry.IDENTITY_USER,
+                rights='ReadAndExecute, Synchronize',
+            )
+        AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Ana Partner',
+            sam_account_name='ana.partner',
+            ad_user=partner,
+        )
+        partner_principal = AccessReviewPrincipal.objects.get(plan=self.plan, display_name='Ana Partner')
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=partner_principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        current_access_section = content[
+            content.index('Permiss&otilde;es atuais encontradas'):
+            content.index('Resultado final dos acessos revistos')
+        ]
+        final_result_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertContains(response, 'Ana Partner')
+        self.assertContains(response, 'Bruna Regular')
+        self.assertNotIn('Ana Partner', current_access_section)
+        self.assertNotIn('Ana Partner', final_result_section)
+        self.assertIn('Bruna Regular', current_access_section)
+        self.assertContains(response, 's&oacute;cios com acesso geral foram ocultados')
+
+    def test_inactive_partner_is_hidden_from_card_and_tables(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Socios,DC=control,DC=local',
+            name='Socios',
+        )
+        inactive_partner = ADUser.objects.create(
+            sid='S-1-5-21-9301',
+            sam_account_name='inactive.partner',
+            display_name='Inactive Partner',
+            distinguished_name='CN=Inactive Partner,OU=Socios,DC=control,DC=local',
+            ou=socios_ou,
+            enabled=False,
+        )
+        file_server = FileServer.objects.create(name='FS-IP')
+        share = Share.objects.create(file_server=file_server, name='Dados IP', unc_path='\\\\FS-IP\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\IP')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=inactive_partner.sid,
+            identity_name='CONTROL\\inactive.partner',
+            resolved_ad_user=inactive_partner,
+            resolved_identity_type=AclEntry.IDENTITY_USER,
+            rights='ReadAndExecute, Synchronize',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Inactive Partner')
+        self.assertContains(response, 'Lista de s&oacute;cios n&atilde;o identificada automaticamente pela OU do AD.')
+
+    def test_review_folder_detail_keeps_unresolved_textual_proposed_user_visible(self):
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Bruna',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Bruna')
 
     def create_acl_for_rights(self, rights, access_type=AclEntry.ACCESS_ALLOW):
         file_server = FileServer.objects.create(name=f'FS-RIGHTS-{Folder.objects.count()}')

@@ -22,6 +22,8 @@ from .services.access_review import (
     get_folder_breadcrumb,
     get_folder_children,
     get_plan_visible_roots,
+    get_partner_review_users,
+    is_displayable_review_user,
     rule_explanation,
 )
 
@@ -532,14 +534,18 @@ def review_folder_detail(request, plan_id, folder_id):
         AccessReviewRule.PERMISSION_CUSTOM,
     ]
     permission_sections = []
+    hidden_rule_users_count = 0
     for permission_level in permission_order:
-        section_rules = [
-            {
+        section_rules_queryset = user_rules.filter(permission_level=permission_level)
+        section_rules = []
+        for rule in section_rules_queryset:
+            if rule.principal.ad_user_id and not is_displayable_review_user(rule.principal.ad_user):
+                hidden_rule_users_count += 1
+                continue
+            section_rules.append({
                 'rule': rule,
                 'explanation': rule_explanation(rule),
-            }
-            for rule in user_rules.filter(permission_level=permission_level)
-        ]
+            })
         if section_rules:
             permission_sections.append({
                 'level': permission_level,
@@ -557,6 +563,7 @@ def review_folder_detail(request, plan_id, folder_id):
     child_folders = list(get_folder_children(folder))
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
+    partner_users = get_partner_review_users()
     context = {
         **base_context('reviews'),
         'plan': plan,
@@ -564,6 +571,7 @@ def review_folder_detail(request, plan_id, folder_id):
         'child_folders': child_folders,
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
+        'partner_users': partner_users,
         'permission_sections': permission_sections,
         'technical_group_rules': technical_group_rules,
         'rule_count': rules.count(),
@@ -576,5 +584,6 @@ def review_folder_detail(request, plan_id, folder_id):
         ).count(),
         'technical_group_count': group_rules.count(),
         'current_acl_count': folder.current_folder.acl_entries.count() if folder.current_folder_id else 0,
+        'hidden_review_users_count': current_access.get('hidden_users_count', 0) + hidden_rule_users_count,
     }
     return render(request, 'access_inventory/review_folder_detail.html', context)

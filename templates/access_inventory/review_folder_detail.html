@@ -68,6 +68,27 @@
         {% endif %}
     </section>
 
+    <section class="ai-panel ai-review-partner-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>S&oacute;cios t&ecirc;m acesso geral</h2>
+                <p>Os s&oacute;cios possuem acesso a todo o escopo da estrutura e n&atilde;o s&atilde;o repetidos individualmente nas tabelas de cada pasta para evitar ru&iacute;do visual.</p>
+            </div>
+        </div>
+        {% if partner_users %}
+        <div class="ai-review-partner-list">
+            <span>S&oacute;cios contemplados nesta regra:</span>
+            <div>
+                {% for user in partner_users %}
+                <span class="ai-review-partner-chip">{{ user.display_name|default:user.sam_account_name }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <div class="ai-review-technical-note">Lista de s&oacute;cios n&atilde;o identificada automaticamente pela OU do AD.</div>
+        {% endif %}
+    </section>
+
     <section class="ai-panel ai-compact-panel ai-review-technical-panel">
         <h2>Contexto atual vinculado</h2>
         {% if folder.current_folder %}
@@ -179,6 +200,10 @@
                 {% endfor %}
             </ul>
         </div>
+        {% endif %}
+
+        {% if hidden_review_users_count %}
+        <div class="ai-review-technical-note">Contas t&eacute;cnicas, usu&aacute;rios inativos e s&oacute;cios com acesso geral foram ocultados das tabelas detalhadas desta visualiza&ccedil;&atilde;o.</div>
         {% endif %}
     </section>
 

@@ -1,6 +1,9 @@
+import re
+import unicodedata
+
 from django.db.models import Count, Q
 
-from access_inventory.models import ADGroupMembership, AccessReviewFolder, AccessReviewPlan, AccessReviewRule, AclEntry
+from access_inventory.models import ADGroupMembership, ADUser, AccessReviewFolder, AccessReviewPlan, AccessReviewRule, AclEntry
 
 
 # Escopo executivo temporario da reestruturacao: mostrar apenas areas selecionadas
@@ -8,6 +11,19 @@ from access_inventory.models import ADGroupMembership, AccessReviewFolder, Acces
 EXECUTIVE_VISIBLE_ROOT_PATHS = {
     'controlsul\\administrativo',
     'controlsul\\juridico',
+}
+
+TECHNICAL_REVIEW_USER_NAMES = {
+    'administrador',
+    'administrator',
+    'backup cs',
+    'infraestrutura',
+    'meraki firewall',
+    'nectunt tecnologia',
+    'rocket chat',
+    'saggin constel',
+    'suporte nextcloud',
+    'wts 1',
 }
 
 
@@ -61,6 +77,115 @@ def explain_permission(permission_level):
 
 def rule_explanation(rule):
     return rule.permission_explanation or explain_permission(rule.permission_level)
+
+
+def normalize_review_user_value(value):
+    value = '' if value is None else str(value)
+    value = unicodedata.normalize('NFKD', value)
+    value = ''.join(character for character in value if not unicodedata.combining(character))
+    return re.sub(r'\s+', ' ', value).strip().lower()
+
+
+def review_user_identity_values(ad_user):
+    values = []
+    for field_name in ('display_name', 'name', 'sam_account_name', 'username', 'user_principal_name', 'email'):
+        if hasattr(ad_user, field_name):
+            value = getattr(ad_user, field_name, '')
+            if value:
+                values.append(value)
+                if field_name in {'email', 'user_principal_name'} and '@' in value:
+                    values.append(value.split('@', 1)[0])
+    return values
+
+
+def is_technical_review_user(ad_user):
+    normalized_values = {
+        normalize_review_user_value(value)
+        for value in review_user_identity_values(ad_user)
+        if normalize_review_user_value(value)
+    }
+    return bool(normalized_values & TECHNICAL_REVIEW_USER_NAMES)
+
+
+def is_inactive_review_user(ad_user):
+    inactive_false_fields = ('enabled', 'is_active', 'active')
+    inactive_true_fields = ('disabled', 'account_disabled', 'is_disabled', 'locked', 'locked_out', 'lockout')
+
+    for field_name in inactive_false_fields:
+        if hasattr(ad_user, field_name) and getattr(ad_user, field_name) is False:
+            return True
+
+    for field_name in inactive_true_fields:
+        if hasattr(ad_user, field_name) and getattr(ad_user, field_name) is True:
+            return True
+
+    for field_name in ('user_account_control', 'userAccountControl'):
+        if hasattr(ad_user, field_name):
+            value = getattr(ad_user, field_name)
+            try:
+                if int(value) & 0x0002:
+                    return True
+            except (TypeError, ValueError):
+                pass
+
+    return False
+
+
+def review_user_ou_values(ad_user):
+    values = []
+    for field_name in ('distinguished_name', 'dn', 'canonical_name', 'organizational_unit', 'path'):
+        if hasattr(ad_user, field_name):
+            value = getattr(ad_user, field_name, '')
+            if value:
+                values.append(value)
+
+    ou = getattr(ad_user, 'ou', None)
+    if ou:
+        for field_name in ('name', 'distinguished_name', 'parent_distinguished_name'):
+            value = getattr(ou, field_name, '')
+            if value:
+                values.append(value)
+    return values
+
+
+def is_partner_review_user(ad_user):
+    for value in review_user_ou_values(ad_user):
+        normalized = normalize_review_user_value(value)
+        path_normalized = normalized.replace('/', '\\')
+        if 'ou=socios' in normalized or '\\socios\\' in f'\\{path_normalized}\\':
+            return True
+    return False
+
+
+def can_show_in_partner_review_card(ad_user):
+    if not ad_user:
+        return False
+    if is_technical_review_user(ad_user):
+        return False
+    if is_inactive_review_user(ad_user):
+        return False
+    return is_partner_review_user(ad_user)
+
+
+def is_displayable_review_user(ad_user):
+    if not ad_user:
+        return False
+    if is_technical_review_user(ad_user):
+        return False
+    if is_inactive_review_user(ad_user):
+        return False
+    if is_partner_review_user(ad_user):
+        return False
+    return True
+
+
+def get_partner_review_users():
+    users = (
+        ADUser.objects.select_related('ou')
+        .filter(enabled=True)
+        .order_by('display_name', 'sam_account_name', 'id')
+    )
+    return [user for user in users if can_show_in_partner_review_card(user)]
 
 
 def get_executive_review_plans():
@@ -218,6 +343,7 @@ def get_current_effective_user_access(review_folder, limit=200):
         'rows': [],
         'unknown_acl_entries': [],
         'groups_without_members': [],
+        'hidden_users_count': 0,
         'total_rows': 0,
         'is_limited': False,
         'empty_reason': '',
@@ -260,6 +386,9 @@ def get_current_effective_user_access(review_folder, limit=200):
         inheritance_label = 'herdado' if acl.inherited else 'direto'
         inheritance_summary = 'vem de uma pasta acima' if acl.inherited else 'definido nesta pasta'
         if acl.resolved_identity_type == AclEntry.IDENTITY_USER and acl.resolved_ad_user_id:
+            if not is_displayable_review_user(acl.resolved_ad_user):
+                result['hidden_users_count'] += 1
+                continue
             key = (acl.resolved_ad_user_id, permission_label, 'direct', acl.id)
             if key in seen:
                 continue
@@ -286,6 +415,9 @@ def get_current_effective_user_access(review_folder, limit=200):
             if not memberships:
                 groups_without_members.append(acl.resolved_ad_group)
             for membership in memberships[:limit]:
+                if not is_displayable_review_user(membership.member_user):
+                    result['hidden_users_count'] += 1
+                    continue
                 key = (membership.member_user_id, permission_label, 'group', acl.resolved_ad_group_id, acl.id)
                 if key in seen:
                     continue

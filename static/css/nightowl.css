@@ -8202,6 +8202,32 @@ body.page-access-inventory .ai-review-technical-panel:hover {
     padding: 12px 14px;
 }
 
+.ai-review-partner-list {
+    display: grid;
+    gap: 10px;
+}
+
+.ai-review-partner-list > span {
+    color: var(--ai-secondary-text);
+    font-size: 0.86rem;
+}
+
+.ai-review-partner-list > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.ai-review-partner-chip {
+    background: rgba(37, 99, 235, 0.1);
+    border: 1px solid rgba(147, 197, 253, 0.16);
+    border-radius: 999px;
+    color: var(--ai-primary-text);
+    font-size: 0.78rem;
+    font-weight: 800;
+    padding: 5px 8px;
+}
+
 .ai-review-current-folder {
     border: 1px solid rgba(148, 163, 184, 0.1);
     border-radius: 12px;
