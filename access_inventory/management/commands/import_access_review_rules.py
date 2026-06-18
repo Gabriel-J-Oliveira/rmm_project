@@ -48,10 +48,18 @@ class Command(BaseCommand):
         self.stdout.write(f'linhas lidas: {result.rows_read}')
         self.stdout.write(f'principals criados: {result.principals_created}')
         self.stdout.write(f'principals atualizados: {result.principals_updated}')
+        self.stdout.write(f'usuarios resolvidos: {result.users_resolved}')
+        self.stdout.write(f'usuarios nao encontrados: {result.users_not_found}')
+        self.stdout.write(f'usuarios ambiguos: {result.users_ambiguous}')
         self.stdout.write(f'regras criadas: {result.rules_created}')
         self.stdout.write(f'regras atualizadas: {result.rules_updated}')
         self.stdout.write(f'ignorados: {result.ignored}')
         self.stdout.write(f'erros: {len(result.errors)}')
+
+        if result.user_resolution_messages:
+            self.stdout.write('resolucao de usuarios:')
+            for item in result.user_resolution_messages[:20]:
+                self.stdout.write(f'  - {item}')
 
         if result.examples:
             self.stdout.write('exemplos:')

@@ -61,8 +61,26 @@ class ImportAccessReviewRulesResult:
     rules_created: int = 0
     rules_updated: int = 0
     ignored: int = 0
+    users_resolved: int = 0
+    users_not_found: int = 0
+    users_ambiguous: int = 0
     errors: list[str] = field(default_factory=list)
     examples: list[str] = field(default_factory=list)
+    user_resolution_messages: list[str] = field(default_factory=list)
+
+
+@dataclass
+class UserResolution:
+    original_name: str
+    status: str
+    user: ADUser | None = None
+    candidates: list[ADUser] = field(default_factory=list)
+
+    @property
+    def resolved_name(self):
+        if self.user:
+            return self.user.display_name or self.user.sam_account_name
+        return self.original_name
 
 
 def normalize_key(value):
@@ -197,12 +215,64 @@ def resolve_target_folders(row, folders, children_by_parent, explicit_by_base):
     raise ValueError(f'Escopo desconhecido: {row["escopo"]}')
 
 
-def find_ad_user(name):
+def unique_user_resolution(original_name, matches):
+    unique = []
+    seen = set()
+    for user in matches:
+        if user.id in seen:
+            continue
+        unique.append(user)
+        seen.add(user.id)
+    if len(unique) == 1:
+        return UserResolution(original_name=original_name, status='resolved', user=unique[0])
+    if len(unique) > 1:
+        return UserResolution(original_name=original_name, status='ambiguous', candidates=unique)
+    return UserResolution(original_name=original_name, status='not_found')
+
+
+def resolve_proposed_ad_user(name):
     key = normalize_key(name)
-    for user in ADUser.objects.all().only('id', 'display_name', 'sam_account_name'):
-        if normalize_key(user.display_name) == key or normalize_key(user.sam_account_name) == key:
-            return user
-    return None
+    if not key:
+        return UserResolution(original_name=name, status='not_found')
+
+    users = list(ADUser.objects.all().only(
+        'id',
+        'display_name',
+        'sam_account_name',
+        'user_principal_name',
+        'email',
+    ))
+
+    ordered_exact_fields = [
+        'sam_account_name',
+        'username',
+        'user_principal_name',
+        'email',
+        'display_name',
+    ]
+    for field_name in ordered_exact_fields:
+        matches = [
+            user for user in users
+            if normalize_key(getattr(user, field_name, '')) == key
+        ]
+        if matches:
+            return unique_user_resolution(name, matches)
+
+    startswith_matches = [
+        user for user in users
+        if normalize_key(user.display_name).startswith(key)
+    ]
+    if startswith_matches:
+        return unique_user_resolution(name, startswith_matches)
+
+    contains_matches = [
+        user for user in users
+        if key in normalize_key(user.display_name)
+    ]
+    if contains_matches:
+        return unique_user_resolution(name, contains_matches)
+
+    return UserResolution(original_name=name, status='not_found')
 
 
 def find_ad_group(name):
@@ -222,26 +292,61 @@ def build_rule_notes(row):
     return '; '.join(parts)
 
 
+def user_resolution_note(resolution):
+    if resolution.status == 'resolved':
+        return f'import_original_name={resolution.original_name}; user_resolution=resolved'
+    if resolution.status == 'ambiguous':
+        candidates = '; '.join(user.display_name or user.sam_account_name for user in resolution.candidates)
+        return f'import_original_name={resolution.original_name}; user_resolution=ambiguous; candidates={candidates}'
+    if resolution.status == 'not_found':
+        return f'import_original_name={resolution.original_name}; user_resolution=not_found'
+    return f'import_original_name={resolution.original_name}; user_resolution={resolution.status}'
+
+
+def user_resolution_message(resolution):
+    if resolution.status == 'resolved':
+        return f'original: {resolution.original_name} | resolvido: {resolution.resolved_name} | status: resolved'
+    if resolution.status == 'ambiguous':
+        candidates = '; '.join(user.display_name or user.sam_account_name for user in resolution.candidates)
+        return f'original: {resolution.original_name} | status: ambiguous | candidatos: {candidates}'
+    return f'original: {resolution.original_name} | status: not_found'
+
+
 def get_or_prepare_principal(plan, row, dry_run=False):
     principal_type = normalize_principal_type(row['principal_tipo'])
-    display_name = row['principal_nome']
+    original_name = row['principal_nome']
+    user_resolution = None
+    if principal_type == AccessReviewPrincipal.PRINCIPAL_USER:
+        user_resolution = resolve_proposed_ad_user(original_name)
+        display_name = user_resolution.resolved_name
+    else:
+        display_name = original_name
     existing = None
+    if user_resolution and user_resolution.status == 'resolved':
+        existing = plan.principals.filter(
+            principal_type=principal_type,
+            ad_user=user_resolution.user,
+        ).first()
     for principal in plan.principals.filter(principal_type=principal_type):
-        if normalize_key(principal.display_name) == normalize_key(display_name):
+        if existing:
+            break
+        if normalize_key(principal.display_name) in {normalize_key(display_name), normalize_key(original_name)}:
             existing = principal
             break
 
-    ad_user = find_ad_user(display_name) if principal_type == AccessReviewPrincipal.PRINCIPAL_USER else None
+    ad_user = user_resolution.user if user_resolution and user_resolution.status == 'resolved' else None
     ad_group = find_ad_group(display_name) if principal_type == AccessReviewPrincipal.PRINCIPAL_GROUP else None
+    notes = user_resolution_note(user_resolution) if user_resolution else ''
     defaults = {
         'display_name': display_name,
         'sam_account_name': ad_user.sam_account_name if ad_user else '',
         'proposed_group_name': display_name if principal_type == AccessReviewPrincipal.PRINCIPAL_GROUP else '',
         'ad_user': ad_user,
         'ad_group': ad_group,
+        'notes': notes,
     }
     if dry_run:
-        return existing, existing is None, False
+        return existing, existing is None, False, user_resolution
 
     if existing:
         changed = False
@@ -251,14 +356,14 @@ def get_or_prepare_principal(plan, row, dry_run=False):
                 changed = True
         if changed:
             existing.save(update_fields=[*defaults.keys(), 'updated_at'])
-        return existing, False, changed
+        return existing, False, changed, user_resolution
 
     principal = AccessReviewPrincipal.objects.create(
         plan=plan,
         principal_type=principal_type,
         **defaults,
     )
-    return principal, True, False
+    return principal, True, False, user_resolution
 
 
 def import_access_review_rules_from_rows(plan, rows, dry_run=False):
@@ -266,6 +371,7 @@ def import_access_review_rules_from_rows(plan, rows, dry_run=False):
     folders, children_by_parent = build_folder_indexes(plan)
     explicit_by_base = explicit_subfolders_by_base(rows)
     touched_principals = set()
+    touched_user_resolutions = set()
 
     with transaction.atomic():
         for index, row in enumerate(rows, start=2):
@@ -276,8 +382,29 @@ def import_access_review_rules_from_rows(plan, rows, dry_run=False):
                     result.errors.append(f'Linha {index}: escopo sem pastas alvo.')
                     continue
                 permission_level = normalize_permission(row['permissao'])
-                principal, principal_created, principal_updated = get_or_prepare_principal(plan, row, dry_run=dry_run)
-                principal_key = (normalize_principal_type(row['principal_tipo']), normalize_key(row['principal_nome']))
+                principal, principal_created, principal_updated, user_resolution = get_or_prepare_principal(
+                    plan,
+                    row,
+                    dry_run=dry_run,
+                )
+                principal_label = row['principal_nome']
+                if user_resolution:
+                    principal_label = user_resolution.resolved_name
+                    resolution_key = normalize_key(user_resolution.original_name)
+                    if resolution_key not in touched_user_resolutions:
+                        if user_resolution.status == 'resolved':
+                            result.users_resolved += 1
+                        elif user_resolution.status == 'ambiguous':
+                            result.users_ambiguous += 1
+                        elif user_resolution.status == 'not_found':
+                            result.users_not_found += 1
+                        result.user_resolution_messages.append(user_resolution_message(user_resolution))
+                        touched_user_resolutions.add(resolution_key)
+
+                principal_key = (
+                    normalize_principal_type(row['principal_tipo']),
+                    normalize_key(principal_label),
+                )
                 if principal_created and principal_key not in touched_principals:
                     result.principals_created += 1
                 if principal_updated and principal_key not in touched_principals:
@@ -289,7 +416,7 @@ def import_access_review_rules_from_rows(plan, rows, dry_run=False):
                     permission_label = dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level)
                     if dry_run:
                         result.rules_created += 1
-                        result.examples.append(f'{folder.proposed_path} -> {row["principal_nome"]} ({permission_level})')
+                        result.examples.append(f'{folder.proposed_path} -> {principal_label} ({permission_level})')
                         continue
 
                     rule, created = AccessReviewRule.objects.get_or_create(

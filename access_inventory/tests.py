@@ -696,6 +696,19 @@ class ImportAccessReviewRulesCommandTests(TestCase):
             },
         ]
 
+    def user_row(self, principal_nome):
+        return [{
+            'area': 'Administrativo',
+            'pasta_base': 'FINANCEIRO',
+            'subpasta': 'FATUR',
+            'escopo': 'exata',
+            'principal_tipo': 'usuario',
+            'principal_nome': principal_nome,
+            'permissao': 'RW',
+            'acao': 'adicionar',
+            'observacao': 'Resolucao de usuario',
+        }]
+
     def test_import_review_rules_from_rows_creates_principals_and_rules(self):
         result = import_access_review_rules_from_rows(self.plan, self.rows())
 
@@ -730,6 +743,98 @@ class ImportAccessReviewRulesCommandTests(TestCase):
         self.assertEqual(result.rules_created, 3)
         self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan).count(), 0)
         self.assertEqual(AccessReviewPrincipal.objects.filter(plan=self.plan).count(), 0)
+
+    def test_import_resolves_short_user_name_when_unique(self):
+        user = ADUser.objects.create(
+            sid='S-1-5-21-9001',
+            sam_account_name='roseli.branco',
+            display_name='Roseli Branco',
+            user_principal_name='roseli.branco@control.local',
+            email='roseli.branco@control.local',
+        )
+
+        result = import_access_review_rules_from_rows(self.plan, self.user_row('Roseli'))
+
+        self.assertEqual(result.users_resolved, 1)
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, principal_type=AccessReviewPrincipal.PRINCIPAL_USER)
+        self.assertEqual(principal.display_name, 'Roseli Branco')
+        self.assertEqual(principal.ad_user, user)
+        self.assertIn('import_original_name=Roseli', principal.notes)
+
+    def test_import_resolves_user_name_ignoring_accents(self):
+        user = ADUser.objects.create(
+            sid='S-1-5-21-9002',
+            sam_account_name='ana.matos',
+            display_name='Ana Claudia Zachetti Matos',
+        )
+
+        result = import_access_review_rules_from_rows(self.plan, self.user_row('Ana Cláudia'))
+
+        self.assertEqual(result.users_resolved, 1)
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, principal_type=AccessReviewPrincipal.PRINCIPAL_USER)
+        self.assertEqual(principal.display_name, user.display_name)
+        self.assertEqual(principal.ad_user, user)
+
+    def test_import_keeps_ambiguous_user_unresolved(self):
+        ADUser.objects.create(
+            sid='S-1-5-21-9003',
+            sam_account_name='bruna.brito',
+            display_name='Bruna Brito',
+        )
+        ADUser.objects.create(
+            sid='S-1-5-21-9004',
+            sam_account_name='bruna.oliveira',
+            display_name='Bruna Oliveira',
+        )
+
+        result = import_access_review_rules_from_rows(self.plan, self.user_row('Bruna'))
+
+        self.assertEqual(result.users_ambiguous, 1)
+        self.assertIn('Bruna Brito', result.user_resolution_messages[0])
+        self.assertIn('Bruna Oliveira', result.user_resolution_messages[0])
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, principal_type=AccessReviewPrincipal.PRINCIPAL_USER)
+        self.assertEqual(principal.display_name, 'Bruna')
+        self.assertIsNone(principal.ad_user)
+        self.assertIn('user_resolution=ambiguous', principal.notes)
+
+    def test_import_keeps_unknown_user_without_breaking(self):
+        result = import_access_review_rules_from_rows(self.plan, self.user_row('Fulano Inexistente'))
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.users_not_found, 1)
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, principal_type=AccessReviewPrincipal.PRINCIPAL_USER)
+        self.assertEqual(principal.display_name, 'Fulano Inexistente')
+        self.assertIsNone(principal.ad_user)
+        self.assertIn('user_resolution=not_found', principal.notes)
+
+    def test_import_user_resolution_remains_idempotent(self):
+        ADUser.objects.create(
+            sid='S-1-5-21-9005',
+            sam_account_name='ana.paula',
+            display_name='Ana Paula Schwann',
+        )
+
+        import_access_review_rules_from_rows(self.plan, self.user_row('Ana Paula'))
+        result = import_access_review_rules_from_rows(self.plan, self.user_row('Ana Paula'))
+
+        self.assertEqual(result.principals_created, 0)
+        self.assertEqual(result.rules_created, 0)
+        self.assertEqual(AccessReviewPrincipal.objects.filter(plan=self.plan).count(), 1)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan).count(), 1)
+
+    def test_import_dry_run_reports_user_resolution_status(self):
+        ADUser.objects.create(
+            sid='S-1-5-21-9006',
+            sam_account_name='roseli.branco',
+            display_name='Roseli Branco',
+        )
+
+        result = import_access_review_rules_from_rows(self.plan, self.user_row('Roseli'), dry_run=True)
+
+        self.assertEqual(result.users_resolved, 1)
+        self.assertIn('original: Roseli', result.user_resolution_messages[0])
+        self.assertIn('resolvido: Roseli Branco', result.user_resolution_messages[0])
+        self.assertIn('status: resolved', result.user_resolution_messages[0])
 
     def test_import_review_rules_command_reads_csv(self):
         with tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='', suffix='.csv', delete=False) as handle:

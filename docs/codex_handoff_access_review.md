@@ -204,32 +204,28 @@ O importador:
 - usa `AccessReviewPrincipal` e `AccessReviewRule`;
 - deve ser idempotente.
 
-## 8. Proxima Melhoria Pendente
+## 8. Resolucao De Usuarios Na Importacao Das Propostas
 
-Melhorar a resolucao de usuarios na importacao das permissoes propostas.
+O importador `import_access_review_rules` ja tenta resolver `principal_tipo=usuario` contra `ADUser`.
 
-Problema:
-nas anotacoes, usuarios aparecem com nome curto:
-- Roseli
-- Ana Claudia
-- Bruna
-- Ana Paula
+Comportamento implementado:
+- ignora acentos, maiusculas/minusculas e espacos repetidos;
+- tenta match exato por `sam_account_name`, `username` se existir, `user_principal_name`, `email` e `display_name`;
+- depois tenta `display_name` comeca com o texto informado;
+- por fim tenta `display_name` contendo o texto informado, somente se nao houver ambiguidade;
+- se houver match unico, vincula `AccessReviewPrincipal.ad_user` e usa o `display_name` real do AD;
+- se nao houver match, cria o principal textual e marca `user_resolution=not_found` em `notes`;
+- se houver multiplos matches, nao escolhe automaticamente, cria o principal textual e marca `user_resolution=ambiguous` com candidatos em `notes`;
+- `--dry-run` mostra mensagens de resolucao, por exemplo `original`, `resolvido`, `status` e `candidatos`.
 
-Mas no AD eles podem ter nomes completos:
-- Roseli Branco
-- Ana Claudia ...
-- Bruna Oliveira ou Bruna Brito
-- Ana Paula Schwann
+Exemplos esperados:
+- `Roseli` -> `Roseli Branco`, se unico no AD;
+- `Ana Claudia` / `Ana Claudia` com acento -> resolve ignorando acento;
+- `Bruna` -> ambiguo se existirem `Bruna Brito` e `Bruna Oliveira`;
+- usuario inexistente nao quebra a importacao.
 
-Objetivo:
-ao importar `principal_tipo=usuario`, resolver contra `ADUser`:
-- ignorar acentos;
-- ignorar maiusculas/minusculas;
-- comparar `login`, `email`, `UPN`, `sam_account_name` e `display_name` quando existirem;
-- se houver match unico, usar o nome completo real do AD;
-- se houver multiplos, marcar como ambiguo e nao chutar;
-- se nao houver, marcar como nao encontrado, sem quebrar importacao;
-- `--dry-run` deve exibir original, resolvido/status e candidatos quando ambiguo.
+Melhoria futura:
+- criar uma tela simples de revisao para principals ambiguos/nao encontrados antes da apresentacao final.
 
 ## 9. Fluxo Padrao De Deploy No Servidor
 
