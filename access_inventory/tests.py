@@ -1,4 +1,5 @@
 import json
+import tempfile
 from io import StringIO
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from .models import (
     Share,
 )
 from .services.access_review import describe_acl_rights, explain_permission, get_current_effective_user_access
+from .services.import_access_review_rules import import_access_review_rules_from_rows
 from .services.resolve_acl_identities import resolve_acl_identities
 
 
@@ -621,3 +623,130 @@ class SeedAccessReviewFoldersCommandTests(TestCase):
 
         self.assertIn('folders encontrados: 3', output)
         self.assertIn('dedup warnings: 0', output)
+
+
+class ImportAccessReviewRulesCommandTests(TestCase):
+    def setUp(self):
+        self.plan = AccessReviewPlan.objects.create(name='Plano regras CSV')
+        self.root = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        self.area = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            parent=self.root,
+        )
+        self.base = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+            parent=self.area,
+        )
+        self.movimentacao = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='MOVIMENTACAO BANCARIA',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\MOVIMENTACAO BANCARIA',
+            parent=self.base,
+        )
+        self.fatur = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FATUR',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\FATUR',
+            parent=self.base,
+        )
+        self.caixa = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAIXA',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAIXA',
+            parent=self.base,
+        )
+
+    def rows(self):
+        return [
+            {
+                'area': 'Administrativo',
+                'pasta_base': 'FINANCEIRO',
+                'subpasta': 'MOVIMENTAÇÃO BANCÁRIA',
+                'escopo': 'exata',
+                'principal_tipo': 'grupo',
+                'principal_nome': 'GS_ADMINISTRATIVO_FIN',
+                'permissao': 'RW',
+                'acao': 'manter',
+                'observacao': 'Grupo atualizado planilha',
+            },
+            {
+                'area': 'Administrativo',
+                'pasta_base': 'FINANCEIRO',
+                'subpasta': 'demais',
+                'escopo': 'demais_subpastas',
+                'principal_tipo': 'usuario',
+                'principal_nome': 'Roseli',
+                'permissao': 'NONE',
+                'acao': 'remover',
+                'observacao': 'Tirar das demais pastas',
+            },
+        ]
+
+    def test_import_review_rules_from_rows_creates_principals_and_rules(self):
+        result = import_access_review_rules_from_rows(self.plan, self.rows())
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.principals_created, 2)
+        self.assertEqual(AccessReviewPrincipal.objects.filter(plan=self.plan).count(), 2)
+        group_rule = AccessReviewRule.objects.get(folder=self.movimentacao)
+        self.assertEqual(group_rule.permission_level, AccessReviewRule.PERMISSION_RW)
+        self.assertEqual(group_rule.source, AccessReviewRule.SOURCE_SPREADSHEET)
+
+    def test_demais_subpastas_excludes_explicit_subfolders(self):
+        import_access_review_rules_from_rows(self.plan, self.rows())
+
+        roseli = AccessReviewPrincipal.objects.get(plan=self.plan, display_name='Roseli')
+        folders = set(
+            AccessReviewRule.objects.filter(principal=roseli).values_list('folder__name', flat=True)
+        )
+        self.assertEqual(folders, {'FATUR', 'CAIXA'})
+        self.assertNotIn('MOVIMENTACAO BANCARIA', folders)
+
+    def test_import_review_rules_is_idempotent(self):
+        import_access_review_rules_from_rows(self.plan, self.rows())
+        result = import_access_review_rules_from_rows(self.plan, self.rows())
+
+        self.assertEqual(result.rules_created, 0)
+        self.assertGreater(result.ignored, 0)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan).count(), 3)
+
+    def test_import_review_rules_dry_run_does_not_write(self):
+        result = import_access_review_rules_from_rows(self.plan, self.rows(), dry_run=True)
+
+        self.assertEqual(result.rules_created, 3)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan).count(), 0)
+        self.assertEqual(AccessReviewPrincipal.objects.filter(plan=self.plan).count(), 0)
+
+    def test_import_review_rules_command_reads_csv(self):
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', newline='', suffix='.csv', delete=False) as handle:
+            handle.write('area,pasta_base,subpasta,escopo,principal_tipo,principal_nome,permissao,acao,observacao\n')
+            handle.write('Administrativo,FINANCEIRO,FATUR,exata,grupo,GS_ADMINISTRATIVO_FIN,RW,manter,Grupo atualizado planilha\n')
+            csv_path = handle.name
+
+        output = StringIO()
+        call_command(
+            'import_access_review_rules',
+            '--plan-id',
+            str(self.plan.id),
+            '--file',
+            csv_path,
+            '--dry-run',
+            stdout=output,
+        )
+
+        self.assertIn('DRY-RUN', output.getvalue())
+        self.assertIn('regras criadas: 1', output.getvalue())
