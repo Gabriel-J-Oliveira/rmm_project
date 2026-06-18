@@ -6395,6 +6395,13 @@ body.page-access-inventory .content {
         var(--ai-bg);
 }
 
+body.page-access-review,
+body.page-access-review .content,
+body.page-access-review .access-review-page {
+    background: #050609;
+    background-image: none;
+}
+
 body.page-access-inventory .sidebar {
     background: #05070c;
     border-right-color: var(--ai-border);
@@ -6450,10 +6457,6 @@ body.page-access-inventory .topbar-status {
 .ai-shell {
     display: grid;
     gap: 14px;
-}
-
-body.page-access-inventory .access-review-page {
-    background: #050609;
 }
 
 .ai-hero {
@@ -8034,6 +8037,7 @@ body.page-access-inventory .ai-review-folder-nav-card:hover {
 
 body.page-access-inventory .ai-review-structure-panel:hover,
 body.page-access-inventory .ai-review-people-panel:hover,
+body.page-access-inventory .ai-review-navigation-note-panel:hover,
 body.page-access-inventory .ai-review-executive-note-panel:hover,
 body.page-access-inventory .ai-review-inherited-panel:hover,
 body.page-access-inventory .ai-review-removed-panel:hover,

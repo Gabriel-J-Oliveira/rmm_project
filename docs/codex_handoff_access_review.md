@@ -120,11 +120,14 @@ Comportamento atual:
 
 Tela individual da pasta:
 - mostra subpastas diretas;
-- mostra card informativo "Socios tem acesso geral";
-- mostra acessos herdados do escopo quando houver regras propostas em ancestrais;
-- destaca usuarios removidos quando a regra proposta for `NONE` ou `acao=remover`;
-- mostra "Resultado final dos acessos revistos" com regras positivas diretas e herdadas;
-- mantem acessos atuais antes da reestruturacao como referencia.
+- se a pasta possui filhos diretos, ela e tratada como pasta intermediaria de navegacao;
+- pastas intermediarias mostram apenas subpastas e a mensagem "Escolha uma subpasta para revisar os acessos";
+- se a pasta nao possui filhos diretos, ela e tratada como alvo/final de analise;
+- somente pastas finais mostram card informativo "Socios tem acesso geral";
+- somente pastas finais mostram acessos herdados do escopo quando houver regras propostas em ancestrais;
+- somente pastas finais destacam usuarios removidos quando a regra proposta for `NONE` ou `acao=remover`;
+- somente pastas finais mostram "Resultado final dos acessos revistos" com regras positivas diretas e herdadas;
+- somente pastas finais mantem acessos atuais antes da reestruturacao como referencia.
 
 ## 6. Permissoes Atuais
 

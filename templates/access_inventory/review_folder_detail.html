@@ -68,6 +68,18 @@
         {% endif %}
     </section>
 
+    {% if is_intermediate_folder %}
+    <section class="ai-panel ai-review-navigation-note-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Escolha uma subpasta para revisar os acessos</h2>
+                <p>Esta pasta ainda possui filhos diretos e, nesta etapa, funciona como ponto de navega&ccedil;&atilde;o da estrutura. A an&aacute;lise executiva aparece nas pastas finais do ramo.</p>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if is_analysis_target %}
     {# Regra executiva temporaria: socios tem acesso geral ao escopo. #}
     <section class="ai-panel ai-review-executive-note-panel">
         <div class="ai-section-heading">
@@ -292,5 +304,6 @@
         </div>
         {% endif %}
     </section>
+    {% endif %}
 </section>
 {% endblock %}

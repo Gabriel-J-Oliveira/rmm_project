@@ -457,6 +457,96 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
         self.assertContains(response, 'exce&ccedil;&atilde;o executiva')
 
+    def test_intermediate_review_folder_shows_navigation_without_executive_blocks(self):
+        parent = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+        )
+        cafofo = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAFOFO',
+            parent=parent,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, parent.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, cafofo.name)
+        self.assertContains(response, 'Escolha uma subpasta para revisar os acessos')
+        self.assertNotContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
+        self.assertNotContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
+
+    def test_leaf_review_folder_shows_executive_blocks(self):
+        leaf = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAFOFO',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, leaf.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertContains(response, 'Resultado final dos acessos revistos')
+
+    def test_internal_review_folder_children_are_not_filtered_by_executive_scope(self):
+        current_plan = AccessReviewPlan.objects.create(name='Plano executivo com filhos internos')
+        root = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        admin = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            parent=root,
+        )
+        finance = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+            parent=admin,
+        )
+        cafofo = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAFOFO',
+            parent=finance,
+        )
+        fatur = AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='Administrativo',
+            name='FATUR',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\FATUR',
+            parent=finance,
+        )
+        AccessReviewFolder.objects.create(
+            plan=current_plan,
+            area_name='controlsul',
+            name='Comum',
+            proposed_path='controlsul\\Comum',
+            parent=root,
+        )
+
+        plan_response = self.client.get(reverse('access_inventory:review-plan-detail', args=[current_plan.id]))
+        finance_response = self.client.get(reverse('access_inventory:review-folder-detail', args=[current_plan.id, finance.id]))
+
+        self.assertContains(plan_response, admin.proposed_path)
+        self.assertNotContains(plan_response, 'controlsul\\Comum')
+        self.assertContains(finance_response, cafofo.name)
+        self.assertContains(finance_response, fatur.name)
+
     def test_review_folder_detail_shows_inherited_scope_rules(self):
         parent = AccessReviewFolder.objects.create(
             plan=self.plan,

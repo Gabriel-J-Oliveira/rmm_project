@@ -35,6 +35,12 @@ def base_context(section='overview'):
     }
 
 
+def review_base_context():
+    context = base_context('reviews')
+    context['body_class'] = 'page-access-inventory page-access-review'
+    return context
+
+
 def acl_with_relations():
     return AclEntry.objects.select_related(
         'folder',
@@ -485,7 +491,7 @@ def review_plan_list(request):
         rule_count=Count('rules', distinct=True),
     ).select_related('created_by')
     context = {
-        **base_context('reviews'),
+        **review_base_context(),
         'plans': plans,
     }
     return render(request, 'access_inventory/review_plan_list.html', context)
@@ -497,7 +503,7 @@ def review_plan_detail(request, plan_id):
     business_roots = get_plan_visible_roots(plan)
 
     context = {
-        **base_context('reviews'),
+        **review_base_context(),
         'plan': plan,
         'business_roots': business_roots,
         'folder_count': plan.folders.count(),
@@ -555,15 +561,18 @@ def review_folder_detail(request, plan_id, folder_id):
         }
         for rule in group_rules
     ]
-    child_folders = get_folder_children(folder)
+    child_folders = list(get_folder_children(folder))
+    is_intermediate_folder = bool(child_folders)
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     executive_rules = get_review_folder_executive_rules(folder)
     context = {
-        **base_context('reviews'),
+        **review_base_context(),
         'plan': plan,
         'folder': folder,
         'child_folders': child_folders,
+        'is_intermediate_folder': is_intermediate_folder,
+        'is_analysis_target': not is_intermediate_folder,
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
         'inherited_scope_rules': executive_rules['inherited_scope_rules'],
