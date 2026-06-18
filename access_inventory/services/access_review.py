@@ -51,20 +51,6 @@ PERMISSION_SUMMARIES = {
     'Personalizada': 'Permissao especial com acoes especificas. Requer atencao antes de alterar.',
 }
 
-POSITIVE_REVIEW_PERMISSIONS = {
-    AccessReviewRule.PERMISSION_RO,
-    AccessReviewRule.PERMISSION_RW,
-    AccessReviewRule.PERMISSION_FULL,
-    AccessReviewRule.PERMISSION_CUSTOM,
-}
-
-ACTION_LABELS = {
-    'adicionar': 'Novo acesso',
-    'manter': 'Mantem acesso',
-    'remover': 'Removido',
-    'alterar': 'Permissao alterada',
-}
-
 
 def explain_permission(permission_level):
     return PERMISSION_EXPLANATIONS.get(
@@ -75,104 +61,6 @@ def explain_permission(permission_level):
 
 def rule_explanation(rule):
     return rule.permission_explanation or explain_permission(rule.permission_level)
-
-
-def rule_action(rule):
-    for part in (rule.notes or '').split(';'):
-        key, separator, value = part.strip().partition('=')
-        if separator and key.strip().lower() == 'acao':
-            return value.strip().lower()
-    return ''
-
-
-def rule_situation_label(rule):
-    return ACTION_LABELS.get(rule_action(rule), 'Regra proposta')
-
-
-def is_positive_access_rule(rule):
-    return rule.permission_level in POSITIVE_REVIEW_PERMISSIONS and rule_action(rule) != 'remover'
-
-
-def is_removed_access_rule(rule):
-    return rule.permission_level == AccessReviewRule.PERMISSION_NONE or rule_action(rule) == 'remover'
-
-
-def get_folder_ancestors(folder):
-    ancestors = []
-    current = folder.parent
-    while current:
-        ancestors.append(current)
-        current = current.parent
-    ancestors.reverse()
-    return ancestors
-
-
-def review_rule_item(rule, origin_folder=None, inherited=False):
-    return {
-        'rule': rule,
-        'principal': rule.principal,
-        'permission_label': dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(
-            rule.permission_level,
-            rule.permission_level,
-        ),
-        'permission_level': rule.permission_level,
-        'explanation': rule_explanation(rule),
-        'situation': rule_situation_label(rule),
-        'action': rule_action(rule),
-        'origin_folder': origin_folder or rule.folder,
-        'is_inherited': inherited,
-    }
-
-
-def get_review_folder_executive_rules(folder):
-    direct_rules = list(
-        folder.rules.select_related('folder', 'principal', 'principal__ad_user', 'principal__ad_group').order_by(
-            'permission_level',
-            'principal__display_name',
-        )
-    )
-    ancestors = get_folder_ancestors(folder)
-    inherited_rules = list(
-        AccessReviewRule.objects.filter(plan=folder.plan, folder__in=ancestors)
-        .select_related('folder', 'principal', 'principal__ad_user', 'principal__ad_group')
-        .order_by('folder__sort_order', 'folder__proposed_path', 'principal__display_name')
-    )
-
-    inherited_scope_rules = [
-        review_rule_item(rule, origin_folder=rule.folder, inherited=True)
-        for rule in inherited_rules
-        if is_positive_access_rule(rule)
-    ]
-    removed_rules = [
-        review_rule_item(rule, origin_folder=rule.folder, inherited=rule.folder_id != folder.id)
-        for rule in [*inherited_rules, *direct_rules]
-        if is_removed_access_rule(rule)
-    ]
-    final_access_rules = [
-        review_rule_item(rule, origin_folder=rule.folder, inherited=rule.folder_id != folder.id)
-        for rule in [*inherited_rules, *direct_rules]
-        if is_positive_access_rule(rule)
-    ]
-
-    final_access_rules.sort(key=lambda item: (
-        item['principal'].display_name.lower(),
-        item['permission_label'],
-        item['origin_folder'].proposed_path,
-    ))
-    removed_rules.sort(key=lambda item: (
-        item['principal'].display_name.lower(),
-        item['origin_folder'].proposed_path,
-    ))
-    inherited_scope_rules.sort(key=lambda item: (
-        item['origin_folder'].proposed_path,
-        item['principal'].display_name.lower(),
-    ))
-    return {
-        'direct_rules': direct_rules,
-        'inherited_scope_rules': inherited_scope_rules,
-        'removed_rules': removed_rules,
-        'final_access_rules': final_access_rules,
-    }
 
 
 def get_executive_review_plans():
@@ -319,13 +207,6 @@ def current_folder_from_review_folder(review_folder):
     return getattr(review_folder, 'current_folder', review_folder)
 
 
-def is_active_ad_user(user):
-    if hasattr(user, 'enabled'):
-        return bool(user.enabled)
-    # TODO: caso o inventario passe a armazenar userAccountControl, aplicar ACCOUNTDISABLE aqui.
-    return True
-
-
 def get_current_effective_user_access(review_folder, limit=200):
     """Expande ACLs atuais em linhas executivas Pasta -> Usuario -> Permissao.
 
@@ -340,7 +221,6 @@ def get_current_effective_user_access(review_folder, limit=200):
         'total_rows': 0,
         'is_limited': False,
         'empty_reason': '',
-        'inactive_users_hidden': 0,
     }
     if not current_folder:
         result['empty_reason'] = 'Pasta planejada sem vinculo com snapshot atual.'
@@ -380,9 +260,6 @@ def get_current_effective_user_access(review_folder, limit=200):
         inheritance_label = 'herdado' if acl.inherited else 'direto'
         inheritance_summary = 'vem de uma pasta acima' if acl.inherited else 'definido nesta pasta'
         if acl.resolved_identity_type == AclEntry.IDENTITY_USER and acl.resolved_ad_user_id:
-            if not is_active_ad_user(acl.resolved_ad_user):
-                result['inactive_users_hidden'] += 1
-                continue
             key = (acl.resolved_ad_user_id, permission_label, 'direct', acl.id)
             if key in seen:
                 continue
@@ -409,9 +286,6 @@ def get_current_effective_user_access(review_folder, limit=200):
             if not memberships:
                 groups_without_members.append(acl.resolved_ad_group)
             for membership in memberships[:limit]:
-                if not is_active_ad_user(membership.member_user):
-                    result['inactive_users_hidden'] += 1
-                    continue
                 key = (membership.member_user_id, permission_label, 'group', acl.resolved_ad_group_id, acl.id)
                 if key in seen:
                     continue

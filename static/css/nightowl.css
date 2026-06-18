@@ -6395,13 +6395,6 @@ body.page-access-inventory .content {
         var(--ai-bg);
 }
 
-body.page-access-review,
-body.page-access-review .content,
-body.page-access-review .access-review-page {
-    background: #050609;
-    background-image: none;
-}
-
 body.page-access-inventory .sidebar {
     background: #05070c;
     border-right-color: var(--ai-border);
@@ -8037,30 +8030,11 @@ body.page-access-inventory .ai-review-folder-nav-card:hover {
 
 body.page-access-inventory .ai-review-structure-panel:hover,
 body.page-access-inventory .ai-review-people-panel:hover,
-body.page-access-inventory .ai-review-navigation-note-panel:hover,
-body.page-access-inventory .ai-review-executive-note-panel:hover,
-body.page-access-inventory .ai-review-inherited-panel:hover,
-body.page-access-inventory .ai-review-removed-panel:hover,
 body.page-access-inventory .ai-review-technical-panel:hover {
     background: var(--ai-card);
     border-color: var(--ai-border);
     box-shadow: none;
     transform: none;
-}
-
-.ai-review-executive-copy {
-    color: var(--ai-secondary-text);
-    line-height: 1.5;
-    margin: 0;
-}
-
-.ai-review-executive-rows .ai-review-person-row {
-    grid-template-columns: minmax(180px, 0.8fr) minmax(260px, 1.25fr) minmax(180px, 0.85fr);
-}
-
-.ai-review-removed-row .ai-permission-chip,
-.ai-review-removed-row strong {
-    color: var(--ai-primary-text);
 }
 
 .ai-review-folder-hero {
