@@ -35,6 +35,7 @@ from .services.import_access_review_rules import import_access_review_rules_from
 from .services.resolve_acl_identities import resolve_acl_identities
 from .services.sync_access_review_rules_from_ad_groups import (
     compare_current_and_proposed_user_access,
+    detect_permission_from_group,
     get_proposed_effective_users_for_folder,
     sync_access_review_rules_from_ad_groups,
 )
@@ -1443,12 +1444,45 @@ class SyncAccessReviewRulesFromAdGroupsTests(TestCase):
             parent=self.area,
         )
 
-    def create_group(self, name, sid_suffix):
+    def create_group(self, name, sid_suffix, description=''):
         return ADGroup.objects.create(
             sid=f'S-1-5-21-sync-{sid_suffix}',
             sam_account_name=name,
             name=name,
+            description=description,
         )
+
+    def test_permission_detection_uses_final_suffix_with_absolute_priority(self):
+        examples = [
+            ('GS_ADMINISTRATIVO_BACKUP_E_MAILS_RO', AccessReviewRule.PERMISSION_RO),
+            ('GS_ADMINISTRATIVO_BACKUP_E_MAILS_RW', AccessReviewRule.PERMISSION_RW),
+            ('GS_ADMINISTRATIVO_CONTRATOS_ASSINADOS_RO', AccessReviewRule.PERMISSION_RO),
+            ('GS_ADMINISTRATIVO_CONTRATOS_ASSINADOS_RW', AccessReviewRule.PERMISSION_RW),
+            ('GS_ADMINISTRATIVO_FINANCEIRO_CAFOFO_RO', AccessReviewRule.PERMISSION_RO),
+            ('GS_ADMINISTRATIVO_FINANCEIRO_CAFOFO_RW', AccessReviewRule.PERMISSION_RW),
+            ('GS_ADMINISTRATIVO_DRE_DRE_RW', AccessReviewRule.PERMISSION_RW),
+            ('GS_ADMINISTRATIVO_DRE_FULL', AccessReviewRule.PERMISSION_FULL),
+            ('GS_ADMINISTRATIVO_DRE_CUSTOM', AccessReviewRule.PERMISSION_CUSTOM),
+        ]
+
+        for index, (name, expected) in enumerate(examples, start=2001):
+            group = self.create_group(name, str(index))
+            self.assertEqual(detect_permission_from_group(group), expected)
+
+    def test_permission_suffix_wins_over_conflicting_description(self):
+        rw_group = self.create_group(
+            'GS_ADMINISTRATIVO_FINANCEIRO_CAFOFO_RW',
+            '2010',
+            description='grupo de leitura somente',
+        )
+        ro_group = self.create_group(
+            'GS_ADMINISTRATIVO_FINANCEIRO_CAFOFO_RO',
+            '2011',
+            description='grupo de escrita modificacao',
+        )
+
+        self.assertEqual(detect_permission_from_group(rw_group), AccessReviewRule.PERMISSION_RW)
+        self.assertEqual(detect_permission_from_group(ro_group), AccessReviewRule.PERMISSION_RO)
 
     def test_group_with_clear_name_maps_to_folder_and_creates_rw_rule(self):
         group = self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1001')
@@ -1465,6 +1499,23 @@ class SyncAccessReviewRulesFromAdGroupsTests(TestCase):
         self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_RW)
         self.assertEqual(rule.principal.ad_group, group)
         self.assertIn('acao=adicionar', rule.notes)
+
+    def test_dry_run_reports_cafofo_rw_as_rw(self):
+        self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_CAFOFO_RW', '1001b')
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+            dry_run=True,
+        )
+
+        decision = next(
+            item for item in result.decisions
+            if item.group.name == 'GS_ADMINISTRATIVO_FINANCEIRO_CAFOFO_RW'
+        )
+        self.assertEqual(decision.folder, self.cafofo)
+        self.assertEqual(decision.permission_level, AccessReviewRule.PERMISSION_RW)
 
     def test_group_with_ro_permission_creates_ro_rule(self):
         self.create_group('GS_ADMINISTRATIVO_DRE_RO', '1002')

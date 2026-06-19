@@ -26,6 +26,20 @@ PERMISSION_ALIASES = {
     AccessReviewRule.PERMISSION_CUSTOM: {'custom', 'especial'},
 }
 
+PERMISSION_FALLBACK_ORDER = [
+    AccessReviewRule.PERMISSION_FULL,
+    AccessReviewRule.PERMISSION_CUSTOM,
+    AccessReviewRule.PERMISSION_RW,
+    AccessReviewRule.PERMISSION_RO,
+]
+
+PERMISSION_SUFFIX_MAP = {
+    'RO': AccessReviewRule.PERMISSION_RO,
+    'RW': AccessReviewRule.PERMISSION_RW,
+    'FULL': AccessReviewRule.PERMISSION_FULL,
+    'CUSTOM': AccessReviewRule.PERMISSION_CUSTOM,
+}
+
 COMPACT_PERMISSION_ALIASES = {
     'somenteleitura',
     'leituraescrita',
@@ -152,11 +166,33 @@ def discover_candidate_groups(folders, area='', prefixes=None):
     ]
 
 
-def detect_permission(group, default_permission=''):
-    compact_text = compact_review_text(group_search_text(group))
-    tokens = group_tokens(group)
+def detect_permission_suffix(value):
+    match = re.search(r'(?:^|[_\s-])(RO|RW|FULL|CUSTOM)$', (value or '').strip(), flags=re.IGNORECASE)
+    if not match:
+        return ''
+    return PERMISSION_SUFFIX_MAP[match.group(1).upper()]
 
-    for permission, aliases in PERMISSION_ALIASES.items():
+
+def detect_permission_from_group(group, default_permission=''):
+    for value in (group.name, group.sam_account_name):
+        permission = detect_permission_suffix(value)
+        if permission:
+            return permission
+
+    fallback_text = ' '.join(
+        value for value in [
+            group.description,
+            group.distinguished_name,
+            group.name,
+            group.sam_account_name,
+        ]
+        if value
+    )
+    compact_text = compact_review_text(fallback_text)
+    tokens = token_set(fallback_text)
+
+    for permission in PERMISSION_FALLBACK_ORDER:
+        aliases = PERMISSION_ALIASES[permission]
         for alias in aliases:
             if alias in tokens or (alias in COMPACT_PERMISSION_ALIASES and alias in compact_text):
                 return permission
@@ -167,6 +203,10 @@ def detect_permission(group, default_permission=''):
             if normalized == permission or normalized in aliases:
                 return permission
     return ''
+
+
+def detect_permission(group, default_permission=''):
+    return detect_permission_from_group(group, default_permission=default_permission)
 
 
 def map_group_to_folder(group, folders):
