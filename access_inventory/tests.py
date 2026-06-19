@@ -311,7 +311,26 @@ class AccessReviewTests(TestCase):
         self.assertNotContains(response, '<h2>Subpastas</h2>', html=True)
         self.assertNotContains(response, 'Nenhuma subpasta direta cadastrada neste ramo.')
 
+    def test_final_review_folder_without_positive_results_does_not_render_final_result_card(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
+        self.assertNotContains(response, 'Nenhuma permiss&atilde;o proposta cadastrada para esta pasta.')
+        self.assertNotContains(response, 'As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.')
+
     def test_review_folder_detail_final_result_is_after_current_access(self):
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Usuario Final',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
 
         content = response.content.decode()
@@ -572,19 +591,14 @@ class AccessReviewTests(TestCase):
             content.index('Permiss&otilde;es atuais encontradas'):
             content.index('Usu&aacute;rios com acesso revogado')
         ]
-        revoked_section = content[
-            content.index('Usu&aacute;rios com acesso revogado'):
-            content.index('Resultado final dos acessos revistos')
-        ]
-        final_result_section = content[content.index('Resultado final dos acessos revistos'):]
+        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Carlos Lima', current_access_section)
         self.assertIn('acesso administrativo via Domain Admins', current_access_section)
         self.assertIn('Carlos Lima', revoked_section)
         self.assertIn('ACESSO ADMINISTRATIVO SERA REMOVIDO', revoked_section)
-        self.assertNotIn('Carlos Lima', final_result_section)
-        self.assertNotIn('Domain Admins', final_result_section)
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
 
     def test_domain_admins_revoked_card_filters_partners_technical_and_inactive_users(self):
         socios_ou = ADOrganizationalUnit.objects.create(
@@ -637,10 +651,7 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        revoked_section = content[
-            content.index('Usu&aacute;rios com acesso revogado'):
-            content.index('Resultado final dos acessos revistos')
-        ]
+        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Bruna Regular', revoked_section)
@@ -690,17 +701,13 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        revoked_section = content[
-            content.index('Usu&aacute;rios com acesso revogado'):
-            content.index('Resultado final dos acessos revistos')
-        ]
-        final_result_section = content[content.index('Resultado final dos acessos revistos'):]
+        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(revoked_section.count('Ana Remover'), 1)
         self.assertIn('ACESSO SERA REVOGADO', revoked_section)
         self.assertIn('Acesso sera revogado nesta pasta.', revoked_section)
-        self.assertNotIn('Ana Remover', final_result_section)
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
 
     def test_review_folder_detail_keeps_unknown_acl_discreet(self):
         file_server = FileServer.objects.create(name='FS-UNKNOWN')
@@ -840,18 +847,23 @@ class AccessReviewTests(TestCase):
         content = response.content.decode()
         current_access_section = content[
             content.index('Permiss&otilde;es atuais encontradas'):
-            content.index('Resultado final dos acessos revistos')
+            content.index('Usu&aacute;rios com acesso revogado')
         ]
-        final_result_section = content[content.index('Resultado final dos acessos revistos'):]
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
         self.assertContains(response, 'ai-review-partner-grid')
         self.assertContains(response, 'ai-review-partner-grid-item')
+        partner_section = content[
+            content.index('S&oacute;cios t&ecirc;m acesso geral'):
+            content.index('Contexto atual vinculado')
+        ]
+        self.assertNotIn('<ul', partner_section)
+        self.assertIn('<div class="ai-review-partner-grid">', partner_section)
         self.assertContains(response, 'Ana Partner')
         self.assertContains(response, 'Bruna Regular')
         self.assertNotIn('Ana Partner', current_access_section)
-        self.assertNotIn('Ana Partner', final_result_section)
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
         self.assertIn('Bruna Regular', current_access_section)
         self.assertContains(response, 's&oacute;cios com acesso geral foram ocultados')
 

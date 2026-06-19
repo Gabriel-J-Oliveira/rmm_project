@@ -76,11 +76,11 @@
         {% if partner_users %}
         <div class="ai-review-partner-list">
             <span>S&oacute;cios contemplados nesta regra:</span>
-            <ul class="partner-grid ai-review-partner-grid">
+            <div class="ai-review-partner-grid">
                 {% for user in partner_users %}
-                <li class="partner-grid-item ai-review-partner-grid-item">{{ user.display_name|default:user.sam_account_name }}</li>
+                <div class="ai-review-partner-grid-item">{{ user.display_name|default:user.sam_account_name }}</div>
                 {% endfor %}
-            </ul>
+            </div>
         </div>
         {% else %}
         <div class="ai-review-technical-note">Lista de s&oacute;cios n&atilde;o identificada automaticamente pela OU do AD.</div>
@@ -231,6 +231,7 @@
         {% endif %}
     </section>
 
+    {% if permission_sections %}
     <section class="ai-panel ai-review-people-panel">
         <div class="ai-section-heading">
             <div>
@@ -239,34 +240,28 @@
             </div>
         </div>
 
-        {% if permission_sections %}
-            <div class="ai-review-person-list">
-                {% for section in permission_sections %}
-                <section class="ai-review-permission-section">
-                    <h3><span class="ai-permission-chip ai-permission-{{ section.level }}">{{ section.label }}</span></h3>
-                    <div class="ai-review-person-rows">
-                        {% for item in section.rules %}
-                        <article class="ai-review-person-row">
-                            <div>
-                                <strong>{{ item.rule.principal.display_name }}</strong>
-                                {% if item.rule.principal.sam_account_name %}
-                                <span>{{ item.rule.principal.sam_account_name }}</span>
-                                {% endif %}
-                            </div>
-                            <p>{{ item.explanation }}</p>
-                            {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
-                        </article>
-                        {% endfor %}
-                    </div>
-                </section>
-                {% endfor %}
-            </div>
-        {% else %}
-            <div class="ai-empty">
-                <strong>Nenhuma permiss&atilde;o proposta cadastrada para esta pasta.</strong>
-                <p>As permiss&otilde;es propostas ainda n&atilde;o foram importadas para este plano.</p>
-            </div>
-        {% endif %}
+        <div class="ai-review-person-list">
+            {% for section in permission_sections %}
+            <section class="ai-review-permission-section">
+                <h3><span class="ai-permission-chip ai-permission-{{ section.level }}">{{ section.label }}</span></h3>
+                <div class="ai-review-person-rows">
+                    {% for item in section.rules %}
+                    <article class="ai-review-person-row">
+                        <div>
+                            <strong>{{ item.rule.principal.display_name }}</strong>
+                            {% if item.rule.principal.sam_account_name %}
+                            <span>{{ item.rule.principal.sam_account_name }}</span>
+                            {% endif %}
+                        </div>
+                        <p>{{ item.explanation }}</p>
+                        {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
+                    </article>
+                    {% endfor %}
+                </div>
+            </section>
+            {% endfor %}
+        </div>
     </section>
+    {% endif %}
 </section>
 {% endblock %}
