@@ -8135,6 +8135,18 @@ body.page-access-inventory .ai-review-technical-panel:hover {
     background: rgba(15, 23, 42, 0.58);
 }
 
+body.page-access-inventory .ai-review-current-access-panel .ai-current-access-row:hover,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-technical-panel .ai-review-technical-groups article:hover {
+    background: rgba(2, 6, 12, 0.28);
+    border-color: rgba(148, 163, 184, 0.08);
+    box-shadow: none;
+    filter: none;
+    transform: none;
+}
+
 .ai-review-person-row strong {
     color: var(--ai-primary-text);
     display: block;

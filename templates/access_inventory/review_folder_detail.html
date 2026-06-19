@@ -205,6 +205,31 @@
         {% endif %}
     </section>
 
+    {% if maintained_access_rows %}
+    <section class="ai-panel ai-review-maintained-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Usu&aacute;rios com acesso mantido</h2>
+                <p>Esses usu&aacute;rios j&aacute; possuem acesso hoje e permanecer&atilde;o com acesso ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
+            </div>
+        </div>
+        <div class="ai-review-person-rows">
+            {% for item in maintained_access_rows %}
+            <article class="ai-review-person-row">
+                <div>
+                    <strong>{{ item.display_name }}</strong>
+                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
+                </div>
+                <p>{{ item.message }}</p>
+                <span class="ai-permission-chip ai-permission-{{ item.rule.permission_level }}">{{ item.permission_label }}</span>
+                <span class="ai-permission-chip ai-permission-current">{{ item.badge }}</span>
+                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
     <section class="ai-panel ai-review-revoked-panel">
         <div class="ai-section-heading">
             <div>

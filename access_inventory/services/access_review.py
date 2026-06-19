@@ -224,6 +224,24 @@ def is_removal_review_rule(rule):
     )
 
 
+def is_positive_review_rule(rule):
+    return rule.permission_level in {
+        AccessReviewRule.PERMISSION_RO,
+        AccessReviewRule.PERMISSION_RW,
+        AccessReviewRule.PERMISSION_FULL,
+        AccessReviewRule.PERMISSION_CUSTOM,
+    }
+
+
+def is_maintained_review_rule(rule):
+    notes = normalize_review_user_value(getattr(rule, 'notes', ''))
+    return (
+        is_positive_review_rule(rule)
+        and not is_removal_review_rule(rule)
+        and ('acao=manter' in notes or 'acao: manter' in notes)
+    )
+
+
 def review_person_key_from_user(ad_user):
     if ad_user and getattr(ad_user, 'id', None):
         return ('user', ad_user.id)
@@ -234,6 +252,57 @@ def review_person_key_from_user(ad_user):
 
 def review_person_key_from_name(name):
     return ('name', normalize_review_user_value(name))
+
+
+def review_principal_key(principal):
+    if principal.ad_user_id:
+        return review_person_key_from_user(principal.ad_user)
+    if principal.ad_group_id:
+        return ('group', principal.ad_group_id)
+    prefix = 'group' if principal.principal_type == 'group' else 'name'
+    return (prefix, normalize_review_user_value(principal.display_name))
+
+
+def permission_level_label(permission_level):
+    return dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level)
+
+
+def can_show_maintained_review_principal(principal):
+    if principal.ad_user_id:
+        return is_displayable_review_user(principal.ad_user)
+    if principal.ad_group_id and is_domain_admins_principal(principal.ad_group):
+        return False
+    if is_domain_admins_principal(principal.display_name) or is_domain_admins_principal(principal.proposed_group_name):
+        return False
+    return True
+
+
+def build_maintained_review_access_rows(rules):
+    maintained_by_key = {}
+
+    for rule in rules:
+        if not is_maintained_review_rule(rule):
+            continue
+        principal = rule.principal
+        if not can_show_maintained_review_principal(principal):
+            continue
+        key = review_principal_key(principal)
+        if key in maintained_by_key:
+            continue
+        maintained_by_key[key] = {
+            'display_name': principal.display_name,
+            'username': principal.sam_account_name,
+            'permission_label': permission_level_label(rule.permission_level),
+            'badge': 'ACESSO MANTIDO',
+            'message': 'Permissao mantida pela proposta.',
+            'source': rule.notes,
+            'rule': rule,
+        }
+
+    return sorted(
+        maintained_by_key.values(),
+        key=lambda item: normalize_review_user_value(item.get('display_name')),
+    )
 
 
 def build_revoked_review_access_rows(current_access_rows, user_rules):

@@ -33,6 +33,11 @@ from .services.access_review import (
 )
 from .services.import_access_review_rules import import_access_review_rules_from_rows
 from .services.resolve_acl_identities import resolve_acl_identities
+from .services.sync_access_review_rules_from_ad_groups import (
+    compare_current_and_proposed_user_access,
+    get_proposed_effective_users_for_folder,
+    sync_access_review_rules_from_ad_groups,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -557,6 +562,155 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'Pode abrir, criar, alterar e excluir arquivos nesta pasta.')
         self.assertContains(response, 'via grupo GG Juridico RW')
         self.assertContains(response, 'herdado')
+
+    def test_maintained_access_card_shows_positive_keep_rules(self):
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Bruna Mantida',
+            sam_account_name='bruna.mantida',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+            notes='acao=manter; regra validada',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        maintained_section = content[
+            content.index('Usu&aacute;rios com acesso mantido'):
+            content.index('Usu&aacute;rios com acesso revogado')
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Bruna Mantida', maintained_section)
+        self.assertIn('Leitura e escrita', maintained_section)
+        self.assertIn('ACESSO MANTIDO', maintained_section)
+        self.assertLess(
+            content.index('Usu&aacute;rios com acesso mantido'),
+            content.index('Usu&aacute;rios com acesso revogado'),
+        )
+
+    def test_maintained_access_card_ignores_removed_none_filtered_and_domain_admins(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Sócios,DC=control,DC=local',
+            name='Sócios',
+        )
+        visible = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Usuario Mantido',
+        )
+        removed = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Usuario Removido',
+        )
+        none_user = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Usuario Sem Acesso',
+        )
+        partner_user = ADUser.objects.create(
+            sid='S-1-5-21-8501',
+            sam_account_name='socio.mantido',
+            display_name='Socio Mantido',
+            distinguished_name='CN=Socio Mantido,OU=Sócios,DC=control,DC=local',
+            ou=socios_ou,
+        )
+        partner = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Socio Mantido',
+            sam_account_name='socio.mantido',
+            ad_user=partner_user,
+        )
+        technical_user = ADUser.objects.create(
+            sid='S-1-5-21-8502',
+            sam_account_name='administrator',
+            display_name='Administrator',
+        )
+        technical = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Administrator',
+            sam_account_name='administrator',
+            ad_user=technical_user,
+        )
+        inactive_user = ADUser.objects.create(
+            sid='S-1-5-21-8503',
+            sam_account_name='inativo.mantido',
+            display_name='Inativo Mantido',
+            enabled=False,
+        )
+        inactive = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Inativo Mantido',
+            sam_account_name='inativo.mantido',
+            ad_user=inactive_user,
+        )
+        domain_admins_group = ADGroup.objects.create(
+            sid='S-1-5-21-8504',
+            sam_account_name='Domain Admins',
+            name='Domain Admins',
+        )
+        domain_admins = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name='Domain Admins',
+            sam_account_name='Domain Admins',
+            ad_group=domain_admins_group,
+        )
+        rules = [
+            (visible, AccessReviewRule.PERMISSION_RW, 'acao=manter'),
+            (removed, AccessReviewRule.PERMISSION_RW, 'acao=remover'),
+            (none_user, AccessReviewRule.PERMISSION_NONE, 'acao=manter'),
+            (partner, AccessReviewRule.PERMISSION_RW, 'acao=manter'),
+            (technical, AccessReviewRule.PERMISSION_RW, 'acao=manter'),
+            (inactive, AccessReviewRule.PERMISSION_RW, 'acao=manter'),
+            (domain_admins, AccessReviewRule.PERMISSION_RW, 'acao=manter'),
+        ]
+        for principal, permission, notes in rules:
+            AccessReviewRule.objects.create(
+                plan=self.plan,
+                folder=self.folder,
+                principal=principal,
+                permission_level=permission,
+                notes=notes,
+            )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        maintained_section = content[
+            content.index('Usu&aacute;rios com acesso mantido'):
+            content.index('Usu&aacute;rios com acesso revogado')
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Usuario Mantido', maintained_section)
+        self.assertNotIn('Usuario Removido', maintained_section)
+        self.assertNotIn('Usuario Sem Acesso', maintained_section)
+        self.assertNotIn('Socio Mantido', maintained_section)
+        self.assertNotIn('Administrator', maintained_section)
+        self.assertNotIn('Inativo Mantido', maintained_section)
+        self.assertNotIn('Domain Admins', maintained_section)
+
+    def test_maintained_access_card_is_not_rendered_when_empty(self):
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Usu&aacute;rios com acesso mantido')
+
+    def test_access_review_rows_have_scoped_no_hover_css(self):
+        css = (BASE_DIR / 'static' / 'css' / 'nightowl.css').read_text(encoding='utf-8')
+
+        self.assertIn('body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover', css)
+        self.assertIn('body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover', css)
+        self.assertIn('body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover', css)
 
     def test_domain_admins_current_access_is_visible_and_revoked_from_business_access(self):
         file_server = FileServer.objects.create(name='FS-DA')
@@ -1249,3 +1403,285 @@ class ImportAccessReviewRulesCommandTests(TestCase):
 
         self.assertIn('DRY-RUN', output.getvalue())
         self.assertIn('regras criadas: 1', output.getvalue())
+
+
+class SyncAccessReviewRulesFromAdGroupsTests(TestCase):
+    def setUp(self):
+        self.plan = AccessReviewPlan.objects.create(name='Plano sync AD groups')
+        self.root = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        self.area = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            parent=self.root,
+        )
+        self.finance = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+            parent=self.area,
+        )
+        self.cafofo = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAFOFO',
+            parent=self.finance,
+        )
+        self.dre = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='DRE',
+            proposed_path='controlsul\\Administrativo\\DRE',
+            parent=self.area,
+        )
+
+    def create_group(self, name, sid_suffix):
+        return ADGroup.objects.create(
+            sid=f'S-1-5-21-sync-{sid_suffix}',
+            sam_account_name=name,
+            name=name,
+        )
+
+    def test_group_with_clear_name_maps_to_folder_and_creates_rw_rule(self):
+        group = self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1001')
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+        )
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.groups_mapped, 1)
+        rule = AccessReviewRule.objects.get(folder=self.finance)
+        self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_RW)
+        self.assertEqual(rule.principal.ad_group, group)
+        self.assertIn('acao=adicionar', rule.notes)
+
+    def test_group_with_ro_permission_creates_ro_rule(self):
+        self.create_group('GS_ADMINISTRATIVO_DRE_RO', '1002')
+
+        sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+        )
+
+        rule = AccessReviewRule.objects.get(folder=self.dre)
+        self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_RO)
+
+    def test_group_without_permission_is_ignored_without_default_permission(self):
+        self.create_group('GS_ADMINISTRATIVO_FINANCEIRO', '1003')
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+        )
+
+        self.assertEqual(result.groups_without_permission, 1)
+        self.assertEqual(AccessReviewRule.objects.count(), 0)
+
+    def test_group_without_permission_uses_default_permission(self):
+        self.create_group('GS_ADMINISTRATIVO_FINANCEIRO', '1004')
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+            default_permission='RW',
+        )
+
+        self.assertEqual(result.groups_mapped, 1)
+        self.assertEqual(AccessReviewRule.objects.get(folder=self.finance).permission_level, AccessReviewRule.PERMISSION_RW)
+
+    def test_ambiguous_group_does_not_create_rule(self):
+        other_parent = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='OUTRO',
+            proposed_path='controlsul\\Administrativo\\OUTRO',
+            parent=self.area,
+        )
+        AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\OUTRO\\CAFOFO',
+            parent=other_parent,
+        )
+        self.create_group('GS_ADMINISTRATIVO_CAFOFO_RW', '1005')
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+        )
+
+        self.assertEqual(result.groups_ambiguous, 1)
+        self.assertEqual(AccessReviewRule.objects.count(), 0)
+
+    def test_sync_is_idempotent(self):
+        self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1006')
+
+        sync_access_review_rules_from_ad_groups(self.plan, area='Administrativo', group_prefixes=['GS_ADMINISTRATIVO'])
+        result = sync_access_review_rules_from_ad_groups(self.plan, area='Administrativo', group_prefixes=['GS_ADMINISTRATIVO'])
+
+        self.assertEqual(result.rules_created, 0)
+        self.assertEqual(result.ignored, 1)
+        self.assertEqual(AccessReviewRule.objects.count(), 1)
+
+    def test_dry_run_does_not_create_rules(self):
+        self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1007')
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+            dry_run=True,
+        )
+
+        self.assertEqual(result.rules_created, 1)
+        self.assertEqual(AccessReviewRule.objects.count(), 0)
+        self.assertEqual(AccessReviewPrincipal.objects.count(), 0)
+
+    def test_clear_existing_removes_only_rules_from_affected_area(self):
+        admin_group = self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1008')
+        juridico = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='Juridico',
+            proposed_path='controlsul\\Juridico',
+            parent=self.root,
+        )
+        jur_group = self.create_group('GS_JURIDICO_RW', '1009')
+        jur_principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=jur_group.name,
+            ad_group=jur_group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=juridico,
+            principal=jur_principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+        admin_principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=admin_group.name,
+            ad_group=admin_group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.finance,
+            principal=admin_principal,
+            permission_level=AccessReviewRule.PERMISSION_RO,
+        )
+
+        result = sync_access_review_rules_from_ad_groups(
+            self.plan,
+            area='Administrativo',
+            group_prefixes=['GS_ADMINISTRATIVO'],
+            clear_existing=True,
+        )
+
+        self.assertGreaterEqual(result.rules_deleted, 1)
+        self.assertTrue(AccessReviewRule.objects.filter(folder=juridico).exists())
+        self.assertEqual(AccessReviewRule.objects.get(folder=self.finance).permission_level, AccessReviewRule.PERMISSION_RW)
+
+    def test_command_dry_run_outputs_summary(self):
+        self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1010')
+        output = StringIO()
+
+        call_command(
+            'sync_access_review_rules_from_ad_groups',
+            '--plan-id',
+            str(self.plan.id),
+            '--area',
+            'Administrativo',
+            '--group-prefix',
+            'GS_ADMINISTRATIVO',
+            '--dry-run',
+            stdout=output,
+        )
+
+        self.assertIn('DRY-RUN', output.getvalue())
+        self.assertIn('Grupos mapeados: 1', output.getvalue())
+        self.assertEqual(AccessReviewRule.objects.count(), 0)
+
+    def test_proposed_effective_users_expands_group_memberships(self):
+        group = self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1011')
+        user = ADUser.objects.create(
+            sid='S-1-5-21-sync-user-1',
+            sam_account_name='ana',
+            display_name='Ana Sync',
+        )
+        ADGroupMembership.objects.create(parent_group=group, member_user=user)
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=group.name,
+            ad_group=group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.finance,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        rows = get_proposed_effective_users_for_folder(self.finance)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['user'], user)
+        self.assertEqual(rows[0]['permission_level'], AccessReviewRule.PERMISSION_RW)
+
+    def test_current_vs_proposed_user_comparison_classifies_users(self):
+        file_server = FileServer.objects.create(name='FS-SYNC-COMP')
+        share = Share.objects.create(file_server=file_server, name='Dados Sync', unc_path='\\\\FS-SYNC-COMP\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\FINANCEIRO')
+        self.finance.current_folder = current_folder
+        self.finance.save(update_fields=['current_folder'])
+        maintained = ADUser.objects.create(sid='S-1-5-21-sync-user-2', sam_account_name='mantido', display_name='Mantido')
+        removed = ADUser.objects.create(sid='S-1-5-21-sync-user-3', sam_account_name='removido', display_name='Removido')
+        added = ADUser.objects.create(sid='S-1-5-21-sync-user-4', sam_account_name='novo', display_name='Novo')
+        for user in (maintained, removed):
+            AclEntry.objects.create(
+                folder=current_folder,
+                identity_sid=user.sid,
+                identity_name=user.sam_account_name,
+                resolved_ad_user=user,
+                resolved_identity_type=AclEntry.IDENTITY_USER,
+                rights='Modify, Synchronize',
+            )
+        group = self.create_group('GS_ADMINISTRATIVO_FINANCEIRO_RW', '1012')
+        ADGroupMembership.objects.create(parent_group=group, member_user=maintained)
+        ADGroupMembership.objects.create(parent_group=group, member_user=added)
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=group.name,
+            ad_group=group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.finance,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        comparison = compare_current_and_proposed_user_access(self.finance)
+
+        self.assertEqual([row['user'] for row in comparison['maintained']], [maintained])
+        self.assertEqual([row['user'] for row in comparison['added']], [added])
+        self.assertEqual([row['user'] for row in comparison['removed']], [removed])
