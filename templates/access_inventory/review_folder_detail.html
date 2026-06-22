@@ -91,32 +91,6 @@
         {% endif %}
     </section>
 
-    <section class="ai-panel ai-review-revoked-panel ai-review-card-danger">
-        <div class="ai-section-heading">
-            <div>
-                <h2>Usu&aacute;rios com acesso revogado</h2>
-                <p>Esses acessos existem hoje, mas n&atilde;o devem permanecer como permiss&atilde;o de neg&oacute;cio ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
-            </div>
-        </div>
-        {% if revoked_access_rows %}
-        <div class="ai-review-person-rows">
-            {% for item in revoked_access_rows %}
-            <article class="ai-review-person-row">
-                <div>
-                    <strong>{{ item.display_name }}</strong>
-                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
-                </div>
-                <p>{{ item.message }}</p>
-                <span class="ai-permission-chip ai-permission-none">{{ item.badge }}</span>
-                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
-            </article>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="ai-empty">Nenhum acesso revogado cadastrado para esta pasta.</div>
-        {% endif %}
-    </section>
-
     <section class="ai-panel ai-review-current-access-panel ai-review-card-info">
         <div class="ai-section-heading">
             <div>
@@ -217,6 +191,30 @@
                     {% endfor %}
                 </div>
             </section>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if revoked_access_rows %}
+    <section class="ai-panel ai-review-revoked-panel ai-review-card-danger">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Usu&aacute;rios com acesso revogado</h2>
+                <p>Esses acessos existem hoje, mas n&atilde;o devem permanecer como permiss&atilde;o de neg&oacute;cio ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
+            </div>
+        </div>
+        <div class="ai-review-person-rows">
+            {% for item in revoked_access_rows %}
+            <article class="ai-review-person-row">
+                <div>
+                    <strong>{{ item.display_name }}</strong>
+                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
+                </div>
+                <p>{{ item.message }}</p>
+                <span class="ai-permission-chip ai-permission-none">{{ item.badge }}</span>
+                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
+            </article>
             {% endfor %}
         </div>
     </section>

@@ -47,6 +47,13 @@ from .services.sync_access_review_rules_from_ad_groups import (
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def html_section(content, start_text, end_text=None):
+    start = content.index(start_text)
+    if end_text and end_text in content[start:]:
+        return content[start:start + content[start:].index(end_text)]
+    return content[start:]
+
+
 class InventoryAgentApiTests(TestCase):
     def setUp(self):
         self.agent, self.token = create_inventory_agent_with_token(
@@ -300,6 +307,24 @@ class AccessReviewTests(TestCase):
         self.assertNotContains(response, '<aside class="sidebar">', html=True)
 
     def test_review_folder_detail_uses_decision_card_classes(self):
+        file_server = FileServer.objects.create(name='FS-CARD-CLASSES')
+        share = Share.objects.create(file_server=file_server, name='Dados Card Classes', unc_path='\\\\FS-CARD-CLASSES\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Pasta de teste')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        current_only_user = ADUser.objects.create(
+            sid='S-1-5-21-CARD-1',
+            sam_account_name='usuario.revogado.card',
+            display_name='Usuario Revogado Card',
+        )
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=current_only_user.sid,
+            identity_name='CONTROL\\usuario.revogado.card',
+            resolved_ad_user=current_only_user,
+            resolved_identity_type=AclEntry.IDENTITY_USER,
+            rights='ReadAndExecute, Synchronize',
+        )
         self.create_user_review_rule(self.folder, display_name='Usuario Resultado', sam_account_name='usuario.resultado')
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
@@ -742,20 +767,17 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Bruna Mantida', final_section)
         self.assertIn('Leitura e escrita', final_section)
         self.assertNotContains(response, 'Usu&aacute;rios com acesso mantido')
         self.assertLess(
-            content.index('Usu&aacute;rios com acesso revogado'),
-            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'),
-        )
-        self.assertLess(
             content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'),
             content.index('Resultado final dos acessos revistos'),
         )
+        self.assertNotContains(response, 'Usu&aacute;rios com acesso revogado')
 
     def test_proposed_group_rule_expands_members_in_final_result(self):
         user = ADUser.objects.create(
@@ -785,7 +807,7 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Maria Silva', final_section)
@@ -820,7 +842,7 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(final_section.count('Joao Souza'), 1)
@@ -860,7 +882,7 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Bruna Comum', final_section)
@@ -915,7 +937,7 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Ana Mantida Grupo', final_section)
@@ -1013,7 +1035,7 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Usuario Mantido', final_section)
@@ -1080,11 +1102,9 @@ class AccessReviewTests(TestCase):
         content = response.content.decode()
         current_access_section = content[
             content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'):
+            content.index('Usu&aacute;rios com acesso revogado')
         ]
-        revoked_section = content[
-            content.index('Usu&aacute;rios com acesso revogado'):
-            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o')
-        ]
+        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Carlos Lima', current_access_section)
@@ -1151,6 +1171,167 @@ class AccessReviewTests(TestCase):
         self.assertNotIn('Socio Regular', revoked_section)
         self.assertNotIn('Administrator', revoked_section)
         self.assertNotIn('Inactive User', revoked_section)
+
+    def test_revoked_access_is_current_effective_users_minus_final_effective_users(self):
+        file_server = FileServer.objects.create(name='FS-REV-DIFF')
+        share = Share.objects.create(file_server=file_server, name='Dados Rev Diff', unc_path='\\\\FS-REV-DIFF\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\RevDiff')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        ana = ADUser.objects.create(sid='S-1-5-21-8701', sam_account_name='ana', display_name='Ana Permanece')
+        bruno = ADUser.objects.create(sid='S-1-5-21-8702', sam_account_name='bruno', display_name='Bruno Permanece')
+        carla = ADUser.objects.create(sid='S-1-5-21-8703', sam_account_name='carla', display_name='Carla Sai')
+        novo = ADUser.objects.create(sid='S-1-5-21-8704', sam_account_name='novo', display_name='Novo Acesso')
+        current_group = ADGroup.objects.create(sid='S-1-5-21-8705', sam_account_name='GS_ATUAL_RW', name='GS Atual RW')
+        final_group = ADGroup.objects.create(sid='S-1-5-21-8706', sam_account_name='GS_FINAL_RW', name='GS Final RW')
+        for user in (ana, bruno, carla):
+            ADGroupMembership.objects.create(parent_group=current_group, member_user=user)
+        for user in (bruno, novo):
+            ADGroupMembership.objects.create(parent_group=final_group, member_user=user)
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=current_group.sid,
+            identity_name='CONTROL\\GS_ATUAL_RW',
+            resolved_ad_group=current_group,
+            resolved_identity_type=AclEntry.IDENTITY_GROUP,
+            rights='Modify, Synchronize',
+        )
+        ana_principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Ana Permanece',
+            sam_account_name='ana',
+            ad_user=ana,
+        )
+        final_group_principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name='GS Final RW',
+            proposed_group_name='GS_FINAL_RW',
+            ad_group=final_group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=ana_principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=final_group_principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        current_section = content[
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'):
+            content.index('Resultado final dos acessos revistos')
+        ]
+        final_section = content[
+            content.index('Resultado final dos acessos revistos'):
+            content.index('Usu&aacute;rios com acesso revogado')
+        ]
+        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Ana Permanece', current_section)
+        self.assertIn('Bruno Permanece', current_section)
+        self.assertIn('Carla Sai', current_section)
+        self.assertIn('Ana Permanece', final_section)
+        self.assertIn('Bruno Permanece', final_section)
+        self.assertIn('Novo Acesso', final_section)
+        self.assertNotIn('Carla Sai', final_section)
+        self.assertIn('Carla Sai', revoked_section)
+        self.assertIn('Usuario possui acesso hoje, mas nao esta previsto no resultado final apos a reestruturacao.', revoked_section)
+        self.assertIn('via grupo GS Atual RW', revoked_section)
+        self.assertNotIn('Ana Permanece', revoked_section)
+        self.assertNotIn('Bruno Permanece', revoked_section)
+        self.assertNotIn('Novo Acesso', revoked_section)
+
+    def test_revoked_access_matches_final_textual_user_by_username(self):
+        file_server = FileServer.objects.create(name='FS-REV-TEXT')
+        share = Share.objects.create(file_server=file_server, name='Dados Rev Text', unc_path='\\\\FS-REV-TEXT\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Administrativo\\RevText')
+        self.folder.current_folder = current_folder
+        self.folder.save(update_fields=['current_folder'])
+        user = ADUser.objects.create(
+            sid='S-1-5-21-8711',
+            sam_account_name='ana.textual',
+            display_name='Ana Textual',
+        )
+        AclEntry.objects.create(
+            folder=current_folder,
+            identity_sid=user.sid,
+            identity_name='CONTROL\\ana.textual',
+            resolved_ad_user=user,
+            resolved_identity_type=AclEntry.IDENTITY_USER,
+            rights='Modify, Synchronize',
+        )
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Ana Textual',
+            sam_account_name='ana.textual',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Resultado final dos acessos revistos')
+        self.assertNotContains(response, 'Usu&aacute;rios com acesso revogado')
+
+    def test_partners_only_folder_revokes_current_common_users_but_not_partners(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Socios,DC=control,DC=local',
+            name='Socios',
+        )
+        root = self.create_review_folder('controlsul', 'controlsul')
+        juridico = self.create_review_folder('Juridico', 'controlsul\\Juridico', parent=root)
+        partners_only = self.create_review_folder('PENAL', 'controlsul\\Juridico\\PENAL', parent=juridico)
+        file_server = FileServer.objects.create(name='FS-PARTNERS-ONLY')
+        share = Share.objects.create(file_server=file_server, name='Dados Penal', unc_path='\\\\FS-PARTNERS-ONLY\\Dados')
+        current_folder = Folder.objects.create(share=share, path='controlsul\\Juridico\\PENAL')
+        partners_only.current_folder = current_folder
+        partners_only.save(update_fields=['current_folder'])
+        common_user = ADUser.objects.create(
+            sid='S-1-5-21-8721',
+            sam_account_name='comum.penal',
+            display_name='Comum Penal',
+        )
+        partner_user = ADUser.objects.create(
+            sid='S-1-5-21-8722',
+            sam_account_name='socio.penal',
+            display_name='Socio Penal',
+            distinguished_name='CN=Socio Penal,OU=Socios,DC=control,DC=local',
+            ou=socios_ou,
+        )
+        for user in (common_user, partner_user):
+            AclEntry.objects.create(
+                folder=current_folder,
+                identity_sid=user.sid,
+                identity_name=f'CONTROL\\{user.sam_account_name}',
+                resolved_ad_user=user,
+                resolved_identity_type=AclEntry.IDENTITY_USER,
+                rights='Modify, Synchronize',
+            )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, partners_only.id]))
+        content = response.content.decode()
+        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
+        self.assertIn('Comum Penal', revoked_section)
+        self.assertNotIn('Socio Penal', revoked_section)
 
     def test_explicit_removal_has_priority_over_domain_admins_revocation(self):
         file_server = FileServer.objects.create(name='FS-DA-DEDUP')
@@ -1615,7 +1796,7 @@ class GrantAccessReviewRuleCommandTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'Acessos herdados do escopo')
@@ -1640,7 +1821,7 @@ class GrantAccessReviewRuleCommandTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Kelly Cristine Padovim', final_section)
@@ -1664,7 +1845,7 @@ class GrantAccessReviewRuleCommandTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(final_section.count('Kelly Cristine Padovim'), 1)
@@ -1845,7 +2026,7 @@ class SeedJuridicoAccessReviewRulesCommandTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, child.id]))
         content = response.content.decode()
-        final_section = content[content.index('Resultado final dos acessos revistos'):]
+        final_section = html_section(content, 'Resultado final dos acessos revistos', 'Usu&aacute;rios com acesso revogado')
 
         self.assertIn('Denise Monteiro de Oliveira', final_section)
         self.assertIn('Leitura e gravação sem exclusão', final_section)

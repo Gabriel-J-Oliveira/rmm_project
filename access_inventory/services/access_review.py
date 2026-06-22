@@ -542,7 +542,75 @@ def build_maintained_review_access_rows(rules):
     return rows
 
 
-def build_revoked_review_access_rows(current_access_rows, user_rules):
+def review_access_row_user_key(row):
+    user = row.get('user')
+    if user:
+        return review_person_key_from_user(user)
+    username = row.get('username')
+    if username:
+        return ('username', normalize_review_user_value(username))
+    return review_person_key_from_name(row.get('display_name'))
+
+
+def review_access_row_user_keys(row):
+    keys = set()
+    user = row.get('user')
+    if user:
+        keys.add(review_person_key_from_user(user))
+        if getattr(user, 'sam_account_name', ''):
+            keys.add(('username', normalize_review_user_value(user.sam_account_name)))
+        if getattr(user, 'display_name', ''):
+            keys.add(review_person_key_from_name(user.display_name))
+    username = row.get('username')
+    if username:
+        keys.add(('username', normalize_review_user_value(username)))
+    display_name = row.get('display_name')
+    if display_name:
+        keys.add(review_person_key_from_name(display_name))
+    return {key for key in keys if key and key[-1]}
+
+
+def add_revoked_row(revoked_by_key, key, row):
+    existing = revoked_by_key.get(key)
+    if existing and existing['priority'] <= row['priority']:
+        if row.get('source') and row['source'] not in existing.get('source', ''):
+            existing['source'] = f'{existing["source"]}; {row["source"]}' if existing.get('source') else row['source']
+        return
+    revoked_by_key[key] = row
+
+
+def build_current_access_by_user(current_access_rows):
+    current_by_key = {}
+    for row in current_access_rows:
+        user = row.get('user')
+        if not is_displayable_review_user(user):
+            continue
+        key = review_access_row_user_key(row)
+        if not key:
+            continue
+        origin = row.get('origin_label') or 'acesso atual'
+        current = current_by_key.setdefault(key, {
+            'display_name': row.get('display_name'),
+            'username': row.get('username'),
+            'origins': [],
+            'is_domain_admins_access': False,
+            'keys': set(),
+        })
+        current['keys'].update(review_access_row_user_keys(row))
+        if origin and origin not in current['origins']:
+            current['origins'].append(origin)
+        current['is_domain_admins_access'] = current['is_domain_admins_access'] or bool(row.get('is_domain_admins_access'))
+    return current_by_key
+
+
+def build_final_access_user_keys(final_access_rows):
+    final_keys = set()
+    for row in final_access_rows:
+        final_keys.update(review_access_row_user_keys(row))
+    return final_keys
+
+
+def build_revoked_review_access_rows(current_access_rows, final_access_rows, user_rules):
     revoked_by_key = {}
 
     for rule in user_rules:
@@ -555,32 +623,39 @@ def build_revoked_review_access_rows(current_access_rows, user_rules):
         display_name = principal.display_name
         username = principal.sam_account_name
         key = review_person_key_from_user(ad_user) if ad_user else review_person_key_from_name(display_name)
-        revoked_by_key[key] = {
+        add_revoked_row(revoked_by_key, key, {
             'display_name': display_name,
             'username': username,
             'badge': 'ACESSO SERA REVOGADO',
             'message': 'Acesso sera revogado nesta pasta.',
             'source': 'regra proposta de remocao',
             'priority': 0,
-        }
+        })
 
-    for row in current_access_rows:
-        if not row.get('is_domain_admins_access'):
+    current_by_key = build_current_access_by_user(current_access_rows)
+    final_keys = build_final_access_user_keys(final_access_rows)
+    for key, row in current_by_key.items():
+        if row.get('keys') and row['keys'] & final_keys:
             continue
-        user = row.get('user')
-        if not is_displayable_review_user(user):
-            continue
-        key = review_person_key_from_user(user)
         if key in revoked_by_key:
             continue
-        revoked_by_key[key] = {
+        is_domain_admins_access = row.get('is_domain_admins_access')
+        origins = row.get('origins', [])
+        source = '; '.join(origins[:3])
+        if len(origins) > 3:
+            source = f'{source}; + {len(origins) - 3} origens'
+        add_revoked_row(revoked_by_key, key, {
             'display_name': row.get('display_name'),
             'username': row.get('username'),
-            'badge': 'ACESSO ADMINISTRATIVO SERA REMOVIDO',
-            'message': 'Acesso administrativo via Domain Admins sera removido da permissao de negocio desta pasta.',
-            'source': row.get('origin_label'),
+            'badge': 'ACESSO ADMINISTRATIVO SERA REMOVIDO' if is_domain_admins_access else 'ACESSO SERA REVOGADO',
+            'message': (
+                'Acesso administrativo via Domain Admins sera removido da permissao de negocio desta pasta.'
+                if is_domain_admins_access
+                else 'Usuario possui acesso hoje, mas nao esta previsto no resultado final apos a reestruturacao.'
+            ),
+            'source': source,
             'priority': 1,
-        }
+        })
 
     return sorted(
         revoked_by_key.values(),

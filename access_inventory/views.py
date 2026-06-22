@@ -560,7 +560,7 @@ def review_folder_detail(request, plan_id, folder_id):
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     partner_users = get_partner_review_users()
-    revoked_access_rows = build_revoked_review_access_rows(current_access.get('rows', []), user_rules)
+    revoked_access_rows = build_revoked_review_access_rows(current_access.get('rows', []), final_access_rows, user_rules)
     context = {
         **base_context('reviews'),
         'plan': plan,
