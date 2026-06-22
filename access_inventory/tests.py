@@ -1651,6 +1651,19 @@ class SeedJuridicoAccessReviewRulesCommandTests(TestCase):
         self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_CUSTOM)
         self.assertEqual(rule.permission_label, 'Leitura e gravação sem exclusão')
         self.assertIn('não deve excluir', rule.permission_explanation)
+        self.assertEqual(rule.source, 'juridico_rules')
+        self.assertLessEqual(len(rule.source), AccessReviewRule._meta.get_field('source').max_length)
+        self.assertLessEqual(len(rule.permission_level), AccessReviewRule._meta.get_field('permission_level').max_length)
+
+    def test_real_command_execution_does_not_write_values_over_field_limits(self):
+        self.create_user('Denise Monteiro de Oliveira', 'denise.oliveira')
+
+        self.call_juridico()
+
+        rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.juridico, principal__ad_user__sam_account_name='denise.oliveira')
+        for field_name in ('permission_level', 'permission_label', 'source'):
+            max_length = AccessReviewRule._meta.get_field(field_name).max_length
+            self.assertLessEqual(len(getattr(rule, field_name)), max_length)
 
     def test_prazos_rule_is_inherited_in_juridico_child_final_result(self):
         self.create_user('Denise Monteiro de Oliveira', 'denise.oliveira')
@@ -1818,7 +1831,7 @@ class SeedJuridicoAccessReviewRulesCommandTests(TestCase):
             6,
         )
 
-    def test_clear_existing_removes_only_juridico_business_rules(self):
+    def test_clear_existing_removes_only_juridico_rule_sources(self):
         self.create_user('Kelly Cristine Padovim', 'kelly.padovim')
         manual_principal = AccessReviewPrincipal.objects.create(
             plan=self.plan,
@@ -1832,12 +1845,25 @@ class SeedJuridicoAccessReviewRulesCommandTests(TestCase):
             permission_level=AccessReviewRule.PERMISSION_RW,
             source='manual',
         )
+        legacy_principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Legacy',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.sicoob,
+            principal=legacy_principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+            source='juridico_business',
+        )
         self.call_juridico()
 
         self.call_juridico('--clear-existing')
 
         self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, source='manual').exists())
-        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, source='juridico_business_rules').exists())
+        self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan, source='juridico_business').exists())
+        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, source='juridico_rules').exists())
 
     def test_user_not_found_is_reported_without_breaking(self):
         output = self.call_juridico()

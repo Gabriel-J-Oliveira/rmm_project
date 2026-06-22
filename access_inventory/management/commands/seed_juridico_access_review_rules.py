@@ -11,7 +11,8 @@ from access_inventory.services.access_review import (
 )
 
 
-SOURCE = 'juridico_business_rules'
+SOURCE = 'juridico_rules'
+SOURCE_ALIASES = ('juridico_rules', 'juridico_business_rules', 'juridico_business')
 CUSTOM_LABEL = 'Leitura e gravação sem exclusão'
 CUSTOM_EXPLANATION = 'Pode abrir, criar e editar arquivos, mas não deve excluir arquivos ou subpastas.'
 RO_LABEL = 'Somente leitura'
@@ -124,6 +125,7 @@ class SeedResult:
     users_ambiguous: list = field(default_factory=list)
     users_ignored: list = field(default_factory=list)
     observations: list = field(default_factory=list)
+    validation_warnings: list = field(default_factory=list)
     rules_created: int = 0
     rules_updated: int = 0
     rules_would_create: int = 0
@@ -219,7 +221,7 @@ class Command(BaseCommand):
 
         scoped_folders = self.collect_descendants(juridico)
         if options['clear_existing']:
-            existing = AccessReviewRule.objects.filter(plan=plan, folder__in=scoped_folders, source=SOURCE)
+            existing = AccessReviewRule.objects.filter(plan=plan, folder__in=scoped_folders, source__in=SOURCE_ALIASES)
             result.rules_deleted = existing.count()
             if not options['dry_run']:
                 existing.delete()
@@ -390,12 +392,13 @@ class Command(BaseCommand):
             'source': SOURCE,
             'notes': notes,
         }
+        self.validate_payload_lengths(payload, result)
 
         principal = AccessReviewPrincipal.objects.filter(**principal_lookup).first()
         rule = None
         if principal:
             rule = AccessReviewRule.objects.filter(plan=plan, folder=folder, principal=principal).first()
-        if rule and rule.source != SOURCE:
+        if rule and rule.source not in SOURCE_ALIASES:
             result.rules_ignored += 1
             return
 
@@ -459,3 +462,20 @@ class Command(BaseCommand):
             self.stdout.write(f'Regras atualizadas: {result.rules_updated}')
             self.stdout.write(f'Regras removidas por --clear-existing: {result.rules_deleted}')
         self.stdout.write(f'Regras ignoradas: {result.rules_ignored}')
+
+        if result.validation_warnings:
+            self.stdout.write('Avisos de validacao:')
+            for warning in sorted(set(result.validation_warnings)):
+                self.stdout.write(f'- {warning}')
+
+    def validate_payload_lengths(self, payload, result):
+        for field_name in ('permission_level', 'permission_label', 'source'):
+            field = AccessReviewRule._meta.get_field(field_name)
+            max_length = getattr(field, 'max_length', None)
+            value = payload.get(field_name) or ''
+            if max_length and len(value) > max_length:
+                result.validation_warnings.append(
+                    f'{field_name} excede max_length={max_length}: {value}'
+                )
+                if not result.dry_run:
+                    raise CommandError(f'{field_name} excede max_length={max_length}: {value}')
