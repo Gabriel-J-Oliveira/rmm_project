@@ -4,6 +4,7 @@ from io import StringIO
 from pathlib import Path
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
 
@@ -309,6 +310,9 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'Subpastas')
         self.assertContains(response, 'CAFOFO')
         self.assertContains(response, 'CAIXA')
+        self.assertNotContains(response, 'Contexto atual vinculado')
+        self.assertNotContains(response, 'Permiss&otilde;es atuais encontradas')
+        self.assertNotContains(response, 'Usu&aacute;rios com acesso revogado')
 
     def test_final_review_folder_detail_does_not_render_empty_subfolders_panel(self):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
@@ -1297,6 +1301,165 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(description['permission_label'], 'Negado')
         self.assertIn('Acesso negado', description['permission_summary'])
+
+
+class GrantAccessReviewRuleCommandTests(TestCase):
+    def setUp(self):
+        self.plan = AccessReviewPlan.objects.create(name='Plano escopo')
+        self.root = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        self.admin = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='Administrativo',
+            proposed_path='controlsul\\Administrativo',
+            parent=self.root,
+        )
+        self.finance = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='FINANCEIRO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO',
+            parent=self.admin,
+        )
+        self.cafofo = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Administrativo',
+            name='CAFOFO',
+            proposed_path='controlsul\\Administrativo\\FINANCEIRO\\CAFOFO',
+            parent=self.finance,
+        )
+        self.kelly = ADUser.objects.create(
+            sid='S-1-5-21-kelly',
+            sam_account_name='kelly.padovim',
+            display_name='Kelly Cristine Padovim',
+            user_principal_name='kelly.padovim@control.local',
+            email='kelly.padovim@control.local',
+        )
+
+    def call_grant(self, *args):
+        out = StringIO()
+        call_command('grant_access_review_rule', *args, stdout=out)
+        return out.getvalue()
+
+    def test_command_creates_user_rule_for_root_scope(self):
+        output = self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlSul/Administrativo',
+            '--user', 'kelly.padovim',
+            '--permission', 'FULL',
+            '--source', 'manual_scope',
+            '--notes', 'Kelly tera acesso completo herdado a todo o escopo Administrativo.',
+        )
+
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, ad_user=self.kelly)
+        rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.admin, principal=principal)
+        self.assertIn('Regra criada', output)
+        self.assertEqual(principal.display_name, 'Kelly Cristine Padovim')
+        self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_FULL)
+        self.assertEqual(rule.permission_label, 'Controle total')
+        self.assertIn('administrar', rule.permission_explanation)
+        self.assertEqual(rule.source, 'manual_scope')
+
+    def test_command_is_idempotent_and_updates_rule(self):
+        args = [
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul\\Administrativo',
+            '--user', 'kelly.padovim',
+            '--permission', 'FULL',
+        ]
+        self.call_grant(*args)
+        self.call_grant(*(args[:-1] + ['RW']))
+
+        self.assertEqual(AccessReviewPrincipal.objects.filter(plan=self.plan, ad_user=self.kelly).count(), 1)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.admin).count(), 1)
+        rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.admin)
+        self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_RW)
+
+    def test_command_finds_user_by_display_name(self):
+        self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul;Administrativo',
+            '--user', 'Kelly Cristine Padovim',
+            '--permission', 'FULL',
+        )
+
+        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, folder=self.admin, principal__ad_user=self.kelly).exists())
+
+    def test_command_fails_for_ambiguous_user(self):
+        ADUser.objects.create(
+            sid='S-1-5-21-kelly-2',
+            sam_account_name='kelly2',
+            display_name='Kelly Cristine Padovim',
+        )
+
+        with self.assertRaises(CommandError):
+            self.call_grant(
+                '--plan-id', str(self.plan.id),
+                '--folder-path', 'controlsul\\Administrativo',
+                '--user', 'Kelly Cristine Padovim',
+                '--permission', 'FULL',
+            )
+
+    def test_command_creates_group_rule(self):
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-group-full',
+            sam_account_name='GS ADMINISTRATIVO',
+            name='GS ADMINISTRATIVO',
+        )
+
+        self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul\\Administrativo',
+            '--group', 'GS ADMINISTRATIVO',
+            '--permission', 'FULL',
+        )
+
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, ad_group=group)
+        rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.admin, principal=principal)
+        self.assertEqual(principal.principal_type, AccessReviewPrincipal.PRINCIPAL_GROUP)
+        self.assertEqual(principal.proposed_group_name, 'GS ADMINISTRATIVO')
+        self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_FULL)
+
+    def test_dry_run_does_not_create_rule(self):
+        output = self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul\\Administrativo',
+            '--user', 'kelly.padovim',
+            '--permission', 'FULL',
+            '--dry-run',
+        )
+
+        self.assertIn('DRY-RUN', output)
+        self.assertFalse(AccessReviewPrincipal.objects.filter(plan=self.plan, ad_user=self.kelly).exists())
+        self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan).exists())
+
+    def test_scope_rule_is_rendered_as_inherited_on_child_folder(self):
+        self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul\\Administrativo',
+            '--user', 'kelly.padovim',
+            '--permission', 'FULL',
+            '--source', 'manual_scope',
+            '--notes', 'Kelly tera acesso completo herdado a todo o escopo Administrativo.',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
+        content = response.content.decode()
+        inherited_section = content[
+            content.index('Acessos herdados do escopo'):
+            content.index('Permiss&otilde;es atuais encontradas')
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Kelly Cristine Padovim', inherited_section)
+        self.assertIn('Controle total', inherited_section)
+        self.assertIn('herdado de Administrativo', inherited_section)
+        self.assertIn('manual_scope', inherited_section)
 
 
 class SeedAccessReviewFoldersCommandTests(TestCase):

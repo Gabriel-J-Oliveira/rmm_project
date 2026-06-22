@@ -66,6 +66,7 @@
     </section>
     {% endif %}
 
+    {% if is_permission_target_folder %}
     <section class="ai-panel ai-review-partner-panel">
         <div class="ai-section-heading">
             <div>
@@ -118,6 +119,32 @@
         </div>
         {% endif %}
     </section>
+
+    {% if inherited_scope_access_rows %}
+    <section class="ai-panel ai-review-inherited-scope-panel">
+        <div class="ai-section-heading">
+            <div>
+                <h2>Acessos herdados do escopo</h2>
+                <p>Regras propostas em pastas acima deste ramo e aplicadas a esta pasta por escopo.</p>
+            </div>
+        </div>
+        <div class="ai-review-person-rows">
+            {% for item in inherited_scope_access_rows %}
+            <article class="ai-review-person-row">
+                <div>
+                    <strong>{{ item.display_name }}</strong>
+                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
+                </div>
+                <p>{{ item.permission_description }}</p>
+                <span class="ai-permission-chip ai-permission-{{ item.permission_level }}">{{ item.permission_label }}</span>
+                <span class="ai-permission-chip ai-permission-current">{{ item.badge }}</span>
+                {% if item.scope_origin_text %}<small>{{ item.scope_origin_text }}</small>{% endif %}
+                {% if item.rule.source or item.rule.notes %}<small>{{ item.rule.source }}{% if item.rule.notes %} - {{ item.rule.notes }}{% endif %}</small>{% endif %}
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
 
     <section class="ai-panel ai-review-current-access-panel">
         <div class="ai-section-heading">
@@ -272,6 +299,7 @@
             {% endfor %}
         </div>
     </section>
+    {% endif %}
     {% endif %}
 </section>
 {% endblock %}

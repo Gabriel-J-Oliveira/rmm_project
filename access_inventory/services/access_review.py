@@ -343,6 +343,20 @@ def proposed_access_row_from_rule(rule, user=None, origin_group=None):
     }
 
 
+def mark_scope_inherited_access_rows(rows, source_folder):
+    marked_rows = []
+    source_name = source_folder.name or source_folder.proposed_path
+    for row in rows:
+        inherited = dict(row)
+        inherited['scope_folder'] = source_folder
+        inherited['scope_origin_text'] = f'herdado de {source_name}'
+        if inherited.get('origin_text') and inherited['origin_text'] != 'regra direta':
+            inherited['scope_origin_text'] = f'{inherited["scope_origin_text"]} - {inherited["origin_text"]}'
+        inherited['badge'] = 'HERDADO DO ESCOPO'
+        marked_rows.append(inherited)
+    return marked_rows
+
+
 def merge_effective_access_row(rows_by_key, key, row):
     existing = rows_by_key.get(key)
     if not existing or permission_strength(row['permission_level']) > permission_strength(existing['permission_level']):
@@ -421,6 +435,25 @@ def get_proposed_effective_access_for_folder(review_folder, action_filter=None):
         review_folder.rules.select_related('principal', 'principal__ad_user', 'principal__ad_group').all()
     )
     return get_proposed_effective_access_for_rules(rules, action_filter=action_filter)
+
+
+def get_scope_inherited_access_for_folder(review_folder):
+    rows = []
+    current = review_folder.parent
+    ancestors = []
+    while current:
+        ancestors.append(current)
+        current = current.parent
+    ancestors.reverse()
+
+    for ancestor in ancestors:
+        rules = list(
+            ancestor.rules.select_related('principal', 'principal__ad_user', 'principal__ad_group').all()
+        )
+        ancestor_rows = get_proposed_effective_access_for_rules(rules)
+        rows.extend(mark_scope_inherited_access_rows(ancestor_rows, ancestor))
+
+    return rows
 
 
 def can_show_maintained_review_principal(principal):

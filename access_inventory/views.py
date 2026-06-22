@@ -26,6 +26,7 @@ from .services.access_review import (
     get_plan_visible_roots,
     get_partner_review_users,
     get_proposed_effective_access_for_rules,
+    get_scope_inherited_access_for_folder,
 )
 
 
@@ -549,9 +550,11 @@ def review_folder_detail(request, plan_id, folder_id):
 
     technical_group_rules = []
     child_folders = list(get_folder_children(folder))
+    is_permission_target_folder = not child_folders
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     partner_users = get_partner_review_users()
+    inherited_scope_access_rows = get_scope_inherited_access_for_folder(folder)
     maintained_access_rows = build_maintained_review_access_rows(rules)
     revoked_access_rows = build_revoked_review_access_rows(current_access.get('rows', []), user_rules)
     context = {
@@ -559,9 +562,11 @@ def review_folder_detail(request, plan_id, folder_id):
         'plan': plan,
         'folder': folder,
         'child_folders': child_folders,
+        'is_permission_target_folder': is_permission_target_folder,
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
         'partner_users': partner_users,
+        'inherited_scope_access_rows': inherited_scope_access_rows,
         'maintained_access_rows': maintained_access_rows,
         'revoked_access_rows': revoked_access_rows,
         'permission_sections': permission_sections,
