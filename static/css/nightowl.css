@@ -8613,3 +8613,79 @@ body.page-access-inventory .ai-review-technical-panel .ai-review-technical-group
     box-shadow: none !important;
     transform: none !important;
 }
+
+/* Access Review decision colors: discreet executive emphasis by decision type. */
+body.page-access-inventory .ai-review-card-special {
+    background:
+        linear-gradient(90deg, rgba(14, 116, 144, 0.08), rgba(13, 19, 32, 0.95) 20%),
+        var(--ai-card);
+    border-color: rgba(56, 189, 248, 0.18);
+    box-shadow: inset 3px 0 0 rgba(56, 189, 248, 0.26);
+}
+
+body.page-access-inventory .ai-review-card-info {
+    background:
+        linear-gradient(90deg, rgba(30, 64, 175, 0.08), rgba(13, 19, 32, 0.95) 20%),
+        var(--ai-card);
+    border-color: rgba(96, 165, 250, 0.16);
+    box-shadow: inset 3px 0 0 rgba(96, 165, 250, 0.2);
+}
+
+body.page-access-inventory .ai-review-card-danger {
+    background:
+        linear-gradient(90deg, rgba(127, 29, 29, 0.24), rgba(13, 19, 32, 0.96) 20%),
+        var(--ai-card);
+    border-color: rgba(248, 113, 113, 0.34);
+    box-shadow: inset 3px 0 0 rgba(248, 113, 113, 0.42);
+}
+
+body.page-access-inventory .ai-review-card-success {
+    background:
+        linear-gradient(90deg, rgba(20, 83, 45, 0.15), rgba(13, 19, 32, 0.96) 20%),
+        var(--ai-card);
+    border-color: rgba(45, 212, 191, 0.24);
+    box-shadow: inset 3px 0 0 rgba(45, 212, 191, 0.28);
+}
+
+body.page-access-inventory .ai-review-card-danger .ai-section-heading h2 {
+    color: #fee2e2;
+}
+
+body.page-access-inventory .ai-review-card-success .ai-section-heading h2 {
+    color: #d1fae5;
+}
+
+body.page-access-inventory .ai-review-card-special .ai-section-heading h2,
+body.page-access-inventory .ai-review-card-info .ai-section-heading h2 {
+    color: var(--ai-primary-text);
+}
+
+body.page-access-inventory .ai-review-card-danger .ai-permission-none {
+    background: rgba(127, 29, 29, 0.42);
+    border-color: rgba(248, 113, 113, 0.44);
+    color: #fecaca;
+}
+
+body.page-access-inventory .ai-review-card-success .ai-permission-ro,
+body.page-access-inventory .ai-review-card-success .ai-permission-rw {
+    background: rgba(13, 148, 136, 0.14);
+    border-color: rgba(94, 234, 212, 0.24);
+    color: #ccfbf1;
+}
+
+body.page-access-inventory .ai-review-card-success .ai-permission-full,
+body.page-access-inventory .ai-review-card-success .ai-permission-custom {
+    background: rgba(20, 184, 166, 0.13);
+    border-color: rgba(94, 234, 212, 0.22);
+    color: #d1fae5;
+}
+
+body.page-access-inventory .ai-review-card-danger .ai-review-person-row:hover {
+    background: rgba(2, 6, 12, 0.28) !important;
+    border-color: rgba(148, 163, 184, 0.08) !important;
+}
+
+body.page-access-inventory .ai-review-card-success .ai-review-person-row:hover {
+    background: rgba(2, 6, 12, 0.28) !important;
+    border-color: rgba(148, 163, 184, 0.08) !important;
+}

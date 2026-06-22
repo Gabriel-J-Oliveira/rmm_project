@@ -299,6 +299,19 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'page-access-inventory')
         self.assertNotContains(response, '<aside class="sidebar">', html=True)
 
+    def test_review_folder_detail_uses_decision_card_classes(self):
+        self.create_user_review_rule(self.folder, display_name='Usuario Resultado', sam_account_name='usuario.resultado')
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'ai-review-card-special')
+        self.assertContains(response, 'ai-review-card-danger')
+        self.assertContains(response, 'ai-review-card-info')
+        self.assertContains(response, 'ai-review-card-success')
+        self.assertContains(response, 'Usu&aacute;rios com acesso revogado')
+        self.assertContains(response, 'Resultado final dos acessos revistos')
+
     def test_access_inventory_plan_list_does_not_render_global_sidebar(self):
         response = self.client.get(reverse('access_inventory:review-plan-list'))
 
@@ -1031,6 +1044,10 @@ class AccessReviewTests(TestCase):
         self.assertIn('body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover', css)
         self.assertIn('box-shadow: none !important;', css)
         self.assertIn('transform: none !important;', css)
+        self.assertIn('body.page-access-inventory .ai-review-card-danger', css)
+        self.assertIn('body.page-access-inventory .ai-review-card-success', css)
+        self.assertIn('body.page-access-inventory .ai-review-card-info', css)
+        self.assertIn('body.page-access-inventory .ai-review-card-special', css)
 
     def test_domain_admins_current_access_is_visible_and_revoked_from_business_access(self):
         file_server = FileServer.objects.create(name='FS-DA')
