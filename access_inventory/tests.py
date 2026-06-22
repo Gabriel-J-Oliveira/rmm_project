@@ -262,8 +262,8 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, self.principal.display_name)
-        self.assertContains(response, 'Pode abrir, criar, editar e excluir arquivos.')
+        self.assertContains(response, self.folder.name)
+        self.assertContains(response, 'Permiss&otilde;es atuais encontradas')
 
     def test_review_folder_detail_renders_first_direct_child(self):
         root = AccessReviewFolder.objects.create(
@@ -595,6 +595,174 @@ class AccessReviewTests(TestCase):
             content.index('Usu&aacute;rios com acesso revogado'),
         )
 
+    def test_proposed_group_rule_expands_members_in_final_result(self):
+        user = ADUser.objects.create(
+            sid='S-1-5-21-8601',
+            sam_account_name='maria.silva',
+            display_name='Maria Silva',
+        )
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-8602',
+            sam_account_name='GS_CAFOFO_RW',
+            name='GS_CAFOFO_RW',
+        )
+        ADGroupMembership.objects.create(parent_group=group, member_user=user)
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name='GS_CAFOFO_RW',
+            proposed_group_name='GS_CAFOFO_RW',
+            ad_group=group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Maria Silva', final_section)
+        self.assertIn('Leitura e escrita', final_section)
+        self.assertIn('via grupo GS_CAFOFO_RW', final_section)
+        self.assertNotIn('Grupo t&eacute;cnico:', final_section)
+
+    def test_proposed_group_rule_keeps_strongest_permission_for_same_user(self):
+        user = ADUser.objects.create(
+            sid='S-1-5-21-8611',
+            sam_account_name='joao.souza',
+            display_name='Joao Souza',
+        )
+        ro_group = ADGroup.objects.create(sid='S-1-5-21-8612', sam_account_name='GS_CAFOFO_RO', name='GS_CAFOFO_RO')
+        rw_group = ADGroup.objects.create(sid='S-1-5-21-8613', sam_account_name='GS_CAFOFO_RW', name='GS_CAFOFO_RW')
+        ADGroupMembership.objects.create(parent_group=ro_group, member_user=user)
+        ADGroupMembership.objects.create(parent_group=rw_group, member_user=user)
+        for group, permission in ((ro_group, AccessReviewRule.PERMISSION_RO), (rw_group, AccessReviewRule.PERMISSION_RW)):
+            principal = AccessReviewPrincipal.objects.create(
+                plan=self.plan,
+                principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+                display_name=group.name,
+                proposed_group_name=group.name,
+                ad_group=group,
+            )
+            AccessReviewRule.objects.create(
+                plan=self.plan,
+                folder=self.folder,
+                principal=principal,
+                permission_level=permission,
+            )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(final_section.count('Joao Souza'), 1)
+        self.assertIn('Leitura e escrita', final_section)
+
+    def test_proposed_group_rule_filters_partner_technical_and_inactive_members(self):
+        socios_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Socios,DC=control,DC=local',
+            name='Socios',
+        )
+        visible = ADUser.objects.create(sid='S-1-5-21-8621', sam_account_name='bruna', display_name='Bruna Comum')
+        partner = ADUser.objects.create(
+            sid='S-1-5-21-8622',
+            sam_account_name='socio',
+            display_name='Socio Grupo',
+            distinguished_name='CN=Socio Grupo,OU=Socios,DC=control,DC=local',
+            ou=socios_ou,
+        )
+        technical = ADUser.objects.create(sid='S-1-5-21-8623', sam_account_name='administrator', display_name='Administrator')
+        inactive = ADUser.objects.create(sid='S-1-5-21-8624', sam_account_name='inativo', display_name='Inativo Grupo', enabled=False)
+        group = ADGroup.objects.create(sid='S-1-5-21-8625', sam_account_name='GS_CAFOFO_RW_2', name='GS_CAFOFO_RW_2')
+        for member in (visible, partner, technical, inactive):
+            ADGroupMembership.objects.create(parent_group=group, member_user=member)
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=group.name,
+            proposed_group_name=group.name,
+            ad_group=group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Bruna Comum', final_section)
+        self.assertNotIn('Socio Grupo', final_section)
+        self.assertNotIn('Administrator', final_section)
+        self.assertNotIn('Inativo Grupo', final_section)
+
+    def test_proposed_group_without_members_does_not_render_group_as_final_result(self):
+        group = ADGroup.objects.create(sid='S-1-5-21-8631', sam_account_name='GS_EMPTY_RW', name='GS_EMPTY_RW')
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=group.name,
+            proposed_group_name=group.name,
+            ad_group=group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
+        self.assertNotContains(response, 'GS_EMPTY_RW')
+
+    def test_maintained_group_rule_expands_members(self):
+        user = ADUser.objects.create(
+            sid='S-1-5-21-8641',
+            sam_account_name='ana.mantida',
+            display_name='Ana Mantida Grupo',
+        )
+        group = ADGroup.objects.create(sid='S-1-5-21-8642', sam_account_name='GS_MANTER_RW', name='GS_MANTER_RW')
+        ADGroupMembership.objects.create(parent_group=group, member_user=user)
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_GROUP,
+            display_name=group.name,
+            proposed_group_name=group.name,
+            ad_group=group,
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+            notes='acao=manter',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
+        content = response.content.decode()
+        maintained_section = content[
+            content.index('Usu&aacute;rios com acesso mantido'):
+            content.index('Usu&aacute;rios com acesso revogado')
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Ana Mantida Grupo', maintained_section)
+        self.assertIn('via grupo GS_MANTER_RW', maintained_section)
+        self.assertNotIn('Grupo t&eacute;cnico:', maintained_section)
+
     def test_maintained_access_card_ignores_removed_none_filtered_and_domain_admins(self):
         socios_ou = ADOrganizationalUnit.objects.create(
             distinguished_name='OU=Sócios,DC=control,DC=local',
@@ -712,6 +880,8 @@ class AccessReviewTests(TestCase):
         self.assertIn('body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover', css)
         self.assertIn('body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover', css)
         self.assertIn('body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover', css)
+        self.assertIn('box-shadow: none !important;', css)
+        self.assertIn('transform: none !important;', css)
 
     def test_domain_admins_current_access_is_visible_and_revoked_from_business_access(self):
         file_server = FileServer.objects.create(name='FS-DA')

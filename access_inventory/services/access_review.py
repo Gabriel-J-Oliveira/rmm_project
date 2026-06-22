@@ -3,7 +3,7 @@ import unicodedata
 
 from django.db.models import Count, Q
 
-from access_inventory.models import ADGroupMembership, ADUser, AccessReviewFolder, AccessReviewPlan, AccessReviewRule, AclEntry
+from access_inventory.models import ADGroup, ADGroupMembership, ADUser, AccessReviewFolder, AccessReviewPlan, AccessReviewRule, AclEntry
 
 
 # Escopo executivo temporario da reestruturacao: mostrar apenas areas selecionadas
@@ -24,6 +24,14 @@ TECHNICAL_REVIEW_USER_NAMES = {
     'saggin constel',
     'suporte nextcloud',
     'wts 1',
+}
+
+PERMISSION_STRENGTH = {
+    AccessReviewRule.PERMISSION_NONE: 0,
+    AccessReviewRule.PERMISSION_RO: 1,
+    AccessReviewRule.PERMISSION_CUSTOM: 2,
+    AccessReviewRule.PERMISSION_RW: 3,
+    AccessReviewRule.PERMISSION_FULL: 4,
 }
 
 
@@ -224,6 +232,16 @@ def is_removal_review_rule(rule):
     )
 
 
+def review_rule_action(rule):
+    notes = normalize_review_user_value(getattr(rule, 'notes', ''))
+    for action in ('manter', 'adicionar', 'alterar', 'remover'):
+        if f'acao={action}' in notes or f'acao: {action}' in notes:
+            return action
+    if rule.permission_level == AccessReviewRule.PERMISSION_NONE:
+        return 'remover'
+    return ''
+
+
 def is_positive_review_rule(rule):
     return rule.permission_level in {
         AccessReviewRule.PERMISSION_RO,
@@ -267,6 +285,144 @@ def permission_level_label(permission_level):
     return dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level)
 
 
+def permission_strength(permission_level):
+    return PERMISSION_STRENGTH.get(permission_level, 0)
+
+
+def resolve_review_principal_group(principal):
+    if principal.ad_group_id:
+        return principal.ad_group
+    candidates = [
+        principal.proposed_group_name,
+        principal.sam_account_name,
+        principal.display_name,
+    ]
+    normalized_candidates = {
+        normalize_review_user_value(value)
+        for value in candidates
+        if value
+    }
+    if not normalized_candidates:
+        return None
+    for group in ADGroup.objects.all().order_by('name', 'sam_account_name', 'id'):
+        values = {
+            normalize_review_user_value(group.name),
+            normalize_review_user_value(group.sam_account_name),
+        }
+        if values & normalized_candidates:
+            return group
+    return None
+
+
+def proposed_access_row_from_rule(rule, user=None, origin_group=None):
+    principal = rule.principal
+    display_name = principal.display_name
+    username = principal.sam_account_name
+    origin_text = 'regra direta'
+    origin_group_name = ''
+
+    if user:
+        display_name = user.display_name or user.sam_account_name
+        username = user.sam_account_name
+
+    if origin_group:
+        origin_group_name = origin_group.name or origin_group.sam_account_name
+        origin_text = f'via grupo {origin_group_name}'
+
+    return {
+        'user': user,
+        'display_name': display_name,
+        'username': username,
+        'permission_level': rule.permission_level,
+        'permission_label': permission_level_label(rule.permission_level),
+        'permission_description': rule_explanation(rule),
+        'origin_group_name': origin_group_name,
+        'origin_text': origin_text,
+        'action': review_rule_action(rule),
+        'rule': rule,
+    }
+
+
+def merge_effective_access_row(rows_by_key, key, row):
+    existing = rows_by_key.get(key)
+    if not existing or permission_strength(row['permission_level']) > permission_strength(existing['permission_level']):
+        rows_by_key[key] = row
+        return
+    if existing and row['origin_text'] not in existing.get('origin_text', ''):
+        existing['origin_text'] = f'{existing["origin_text"]}; {row["origin_text"]}'
+
+
+def get_proposed_effective_access_for_rules(rules, action_filter=None):
+    rows_by_key = {}
+    positive_rules = [
+        rule for rule in rules
+        if is_positive_review_rule(rule) and not is_removal_review_rule(rule)
+    ]
+    if action_filter:
+        positive_rules = [rule for rule in positive_rules if review_rule_action(rule) in action_filter]
+
+    group_ids = []
+    group_by_rule_id = {}
+    for rule in positive_rules:
+        principal = rule.principal
+        if principal.principal_type != 'group':
+            continue
+        group = resolve_review_principal_group(principal)
+        if not group or is_domain_admins_principal(group):
+            continue
+        group_by_rule_id[rule.id] = group
+        group_ids.append(group.id)
+
+    memberships_by_group = {}
+    if group_ids:
+        memberships = (
+            ADGroupMembership.objects.filter(parent_group_id__in=group_ids, member_user__isnull=False)
+            .select_related('parent_group', 'member_user')
+            .order_by('member_user__display_name', 'member_user__sam_account_name')
+        )
+        for membership in memberships:
+            memberships_by_group.setdefault(membership.parent_group_id, []).append(membership)
+
+    for rule in positive_rules:
+        principal = rule.principal
+        if principal.ad_user_id:
+            user = principal.ad_user
+            if not is_displayable_review_user(user):
+                continue
+            merge_effective_access_row(rows_by_key, review_person_key_from_user(user), proposed_access_row_from_rule(rule, user=user))
+            continue
+
+        if principal.principal_type == 'user':
+            merge_effective_access_row(
+                rows_by_key,
+                review_person_key_from_name(principal.display_name),
+                proposed_access_row_from_rule(rule),
+            )
+            continue
+
+        group = group_by_rule_id.get(rule.id)
+        if not group:
+            continue
+        for membership in memberships_by_group.get(group.id, []):
+            user = membership.member_user
+            if not is_displayable_review_user(user):
+                continue
+            row = proposed_access_row_from_rule(rule, user=user, origin_group=group)
+            merge_effective_access_row(rows_by_key, review_person_key_from_user(user), row)
+
+    return sorted(
+        rows_by_key.values(),
+        key=lambda item: normalize_review_user_value(item.get('display_name')),
+    )
+
+
+def get_proposed_effective_access_for_folder(review_folder, action_filter=None):
+    rules = list(
+        review_folder.rules.select_related('principal', 'principal__ad_user', 'principal__ad_group').all()
+    )
+    return get_proposed_effective_access_for_rules(rules, action_filter=action_filter)
+
+
 def can_show_maintained_review_principal(principal):
     if principal.ad_user_id:
         return is_displayable_review_user(principal.ad_user)
@@ -278,31 +434,12 @@ def can_show_maintained_review_principal(principal):
 
 
 def build_maintained_review_access_rows(rules):
-    maintained_by_key = {}
-
-    for rule in rules:
-        if not is_maintained_review_rule(rule):
-            continue
-        principal = rule.principal
-        if not can_show_maintained_review_principal(principal):
-            continue
-        key = review_principal_key(principal)
-        if key in maintained_by_key:
-            continue
-        maintained_by_key[key] = {
-            'display_name': principal.display_name,
-            'username': principal.sam_account_name,
-            'permission_label': permission_level_label(rule.permission_level),
-            'badge': 'ACESSO MANTIDO',
-            'message': 'Permissao mantida pela proposta.',
-            'source': rule.notes,
-            'rule': rule,
-        }
-
-    return sorted(
-        maintained_by_key.values(),
-        key=lambda item: normalize_review_user_value(item.get('display_name')),
-    )
+    rows = get_proposed_effective_access_for_rules(list(rules), action_filter={'manter'})
+    for row in rows:
+        row['badge'] = 'ACESSO MANTIDO'
+        row['message'] = 'Permissao mantida pela proposta.'
+        row['source'] = row.get('origin_text') or row['rule'].notes
+    return rows
 
 
 def build_revoked_review_access_rows(current_access_rows, user_rules):

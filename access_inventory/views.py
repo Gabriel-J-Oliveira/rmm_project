@@ -25,9 +25,7 @@ from .services.access_review import (
     get_folder_children,
     get_plan_visible_roots,
     get_partner_review_users,
-    is_displayable_review_user,
-    is_removal_review_rule,
-    rule_explanation,
+    get_proposed_effective_access_for_rules,
 )
 
 
@@ -532,39 +530,24 @@ def review_folder_detail(request, plan_id, folder_id):
     permission_order = [
         AccessReviewRule.PERMISSION_RO,
         AccessReviewRule.PERMISSION_RW,
-        AccessReviewRule.PERMISSION_NONE,
         AccessReviewRule.PERMISSION_FULL,
         AccessReviewRule.PERMISSION_CUSTOM,
     ]
     permission_sections = []
-    hidden_rule_users_count = 0
+    final_access_rows = get_proposed_effective_access_for_rules(list(rules))
     for permission_level in permission_order:
-        section_rules_queryset = user_rules.filter(permission_level=permission_level)
-        section_rules = []
-        for rule in section_rules_queryset:
-            if is_removal_review_rule(rule):
-                continue
-            if rule.principal.ad_user_id and not is_displayable_review_user(rule.principal.ad_user):
-                hidden_rule_users_count += 1
-                continue
-            section_rules.append({
-                'rule': rule,
-                'explanation': rule_explanation(rule),
-            })
-        if section_rules:
+        section_rows = [
+            row for row in final_access_rows
+            if row.get('permission_level') == permission_level
+        ]
+        if section_rows:
             permission_sections.append({
                 'level': permission_level,
                 'label': dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level),
-                'rules': section_rules,
+                'rows': section_rows,
             })
 
-    technical_group_rules = [
-        {
-            'rule': rule,
-            'explanation': rule_explanation(rule),
-        }
-        for rule in group_rules
-    ]
+    technical_group_rules = []
     child_folders = list(get_folder_children(folder))
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
@@ -593,6 +576,6 @@ def review_folder_detail(request, plan_id, folder_id):
         ).count(),
         'technical_group_count': group_rules.count(),
         'current_acl_count': folder.current_folder.acl_entries.count() if folder.current_folder_id else 0,
-        'hidden_review_users_count': current_access.get('hidden_users_count', 0) + hidden_rule_users_count,
+        'hidden_review_users_count': current_access.get('hidden_users_count', 0),
     }
     return render(request, 'access_inventory/review_folder_detail.html', context)

@@ -8140,11 +8140,11 @@ body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hov
 body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover,
 body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover,
 body.page-access-inventory .ai-review-technical-panel .ai-review-technical-groups article:hover {
-    background: rgba(2, 6, 12, 0.28);
-    border-color: rgba(148, 163, 184, 0.08);
-    box-shadow: none;
-    filter: none;
-    transform: none;
+    background: rgba(2, 6, 12, 0.28) !important;
+    border-color: rgba(148, 163, 184, 0.08) !important;
+    box-shadow: none !important;
+    filter: none !important;
+    transform: none !important;
 }
 
 .ai-review-person-row strong {
@@ -8312,11 +8312,11 @@ body.page-access-inventory .ai-review-partner-grid-item {
 }
 
 .ai-current-access-row:hover {
-    background: rgba(2, 6, 12, 0.24);
-    border-color: rgba(148, 163, 184, 0.08);
-    box-shadow: none;
+    background: rgba(2, 6, 12, 0.24) !important;
+    border-color: rgba(148, 163, 184, 0.08) !important;
+    box-shadow: none !important;
     color: inherit;
-    transform: none;
+    transform: none !important;
 }
 
 body.page-access-inventory .ai-review-current-access-panel:hover {
@@ -8330,16 +8330,39 @@ body.page-access-inventory .ai-review-current-access-panel .ai-current-access-ro
 body.page-access-inventory .ai-review-current-access-panel .ai-current-access-row:hover span,
 body.page-access-inventory .ai-review-current-access-panel .ai-current-access-row:hover p,
 body.page-access-inventory .ai-review-current-access-panel .ai-current-access-row:hover small {
-    background: transparent;
-    box-shadow: none;
-    filter: none;
+    background: transparent !important;
+    box-shadow: none !important;
+    filter: none !important;
     text-decoration: none;
-    transform: none;
+    transform: none !important;
 }
 
 body.page-access-inventory .ai-review-current-access-panel .ai-current-access-row:hover {
-    background: rgba(2, 6, 12, 0.24);
-    border-top-color: rgba(148, 163, 184, 0.08);
+    background: rgba(2, 6, 12, 0.24) !important;
+    border-top-color: rgba(148, 163, 184, 0.08) !important;
+}
+
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover > div,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover strong,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover span,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover p,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover small,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover > div,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover strong,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover span,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover p,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover small,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover > div,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover strong,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover span,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover p,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover small {
+    box-shadow: none !important;
+    filter: none !important;
+    transform: none !important;
 }
 
 .ai-current-access-row strong {

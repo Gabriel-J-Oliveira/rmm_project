@@ -114,20 +114,7 @@
 
         {% if technical_group_rules %}
         <div class="ai-review-technical-note">
-            Esta pasta usar&aacute; grupos t&eacute;cnicos pr&oacute;prios. A lista nominal de pessoas ser&aacute; preenchida ap&oacute;s a importa&ccedil;&atilde;o da planilha de usu&aacute;rios.
-        </div>
-        <div class="ai-review-technical-groups">
-            {% for item in technical_group_rules %}
-            <article>
-                <div>
-                    <strong>Grupo t&eacute;cnico: {{ item.rule.principal.proposed_group_name|default:item.rule.principal.display_name }}</strong>
-                    <span>{{ item.rule.principal.display_name }}</span>
-                </div>
-                <span class="ai-permission-chip ai-permission-{{ item.rule.permission_level }}">{{ item.rule.get_permission_level_display }}</span>
-                <p>{{ item.explanation }}</p>
-                {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
-            </article>
-            {% endfor %}
+            Grupos t&eacute;cnicos s&atilde;o usados apenas como origem do acesso. A visualiza&ccedil;&atilde;o executiva prioriza os usu&aacute;rios efetivos.
         </div>
         {% endif %}
     </section>
@@ -261,7 +248,7 @@
         <div class="ai-section-heading">
             <div>
                 <h2>Resultado final dos acessos revistos</h2>
-                <p>Regras propostas diretamente nesta pasta. As permiss&otilde;es de subpastas aparecem ao abrir cada subpasta.</p>
+                <p>Quem ficar&aacute; com acesso de neg&oacute;cio ap&oacute;s a revis&atilde;o. Acesso calculado a partir dos grupos t&eacute;cnicos propostos.</p>
             </div>
         </div>
 
@@ -270,16 +257,14 @@
             <section class="ai-review-permission-section">
                 <h3><span class="ai-permission-chip ai-permission-{{ section.level }}">{{ section.label }}</span></h3>
                 <div class="ai-review-person-rows">
-                    {% for item in section.rules %}
+                    {% for item in section.rows %}
                     <article class="ai-review-person-row">
                         <div>
-                            <strong>{{ item.rule.principal.display_name }}</strong>
-                            {% if item.rule.principal.sam_account_name %}
-                            <span>{{ item.rule.principal.sam_account_name }}</span>
-                            {% endif %}
+                            <strong>{{ item.display_name }}</strong>
+                            {% if item.username %}<span>{{ item.username }}</span>{% endif %}
                         </div>
-                        <p>{{ item.explanation }}</p>
-                        {% if item.rule.notes %}<small>{{ item.rule.notes }}</small>{% endif %}
+                        <p>{{ item.permission_description }}</p>
+                        {% if item.origin_text %}<small>{{ item.origin_text }}</small>{% endif %}
                     </article>
                     {% endfor %}
                 </div>
