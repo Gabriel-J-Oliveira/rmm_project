@@ -264,7 +264,7 @@ class AccessReviewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.folder.name)
-        self.assertContains(response, 'Permiss&otilde;es atuais encontradas')
+        self.assertContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
 
     def test_review_folder_detail_renders_first_direct_child(self):
         root = AccessReviewFolder.objects.create(
@@ -311,7 +311,7 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'CAFOFO')
         self.assertContains(response, 'CAIXA')
         self.assertNotContains(response, 'Contexto atual vinculado')
-        self.assertNotContains(response, 'Permiss&otilde;es atuais encontradas')
+        self.assertNotContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
         self.assertNotContains(response, 'Usu&aacute;rios com acesso revogado')
 
     def test_final_review_folder_detail_does_not_render_empty_subfolders_panel(self):
@@ -345,7 +345,7 @@ class AccessReviewTests(TestCase):
 
         content = response.content.decode()
         self.assertLess(
-            content.index('Permiss&otilde;es atuais encontradas'),
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'),
             content.index('Resultado final dos acessos revistos'),
         )
 
@@ -447,7 +447,7 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Permiss&otilde;es atuais encontradas')
+        self.assertContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
         self.assertContains(response, 'Gabriel Oliveira')
         self.assertContains(response, 'Somente leitura')
         self.assertContains(response, 'Pode abrir, listar e visualizar arquivos.')
@@ -585,18 +585,19 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        maintained_section = content[
-            content.index('Usu&aacute;rios com acesso mantido'):
-            content.index('Usu&aacute;rios com acesso revogado')
-        ]
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Bruna Mantida', maintained_section)
-        self.assertIn('Leitura e escrita', maintained_section)
-        self.assertIn('ACESSO MANTIDO', maintained_section)
+        self.assertIn('Bruna Mantida', final_section)
+        self.assertIn('Leitura e escrita', final_section)
+        self.assertNotContains(response, 'Usu&aacute;rios com acesso mantido')
         self.assertLess(
-            content.index('Usu&aacute;rios com acesso mantido'),
             content.index('Usu&aacute;rios com acesso revogado'),
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'),
+        )
+        self.assertLess(
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'),
+            content.index('Resultado final dos acessos revistos'),
         )
 
     def test_proposed_group_rule_expands_members_in_final_result(self):
@@ -757,15 +758,12 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        maintained_section = content[
-            content.index('Usu&aacute;rios com acesso mantido'):
-            content.index('Usu&aacute;rios com acesso revogado')
-        ]
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Ana Mantida Grupo', maintained_section)
-        self.assertIn('via grupo GS_MANTER_RW', maintained_section)
-        self.assertNotIn('Grupo t&eacute;cnico:', maintained_section)
+        self.assertIn('Ana Mantida Grupo', final_section)
+        self.assertIn('via grupo GS_MANTER_RW', final_section)
+        self.assertNotIn('Grupo t&eacute;cnico:', final_section)
 
     def test_maintained_access_card_ignores_removed_none_filtered_and_domain_admins(self):
         socios_ou = ADOrganizationalUnit.objects.create(
@@ -858,19 +856,16 @@ class AccessReviewTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
-        maintained_section = content[
-            content.index('Usu&aacute;rios com acesso mantido'):
-            content.index('Usu&aacute;rios com acesso revogado')
-        ]
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Usuario Mantido', maintained_section)
-        self.assertNotIn('Usuario Removido', maintained_section)
-        self.assertNotIn('Usuario Sem Acesso', maintained_section)
-        self.assertNotIn('Socio Mantido', maintained_section)
-        self.assertNotIn('Administrator', maintained_section)
-        self.assertNotIn('Inativo Mantido', maintained_section)
-        self.assertNotIn('Domain Admins', maintained_section)
+        self.assertIn('Usuario Mantido', final_section)
+        self.assertNotIn('Usuario Removido', final_section)
+        self.assertNotIn('Usuario Sem Acesso', final_section)
+        self.assertNotIn('Socio Mantido', final_section)
+        self.assertNotIn('Administrator', final_section)
+        self.assertNotIn('Inativo Mantido', final_section)
+        self.assertNotIn('Domain Admins', final_section)
 
     def test_maintained_access_card_is_not_rendered_when_empty(self):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
@@ -917,10 +912,12 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
         current_access_section = content[
-            content.index('Permiss&otilde;es atuais encontradas'):
-            content.index('Usu&aacute;rios com acesso revogado')
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'):
         ]
-        revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
+        revoked_section = content[
+            content.index('Usu&aacute;rios com acesso revogado'):
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o')
+        ]
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('Carlos Lima', current_access_section)
@@ -1033,7 +1030,9 @@ class AccessReviewTests(TestCase):
         revoked_section = content[content.index('Usu&aacute;rios com acesso revogado'):]
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(revoked_section.count('Ana Remover'), 1)
+        self.assertIn('Ana Remover', revoked_section)
+        self.assertEqual(revoked_section.count('ACESSO SERA REVOGADO'), 1)
+        self.assertNotIn('ACESSO ADMINISTRATIVO SERA REMOVIDO', revoked_section)
         self.assertIn('ACESSO SERA REVOGADO', revoked_section)
         self.assertIn('Acesso sera revogado nesta pasta.', revoked_section)
         self.assertNotContains(response, 'Resultado final dos acessos revistos')
@@ -1175,8 +1174,7 @@ class AccessReviewTests(TestCase):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
         content = response.content.decode()
         current_access_section = content[
-            content.index('Permiss&otilde;es atuais encontradas'):
-            content.index('Usu&aacute;rios com acesso revogado')
+            content.index('Acessos atuais antes da reestrutura&ccedil;&atilde;o'):
         ]
 
         self.assertEqual(response.status_code, 200)
@@ -1185,7 +1183,7 @@ class AccessReviewTests(TestCase):
         self.assertContains(response, 'ai-review-partner-grid-item')
         partner_section = content[
             content.index('S&oacute;cios t&ecirc;m acesso geral'):
-            content.index('Contexto atual vinculado')
+            content.index('Usu&aacute;rios com acesso revogado')
         ]
         self.assertNotIn('<ul', partner_section)
         self.assertIn('<div class="ai-review-partner-grid">', partner_section)
@@ -1438,7 +1436,7 @@ class GrantAccessReviewRuleCommandTests(TestCase):
         self.assertFalse(AccessReviewPrincipal.objects.filter(plan=self.plan, ad_user=self.kelly).exists())
         self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan).exists())
 
-    def test_scope_rule_is_rendered_as_inherited_on_child_folder(self):
+    def test_scope_rule_is_rendered_in_final_result_on_child_folder(self):
         self.call_grant(
             '--plan-id', str(self.plan.id),
             '--folder-path', 'controlsul\\Administrativo',
@@ -1450,16 +1448,61 @@ class GrantAccessReviewRuleCommandTests(TestCase):
 
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
         content = response.content.decode()
-        inherited_section = content[
-            content.index('Acessos herdados do escopo'):
-            content.index('Permiss&otilde;es atuais encontradas')
-        ]
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Kelly Cristine Padovim', inherited_section)
-        self.assertIn('Controle total', inherited_section)
-        self.assertIn('herdado de Administrativo', inherited_section)
-        self.assertIn('manual_scope', inherited_section)
+        self.assertNotContains(response, 'Acessos herdados do escopo')
+        self.assertIn('Kelly Cristine Padovim', final_section)
+        self.assertIn('Controle total', final_section)
+        self.assertIn('herdado de Administrativo', final_section)
+        self.assertIn('Regra de escopo', final_section)
+
+    def test_scope_group_rule_expands_members_in_final_result(self):
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-scope-group',
+            sam_account_name='GS_ADMINISTRATIVO_FULL',
+            name='GS ADMINISTRATIVO FULL',
+        )
+        ADGroupMembership.objects.create(parent_group=group, member_user=self.kelly)
+        self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul\\Administrativo',
+            '--group', 'GS ADMINISTRATIVO FULL',
+            '--permission', 'FULL',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
+        content = response.content.decode()
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Kelly Cristine Padovim', final_section)
+        self.assertIn('Controle total', final_section)
+        self.assertIn('herdado de Administrativo - via grupo GS ADMINISTRATIVO FULL', final_section)
+
+    def test_scope_full_rule_wins_over_direct_read_write_rule(self):
+        self.call_grant(
+            '--plan-id', str(self.plan.id),
+            '--folder-path', 'controlsul\\Administrativo',
+            '--user', 'kelly.padovim',
+            '--permission', 'FULL',
+        )
+        principal = AccessReviewPrincipal.objects.get(plan=self.plan, ad_user=self.kelly)
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.cafofo,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.cafofo.id]))
+        content = response.content.decode()
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(final_section.count('Kelly Cristine Padovim'), 1)
+        self.assertIn('Controle total', final_section)
+        self.assertIn('herdado de Administrativo', final_section)
 
 
 class SeedAccessReviewFoldersCommandTests(TestCase):

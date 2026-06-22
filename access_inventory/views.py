@@ -17,16 +17,14 @@ from .models import (
     Share,
 )
 from .services.access_review import (
-    build_maintained_review_access_rows,
     build_revoked_review_access_rows,
     get_executive_review_plans,
     get_current_effective_user_access,
+    get_final_review_access_for_folder,
     get_folder_breadcrumb,
     get_folder_children,
     get_plan_visible_roots,
     get_partner_review_users,
-    get_proposed_effective_access_for_rules,
-    get_scope_inherited_access_for_folder,
 )
 
 
@@ -535,7 +533,7 @@ def review_folder_detail(request, plan_id, folder_id):
         AccessReviewRule.PERMISSION_CUSTOM,
     ]
     permission_sections = []
-    final_access_rows = get_proposed_effective_access_for_rules(list(rules))
+    final_access_rows = get_final_review_access_for_folder(folder)
     for permission_level in permission_order:
         section_rows = [
             row for row in final_access_rows
@@ -554,8 +552,6 @@ def review_folder_detail(request, plan_id, folder_id):
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     partner_users = get_partner_review_users()
-    inherited_scope_access_rows = get_scope_inherited_access_for_folder(folder)
-    maintained_access_rows = build_maintained_review_access_rows(rules)
     revoked_access_rows = build_revoked_review_access_rows(current_access.get('rows', []), user_rules)
     context = {
         **base_context('reviews'),
@@ -566,8 +562,6 @@ def review_folder_detail(request, plan_id, folder_id):
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
         'partner_users': partner_users,
-        'inherited_scope_access_rows': inherited_scope_access_rows,
-        'maintained_access_rows': maintained_access_rows,
         'revoked_access_rows': revoked_access_rows,
         'permission_sections': permission_sections,
         'technical_group_rules': technical_group_rules,

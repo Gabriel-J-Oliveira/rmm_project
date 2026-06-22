@@ -352,9 +352,17 @@ def mark_scope_inherited_access_rows(rows, source_folder):
         inherited['scope_origin_text'] = f'herdado de {source_name}'
         if inherited.get('origin_text') and inherited['origin_text'] != 'regra direta':
             inherited['scope_origin_text'] = f'{inherited["scope_origin_text"]} - {inherited["origin_text"]}'
+        inherited['origin_text'] = inherited['scope_origin_text']
         inherited['badge'] = 'HERDADO DO ESCOPO'
         marked_rows.append(inherited)
     return marked_rows
+
+
+def effective_access_row_key(row):
+    user = row.get('user')
+    if user:
+        return review_person_key_from_user(user)
+    return review_person_key_from_name(row.get('display_name'))
 
 
 def merge_effective_access_row(rows_by_key, key, row):
@@ -454,6 +462,22 @@ def get_scope_inherited_access_for_folder(review_folder):
         rows.extend(mark_scope_inherited_access_rows(ancestor_rows, ancestor))
 
     return rows
+
+
+def get_final_review_access_for_folder(review_folder):
+    rows_by_key = {}
+
+    for row in get_scope_inherited_access_for_folder(review_folder):
+        merge_effective_access_row(rows_by_key, effective_access_row_key(row), row)
+
+    direct_rows = get_proposed_effective_access_for_folder(review_folder)
+    for row in direct_rows:
+        merge_effective_access_row(rows_by_key, effective_access_row_key(row), row)
+
+    return sorted(
+        rows_by_key.values(),
+        key=lambda item: normalize_review_user_value(item.get('display_name')),
+    )
 
 
 def can_show_maintained_review_principal(principal):

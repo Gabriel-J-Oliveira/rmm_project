@@ -88,68 +88,36 @@
         {% endif %}
     </section>
 
-    <section class="ai-panel ai-compact-panel ai-review-technical-panel">
-        <h2>Contexto atual vinculado</h2>
-        {% if folder.current_folder %}
-        <div class="ai-review-current-folder">
-            <article>
-                <span>Pasta atual</span>
-                <strong>{{ folder.current_folder.path }}</strong>
-            </article>
-            <article>
-                <span>Share</span>
-                <strong>{{ folder.current_folder.share.name }}</strong>
-            </article>
-            <article>
-                <span>File server</span>
-                <strong>{{ folder.current_folder.share.file_server.name }}</strong>
-            </article>
-            <article>
-                <span>ACLs atuais</span>
-                <strong>{{ current_acl_count }}</strong>
-            </article>
-        </div>
-        {% else %}
-        <div class="ai-empty">Esta pasta planejada ainda n&atilde;o possui v&iacute;nculo com uma pasta do snapshot atual.</div>
-        {% endif %}
-
-        {% if technical_group_rules %}
-        <div class="ai-review-technical-note">
-            Grupos t&eacute;cnicos s&atilde;o usados apenas como origem do acesso. A visualiza&ccedil;&atilde;o executiva prioriza os usu&aacute;rios efetivos.
-        </div>
-        {% endif %}
-    </section>
-
-    {% if inherited_scope_access_rows %}
-    <section class="ai-panel ai-review-inherited-scope-panel">
+    <section class="ai-panel ai-review-revoked-panel">
         <div class="ai-section-heading">
             <div>
-                <h2>Acessos herdados do escopo</h2>
-                <p>Regras propostas em pastas acima deste ramo e aplicadas a esta pasta por escopo.</p>
+                <h2>Usu&aacute;rios com acesso revogado</h2>
+                <p>Acessos que n&atilde;o devem permanecer como permiss&atilde;o de neg&oacute;cio ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
             </div>
         </div>
+        {% if revoked_access_rows %}
         <div class="ai-review-person-rows">
-            {% for item in inherited_scope_access_rows %}
+            {% for item in revoked_access_rows %}
             <article class="ai-review-person-row">
                 <div>
                     <strong>{{ item.display_name }}</strong>
                     {% if item.username %}<span>{{ item.username }}</span>{% endif %}
                 </div>
-                <p>{{ item.permission_description }}</p>
-                <span class="ai-permission-chip ai-permission-{{ item.permission_level }}">{{ item.permission_label }}</span>
-                <span class="ai-permission-chip ai-permission-current">{{ item.badge }}</span>
-                {% if item.scope_origin_text %}<small>{{ item.scope_origin_text }}</small>{% endif %}
-                {% if item.rule.source or item.rule.notes %}<small>{{ item.rule.source }}{% if item.rule.notes %} - {{ item.rule.notes }}{% endif %}</small>{% endif %}
+                <p>{{ item.message }}</p>
+                <span class="ai-permission-chip ai-permission-none">{{ item.badge }}</span>
+                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
             </article>
             {% endfor %}
         </div>
+        {% else %}
+        <div class="ai-empty">Nenhum acesso revogado cadastrado para esta pasta.</div>
+        {% endif %}
     </section>
-    {% endif %}
 
     <section class="ai-panel ai-review-current-access-panel">
         <div class="ai-section-heading">
             <div>
-                <h2>Permiss&otilde;es atuais encontradas</h2>
+                <h2>Acessos atuais antes da reestrutura&ccedil;&atilde;o</h2>
                 <p>Usu&aacute;rios que hoje possuem acesso nesta pasta, diretamente ou por grupos resolvidos do Active Directory.</p>
             </div>
         </div>
@@ -219,63 +187,12 @@
         {% endif %}
     </section>
 
-    {% if maintained_access_rows %}
-    <section class="ai-panel ai-review-maintained-panel">
-        <div class="ai-section-heading">
-            <div>
-                <h2>Usu&aacute;rios com acesso mantido</h2>
-                <p>Esses usu&aacute;rios j&aacute; possuem acesso hoje e permanecer&atilde;o com acesso ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
-            </div>
-        </div>
-        <div class="ai-review-person-rows">
-            {% for item in maintained_access_rows %}
-            <article class="ai-review-person-row">
-                <div>
-                    <strong>{{ item.display_name }}</strong>
-                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
-                </div>
-                <p>{{ item.message }}</p>
-                <span class="ai-permission-chip ai-permission-{{ item.rule.permission_level }}">{{ item.permission_label }}</span>
-                <span class="ai-permission-chip ai-permission-current">{{ item.badge }}</span>
-                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
-            </article>
-            {% endfor %}
-        </div>
-    </section>
-    {% endif %}
-
-    <section class="ai-panel ai-review-revoked-panel">
-        <div class="ai-section-heading">
-            <div>
-                <h2>Usu&aacute;rios com acesso revogado</h2>
-                <p>Acessos que n&atilde;o devem permanecer como permiss&atilde;o de neg&oacute;cio ap&oacute;s a reestrutura&ccedil;&atilde;o.</p>
-            </div>
-        </div>
-        {% if revoked_access_rows %}
-        <div class="ai-review-person-rows">
-            {% for item in revoked_access_rows %}
-            <article class="ai-review-person-row">
-                <div>
-                    <strong>{{ item.display_name }}</strong>
-                    {% if item.username %}<span>{{ item.username }}</span>{% endif %}
-                </div>
-                <p>{{ item.message }}</p>
-                <span class="ai-permission-chip ai-permission-none">{{ item.badge }}</span>
-                {% if item.source %}<small>{{ item.source }}</small>{% endif %}
-            </article>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="ai-empty">Nenhum acesso revogado cadastrado para esta pasta.</div>
-        {% endif %}
-    </section>
-
     {% if permission_sections %}
     <section class="ai-panel ai-review-people-panel">
         <div class="ai-section-heading">
             <div>
                 <h2>Resultado final dos acessos revistos</h2>
-                <p>Quem ficar&aacute; com acesso de neg&oacute;cio ap&oacute;s a revis&atilde;o. Acesso calculado a partir dos grupos t&eacute;cnicos propostos.</p>
+                <p>Quem ficar&aacute; com acesso de neg&oacute;cio ap&oacute;s a revis&atilde;o. Inclui acessos diretos da pasta e acessos herdados de escopos superiores.</p>
             </div>
         </div>
 
@@ -292,6 +209,7 @@
                         </div>
                         <p>{{ item.permission_description }}</p>
                         {% if item.origin_text %}<small>{{ item.origin_text }}</small>{% endif %}
+                        {% if item.rule.source == "manual_scope" %}<small>Regra de escopo</small>{% endif %}
                     </article>
                     {% endfor %}
                 </div>
