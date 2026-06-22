@@ -1505,6 +1505,356 @@ class GrantAccessReviewRuleCommandTests(TestCase):
         self.assertIn('herdado de Administrativo', final_section)
 
 
+class SeedJuridicoAccessReviewRulesCommandTests(TestCase):
+    def setUp(self):
+        self.plan = AccessReviewPlan.objects.create(name='Plano Juridico')
+        self.root = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='controlsul',
+            name='controlsul',
+            proposed_path='controlsul',
+        )
+        self.juridico = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='Juridico',
+            proposed_path='controlsul\\Juridico',
+            parent=self.root,
+        )
+        self.sicoob = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='SICOOB',
+            proposed_path='controlsul\\Juridico\\SICOOB',
+            parent=self.juridico,
+        )
+        self.sicredi = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='SICREDI',
+            proposed_path='controlsul\\Juridico\\SICREDI',
+            parent=self.juridico,
+        )
+        self.sicoob_localizador = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='Localizador',
+            proposed_path='controlsul\\Juridico\\SICOOB\\Localizador',
+            parent=self.sicoob,
+        )
+        self.sicredi_localizador = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='Localizador',
+            proposed_path='controlsul\\Juridico\\SICREDI\\Localizador',
+            parent=self.sicredi,
+        )
+        self.adm = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='ADM',
+            proposed_path='controlsul\\Juridico\\ADM',
+            parent=self.juridico,
+        )
+        self.pre = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='PRE',
+            proposed_path='controlsul\\Juridico\\PRE',
+            parent=self.juridico,
+        )
+        self.penal = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='PENAL',
+            proposed_path='controlsul\\Juridico\\PENAL',
+            parent=self.juridico,
+        )
+        self.oper = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='OPER',
+            proposed_path='controlsul\\Juridico\\OPER',
+            parent=self.juridico,
+        )
+        self.trab = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='TRAB',
+            proposed_path='controlsul\\Juridico\\TRAB',
+            parent=self.juridico,
+        )
+        self.trib = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='TRIB',
+            proposed_path='controlsul\\Juridico\\TRIB',
+            parent=self.juridico,
+        )
+        self.prazos = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='PRAZOS',
+            proposed_path='controlsul\\Juridico\\PRAZOS',
+            parent=self.juridico,
+        )
+        self.civel = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='CIVEL',
+            proposed_path='controlsul\\Juridico\\CIVEL',
+            parent=self.juridico,
+        )
+
+    def create_user(self, display_name, sam_account_name, enabled=True, ou=None, distinguished_name=''):
+        return ADUser.objects.create(
+            sid=f'S-1-5-21-juridico-{ADUser.objects.count() + 1}',
+            sam_account_name=sam_account_name,
+            display_name=display_name,
+            email=f'{sam_account_name.replace(" ", ".")}@control.local',
+            user_principal_name=f'{sam_account_name.replace(" ", ".")}@control.local',
+            enabled=enabled,
+            ou=ou,
+            distinguished_name=distinguished_name or None,
+        )
+
+    def call_juridico(self, *args):
+        output = StringIO()
+        call_command(
+            'seed_juridico_access_review_rules',
+            '--plan-id',
+            str(self.plan.id),
+            *args,
+            stdout=output,
+        )
+        return output.getvalue()
+
+    def create_users_by_sam(self, *sam_names):
+        for sam in sam_names:
+            display = sam.replace('.', ' ').title()
+            self.create_user(display, sam)
+
+    def test_dry_run_does_not_create_rules(self):
+        self.create_user('Denise Monteiro de Oliveira', 'denise.oliveira')
+
+        output = self.call_juridico('--dry-run')
+
+        self.assertIn('DRY-RUN', output)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan).count(), 0)
+
+    def test_creates_prazos_custom_rules_on_juridico_root(self):
+        self.create_user('Denise Monteiro de Oliveira', 'denise.oliveira')
+
+        self.call_juridico()
+
+        rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.juridico, principal__ad_user__sam_account_name='denise.oliveira')
+        self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_CUSTOM)
+        self.assertEqual(rule.permission_label, 'Leitura e gravação sem exclusão')
+        self.assertIn('não deve excluir', rule.permission_explanation)
+
+    def test_prazos_rule_is_inherited_in_juridico_child_final_result(self):
+        self.create_user('Denise Monteiro de Oliveira', 'denise.oliveira')
+        child = AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name='Juridico',
+            name='PRAZOS TESTE',
+            proposed_path='controlsul\\Juridico\\PRAZOS TESTE',
+            parent=self.juridico,
+        )
+        self.call_juridico()
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, child.id]))
+        content = response.content.decode()
+        final_section = content[content.index('Resultado final dos acessos revistos'):]
+
+        self.assertIn('Denise Monteiro de Oliveira', final_section)
+        self.assertIn('Leitura e gravação sem exclusão', final_section)
+        self.assertIn('herdado de Juridico', final_section)
+
+    def test_creates_rw_rules_for_sicoob_and_sicredi(self):
+        self.create_user('Kelly Cristine Padovim', 'kelly.padovim')
+
+        self.call_juridico()
+
+        sicoob_rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.sicoob, principal__ad_user__sam_account_name='kelly.padovim')
+        sicredi_rule = AccessReviewRule.objects.get(plan=self.plan, folder=self.sicredi, principal__ad_user__sam_account_name='kelly.padovim')
+        self.assertEqual(sicoob_rule.permission_level, AccessReviewRule.PERMISSION_RW)
+        self.assertEqual(sicredi_rule.permission_level, AccessReviewRule.PERMISSION_RW)
+        self.assertEqual(sicoob_rule.permission_label, 'Leitura e escrita')
+
+    def test_pre_creates_rw_rules(self):
+        self.create_users_by_sam('alexandre.bracht', 'laercio.lisboa')
+
+        self.call_juridico()
+
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.pre).count(), 2)
+        for rule in AccessReviewRule.objects.filter(plan=self.plan, folder=self.pre):
+            self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_RW)
+
+    def test_penal_creates_no_individual_rules_and_reports_socios_only(self):
+        output = self.call_juridico()
+
+        self.assertIn('PENAL: apenas socios', output)
+        self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan, folder=self.penal).exists())
+
+    def test_oper_creates_rw_rules(self):
+        self.create_users_by_sam('ana.silva', 'fabiana.lorenzetti', 'kelly.padovim')
+
+        self.call_juridico()
+
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.oper).count(), 3)
+        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, folder=self.oper, principal__ad_user__sam_account_name='kelly.padovim').exists())
+
+    def test_trab_and_trib_create_rw_rules(self):
+        self.create_users_by_sam('bruna.oliveira', 'leovanir.lisboa', 'marcelle.prado', 'sabrina.soares')
+
+        self.call_juridico()
+
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.trab).count(), 4)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.trib).count(), 4)
+
+    def test_prazos_folder_creates_custom_rules(self):
+        self.create_users_by_sam(
+            'alexandre.bracht',
+            'ana.weiler',
+            'bianca.genguini',
+            'denise.oliveira',
+            'fabiana.lorenzetti',
+            'gabriela.bonin',
+            'kelly.padovim',
+            'larissa.odin',
+            'marcia.silva',
+        )
+
+        self.call_juridico()
+
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.prazos).count(), 9)
+        for rule in AccessReviewRule.objects.filter(plan=self.plan, folder=self.prazos):
+            self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_CUSTOM)
+            self.assertEqual(rule.permission_label, 'Leitura e gravação sem exclusão')
+
+    def test_civel_creates_rw_rules(self):
+        self.create_users_by_sam('alexandre.bracht', 'laercio.lisboa')
+
+        self.call_juridico()
+
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.civel).count(), 2)
+        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, folder=self.civel, principal__ad_user__sam_account_name='alexandre.bracht').exists())
+
+    def test_creates_kelly_localizador_rule_when_folder_exists(self):
+        self.create_user('Kelly Cristine Padovim', 'kelly.padovim')
+
+        self.call_juridico('--kelly-localizador-permission', 'FULL')
+
+        self.assertTrue(AccessReviewRule.objects.filter(
+            plan=self.plan,
+            folder=self.sicoob_localizador,
+            principal__ad_user__sam_account_name='kelly.padovim',
+            permission_level=AccessReviewRule.PERMISSION_FULL,
+        ).exists())
+        self.assertTrue(AccessReviewRule.objects.filter(
+            plan=self.plan,
+            folder=self.sicredi_localizador,
+            principal__ad_user__sam_account_name='kelly.padovim',
+            permission_level=AccessReviewRule.PERMISSION_FULL,
+        ).exists())
+
+    def test_missing_localizador_does_not_break(self):
+        self.sicoob_localizador.delete()
+        self.sicredi_localizador.delete()
+        self.create_user('Kelly Cristine Padovim', 'kelly.padovim')
+
+        output = self.call_juridico()
+
+        self.assertIn('Localizador', output)
+        self.assertFalse(AccessReviewRule.objects.filter(folder__name='Localizador').exists())
+
+    def test_creates_adm_rules_for_active_blazius_lorenzetti_users(self):
+        blazius_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Blazius,DC=control,DC=local',
+            name='Blazius',
+        )
+        lorenzetti_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Lorenzetti,DC=control,DC=local',
+            name='Lorenzetti',
+        )
+        self.create_user('Usuario Blazius', 'usuario.blazius', ou=blazius_ou)
+        self.create_user('Usuario Lorenzetti', 'usuario.lorenzetti', ou=lorenzetti_ou)
+
+        self.call_juridico()
+
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan, folder=self.adm).count(), 2)
+        for rule in AccessReviewRule.objects.filter(plan=self.plan, folder=self.adm):
+            self.assertEqual(rule.permission_level, AccessReviewRule.PERMISSION_CUSTOM)
+            self.assertEqual(rule.permission_label, 'Leitura e gravação sem exclusão')
+
+    def test_inactive_ou_user_is_not_created(self):
+        blazius_ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Blazius,DC=control,DC=local',
+            name='Blazius',
+        )
+        self.create_user('Usuario Inativo Blazius', 'inativo.blazius', enabled=False, ou=blazius_ou)
+
+        self.call_juridico()
+
+        self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan, folder=self.adm).exists())
+
+    def test_inactive_listed_user_is_ignored(self):
+        self.create_user('Kelly Cristine Padovim', 'kelly.padovim', enabled=False)
+
+        output = self.call_juridico()
+
+        self.assertIn('Usuarios ignorados', output)
+        self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan, principal__ad_user__sam_account_name='kelly.padovim').exists())
+
+    def test_command_is_idempotent(self):
+        self.create_user('Kelly Cristine Padovim', 'kelly.padovim')
+
+        self.call_juridico()
+        self.call_juridico()
+
+        self.assertEqual(
+            AccessReviewRule.objects.filter(plan=self.plan, principal__ad_user__sam_account_name='kelly.padovim').count(),
+            6,
+        )
+
+    def test_clear_existing_removes_only_juridico_business_rules(self):
+        self.create_user('Kelly Cristine Padovim', 'kelly.padovim')
+        manual_principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name='Manual',
+        )
+        AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=self.sicoob,
+            principal=manual_principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+            source='manual',
+        )
+        self.call_juridico()
+
+        self.call_juridico('--clear-existing')
+
+        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, source='manual').exists())
+        self.assertTrue(AccessReviewRule.objects.filter(plan=self.plan, source='juridico_business_rules').exists())
+
+    def test_user_not_found_is_reported_without_breaking(self):
+        output = self.call_juridico()
+
+        self.assertIn('Usuarios nao encontrados', output)
+        self.assertEqual(AccessReviewRule.objects.filter(plan=self.plan).count(), 0)
+
+    def test_ambiguous_user_is_reported_without_rule(self):
+        self.create_user('Denise Monteiro de Oliveira', 'denise.a')
+        self.create_user('Denise Monteiro de Oliveira', 'denise.b')
+
+        output = self.call_juridico()
+
+        self.assertIn('Usuarios ambiguos', output)
+        self.assertFalse(AccessReviewRule.objects.filter(plan=self.plan, principal__display_name='Denise Monteiro de Oliveira').exists())
+
+
 class SeedAccessReviewFoldersCommandTests(TestCase):
     def setUp(self):
         self.plan = AccessReviewPlan.objects.create(

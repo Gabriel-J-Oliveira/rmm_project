@@ -334,7 +334,7 @@ def proposed_access_row_from_rule(rule, user=None, origin_group=None):
         'display_name': display_name,
         'username': username,
         'permission_level': rule.permission_level,
-        'permission_label': permission_level_label(rule.permission_level),
+        'permission_label': rule.permission_label or permission_level_label(rule.permission_level),
         'permission_description': rule_explanation(rule),
         'origin_group_name': origin_group_name,
         'origin_text': origin_text,

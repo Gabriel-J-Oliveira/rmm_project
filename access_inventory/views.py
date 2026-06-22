@@ -540,9 +540,12 @@ def review_folder_detail(request, plan_id, folder_id):
             if row.get('permission_level') == permission_level
         ]
         if section_rows:
+            section_label = dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level)
+            if permission_level == AccessReviewRule.PERMISSION_CUSTOM and section_rows[0].get('permission_label'):
+                section_label = section_rows[0]['permission_label']
             permission_sections.append({
                 'level': permission_level,
-                'label': dict(AccessReviewRule.PERMISSION_LEVEL_CHOICES).get(permission_level, permission_level),
+                'label': section_label,
                 'rows': section_rows,
             })
 
