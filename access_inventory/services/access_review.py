@@ -13,6 +13,21 @@ EXECUTIVE_VISIBLE_ROOT_PATHS = {
     'controlsul\\juridico',
 }
 
+# Pastas cujo conteudo deve ser analisado no proprio no, mesmo que existam
+# subpastas tecnicas/de clientes abaixo delas.
+FORCED_ANALYSIS_FOLDER_PATHS = {
+    'controlsul\\juridico\\civel',
+    'controlsul\\juridico\\trib',
+    'controlsul\\juridico\\pre',
+}
+
+# Pastas restritas aos socios na leitura executiva da reestruturacao.
+PARTNERS_ONLY_FOLDER_PATHS = {
+    'controlsul\\juridico\\uopecan',
+    'controlsul\\juridico\\trab',
+    'controlsul\\juridico\\penal',
+}
+
 TECHNICAL_REVIEW_USER_NAMES = {
     'administrador',
     'administrator',
@@ -92,6 +107,34 @@ def normalize_review_user_value(value):
     value = unicodedata.normalize('NFKD', value)
     value = ''.join(character for character in value if not unicodedata.combining(character))
     return re.sub(r'\s+', ' ', value).strip().lower()
+
+
+def normalize_review_folder_path(value):
+    value = '' if value is None else str(value)
+    value = value.replace('/', '\\')
+    value = re.sub(r'\\+', r'\\', value)
+    parts = [' '.join(part.strip().split()) for part in value.split('\\') if part.strip()]
+    return normalize_review_user_value('\\'.join(parts))
+
+
+def normalized_review_folder_path(review_folder):
+    return normalize_review_folder_path(getattr(review_folder, 'proposed_path', '') or '')
+
+
+def is_forced_analysis_folder(review_folder):
+    return normalized_review_folder_path(review_folder) in FORCED_ANALYSIS_FOLDER_PATHS
+
+
+def is_partners_only_folder(review_folder):
+    return normalized_review_folder_path(review_folder) in PARTNERS_ONLY_FOLDER_PATHS
+
+
+def is_analysis_target_folder(review_folder, child_folders=None):
+    if is_forced_analysis_folder(review_folder) or is_partners_only_folder(review_folder):
+        return True
+    if child_folders is None:
+        return not get_folder_children(review_folder).exists()
+    return not bool(child_folders)
 
 
 def review_user_identity_values(ad_user):

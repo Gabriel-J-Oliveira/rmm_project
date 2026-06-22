@@ -25,6 +25,8 @@ from .services.access_review import (
     get_folder_children,
     get_plan_visible_roots,
     get_partner_review_users,
+    is_analysis_target_folder,
+    is_partners_only_folder,
 )
 
 
@@ -532,8 +534,13 @@ def review_folder_detail(request, plan_id, folder_id):
         AccessReviewRule.PERMISSION_FULL,
         AccessReviewRule.PERMISSION_CUSTOM,
     ]
+    child_folders = list(get_folder_children(folder))
+    is_partners_only = is_partners_only_folder(folder)
+    is_permission_target_folder = is_analysis_target_folder(folder, child_folders)
+    visible_child_folders = [] if is_permission_target_folder else child_folders
+
     permission_sections = []
-    final_access_rows = get_final_review_access_for_folder(folder)
+    final_access_rows = [] if is_partners_only else get_final_review_access_for_folder(folder)
     for permission_level in permission_order:
         section_rows = [
             row for row in final_access_rows
@@ -550,8 +557,6 @@ def review_folder_detail(request, plan_id, folder_id):
             })
 
     technical_group_rules = []
-    child_folders = list(get_folder_children(folder))
-    is_permission_target_folder = not child_folders
     review_breadcrumb = get_folder_breadcrumb(folder)
     current_access = get_current_effective_user_access(folder)
     partner_users = get_partner_review_users()
@@ -560,8 +565,9 @@ def review_folder_detail(request, plan_id, folder_id):
         **base_context('reviews'),
         'plan': plan,
         'folder': folder,
-        'child_folders': child_folders,
+        'child_folders': visible_child_folders,
         'is_permission_target_folder': is_permission_target_folder,
+        'is_partners_only_folder': is_partners_only,
         'review_breadcrumb': review_breadcrumb,
         'current_access': current_access,
         'partner_users': partner_users,

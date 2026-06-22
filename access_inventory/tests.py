@@ -29,6 +29,8 @@ from .services.access_review import (
     describe_acl_rights,
     explain_permission,
     get_current_effective_user_access,
+    is_analysis_target_folder,
+    is_partners_only_folder,
     is_partner_review_user,
     is_displayable_review_user,
 )
@@ -230,6 +232,35 @@ class AccessReviewTests(TestCase):
             permission_level=AccessReviewRule.PERMISSION_RW,
         )
 
+    def create_review_folder(self, name, proposed_path, parent=None, area_name='Juridico'):
+        return AccessReviewFolder.objects.create(
+            plan=self.plan,
+            area_name=area_name,
+            name=name,
+            proposed_path=proposed_path,
+            parent=parent,
+        )
+
+    def create_user_review_rule(self, folder, display_name='Usuario Aprovado', sam_account_name='usuario.aprovado'):
+        user = ADUser.objects.create(
+            sid=f'S-1-5-21-REVIEW-{ADUser.objects.count() + 1}',
+            sam_account_name=sam_account_name,
+            display_name=display_name,
+        )
+        principal = AccessReviewPrincipal.objects.create(
+            plan=self.plan,
+            principal_type=AccessReviewPrincipal.PRINCIPAL_USER,
+            display_name=display_name,
+            sam_account_name=sam_account_name,
+            ad_user=user,
+        )
+        return AccessReviewRule.objects.create(
+            plan=self.plan,
+            folder=folder,
+            principal=principal,
+            permission_level=AccessReviewRule.PERMISSION_RW,
+        )
+
     def test_permission_explanation_is_executive_friendly(self):
         self.assertIn('criar', explain_permission(AccessReviewRule.PERMISSION_RW))
         self.assertIn('Sem acesso', explain_permission(AccessReviewRule.PERMISSION_NONE))
@@ -265,6 +296,15 @@ class AccessReviewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.folder.name)
         self.assertContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
+        self.assertContains(response, 'page-access-inventory')
+        self.assertNotContains(response, '<aside class="sidebar">', html=True)
+
+    def test_access_inventory_plan_list_does_not_render_global_sidebar(self):
+        response = self.client.get(reverse('access_inventory:review-plan-list'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'page-access-inventory')
+        self.assertNotContains(response, '<aside class="sidebar">', html=True)
 
     def test_review_folder_detail_renders_first_direct_child(self):
         root = AccessReviewFolder.objects.create(
@@ -313,6 +353,110 @@ class AccessReviewTests(TestCase):
         self.assertNotContains(response, 'Contexto atual vinculado')
         self.assertNotContains(response, 'Acessos atuais antes da reestrutura&ccedil;&atilde;o')
         self.assertNotContains(response, 'Usu&aacute;rios com acesso revogado')
+
+    def test_juridico_forced_analysis_folders_do_not_render_subfolders(self):
+        root = self.create_review_folder('controlsul', 'controlsul')
+        juridico = self.create_review_folder('Juridico', 'controlsul\\Juridico', parent=root)
+
+        for folder_name in ('CIVEL', 'TRIB', 'PRE'):
+            with self.subTest(folder_name=folder_name):
+                folder = self.create_review_folder(folder_name, f'controlsul\\Juridico\\{folder_name}', parent=juridico)
+                self.create_review_folder('Processo 001', f'controlsul\\Juridico\\{folder_name}\\Processo 001', parent=folder)
+                self.create_user_review_rule(
+                    folder,
+                    display_name=f'Usuario {folder_name}',
+                    sam_account_name=f'usuario.{folder_name.lower()}',
+                )
+
+                response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, folder.id]))
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(is_analysis_target_folder(folder, list(folder.children.all())))
+                self.assertNotContains(response, 'Subpastas')
+                self.assertNotContains(response, 'Processo 001')
+                self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+                self.assertContains(response, 'Resultado final dos acessos revistos')
+                self.assertContains(response, f'Usuario {folder_name}')
+
+    def test_regular_folder_with_children_remains_intermediate(self):
+        root = self.create_review_folder('controlsul', 'controlsul')
+        juridico = self.create_review_folder('Juridico', 'controlsul\\Juridico', parent=root)
+        folder = self.create_review_folder('OPER', 'controlsul\\Juridico\\OPER', parent=juridico)
+        self.create_review_folder('Cliente 001', 'controlsul\\Juridico\\OPER\\Cliente 001', parent=folder)
+        self.create_user_review_rule(folder, display_name='Usuario OPER', sam_account_name='usuario.oper')
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(is_analysis_target_folder(folder, list(folder.children.all())))
+        self.assertContains(response, 'Subpastas')
+        self.assertContains(response, 'Cliente 001')
+        self.assertNotContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
+
+    def test_partners_only_folders_hide_common_users_from_final_result(self):
+        root = self.create_review_folder('controlsul', 'controlsul')
+        juridico = self.create_review_folder('Juridico', 'controlsul\\Juridico', parent=root)
+
+        for folder_name in ('UOPECAN', 'TRAB', 'PENAL'):
+            with self.subTest(folder_name=folder_name):
+                folder = self.create_review_folder(folder_name, f'controlsul\\Juridico\\{folder_name}', parent=juridico)
+                self.create_review_folder('Cliente restrito', f'controlsul\\Juridico\\{folder_name}\\Cliente restrito', parent=folder)
+                self.create_user_review_rule(
+                    folder,
+                    display_name=f'Usuario Comum {folder_name}',
+                    sam_account_name=f'comum.{folder_name.lower()}',
+                )
+
+                response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, folder.id]))
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(is_partners_only_folder(folder))
+                self.assertTrue(is_analysis_target_folder(folder, list(folder.children.all())))
+                self.assertNotContains(response, 'Subpastas')
+                self.assertNotContains(response, 'Cliente restrito')
+                self.assertContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
+                self.assertContains(response, 'Regra desta pasta: acesso restrito aos s&oacute;cios')
+                self.assertNotContains(response, 'Resultado final dos acessos revistos')
+                self.assertNotContains(response, f'Usuario Comum {folder_name}')
+
+    def test_partners_only_path_matching_is_case_and_separator_tolerant(self):
+        root = self.create_review_folder('controlsul', 'controlsul')
+        juridico = self.create_review_folder('Juridico', 'controlSul/Jurídico', parent=root)
+        folder = self.create_review_folder('Uopecan', 'controlSul/Jurídico/Uopecan', parent=juridico)
+        self.create_review_folder('Cliente', 'controlSul/Jurídico/Uopecan/Cliente', parent=folder)
+        self.create_user_review_rule(folder, display_name='Usuario Uopecan', sam_account_name='usuario.uopecan')
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(is_partners_only_folder(folder))
+        self.assertNotContains(response, 'Subpastas')
+        self.assertContains(response, 'Regra desta pasta: acesso restrito aos s&oacute;cios')
+        self.assertNotContains(response, 'Resultado final dos acessos revistos')
+
+    def test_administrativo_is_not_affected_by_juridico_exceptions(self):
+        root = self.create_review_folder('controlsul', 'controlsul')
+        admin = self.create_review_folder('Administrativo', 'controlsul\\Administrativo', parent=root, area_name='Administrativo')
+        folder = self.create_review_folder(
+            'CIVEL',
+            'controlsul\\Administrativo\\CIVEL',
+            parent=admin,
+            area_name='Administrativo',
+        )
+        self.create_review_folder(
+            'Cliente Administrativo',
+            'controlsul\\Administrativo\\CIVEL\\Cliente Administrativo',
+            parent=folder,
+            area_name='Administrativo',
+        )
+
+        response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, folder.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Subpastas')
+        self.assertContains(response, 'Cliente Administrativo')
+        self.assertNotContains(response, 'S&oacute;cios t&ecirc;m acesso geral')
 
     def test_final_review_folder_detail_does_not_render_empty_subfolders_panel(self):
         response = self.client.get(reverse('access_inventory:review-folder-detail', args=[self.plan.id, self.folder.id]))
@@ -876,6 +1020,12 @@ class AccessReviewTests(TestCase):
     def test_access_review_rows_have_scoped_no_hover_css(self):
         css = (BASE_DIR / 'static' / 'css' / 'nightowl.css').read_text(encoding='utf-8')
 
+        self.assertIn('body.page-access-inventory .app-shell', css)
+        self.assertIn('grid-template-columns: minmax(0, 1fr);', css)
+        self.assertIn('body.page-access-inventory .ai-table tr:hover td', css)
+        self.assertIn('body.page-access-inventory .ai-mini-list a:hover', css)
+        self.assertIn('body.page-access-inventory .ai-result-item:hover', css)
+        self.assertIn('body.page-access-inventory .ai-access-line:hover', css)
         self.assertIn('body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover', css)
         self.assertIn('body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover', css)
         self.assertIn('body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover', css)

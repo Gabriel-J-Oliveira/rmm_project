@@ -13,6 +13,7 @@
 </head>
 <body class="{% block body_class %}page-dashboard{% endblock %}">
     <div class="app-shell">
+        {% if active_nav != 'access_inventory' %}
         <aside class="sidebar">
             <div class="brand">
                 <div class="brand-logo" aria-hidden="true">
@@ -48,6 +49,7 @@
                 </div>
             </nav>
         </aside>
+        {% endif %}
 
         <div class="main-area">
             <header class="topbar">

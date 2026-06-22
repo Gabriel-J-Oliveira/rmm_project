@@ -6395,6 +6395,10 @@ body.page-access-inventory .content {
         var(--ai-bg);
 }
 
+body.page-access-inventory .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 body.page-access-inventory .sidebar {
     background: #05070c;
     border-right-color: var(--ai-border);
@@ -8565,4 +8569,47 @@ body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover s
     body.page-access-inventory .ai-review-partner-grid {
         grid-template-columns: 1fr;
     }
+}
+
+/* Access Inventory tabular/list rows are informational; keep hover only on links and controls. */
+body.page-access-inventory .ai-table tr:hover td {
+    background: transparent !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+body.page-access-inventory .ai-mini-list a:hover,
+body.page-access-inventory .ai-list-row:hover,
+body.page-access-inventory .ai-result-item:hover,
+body.page-access-inventory .ai-access-line:hover,
+body.page-access-inventory .ai-compact-list a:hover {
+    background: #070d15 !important;
+    border-color: rgba(148, 163, 184, 0.11) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+body.page-access-inventory .ai-review-folder-lines article:hover {
+    background: rgba(2, 6, 12, 0.22) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+body.page-access-inventory .ai-current-access-row:hover,
+body.page-access-inventory .ai-review-current-access-panel .ai-current-access-row:hover {
+    background: rgba(2, 6, 12, 0.24) !important;
+    border-color: rgba(148, 163, 184, 0.08) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+body.page-access-inventory .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-maintained-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-revoked-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-people-panel .ai-review-person-row:hover,
+body.page-access-inventory .ai-review-technical-panel .ai-review-technical-groups article:hover {
+    background: rgba(2, 6, 12, 0.28) !important;
+    border-color: rgba(148, 163, 184, 0.08) !important;
+    box-shadow: none !important;
+    transform: none !important;
 }
