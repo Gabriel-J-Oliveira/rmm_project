@@ -2,9 +2,8 @@
     <div class="desk-compact-title">
         <span class="desk-compact-icon"><i data-lucide="radio"></i></span>
         <div>
-            <p class="desk-kicker">Night Owl Desk / Operacao</p>
             <h1>{{ page_title }}</h1>
-            <span>{{ page_subtitle }}</span>
+            <span>{{ tickets|length }} na fila &middot; {{ new_ticket_count }} novos &middot; RMM integrado</span>
         </div>
     </div>
 
@@ -12,6 +11,13 @@
         <i data-lucide="search"></i>
         <input name="q" value="{{ request.GET.q }}" placeholder="Chamado, solicitante, endpoint...">
         <input type="hidden" name="view" value="{{ view_mode }}">
+        <kbd>Ctrl K</kbd>
+        <div class="desk-search-preview" aria-label="Resultados da busca">
+            <strong>Resultados rapidos</strong>
+            <a href="{% url 'tickets:central' %}?ticket=1048"><i data-lucide="ticket"></i>#1048 Socio sem acesso ao e-mail</a>
+            <a href="{% url 'tickets:central' %}?origin=rmm"><i data-lucide="activity"></i>RMM Alertas</a>
+            <a href="{% url 'endpoint-list' %}"><i data-lucide="monitor"></i>Endpoints monitorados</a>
+        </div>
     </form>
 
     <div class="desk-view-switcher" aria-label="Alternar visualizacao">

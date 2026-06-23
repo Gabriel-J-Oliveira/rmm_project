@@ -1,11 +1,14 @@
-<section class="desk-selection-bar" aria-label="Acoes em lote">
+<section class="desk-selection-bar" aria-label="Acoes em lote" data-selected-count="0" hidden>
     <div>
-        <strong>0 selecionados</strong>
-        <span>Marque chamados para aplicar acoes em lote.</span>
+        <strong><span data-selected-label>0</span> selecionados</strong>
+        <button type="button" data-clear-selection>limpar selecao</button>
     </div>
     <div>
         <button class="desk-btn" type="button"><i data-lucide="user-plus"></i>Atribuir</button>
         <button class="desk-btn" type="button"><i data-lucide="flag"></i>Mudar prioridade</button>
         <button class="desk-btn" type="button"><i data-lucide="shuffle"></i>Mudar status</button>
+        <button class="desk-btn" type="button"><i data-lucide="arrow-up-right"></i>Escalar</button>
+        <button class="desk-btn" type="button"><i data-lucide="git-merge"></i>Mesclar</button>
+        <button class="desk-btn" type="button"><i data-lucide="check-circle"></i>Fechar</button>
     </div>
 </section>

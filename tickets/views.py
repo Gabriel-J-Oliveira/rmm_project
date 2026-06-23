@@ -43,6 +43,72 @@ def _ticket_sort_key(ticket):
     )
 
 
+def _decorate_central_ticket(ticket):
+    is_rmm = ticket.category == 'RMM / Alerta' or 'alerta' in ticket.title.casefold() or 'bitdefender' in ticket.title.casefold()
+    is_manual = not is_rmm
+    is_waiting = ticket.status in {'waiting_user', 'waiting_third_party'}
+    is_unassigned = not ticket.assigned_to
+    stale_times = {'2h 44min', '2h 40min', '2h 15min', '3h'}
+    is_stale = ticket.updated_for in stale_times
+    has_recent_internal = any(comment.visibility == 'Interno' for comment in ticket.comments)
+    has_attachment = ticket.number in {1048, 1045, 1042}
+    is_merged = ticket.number in {1046}
+    sla_state = 'critical' if ticket.priority == 'critical' or is_stale else 'warning' if ticket.priority == 'high' else 'ok'
+    origin = 'rmm' if is_rmm else 'manual'
+    origin_label = 'RMM Alert' if is_rmm else 'Manual'
+    origin_icon = 'activity' if is_rmm else 'user-round'
+    alert_label = 'Antivirus desativado' if 'Bitdefender' in ticket.title else 'Disco cheio' if 'disco' in ticket.title.casefold() else 'Alerta RMM critico'
+    endpoint_status = ticket.endpoint.status if ticket.endpoint else 'none'
+    endpoint_online = endpoint_status == 'online'
+    rmm_card = None
+    if ticket.endpoint:
+        rmm_card = {
+            'hostname': ticket.endpoint.hostname,
+            'online': endpoint_online,
+            'status_label': 'Online' if endpoint_online else 'Offline',
+            'last_seen': ticket.endpoint.last_heartbeat,
+            'logged_user': ticket.endpoint.last_user,
+            'cpu': 38 if endpoint_online else 0,
+            'memory': 67 if endpoint_online else 0,
+            'disk': 91 if is_rmm else 58,
+            'active_alerts': 2 if is_rmm else 0,
+            'risk': 'critical' if is_rmm else 'normal',
+        }
+    suggestion = 'Este chamado esta sem responsavel. Atribua a alguem para iniciar o atendimento.'
+    if is_rmm:
+        suggestion = 'Chamado veio de alerta RMM critico. Valide o endpoint antes de resolver.'
+    elif sla_state == 'critical':
+        suggestion = f'SLA em atencao: chamado aberto ha {ticket.opened_for}.'
+    elif is_waiting:
+        suggestion = 'Chamado pausado aguardando retorno externo. Revise se precisa de follow-up.'
+    elif ticket.endpoint:
+        suggestion = f'Endpoint {ticket.endpoint.hostname} vinculado. Verifique telemetria antes da proxima acao.'
+
+    ticket.central = {
+        'origin': origin,
+        'origin_label': origin_label,
+        'origin_icon': origin_icon,
+        'is_rmm': is_rmm,
+        'is_manual': is_manual,
+        'is_waiting': is_waiting,
+        'is_unassigned': is_unassigned,
+        'is_stale': is_stale,
+        'has_recent_internal': has_recent_internal,
+        'has_attachment': has_attachment,
+        'is_merged': is_merged,
+        'sla_state': sla_state,
+        'sla_label': 'vence agora' if sla_state == 'critical' else 'vence em breve' if sla_state == 'warning' else 'no prazo',
+        'alert_label': alert_label,
+        'endpoint_status': endpoint_status,
+        'rmm': rmm_card,
+        'suggestion': suggestion,
+        'comments_count': len(ticket.comments),
+        'attachments_count': 2 if has_attachment else 0,
+        'watchers': ['Gabriel', 'Renan'] if ticket.priority in {'critical', 'high'} else ['Ana'],
+    }
+    return ticket
+
+
 def _count_by(items, attr_name):
     counts = {}
     for item in items:
@@ -58,7 +124,9 @@ def _central_context(request, active_section='central', assigned_to=None):
     open_tickets = _open_tickets()
     selected_number = request.GET.get('ticket') or (tickets[0].number if tickets else None)
     selected_ticket = get_ticket(selected_number) if selected_number else None
-    sorted_tickets = sorted(tickets, key=_ticket_sort_key)
+    sorted_tickets = [_decorate_central_ticket(ticket) for ticket in sorted(tickets, key=_ticket_sort_key)]
+    if selected_ticket:
+        selected_ticket = _decorate_central_ticket(selected_ticket)
     status_groups = [
         ('new', 'Novo'),
         ('in_progress', 'Em atendimento'),
@@ -119,11 +187,13 @@ def _central_context(request, active_section='central', assigned_to=None):
             for value, count in sorted(filter_counts['category'].items())
         ],
     }
+    current_summary = summary_for(tickets)
+    global_summary = summary_for()
     context = {
         **_base_context(active_section),
         'tickets': sorted_tickets,
-        'summary': summary_for(tickets),
-        'global_summary': summary_for(),
+        'summary': current_summary,
+        'global_summary': global_summary,
         'selected_ticket': selected_ticket,
         'kanban_columns': kanban_columns,
         'grouped_by_owner': grouped_by_owner,
@@ -132,9 +202,34 @@ def _central_context(request, active_section='central', assigned_to=None):
         'filter_options': filter_options,
         'unassigned_count': len([ticket for ticket in MOCK_TICKETS if not ticket.assigned_to]),
         'saved_views': [
-            {'name': 'Criticos agora', 'query': '?priority=critical'},
-            {'name': 'Sem dono', 'query': '?unassigned=1'},
-            {'name': 'Socios / VIP', 'query': '?vip=1'},
+            {'name': 'Fila geral', 'query': '?view=list', 'active': True},
+            {'name': 'Criticos sem dono', 'query': '?priority=critical&unassigned=1', 'active': False},
+            {'name': 'Minha fila', 'query': '?assigned_to=Gabriel', 'active': False},
+            {'name': 'RMM Alertas', 'query': '?origin=rmm', 'active': False},
+            {'name': 'Financeiro', 'query': '?sector=Financeiro', 'active': False},
+        ],
+        'central_kpis': [
+            {'label': 'Abertos', 'value': global_summary['open'], 'url': '?view=list', 'icon': 'inbox', 'trend': '+8%', 'spark': [12, 16, 14, 18, 22, 21]},
+            {'label': 'Criticos', 'value': global_summary['critical'], 'url': '?priority=critical', 'icon': 'alert-triangle', 'trend': '+2', 'spark': [4, 5, 5, 6, 8, 7], 'variant': 'critical'},
+            {'label': 'Sem dono', 'value': len([ticket for ticket in MOCK_TICKETS if not ticket.assigned_to]), 'url': '?unassigned=1', 'icon': 'user-x', 'trend': '-1', 'spark': [6, 5, 7, 5, 4, 4], 'variant': 'warning'},
+            {'label': 'SLA vencendo', 'value': 3, 'url': '?stale=1', 'icon': 'timer', 'trend': '+1', 'spark': [1, 1, 2, 2, 3, 3], 'variant': 'warning'},
+            {'label': '1a resposta', 'value': global_summary['avg_first_response'], 'url': '?view=list', 'icon': 'clock-3', 'trend': '-6%', 'spark': [28, 25, 24, 22, 20, 18]},
+            {'label': 'Resolucao', 'value': '2h14', 'url': '?status=resolved', 'icon': 'check-circle', 'trend': '-11%', 'spark': [34, 31, 29, 28, 25, 22]},
+            {'label': 'Em atendimento', 'value': global_summary['in_progress'], 'url': '?status=in_progress', 'icon': 'radio', 'trend': '+4', 'spark': [4, 6, 7, 8, 9, 9]},
+            {'label': 'Alertas RMM', 'value': len([ticket for ticket in MOCK_TICKETS if ticket.category == 'RMM / Alerta' or 'alerta' in ticket.title.casefold() or 'Bitdefender' in ticket.title]), 'url': '?origin=rmm', 'icon': 'activity', 'trend': '+3', 'spark': [1, 2, 2, 4, 4, 5], 'variant': 'rmm'},
+        ],
+        'origin_options': [
+            {'value': 'manual', 'label': 'Manual', 'count': len([ticket for ticket in MOCK_TICKETS if ticket.category != 'RMM / Alerta'])},
+            {'value': 'rmm', 'label': 'RMM Alert', 'count': len([ticket for ticket in MOCK_TICKETS if ticket.category == 'RMM / Alerta' or 'alerta' in ticket.title.casefold() or 'Bitdefender' in ticket.title])},
+            {'value': 'email', 'label': 'E-mail', 'count': 2},
+            {'value': 'phone', 'label': 'Telefone', 'count': 1},
+        ],
+        'command_actions': [
+            {'icon': 'ticket-plus', 'label': 'Novo chamado', 'shortcut': 'Ctrl N'},
+            {'icon': 'activity', 'label': 'Abrir RMM Alertas', 'shortcut': 'R M M'},
+            {'icon': 'user-check', 'label': 'Ver meus chamados', 'shortcut': 'G M'},
+            {'icon': 'bar-chart-3', 'label': 'Abrir dashboard', 'shortcut': 'G D'},
+            {'icon': 'columns-3', 'label': 'Alternar Kanban', 'shortcut': 'V K'},
         ],
         'view_mode': request.GET.get('view', 'list'),
         'new_ticket_count': 3,

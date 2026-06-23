@@ -4,14 +4,32 @@
     <button type="button">Atribuir a mim</button>
     <button type="button">Copiar link</button>
     <button type="button">Marcar como critico</button>
+    <button type="button">Mesclar duplicados</button>
 </div>
 
-<dialog class="desk-modal">
+<dialog class="desk-modal desk-bulk-confirm-modal">
     <h2>Confirmar acao sensivel</h2>
     <p>Alteracoes de status em massa pedem confirmacao e comentario opcional.</p>
+    <ul>
+        <li>#1048 Socio sem acesso ao e-mail</li>
+        <li>#1042 Bitdefender ausente em FIN-012</li>
+        <li>#1039 Solicitacao de acesso ao ERP</li>
+    </ul>
     <textarea rows="4" placeholder="Comentario aplicado aos chamados selecionados"></textarea>
     <div class="desk-form-actions">
         <button class="desk-btn" type="button">Cancelar</button>
         <button class="desk-btn desk-btn-primary" type="button">Confirmar</button>
+    </div>
+</dialog>
+
+<dialog class="desk-modal desk-merge-dialog">
+    <h2>Mesclar duplicados</h2>
+    <p>Escolha o chamado principal. Comentarios e anexos dos secundarias serao preservados.</p>
+    <label class="desk-check"><input type="radio" name="main-ticket" checked><span>#1048 como principal</span></label>
+    <label class="desk-check"><input type="radio" name="main-ticket"><span>#1038 como principal</span></label>
+    <textarea rows="3" placeholder="Observacao da mesclagem"></textarea>
+    <div class="desk-form-actions">
+        <button class="desk-btn" type="button">Cancelar</button>
+        <button class="desk-btn desk-btn-primary" type="button">Confirmar mesclagem</button>
     </div>
 </dialog>

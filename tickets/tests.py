@@ -13,7 +13,11 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, 'Central de Atendimento')
         self.assertContains(response, 'desk-ticket-table')
         self.assertContains(response, 'desk-detail-panel')
-        self.assertContains(response, 'desk-filter-chipbar')
+        self.assertContains(response, 'desk-filter-commandbar')
+        self.assertContains(response, 'desk-command-palette')
+        self.assertContains(response, 'View:')
+        self.assertContains(response, 'Mais filtros')
+        self.assertContains(response, 'RMM Alertas')
 
     def test_ticket_index_renders_central(self):
         response = self.client.get(reverse('tickets:index'), HTTP_HOST=self.host)
@@ -35,6 +39,21 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, '#1048')
         self.assertContains(response, 'Socio sem acesso ao e-mail')
         self.assertContains(response, 'desk-comment-dock')
+
+    def test_central_bulk_actions_are_hidden_until_selection(self):
+        response = self.client.get(reverse('tickets:central'), HTTP_HOST=self.host)
+
+        self.assertContains(response, 'desk-selection-bar')
+        self.assertContains(response, 'hidden')
+        self.assertContains(response, 'data-selected-label')
+
+    def test_central_renders_rmm_context_and_shortcuts(self):
+        response = self.client.get(reverse('tickets:central'), {'origin': 'rmm'}, HTTP_HOST=self.host)
+
+        self.assertContains(response, 'RMM Alert')
+        self.assertContains(response, 'desk-rmm-mini-card')
+        self.assertContains(response, 'Acesso remoto')
+        self.assertContains(response, 'Atalhos da Central')
 
     def test_desk_nav_uses_central_as_main_entry(self):
         response = self.client.get(reverse('tickets:central'), HTTP_HOST=self.host)

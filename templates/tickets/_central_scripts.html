@@ -1,0 +1,128 @@
+<script>
+(() => {
+    const rows = Array.from(document.querySelectorAll('.desk-ticket-row'));
+    const checks = Array.from(document.querySelectorAll('.desk-row-checkbox'));
+    const checkAll = document.querySelector('.desk-row-check-all');
+    const selectionBar = document.querySelector('.desk-selection-bar');
+    const selectedLabel = document.querySelector('[data-selected-label]');
+    const command = document.querySelector('[data-command-palette]');
+    const shortcuts = document.querySelector('[data-shortcuts-dialog]');
+    const toast = document.querySelector('[data-toast]');
+    let focusedIndex = rows.findIndex((row) => row.classList.contains('is-selected'));
+    if (focusedIndex < 0) focusedIndex = 0;
+
+    function refreshSelection() {
+        const count = checks.filter((item) => item.checked).length;
+        if (selectedLabel) selectedLabel.textContent = count;
+        if (selectionBar) selectionBar.hidden = count === 0;
+        if (checkAll) checkAll.checked = count > 0 && count === checks.length;
+    }
+
+    function focusRow(index) {
+        if (!rows.length) return;
+        focusedIndex = Math.max(0, Math.min(index, rows.length - 1));
+        rows[focusedIndex].focus();
+    }
+
+    function showToast(message) {
+        if (!toast) return;
+        toast.querySelector('span').textContent = message || 'Acao aplicada.';
+        toast.hidden = false;
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => { toast.hidden = true; }, 4800);
+    }
+
+    checks.forEach((check) => check.addEventListener('change', refreshSelection));
+    if (checkAll) {
+        checkAll.addEventListener('change', () => {
+            checks.forEach((check) => { check.checked = checkAll.checked; });
+            refreshSelection();
+        });
+    }
+    document.querySelector('[data-clear-selection]')?.addEventListener('click', () => {
+        checks.forEach((check) => { check.checked = false; });
+        refreshSelection();
+    });
+
+    rows.forEach((row, index) => {
+        row.addEventListener('click', (event) => {
+            if (event.target.closest('a, button, input, summary, details, label')) return;
+            const ticket = row.dataset.ticket;
+            window.location.href = `{% url 'tickets:central' %}?ticket=${ticket}&view={{ view_mode }}`;
+        });
+        row.addEventListener('dblclick', () => {
+            window.location.href = row.dataset.detailUrl;
+        });
+        row.addEventListener('focus', () => { focusedIndex = index; });
+    });
+
+    document.querySelectorAll('[data-toast-action]').forEach((button) => {
+        button.addEventListener('click', () => showToast('Acao aplicada. Voce pode desfazer por alguns segundos.'));
+    });
+    document.querySelectorAll('[data-sensitive-action]').forEach((button) => {
+        button.addEventListener('click', () => document.querySelector('.desk-bulk-confirm-modal')?.showModal());
+    });
+
+    document.addEventListener('keydown', (event) => {
+        const activeTag = document.activeElement?.tagName;
+        const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag);
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            command.hidden = false;
+            command.querySelector('input')?.focus();
+            return;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
+            event.preventDefault();
+            window.location.href = "{% url 'tickets:create' %}";
+            return;
+        }
+        if (event.key === 'Escape') {
+            document.querySelectorAll('.desk-command-palette, .desk-shortcuts-overlay').forEach((item) => { item.hidden = true; });
+            document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+            return;
+        }
+        if (typing) return;
+        if (event.key === '?') {
+            event.preventDefault();
+            shortcuts.hidden = false;
+        } else if (event.key.toLowerCase() === 'j') {
+            event.preventDefault();
+            focusRow(focusedIndex + 1);
+        } else if (event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            focusRow(focusedIndex - 1);
+        } else if (event.key === 'Enter' && rows[focusedIndex]) {
+            event.preventDefault();
+            window.location.href = rows[focusedIndex].dataset.detailUrl;
+        } else if (event.key === ' ' && rows[focusedIndex]) {
+            event.preventDefault();
+            const checkbox = rows[focusedIndex].querySelector('.desk-row-checkbox');
+            checkbox.checked = !checkbox.checked;
+            refreshSelection();
+        } else if (event.key.toLowerCase() === 'a') {
+            showToast('Chamado atribuido a voce.');
+        } else if (event.key.toLowerCase() === 'c') {
+            document.querySelector('.desk-comment-dock textarea')?.focus();
+        }
+    });
+
+    document.querySelectorAll('[data-close-overlay]').forEach((button) => {
+        button.addEventListener('click', () => button.closest('[data-shortcuts-dialog], [data-command-palette]').hidden = true);
+    });
+    document.querySelector('.desk-command-palette')?.addEventListener('click', (event) => {
+        if (event.target.classList.contains('desk-command-palette')) event.currentTarget.hidden = true;
+    });
+    document.querySelector('.desk-shortcuts-overlay')?.addEventListener('click', (event) => {
+        if (event.target.classList.contains('desk-shortcuts-overlay')) event.currentTarget.hidden = true;
+    });
+
+    setTimeout(() => {
+        const liveRow = rows.find((row) => row.classList.contains('is-rmm')) || rows[0];
+        liveRow?.classList.add('is-live-updated');
+        setTimeout(() => liveRow?.classList.remove('is-live-updated'), 4200);
+    }, 1400);
+
+    refreshSelection();
+})();
+</script>

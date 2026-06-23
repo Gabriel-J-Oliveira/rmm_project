@@ -1,68 +1,93 @@
-<form class="desk-filter-chipbar" method="get" action="{% url 'tickets:central' %}">
+<form class="desk-filter-commandbar" method="get" action="{% url 'tickets:central' %}">
     <input type="hidden" name="q" value="{{ request.GET.q }}">
     <input type="hidden" name="view" value="{{ view_mode }}">
 
-    <details class="desk-filter-chip">
-        <summary>Status</summary>
-        <div class="desk-popover">
-            {% for option in filter_options.status %}
-            <label><input type="checkbox" name="status" value="{{ option.value }}" {% if request.GET.status == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
-            {% endfor %}
-            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
-        </div>
-    </details>
-
-    <details class="desk-filter-chip">
-        <summary>Prioridade</summary>
-        <div class="desk-popover">
-            {% for option in filter_options.priority %}
-            <label><input type="checkbox" name="priority" value="{{ option.value }}" {% if request.GET.priority == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
-            {% endfor %}
-            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
-        </div>
-    </details>
-
-    <details class="desk-filter-chip">
-        <summary>Responsavel</summary>
-        <div class="desk-popover">
-            {% for option in filter_options.assigned_to %}
-            <label><input type="checkbox" name="assigned_to" value="{{ option.value }}" {% if request.GET.assigned_to == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
-            {% endfor %}
-            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
-        </div>
-    </details>
-
-    <details class="desk-filter-chip">
-        <summary>Setor</summary>
-        <div class="desk-popover">
-            {% for option in filter_options.sector %}
-            <label><input type="checkbox" name="sector" value="{{ option.value }}">{{ option.label }} <span>{{ option.count }}</span></label>
-            {% endfor %}
-            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
-        </div>
-    </details>
-
-    <details class="desk-filter-chip">
-        <summary>Categoria</summary>
-        <div class="desk-popover">
-            {% for option in filter_options.category %}
-            <label><input type="checkbox" name="category" value="{{ option.value }}" {% if request.GET.category == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
-            {% endfor %}
-            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
-        </div>
-    </details>
-
-    <button class="desk-filter-chip desk-filter-toggle" name="stale" value="1" type="submit">Parado &gt;2h</button>
-    <button class="desk-filter-chip desk-filter-toggle" name="vip" value="1" type="submit">Socio / VIP</button>
-    <button class="desk-filter-chip desk-filter-toggle" name="unassigned" value="1" type="submit">Sem dono</button>
-
-    <details class="desk-filter-chip desk-saved-views">
-        <summary>Views salvas</summary>
-        <div class="desk-popover">
+    <details class="desk-view-select">
+        <summary><span>View:</span> Fila geral</summary>
+        <div class="desk-popover desk-rich-popover">
+            <strong>Views salvas</strong>
             {% for view in saved_views %}
-            <a href="{% url 'tickets:central' %}{{ view.query }}">{{ view.name }}</a>
+            <a href="{% url 'tickets:central' %}{{ view.query }}"><i data-lucide="{% if view.name == 'RMM Alertas' %}activity{% elif view.name == 'Minha fila' %}user-check{% else %}list-filter{% endif %}"></i>{{ view.name }}</a>
             {% endfor %}
             <button class="desk-btn desk-btn-primary" type="button">Salvar view atual</button>
+        </div>
+    </details>
+
+    <div class="desk-primary-filters">
+        <details class="desk-filter-chip">
+            <summary>Status</summary>
+            <div class="desk-popover desk-rich-popover">
+                <input class="desk-popover-search" placeholder="Buscar status...">
+                {% for option in filter_options.status %}
+                <label><input type="checkbox" name="status" value="{{ option.value }}" {% if request.GET.status == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
+                {% endfor %}
+                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+            </div>
+        </details>
+
+        <details class="desk-filter-chip">
+            <summary>Prioridade</summary>
+            <div class="desk-popover desk-rich-popover">
+                <input class="desk-popover-search" placeholder="Buscar prioridade...">
+                {% for option in filter_options.priority %}
+                <label><input type="checkbox" name="priority" value="{{ option.value }}" {% if request.GET.priority == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
+                {% endfor %}
+                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+            </div>
+        </details>
+
+        <details class="desk-filter-chip">
+            <summary>Responsavel</summary>
+            <div class="desk-popover desk-rich-popover">
+                <input class="desk-popover-search" placeholder="Buscar tecnico...">
+                {% for option in filter_options.assigned_to %}
+                <label><input type="checkbox" name="assigned_to" value="{{ option.value }}" {% if request.GET.assigned_to == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
+                {% endfor %}
+                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+            </div>
+        </details>
+
+        <details class="desk-filter-chip">
+            <summary>Categoria</summary>
+            <div class="desk-popover desk-rich-popover">
+                <input class="desk-popover-search" placeholder="Buscar categoria...">
+                {% for option in filter_options.category %}
+                <label><input type="checkbox" name="category" value="{{ option.value }}" {% if request.GET.category == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
+                {% endfor %}
+                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+            </div>
+        </details>
+    </div>
+
+    <details class="desk-filter-chip desk-more-filters">
+        <summary><i data-lucide="sliders-horizontal"></i>Mais filtros</summary>
+        <div class="desk-popover desk-rich-popover desk-more-filter-grid">
+            <section>
+                <strong>Setor</strong>
+                {% for option in filter_options.sector %}
+                <label><input type="checkbox" name="sector" value="{{ option.value }}"><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
+                {% endfor %}
+            </section>
+            <section>
+                <strong>Origem</strong>
+                {% for option in origin_options %}
+                <label><input type="checkbox" name="origin" value="{{ option.value }}"><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
+                {% endfor %}
+            </section>
+            <section>
+                <strong>Operacionais</strong>
+                <label><input type="checkbox" name="stale" value="1"><span>Parado &gt;2h</span><em>3</em></label>
+                <label><input type="checkbox" name="vip" value="1"><span>Socio / VIP</span><em>3</em></label>
+                <label><input type="checkbox" name="unassigned" value="1"><span>Sem dono</span><em>{{ unassigned_count }}</em></label>
+                <label><input type="checkbox" name="sla" value="risk"><span>SLA vencendo</span><em>3</em></label>
+            </section>
+            <section>
+                <strong>Endpoint</strong>
+                <input class="desk-popover-search" name="endpoint" placeholder="Hostname...">
+                <label><input type="checkbox" name="endpoint_status" value="online"><span>Online</span><em>8</em></label>
+                <label><input type="checkbox" name="endpoint_status" value="offline"><span>Offline</span><em>2</em></label>
+            </section>
+            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar filtros</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar tudo</a></div>
         </div>
     </details>
 </form>

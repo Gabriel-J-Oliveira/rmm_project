@@ -10,10 +10,10 @@
     {% include "tickets/_central_kpis.html" %}
     {% include "tickets/_central_filters.html" %}
 
-    <div class="desk-live-indicator" role="status">
+    <div class="desk-realtime-chip" role="status">
         <i data-lucide="radio"></i>
-        <span>{{ new_ticket_count }} novos chamados disponiveis.</span>
-        <button class="desk-btn" type="button">Carregar novos</button>
+        <span>{{ new_ticket_count }} novos chamados</span>
+        <button type="button">Carregar</button>
     </div>
 
     {% include "tickets/_central_bulk_actions.html" %}
@@ -33,5 +33,8 @@
 
     {% include "tickets/_central_popovers.html" %}
     {% include "tickets/_central_shortcuts.html" %}
+    {% include "tickets/_central_command_palette.html" %}
+    {% include "tickets/_central_toasts.html" %}
+    {% include "tickets/_central_scripts.html" %}
 </section>
 {% endblock %}

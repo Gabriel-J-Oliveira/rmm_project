@@ -1,0 +1,28 @@
+<section class="desk-command-palette" hidden data-command-palette aria-label="Command palette">
+    <div class="desk-command-panel">
+        <header>
+            <i data-lucide="command"></i>
+            <input type="search" placeholder="Buscar chamado, usuario, endpoint ou acao...">
+            <kbd>Esc</kbd>
+        </header>
+        <div class="desk-command-groups">
+            <section>
+                <strong>Chamados</strong>
+                {% for ticket in tickets|slice:":4" %}
+                <a href="{% url 'tickets:central' %}?ticket={{ ticket.number }}"><span>#{{ ticket.number }}</span>{{ ticket.title }}</a>
+                {% endfor %}
+            </section>
+            <section>
+                <strong>Endpoints</strong>
+                <a href="{% url 'endpoint-list' %}"><span>RMM</span>FIN-012</a>
+                <a href="{% url 'endpoint-list' %}"><span>RMM</span>NOTE-DIR-004</a>
+            </section>
+            <section>
+                <strong>Acoes</strong>
+                {% for action in command_actions %}
+                <button type="button"><i data-lucide="{{ action.icon }}"></i>{{ action.label }}<kbd>{{ action.shortcut }}</kbd></button>
+                {% endfor %}
+            </section>
+        </div>
+    </div>
+</section>

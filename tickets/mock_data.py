@@ -335,10 +335,13 @@ def filter_tickets(params, tickets=None, assigned_to=None):
     priorities = _values('priority')
     categories = _values('category')
     sectors = _values('sector')
+    origins = _values('origin')
+    endpoint_statuses = _values('endpoint_status')
     owner = (params.get('assigned_to') or '').strip().lower()
+    endpoint_query = (params.get('endpoint') or '').strip().lower()
 
     if assigned_to:
-        items = [ticket for ticket in items if ticket.assigned_to.lower() == assigned_to.lower()]
+        items = [ticket for ticket in items if (ticket.assigned_to or '').lower() == assigned_to.lower()]
     if query:
         items = [
             ticket for ticket in items
@@ -356,7 +359,26 @@ def filter_tickets(params, tickets=None, assigned_to=None):
     if sectors:
         items = [ticket for ticket in items if ticket.sector in sectors]
     if owner:
-        items = [ticket for ticket in items if owner in ticket.assigned_to.lower()]
+        items = [ticket for ticket in items if owner in (ticket.assigned_to or '').lower()]
+    if origins:
+        if 'rmm' in origins:
+            items = [
+                ticket for ticket in items
+                if ticket.category == 'RMM / Alerta'
+                or 'alerta' in ticket.title.lower()
+                or 'bitdefender' in ticket.title.lower()
+            ]
+        elif 'manual' in origins:
+            items = [
+                ticket for ticket in items
+                if ticket.category != 'RMM / Alerta'
+                and 'alerta' not in ticket.title.lower()
+                and 'bitdefender' not in ticket.title.lower()
+            ]
+    if endpoint_query:
+        items = [ticket for ticket in items if ticket.endpoint and endpoint_query in ticket.endpoint.hostname.lower()]
+    if endpoint_statuses:
+        items = [ticket for ticket in items if ticket.endpoint and ticket.endpoint.status in endpoint_statuses]
     if params.get('critical') == '1':
         items = [ticket for ticket in items if ticket.priority == 'critical']
     if params.get('vip') == '1':

@@ -6,7 +6,10 @@
             <h2>{{ selected_ticket.title }}</h2>
             <p>{{ selected_ticket.requester }} &middot; {{ selected_ticket.sector }} &middot; aberto ha {{ selected_ticket.opened_for }}</p>
         </div>
-        <a class="desk-btn" href="{% url 'tickets:detail' selected_ticket.number %}"><i data-lucide="maximize-2"></i>Tela cheia</a>
+        <div class="desk-preview-header-actions">
+            <button class="desk-icon-action" type="button" aria-label="Copiar link"><i data-lucide="link"></i></button>
+            <a class="desk-btn" href="{% url 'tickets:detail' selected_ticket.number %}"><i data-lucide="maximize-2"></i>Tela cheia</a>
+        </div>
     </header>
 
     <div class="desk-detail-inline-state">
@@ -29,29 +32,67 @@
             </div>
         </details>
         {% if selected_ticket.partner %}<span class="desk-badge partner-badge">Socio / VIP</span>{% endif %}
+        <span class="desk-origin-badge origin-{{ selected_ticket.central.origin }}"><i data-lucide="{{ selected_ticket.central.origin_icon }}"></i>{{ selected_ticket.central.origin_label }}</span>
     </div>
 
-    <nav class="desk-detail-tabs" aria-label="Abas do chamado">
-        <a class="active" href="#overview">Visao geral</a>
-        <a href="#comments">Comentarios</a>
-        <a href="#history">Historico</a>
-        <a href="#attachments">Anexos</a>
-    </nav>
-
     <section class="desk-detail-panel-body">
+        <article class="desk-suggestion-card priority-{{ selected_ticket.priority }}">
+            <i data-lucide="sparkles"></i>
+            <div>
+                <strong>Proxima melhor acao</strong>
+                <p>{{ selected_ticket.central.suggestion }}</p>
+            </div>
+        </article>
+
+        <div class="desk-preview-grid">
+            <article class="desk-preview-stat">
+                <span>SLA</span>
+                <strong>{{ selected_ticket.central.sla_label }}</strong>
+                <small>{{ selected_ticket.opened_for }} aberto</small>
+            </article>
+            <article class="desk-preview-stat">
+                <span>Responsavel</span>
+                <strong>{{ selected_ticket.assigned_to|default:"Sem dono" }}</strong>
+                <small>{{ selected_ticket.updated_for }} sem atualizacao</small>
+            </article>
+        </div>
+
+        {% if selected_ticket.central.rmm %}
+        <article class="desk-rmm-mini-card risk-{{ selected_ticket.central.rmm.risk }}">
+            <header>
+                <div>
+                    <span class="desk-section-eyebrow">RMM endpoint</span>
+                    <h3>{{ selected_ticket.central.rmm.hostname }}</h3>
+                    <p><i class="desk-status-dot status-{{ selected_ticket.central.endpoint_status }}"></i>{{ selected_ticket.central.rmm.status_label }} &middot; ultimo check-in {{ selected_ticket.central.rmm.last_seen }}</p>
+                </div>
+                <span class="desk-rmm-alert-pill">{{ selected_ticket.central.rmm.active_alerts }} alertas</span>
+            </header>
+            <div class="desk-rmm-metrics">
+                <div><span>CPU</span><meter value="{{ selected_ticket.central.rmm.cpu }}" min="0" max="100"></meter><strong>{{ selected_ticket.central.rmm.cpu }}%</strong></div>
+                <div><span>Mem</span><meter value="{{ selected_ticket.central.rmm.memory }}" min="0" max="100"></meter><strong>{{ selected_ticket.central.rmm.memory }}%</strong></div>
+                <div><span>Disco</span><meter value="{{ selected_ticket.central.rmm.disk }}" min="0" max="100"></meter><strong>{{ selected_ticket.central.rmm.disk }}%</strong></div>
+            </div>
+            <p class="desk-muted">Usuario logado: {{ selected_ticket.central.rmm.logged_user }}</p>
+            <div class="desk-rmm-actions">
+                <a class="desk-btn" href="{% url 'endpoint-list' %}">Ver dispositivo</a>
+                <button class="desk-btn" type="button">Abrir no RMM</button>
+                <button class="desk-btn desk-btn-primary" type="button">Acesso remoto</button>
+            </div>
+        </article>
+        {% endif %}
+
         <article id="overview" class="desk-detail-section">
             <h3>Descricao</h3>
             <p>{{ selected_ticket.description }}</p>
-            <dl class="desk-data-list">
-                <div><dt>Responsavel</dt><dd>{{ selected_ticket.assigned_to|default:"Sem responsavel" }}</dd></div>
-                <div><dt>Categoria</dt><dd>{{ selected_ticket.category }}</dd></div>
-                <div><dt>Endpoint</dt><dd>{% if selected_ticket.endpoint %}{{ selected_ticket.endpoint.hostname }}{% else %}Sem endpoint{% endif %}</dd></div>
-                <div><dt>Primeira resposta</dt><dd>{{ selected_ticket.first_response_at }}</dd></div>
-            </dl>
+            <div class="desk-preview-badges">
+                <span class="desk-badge neutral">{{ selected_ticket.category }}</span>
+                <span class="desk-badge priority-{{ selected_ticket.priority }}">{{ selected_ticket.priority_label }}</span>
+                {% if selected_ticket.endpoint %}<span class="desk-endpoint-chip status-{{ selected_ticket.central.endpoint_status }}"><i></i><span class="mono">{{ selected_ticket.endpoint.hostname }}</span></span>{% endif %}
+            </div>
         </article>
 
         <article id="comments" class="desk-detail-section">
-            <h3>Comentarios recentes</h3>
+            <h3>Ultimos comentarios</h3>
             <div class="desk-comments">
                 {% for comment in selected_ticket.comments %}
                 <div class="desk-comment">
@@ -63,11 +104,26 @@
                 {% endfor %}
             </div>
         </article>
+
+        <article class="desk-detail-section">
+            <h3>Eventos recentes</h3>
+            <div class="desk-preview-timeline">
+                <div><i data-lucide="ticket-check"></i><strong>Chamado criado</strong><span>Hoje, 08:40</span></div>
+                <div><i data-lucide="user-round-check"></i><strong>{% if selected_ticket.assigned_to %}{{ selected_ticket.assigned_to }} assumiu{% else %}Sem responsavel definido{% endif %}</strong><span>{{ selected_ticket.updated_for }}</span></div>
+            </div>
+        </article>
+
+        <div class="desk-quick-actions">
+            <button class="desk-btn desk-btn-primary" type="button" data-toast-action>Atribuir a mim</button>
+            <button class="desk-btn" type="button">Mudar status</button>
+            <button class="desk-btn" type="button">Mudar prioridade</button>
+            <a class="desk-btn" href="{% url 'tickets:detail' selected_ticket.number %}">Abrir tela cheia</a>
+        </div>
     </section>
 
     <form class="desk-comment-dock" method="post" action="{% url 'tickets:fake-action' selected_ticket.number 'comentario-adicionado' %}">
         {% csrf_token %}
-        <textarea name="body" rows="3" placeholder="Escreva um comentario..."></textarea>
+        <textarea name="body" rows="3" placeholder="Comentario rapido..."></textarea>
         <div>
             <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
             <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar</button>
