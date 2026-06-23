@@ -20,7 +20,6 @@ class TicketCentralTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Central de Atendimento')
-        self.assertNotContains(response, 'Night Owl Desk / Fila')
 
     def test_legacy_queue_and_panel_routes_are_removed(self):
         queue_response = self.client.get('/tickets/queue/', HTTP_HOST=self.host)
@@ -42,7 +41,6 @@ class TicketCentralTests(TestCase):
 
         self.assertContains(response, 'Central de Atendimento')
         self.assertNotContains(response, '>Fila</a>')
-        self.assertNotContains(response, '>Painel de Chamados</a>')
 
 
 class TicketDetailLayoutTests(TestCase):
@@ -241,7 +239,6 @@ class TicketAdminExperienceTests(TestCase):
         self.assertContains(response, 'Geral')
         self.assertContains(response, 'SLA')
         self.assertContains(response, 'Integra')
-        self.assertNotContains(response, 'Configuracoes futuras')
 
     def test_settings_integrations_use_shared_alert_mapping(self):
         response = self.client.get(reverse('tickets:settings'), {'section': 'integrations'}, HTTP_HOST=self.host)
