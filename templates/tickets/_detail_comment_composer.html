@@ -1,0 +1,27 @@
+<article class="desk-panel desk-composer-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="send"></i>Novo comentario</h2>
+            <p>Arraste arquivos, cole prints ou use uma macro para responder mais rapido.</p>
+        </div>
+    </div>
+    <form class="desk-composer" method="post" action="{% url 'tickets:fake-action' ticket.number 'comentario-adicionado' %}">
+        {% csrf_token %}
+        <textarea rows="5" placeholder="Escreva um comentario para o chamado..."></textarea>
+        <div class="desk-composer-toolbar">
+            <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
+            <button class="desk-btn" type="button"><i data-lucide="at-sign"></i>Mencionar</button>
+            <details class="desk-inline-popover">
+                <summary class="desk-btn"><i data-lucide="message-square-quote"></i>Macro</summary>
+                <div class="desk-popover">
+                    <button type="button">Solicitar evidencias</button>
+                    <button type="button">Informar em atendimento</button>
+                    <button type="button">Validacao com usuario</button>
+                </div>
+            </details>
+            <button class="desk-btn" type="button"><i data-lucide="paperclip"></i>Anexar</button>
+            <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar comentario</button>
+        </div>
+        <div class="desk-dropzone"><i data-lucide="upload-cloud"></i>Solte arquivos aqui ou cole uma imagem com Ctrl+V.</div>
+    </form>
+</article>

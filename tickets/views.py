@@ -3,6 +3,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
 from .mock_data import CATEGORIES, MOCK_TICKETS, PRIORITY_LABELS, STATUS_LABELS, filter_tickets, get_ticket, summary_for
+from .services.dashboard_context import build_ticket_dashboard_context
+from .services.ticket_detail_context import build_ticket_detail_context
 
 
 def _base_context(active_section='queue'):
@@ -175,6 +177,7 @@ def ticket_detail(request, number):
     context = {
         **_base_context('queue'),
         'ticket': ticket,
+        **build_ticket_detail_context(ticket),
         'related_alerts': [
             {'title': 'Alerta RMM relacionado', 'description': 'Espaco reservado para vinculo futuro com EndpointAlert.'},
             {'title': 'Historico de inventario', 'description': 'Preview visual sem integracao real nesta fase.'},
@@ -263,35 +266,7 @@ def _service_panel_context():
 def ticket_dashboard(request):
     context = {
         **_base_context('dashboard'),
-        'summary': summary_for(),
-        'category_rows': [
-            {'label': 'Acesso', 'value': 80, 'count': 5},
-            {'label': 'Software', 'value': 64, 'count': 4},
-            {'label': 'Hardware', 'value': 48, 'count': 3},
-            {'label': 'Impressora', 'value': 36, 'count': 2},
-            {'label': 'Seguranca', 'value': 36, 'count': 2},
-        ],
-        'tech_rows': [
-            {'label': 'Gabriel', 'value': 78, 'count': 7},
-            {'label': 'Renan', 'value': 56, 'count': 5},
-            {'label': 'Sem responsavel', 'value': 44, 'count': 4},
-        ],
-        'status_rows': [
-            {'label': 'Novo', 'value': 55, 'count': 5},
-            {'label': 'Em atendimento', 'value': 80, 'count': 9},
-            {'label': 'Aguardando usuario', 'value': 48, 'count': 5},
-            {'label': 'Aguardando terceiro', 'value': 24, 'count': 2},
-            {'label': 'Resolvido hoje', 'value': 36, 'count': 3},
-        ],
-        'sector_rows': [
-            {'label': 'Juridico', 'value': 86, 'count': 6},
-            {'label': 'Financeiro', 'value': 64, 'count': 4},
-            {'label': 'Diretoria', 'value': 48, 'count': 3},
-            {'label': 'Comercial', 'value': 32, 'count': 2},
-            {'label': 'TI', 'value': 18, 'count': 1},
-        ],
-        'critical_tickets': [ticket for ticket in MOCK_TICKETS if ticket.priority == 'critical'][:5],
-        'partner_tickets': [ticket for ticket in MOCK_TICKETS if ticket.partner],
+        **build_ticket_dashboard_context(request),
     }
     return render(request, 'tickets/dashboard.html', context)
 

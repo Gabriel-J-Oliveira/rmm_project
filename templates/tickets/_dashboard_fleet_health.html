@@ -1,0 +1,38 @@
+<section class="desk-panel desk-widget desk-fleet-health {% if compact %}is-compact{% endif %}">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="server"></i>Saude da frota RMM</h2>
+            <p>Resumo gerencial dos dispositivos monitorados e alertas ativos.</p>
+        </div>
+        <span class="desk-badge neutral">{{ fleet.source }}</span>
+    </div>
+
+    <div class="desk-fleet-summary">
+        <article>
+            <span>Total monitorado</span>
+            <strong>{{ fleet.total_devices }}</strong>
+        </article>
+        <article>
+            <span>Online</span>
+            <strong>{{ fleet.online_count }} <em>{{ fleet.online_percent }}%</em></strong>
+        </article>
+        <article>
+            <span>Alertas criticos</span>
+            <strong>{{ fleet.critical_alerts }}</strong>
+        </article>
+        <article>
+            <span>Alerta mais frequente</span>
+            <strong>{{ fleet.top_alert_type }}</strong>
+            <small>{{ fleet.top_alert_count }} ocorrencias</small>
+        </article>
+    </div>
+
+    <div class="desk-fleet-bars">
+        {% for row in fleet.health_rows %}
+        <div class="desk-fleet-bar level-{{ row.level }}">
+            <header><span>{{ row.label }}</span><strong>{{ row.count }}</strong></header>
+            <div><i style="width: {{ row.value }}%"></i></div>
+        </div>
+        {% endfor %}
+    </div>
+</section>

@@ -1,0 +1,51 @@
+<header class="desk-ticket-detail-header">
+    <div class="desk-detail-heading">
+        <a class="desk-btn" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}"><i data-lucide="arrow-left"></i>Voltar</a>
+        <span class="desk-ticket-number">#{{ ticket.number }}</span>
+        <div class="desk-editable-title">
+            <h1>{{ ticket.title }}</h1>
+            <button type="button" aria-label="Editar titulo"><i data-lucide="pencil"></i></button>
+        </div>
+    </div>
+
+    <div class="desk-detail-header-meta">
+        <details class="desk-inline-popover">
+            <summary class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</summary>
+            <div class="desk-popover">
+                <strong>Transicoes validas</strong>
+                {% for status in status_transitions %}
+                <button type="button">{{ status }}</button>
+                {% empty %}
+                <span>Chamado sem transicoes disponiveis.</span>
+                {% endfor %}
+            </div>
+        </details>
+        <details class="desk-inline-popover">
+            <summary class="desk-badge priority-{{ ticket.priority }}">{{ ticket.priority_label }}</summary>
+            <div class="desk-popover">
+                {% for value,label in priority_labels.items %}
+                <button type="button">{{ label }}</button>
+                {% endfor %}
+            </div>
+        </details>
+        <span class="desk-sla-chip desk-sla-{{ sla.level }}"><i data-lucide="timer"></i>{{ sla.label }}</span>
+        {% if ticket.partner %}<span class="desk-badge partner-badge">Socio / VIP</span>{% endif %}
+    </div>
+
+    <div class="desk-detail-actions">
+        <button class="desk-btn desk-btn-primary" type="button" data-drawer-target="resolution"><i data-lucide="check-circle"></i>Resolver</button>
+        <details class="desk-inline-popover desk-kebab-menu">
+            <summary class="desk-btn" aria-label="Acoes secundarias"><i data-lucide="more-vertical"></i></summary>
+            <div class="desk-popover">
+                <button type="button">Escalar</button>
+                <button type="button">Mesclar com outro chamado</button>
+                <button type="button">Duplicar</button>
+                <button type="button">Imprimir / Exportar PDF</button>
+                <button type="button">Excluir</button>
+            </div>
+        </details>
+        <button class="desk-btn" type="button"><i data-lucide="history"></i>Auditoria</button>
+    </div>
+
+    <div class="desk-presence-indicator"><i data-lucide="eye"></i>Renan tambem esta visualizando este chamado.</div>
+</header>

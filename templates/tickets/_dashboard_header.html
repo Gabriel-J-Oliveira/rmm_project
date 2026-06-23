@@ -1,0 +1,55 @@
+<header class="desk-compact-header desk-dashboard-header">
+    <div class="desk-compact-title">
+        <span class="desk-compact-icon"><i data-lucide="bar-chart-3"></i></span>
+        <div>
+            <p class="desk-kicker">Night Owl Desk / Dashboards</p>
+            <h1>Painel do Desk</h1>
+            <span>Indicadores acionaveis para operacao, gestao e infraestrutura monitorada.</span>
+        </div>
+    </div>
+
+    <form class="desk-dashboard-controls" method="get">
+        <input type="hidden" name="mode" value="{{ dashboard_mode }}">
+        <details class="desk-filter-chip">
+            <summary>Periodo: {{ period|title }}</summary>
+            <div class="desk-popover">
+                <button name="period" value="today" type="submit">Hoje</button>
+                <button name="period" value="week" type="submit">Semana</button>
+                <button name="period" value="month" type="submit">Mes</button>
+                <label>Personalizado <input type="date" name="start"></label>
+                <label>ate <input type="date" name="end"></label>
+            </div>
+        </details>
+        <label class="desk-dashboard-toggle">
+            <input type="checkbox" name="compare" value="1" {% if compare_enabled %}checked{% endif %}>
+            <span>Comparar periodo anterior</span>
+        </label>
+        <details class="desk-filter-chip">
+            <summary>Setor</summary>
+            <div class="desk-popover">
+                {% for sector in sector_options %}
+                <label><input type="checkbox" name="sector" value="{{ sector }}">{{ sector }}</label>
+                {% endfor %}
+            </div>
+        </details>
+        <details class="desk-filter-chip">
+            <summary>Equipe / tecnico</summary>
+            <div class="desk-popover">
+                {% for owner in team_options %}
+                <label><input type="checkbox" name="assigned_to" value="{{ owner }}">{{ owner }}</label>
+                {% endfor %}
+            </div>
+        </details>
+    </form>
+
+    <div class="desk-compact-actions">
+        <button class="desk-btn" type="button"><i data-lucide="monitor-up"></i>Ativar wallboard</button>
+        <details class="desk-inline-popover">
+            <summary class="desk-btn"><i data-lucide="download"></i>Exportar</summary>
+            <div class="desk-popover">
+                <button type="button">Exportar PDF</button>
+                <button type="button">Agendar envio</button>
+            </div>
+        </details>
+    </div>
+</header>

@@ -1,0 +1,16 @@
+<aside class="desk-audit-drawer" aria-label="Auditoria do chamado">
+    <header>
+        <h2><i data-lucide="history"></i>Auditoria completa</h2>
+        <p>Registro tecnico de quem alterou o que e quando.</p>
+    </header>
+    <div class="desk-activity-feed">
+        <div class="desk-activity-item">
+            <span class="desk-activity-icon"><i data-lucide="user-check"></i></span>
+            <div><header><strong>Sistema</strong><small>{{ ticket.created_at }}</small></header><p>Chamado registrado no Desk.</p></div>
+        </div>
+        <div class="desk-activity-item">
+            <span class="desk-activity-icon"><i data-lucide="bell"></i></span>
+            <div><header><strong>Watchers</strong><small>Preview</small></header><p>{% for watcher in watchers %}{{ watcher.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</p></div>
+        </div>
+    </div>
+</aside>

@@ -1,0 +1,49 @@
+<article class="desk-panel desk-device-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="{{ device_context.icon|default:'monitor' }}"></i>Dispositivo</h2>
+            <p>Dados vindos do RMM interno quando disponiveis; caso contrario, mock isolado para preview.</p>
+        </div>
+        {% include "tickets/_detail_remote_actions.html" %}
+    </div>
+
+    <div class="desk-device-hero-card">
+        <span class="desk-device-large-icon"><i data-lucide="{{ device_context.icon|default:'monitor' }}"></i></span>
+        <div>
+            <strong>{{ device_context.hostname }}</strong>
+            <span>{{ device_context.domain|default:"Sem dominio" }}</span>
+            <small>{{ device_context.status_label }} &middot; ultima sincronizacao {{ device_context.last_seen }}</small>
+        </div>
+        <span class="desk-badge status-{{ device_context.status }}">{{ device_context.status_label }}</span>
+    </div>
+
+    <section class="desk-device-metrics">
+        {% for metric in device_context.metrics %}
+        <article class="desk-device-metric metric-{{ metric.level }}">
+            <header><strong>{{ metric.name }}</strong><span>{{ metric.summary }}</span></header>
+            <div><i style="width: {{ metric.value }}%"></i></div>
+        </article>
+        {% empty %}
+        <div class="desk-empty compact">Sem telemetria recebida para este dispositivo.</div>
+        {% endfor %}
+    </section>
+
+    <section class="desk-device-status-grid">
+        <article>
+            <span>Antivirus</span>
+            <strong class="status-{{ device_context.antivirus.level }}">{{ device_context.antivirus.label }}</strong>
+        </article>
+        <article>
+            <span>Atualizacoes pendentes</span>
+            <strong>{{ device_context.updates_pending }}</strong>
+        </article>
+        <article>
+            <span>Alertas ativos</span>
+            <strong>{{ device_context.alerts_count|default:"--" }}</strong>
+        </article>
+    </section>
+
+    {% if device_context.url %}
+    <a class="desk-btn" href="{{ device_context.url }}"><i data-lucide="external-link"></i>Ver no RMM</a>
+    {% endif %}
+</article>

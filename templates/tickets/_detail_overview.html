@@ -1,0 +1,18 @@
+<div class="desk-detail-layout">
+    <main class="desk-overview-main">
+        <article class="desk-panel">
+            <div class="desk-panel-title-row">
+                <div>
+                    <h2><i data-lucide="align-left"></i>Descricao</h2>
+                    <p>Editado ha {{ ticket.updated_for }}.</p>
+                </div>
+            </div>
+            <p class="desk-description">{{ ticket.description }}</p>
+        </article>
+
+        {% include "tickets/_detail_activity.html" %}
+        {% include "tickets/_detail_comment_composer.html" %}
+    </main>
+
+    {% include "tickets/_detail_sidebar.html" %}
+</div>

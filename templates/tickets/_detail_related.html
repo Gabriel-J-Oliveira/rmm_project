@@ -1,0 +1,42 @@
+<article class="desk-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="git-branch"></i>Relacionados</h2>
+            <p>Duplicados, chamados do mesmo solicitante e chamados do mesmo dispositivo.</p>
+        </div>
+    </div>
+
+    <div class="desk-related-grid">
+        <section>
+            <h3>Mesmo solicitante</h3>
+            {% for related in related_tickets.same_requester %}
+            <a class="desk-related-item" href="{% url 'tickets:detail' related.number %}"><strong>#{{ related.number }}</strong><span>{{ related.title }}</span></a>
+            {% empty %}
+            <div class="desk-empty compact">Nenhum chamado anterior do solicitante.</div>
+            {% endfor %}
+        </section>
+
+        <section>
+            <h3>Mesmo dispositivo</h3>
+            {% for related in related_tickets.same_device %}
+            <a class="desk-related-item" href="{% url 'tickets:detail' related.number %}"><strong>#{{ related.number }}</strong><span>{{ related.title }}</span></a>
+            {% empty %}
+            <div class="desk-empty compact">Nenhum chamado do mesmo dispositivo.</div>
+            {% endfor %}
+        </section>
+
+        <section>
+            <h3>Duplicados / mesclados</h3>
+            {% for related in related_tickets.duplicates %}
+            <a class="desk-related-item" href="{% url 'tickets:detail' related.number %}"><strong>#{{ related.number }}</strong><span>{{ related.title }}</span></a>
+            {% empty %}
+            <div class="desk-empty compact">Nenhum duplicado identificado.</div>
+            {% endfor %}
+        </section>
+    </div>
+
+    <aside class="desk-related-overlay">
+        <h3>Painel lateral de chamado relacionado</h3>
+        <p>Estrutura preparada para abrir outro chamado sem sair deste contexto.</p>
+    </aside>
+</article>

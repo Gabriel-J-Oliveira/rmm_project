@@ -1,0 +1,29 @@
+<article class="desk-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="paperclip"></i>Anexos</h2>
+            <p>Miniaturas, evidencias e arquivos relacionados ao atendimento.</p>
+        </div>
+        <button class="desk-btn" type="button"><i data-lucide="upload"></i>Enviar arquivo</button>
+    </div>
+
+    <div class="desk-attachment-dropzone">
+        <i data-lucide="upload-cloud"></i>
+        <span>Arraste arquivos aqui ou cole prints com Ctrl+V.</span>
+    </div>
+
+    <div class="desk-attachment-grid">
+        {% for attachment in attachments %}
+        <article class="desk-attachment-card">
+            <div class="desk-attachment-thumb">
+                <i data-lucide="{% if attachment.type == 'image' %}image{% else %}file-text{% endif %}"></i>
+            </div>
+            <strong>{{ attachment.name }}</strong>
+            <span>{{ attachment.size }}</span>
+            <button class="desk-btn" type="button">{% if attachment.is_primary %}Principal{% else %}Marcar principal{% endif %}</button>
+        </article>
+        {% empty %}
+        <div class="desk-empty compact"><i data-lucide="paperclip"></i><span>Nenhum anexo registrado.</span></div>
+        {% endfor %}
+    </div>
+</article>

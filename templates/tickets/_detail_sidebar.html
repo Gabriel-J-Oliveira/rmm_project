@@ -1,0 +1,77 @@
+<aside class="desk-overview-side">
+    <article class="desk-panel desk-requester-card">
+        <h2><i data-lucide="user"></i>Solicitante</h2>
+        <div class="desk-person-card">
+            <span class="desk-avatar">{{ ticket.requester|slice:":1" }}</span>
+            <div>
+                <strong>{{ ticket.requester }}</strong>
+                <span>{{ ticket.sector }} &middot; {{ ticket.role }}</span>
+            </div>
+        </div>
+        <details class="desk-inline-popover">
+            <summary class="desk-btn">Ver historico</summary>
+            <div class="desk-popover">
+                <strong>{{ requester_history_count }} chamados anteriores</strong>
+                <span>Historico completo sera conectado ao cadastro real do solicitante.</span>
+            </div>
+        </details>
+    </article>
+
+    <article class="desk-panel">
+        <h2><i data-lucide="sliders-horizontal"></i>Resumo editavel</h2>
+        <dl class="desk-data-list">
+            <div><dt>Status</dt><dd><span class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</span></dd></div>
+            <div><dt>Prioridade</dt><dd><span class="desk-badge priority-{{ ticket.priority }}">{{ ticket.priority_label }}</span></dd></div>
+            <div><dt>Categoria</dt><dd><span class="desk-badge neutral">{{ ticket.category }}</span></dd></div>
+            <div>
+                <dt>Responsavel</dt>
+                <dd>
+                    <details class="desk-inline-popover">
+                        <summary class="desk-assignee-pill"><span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>{{ ticket.assigned_to|default:"Sem responsavel" }}</summary>
+                        <div class="desk-popover desk-assignee-popover">
+                            <button class="desk-btn desk-btn-primary" type="button">Atribuir a mim</button>
+                            {% for row in workload_rows %}
+                            <button type="button">{{ row.label }} <span>{{ row.count }} abertos</span></button>
+                            {% endfor %}
+                        </div>
+                    </details>
+                </dd>
+            </div>
+        </dl>
+    </article>
+
+    <article class="desk-panel">
+        <h2><i data-lucide="timer"></i>SLA</h2>
+        <div class="desk-sla-progress">
+            <div><span>Tempo restante</span><strong>{{ sla.remaining }}</strong></div>
+            <i class="desk-sla-fill desk-sla-{{ sla.level }}" style="width: {{ sla.progress }}%"></i>
+        </div>
+        <dl class="desk-data-list">
+            <div><dt>Resposta</dt><dd>{{ sla.response_due }}</dd></div>
+            <div><dt>Resolucao</dt><dd>{{ sla.resolution_due }}</dd></div>
+        </dl>
+    </article>
+
+    <article class="desk-panel desk-device-summary-card">
+        <h2><i data-lucide="monitor"></i>Dispositivo</h2>
+        <div class="desk-device-summary">
+            <span class="desk-device-status status-{{ device_context.status }}"></span>
+            <div>
+                <strong>{{ device_context.hostname }}</strong>
+                <span>{{ device_context.status_label }} &middot; {{ device_context.last_seen }}</span>
+            </div>
+        </div>
+        <a class="desk-btn" href="#device"><i data-lucide="arrow-right"></i>Ver aba Dispositivo</a>
+    </article>
+
+    <article class="desk-panel">
+        <h2><i data-lucide="sparkles"></i>Similares resolvidos</h2>
+        <div class="desk-mini-list">
+            {% for similar in similar_tickets %}
+            <a href="{% url 'tickets:detail' similar.number %}"><strong>#{{ similar.number }}</strong><span>{{ similar.title }}</span><em>{{ similar.category }}</em></a>
+            {% empty %}
+            <div class="desk-empty compact">Nenhum chamado similar encontrado.</div>
+            {% endfor %}
+        </div>
+    </article>
+</aside>

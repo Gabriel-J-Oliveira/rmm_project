@@ -1,0 +1,35 @@
+<section class="desk-panel desk-widget desk-ranking-widget">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="trophy"></i>Ranking de tecnicos</h2>
+            <p>Clique em um tecnico para abrir a Central filtrada por responsavel.</p>
+        </div>
+        <span class="desk-badge neutral">Ordenado por resolvidos</span>
+    </div>
+    <div class="desk-ranking-table-wrap">
+        <table class="desk-ranking-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Tecnico</th>
+                    <th>Resolvidos</th>
+                    <th>Tempo medio</th>
+                    <th>Reabertura</th>
+                    <th>CSAT</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in technician_ranking %}
+                <tr class="{% if row.is_best %}is-best{% endif %}">
+                    <td>{{ row.rank }}</td>
+                    <td><a href="{{ row.url }}">{{ row.name }}</a></td>
+                    <td>{{ row.resolved }}</td>
+                    <td>{{ row.avg_resolution }}</td>
+                    <td>{{ row.reopen_rate }}</td>
+                    <td>{{ row.csat }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>

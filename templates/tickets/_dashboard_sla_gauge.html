@@ -1,0 +1,15 @@
+<section class="desk-panel desk-widget desk-sla-gauge-widget">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="gauge"></i>SLA cumprido vs meta</h2>
+            <p>Meta simples configuravel; pronta para ligar nas configuracoes de SLA.</p>
+        </div>
+    </div>
+    <div class="desk-sla-gauge" style="--gauge-value: {{ fleet.sla_actual }}%;">
+        <div>
+            <strong>{{ fleet.sla_actual }}%</strong>
+            <span>Meta {{ fleet.sla_target }}%</span>
+        </div>
+    </div>
+    <a class="desk-btn" href="{% url 'tickets:central' %}?stale=1"><i data-lucide="arrow-right"></i>Ver riscos de SLA</a>
+</section>

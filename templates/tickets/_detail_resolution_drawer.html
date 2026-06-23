@@ -1,0 +1,35 @@
+<aside class="desk-resolution-drawer" aria-label="Resolver chamado">
+    <header>
+        <h2><i data-lucide="check-circle"></i>Resolver chamado</h2>
+        <p>Fluxo preparado para confirmar a resolucao sem fechar direto pelo header.</p>
+    </header>
+    <label>
+        <span>Tipo de resolucao</span>
+        <select>
+            {% for item in resolution_types %}
+            <option>{{ item }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <div class="desk-resolution-checklist">
+        {% for item in resolution_checklist %}
+        <label class="desk-check"><input type="checkbox"><span>{{ item }}</span></label>
+        {% endfor %}
+    </div>
+    <label>
+        <span>Resumo da resolucao</span>
+        <textarea rows="5" placeholder="Explique o que foi feito e como foi validado."></textarea>
+    </label>
+    <label>
+        <span>Tempo dedicado</span>
+        <input placeholder="Ex.: 45 min">
+    </label>
+    <label class="desk-check"><input type="checkbox"><span>Transformar em artigo da base de conhecimento</span></label>
+    <footer>
+        <button class="desk-btn" type="button">Cancelar</button>
+        <form method="post" action="{% url 'tickets:fake-action' ticket.number 'resolvido' %}">
+            {% csrf_token %}
+            <button class="desk-btn desk-btn-primary" type="submit">Confirmar resolucao</button>
+        </form>
+    </footer>
+</aside>

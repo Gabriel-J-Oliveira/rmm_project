@@ -1,0 +1,14 @@
+<details class="desk-inline-popover desk-device-action-menu">
+    <summary class="desk-btn"><i data-lucide="bolt"></i>Acoes remotas</summary>
+    <div class="desk-popover">
+        {% for action in device_context.remote_actions %}
+            {% if action.url %}
+            <a href="{{ action.url }}"><i data-lucide="{{ action.icon }}"></i>{{ action.label }}</a>
+            {% else %}
+            <button type="button"><i data-lucide="{{ action.icon }}"></i>{{ action.label }}</button>
+            {% endif %}
+        {% empty %}
+            <span>Nenhuma acao remota disponivel.</span>
+        {% endfor %}
+    </div>
+</details>

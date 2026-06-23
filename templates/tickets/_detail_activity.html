@@ -1,0 +1,21 @@
+<article class="desk-panel desk-activity-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="activity"></i>Atividade</h2>
+            <p>Comentarios e eventos do sistema em uma linha do tempo unica.</p>
+        </div>
+    </div>
+    <div class="desk-activity-feed">
+        {% for item in activity_items %}
+        <div class="desk-activity-item activity-{{ item.kind }}">
+            <span class="desk-activity-icon"><i data-lucide="{{ item.icon }}"></i></span>
+            <div>
+                <header><strong>{{ item.title }}</strong><small>{{ item.when }}</small></header>
+                <p>{{ item.body }}</p>
+            </div>
+        </div>
+        {% empty %}
+        <div class="desk-empty compact"><i data-lucide="moon"></i><span>Nenhuma atividade registrada.</span></div>
+        {% endfor %}
+    </div>
+</article>

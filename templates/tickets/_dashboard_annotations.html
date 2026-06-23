@@ -1,0 +1,20 @@
+<section class="desk-panel desk-widget desk-dashboard-annotations">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="message-square-plus"></i>Anotacoes da timeline</h2>
+            <p>Marcadores manuais para explicar mudancas em graficos e series temporais.</p>
+        </div>
+        <button class="desk-btn" type="button"><i data-lucide="plus"></i>Adicionar anotacao</button>
+    </div>
+    <div class="desk-annotation-list">
+        {% for item in annotations %}
+        <article>
+            <strong>{{ item.date }}</strong>
+            <div>
+                <span>{{ item.label }}</span>
+                <p>{{ item.description }}</p>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</section>

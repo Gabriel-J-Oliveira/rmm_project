@@ -1,0 +1,9 @@
+<nav class="desk-dashboard-mode-tabs" aria-label="Modos do dashboard">
+    {% for mode in modes %}
+    <a class="{% if dashboard_mode == mode.key %}active{% endif %}" href="{% url 'tickets:dashboard' %}?mode={{ mode.key }}&period={{ period }}{% if compare_enabled %}&compare=1{% endif %}">
+        <i data-lucide="{{ mode.icon }}"></i>
+        {{ mode.label }}
+    </a>
+    {% endfor %}
+    <button class="desk-btn" type="button"><i data-lucide="rotate-ccw"></i>Resetar layout</button>
+</nav>

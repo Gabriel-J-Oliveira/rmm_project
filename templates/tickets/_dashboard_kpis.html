@@ -1,0 +1,16 @@
+<section class="desk-dashboard-kpi-grid" aria-label="KPIs com tendencia">
+    {% for kpi in dashboard_kpis %}
+    <a class="desk-dashboard-kpi-card trend-{{ kpi.trend }}" href="{{ kpi.url }}">
+        <header>
+            <span>{{ kpi.label }}</span>
+            <em class="desk-trend-badge trend-{{ kpi.trend }}">{{ kpi.delta }}</em>
+        </header>
+        <strong>{{ kpi.value }}</strong>
+        <div class="desk-sparkline" aria-hidden="true">
+            {% for point in kpi.sparkline %}
+            <i style="height: {{ point }}%"></i>
+            {% endfor %}
+        </div>
+    </a>
+    {% endfor %}
+</section>

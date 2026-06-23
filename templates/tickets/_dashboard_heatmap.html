@@ -1,0 +1,23 @@
+<section class="desk-panel desk-widget desk-heatmap-widget">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="calendar-clock"></i>Heatmap de volume</h2>
+            <p>Dia da semana x faixa de horario para apoiar escala da equipe.</p>
+        </div>
+    </div>
+    <div class="desk-heatmap">
+        <div class="desk-heatmap-head"></div>
+        {% for hour in heatmap.hours %}
+        <div class="desk-heatmap-head">{{ hour }}</div>
+        {% endfor %}
+        {% for row in heatmap.rows %}
+        <div class="desk-heatmap-day">{{ row.day }}</div>
+            {% for cell in row.cells %}
+            <a class="desk-heatmap-cell" href="{% url 'tickets:central' %}" title="{{ row.day }} {{ cell.hour }}: {{ cell.value }} chamados">
+                <span style="opacity: {{ cell.intensity }}%"></span>
+                <strong>{{ cell.value }}</strong>
+            </a>
+            {% endfor %}
+        {% endfor %}
+    </div>
+</section>

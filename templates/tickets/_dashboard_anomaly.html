@@ -1,0 +1,11 @@
+{% if anomaly.active %}
+<section class="desk-anomaly-banner">
+    <i data-lucide="radar"></i>
+    <div>
+        <strong>{{ anomaly.title }}</strong>
+        <span>{{ anomaly.description }}</span>
+    </div>
+    <a class="desk-btn" href="{{ anomaly.url }}">Ver chamados</a>
+    <button class="desk-btn" type="button" aria-label="Dispensar alerta"><i data-lucide="x"></i></button>
+</section>
+{% endif %}

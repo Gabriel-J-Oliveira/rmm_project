@@ -4,74 +4,28 @@
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
-<section class="desk-shell">
-    <header class="desk-hero page-header">
-        <div class="page-header-icon"><i data-lucide="bar-chart-3"></i></div>
-        <div>
-            <p class="desk-kicker">Night Owl Desk / Dashboards</p>
-            <h1 class="page-title">Painel do Desk</h1>
-            <p class="page-subtitle">Visao gerencial mockada para validar indicadores e layout sem backend real.</p>
-        </div>
-        <div class="page-actions">
-            <a class="desk-btn desk-btn-primary" href="{% url 'tickets:create' %}"><i data-lucide="ticket-plus"></i>Novo chamado</a>
-        </div>
-    </header>
-
+<section class="desk-shell desk-dashboard-shell">
+    {% include "tickets/_dashboard_header.html" %}
     {% include "tickets/_desk_nav.html" %}
+    {% include "tickets/_dashboard_modes.html" %}
+    {% include "tickets/_dashboard_kpis.html" %}
 
-    <section class="desk-metrics">
-        <article class="desk-metric"><i data-lucide="inbox"></i><strong>{{ summary.open }}</strong><span>Chamados abertos</span></article>
-        <article class="desk-metric desk-critical"><i data-lucide="alert-triangle"></i><strong>{{ summary.critical }}</strong><span>Criticos</span></article>
-        <article class="desk-metric"><i data-lucide="timer"></i><strong>{{ summary.avg_first_response }}</strong><span>Tempo medio resposta</span></article>
-        <article class="desk-metric"><i data-lucide="check-circle"></i><strong>3h 42min</strong><span>Tempo medio resolucao</span></article>
-        <article class="desk-metric"><i data-lucide="user-check"></i><strong>4</strong><span>Tecnicos ativos</span></article>
-        <article class="desk-metric"><i data-lucide="building-2"></i><strong>8</strong><span>Setores atendidos</span></article>
+    <section class="desk-widget-grid mode-{{ dashboard_mode }}">
+        {% if dashboard_mode == "operational" %}
+            {% include "tickets/_dashboard_anomaly.html" %}
+            {% include "tickets/_dashboard_heatmap.html" %}
+            {% include "tickets/_dashboard_technician_ranking.html" %}
+        {% elif dashboard_mode == "management" %}
+            {% include "tickets/_dashboard_fleet_health.html" with compact=True %}
+            {% include "tickets/_dashboard_sla_gauge.html" %}
+            {% include "tickets/_dashboard_annotations.html" %}
+        {% else %}
+            {% include "tickets/_dashboard_fleet_health.html" %}
+            {% include "tickets/_dashboard_sla_gauge.html" %}
+        {% endif %}
     </section>
 
-    <div class="desk-dashboard-grid">
-        <section class="desk-panel">
-            <h2><i data-lucide="folder"></i>Chamados por categoria</h2>
-            {% for row in category_rows %}
-                <div class="desk-bar-row"><span>{{ row.label }}</span><div><i style="width: {{ row.value }}%"></i></div><strong>{{ row.count }}</strong></div>
-            {% endfor %}
-        </section>
-        <section class="desk-panel">
-            <h2><i data-lucide="users"></i>Chamados por tecnico</h2>
-            {% for row in tech_rows %}
-                <div class="desk-bar-row"><span>{{ row.label }}</span><div><i style="width: {{ row.value }}%"></i></div><strong>{{ row.count }}</strong></div>
-            {% endfor %}
-        </section>
-        <section class="desk-panel">
-            <h2><i data-lucide="activity"></i>Chamados por status</h2>
-            {% for row in status_rows %}
-                <div class="desk-bar-row"><span>{{ row.label }}</span><div><i style="width: {{ row.value }}%"></i></div><strong>{{ row.count }}</strong></div>
-            {% endfor %}
-        </section>
-        <section class="desk-panel">
-            <h2><i data-lucide="building"></i>Chamados por setor</h2>
-            {% for row in sector_rows %}
-                <div class="desk-bar-row"><span>{{ row.label }}</span><div><i style="width: {{ row.value }}%"></i></div><strong>{{ row.count }}</strong></div>
-            {% endfor %}
-        </section>
-    </div>
-
-    <div class="desk-dashboard-grid">
-        <section class="desk-panel">
-            <h2><i data-lucide="radio"></i>Fila agora</h2>
-            <div class="desk-mini-list">
-                {% for ticket in critical_tickets %}
-                    <a href="{% url 'tickets:detail' ticket.number %}"><strong>#{{ ticket.number }}</strong><span>{{ ticket.title }}</span><em>{{ ticket.priority_label }}</em></a>
-                {% endfor %}
-            </div>
-        </section>
-        <section class="desk-panel">
-            <h2><i data-lucide="crown"></i>Socios aguardando atendimento</h2>
-            <div class="desk-mini-list">
-                {% for ticket in partner_tickets %}
-                    <a href="{% url 'tickets:detail' ticket.number %}"><strong>#{{ ticket.number }}</strong><span>{{ ticket.requester }}</span><em>{{ ticket.status_label }}</em></a>
-                {% endfor %}
-            </div>
-        </section>
-    </div>
+    {% include "tickets/_dashboard_wallboard.html" %}
+    {% include "tickets/_dashboard_export_schedule.html" %}
 </section>
 {% endblock %}
