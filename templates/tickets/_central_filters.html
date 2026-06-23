@@ -1,0 +1,68 @@
+<form class="desk-filter-chipbar" method="get" action="{% url 'tickets:central' %}">
+    <input type="hidden" name="q" value="{{ request.GET.q }}">
+    <input type="hidden" name="view" value="{{ view_mode }}">
+
+    <details class="desk-filter-chip">
+        <summary>Status</summary>
+        <div class="desk-popover">
+            {% for option in filter_options.status %}
+            <label><input type="checkbox" name="status" value="{{ option.value }}" {% if request.GET.status == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
+            {% endfor %}
+            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        </div>
+    </details>
+
+    <details class="desk-filter-chip">
+        <summary>Prioridade</summary>
+        <div class="desk-popover">
+            {% for option in filter_options.priority %}
+            <label><input type="checkbox" name="priority" value="{{ option.value }}" {% if request.GET.priority == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
+            {% endfor %}
+            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        </div>
+    </details>
+
+    <details class="desk-filter-chip">
+        <summary>Responsavel</summary>
+        <div class="desk-popover">
+            {% for option in filter_options.assigned_to %}
+            <label><input type="checkbox" name="assigned_to" value="{{ option.value }}" {% if request.GET.assigned_to == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
+            {% endfor %}
+            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        </div>
+    </details>
+
+    <details class="desk-filter-chip">
+        <summary>Setor</summary>
+        <div class="desk-popover">
+            {% for option in filter_options.sector %}
+            <label><input type="checkbox" name="sector" value="{{ option.value }}">{{ option.label }} <span>{{ option.count }}</span></label>
+            {% endfor %}
+            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        </div>
+    </details>
+
+    <details class="desk-filter-chip">
+        <summary>Categoria</summary>
+        <div class="desk-popover">
+            {% for option in filter_options.category %}
+            <label><input type="checkbox" name="category" value="{{ option.value }}" {% if request.GET.category == option.value %}checked{% endif %}>{{ option.label }} <span>{{ option.count }}</span></label>
+            {% endfor %}
+            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        </div>
+    </details>
+
+    <button class="desk-filter-chip desk-filter-toggle" name="stale" value="1" type="submit">Parado &gt;2h</button>
+    <button class="desk-filter-chip desk-filter-toggle" name="vip" value="1" type="submit">Socio / VIP</button>
+    <button class="desk-filter-chip desk-filter-toggle" name="unassigned" value="1" type="submit">Sem dono</button>
+
+    <details class="desk-filter-chip desk-saved-views">
+        <summary>Views salvas</summary>
+        <div class="desk-popover">
+            {% for view in saved_views %}
+            <a href="{% url 'tickets:central' %}{{ view.query }}">{{ view.name }}</a>
+            {% endfor %}
+            <button class="desk-btn desk-btn-primary" type="button">Salvar view atual</button>
+        </div>
+    </details>
+</form>

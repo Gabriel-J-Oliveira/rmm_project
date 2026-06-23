@@ -1,0 +1,27 @@
+<section class="desk-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="users"></i>Agrupado por responsavel</h2>
+            <p>Visao rapida para balancear carga por tecnico ou setor.</p>
+        </div>
+    </div>
+    <div class="desk-grouped-list">
+        {% for group in grouped_by_owner %}
+        <article class="desk-group-column">
+            <header>
+                <strong>{{ group.owner }}</strong>
+                <span>{{ group.tickets|length }}</span>
+            </header>
+            {% for ticket in group.tickets %}
+            <a class="desk-group-ticket priority-{{ ticket.priority }}" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}&view=grouped">
+                <span>#{{ ticket.number }}</span>
+                <strong>{{ ticket.title|truncatechars:52 }}</strong>
+                <small>{{ ticket.requester }} &middot; {{ ticket.sector }}</small>
+            </a>
+            {% empty %}
+            <div class="desk-empty compact">Sem chamados.</div>
+            {% endfor %}
+        </article>
+        {% endfor %}
+    </div>
+</section>

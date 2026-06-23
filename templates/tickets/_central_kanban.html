@@ -1,0 +1,24 @@
+<section class="desk-panel kanban-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="columns-3"></i>Kanban por status</h2>
+            <p>Arraste futuramente entre colunas; transicoes sensiveis pedirao confirmacao.</p>
+        </div>
+    </div>
+    <div class="service-kanban desk-central-kanban">
+        {% for column in kanban_columns %}
+        <article class="kanban-column">
+            <header><strong>{{ column.label }}</strong><span>{{ column.count }}</span></header>
+            {% for ticket in column.tickets %}
+            <a class="kanban-card priority-{{ ticket.priority }}" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}&view=kanban">
+                <span>#{{ ticket.number }}</span>
+                <strong>{{ ticket.title|truncatechars:48 }}</strong>
+                <small>{{ ticket.priority_label }} &middot; {{ ticket.assigned_to|default:"Sem responsavel" }}</small>
+            </a>
+            {% empty %}
+            <div class="desk-empty compact">Sem chamados.</div>
+            {% endfor %}
+        </article>
+        {% endfor %}
+    </div>
+</section>

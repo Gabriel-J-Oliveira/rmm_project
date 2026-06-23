@@ -323,11 +323,18 @@ def get_ticket(number):
 
 
 def filter_tickets(params, tickets=None, assigned_to=None):
+    def _values(name):
+        if hasattr(params, 'getlist'):
+            return [value for value in params.getlist(name) if value]
+        value = params.get(name) if hasattr(params, 'get') else None
+        return [value] if value else []
+
     items = list(tickets or MOCK_TICKETS)
     query = (params.get('q') or '').strip().lower()
-    status = (params.get('status') or '').strip()
-    priority = (params.get('priority') or '').strip()
-    category = (params.get('category') or '').strip()
+    statuses = _values('status')
+    priorities = _values('priority')
+    categories = _values('category')
+    sectors = _values('sector')
     owner = (params.get('assigned_to') or '').strip().lower()
 
     if assigned_to:
@@ -340,16 +347,22 @@ def filter_tickets(params, tickets=None, assigned_to=None):
             or query in ticket.sector.lower()
             or (ticket.endpoint and query in ticket.endpoint.hostname.lower())
         ]
-    if status:
-        items = [ticket for ticket in items if ticket.status == status]
-    if priority:
-        items = [ticket for ticket in items if ticket.priority == priority]
-    if category:
-        items = [ticket for ticket in items if ticket.category == category]
+    if statuses:
+        items = [ticket for ticket in items if ticket.status in statuses]
+    if priorities:
+        items = [ticket for ticket in items if ticket.priority in priorities]
+    if categories:
+        items = [ticket for ticket in items if ticket.category in categories]
+    if sectors:
+        items = [ticket for ticket in items if ticket.sector in sectors]
     if owner:
         items = [ticket for ticket in items if owner in ticket.assigned_to.lower()]
     if params.get('critical') == '1':
         items = [ticket for ticket in items if ticket.priority == 'critical']
+    if params.get('vip') == '1':
+        items = [ticket for ticket in items if ticket.partner]
+    if params.get('stale') == '1':
+        items = [ticket for ticket in items if ticket.updated_for in {'2h 44min', '2h 40min', '2h 15min', '3h', '1d', '2d'}]
     if params.get('unassigned') == '1':
         items = [ticket for ticket in items if not ticket.assigned_to]
     return items

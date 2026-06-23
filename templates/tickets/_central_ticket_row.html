@@ -1,0 +1,63 @@
+<tr class="desk-ticket-row priority-{{ ticket.priority }} {% if selected_ticket and selected_ticket.number == ticket.number %}is-selected{% endif %}" data-ticket="{{ ticket.number }}">
+    <td><input type="checkbox" aria-label="Selecionar chamado {{ ticket.number }}"></td>
+    <td>
+        <div class="desk-row-title">
+            <span class="desk-ticket-number">#{{ ticket.number }}</span>
+            <div>
+                <a class="desk-ticket-title" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}&view={{ view_mode }}">{{ ticket.title }}</a>
+                <div class="desk-ticket-meta">
+                    <span>{{ ticket.requester }}</span>
+                    <span>{{ ticket.sector }}</span>
+                    {% if ticket.partner %}<span class="desk-badge partner-badge">Socio / VIP</span>{% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="desk-row-preview">
+            <strong>Preview rapido</strong>
+            <p>{{ ticket.description|truncatechars:150 }}</p>
+            {% if ticket.comments %}
+                <small>Ultimo comentario: {{ ticket.comments.0.body|truncatechars:120 }}</small>
+            {% else %}
+                <small>Sem comentarios registrados no preview.</small>
+            {% endif %}
+        </div>
+    </td>
+    <td>
+        <span class="desk-sla-indicator priority-{{ ticket.priority }}">
+            <i></i>
+            {{ ticket.opened_for }}
+        </span>
+        <small class="desk-muted">sem atualizacao {{ ticket.updated_for }}</small>
+    </td>
+    <td>
+        <details class="desk-inline-popover">
+            <summary class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</summary>
+            <div class="desk-popover">
+                <strong>Alterar status</strong>
+                <button type="button">Novo</button>
+                <button type="button">Em atendimento</button>
+                <button type="button">Aguardando usuario</button>
+                <button type="button">Resolvido</button>
+            </div>
+        </details>
+    </td>
+    <td>
+        <details class="desk-inline-popover">
+            <summary class="desk-assignee-pill">
+                <span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>
+                {{ ticket.assigned_to|default:"Sem dono" }}
+            </summary>
+            <div class="desk-popover desk-assignee-popover">
+                <button class="desk-btn desk-btn-primary" type="button">Atribuir a mim</button>
+                {% for row in workload_rows %}
+                    <button type="button">{{ row.label }} <span>{{ row.count }} abertos</span></button>
+                {% endfor %}
+            </div>
+        </details>
+    </td>
+    <td>{% if ticket.endpoint %}<span class="mono">{{ ticket.endpoint.hostname }}</span>{% else %}<span class="desk-muted">Sem endpoint</span>{% endif %}</td>
+    <td><span class="desk-badge neutral">{{ ticket.category }}</span></td>
+    <td class="desk-row-actions">
+        <a class="desk-btn" href="{% url 'tickets:detail' ticket.number %}"><i data-lucide="maximize-2"></i>Tela cheia</a>
+    </td>
+</tr>

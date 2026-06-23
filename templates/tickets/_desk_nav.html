@@ -1,6 +1,5 @@
 <nav class="desk-module-nav">
-    <a class="{% if desk_active_section == 'queue' %}active{% endif %}" href="{% url 'tickets:list' %}"><i data-lucide="list-filter"></i>Fila</a>
-    <a class="{% if desk_active_section == 'service_panel' %}active{% endif %}" href="{% url 'tickets:service-panel' %}"><i data-lucide="radio"></i>Painel de Chamados</a>
+    <a class="{% if desk_active_section == 'central' or desk_active_section == 'queue' or desk_active_section == 'service_panel' %}active{% endif %}" href="{% url 'tickets:central' %}"><i data-lucide="radio"></i>Central de Atendimento</a>
     <a class="{% if desk_active_section == 'my' %}active{% endif %}" href="{% url 'tickets:my' %}"><i data-lucide="user-check"></i>Meus chamados</a>
     <a class="{% if desk_active_section == 'new' %}active{% endif %}" href="{% url 'tickets:create' %}"><i data-lucide="plus-circle"></i>Novo chamado</a>
     <a class="{% if desk_active_section == 'dashboard' %}active{% endif %}" href="{% url 'tickets:dashboard' %}"><i data-lucide="bar-chart-3"></i>Dashboards</a>

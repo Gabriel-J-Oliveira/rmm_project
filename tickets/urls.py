@@ -7,6 +7,7 @@ app_name = 'tickets'
 
 urlpatterns = [
     path('', views.ticket_list, name='list'),
+    path('central/', views.ticket_central, name='central'),
     path('queue/', views.ticket_queue, name='queue'),
     path('my/', views.ticket_my, name='my'),
     path('new/', views.ticket_create, name='create'),

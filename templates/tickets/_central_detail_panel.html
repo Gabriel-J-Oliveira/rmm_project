@@ -1,0 +1,83 @@
+<aside class="desk-detail-panel" aria-label="Detalhe do chamado">
+    {% if selected_ticket %}
+    <header class="desk-detail-panel-header">
+        <div>
+            <span class="desk-ticket-number">#{{ selected_ticket.number }}</span>
+            <h2>{{ selected_ticket.title }}</h2>
+            <p>{{ selected_ticket.requester }} &middot; {{ selected_ticket.sector }} &middot; aberto ha {{ selected_ticket.opened_for }}</p>
+        </div>
+        <a class="desk-btn" href="{% url 'tickets:detail' selected_ticket.number %}"><i data-lucide="maximize-2"></i>Tela cheia</a>
+    </header>
+
+    <div class="desk-detail-inline-state">
+        <details class="desk-inline-popover">
+            <summary class="desk-badge status-{{ selected_ticket.status }}">{{ selected_ticket.status_label }}</summary>
+            <div class="desk-popover">
+                <button type="button">Novo</button>
+                <button type="button">Em atendimento</button>
+                <button type="button">Aguardando usuario</button>
+                <button type="button">Resolvido</button>
+            </div>
+        </details>
+        <details class="desk-inline-popover">
+            <summary class="desk-badge priority-{{ selected_ticket.priority }}">{{ selected_ticket.priority_label }}</summary>
+            <div class="desk-popover">
+                <button type="button">Baixa</button>
+                <button type="button">Normal</button>
+                <button type="button">Alta</button>
+                <button type="button">Critica</button>
+            </div>
+        </details>
+        {% if selected_ticket.partner %}<span class="desk-badge partner-badge">Socio / VIP</span>{% endif %}
+    </div>
+
+    <nav class="desk-detail-tabs" aria-label="Abas do chamado">
+        <a class="active" href="#overview">Visao geral</a>
+        <a href="#comments">Comentarios</a>
+        <a href="#history">Historico</a>
+        <a href="#attachments">Anexos</a>
+    </nav>
+
+    <section class="desk-detail-panel-body">
+        <article id="overview" class="desk-detail-section">
+            <h3>Descricao</h3>
+            <p>{{ selected_ticket.description }}</p>
+            <dl class="desk-data-list">
+                <div><dt>Responsavel</dt><dd>{{ selected_ticket.assigned_to|default:"Sem responsavel" }}</dd></div>
+                <div><dt>Categoria</dt><dd>{{ selected_ticket.category }}</dd></div>
+                <div><dt>Endpoint</dt><dd>{% if selected_ticket.endpoint %}{{ selected_ticket.endpoint.hostname }}{% else %}Sem endpoint{% endif %}</dd></div>
+                <div><dt>Primeira resposta</dt><dd>{{ selected_ticket.first_response_at }}</dd></div>
+            </dl>
+        </article>
+
+        <article id="comments" class="desk-detail-section">
+            <h3>Comentarios recentes</h3>
+            <div class="desk-comments">
+                {% for comment in selected_ticket.comments %}
+                <div class="desk-comment">
+                    <div><strong>{{ comment.author }}</strong><span>{{ comment.when }} &middot; {{ comment.visibility }}</span></div>
+                    <p>{{ comment.body }}</p>
+                </div>
+                {% empty %}
+                <div class="desk-empty compact"><i data-lucide="message-circle"></i><span>Nenhum comentario no preview.</span></div>
+                {% endfor %}
+            </div>
+        </article>
+    </section>
+
+    <form class="desk-comment-dock" method="post" action="{% url 'tickets:fake-action' selected_ticket.number 'comentario-adicionado' %}">
+        {% csrf_token %}
+        <textarea name="body" rows="3" placeholder="Escreva um comentario..."></textarea>
+        <div>
+            <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
+            <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar</button>
+        </div>
+    </form>
+    {% else %}
+    <div class="desk-empty">
+        <i data-lucide="panel-right-open"></i>
+        <strong>Selecione um chamado</strong>
+        <span>O detalhe abre aqui sem tirar voce da fila.</span>
+    </div>
+    {% endif %}
+</aside>

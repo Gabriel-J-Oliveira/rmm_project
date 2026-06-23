@@ -1,0 +1,26 @@
+<section class="desk-kpi-strip" aria-label="Indicadores da central">
+    <a href="{% url 'tickets:central' %}" class="desk-kpi-link">
+        <span>Abertos</span>
+        <strong>{{ global_summary.open }}</strong>
+    </a>
+    <a href="{% url 'tickets:central' %}?priority=critical" class="desk-kpi-link critical">
+        <span>Criticos</span>
+        <strong>{{ global_summary.critical }}</strong>
+    </a>
+    <a href="{% url 'tickets:central' %}?unassigned=1" class="desk-kpi-link">
+        <span>Sem dono</span>
+        <strong>{{ unassigned_count }}</strong>
+    </a>
+    <a href="{% url 'tickets:central' %}" class="desk-kpi-link">
+        <span>1a resposta media</span>
+        <strong>{{ global_summary.avg_first_response }}</strong>
+    </a>
+    <a href="{% url 'tickets:central' %}" class="desk-kpi-link">
+        <span>Resolucao media</span>
+        <strong>2h14</strong>
+    </a>
+    <a href="{% url 'tickets:central' %}?status=in_progress" class="desk-kpi-link">
+        <span>Em atendimento</span>
+        <strong>{{ global_summary.in_progress }}</strong>
+    </a>
+</section>

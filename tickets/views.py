@@ -16,33 +16,146 @@ def _base_context(active_section='queue'):
     }
 
 
-def ticket_list(request):
+def _open_tickets():
+    return [
+        ticket for ticket in MOCK_TICKETS
+        if ticket.status not in {'resolved', 'closed', 'canceled'}
+    ]
+
+
+def _priority_rank(ticket):
+    priority_rank = {'critical': 0, 'high': 1, 'normal': 2, 'low': 3}
+    return priority_rank.get(ticket.priority, 9)
+
+
+def _ticket_sort_key(ticket):
+    return (
+        _priority_rank(ticket),
+        0 if ticket.partner else 1,
+        0 if not ticket.assigned_to else 1,
+        ticket.number * -1,
+    )
+
+
+def _count_by(items, attr_name):
+    counts = {}
+    for item in items:
+        value = getattr(item, attr_name) or 'Sem responsavel'
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _central_context(request, active_section='central', assigned_to=None):
     tickets = filter_tickets(request.GET)
-    context = {
-        **_base_context('queue'),
-        'tickets': tickets,
-        'summary': summary_for(),
-        'page_title': 'Night Owl Desk',
-        'page_subtitle': 'Fila interna de atendimento da TI',
+    if assigned_to:
+        tickets = filter_tickets(request.GET, assigned_to=assigned_to)
+    open_tickets = _open_tickets()
+    selected_number = request.GET.get('ticket') or (tickets[0].number if tickets else None)
+    selected_ticket = get_ticket(selected_number) if selected_number else None
+    sorted_tickets = sorted(tickets, key=_ticket_sort_key)
+    status_groups = [
+        ('new', 'Novo'),
+        ('in_progress', 'Em atendimento'),
+        ('waiting_user', 'Aguardando usuario'),
+        ('waiting_third_party', 'Aguardando terceiro'),
+        ('resolved', 'Resolvidos'),
+    ]
+    kanban_columns = [
+        {
+            'status': status,
+            'label': label,
+            'tickets': [ticket for ticket in sorted_tickets if ticket.status == status],
+            'count': len([ticket for ticket in sorted_tickets if ticket.status == status]),
+        }
+        for status, label in status_groups
+    ]
+    grouped_by_owner = [
+        {
+            'owner': owner,
+            'tickets': [ticket for ticket in sorted_tickets if (ticket.assigned_to or 'Sem responsavel') == owner],
+        }
+        for owner in sorted(_count_by(sorted_tickets, 'assigned_to').keys())
+    ]
+    workload_rows = [
+        {
+            'label': owner,
+            'count': count,
+            'critical': len([ticket for ticket in open_tickets if (ticket.assigned_to or 'Sem responsavel') == owner and ticket.priority == 'critical']),
+        }
+        for owner, count in sorted(_count_by(open_tickets, 'assigned_to').items())
+    ]
+    filter_counts = {
+        'status': _count_by(MOCK_TICKETS, 'status'),
+        'priority': _count_by(MOCK_TICKETS, 'priority'),
+        'assigned_to': _count_by(MOCK_TICKETS, 'assigned_to'),
+        'sector': _count_by(MOCK_TICKETS, 'sector'),
+        'category': _count_by(MOCK_TICKETS, 'category'),
     }
-    return render(request, 'tickets/list.html', context)
+    filter_options = {
+        'status': [
+            {'value': value, 'label': label, 'count': filter_counts['status'].get(value, 0)}
+            for value, label in STATUS_LABELS.items()
+        ],
+        'priority': [
+            {'value': value, 'label': label, 'count': filter_counts['priority'].get(value, 0)}
+            for value, label in PRIORITY_LABELS.items()
+        ],
+        'assigned_to': [
+            {'value': value, 'label': value, 'count': count}
+            for value, count in sorted(filter_counts['assigned_to'].items())
+        ],
+        'sector': [
+            {'value': value, 'label': value, 'count': count}
+            for value, count in sorted(filter_counts['sector'].items())
+        ],
+        'category': [
+            {'value': value, 'label': value, 'count': count}
+            for value, count in sorted(filter_counts['category'].items())
+        ],
+    }
+    context = {
+        **_base_context(active_section),
+        'tickets': sorted_tickets,
+        'summary': summary_for(tickets),
+        'global_summary': summary_for(),
+        'selected_ticket': selected_ticket,
+        'kanban_columns': kanban_columns,
+        'grouped_by_owner': grouped_by_owner,
+        'workload_rows': workload_rows,
+        'filter_counts': filter_counts,
+        'filter_options': filter_options,
+        'unassigned_count': len([ticket for ticket in MOCK_TICKETS if not ticket.assigned_to]),
+        'saved_views': [
+            {'name': 'Criticos agora', 'query': '?priority=critical'},
+            {'name': 'Sem dono', 'query': '?unassigned=1'},
+            {'name': 'Socios / VIP', 'query': '?vip=1'},
+        ],
+        'view_mode': request.GET.get('view', 'list'),
+        'new_ticket_count': 3,
+        'page_title': 'Central de Atendimento',
+        'page_subtitle': 'Trabalhe a fila, acompanhe o kanban e abra detalhes sem perder o contexto.',
+    }
+    return context
+
+
+def ticket_central(request):
+    return render(request, 'tickets/central.html', _central_context(request))
+
+
+def ticket_list(request):
+    return render(request, 'tickets/central.html', _central_context(request))
 
 
 def ticket_queue(request):
-    return ticket_list(request)
+    return render(request, 'tickets/central.html', _central_context(request))
 
 
 def ticket_my(request):
-    tickets = filter_tickets(request.GET, assigned_to='Gabriel')
-    context = {
-        **_base_context('my'),
-        'tickets': tickets,
-        'summary': summary_for(tickets),
-        'page_title': 'Meus chamados',
-        'page_subtitle': 'Atendimentos atribuidos ao tecnico atual.',
-        'is_my_queue': True,
-    }
-    return render(request, 'tickets/list.html', context)
+    context = _central_context(request, active_section='my', assigned_to='Gabriel')
+    context['page_title'] = 'Meus chamados'
+    context['page_subtitle'] = 'Atendimentos atribuidos ao tecnico atual dentro da Central.'
+    context['is_my_queue'] = True
+    return render(request, 'tickets/central.html', context)
 
 
 def ticket_create(request):
@@ -184,7 +297,9 @@ def ticket_dashboard(request):
 
 
 def ticket_service_panel(request):
-    return render(request, 'tickets/service_panel.html', _service_panel_context())
+    context = _central_context(request)
+    context['view_mode'] = request.GET.get('view', 'kanban')
+    return render(request, 'tickets/central.html', context)
 
 
 def ticket_categories(request):

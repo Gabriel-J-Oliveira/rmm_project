@@ -1,0 +1,37 @@
+<section class="desk-panel desk-ticket-table-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="list"></i>Fila de trabalho</h2>
+            <p>Lista densa para triagem, atribuicao e acompanhamento dos chamados.</p>
+        </div>
+        <span class="desk-badge neutral">{{ tickets|length }} chamados</span>
+    </div>
+
+    <div class="desk-ticket-table-wrap">
+        <table class="desk-ticket-table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" aria-label="Selecionar todos"></th>
+                    <th>Chamado</th>
+                    <th>SLA</th>
+                    <th>Status</th>
+                    <th>Responsavel</th>
+                    <th>Endpoint</th>
+                    <th>Categoria</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ticket in tickets %}
+                    {% include "tickets/_central_ticket_row.html" %}
+                {% empty %}
+                    <tr>
+                        <td colspan="8">
+                            <div class="desk-empty compact"><i data-lucide="check-circle"></i><span>Nenhum chamado encontrado para os filtros atuais.</span></div>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>

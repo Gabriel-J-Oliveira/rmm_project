@@ -1,0 +1,27 @@
+<header class="desk-compact-header desk-central-header">
+    <div class="desk-compact-title">
+        <span class="desk-compact-icon"><i data-lucide="radio"></i></span>
+        <div>
+            <p class="desk-kicker">Night Owl Desk / Operacao</p>
+            <h1>{{ page_title }}</h1>
+            <span>{{ page_subtitle }}</span>
+        </div>
+    </div>
+
+    <form class="desk-central-search" method="get" action="{% url 'tickets:central' %}">
+        <i data-lucide="search"></i>
+        <input name="q" value="{{ request.GET.q }}" placeholder="Chamado, solicitante, endpoint...">
+        <input type="hidden" name="view" value="{{ view_mode }}">
+    </form>
+
+    <div class="desk-view-switcher" aria-label="Alternar visualizacao">
+        <a class="{% if view_mode == 'list' %}active{% endif %}" href="?view=list{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="list"></i>Lista</a>
+        <a class="{% if view_mode == 'kanban' %}active{% endif %}" href="?view=kanban{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="columns-3"></i>Kanban</a>
+        <a class="{% if view_mode == 'grouped' %}active{% endif %}" href="?view=grouped{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="users"></i>Responsavel</a>
+    </div>
+
+    <div class="desk-compact-actions">
+        <a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
+        <a class="desk-btn desk-btn-primary" href="{% url 'tickets:create' %}"><i data-lucide="ticket-plus"></i>Novo chamado</a>
+    </div>
+</header>
