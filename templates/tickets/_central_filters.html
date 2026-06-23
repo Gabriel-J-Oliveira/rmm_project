@@ -90,4 +90,5 @@
             <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar filtros</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar tudo</a></div>
         </div>
     </details>
+    <a class="desk-btn desk-filter-clear" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="x-circle"></i>Limpar</a>
 </form>

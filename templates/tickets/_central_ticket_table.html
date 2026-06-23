@@ -8,30 +8,26 @@
     </div>
 
     <div class="desk-ticket-table-wrap">
-        <table class="desk-ticket-table">
-            <thead>
-                <tr>
-                    <th><input class="desk-row-check-all" type="checkbox" aria-label="Selecionar todos"></th>
-                    <th>Chamado</th>
-                    <th>Origem</th>
-                    <th>SLA</th>
-                    <th>Status</th>
-                    <th>Responsavel</th>
-                    <th>Endpoint</th>
-                    <th>Categoria</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for ticket in tickets %}
-                    {% include "tickets/_central_ticket_row.html" %}
-                {% empty %}
-                    <tr>
-                        <td colspan="8">
-                            <div class="desk-empty compact"><i data-lucide="check-circle"></i><span>Nenhum chamado encontrado para os filtros atuais.</span></div>
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="desk-ticket-table" role="table" aria-label="Fila de chamados">
+            <div class="desk-ticket-grid desk-ticket-grid-header" role="row">
+                <div role="columnheader"><input class="desk-row-check-all" type="checkbox" aria-label="Selecionar todos"></div>
+                <div role="columnheader" aria-label="Origem"></div>
+                <div role="columnheader">Chamado</div>
+                <div role="columnheader">Origem</div>
+                <div role="columnheader">SLA</div>
+                <div role="columnheader">Status</div>
+                <div role="columnheader">Responsavel</div>
+                <div role="columnheader">Endpoint</div>
+                <div role="columnheader">Categoria</div>
+                <div role="columnheader">Acoes</div>
+            </div>
+            <div class="desk-ticket-grid-body" role="rowgroup">
+            {% for ticket in tickets %}
+                {% include "tickets/_central_ticket_row.html" %}
+            {% empty %}
+                <div class="desk-empty compact desk-ticket-empty"><i data-lucide="check-circle"></i><span>Nenhum chamado encontrado para os filtros atuais.</span></div>
+            {% endfor %}
+            </div>
+        </div>
     </div>
 </section>

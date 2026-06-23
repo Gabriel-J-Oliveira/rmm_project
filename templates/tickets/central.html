@@ -10,10 +10,10 @@
     {% include "tickets/_central_kpis.html" %}
     {% include "tickets/_central_filters.html" %}
 
-    <div class="desk-realtime-chip" role="status">
+    <div class="desk-realtime-chip" role="status" data-realtime-pill>
         <i data-lucide="radio"></i>
-        <span>{{ new_ticket_count }} novos chamados</span>
-        <button type="button">Carregar</button>
+        <span>{{ new_ticket_count }} novos chamados disponiveis</span>
+        <button type="button" data-load-new>Carregar agora</button>
     </div>
 
     {% include "tickets/_central_bulk_actions.html" %}
@@ -35,6 +35,7 @@
     {% include "tickets/_central_shortcuts.html" %}
     {% include "tickets/_central_command_palette.html" %}
     {% include "tickets/_central_toasts.html" %}
+    {{ central_ticket_payloads|json_script:"central-ticket-data" }}
     {% include "tickets/_central_scripts.html" %}
 </section>
 {% endblock %}

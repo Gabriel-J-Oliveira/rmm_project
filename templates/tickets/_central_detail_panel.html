@@ -1,4 +1,4 @@
-<aside class="desk-detail-panel" aria-label="Detalhe do chamado">
+<aside class="desk-detail-panel" aria-label="Detalhe do chamado" data-preview-panel>
     {% if selected_ticket %}
     <header class="desk-detail-panel-header">
         <div>
@@ -130,10 +130,15 @@
         </div>
     </form>
     {% else %}
-    <div class="desk-empty">
+    <div class="desk-preview-empty" data-preview-empty>
         <i data-lucide="panel-right-open"></i>
-        <strong>Selecione um chamado</strong>
-        <span>O detalhe abre aqui sem tirar voce da fila.</span>
+        <strong>Selecione um chamado para ver mais detalhes</strong>
+        <span>Escolha um item da fila para visualizar SLA, comentarios, endpoint, acoes rapidas e contexto RMM.</span>
+        <dl>
+            <div><dt>J / K</dt><dd>navegar</dd></div>
+            <div><dt>Enter</dt><dd>abrir</dd></div>
+            <div><dt>Ctrl K</dt><dd>buscar</dd></div>
+        </dl>
     </div>
     {% endif %}
 </aside>

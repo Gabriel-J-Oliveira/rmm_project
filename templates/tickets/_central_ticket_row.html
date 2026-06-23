@@ -1,11 +1,11 @@
-<tr class="desk-ticket-row priority-{{ ticket.priority }} origin-{{ ticket.central.origin }} sla-{{ ticket.central.sla_state }} {% if ticket.central.is_waiting %}is-paused{% endif %} {% if ticket.central.is_unassigned %}is-unassigned{% endif %} {% if ticket.central.is_rmm %}is-rmm{% endif %} {% if ticket.central.is_stale %}is-stale{% endif %} {% if selected_ticket and selected_ticket.number == ticket.number %}is-selected{% endif %}" data-ticket="{{ ticket.number }}" data-detail-url="{% url 'tickets:detail' ticket.number %}" tabindex="0">
-    <td><input class="desk-row-checkbox" type="checkbox" aria-label="Selecionar chamado {{ ticket.number }}"></td>
-    <td>
+<div class="desk-ticket-grid desk-ticket-row priority-{{ ticket.priority }} origin-{{ ticket.central.origin }} sla-{{ ticket.central.sla_state }} {% if ticket.central.is_waiting %}is-paused{% endif %} {% if ticket.central.is_unassigned %}is-unassigned{% endif %} {% if ticket.central.is_rmm %}is-rmm{% endif %} {% if ticket.central.is_stale %}is-stale{% endif %} {% if selected_ticket and selected_ticket.number == ticket.number %}is-selected{% endif %}" data-ticket="{{ ticket.number }}" data-detail-url="{% url 'tickets:detail' ticket.number %}" role="row" tabindex="0">
+    <div role="cell"><input class="desk-row-checkbox" type="checkbox" aria-label="Selecionar chamado {{ ticket.number }}"></div>
+    <div role="cell"><span class="desk-row-origin-icon" title="{{ ticket.central.origin_label }}"><i data-lucide="{{ ticket.central.origin_icon }}"></i></span></div>
+    <div role="cell">
         <div class="desk-row-title">
-            <span class="desk-row-origin-icon" title="{{ ticket.central.origin_label }}"><i data-lucide="{{ ticket.central.origin_icon }}"></i></span>
             <span class="desk-ticket-number">#{{ ticket.number }}</span>
-            <div>
-                <a class="desk-ticket-title" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}&view={{ view_mode }}">{{ ticket.title }}</a>
+            <div class="desk-row-title-copy">
+                <button class="desk-ticket-title" type="button" data-preview-trigger>{{ ticket.title }}</button>
                 <div class="desk-ticket-meta">
                     <span>{{ ticket.requester }}</span>
                     <span>{{ ticket.sector }}</span>
@@ -25,23 +25,23 @@
                 <small>Sem comentarios registrados no preview.</small>
             {% endif %}
         </div>
-    </td>
-    <td>
+    </div>
+    <div role="cell">
         <span class="desk-origin-badge origin-{{ ticket.central.origin }}" title="{% if ticket.central.is_rmm %}Criado a partir de alerta do RMM{% else %}Chamado criado manualmente{% endif %}">
             <i data-lucide="{{ ticket.central.origin_icon }}"></i>{{ ticket.central.origin_label }}
         </span>
         {% if ticket.central.is_rmm %}
             <small class="desk-rmm-row-note">{{ ticket.central.alert_label }}</small>
         {% endif %}
-    </td>
-    <td>
+    </div>
+    <div role="cell">
         <span class="desk-sla-indicator priority-{{ ticket.priority }} sla-{{ ticket.central.sla_state }}">
             <i data-lucide="clock-3"></i>
             <span>{{ ticket.opened_for }}</span>
         </span>
         <small class="desk-muted">{{ ticket.central.sla_label }} &middot; sem atualizacao {{ ticket.updated_for }}</small>
-    </td>
-    <td>
+    </div>
+    <div role="cell">
         <details class="desk-inline-popover">
             <summary class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</summary>
             <div class="desk-popover desk-status-popover">
@@ -62,8 +62,8 @@
                 <label class="desk-mini-form"><span>Motivo rapido</span><input placeholder="Opcional para transicoes sensiveis"></label>
             </div>
         </details>
-    </td>
-    <td>
+    </div>
+    <div role="cell">
         <details class="desk-inline-popover">
             <summary class="desk-assignee-pill {% if ticket.central.is_unassigned %}is-unassigned{% endif %}">
                 <span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>
@@ -81,8 +81,8 @@
                 {% endfor %}
             </div>
         </details>
-    </td>
-    <td>
+    </div>
+    <div role="cell">
         {% if ticket.endpoint %}
             <span class="desk-endpoint-chip status-{{ ticket.central.endpoint_status }}">
                 <i></i><span class="mono">{{ ticket.endpoint.hostname }}</span>
@@ -91,13 +91,15 @@
         {% else %}
             <span class="desk-muted">Sem endpoint</span>
         {% endif %}
-    </td>
-    <td class="desk-category-cell">
+    </div>
+    <div class="desk-category-cell" role="cell">
         <span class="desk-badge neutral">{{ ticket.category }}</span>
+    </div>
+    <div class="desk-row-actions-cell" role="cell">
         <span class="desk-row-hover-actions">
             <a class="desk-icon-action" href="{% url 'tickets:detail' ticket.number %}" aria-label="Abrir chamado {{ ticket.number }} em tela cheia"><i data-lucide="maximize-2"></i></a>
             <button class="desk-icon-action" type="button" aria-label="Copiar link do chamado {{ ticket.number }}"><i data-lucide="link"></i></button>
             <button class="desk-icon-action" type="button" aria-label="Menu de contexto do chamado {{ ticket.number }}"><i data-lucide="more-horizontal"></i></button>
         </span>
-    </td>
-</tr>
+    </div>
+</div>

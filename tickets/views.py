@@ -109,6 +109,49 @@ def _decorate_central_ticket(ticket):
     return ticket
 
 
+def _central_ticket_payload(ticket):
+    central = getattr(ticket, 'central', {})
+    endpoint = ticket.endpoint
+    return {
+        'number': ticket.number,
+        'title': ticket.title,
+        'requester': ticket.requester,
+        'sector': ticket.sector,
+        'partner': ticket.partner,
+        'priority': ticket.priority,
+        'priority_label': ticket.priority_label,
+        'status': ticket.status,
+        'status_label': ticket.status_label,
+        'category': ticket.category,
+        'assigned_to': ticket.assigned_to or '',
+        'opened_for': ticket.opened_for,
+        'updated_for': ticket.updated_for,
+        'description': ticket.description,
+        'origin': central.get('origin'),
+        'origin_label': central.get('origin_label'),
+        'origin_icon': central.get('origin_icon'),
+        'sla_state': central.get('sla_state'),
+        'sla_label': central.get('sla_label'),
+        'suggestion': central.get('suggestion'),
+        'endpoint': {
+            'hostname': endpoint.hostname,
+            'status': endpoint.status,
+            'last_user': endpoint.last_user,
+            'last_heartbeat': endpoint.last_heartbeat,
+        } if endpoint else None,
+        'rmm': central.get('rmm'),
+        'comments': [
+            {
+                'author': comment.author,
+                'when': comment.when,
+                'visibility': comment.visibility,
+                'body': comment.body,
+            }
+            for comment in ticket.comments[:2]
+        ],
+    }
+
+
 def _count_by(items, attr_name):
     counts = {}
     for item in items:
@@ -122,7 +165,7 @@ def _central_context(request, active_section='central', assigned_to=None):
     if assigned_to:
         tickets = filter_tickets(request.GET, assigned_to=assigned_to)
     open_tickets = _open_tickets()
-    selected_number = request.GET.get('ticket') or (tickets[0].number if tickets else None)
+    selected_number = request.GET.get('ticket')
     selected_ticket = get_ticket(selected_number) if selected_number else None
     sorted_tickets = [_decorate_central_ticket(ticket) for ticket in sorted(tickets, key=_ticket_sort_key)]
     if selected_ticket:
@@ -195,6 +238,7 @@ def _central_context(request, active_section='central', assigned_to=None):
         'summary': current_summary,
         'global_summary': global_summary,
         'selected_ticket': selected_ticket,
+        'central_ticket_payloads': [_central_ticket_payload(ticket) for ticket in sorted_tickets],
         'kanban_columns': kanban_columns,
         'grouped_by_owner': grouped_by_owner,
         'workload_rows': workload_rows,

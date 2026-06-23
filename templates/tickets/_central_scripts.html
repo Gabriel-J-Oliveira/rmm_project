@@ -8,6 +8,8 @@
     const command = document.querySelector('[data-command-palette]');
     const shortcuts = document.querySelector('[data-shortcuts-dialog]');
     const toast = document.querySelector('[data-toast]');
+    const previewPanel = document.querySelector('[data-preview-panel]');
+    const ticketData = JSON.parse(document.getElementById('central-ticket-data')?.textContent || '[]');
     let focusedIndex = rows.findIndex((row) => row.classList.contains('is-selected'));
     if (focusedIndex < 0) focusedIndex = 0;
 
@@ -32,6 +34,126 @@
         showToast.timer = setTimeout(() => { toast.hidden = true; }, 4800);
     }
 
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        }[char]));
+    }
+
+    function badgeClass(value) {
+        return escapeHtml(value || 'neutral');
+    }
+
+    function renderPreview(ticket) {
+        if (!previewPanel || !ticket) return;
+        const endpoint = ticket.endpoint;
+        const rmm = ticket.rmm;
+        const comments = ticket.comments?.length
+            ? ticket.comments.map((comment) => `
+                <div class="desk-comment">
+                    <div><strong>${escapeHtml(comment.author)}</strong><span>${escapeHtml(comment.when)} &middot; ${escapeHtml(comment.visibility)}</span></div>
+                    <p>${escapeHtml(comment.body)}</p>
+                </div>
+            `).join('')
+            : '<div class="desk-empty compact"><i data-lucide="message-circle"></i><span>Nenhum comentario no preview.</span></div>';
+        const rmmHtml = rmm ? `
+            <article class="desk-rmm-mini-card risk-${badgeClass(rmm.risk)}">
+                <header>
+                    <div>
+                        <span class="desk-section-eyebrow">RMM endpoint</span>
+                        <h3>${escapeHtml(rmm.hostname)}</h3>
+                        <p><i class="desk-status-dot status-${badgeClass(endpoint?.status)}"></i>${escapeHtml(rmm.status_label)} &middot; ultimo check-in ${escapeHtml(rmm.last_seen)}</p>
+                    </div>
+                    <span class="desk-rmm-alert-pill">${escapeHtml(rmm.active_alerts)} alertas</span>
+                </header>
+                <div class="desk-rmm-metrics">
+                    <div><span>CPU</span><meter value="${escapeHtml(rmm.cpu)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.cpu)}%</strong></div>
+                    <div><span>Mem</span><meter value="${escapeHtml(rmm.memory)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.memory)}%</strong></div>
+                    <div><span>Disco</span><meter value="${escapeHtml(rmm.disk)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.disk)}%</strong></div>
+                </div>
+                <p class="desk-muted">Usuario logado: ${escapeHtml(rmm.logged_user)}</p>
+                <div class="desk-rmm-actions">
+                    <a class="desk-btn" href="{% url 'endpoint-list' %}">Ver dispositivo</a>
+                    <button class="desk-btn" type="button">Abrir no RMM</button>
+                    <button class="desk-btn desk-btn-primary" type="button">Acesso remoto</button>
+                </div>
+            </article>
+        ` : '';
+        previewPanel.classList.add('is-switching');
+        previewPanel.innerHTML = `
+            <header class="desk-detail-panel-header">
+                <div>
+                    <span class="desk-ticket-number">#${escapeHtml(ticket.number)}</span>
+                    <h2>${escapeHtml(ticket.title)}</h2>
+                    <p>${escapeHtml(ticket.requester)} &middot; ${escapeHtml(ticket.sector)} &middot; aberto ha ${escapeHtml(ticket.opened_for)}</p>
+                </div>
+                <div class="desk-preview-header-actions">
+                    <button class="desk-icon-action" type="button" aria-label="Copiar link"><i data-lucide="link"></i></button>
+                    <a class="desk-icon-action" href="/tickets/${escapeHtml(ticket.number)}/" aria-label="Abrir em tela cheia"><i data-lucide="maximize-2"></i></a>
+                </div>
+            </header>
+            <div class="desk-detail-inline-state">
+                <span class="desk-badge status-${badgeClass(ticket.status)}">${escapeHtml(ticket.status_label)}</span>
+                <span class="desk-badge priority-${badgeClass(ticket.priority)}">${escapeHtml(ticket.priority_label)}</span>
+                ${ticket.partner ? '<span class="desk-badge partner-badge">Socio / VIP</span>' : ''}
+                <span class="desk-origin-badge origin-${badgeClass(ticket.origin)}">${escapeHtml(ticket.origin_label)}</span>
+            </div>
+            <section class="desk-detail-panel-body">
+                <article class="desk-suggestion-card priority-${badgeClass(ticket.priority)}">
+                    <i data-lucide="sparkles"></i>
+                    <div><strong>Proxima melhor acao</strong><p>${escapeHtml(ticket.suggestion)}</p></div>
+                </article>
+                <div class="desk-preview-grid">
+                    <article class="desk-preview-stat"><span>SLA</span><strong>${escapeHtml(ticket.sla_label)}</strong><small>${escapeHtml(ticket.opened_for)} aberto</small></article>
+                    <article class="desk-preview-stat"><span>Responsavel</span><strong>${escapeHtml(ticket.assigned_to || 'Sem dono')}</strong><small>${escapeHtml(ticket.updated_for)} sem atualizacao</small></article>
+                </div>
+                ${rmmHtml}
+                <article class="desk-detail-section">
+                    <h3>Descricao</h3>
+                    <p>${escapeHtml(ticket.description)}</p>
+                    <div class="desk-preview-badges">
+                        <span class="desk-badge neutral">${escapeHtml(ticket.category)}</span>
+                        ${endpoint ? `<span class="desk-endpoint-chip status-${badgeClass(endpoint.status)}"><i></i><span class="mono">${escapeHtml(endpoint.hostname)}</span></span>` : ''}
+                    </div>
+                </article>
+                <article class="desk-detail-section"><h3>Ultimos comentarios</h3><div class="desk-comments">${comments}</div></article>
+                <article class="desk-detail-section">
+                    <h3>Eventos recentes</h3>
+                    <div class="desk-preview-timeline">
+                        <div><i data-lucide="ticket-check"></i><strong>Chamado criado</strong><span>Hoje, 08:40</span></div>
+                        <div><i data-lucide="user-round-check"></i><strong>${escapeHtml(ticket.assigned_to || 'Sem responsavel definido')}</strong><span>${escapeHtml(ticket.updated_for)}</span></div>
+                    </div>
+                </article>
+                <div class="desk-quick-actions">
+                    <button class="desk-btn desk-btn-primary" type="button" data-toast-action>Atribuir a mim</button>
+                    <button class="desk-btn" type="button">Mudar status</button>
+                    <button class="desk-btn" type="button">Mudar prioridade</button>
+                    <a class="desk-btn" href="/tickets/${escapeHtml(ticket.number)}/">Abrir tela cheia</a>
+                </div>
+            </section>
+            <form class="desk-comment-dock" method="post" action="/tickets/${escapeHtml(ticket.number)}/fake/comentario-adicionado/">
+                <textarea name="body" rows="3" placeholder="Comentario rapido..."></textarea>
+                <div>
+                    <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
+                    <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar</button>
+                </div>
+            </form>
+        `;
+        rows.forEach((row) => row.classList.toggle('is-selected', row.dataset.ticket === String(ticket.number)));
+        window.history.replaceState({}, '', `{% url 'tickets:central' %}?ticket=${ticket.number}&view={{ view_mode }}`);
+        setTimeout(() => previewPanel.classList.remove('is-switching'), 180);
+        window.lucide?.createIcons?.();
+    }
+
+    function selectTicket(number) {
+        const ticket = ticketData.find((item) => String(item.number) === String(number));
+        renderPreview(ticket);
+    }
+
     checks.forEach((check) => check.addEventListener('change', refreshSelection));
     if (checkAll) {
         checkAll.addEventListener('change', () => {
@@ -46,9 +168,9 @@
 
     rows.forEach((row, index) => {
         row.addEventListener('click', (event) => {
-            if (event.target.closest('a, button, input, summary, details, label')) return;
-            const ticket = row.dataset.ticket;
-            window.location.href = `{% url 'tickets:central' %}?ticket=${ticket}&view={{ view_mode }}`;
+            if (event.target.closest('a, input, summary, details, label')) return;
+            if (event.target.closest('button') && !event.target.closest('[data-preview-trigger]')) return;
+            selectTicket(row.dataset.ticket);
         });
         row.addEventListener('dblclick', () => {
             window.location.href = row.dataset.detailUrl;
@@ -56,8 +178,21 @@
         row.addEventListener('focus', () => { focusedIndex = index; });
     });
 
-    document.querySelectorAll('[data-toast-action]').forEach((button) => {
-        button.addEventListener('click', () => showToast('Acao aplicada. Voce pode desfazer por alguns segundos.'));
+    document.addEventListener('click', (event) => {
+        if (event.target.closest('[data-toast-action]')) {
+            showToast('Acao aplicada. Voce pode desfazer por alguns segundos.');
+        }
+    });
+    document.querySelectorAll('[data-command-open]').forEach((button) => {
+        button.addEventListener('click', () => {
+            command.hidden = false;
+            command.querySelector('input')?.focus();
+        });
+    });
+    document.querySelector('[data-load-new]')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        document.querySelector('[data-realtime-pill]')?.setAttribute('hidden', '');
+        showToast('Fila atualizada com os novos chamados.');
     });
     document.querySelectorAll('[data-sensitive-action]').forEach((button) => {
         button.addEventListener('click', () => document.querySelector('.desk-bulk-confirm-modal')?.showModal());

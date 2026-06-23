@@ -18,6 +18,8 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, 'View:')
         self.assertContains(response, 'Mais filtros')
         self.assertContains(response, 'RMM Alertas')
+        self.assertContains(response, 'desk-ticket-grid-header')
+        self.assertContains(response, 'Selecione um chamado para ver mais detalhes')
 
     def test_ticket_index_renders_central(self):
         response = self.client.get(reverse('tickets:index'), HTTP_HOST=self.host)
@@ -46,6 +48,14 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, 'desk-selection-bar')
         self.assertContains(response, 'hidden')
         self.assertContains(response, 'data-selected-label')
+
+    def test_central_rows_are_prepared_for_client_side_preview(self):
+        response = self.client.get(reverse('tickets:central'), HTTP_HOST=self.host)
+
+        self.assertContains(response, 'central-ticket-data')
+        self.assertContains(response, 'data-preview-panel')
+        self.assertContains(response, 'data-preview-trigger')
+        self.assertContains(response, 'data-detail-url')
 
     def test_central_renders_rmm_context_and_shortcuts(self):
         response = self.client.get(reverse('tickets:central'), {'origin': 'rmm'}, HTTP_HOST=self.host)

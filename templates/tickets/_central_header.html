@@ -1,33 +1,41 @@
 <header class="desk-compact-header desk-central-header">
-    <div class="desk-compact-title">
-        <span class="desk-compact-icon"><i data-lucide="radio"></i></span>
-        <div>
-            <h1>{{ page_title }}</h1>
-            <span>{{ tickets|length }} na fila &middot; {{ new_ticket_count }} novos &middot; RMM integrado</span>
+    <div class="desk-central-header-main">
+        <div class="desk-compact-title">
+            <span class="desk-compact-icon"><i data-lucide="radio"></i></span>
+            <div>
+                <h1>{{ page_title }}</h1>
+                <span>{{ tickets|length }} na fila &middot; {{ new_ticket_count }} novos &middot; RMM integrado</span>
+            </div>
         </div>
-    </div>
 
-    <form class="desk-central-search" method="get" action="{% url 'tickets:central' %}">
-        <i data-lucide="search"></i>
-        <input name="q" value="{{ request.GET.q }}" placeholder="Chamado, solicitante, endpoint...">
-        <input type="hidden" name="view" value="{{ view_mode }}">
-        <kbd>Ctrl K</kbd>
-        <div class="desk-search-preview" aria-label="Resultados da busca">
-            <strong>Resultados rapidos</strong>
-            <a href="{% url 'tickets:central' %}?ticket=1048"><i data-lucide="ticket"></i>#1048 Socio sem acesso ao e-mail</a>
-            <a href="{% url 'tickets:central' %}?origin=rmm"><i data-lucide="activity"></i>RMM Alertas</a>
-            <a href="{% url 'endpoint-list' %}"><i data-lucide="monitor"></i>Endpoints monitorados</a>
+        <div class="desk-search-cluster">
+            <form class="desk-central-search" method="get" action="{% url 'tickets:central' %}">
+                <i data-lucide="search"></i>
+                <input name="q" value="{{ request.GET.q }}" placeholder="Buscar por chamado, solicitante, endpoint, status...">
+                <input type="hidden" name="view" value="{{ view_mode }}">
+                <kbd>Ctrl K</kbd>
+                <div class="desk-search-preview" aria-label="Resultados da busca">
+                    <strong>Resultados rapidos</strong>
+                    <a href="{% url 'tickets:central' %}?ticket=1048"><i data-lucide="ticket"></i>#1048 Socio sem acesso ao e-mail</a>
+                    <a href="{% url 'tickets:central' %}?origin=rmm"><i data-lucide="activity"></i>RMM Alertas</a>
+                    <a href="{% url 'endpoint-list' %}"><i data-lucide="monitor"></i>Endpoints monitorados</a>
+                </div>
+            </form>
+            <div class="desk-quick-links" aria-label="Atalhos rapidos">
+                <button type="button" data-command-open><i data-lucide="command"></i>Atalhos</button>
+                <a href="{% url 'tickets:central' %}?origin=rmm"><i data-lucide="activity"></i>RMM Alertas</a>
+                <a href="{% url 'endpoint-list' %}"><i data-lucide="monitor-dot"></i>Endpoints</a>
+            </div>
         </div>
-    </form>
 
-    <div class="desk-view-switcher" aria-label="Alternar visualizacao">
-        <a class="{% if view_mode == 'list' %}active{% endif %}" href="?view=list{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="list"></i>Lista</a>
-        <a class="{% if view_mode == 'kanban' %}active{% endif %}" href="?view=kanban{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="columns-3"></i>Kanban</a>
-        <a class="{% if view_mode == 'grouped' %}active{% endif %}" href="?view=grouped{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="users"></i>Responsavel</a>
-    </div>
-
-    <div class="desk-compact-actions">
-        <a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
-        <a class="desk-btn desk-btn-primary" href="{% url 'tickets:create' %}"><i data-lucide="ticket-plus"></i>Novo chamado</a>
+        <div class="desk-header-actions">
+            <div class="desk-view-switcher" aria-label="Alternar visualizacao">
+                <a class="{% if view_mode == 'list' %}active{% endif %}" href="?view=list{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="list"></i>Lista</a>
+                <a class="{% if view_mode == 'kanban' %}active{% endif %}" href="?view=kanban{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="columns-3"></i>Kanban</a>
+                <a class="{% if view_mode == 'grouped' %}active{% endif %}" href="?view=grouped{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="users"></i>Responsavel</a>
+            </div>
+            <a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
+            <a class="desk-btn desk-btn-primary" href="{% url 'tickets:create' %}"><i data-lucide="ticket-plus"></i>Novo chamado</a>
+        </div>
     </div>
 </header>
