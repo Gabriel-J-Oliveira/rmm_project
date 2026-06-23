@@ -35,11 +35,13 @@
         {% endif %}
     </div>
     <div role="cell">
-        <span class="desk-sla-indicator priority-{{ ticket.priority }} sla-{{ ticket.central.sla_state }}">
-            <i data-lucide="clock-3"></i>
-            <span>{{ ticket.opened_for }}</span>
-        </span>
-        <small class="desk-muted">{{ ticket.central.sla_label }} &middot; sem atualizacao {{ ticket.updated_for }}</small>
+        <div class="desk-sla-cell" title="Sem atualizacao ha {{ ticket.updated_for }}">
+            <span class="desk-sla-indicator priority-{{ ticket.priority }} sla-{{ ticket.central.sla_state }}">
+                <i data-lucide="clock-3"></i>
+                <span>{{ ticket.opened_for }}</span>
+            </span>
+            <small>{{ ticket.central.sla_label }}</small>
+        </div>
     </div>
     <div role="cell">
         <details class="desk-inline-popover">
