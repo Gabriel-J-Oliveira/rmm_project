@@ -1,0 +1,18 @@
+<article class="desk-panel desk-settings-section">
+    <h2><i data-lucide="shield-check"></i>Permiss&otilde;es</h2>
+    <table class="desk-admin-table">
+        <thead>
+            <tr><th>A&ccedil;&atilde;o</th>{% for role in permission_roles %}<th>{{ role }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+            {% for action in permission_actions %}
+            <tr>
+                <td><strong>{{ action }}</strong></td>
+                {% for role in permission_roles %}
+                <td><label class="desk-check compact"><input type="checkbox" {% if role != "Tecnico" or "Ver" in action %}checked{% endif %}><span></span></label></td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</article>

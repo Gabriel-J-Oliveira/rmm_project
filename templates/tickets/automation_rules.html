@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Automacoes - Night Owl Desk{% endblock %}
+{% block body_class %}page-tickets{% endblock %}
+
+{% block content %}
+<section class="desk-shell desk-admin-shell">
+    <header class="desk-compact-header">
+        <div class="desk-compact-title">
+            <span class="desk-compact-icon"><i data-lucide="workflow"></i></span>
+            <div>
+                <h1>Motor de automa&ccedil;&otilde;es</h1>
+                <span>Roteamento, cria&ccedil;&atilde;o por alerta RMM e a&ccedil;&otilde;es autom&aacute;ticas em linguagem simples.</span>
+            </div>
+        </div>
+        <div class="desk-compact-actions">
+            <button class="desk-btn desk-btn-primary" type="button"><i data-lucide="plus"></i>Nova regra</button>
+        </div>
+    </header>
+
+    {% include "tickets/_desk_nav.html" %}
+    {% include "tickets/_automation_rule_list.html" %}
+    {% include "tickets/_automation_rule_builder.html" %}
+</section>
+{% endblock %}

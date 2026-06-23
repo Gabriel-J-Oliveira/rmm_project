@@ -1,0 +1,20 @@
+<aside class="desk-config-drawer" aria-label="Editar categoria">
+    <header>
+        <h2><i data-lucide="folder-plus"></i>Editor de categoria</h2>
+        <p>Drawer reutilizavel para nova categoria ou ajuste da linha selecionada.</p>
+    </header>
+    <form class="desk-stack-form">
+        <label><span>Nome</span><input value="Nova categoria"></label>
+        <label><span>Icone</span><input list="deskCategoryIconOptions" value="folder-cog"></label>
+        <datalist id="deskCategoryIconOptions">
+            {% for icon in category_icon_options %}<option value="{{ icon }}"></option>{% endfor %}
+        </datalist>
+        <label><span>SLA primeira resposta</span><input value="1h"></label>
+        <label><span>SLA resolucao</span><input value="8h"></label>
+        <label><span>Checklist padrao</span><textarea rows="5">Entender demanda&#10;Executar atendimento&#10;Validar com usuario</textarea></label>
+        <footer>
+            <button class="desk-btn" type="button">Cancelar</button>
+            <button class="desk-btn desk-btn-primary" type="button">Salvar categoria</button>
+        </footer>
+    </form>
+</aside>

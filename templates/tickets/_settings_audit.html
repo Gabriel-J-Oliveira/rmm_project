@@ -1,0 +1,12 @@
+<article class="desk-panel desk-settings-section">
+    <h2><i data-lucide="history"></i>Auditoria</h2>
+    <div class="desk-audit-list">
+        {% for row in audit_rows %}
+        <article>
+            <span>{{ row.when }}</span>
+            <strong>{{ row.event }}</strong>
+            <p>{{ row.actor }} &middot; {{ row.target }}</p>
+        </article>
+        {% endfor %}
+    </div>
+</article>

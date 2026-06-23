@@ -828,6 +828,329 @@ body.page-tickets .page-subtitle {
     border-color: rgba(239, 68, 68, 0.65) !important;
 }
 
+.desk-admin-shell {
+    gap: 14px;
+}
+
+.desk-admin-table-panel,
+.desk-settings-section {
+    padding: 16px;
+}
+
+.desk-admin-table-wrap {
+    overflow-x: auto;
+}
+
+.desk-admin-table {
+    border-collapse: separate;
+    border-spacing: 0 8px;
+    min-width: 980px;
+    width: 100%;
+}
+
+.desk-admin-table th {
+    color: #94a3b8;
+    font-size: 11px;
+    letter-spacing: .08em;
+    padding: 0 10px 4px;
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.desk-admin-table td {
+    background: #080b10;
+    border-bottom: 1px solid #1f2937;
+    border-top: 1px solid #1f2937;
+    color: #dce7e1;
+    padding: 12px 10px;
+    vertical-align: middle;
+}
+
+.desk-admin-table td:first-child {
+    border-left: 1px solid #1f2937;
+    border-radius: 12px 0 0 12px;
+}
+
+.desk-admin-table td:last-child {
+    border-radius: 0 12px 12px 0;
+    border-right: 1px solid #1f2937;
+}
+
+.desk-admin-table input,
+.desk-admin-table select,
+.desk-config-drawer input,
+.desk-config-drawer select,
+.desk-config-drawer textarea,
+.desk-rule-builder input,
+.desk-rule-builder select {
+    background: #0d1117;
+    border: 1px solid #263241;
+    border-radius: 10px;
+    color: #f8fafc;
+    min-height: 38px;
+    padding: 0 10px;
+    width: 100%;
+}
+
+.desk-config-drawer textarea {
+    padding: 10px;
+}
+
+.desk-drag-handle,
+.desk-toggle-row,
+.desk-category-inline,
+.desk-volume-cell {
+    align-items: center;
+    display: flex;
+    gap: 10px;
+}
+
+.desk-drag-handle {
+    color: #94a3b8;
+    font-family: var(--font-mono);
+    font-weight: 900;
+}
+
+.desk-category-icon,
+.desk-rule-icon {
+    align-items: center;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.22);
+    border-radius: 10px;
+    color: #86efac;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 36px;
+    justify-content: center;
+    width: 36px;
+}
+
+.desk-category-inline {
+    min-width: 260px;
+}
+
+.desk-category-inline strong,
+.desk-rule-card h2,
+.desk-settings-section h2,
+.desk-integration-grid strong {
+    color: #f8fafc;
+}
+
+.desk-category-inline small,
+.desk-volume-cell span,
+.desk-inline-warning,
+.desk-rule-card p,
+.desk-rule-meta,
+.desk-settings-section p,
+.desk-integration-grid span {
+    color: #94a3b8;
+}
+
+.desk-volume-cell {
+    align-items: flex-start;
+    flex-direction: column;
+}
+
+.desk-mini-sparkline {
+    align-items: end;
+    display: flex;
+    gap: 3px;
+    height: 36px;
+}
+
+.desk-mini-sparkline i {
+    background: #22c55e;
+    border-radius: 999px;
+    display: block;
+    opacity: .85;
+    width: 5px;
+}
+
+.desk-toggle-row input {
+    accent-color: #22c55e;
+}
+
+.desk-inline-warning {
+    display: block;
+    font-size: 11px;
+    line-height: 1.35;
+    margin-top: 6px;
+    max-width: 260px;
+}
+
+.desk-config-drawer {
+    background: #0d1117;
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+    display: grid;
+    gap: 14px;
+    padding: 16px;
+}
+
+.desk-config-drawer header h2,
+.desk-config-drawer header p {
+    margin: 0;
+}
+
+.desk-config-drawer header p {
+    color: #94a3b8;
+    margin-top: 6px;
+}
+
+.desk-config-drawer footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.desk-rule-list {
+    display: grid;
+    gap: 12px;
+}
+
+.desk-rule-card {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 16px;
+}
+
+.desk-rule-card header,
+.desk-rule-meta {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.desk-rule-card h2 {
+    font-size: 16px;
+    margin: 0;
+}
+
+.desk-rule-card p {
+    margin: 6px 0;
+}
+
+.desk-rule-card p strong {
+    color: #dce7e1;
+}
+
+.desk-rule-meta {
+    justify-content: flex-start;
+    margin-top: 8px;
+}
+
+.desk-rule-builder-section {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+}
+
+.desk-rule-builder-section h3 {
+    color: #f8fafc;
+    margin: 0;
+}
+
+.desk-rule-condition-row {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: minmax(160px, 1fr) minmax(140px, .8fr) minmax(120px, .8fr) auto;
+}
+
+.desk-shared-mapping {
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.18);
+    border-radius: 12px;
+    color: #94a3b8;
+    padding: 12px;
+}
+
+.desk-shared-mapping strong {
+    color: #f8fafc;
+}
+
+.desk-settings-hub {
+    align-items: start;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: 240px minmax(0, 1fr);
+}
+
+.desk-settings-side-nav {
+    background: #0d1117;
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+    display: grid;
+    gap: 6px;
+    padding: 10px;
+}
+
+.desk-settings-side-nav a {
+    align-items: center;
+    border-radius: 12px;
+    color: #94a3b8;
+    display: flex;
+    font-size: 13px;
+    font-weight: 900;
+    gap: 10px;
+    padding: 11px 12px;
+}
+
+.desk-settings-side-nav a.active,
+.desk-settings-side-nav a:hover {
+    background: rgba(34, 197, 94, 0.1);
+    color: #f8fafc;
+}
+
+.desk-settings-content {
+    display: grid;
+    gap: 14px;
+}
+
+.desk-settings-check-grid,
+.desk-integration-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.desk-integration-grid div {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+}
+
+.desk-audit-list {
+    display: grid;
+    gap: 10px;
+}
+
+.desk-audit-list article {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+}
+
+.desk-audit-list span,
+.desk-audit-list p {
+    color: #94a3b8;
+    margin: 0;
+}
+
+.desk-audit-list strong {
+    color: #f8fafc;
+}
+
 .desk-ticket-state {
     display: flex;
     flex-wrap: wrap;
@@ -3038,7 +3361,12 @@ body.page-tickets .page-subtitle {
 
     .desk-create-quick-form,
     .desk-create-device-card,
-    .desk-duplicate-list a {
+    .desk-duplicate-list a,
+    .desk-settings-hub,
+    .desk-rule-card,
+    .desk-rule-condition-row,
+    .desk-settings-check-grid,
+    .desk-integration-grid {
         grid-template-columns: 1fr;
     }
 

@@ -1,0 +1,33 @@
+<aside class="desk-config-drawer desk-rule-builder" aria-label="Construtor de regra">
+    <header>
+        <h2><i data-lucide="workflow"></i>Construtor de regra</h2>
+        <p>Monte condicoes e acoes sem editar JSON. Esta estrutura usa o mesmo mapeamento RMM do Novo Chamado.</p>
+    </header>
+
+    <section class="desk-rule-builder-section">
+        <h3>Quando</h3>
+        <div class="desk-rule-condition-row">
+            <select>{% for field in automation_fields %}<option>{{ field }}</option>{% endfor %}</select>
+            <select>{% for operator in automation_operators %}<option>{{ operator }}</option>{% endfor %}</select>
+            <input value="critical">
+            <button class="desk-btn" type="button"><i data-lucide="plus"></i></button>
+        </div>
+        <div class="desk-shared-mapping">
+            <strong>Mapeamento compartilhado RMM</strong>
+            <p>Severidade security/critical cria prioridade critica; warning cria prioridade alta; tipo do alerta define a categoria.</p>
+        </div>
+    </section>
+
+    <section class="desk-rule-builder-section">
+        <h3>Entao</h3>
+        <div class="desk-rule-condition-row">
+            <select>{% for action in automation_actions %}<option>{{ action }}</option>{% endfor %}</select>
+            <select><option>Usar mapeamento compartilhado</option><option>Categoria fixa</option><option>Prioridade fixa</option></select>
+        </div>
+    </section>
+
+    <footer>
+        <button class="desk-btn" type="button">Cancelar</button>
+        <button class="desk-btn desk-btn-primary" type="button">Salvar regra</button>
+    </footer>
+</aside>

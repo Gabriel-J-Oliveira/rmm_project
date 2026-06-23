@@ -1,0 +1,16 @@
+<article class="desk-panel desk-settings-section">
+    <h2><i data-lucide="timer"></i>SLA por prioridade</h2>
+    <table class="desk-admin-table">
+        <thead><tr><th>Prioridade</th><th>Primeira resposta</th><th>Resolucao</th><th>Meta usada em</th></tr></thead>
+        <tbody>
+            {% for row in sla_rows %}
+            <tr>
+                <td><strong>{{ row.priority }}</strong></td>
+                <td><input value="{{ row.first_response }}"></td>
+                <td><input value="{{ row.resolution }}"></td>
+                <td><span class="desk-badge neutral">Dashboards e indicadores</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</article>

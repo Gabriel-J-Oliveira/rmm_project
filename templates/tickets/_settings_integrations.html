@@ -1,0 +1,27 @@
+<article class="desk-panel desk-settings-section">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="plug-zap"></i>Integra&ccedil;&otilde;es</h2>
+            <p>Status do RMM e severidades que alimentam o motor de automa&ccedil;&otilde;es.</p>
+        </div>
+        <span class="desk-badge {% if rmm_status.connected %}status-resolved{% else %}status-waiting_user{% endif %}">
+            {% if rmm_status.connected %}Conectado{% else %}Aguardando{% endif %}
+        </span>
+    </div>
+    <div class="desk-integration-grid">
+        <div><span>Integra&ccedil;&atilde;o</span><strong>{{ rmm_status.source }}</strong></div>
+        <div><span>Dispositivos sincronizados</span><strong>{{ rmm_status.devices_synced }}</strong></div>
+        <div><span>Ultima sincroniza&ccedil;&atilde;o</span><strong>{{ rmm_status.last_sync }}</strong></div>
+        <div><span>Alertas criticos</span><strong>{{ rmm_status.critical_alerts }}</strong></div>
+    </div>
+    <section class="desk-shared-mapping">
+        <strong>Severidades que disparam cria&ccedil;&atilde;o autom&aacute;tica</strong>
+        <p>Esta lista vem da mesma fonte consumida pelo Novo Chamado e pelo motor de regras.</p>
+        <div class="desk-settings-check-grid">
+            {% for severity, priority in alert_mapping.priority_rules.items %}
+            <label class="desk-check"><input type="checkbox" {% if priority == "critical" or priority == "high" %}checked{% endif %}><span>{{ severity }} &rarr; {{ priority }}</span></label>
+            {% endfor %}
+        </div>
+        <button class="desk-btn" type="button"><i data-lucide="refresh-cw"></i>Forcar sincronizacao</button>
+    </section>
+</article>

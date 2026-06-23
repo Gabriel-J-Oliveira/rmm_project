@@ -204,3 +204,58 @@ class TicketDashboardLayoutTests(TestCase):
         self.assertContains(response, 'Modo wallboard / TV')
         self.assertContains(response, 'Exportar dashboard')
         self.assertContains(response, 'Agendar relatorio')
+
+
+class TicketAdminExperienceTests(TestCase):
+    host = '127.0.0.1'
+
+    def test_categories_render_inline_table_and_drawer(self):
+        response = self.client.get(reverse('tickets:categories'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Tabela de categorias')
+        self.assertContains(response, 'desk-admin-table')
+        self.assertContains(response, 'Editor de categoria')
+        self.assertContains(response, 'Mesclar categorias')
+
+    def test_categories_warn_when_open_tickets_exist(self):
+        response = self.client.get(reverse('tickets:categories'), HTTP_HOST=self.host)
+
+        self.assertContains(response, 'sera ocultada de novos chamados')
+        self.assertContains(response, 'Checklist')
+
+    def test_automation_rules_render_shared_rmm_rule_and_builder(self):
+        response = self.client.get(reverse('tickets:automation'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Motor de automa')
+        self.assertContains(response, 'Criar chamados para alertas RMM relevantes')
+        self.assertContains(response, 'Mapeamento compartilhado RMM')
+        self.assertContains(response, 'Construtor de regra')
+
+    def test_settings_render_hub_navigation(self):
+        response = self.client.get(reverse('tickets:settings'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'desk-settings-hub')
+        self.assertContains(response, 'Geral')
+        self.assertContains(response, 'SLA')
+        self.assertContains(response, 'Integra')
+        self.assertNotContains(response, 'Configuracoes futuras')
+
+    def test_settings_integrations_use_shared_alert_mapping(self):
+        response = self.client.get(reverse('tickets:settings'), {'section': 'integrations'}, HTTP_HOST=self.host)
+
+        self.assertContains(response, 'Severidades que disparam')
+        self.assertContains(response, 'critical')
+        self.assertContains(response, 'warning')
+        self.assertContains(response, 'Forcar sincronizacao')
+
+    def test_settings_sla_permissions_and_audit_sections_render(self):
+        sla = self.client.get(reverse('tickets:settings'), {'section': 'sla'}, HTTP_HOST=self.host)
+        permissions = self.client.get(reverse('tickets:settings'), {'section': 'permissions'}, HTTP_HOST=self.host)
+        audit = self.client.get(reverse('tickets:settings'), {'section': 'audit'}, HTTP_HOST=self.host)
+
+        self.assertContains(sla, 'SLA por prioridade')
+        self.assertContains(permissions, 'Fechar chamado')
+        self.assertContains(audit, 'Auditoria')

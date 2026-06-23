@@ -3,7 +3,10 @@ from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
 from .mock_data import CATEGORIES, MOCK_TICKETS, PRIORITY_LABELS, STATUS_LABELS, filter_tickets, get_ticket, summary_for
+from .services.automation_rules_context import build_automation_rules_context
+from .services.category_settings_context import build_category_settings_context
 from .services.dashboard_context import build_ticket_dashboard_context
+from .services.settings_context import build_ticket_settings_context
 from .services.ticket_create_context import build_ticket_create_context
 from .services.ticket_detail_context import build_ticket_detail_context
 
@@ -190,22 +193,23 @@ def ticket_dashboard(request):
 def ticket_categories(request):
     context = {
         **_base_context('categories'),
-        'categories': CATEGORIES,
+        **build_category_settings_context(),
     }
     return render(request, 'tickets/categories.html', context)
+
+
+def ticket_automation_rules(request):
+    context = {
+        **_base_context('automation'),
+        **build_automation_rules_context(),
+    }
+    return render(request, 'tickets/automation_rules.html', context)
 
 
 def ticket_settings(request):
     context = {
         **_base_context('settings'),
-        'settings_cards': [
-            {'icon': 'timer', 'title': 'SLA', 'description': 'Metas de resposta e resolucao por prioridade.'},
-            {'icon': 'users', 'title': 'Integracao AD', 'description': 'Sincronizacao futura de solicitantes, setores e tecnicos.'},
-            {'icon': 'mail', 'title': 'E-mail', 'description': 'Abertura e resposta de chamados por caixa compartilhada.'},
-            {'icon': 'alert-triangle', 'title': 'Regras de prioridade', 'description': 'Elevacao automatica para socios, seguranca e indisponibilidade.'},
-            {'icon': 'message-square', 'title': 'Canais de abertura', 'description': 'Portal, agente local, e-mail e alertas RMM.'},
-            {'icon': 'calendar-clock', 'title': 'Horario de atendimento', 'description': 'Calendario operacional e janelas de plantao.'},
-        ],
+        **build_ticket_settings_context(request),
     }
     return render(request, 'tickets/settings.html', context)
 

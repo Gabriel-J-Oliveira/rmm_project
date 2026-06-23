@@ -4,34 +4,35 @@
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
-<section class="desk-shell">
-    <header class="desk-hero page-header">
-        <div class="page-header-icon"><i data-lucide="settings"></i></div>
-        <div>
-            <p class="desk-kicker">Night Owl Desk / Configuracoes</p>
-            <h1 class="page-title">Configuracoes futuras</h1>
-            <p class="page-subtitle">Mapa visual das proximas areas de administracao do modulo de chamados.</p>
+<section class="desk-shell desk-admin-shell">
+    <header class="desk-compact-header">
+        <div class="desk-compact-title">
+            <span class="desk-compact-icon"><i data-lucide="settings"></i></span>
+            <div>
+                <h1>Configura&ccedil;&otilde;es do Desk</h1>
+                <span>Hub operacional para SLA, integra&ccedil;&otilde;es, permiss&otilde;es, notifica&ccedil;&otilde;es e auditoria.</span>
+            </div>
         </div>
     </header>
 
     {% include "tickets/_desk_nav.html" %}
 
-    <section class="desk-settings-grid">
-        {% for card in settings_cards %}
-            <article class="desk-panel desk-setting-card">
-                <div class="desk-setting-icon"><i data-lucide="{{ card.icon }}"></i></div>
-                <h2>{{ card.title }}</h2>
-                <p>{{ card.description }}</p>
-                <span class="desk-badge neutral">Futuro</span>
-            </article>
-        {% endfor %}
-    </section>
-
-    <section class="desk-preview-callout">
-        <i data-lucide="map"></i>
-        <div>
-            <strong>Roadmap do Desk</strong>
-            <span>Esta tela ainda e apenas preview. SLA real, e-mail, AD, popup do agente e automacoes ficam para fases posteriores.</span>
+    <section class="desk-settings-hub">
+        {% include "tickets/_settings_nav.html" %}
+        <div class="desk-settings-content">
+            {% if settings_section == "sla" %}
+                {% include "tickets/_settings_sla.html" %}
+            {% elif settings_section == "notifications" %}
+                {% include "tickets/_settings_notifications.html" %}
+            {% elif settings_section == "integrations" %}
+                {% include "tickets/_settings_integrations.html" %}
+            {% elif settings_section == "permissions" %}
+                {% include "tickets/_settings_permissions.html" %}
+            {% elif settings_section == "audit" %}
+                {% include "tickets/_settings_audit.html" %}
+            {% else %}
+                {% include "tickets/_settings_general.html" %}
+            {% endif %}
         </div>
     </section>
 </section>

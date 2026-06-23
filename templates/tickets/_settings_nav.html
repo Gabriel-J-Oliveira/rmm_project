@@ -1,0 +1,8 @@
+<aside class="desk-settings-side-nav">
+    {% for section in settings_sections %}
+    <a class="{% if settings_section == section.key %}active{% endif %}" href="{% url 'tickets:settings' %}?section={{ section.key }}">
+        <i data-lucide="{{ section.icon }}"></i>
+        <span>{{ section.label }}</span>
+    </a>
+    {% endfor %}
+</aside>

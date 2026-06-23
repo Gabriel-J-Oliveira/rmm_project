@@ -4,5 +4,6 @@
     <a class="{% if desk_active_section == 'new' %}active{% endif %}" href="{% url 'tickets:create' %}"><i data-lucide="plus-circle"></i>Novo chamado</a>
     <a class="{% if desk_active_section == 'dashboard' %}active{% endif %}" href="{% url 'tickets:dashboard' %}"><i data-lucide="bar-chart-3"></i>Dashboards</a>
     <a class="{% if desk_active_section == 'categories' %}active{% endif %}" href="{% url 'tickets:categories' %}"><i data-lucide="folder-cog"></i>Categorias</a>
+    <a class="{% if desk_active_section == 'automation' %}active{% endif %}" href="{% url 'tickets:automation' %}"><i data-lucide="workflow"></i>Automacoes</a>
     <a class="{% if desk_active_section == 'settings' %}active{% endif %}" href="{% url 'tickets:settings' %}"><i data-lucide="settings"></i>Configuracoes</a>
 </nav>

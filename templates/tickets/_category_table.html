@@ -1,0 +1,81 @@
+<section class="desk-panel desk-admin-table-panel">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="list-tree"></i>Tabela de categorias</h2>
+            <p>Reordene, revise SLA e ajuste checklists sem sair da lista.</p>
+        </div>
+        <span class="desk-badge neutral">{{ category_rows|length }} categorias</span>
+    </div>
+    <div class="desk-admin-table-wrap">
+        <table class="desk-admin-table">
+            <thead>
+                <tr>
+                    <th>Ordem</th>
+                    <th>Categoria</th>
+                    <th>SLA 1a resposta</th>
+                    <th>SLA resolucao</th>
+                    <th>Volume</th>
+                    <th>Checklist</th>
+                    <th>Status</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for category in category_rows %}
+                <tr>
+                    <td><span class="desk-drag-handle"><i data-lucide="grip-vertical"></i>{{ category.order }}</span></td>
+                    <td>
+                        <div class="desk-category-inline">
+                            <span class="desk-category-icon"><i data-lucide="{{ category.icon }}"></i></span>
+                            <div>
+                                <strong>{{ category.name }}</strong>
+                                <small>{{ category.description }}</small>
+                            </div>
+                        </div>
+                    </td>
+                    <td><input value="{{ category.first_response_sla }}" aria-label="SLA primeira resposta {{ category.name }}"></td>
+                    <td><input value="{{ category.resolution_sla }}" aria-label="SLA resolucao {{ category.name }}"></td>
+                    <td>
+                        <div class="desk-volume-cell">
+                            <strong>{{ category.period_count }}</strong>
+                            <span>{{ category.open_count }} abertos</span>
+                            <div class="desk-mini-sparkline">
+                                {% for point in category.sparkline %}<i style="height: {{ point }}px"></i>{% endfor %}
+                            </div>
+                        </div>
+                    </td>
+                    <td>
+                        <details class="desk-inline-popover">
+                            <summary class="desk-btn">Checklist</summary>
+                            <div class="desk-popover">
+                                {% for item in category.checklist %}
+                                <label><input type="checkbox" checked><span>{{ item }}</span></label>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </td>
+                    <td>
+                        <label class="desk-toggle-row">
+                            <input type="checkbox" {% if category.active %}checked{% endif %}>
+                            <span>{% if category.active %}Ativa{% else %}Inativa{% endif %}</span>
+                        </label>
+                        {% if category.has_open_tickets %}
+                        <small class="desk-inline-warning">Se desativada, sera ocultada de novos chamados; chamados existentes permanecem.</small>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <details class="desk-inline-popover">
+                            <summary class="desk-btn"><i data-lucide="more-horizontal"></i>Acoes</summary>
+                            <div class="desk-popover">
+                                <button type="button">Editar no drawer</button>
+                                <button type="button">Mesclar categoria</button>
+                                <button type="button">Duplicar checklist</button>
+                            </div>
+                        </details>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>

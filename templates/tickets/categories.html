@@ -4,36 +4,23 @@
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
-<section class="desk-shell">
-    <header class="desk-hero page-header">
-        <div class="page-header-icon"><i data-lucide="folder-cog"></i></div>
-        <div>
-            <p class="desk-kicker">Night Owl Desk / Categorias</p>
-            <h1 class="page-title">Categorias</h1>
-            <p class="page-subtitle">Preview da gestao visual de categorias dos chamados.</p>
+<section class="desk-shell desk-admin-shell">
+    <header class="desk-compact-header">
+        <div class="desk-compact-title">
+            <span class="desk-compact-icon"><i data-lucide="folder-cog"></i></span>
+            <div>
+                <h1>Categorias</h1>
+                <span>SLA, checklist, volume e disponibilidade de cada tipo de chamado.</span>
+            </div>
         </div>
-        <div class="page-actions">
-            <form method="post" action="{% url 'tickets:fake-action-root' 'nova-categoria' %}">
-                {% csrf_token %}
-                <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="plus"></i>Nova categoria</button>
-            </form>
+        <div class="desk-compact-actions">
+            <button class="desk-btn desk-btn-primary" type="button"><i data-lucide="plus"></i>Nova categoria</button>
         </div>
     </header>
 
     {% include "tickets/_desk_nav.html" %}
-
-    <section class="desk-category-grid">
-        {% for category in categories %}
-            <article class="desk-panel desk-category-card">
-                <span class="desk-category-color" style="background: {{ category.color }}"></span>
-                <div>
-                    <h2>{{ category.name }}</h2>
-                    <p>{{ category.description }}</p>
-                    <span class="desk-badge status-resolved">{% if category.active %}Ativa{% else %}Inativa{% endif %}</span>
-                </div>
-                <button class="desk-btn" type="button"><i data-lucide="more-horizontal"></i>Acoes</button>
-            </article>
-        {% endfor %}
-    </section>
+    {% include "tickets/_category_table.html" %}
+    {% include "tickets/_category_drawer.html" %}
+    {% include "tickets/_category_merge_modal.html" %}
 </section>
 {% endblock %}

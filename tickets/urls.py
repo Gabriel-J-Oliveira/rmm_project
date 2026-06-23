@@ -12,6 +12,7 @@ urlpatterns = [
     path('new/', views.ticket_create, name='create'),
     path('dashboard/', views.ticket_dashboard, name='dashboard'),
     path('categories/', views.ticket_categories, name='categories'),
+    path('automation/', views.ticket_automation_rules, name='automation'),
     path('settings/', views.ticket_settings, name='settings'),
     path('fake/<str:action>/', views.ticket_fake_action, name='fake-action-root'),
     path('<int:number>/', views.ticket_detail, name='detail'),

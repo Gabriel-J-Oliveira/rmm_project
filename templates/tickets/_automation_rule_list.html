@@ -1,0 +1,19 @@
+<section class="desk-rule-list">
+    {% for rule in automation_rules %}
+    <article class="desk-panel desk-rule-card">
+        <span class="desk-rule-icon"><i data-lucide="{{ rule.icon }}"></i></span>
+        <div>
+            <header>
+                <h2>{{ rule.name }}</h2>
+                <label class="desk-toggle-row"><input type="checkbox" {% if rule.enabled %}checked{% endif %}><span>{% if rule.enabled %}Ativa{% else %}Inativa{% endif %}</span></label>
+            </header>
+            <p><strong>Quando:</strong> {{ rule.when }}</p>
+            <p><strong>Entao:</strong> {{ rule.then }}</p>
+            <div class="desk-rule-meta">
+                <span>{{ rule.trigger_count }} disparos no periodo</span>
+                <span>{{ rule.source }}</span>
+            </div>
+        </div>
+    </article>
+    {% endfor %}
+</section>
