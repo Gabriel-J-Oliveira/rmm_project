@@ -1,0 +1,10 @@
+<nav class="desk-create-mode-switch" aria-label="Modo de criacao">
+    <a class="{% if create_mode != 'quick' %}active{% endif %}" href="{% url 'tickets:create' %}?mode=complete">
+        <i data-lucide="list-checks"></i>
+        <span>Cria&ccedil;&atilde;o completa</span>
+    </a>
+    <a class="{% if create_mode == 'quick' %}active{% endif %}" href="{% url 'tickets:create' %}?mode=quick">
+        <i data-lucide="zap"></i>
+        <span>Cria&ccedil;&atilde;o r&aacute;pida</span>
+    </a>
+</nav>

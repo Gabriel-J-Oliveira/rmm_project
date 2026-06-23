@@ -1,0 +1,18 @@
+{% if alert_preview %}
+<article class="desk-panel desk-alert-ticket-preview">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="activity"></i>Criar chamado a partir deste alerta</h2>
+            <p>Revise os dados sugeridos pelo RMM antes de confirmar a abertura.</p>
+        </div>
+        <span class="desk-badge priority-{{ alert_preview.priority }}">{{ alert_preview.priority_label }}</span>
+    </div>
+    <div class="desk-alert-preview-grid">
+        <div><span>Categoria</span><strong>{{ alert_preview.category }}</strong></div>
+        <div><span>Dispositivo</span><strong>{{ alert_preview.endpoint.hostname }}</strong></div>
+        <div><span>Tipo do alerta</span><strong>{{ alert_preview.alert_type }}</strong></div>
+        <div><span>Severidade</span><strong>{{ alert_preview.severity }}</strong></div>
+    </div>
+    <p class="desk-create-note">Os campos abaixo ja foram preenchidos com a sugestao do alerta e continuam editaveis.</p>
+</article>
+{% endif %}

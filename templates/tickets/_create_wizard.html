@@ -1,0 +1,21 @@
+<form class="desk-form-panel desk-create-wizard {% if create_mode != 'quick' %}is-active{% endif %}" method="post" action="{% url 'tickets:create' %}" id="deskCreateWizard">
+    {% csrf_token %}
+    <datalist id="deskCategoryOptions">
+        {% for category in category_options %}
+        <option value="{{ category.name }}"></option>
+        {% endfor %}
+    </datalist>
+    <datalist id="deskEndpointOptions">
+        {% for endpoint in endpoint_options %}
+        <option value="{{ endpoint.hostname }}"></option>
+        {% endfor %}
+    </datalist>
+    <datalist id="deskRequesterOptions">
+        {% for requester in requester_options %}
+        <option value="{{ requester.name }}"></option>
+        {% endfor %}
+    </datalist>
+
+    {% include "tickets/_create_step_problem.html" %}
+    {% include "tickets/_create_step_requester.html" %}
+</form>

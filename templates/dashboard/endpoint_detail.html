@@ -399,7 +399,7 @@
             <h2><span class="section-icon"><i data-lucide="inbox"></i></span>Chamados relacionados</h2>
             <p>Atendimentos do Night Owl Desk vinculados a este endpoint.</p>
         </div>
-        <a class="panel-link inline" href="{% url 'tickets:list' %}?q={{ endpoint.hostname }}">Ver fila</a>
+        <a class="panel-link inline" href="{% url 'tickets:central' %}?q={{ endpoint.hostname }}">Ver Central</a>
     </div>
     <div class="endpoint-alert-list">
         {% for ticket in related_tickets %}

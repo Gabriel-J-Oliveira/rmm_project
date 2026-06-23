@@ -4,112 +4,32 @@
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
-<section class="desk-shell">
-    <header class="desk-hero page-header">
-        <div class="page-header-icon"><i data-lucide="ticket-plus"></i></div>
-        <div>
-            <p class="desk-kicker">Night Owl Desk / Novo chamado</p>
-            <h1 class="page-title">Novo chamado</h1>
-            <p class="page-subtitle">Uma experiencia rapida para registrar solicitacoes internas da TI. Dados em preview.</p>
+<section class="desk-shell desk-create-shell">
+    <header class="desk-compact-header desk-create-header">
+        <div class="desk-compact-title">
+            <span class="desk-compact-icon"><i data-lucide="ticket-plus"></i></span>
+            <div>
+                <h1>Novo chamado</h1>
+                <span>Abra um atendimento completo, rapido ou a partir de um alerta do RMM.</span>
+            </div>
         </div>
-        <div class="page-actions">
-            <a class="desk-btn" href="{% url 'tickets:list' %}"><i data-lucide="arrow-left"></i>Voltar para fila</a>
+        <div class="desk-compact-actions">
+            <a class="desk-btn" href="{% url 'tickets:central' %}"><i data-lucide="arrow-left"></i>Voltar para Central</a>
         </div>
     </header>
 
     {% include "tickets/_desk_nav.html" %}
+    {% include "tickets/_create_mode_switch.html" %}
+    {% include "tickets/_create_draft_notice.html" %}
+    {% include "tickets/_create_alert_preview.html" %}
 
-    <form class="desk-form-panel" method="post" id="deskPreviewForm">
-        {% csrf_token %}
-        <section>
-            <h2><i data-lucide="file-text"></i>1. Solicitação</h2>
-            <div class="desk-form-grid">
-                <label class="wide">
-                    <span>Titulo</span>
-                    <input name="title" class="ticket-input" placeholder="Ex.: Computador lento na recepcao">
-                </label>
-                <label class="wide">
-                    <span>Descricao</span>
-                    <textarea name="description" class="ticket-input" rows="6" placeholder="Descreva o problema, impacto e contexto do atendimento."></textarea>
-                </label>
-                <label>
-                    <span>Categoria</span>
-                    <select name="category" class="ticket-input">
-                        {% for category in categories %}
-                            <option>{{ category.name }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-                <label>
-                    <span>Prioridade</span>
-                    <select name="priority" class="ticket-input" id="deskPriority">
-                        <option value="low">Baixa</option>
-                        <option value="normal" selected>Normal</option>
-                        <option value="high">Alta</option>
-                        <option value="critical">Critica</option>
-                    </select>
-                </label>
-                <label>
-                    <span>Endpoint relacionado</span>
-                    <select name="endpoint" class="ticket-input">
-                        <option>Sem endpoint</option>
-                        {% for endpoint in mock_endpoints %}
-                            <option>{{ endpoint.hostname }} · {{ endpoint.status }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-            </div>
-        </section>
-
-        <section>
-            <h2><i data-lucide="user"></i>2. Solicitante</h2>
-            <div class="desk-form-grid">
-                <label><span>Nome</span><input name="requester_name" class="ticket-input" placeholder="Nome do solicitante"></label>
-                <label><span>E-mail</span><input name="requester_email" class="ticket-input" placeholder="usuario@empresa.com.br"></label>
-                <label><span>Usuario / login</span><input name="requester_username" class="ticket-input" placeholder="usuario.login"></label>
-                <label><span>Setor</span><input name="requester_department" class="ticket-input" placeholder="Financeiro"></label>
-                <label><span>Funcao</span><input name="requester_role" class="ticket-input" placeholder="Analista"></label>
-                <label class="desk-partner-toggle">
-                    <input type="checkbox" id="deskVipToggle">
-                    <span>
-                        <strong>Solicitante e socio/VIP</strong>
-                        <small>Preview: ao marcar, a prioridade vira critica.</small>
-                    </span>
-                </label>
-            </div>
-        </section>
-
-        <div class="desk-preview-callout">
-            <i data-lucide="sparkles"></i>
-            <div>
-                <strong>Preview visual</strong>
-                <span>Este formulario ainda nao persiste dados. A proxima fase liga esta experiencia ao backend real.</span>
-            </div>
-        </div>
-
-        <div class="desk-form-actions">
-            <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Abrir chamado</button>
-            <a class="desk-btn" href="{% url 'tickets:list' %}">Cancelar</a>
-        </div>
-    </form>
+    <div class="desk-create-grid">
+        {% include "tickets/_create_quick.html" %}
+        {% include "tickets/_create_wizard.html" %}
+    </div>
 </section>
 {% endblock %}
 
 {% block scripts %}
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-    const vip = document.getElementById("deskVipToggle");
-    const priority = document.getElementById("deskPriority");
-    if (vip && priority) {
-        vip.addEventListener("change", function () {
-            if (vip.checked) {
-                priority.value = "critical";
-                priority.classList.add("desk-critical-input");
-            } else {
-                priority.classList.remove("desk-critical-input");
-            }
-        });
-    }
-});
-</script>
+{% include "tickets/_create_scripts.html" %}
 {% endblock %}

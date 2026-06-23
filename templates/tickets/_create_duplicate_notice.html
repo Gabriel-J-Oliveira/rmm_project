@@ -1,0 +1,19 @@
+{% if duplicate_candidates %}
+<aside class="desk-duplicate-notice">
+    <i data-lucide="copy-warning"></i>
+    <div>
+        <strong>Possivel chamado duplicado</strong>
+        <span>Ja existe chamado aberto recente com a mesma categoria e dispositivo.</span>
+        <div class="desk-duplicate-list">
+            {% for duplicate in duplicate_candidates %}
+            <a href="{% url 'tickets:central' %}?ticket={{ duplicate.number }}">
+                <b>#{{ duplicate.number }}</b>
+                <span>{{ duplicate.title }}</span>
+                <em>{{ duplicate.status_label }} &middot; atualizado {{ duplicate.updated_for }}</em>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    <button class="desk-btn" type="button">Vincular ao existente</button>
+</aside>
+{% endif %}

@@ -1,0 +1,21 @@
+<article class="desk-panel desk-create-quick {% if create_mode == 'quick' %}is-active{% endif %}">
+    <div class="desk-panel-title-row">
+        <div>
+            <h2><i data-lucide="zap"></i>Cria&ccedil;&atilde;o r&aacute;pida</h2>
+            <p>Um texto livre, uma categoria e um clique. Bom para demandas simples.</p>
+        </div>
+        <span class="desk-badge neutral">atalho</span>
+    </div>
+    <form class="desk-create-quick-form" method="post" action="{% url 'tickets:create' %}">
+        {% csrf_token %}
+        <label class="wide">
+            <span>Resumo livre</span>
+            <textarea name="quick_text" rows="4" placeholder="Ex.: Usuario do Financeiro precisa instalar certificado A1 hoje."></textarea>
+        </label>
+        <label>
+            <span>Categoria</span>
+            <input name="quick_category" list="deskCategoryOptions" value="Solicitacao" autocomplete="off">
+        </label>
+        <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Criar em um clique</button>
+    </form>
+</article>

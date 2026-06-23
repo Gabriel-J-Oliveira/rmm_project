@@ -1,0 +1,60 @@
+<section class="desk-create-step" data-create-step="2">
+    <div class="desk-create-step-header">
+        <span class="desk-step-pill">Passo 2 de 2</span>
+        <div>
+            <h2><i data-lucide="user"></i>Quem esta solicitando</h2>
+            <p>Busque um usuario existente e revise os dados antes de criar.</p>
+        </div>
+    </div>
+
+    <div class="desk-form-grid">
+        <label class="wide">
+            <span>Buscar usuario existente</span>
+            <input name="requester_search" list="deskRequesterOptions" placeholder="Digite nome, login ou setor" data-draft-field data-requester-input>
+        </label>
+        <label><span>Nome</span><input name="requester_name" placeholder="Nome do solicitante" data-draft-field></label>
+        <label><span>E-mail</span><input name="requester_email" type="email" placeholder="usuario@empresa.com.br" data-draft-field data-email-input></label>
+        <label><span>Usuario / login</span><input name="requester_username" placeholder="usuario.login" data-draft-field></label>
+        <label><span>Setor</span><input name="requester_department" placeholder="Financeiro" data-draft-field></label>
+        <label><span>Funcao</span><input name="requester_role" placeholder="Analista" data-draft-field></label>
+        <label class="desk-partner-toggle desk-create-vip-toggle">
+            <input type="checkbox" id="deskVipToggle" name="requester_is_partner" data-draft-field>
+            <span>
+                <strong>Solicitante e socio/VIP</strong>
+                <small>Ao ativar, a prioridade sera ajustada para critica e o motivo ficara registrado visualmente.</small>
+            </span>
+        </label>
+        <label class="desk-partner-toggle">
+            <input type="checkbox" name="opened_by_proxy" data-draft-field>
+            <span>
+                <strong>Abrir em nome de outra pessoa</strong>
+                <small>Use para atendimento por telefone ou registro feito pelo tecnico.</small>
+            </span>
+        </label>
+    </div>
+
+    <div class="desk-vip-explanation" data-vip-explanation hidden>
+        <i data-lucide="badge-alert"></i>
+        <span>Prioridade alterada para critica porque o solicitante foi marcado como socio/VIP.</span>
+    </div>
+
+    <div class="desk-requester-autofill">
+        {% for requester in requester_options %}
+        <button type="button"
+            data-requester-pick="{{ requester.name }}"
+            data-requester-email="{{ requester.email }}"
+            data-requester-username="{{ requester.username }}"
+            data-requester-department="{{ requester.department }}"
+            data-requester-role="{{ requester.role }}"
+            data-requester-vip="{{ requester.vip|yesno:'1,0' }}">
+            <strong>{{ requester.name }}</strong>
+            <span>{{ requester.department }} &middot; {{ requester.role }}</span>
+        </button>
+        {% endfor %}
+    </div>
+
+    <div class="desk-form-actions">
+        <button class="desk-btn" type="button" data-prev-step><i data-lucide="arrow-left"></i>Voltar</button>
+        <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Criar chamado</button>
+    </div>
+</section>

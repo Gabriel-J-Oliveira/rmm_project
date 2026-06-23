@@ -1,0 +1,63 @@
+<section class="desk-create-step is-active" data-create-step="1">
+    <div class="desk-create-step-header">
+        <span class="desk-step-pill">Passo 1 de 2</span>
+        <div>
+            <h2><i data-lucide="file-text"></i>O que aconteceu</h2>
+            <p>Classifique o problema, relacione o dispositivo e verifique duplicidades antes de abrir.</p>
+        </div>
+    </div>
+
+    <div class="desk-form-grid">
+        <label class="wide">
+            <span>Titulo</span>
+            <input name="title" value="{{ initial_ticket.title }}" placeholder="Ex.: Computador lento na recepcao" data-draft-field>
+        </label>
+        <label>
+            <span>Categoria por busca</span>
+            <input name="category" list="deskCategoryOptions" value="{{ initial_ticket.category }}" data-draft-field data-category-input>
+        </label>
+        <label>
+            <span>Prioridade</span>
+            <select name="priority" id="deskPriority" data-draft-field>
+                {% for priority in priority_options %}
+                <option value="{{ priority.value }}" {% if priority.value == initial_ticket.priority %}selected{% endif %}>{{ priority.label }}</option>
+                {% endfor %}
+            </select>
+            <small class="desk-field-hint">Sugerida automaticamente pela categoria, mas sempre editavel.</small>
+        </label>
+        <label class="wide">
+            <span>Descricao</span>
+            <textarea name="description" rows="7" placeholder="Descreva impacto, contexto e passos ja tentados." data-draft-field>{{ initial_ticket.description }}</textarea>
+            <small class="desk-field-hint">Aceita colar print com Ctrl+V como anexo visual nesta experiencia.</small>
+        </label>
+        <label>
+            <span>Dispositivo / endpoint relacionado</span>
+            <input name="endpoint" list="deskEndpointOptions" value="{{ selected_endpoint.hostname }}" data-draft-field data-endpoint-input>
+        </label>
+        <div class="desk-create-device-card">
+            <span class="desk-device-status status-{{ selected_endpoint.status }}"></span>
+            <div>
+                <strong>{{ selected_endpoint.hostname }}</strong>
+                <small>{{ selected_endpoint.status_label }} &middot; {{ selected_endpoint.last_seen }} &middot; {{ selected_endpoint.last_user }}</small>
+            </div>
+            <em>{{ selected_endpoint.source }}</em>
+        </div>
+    </div>
+
+    <div class="desk-category-suggestions">
+        {% for category in category_options %}
+        <button type="button" data-category-pick="{{ category.name }}" data-priority-pick="{{ category.suggested_priority }}">
+            <i data-lucide="{{ category.icon }}"></i>
+            <span>{{ category.name }}</span>
+            <small>{{ category.suggested_priority_label }}</small>
+        </button>
+        {% endfor %}
+    </div>
+
+    {% include "tickets/_create_duplicate_notice.html" %}
+
+    <div class="desk-form-actions">
+        <button class="desk-btn desk-btn-primary" type="button" data-next-step><i data-lucide="arrow-right"></i>Continuar</button>
+        <a class="desk-btn" href="{% url 'tickets:central' %}">Cancelar</a>
+    </div>
+</section>

@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 
 class TicketCentralTests(TestCase):
@@ -14,19 +15,19 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, 'desk-detail-panel')
         self.assertContains(response, 'desk-filter-chipbar')
 
-    def test_legacy_queue_route_renders_central(self):
-        response = self.client.get(reverse('tickets:list'), HTTP_HOST=self.host)
+    def test_ticket_index_renders_central(self):
+        response = self.client.get(reverse('tickets:index'), HTTP_HOST=self.host)
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Central de Atendimento')
         self.assertNotContains(response, 'Night Owl Desk / Fila')
 
-    def test_service_panel_route_renders_central_kanban_mode(self):
-        response = self.client.get(reverse('tickets:service-panel'), HTTP_HOST=self.host)
+    def test_legacy_queue_and_panel_routes_are_removed(self):
+        queue_response = self.client.get('/tickets/queue/', HTTP_HOST=self.host)
+        panel_response = self.client.get('/tickets/painel/', HTTP_HOST=self.host)
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Central de Atendimento')
-        self.assertContains(response, 'Kanban por status')
+        self.assertEqual(queue_response.status_code, 404)
+        self.assertEqual(panel_response.status_code, 404)
 
     def test_selected_ticket_opens_side_panel_without_detail_navigation(self):
         response = self.client.get(reverse('tickets:central'), {'ticket': 1048}, HTTP_HOST=self.host)
@@ -82,6 +83,73 @@ class TicketDetailLayoutTests(TestCase):
         self.assertContains(response, 'Tipo de resolucao')
         self.assertContains(response, 'desk-audit-drawer')
         self.assertContains(response, 'Auditoria completa')
+
+
+class TicketCreateLayoutTests(TestCase):
+    host = '127.0.0.1'
+
+    def test_create_page_renders_quick_and_complete_modes(self):
+        response = self.client.get(reverse('tickets:create'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Novo chamado')
+        self.assertContains(response, 'Cria&ccedil;&atilde;o completa')
+        self.assertContains(response, 'Cria&ccedil;&atilde;o r&aacute;pida')
+        self.assertContains(response, 'desk-create-wizard')
+        self.assertContains(response, 'desk-create-quick')
+
+    def test_create_page_renders_problem_and_requester_steps(self):
+        response = self.client.get(reverse('tickets:create'), HTTP_HOST=self.host)
+
+        self.assertContains(response, 'Passo 1 de 2')
+        self.assertContains(response, 'O que aconteceu')
+        self.assertContains(response, 'Passo 2 de 2')
+        self.assertContains(response, 'Quem esta solicitando')
+        self.assertContains(response, 'Buscar usuario existente')
+
+    def test_create_page_explains_vip_priority_change(self):
+        response = self.client.get(reverse('tickets:create'), HTTP_HOST=self.host)
+
+        self.assertContains(response, 'Solicitante e socio/VIP')
+        self.assertContains(response, 'Prioridade alterada para critica')
+        self.assertContains(response, 'data-vip-explanation')
+
+    def test_create_page_renders_rmm_endpoint_and_duplicate_notice(self):
+        response = self.client.get(
+            reverse('tickets:create'),
+            {'category': 'Seguranca', 'endpoint': 'FIN-012'},
+            HTTP_HOST=self.host,
+        )
+
+        self.assertContains(response, 'Dispositivo / endpoint relacionado')
+        self.assertContains(response, 'FIN-012')
+        self.assertContains(response, 'Possivel chamado duplicado')
+        self.assertContains(response, '#1042')
+
+    def test_create_page_renders_alert_prefill_from_rmm_alert(self):
+        from agents.models import AgentMachine, EndpointAlert
+
+        endpoint, _token = AgentMachine.create_with_token(
+            hostname='TEST-RMM-001',
+            domain='control.local',
+            status='online',
+            last_seen_at=timezone.now(),
+        )
+        alert = EndpointAlert.objects.create(
+            endpoint=endpoint,
+            alert_type='disk_low',
+            severity='critical',
+            title='Disco C: critico',
+            description='Disco C: possui apenas 7% livre.',
+            status='open',
+        )
+
+        response = self.client.get(reverse('tickets:create'), {'alert': str(alert.id)}, HTTP_HOST=self.host)
+
+        self.assertContains(response, 'Criar chamado a partir deste alerta')
+        self.assertContains(response, 'Disco C: critico')
+        self.assertContains(response, 'Servidor')
+        self.assertContains(response, 'TEST-RMM-001')
 
 
 class TicketDashboardLayoutTests(TestCase):

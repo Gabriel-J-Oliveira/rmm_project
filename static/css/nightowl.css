@@ -241,15 +241,7 @@ body.page-tickets .page-subtitle {
     opacity: 0.55;
 }
 
-.desk-metrics {
-    display: grid;
-    gap: 14px;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.desk-metric,
 .desk-panel,
-.desk-filter-card,
 .desk-ticket-card,
 .desk-form-panel {
     background: #0d1117;
@@ -257,35 +249,11 @@ body.page-tickets .page-subtitle {
     border-radius: 16px;
 }
 
-.desk-metric {
-    display: grid;
-    gap: 8px;
-    min-height: 120px;
-    padding: 18px;
-    transition: border-color 180ms ease, background-color 180ms ease, transform 180ms ease;
-}
-
-.desk-metric:hover,
 .desk-ticket-card:hover,
 .desk-panel:hover {
     background: #10251d;
     border-color: rgba(34, 197, 94, 0.42);
     transform: translateY(-1px);
-}
-
-.desk-metric svg {
-    color: #86efac;
-}
-
-.desk-metric strong {
-    color: #86efac;
-    font-size: 30px;
-    line-height: 1;
-}
-
-.desk-metric span {
-    color: #94a3b8;
-    font-size: 13px;
 }
 
 .desk-critical svg,
@@ -294,22 +262,12 @@ body.page-tickets .page-subtitle {
     color: #fecaca;
 }
 
-.desk-filter-card {
-    align-items: end;
-    display: grid;
-    gap: 12px;
-    grid-template-columns: 1.4fr repeat(4, minmax(130px, 1fr)) auto auto auto auto;
-    padding: 16px;
-}
-
-.desk-filter-card label,
 .desk-form-grid label,
 .desk-inline-form label {
     display: grid;
     gap: 7px;
 }
 
-.desk-filter-card span,
 .desk-form-grid span,
 .desk-inline-form span {
     color: #94a3b8;
@@ -317,8 +275,6 @@ body.page-tickets .page-subtitle {
     font-weight: 800;
 }
 
-.desk-filter-card input,
-.desk-filter-card select,
 .desk-form-grid input,
 .desk-form-grid textarea,
 .desk-form-grid select,
@@ -334,8 +290,6 @@ body.page-tickets .page-subtitle {
     padding: 0 12px;
 }
 
-.desk-filter-card input:focus,
-.desk-filter-card select:focus,
 .desk-form-grid input:focus,
 .desk-form-grid textarea:focus,
 .desk-form-grid select:focus,
@@ -361,11 +315,6 @@ body.page-tickets .page-subtitle {
     gap: 8px;
     min-height: 42px;
     padding: 0 12px;
-}
-
-.desk-queue {
-    display: grid;
-    gap: 12px;
 }
 
 .desk-ticket-card {
@@ -591,6 +540,294 @@ body.page-tickets .page-subtitle {
     gap: 10px;
 }
 
+.desk-create-shell {
+    gap: 14px;
+}
+
+.desk-create-mode-switch {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px;
+    width: fit-content;
+}
+
+.desk-create-mode-switch a {
+    align-items: center;
+    border-radius: 10px;
+    color: #94a3b8;
+    display: inline-flex;
+    font-size: 13px;
+    font-weight: 900;
+    gap: 8px;
+    padding: 10px 12px;
+}
+
+.desk-create-mode-switch a.active,
+.desk-create-mode-switch a:hover {
+    background: rgba(34, 197, 94, 0.1);
+    color: #f8fafc;
+}
+
+.desk-create-draft,
+.desk-duplicate-notice,
+.desk-vip-explanation {
+    align-items: center;
+    background: #0d1117;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    color: #94a3b8;
+    display: flex;
+    gap: 12px;
+    padding: 14px;
+}
+
+.desk-create-draft strong,
+.desk-duplicate-notice strong,
+.desk-vip-explanation span {
+    color: #f8fafc;
+}
+
+.desk-create-draft svg,
+.desk-duplicate-notice svg,
+.desk-vip-explanation svg {
+    color: #86efac;
+    flex: 0 0 auto;
+}
+
+.desk-create-draft .desk-btn,
+.desk-duplicate-notice .desk-btn {
+    margin-left: auto;
+}
+
+.desk-create-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.desk-create-quick,
+.desk-create-wizard {
+    display: none;
+}
+
+.desk-create-quick.is-active,
+.desk-create-wizard.is-active {
+    display: grid;
+}
+
+.desk-create-quick-form {
+    align-items: end;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.5fr) auto;
+}
+
+.desk-create-quick-form .wide {
+    grid-row: span 2;
+}
+
+.desk-create-quick-form label,
+.desk-create-step label {
+    display: grid;
+    gap: 7px;
+}
+
+.desk-create-quick-form span,
+.desk-create-step label > span,
+.desk-field-hint {
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.desk-create-quick-form input,
+.desk-create-quick-form textarea,
+.desk-create-step input,
+.desk-create-step textarea,
+.desk-create-step select {
+    background: #080b10;
+    border: 1px solid #263241;
+    border-radius: 10px;
+    color: #f8fafc;
+    min-height: 42px;
+    padding: 0 12px;
+}
+
+.desk-create-quick-form textarea,
+.desk-create-step textarea {
+    padding: 12px;
+}
+
+.desk-create-step input:focus,
+.desk-create-step textarea:focus,
+.desk-create-step select:focus,
+.desk-create-quick-form input:focus,
+.desk-create-quick-form textarea:focus {
+    border-color: rgba(34, 197, 94, 0.62);
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+    outline: none;
+}
+
+.desk-create-step {
+    display: none;
+    gap: 18px;
+}
+
+.desk-create-step.is-active {
+    display: grid;
+}
+
+.desk-create-step-header {
+    align-items: start;
+    display: flex;
+    gap: 12px;
+}
+
+.desk-create-step-header h2 {
+    margin-bottom: 4px;
+}
+
+.desk-create-step-header p {
+    color: #94a3b8;
+    margin: 0;
+}
+
+.desk-step-pill {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.22);
+    border-radius: 999px;
+    color: #86efac;
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 900;
+    padding: 7px 10px;
+}
+
+.desk-category-suggestions,
+.desk-requester-autofill {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.desk-category-suggestions button,
+.desk-requester-autofill button {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    color: #f8fafc;
+    cursor: pointer;
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+    text-align: left;
+}
+
+.desk-category-suggestions button:hover,
+.desk-requester-autofill button:hover {
+    background: #10251d;
+    border-color: rgba(34, 197, 94, 0.34);
+}
+
+.desk-category-suggestions svg {
+    color: #86efac;
+}
+
+.desk-category-suggestions small,
+.desk-requester-autofill span {
+    color: #94a3b8;
+}
+
+.desk-create-device-card {
+    align-items: center;
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 12px;
+}
+
+.desk-create-device-card strong,
+.desk-alert-preview-grid strong {
+    color: #f8fafc;
+}
+
+.desk-create-device-card small,
+.desk-create-device-card em,
+.desk-alert-preview-grid span,
+.desk-create-note {
+    color: #94a3b8;
+}
+
+.desk-alert-ticket-preview {
+    padding: 16px;
+}
+
+.desk-alert-preview-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.desk-alert-preview-grid div {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+}
+
+.desk-duplicate-notice {
+    align-items: flex-start;
+    border-color: rgba(245, 158, 11, 0.32);
+}
+
+.desk-duplicate-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.desk-duplicate-list a {
+    align-items: center;
+    background: #080b10;
+    border: 1px solid #263241;
+    border-radius: 10px;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 10px;
+}
+
+.desk-duplicate-list b {
+    color: #86efac;
+    font-family: var(--font-mono);
+}
+
+.desk-duplicate-list em {
+    color: #94a3b8;
+    font-style: normal;
+}
+
+.desk-vip-explanation {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.24);
+}
+
+.desk-vip-explanation svg {
+    color: #fecaca;
+}
+
+.desk-invalid-input {
+    border-color: rgba(239, 68, 68, 0.65) !important;
+}
+
 .desk-ticket-state {
     display: flex;
     flex-wrap: wrap;
@@ -778,28 +1015,10 @@ body.page-tickets .page-subtitle {
     box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
 }
 
-.desk-action-grid,
-.desk-dashboard-grid,
 .desk-category-grid,
 .desk-settings-grid {
     display: grid;
     gap: 14px;
-}
-
-.desk-action-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.desk-action-grid form {
-    margin: 0;
-}
-
-.desk-action-grid .desk-btn {
-    width: 100%;
-}
-
-.desk-dashboard-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .desk-category-grid,
@@ -968,45 +1187,6 @@ body.page-tickets .page-subtitle {
     justify-content: flex-end;
 }
 
-.service-metrics .desk-metric {
-    min-height: 104px;
-}
-
-.service-metrics .desk-metric svg {
-    color: #22c55e;
-}
-
-.service-metrics .metric-critical svg,
-.service-metrics .metric-critical strong {
-    color: #ef4444;
-}
-
-.service-metrics .metric-warning svg,
-.service-metrics .metric-warning strong,
-.service-metrics .metric-waiting svg,
-.service-metrics .metric-waiting strong {
-    color: #f59e0b;
-}
-
-.service-metrics .metric-info svg,
-.service-metrics .metric-info strong {
-    color: #38bdf8;
-}
-
-.service-top-grid,
-.service-insights-grid {
-    display: grid;
-    gap: 14px;
-}
-
-.service-top-grid {
-    grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.75fr);
-}
-
-.service-insights-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .desk-panel-title-row {
     align-items: start;
     display: flex;
@@ -1020,114 +1200,10 @@ body.page-tickets .page-subtitle {
     margin: -8px 0 0;
 }
 
-.attention-list {
-    display: grid;
-    gap: 10px;
-}
-
-.attention-item {
-    align-items: center;
-    background: #080b10;
-    border: 1px solid #1f2937;
-    border-radius: 14px;
-    display: grid;
-    gap: 14px;
-    grid-template-columns: minmax(0, 1fr) auto;
-    padding: 14px;
-}
-
-.attention-item.priority-critical {
-    border-left: 3px solid #ef4444;
-}
-
-.attention-main {
-    align-items: center;
-    display: flex;
-    gap: 12px;
-    min-width: 0;
-}
-
-.attention-main a {
-    color: #f8fafc;
-    display: block;
-    font-weight: 800;
-    margin-bottom: 4px;
-}
-
-.attention-main small {
-    color: #94a3b8;
-}
-
-.attention-badges,
-.attention-actions {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
-}
-
-.attention-actions {
-    justify-content: flex-end;
-    margin-top: 0;
-}
-
-.attention-actions > span {
-    color: #94a3b8;
-    font-size: 12px;
-    font-weight: 700;
-}
-
 .partner-badge {
     background: rgba(34, 197, 94, 0.08);
     border-color: rgba(134, 239, 172, 0.26);
     color: #86efac;
-}
-
-.workload-panel {
-    align-self: stretch;
-}
-
-.workload-row {
-    align-items: center;
-    display: grid;
-    gap: 10px;
-    grid-template-columns: minmax(0, 1fr) 100px 28px;
-    padding: 12px 0;
-}
-
-.workload-row + .workload-row {
-    border-top: 1px solid #1f2937;
-}
-
-.workload-row strong {
-    color: #f8fafc;
-}
-
-.workload-row span {
-    color: #94a3b8;
-    display: block;
-    font-size: 12px;
-    margin-top: 3px;
-}
-
-.workload-row b {
-    color: #f8fafc;
-    text-align: right;
-}
-
-.workload-bar {
-    background: rgba(148, 163, 184, 0.13);
-    border-radius: 999px;
-    height: 8px;
-    overflow: hidden;
-}
-
-.workload-bar i {
-    background: linear-gradient(90deg, #14532d, #22c55e);
-    border-radius: inherit;
-    display: block;
-    height: 100%;
 }
 
 .service-kanban {
@@ -2062,6 +2138,31 @@ body.page-tickets .page-subtitle {
     gap: 10px;
 }
 
+.desk-overview-main .desk-activity-panel {
+    align-self: start;
+}
+
+.desk-overview-main .desk-activity-panel .desk-panel-title-row {
+    margin-bottom: 8px;
+}
+
+.desk-overview-main .desk-activity-panel .desk-activity-feed {
+    max-height: 300px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.desk-overview-main .desk-activity-panel .desk-activity-item {
+    border-radius: 12px;
+    gap: 10px;
+    padding: 10px;
+}
+
+.desk-overview-main .desk-activity-panel .desk-activity-icon {
+    height: 30px;
+    width: 30px;
+}
+
 .desk-activity-item {
     align-items: start;
     background: #080b10;
@@ -2840,18 +2941,10 @@ body.page-tickets .page-subtitle {
 }
 
 @media (max-width: 1180px) {
-    .desk-metrics,
-    .desk-filter-card,
     .desk-ticket-card,
     .desk-detail-grid,
-    .desk-dashboard-grid,
     .desk-category-grid,
     .desk-settings-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .service-top-grid,
-    .service-insights-grid {
         grid-template-columns: 1fr;
     }
 
@@ -2902,18 +2995,8 @@ body.page-tickets .page-subtitle {
 
 @media (max-width: 760px) {
     .desk-form-grid,
-    .desk-inline-form,
-    .desk-action-grid {
+    .desk-inline-form {
         grid-template-columns: 1fr;
-    }
-
-    .attention-item,
-    .workload-row {
-        grid-template-columns: 1fr;
-    }
-
-    .attention-actions {
-        justify-content: flex-start;
     }
 
     .desk-kpi-strip,
@@ -2943,11 +3026,31 @@ body.page-tickets .page-subtitle {
     .desk-device-status-grid,
     .desk-attachment-grid,
     .desk-related-grid,
+    .desk-alert-preview-grid,
+    .desk-category-suggestions,
+    .desk-requester-autofill,
     .desk-dashboard-kpi-grid,
     .desk-widget-grid,
     .desk-fleet-summary,
     .desk-report-popover {
         grid-template-columns: 1fr;
+    }
+
+    .desk-create-quick-form,
+    .desk-create-device-card,
+    .desk-duplicate-list a {
+        grid-template-columns: 1fr;
+    }
+
+    .desk-create-draft,
+    .desk-duplicate-notice {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .desk-create-draft .desk-btn,
+    .desk-duplicate-notice .desk-btn {
+        margin-left: 0;
     }
 
     .desk-widget,
@@ -4721,7 +4824,6 @@ button,
 .summary-number,
 .noc-number,
 .ticket-metric-value,
-.desk-metric strong,
 .metric-card strong,
 .summary-card strong,
 .noc-kpi strong {
@@ -7967,9 +8069,7 @@ body.page-tickets .desk-hero .page-actions {
     margin-left: auto;
 }
 
-body.page-tickets .desk-metric,
 body.page-tickets .desk-panel,
-body.page-tickets .desk-filter-card,
 body.page-tickets .desk-ticket-card,
 body.page-tickets .desk-form-panel {
     background: #0d1117;
@@ -7977,8 +8077,7 @@ body.page-tickets .desk-form-panel {
 }
 
 body.page-tickets .desk-ticket-card:hover,
-body.page-tickets .desk-panel:hover,
-body.page-tickets .desk-metric:hover {
+body.page-tickets .desk-panel:hover {
     background: #10251d;
     border-color: rgba(34, 197, 94, 0.42);
 }
