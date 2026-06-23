@@ -20,6 +20,168 @@
         if (checkAll) checkAll.checked = count > 0 && count === checks.length;
     }
 
+    function initFilterbar() {
+        const filterbar = document.querySelector('[data-filterbar]');
+        if (!filterbar) return;
+        const filters = Array.from(filterbar.querySelectorAll('.nw-filter'));
+        const globalClear = filterbar.querySelector('[data-filter-global-clear]');
+        const resultCount = filterbar.querySelector('[data-filter-result-count]');
+        const tableBody = document.querySelector('.desk-ticket-grid-body');
+        let empty = tableBody?.querySelector('.desk-ticket-empty.is-client-filter-empty');
+        if (tableBody && !empty) {
+            empty = document.createElement('div');
+            empty.className = 'desk-empty compact desk-ticket-empty is-client-filter-empty';
+            empty.hidden = true;
+            empty.innerHTML = '<i data-lucide="search-x"></i><span><strong>Nenhum chamado encontrado com os filtros atuais.</strong><small>Ajuste os filtros ou limpe a busca para ver mais resultados.</small></span>';
+            tableBody.appendChild(empty);
+        }
+
+        const defaults = new Map(filters.map((filter) => {
+            const summary = filter.querySelector('[data-filter-summary]');
+            return [filter, summary?.textContent?.trim() || 'Filtro'];
+        }));
+
+        function closeFilters(except = null) {
+            filters.forEach((filter) => {
+                if (filter !== except) {
+                    filter.classList.remove('is-open', 'is-align-end');
+                    filter.querySelector('[data-filter-trigger]')?.setAttribute('aria-expanded', 'false');
+                }
+            });
+        }
+
+        function selectedByField() {
+            const data = {};
+            filterbar.querySelectorAll('[data-filter-input]:checked').forEach((input) => {
+                const field = input.dataset.field;
+                if (!data[field]) data[field] = [];
+                data[field].push(input.value);
+            });
+            return data;
+        }
+
+        function matches(row, field, values) {
+            if (!values?.length) return true;
+            if (field === 'flag') return values.some((value) => row.dataset[value] === '1');
+            if (field === 'rmm') return values.some((value) => row.dataset[`rmm${value.charAt(0).toUpperCase()}${value.slice(1)}`] === '1');
+            if (field === 'stale') return row.dataset.stale === '1';
+            return values.includes(row.dataset[field] || '');
+        }
+
+        function applyFilters(message) {
+            const active = selectedByField();
+            const activeFields = Object.keys(active);
+            let visible = 0;
+            rows.forEach((row) => {
+                const show = activeFields.every((field) => matches(row, field, active[field]));
+                row.hidden = !show;
+                if (show) visible += 1;
+            });
+            if (empty) empty.hidden = visible !== 0;
+            if (resultCount) resultCount.textContent = `${visible} de ${rows.length} chamados`;
+            updateFilterChips(active);
+            updateFilterUrl(active);
+            if (message) showToast(message);
+            window.lucide?.createIcons?.();
+        }
+
+        function updateFilterChips(active) {
+            let total = 0;
+            filters.forEach((filter) => {
+                const summary = filter.querySelector('[data-filter-summary]');
+                const selected = Array.from(filter.querySelectorAll('[data-filter-input]:checked'));
+                const count = selected.length;
+                total += count;
+                filter.classList.toggle('is-active', count > 0);
+                filter.querySelector('[data-filter-selected]')?.replaceChildren(document.createTextNode(`${count} selecionado${count === 1 ? '' : 's'}`));
+                if (!summary) return;
+                if (count === 0) {
+                    summary.textContent = defaults.get(filter);
+                } else if (filter.dataset.filter === 'advanced') {
+                    summary.textContent = `Mais filtros: ${count}`;
+                } else if (count === 1) {
+                    const label = selected[0].closest('[data-filter-option]')?.querySelector('.nw-filter-option__label')?.childNodes[0]?.textContent?.trim() || selected[0].value;
+                    summary.textContent = `${defaults.get(filter)}: ${label}`;
+                } else {
+                    const label = selected[0].closest('[data-filter-option]')?.querySelector('.nw-filter-option__label')?.childNodes[0]?.textContent?.trim() || selected[0].value;
+                    summary.textContent = `${defaults.get(filter)}: ${label} +${count - 1}`;
+                }
+            });
+            if (globalClear) {
+                globalClear.disabled = total === 0;
+                globalClear.classList.toggle('is-active', total > 0);
+                globalClear.querySelector('span').textContent = total ? `Limpar ${total}` : 'Limpar';
+            }
+        }
+
+        function updateFilterUrl(active) {
+            const params = new URLSearchParams();
+            params.set('view', '{{ view_mode }}');
+            Object.entries(active).forEach(([field, values]) => {
+                if (values.length) params.set(field, values.join(','));
+            });
+            const query = params.toString();
+            window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+        }
+
+        function filterSearch(popover, term) {
+            const options = Array.from(popover.querySelectorAll('[data-filter-option]'));
+            let shown = 0;
+            options.forEach((option) => {
+                const hit = option.textContent.toLowerCase().includes(term.toLowerCase());
+                option.hidden = !hit;
+                if (hit) shown += 1;
+            });
+            const emptyState = popover.querySelector('[data-filter-empty]');
+            if (emptyState) emptyState.hidden = shown !== 0;
+        }
+
+        filters.forEach((filter) => {
+            const trigger = filter.querySelector('[data-filter-trigger]');
+            const popover = filter.querySelector('[data-filter-popover]');
+            trigger?.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const shouldOpen = !filter.classList.contains('is-open');
+                closeFilters();
+                filter.classList.toggle('is-open', shouldOpen);
+                trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+                if (shouldOpen && popover) {
+                    popover.classList.remove('is-align-end');
+                    window.setTimeout(() => {
+                        const rect = popover.getBoundingClientRect();
+                        filter.classList.toggle('is-align-end', rect.right > window.innerWidth - 16);
+                        filter.classList.toggle('is-drop-up', rect.bottom > window.innerHeight - 16);
+                        popover.querySelector('[data-filter-search]')?.focus();
+                    }, 0);
+                }
+            });
+            popover?.addEventListener('click', (event) => event.stopPropagation());
+            popover?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilters());
+            popover?.querySelector('[data-filter-search]')?.addEventListener('input', (event) => filterSearch(popover, event.target.value));
+            popover?.querySelector('[data-filter-apply]')?.addEventListener('click', () => {
+                closeFilters();
+                applyFilters('Filtros aplicados.');
+            });
+            popover?.querySelector('[data-filter-clear]')?.addEventListener('click', () => {
+                popover.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
+                closeFilters();
+                applyFilters('Filtro limpo.');
+            });
+        });
+
+        globalClear?.addEventListener('click', () => {
+            filterbar.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
+            closeFilters();
+            applyFilters('Filtros limpos.');
+        });
+        document.addEventListener('click', () => closeFilters());
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') closeFilters();
+        });
+        applyFilters();
+    }
+
     function focusRow(index) {
         if (!rows.length) return;
         focusedIndex = Math.max(0, Math.min(index, rows.length - 1));
@@ -259,5 +421,6 @@
     }, 1400);
 
     refreshSelection();
+    initFilterbar();
 })();
 </script>

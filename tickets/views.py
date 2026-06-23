@@ -225,6 +225,10 @@ def _central_context(request, active_section='central', assigned_to=None):
             {'value': value, 'label': value, 'count': count}
             for value, count in sorted(filter_counts['sector'].items())
         ],
+        'client': [
+            {'value': value, 'label': value, 'count': count}
+            for value, count in sorted(filter_counts['sector'].items())
+        ],
         'category': [
             {'value': value, 'label': value, 'count': count}
             for value, count in sorted(filter_counts['category'].items())

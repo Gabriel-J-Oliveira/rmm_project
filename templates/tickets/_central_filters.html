@@ -1,94 +1,253 @@
-<form class="desk-filter-commandbar" method="get" action="{% url 'tickets:central' %}">
-    <input type="hidden" name="q" value="{{ request.GET.q }}">
-    <input type="hidden" name="view" value="{{ view_mode }}">
-
-    <details class="desk-view-select">
-        <summary><span>View:</span> Fila geral</summary>
-        <div class="desk-popover desk-rich-popover">
-            <strong>Views salvas</strong>
-            {% for view in saved_views %}
-            <a href="{% url 'tickets:central' %}{{ view.query }}"><i data-lucide="{% if view.name == 'RMM Alertas' %}activity{% elif view.name == 'Minha fila' %}user-check{% else %}list-filter{% endif %}"></i>{{ view.name }}</a>
-            {% endfor %}
-            <button class="desk-btn desk-btn-primary" type="button">Salvar view atual</button>
+<section class="nw-filterbar" data-filterbar data-total-count="{{ tickets|length }}" aria-label="Filtros da Central">
+    <div class="nw-filterbar__track">
+        <div class="nw-filter" data-filter="view">
+            <button class="nw-filter-chip nw-filter-chip--view" type="button" data-filter-trigger aria-expanded="false">
+                <span class="nw-filter-chip__label">View</span>
+                <strong data-filter-summary>Fila geral</strong>
+                <i data-lucide="chevron-down"></i>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro View">
+                <header class="nw-filter-popover__header">
+                    <div><span>View salva</span><strong>Fila operacional</strong></div>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <div class="nw-filter-popover__list">
+                    {% for view in saved_views %}
+                    <a class="nw-filter-view-option" href="{% url 'tickets:central' %}{{ view.query }}">
+                        <i data-lucide="{% if view.name == 'RMM Alertas' %}activity{% elif view.name == 'Minha fila' %}user-check{% else %}list-filter{% endif %}"></i>
+                        <span>{{ view.name }}</span>
+                    </a>
+                    {% endfor %}
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Usar view</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
+            </div>
         </div>
-    </details>
 
-    <div class="desk-primary-filters">
-        <details class="desk-filter-chip">
-            <summary>Status</summary>
-            <div class="desk-popover desk-rich-popover">
-                <input class="desk-popover-search" placeholder="Buscar status...">
-                {% for option in filter_options.status %}
-                <label><input type="checkbox" name="status" value="{{ option.value }}" {% if request.GET.status == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
-                {% endfor %}
-                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        <div class="nw-filter" data-filter="status">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="workflow"></i><span data-filter-summary>Status</span>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro Status">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtro</span><strong>Status</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar status..." data-filter-search></label>
+                <div class="nw-filter-popover__list">
+                    {% for option in filter_options.status %}
+                    <label class="nw-filter-option" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="status" value="{{ option.value }}">
+                        <span class="nw-filter-option__dot status-{{ option.value }}"></span>
+                        <span class="nw-filter-option__label">{{ option.label }}</span>
+                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                    </label>
+                    {% endfor %}
+                    <div class="nw-filter-empty" data-filter-empty>Nenhum resultado encontrado</div>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
             </div>
-        </details>
+        </div>
 
-        <details class="desk-filter-chip">
-            <summary>Prioridade</summary>
-            <div class="desk-popover desk-rich-popover">
-                <input class="desk-popover-search" placeholder="Buscar prioridade...">
-                {% for option in filter_options.priority %}
-                <label><input type="checkbox" name="priority" value="{{ option.value }}" {% if request.GET.priority == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
-                {% endfor %}
-                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        <div class="nw-filter" data-filter="priority">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="flag"></i><span data-filter-summary>Prioridade</span>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro Prioridade">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtro</span><strong>Prioridade</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar prioridade..." data-filter-search></label>
+                <div class="nw-filter-popover__list">
+                    {% for option in filter_options.priority %}
+                    <label class="nw-filter-option" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="priority" value="{{ option.value }}">
+                        <span class="nw-filter-option__dot priority-{{ option.value }}"></span>
+                        <span class="nw-filter-option__label">{{ option.label }}<small>{% if option.value == 'low' %}Sem impacto imediato{% elif option.value == 'normal' %}Atendimento padrao{% elif option.value == 'high' %}Impacto relevante{% else %}Interrupcao ou risco alto{% endif %}</small></span>
+                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                    </label>
+                    {% endfor %}
+                    <div class="nw-filter-empty" data-filter-empty>Nenhum resultado encontrado</div>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
             </div>
-        </details>
+        </div>
 
-        <details class="desk-filter-chip">
-            <summary>Responsavel</summary>
-            <div class="desk-popover desk-rich-popover">
-                <input class="desk-popover-search" placeholder="Buscar tecnico...">
-                {% for option in filter_options.assigned_to %}
-                <label><input type="checkbox" name="assigned_to" value="{{ option.value }}" {% if request.GET.assigned_to == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
-                {% endfor %}
-                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        <div class="nw-filter" data-filter="technician">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="headphones"></i><span data-filter-summary>Tecnico</span>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro Tecnico">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtro</span><strong>Tecnico</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar tecnico..." data-filter-search></label>
+                <div class="nw-filter-popover__list">
+                    {% for option in filter_options.assigned_to %}
+                    <label class="nw-filter-option nw-filter-option--person" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="technician" value="{{ option.value }}">
+                        <span class="nw-filter-avatar">{{ option.label|slice:":1" }}</span>
+                        <span class="nw-filter-option__label">{{ option.label }}<small>{% cycle 'Online' 'Ocupado' 'Online' 'Ausente' %}</small></span>
+                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                    </label>
+                    {% endfor %}
+                    <div class="nw-filter-empty" data-filter-empty>Nenhum resultado encontrado</div>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
             </div>
-        </details>
+        </div>
 
-        <details class="desk-filter-chip">
-            <summary>Categoria</summary>
-            <div class="desk-popover desk-rich-popover">
-                <input class="desk-popover-search" placeholder="Buscar categoria...">
-                {% for option in filter_options.category %}
-                <label><input type="checkbox" name="category" value="{{ option.value }}" {% if request.GET.category == option.value %}checked{% endif %}><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
-                {% endfor %}
-                <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar</a></div>
+        <div class="nw-filter" data-filter="client">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="building-2"></i><span data-filter-summary>Cliente</span>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro Cliente">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtro</span><strong>Cliente</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar cliente..." data-filter-search></label>
+                <div class="nw-filter-popover__list">
+                    {% for option in filter_options.client %}
+                    <label class="nw-filter-option" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="client" value="{{ option.value }}">
+                        <span class="nw-filter-option__label">{{ option.label }}<small>Cliente interno</small></span>
+                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                    </label>
+                    {% endfor %}
+                    <div class="nw-filter-empty" data-filter-empty>Nenhum cliente encontrado</div>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
             </div>
-        </details>
+        </div>
+
+        <div class="nw-filter" data-filter="sector">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="network"></i><span data-filter-summary>Setor</span>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro Setor">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtro</span><strong>Setor</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar setor..." data-filter-search></label>
+                <div class="nw-filter-popover__list">
+                    {% for option in filter_options.sector %}
+                    <label class="nw-filter-option" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="sector" value="{{ option.value }}">
+                        <span class="nw-filter-option__label">{{ option.label }}</span>
+                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                    </label>
+                    {% endfor %}
+                    <div class="nw-filter-empty" data-filter-empty>Nenhum resultado encontrado</div>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
+            </div>
+        </div>
+
+        <div class="nw-filter" data-filter="category">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="folder-cog"></i><span data-filter-summary>Categoria</span>
+            </button>
+            <div class="nw-filter-popover" data-filter-popover role="dialog" aria-label="Filtro Categoria">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtro</span><strong>Categoria</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar categoria..." data-filter-search></label>
+                <div class="nw-filter-popover__list">
+                    {% for option in filter_options.category %}
+                    <label class="nw-filter-option" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="category" value="{{ option.value }}">
+                        <span class="nw-filter-option__label">{% if option.value == 'RMM / Alerta' %}<i data-lucide="activity"></i>{% endif %}{{ option.label }}</span>
+                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                    </label>
+                    {% endfor %}
+                    <div class="nw-filter-empty" data-filter-empty>Nenhum resultado encontrado</div>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar</button>
+                </footer>
+            </div>
+        </div>
+
+        <div class="nw-filter nw-filter--more" data-filter="advanced">
+            <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
+                <i data-lucide="sliders-horizontal"></i><span data-filter-summary>Mais filtros</span>
+            </button>
+            <div class="nw-filter-popover nw-filter-popover--wide" data-filter-popover role="dialog" aria-label="Mais filtros">
+                <header class="nw-filter-popover__header">
+                    <div><span>Filtros avancados</span><strong>Mais filtros</strong></div>
+                    <em data-filter-selected>0 selecionados</em>
+                    <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <div class="nw-filter-popover__advanced">
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Origem</strong>
+                        {% for option in origin_options %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="origin" value="{{ option.value }}"><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">SLA</strong>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="sla" value="critical"><span class="nw-filter-option__label">Vencido / critico</span><em class="nw-filter-option__count">3</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="sla" value="warning"><span class="nw-filter-option__label">Vence em breve</span><em class="nw-filter-option__count">4</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="sla" value="ok"><span class="nw-filter-option__label">No prazo</span><em class="nw-filter-option__count">12</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="stale" value="1"><span class="nw-filter-option__label">Parado &gt; 2h</span><em class="nw-filter-option__count">3</em></label>
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Caracteristicas</strong>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="flag" value="vip"><span class="nw-filter-option__label">Socio / VIP</span><em class="nw-filter-option__count">3</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="flag" value="unassigned"><span class="nw-filter-option__label">Sem dono</span><em class="nw-filter-option__count">{{ unassigned_count }}</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="flag" value="attachments"><span class="nw-filter-option__label">Com anexos</span><em class="nw-filter-option__count">3</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="flag" value="internal"><span class="nw-filter-option__label">Comentario interno</span><em class="nw-filter-option__count">5</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="flag" value="merged"><span class="nw-filter-option__label">Mesclado</span><em class="nw-filter-option__count">1</em></label>
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">RMM</strong>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="rmm" value="linked"><span class="nw-filter-option__label">Endpoint vinculado</span><em class="nw-filter-option__count">10</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="rmm" value="offline"><span class="nw-filter-option__label">Endpoint offline</span><em class="nw-filter-option__count">2</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="rmm" value="alert"><span class="nw-filter-option__label">Com alerta ativo</span><em class="nw-filter-option__count">2</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="rmm" value="antivirus"><span class="nw-filter-option__label">Antivirus desativado</span><em class="nw-filter-option__count">1</em></label>
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="rmm" value="disk"><span class="nw-filter-option__label">Disco cheio</span><em class="nw-filter-option__count">1</em></label>
+                    </section>
+                </div>
+                <footer class="nw-filter-popover__footer">
+                    <button class="nw-filter-apply" type="button" data-filter-apply>Aplicar filtros</button>
+                    <button class="nw-filter-clear" type="button" data-filter-clear>Limpar tudo</button>
+                </footer>
+            </div>
+        </div>
+
+        <button class="nw-filter-global-clear" type="button" data-filter-global-clear disabled>
+            <i data-lucide="x-circle"></i><span>Limpar</span>
+        </button>
     </div>
-
-    <details class="desk-filter-chip desk-more-filters">
-        <summary><i data-lucide="sliders-horizontal"></i>Mais filtros</summary>
-        <div class="desk-popover desk-rich-popover desk-more-filter-grid">
-            <section>
-                <strong>Setor</strong>
-                {% for option in filter_options.sector %}
-                <label><input type="checkbox" name="sector" value="{{ option.value }}"><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
-                {% endfor %}
-            </section>
-            <section>
-                <strong>Origem</strong>
-                {% for option in origin_options %}
-                <label><input type="checkbox" name="origin" value="{{ option.value }}"><span>{{ option.label }}</span><em>{{ option.count }}</em></label>
-                {% endfor %}
-            </section>
-            <section>
-                <strong>Operacionais</strong>
-                <label><input type="checkbox" name="stale" value="1"><span>Parado &gt;2h</span><em>3</em></label>
-                <label><input type="checkbox" name="vip" value="1"><span>Socio / VIP</span><em>3</em></label>
-                <label><input type="checkbox" name="unassigned" value="1"><span>Sem dono</span><em>{{ unassigned_count }}</em></label>
-                <label><input type="checkbox" name="sla" value="risk"><span>SLA vencendo</span><em>3</em></label>
-            </section>
-            <section>
-                <strong>Endpoint</strong>
-                <input class="desk-popover-search" name="endpoint" placeholder="Hostname...">
-                <label><input type="checkbox" name="endpoint_status" value="online"><span>Online</span><em>8</em></label>
-                <label><input type="checkbox" name="endpoint_status" value="offline"><span>Offline</span><em>2</em></label>
-            </section>
-            <div class="desk-popover-actions"><button class="desk-btn desk-btn-primary" type="submit">Aplicar filtros</button><a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}">Limpar tudo</a></div>
-        </div>
-    </details>
-    <a class="desk-btn desk-filter-clear" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="x-circle"></i>Limpar</a>
-</form>
+    <div class="nw-filterbar__meta"><span data-filter-result-count>{{ tickets|length }} de {{ tickets|length }} chamados</span></div>
+</section>
