@@ -1,0 +1,44 @@
+<dialog class="nw-bulk-dialog" data-bulk-confirm-dialog>
+    <form method="dialog">
+        <header>
+            <div>
+                <span>Acao em lote</span>
+                <h2>Confirmar acao em lote</h2>
+                <p data-bulk-confirm-copy>Esta acao afetara os chamados selecionados.</p>
+            </div>
+            <button type="button" class="desk-icon-action" data-bulk-dialog-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="nw-bulk-dialog__list" data-bulk-confirm-list></div>
+        <label class="nw-bulk-dialog__comment">
+            <span>Comentario opcional para todos os chamados</span>
+            <textarea rows="3" placeholder="Adicionar contexto da acao em lote..."></textarea>
+        </label>
+        <footer>
+            <button class="desk-btn" value="cancel">Cancelar</button>
+            <button class="desk-btn desk-btn-primary" value="confirm" data-bulk-confirm-accept>Confirmar</button>
+        </footer>
+    </form>
+</dialog>
+
+<dialog class="nw-bulk-dialog" data-merge-dialog>
+    <form method="dialog">
+        <header>
+            <div>
+                <span>Duplicidade</span>
+                <h2>Mesclar chamados duplicados</h2>
+                <p>Escolha o chamado principal. Os demais serao vinculados como duplicados e seus comentarios/anexos serao preservados.</p>
+            </div>
+            <button type="button" class="desk-icon-action" data-merge-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="nw-bulk-dialog__list" data-merge-list></div>
+        <label class="nw-bulk-dialog__comment">
+            <span>Motivo da mesclagem</span>
+            <textarea rows="3" placeholder="Ex.: chamados tratam do mesmo alerta no endpoint..."></textarea>
+        </label>
+        <label class="desk-check"><input type="checkbox" checked data-merge-comment><span>Adicionar comentario nos chamados mesclados</span></label>
+        <footer>
+            <button class="desk-btn" value="cancel">Cancelar</button>
+            <button class="desk-btn desk-btn-primary" value="confirm" data-merge-accept>Mesclar chamados</button>
+        </footer>
+    </form>
+</dialog>

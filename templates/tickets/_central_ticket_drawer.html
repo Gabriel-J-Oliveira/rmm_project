@@ -1,0 +1,23 @@
+<aside class="nw-ticket-drawer" hidden data-ticket-drawer aria-label="Detalhe rapido do chamado">
+    <div class="nw-ticket-drawer__panel">
+        <header class="nw-ticket-drawer__header">
+            <div>
+                <span data-drawer-number>#----</span>
+                <h2 data-drawer-title>Chamado</h2>
+                <p data-drawer-meta>Resumo operacional</p>
+            </div>
+            <div>
+                <a class="desk-icon-action" href="#" data-drawer-full aria-label="Abrir tela cheia"><i data-lucide="maximize-2"></i></a>
+                <button class="desk-icon-action" type="button" data-drawer-close aria-label="Fechar detalhe"><i data-lucide="x"></i></button>
+            </div>
+        </header>
+        <nav class="nw-ticket-drawer__tabs" aria-label="Abas do detalhe rapido">
+            <button type="button" class="is-active" data-drawer-tab="overview">Visao geral</button>
+            <button type="button" data-drawer-tab="comments">Comentarios</button>
+            <button type="button" data-drawer-tab="activity">Atividade</button>
+            <button type="button" data-drawer-tab="attachments">Anexos</button>
+            <button type="button" data-drawer-tab="device">Dispositivo</button>
+        </nav>
+        <section class="nw-ticket-drawer__body" data-drawer-body></section>
+    </div>
+</aside>

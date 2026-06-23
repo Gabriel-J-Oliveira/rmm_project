@@ -1,23 +1,374 @@
 <script>
 (() => {
-    const rows = Array.from(document.querySelectorAll('.desk-ticket-row'));
-    const checks = Array.from(document.querySelectorAll('.desk-row-checkbox'));
-    const checkAll = document.querySelector('.desk-row-check-all');
+    const CURRENT_TECH = 'Gabriel';
+    const centralUrl = "{% url 'tickets:central' %}";
+    const createUrl = "{% url 'tickets:create' %}";
+    const endpointUrl = "{% url 'endpoint-list' %}";
+    const rowSelector = '.desk-ticket-row';
+    const previewPanel = document.querySelector('[data-preview-panel]');
     const selectionBar = document.querySelector('.desk-selection-bar');
     const selectedLabel = document.querySelector('[data-selected-label]');
+    const checkAll = document.querySelector('.desk-row-check-all');
     const command = document.querySelector('[data-command-palette]');
     const shortcuts = document.querySelector('[data-shortcuts-dialog]');
     const toast = document.querySelector('[data-toast]');
-    const previewPanel = document.querySelector('[data-preview-panel]');
+    const contextMenu = document.querySelector('[data-ticket-context-menu]');
+    const drawer = document.querySelector('[data-ticket-drawer]');
+    const drawerBody = document.querySelector('[data-drawer-body]');
+    const mergeDialog = document.querySelector('[data-merge-dialog]');
+    const bulkDialog = document.querySelector('[data-bulk-confirm-dialog]');
     const ticketData = JSON.parse(document.getElementById('central-ticket-data')?.textContent || '[]');
-    let focusedIndex = rows.findIndex((row) => row.classList.contains('is-selected'));
-    if (focusedIndex < 0) focusedIndex = 0;
+    const ticketById = new Map(ticketData.map((ticket) => [String(ticket.number), ticket]));
+    let focusedTicketId = document.querySelector(`${rowSelector}.is-selected`)?.dataset.ticket || null;
+    let selectedTicketId = focusedTicketId;
+    let lastCheckedIndex = null;
+    let commandIndex = 0;
+    let pendingContextTicketId = null;
+
+    function rows() {
+        return Array.from(document.querySelectorAll(rowSelector));
+    }
+
+    function checks() {
+        return Array.from(document.querySelectorAll('.desk-row-checkbox'));
+    }
+
+    function getVisibleTicketRows() {
+        return rows().filter((row) => !row.hidden && row.offsetParent !== null);
+    }
+
+    function getRow(ticketId) {
+        return rows().find((row) => row.dataset.ticket === String(ticketId));
+    }
+
+    function getTicket(ticketId) {
+        return ticketById.get(String(ticketId));
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        }[char]));
+    }
+
+    function badgeClass(value) {
+        return escapeHtml(value || 'neutral');
+    }
+
+    function ticketUrl(ticket) {
+        return `/tickets/${encodeURIComponent(ticket.number)}/`;
+    }
+
+    function showToast(message, type = 'info', actionLabel = '') {
+        if (!toast) return;
+        toast.dataset.type = type;
+        toast.querySelector('span').textContent = message || 'Acao aplicada.';
+        const action = toast.querySelector('button');
+        if (action) {
+            action.textContent = actionLabel || 'Desfazer';
+            action.hidden = !actionLabel && !message?.toLowerCase().includes('atribu');
+        }
+        toast.hidden = false;
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => { toast.hidden = true; }, 5200);
+    }
+
+    function closeFloatingUi() {
+        document.querySelectorAll('.desk-command-palette, .desk-shortcuts-overlay').forEach((item) => { item.hidden = true; });
+        document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+        document.querySelectorAll('.desk-inline-popover[open]').forEach((details) => { details.open = false; });
+        hideContextMenu();
+        closeDrawer();
+    }
+
+    function focusTicketRow(ticketId, options = {}) {
+        const visible = getVisibleTicketRows();
+        if (!visible.length) return null;
+        const fallback = visible[0];
+        const row = getRow(ticketId) && visible.includes(getRow(ticketId)) ? getRow(ticketId) : fallback;
+        rows().forEach((item) => item.classList.remove('is-key-focused'));
+        row.classList.add('is-key-focused');
+        focusedTicketId = row.dataset.ticket;
+        if (options.scroll !== false) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        if (options.domFocus !== false) row.focus({ preventScroll: true });
+        if (options.select) selectTicketForPreview(focusedTicketId);
+        return row;
+    }
+
+    function moveTicketFocus(direction) {
+        const visible = getVisibleTicketRows();
+        if (!visible.length) return;
+        const currentIndex = visible.findIndex((row) => row.dataset.ticket === focusedTicketId);
+        const nextIndex = currentIndex < 0
+            ? (direction > 0 ? 0 : visible.length - 1)
+            : Math.max(0, Math.min(visible.length - 1, currentIndex + direction));
+        focusTicketRow(visible[nextIndex].dataset.ticket, { select: true });
+    }
+
+    function openFocusedTicket() {
+        const ticket = getTicket(focusedTicketId || selectedTicketId);
+        if (ticket) openTicketDrawer(ticket.number);
+    }
+
+    function toggleFocusedTicketCheckbox() {
+        const row = getRow(focusedTicketId);
+        const checkbox = row?.querySelector('.desk-row-checkbox');
+        if (!checkbox) return;
+        checkbox.checked = !checkbox.checked;
+        refreshSelection();
+    }
+
+    function getNextBestAction(ticket) {
+        const waitingUser = ticket.status === 'waiting_user';
+        const hasRelated = Number(ticket.comments?.length || 0) > 1 || ticket.partner;
+        if (!ticket.assigned_to) {
+            return { tone: 'success', icon: 'user-plus', title: 'Chamado sem responsavel', text: 'Assuma ou atribua este chamado para iniciar o atendimento.', action: 'Assumir atendimento', type: 'assign' };
+        }
+        if (ticket.sla_state === 'critical') {
+            return { tone: 'danger', icon: 'alarm-clock', title: 'SLA vencido', text: 'Este chamado ja ultrapassou o prazo. Registre uma atualizacao ou escale o atendimento.', action: 'Escalar', type: 'escalate' };
+        }
+        if (ticket.sla_state === 'warning') {
+            return { tone: 'warning', icon: 'timer', title: 'SLA vencendo em breve', text: 'Priorize uma primeira resposta ou atualizacao para evitar estouro de SLA.', action: 'Comentar agora', type: 'comment' };
+        }
+        if (ticket.origin === 'rmm' && ticket.endpoint?.status === 'offline') {
+            return { tone: 'warning', icon: 'wifi-off', title: 'Endpoint offline', text: 'O dispositivo nao esta comunicando com o RMM. Verifique o ultimo check-in antes do acesso remoto.', action: 'Ver dispositivo', type: 'device' };
+        }
+        if (ticket.origin === 'rmm' && Number(ticket.rmm?.active_alerts || 0) > 0) {
+            return { tone: 'info', icon: 'activity', title: 'Alerta RMM ativo', text: 'Revise a telemetria do endpoint antes da proxima acao.', action: 'Abrir no RMM', type: 'rmm' };
+        }
+        if (waitingUser) {
+            return { tone: 'warning', icon: 'mail-question', title: 'Aguardando retorno', text: 'Considere enviar um lembrete ao solicitante.', action: 'Enviar lembrete', type: 'reminder' };
+        }
+        if (hasRelated) {
+            return { tone: 'info', icon: 'git-merge', title: 'Possiveis duplicados', text: 'Ha chamados semelhantes para este solicitante ou endpoint.', action: 'Ver relacionados', type: 'related' };
+        }
+        return { tone: 'success', icon: 'sparkles', title: 'Proxima melhor acao', text: ticket.suggestion || 'Revise o contexto e registre a proxima atualizacao.', action: 'Comentar agora', type: 'comment' };
+    }
+
+    function renderComments(ticket) {
+        return ticket.comments?.length
+            ? ticket.comments.map((comment) => `
+                <div class="desk-comment">
+                    <div><strong>${escapeHtml(comment.author)}</strong><span>${escapeHtml(comment.when)} &middot; ${escapeHtml(comment.visibility)}</span></div>
+                    <p>${escapeHtml(comment.body)}</p>
+                </div>
+            `).join('')
+            : '<div class="desk-empty compact"><i data-lucide="message-circle"></i><span>Nenhum comentario no preview.</span></div>';
+    }
+
+    function renderRmmCard(ticket) {
+        const endpoint = ticket.endpoint;
+        const rmm = ticket.rmm;
+        if (!rmm) return '';
+        const remoteDisabled = endpoint?.status === 'offline' ? 'disabled title="Endpoint offline"' : '';
+        return `
+            <article class="desk-rmm-mini-card risk-${badgeClass(rmm.risk)}">
+                <header>
+                    <div>
+                        <span class="desk-section-eyebrow">RMM endpoint</span>
+                        <h3>${escapeHtml(rmm.hostname)}</h3>
+                        <p><i class="desk-status-dot status-${badgeClass(endpoint?.status)}"></i>${escapeHtml(rmm.status_label)} &middot; ultimo check-in ${escapeHtml(rmm.last_seen)}</p>
+                    </div>
+                    <span class="desk-rmm-alert-pill">${escapeHtml(rmm.active_alerts)} alertas</span>
+                </header>
+                <div class="desk-rmm-metrics">
+                    <div><span>CPU</span><meter value="${escapeHtml(rmm.cpu)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.cpu)}%</strong></div>
+                    <div><span>Mem</span><meter value="${escapeHtml(rmm.memory)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.memory)}%</strong></div>
+                    <div><span>Disco</span><meter value="${escapeHtml(rmm.disk)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.disk)}%</strong></div>
+                </div>
+                <p class="desk-muted">Usuario logado: ${escapeHtml(rmm.logged_user)}</p>
+                <div class="desk-rmm-actions">
+                    <a class="desk-btn" href="${endpointUrl}">Ver dispositivo</a>
+                    <button class="desk-btn" type="button" data-preview-action="open-rmm">Abrir no RMM</button>
+                    <button class="desk-btn desk-btn-primary" type="button" data-preview-action="remote" ${remoteDisabled}>Acesso remoto</button>
+                </div>
+            </article>
+        `;
+    }
+
+    function renderPreview(ticket) {
+        if (!previewPanel || !ticket) return;
+        const endpoint = ticket.endpoint;
+        const action = getNextBestAction(ticket);
+        const primaryLabel = !ticket.assigned_to ? 'Assumir atendimento' : 'Atribuir a mim';
+        previewPanel.classList.add('is-switching');
+        previewPanel.innerHTML = `
+            <header class="desk-detail-panel-header">
+                <div>
+                    <span class="desk-ticket-number">#${escapeHtml(ticket.number)}</span>
+                    <h2>${escapeHtml(ticket.title)}</h2>
+                    <p>${escapeHtml(ticket.requester)} &middot; ${escapeHtml(ticket.sector)} &middot; aberto ha ${escapeHtml(ticket.opened_for)}</p>
+                </div>
+                <div class="desk-preview-header-actions">
+                    <button class="desk-icon-action" type="button" data-preview-action="copy" aria-label="Copiar link"><i data-lucide="link"></i></button>
+                    <button class="desk-icon-action" type="button" data-preview-action="drawer" aria-label="Abrir detalhe rapido"><i data-lucide="sidebar"></i></button>
+                    <a class="desk-icon-action" href="${ticketUrl(ticket)}" aria-label="Abrir em tela cheia"><i data-lucide="maximize-2"></i></a>
+                </div>
+            </header>
+            <div class="desk-detail-inline-state">
+                <span class="desk-badge status-${badgeClass(ticket.status)}">${escapeHtml(ticket.status_label)}</span>
+                <span class="desk-badge priority-${badgeClass(ticket.priority)}">${escapeHtml(ticket.priority_label)}</span>
+                ${ticket.partner ? '<span class="desk-badge partner-badge">Socio / VIP</span>' : ''}
+                <span class="desk-origin-badge origin-${badgeClass(ticket.origin)}">${escapeHtml(ticket.origin_label)}</span>
+            </div>
+            <section class="desk-detail-panel-body">
+                <article class="desk-suggestion-card nw-next-action nw-next-action--${action.tone}">
+                    <i data-lucide="${action.icon}"></i>
+                    <div><strong>${escapeHtml(action.title)}</strong><p>${escapeHtml(action.text)}</p></div>
+                    <button class="desk-btn" type="button" data-preview-action="${action.type}">${escapeHtml(action.action)}</button>
+                </article>
+                <div class="desk-preview-grid">
+                    <article class="desk-preview-stat"><span>SLA</span><strong>${escapeHtml(ticket.sla_label)}</strong><small>${escapeHtml(ticket.opened_for)} aberto</small></article>
+                    <article class="desk-preview-stat"><span>Responsavel</span><strong data-preview-assignee>${escapeHtml(ticket.assigned_to || 'Sem dono')}</strong><small>${escapeHtml(ticket.updated_for)} sem atualizacao</small></article>
+                </div>
+                ${renderRmmCard(ticket)}
+                <article class="desk-detail-section">
+                    <h3>Descricao</h3>
+                    <p>${escapeHtml(ticket.description)}</p>
+                    <div class="desk-preview-badges">
+                        <span class="desk-badge neutral">${escapeHtml(ticket.category)}</span>
+                        ${endpoint ? `<span class="desk-endpoint-chip status-${badgeClass(endpoint.status)}"><i></i><span class="mono">${escapeHtml(endpoint.hostname)}</span></span>` : ''}
+                    </div>
+                </article>
+                <article class="desk-detail-section"><h3>Ultimos comentarios</h3><div class="desk-comments" data-preview-comments>${renderComments(ticket)}</div></article>
+                <article class="desk-detail-section">
+                    <h3>Eventos recentes</h3>
+                    <div class="desk-preview-timeline">
+                        <div><i data-lucide="ticket-check"></i><strong>Chamado criado</strong><span>Hoje, 08:40</span></div>
+                        <div><i data-lucide="user-round-check"></i><strong>${escapeHtml(ticket.assigned_to || 'Sem responsavel definido')}</strong><span>${escapeHtml(ticket.updated_for)}</span></div>
+                    </div>
+                </article>
+                <div class="desk-quick-actions">
+                    <button class="desk-btn desk-btn-primary" type="button" data-preview-action="assign">${escapeHtml(primaryLabel)}</button>
+                    <button class="desk-btn" type="button" data-preview-action="status">Mudar status</button>
+                    <button class="desk-btn" type="button" data-preview-action="priority">Mudar prioridade</button>
+                    <button class="desk-btn" type="button" data-preview-action="comment">Comentar</button>
+                    <a class="desk-btn" href="${ticketUrl(ticket)}">Abrir tela cheia</a>
+                    ${ticket.rmm ? '<button class="desk-btn" type="button" data-preview-action="open-rmm">Abrir no RMM</button>' : ''}
+                </div>
+            </section>
+            <form class="desk-comment-dock" data-comment-form>
+                <textarea name="body" rows="3" placeholder="Comentario rapido..."></textarea>
+                <div class="nw-comment-tools">
+                    <div>
+                        <button class="desk-icon-action" type="button" data-mock-macro aria-label="Inserir macro"><i data-lucide="text-cursor-input"></i></button>
+                        <button class="desk-icon-action" type="button" data-mock-attach aria-label="Anexar arquivo"><i data-lucide="paperclip"></i></button>
+                        <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
+                    </div>
+                    <small data-public-warning hidden>Este comentario sera visivel ao solicitante.</small>
+                    <span class="desk-muted">Ctrl+Enter para enviar</span>
+                    <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar</button>
+                </div>
+            </form>
+        `;
+        selectedTicketId = String(ticket.number);
+        focusedTicketId = String(ticket.number);
+        rows().forEach((row) => {
+            row.classList.toggle('is-selected', row.dataset.ticket === selectedTicketId);
+            row.classList.toggle('is-key-focused', row.dataset.ticket === focusedTicketId);
+        });
+        window.history.replaceState({}, '', `${centralUrl}?ticket=${ticket.number}&view={{ view_mode }}`);
+        setTimeout(() => previewPanel.classList.remove('is-switching'), 180);
+        window.lucide?.createIcons?.();
+    }
+
+    function selectTicketForPreview(ticketId) {
+        const ticket = getTicket(ticketId);
+        if (ticket) renderPreview(ticket);
+    }
 
     function refreshSelection() {
-        const count = checks.filter((item) => item.checked).length;
-        if (selectedLabel) selectedLabel.textContent = count;
-        if (selectionBar) selectionBar.hidden = count === 0;
-        if (checkAll) checkAll.checked = count > 0 && count === checks.length;
+        const visible = getVisibleTicketRows();
+        const selectedChecks = checks().filter((item) => item.checked);
+        const visibleChecks = visible.map((row) => row.querySelector('.desk-row-checkbox')).filter(Boolean);
+        if (selectedLabel) selectedLabel.textContent = selectedChecks.length;
+        if (selectionBar) {
+            selectionBar.hidden = selectedChecks.length === 0;
+            selectionBar.dataset.selectedCount = selectedChecks.length;
+        }
+        if (checkAll) {
+            const selectedVisible = visibleChecks.filter((check) => check.checked).length;
+            checkAll.checked = visibleChecks.length > 0 && selectedVisible === visibleChecks.length;
+            checkAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleChecks.length;
+        }
+    }
+
+    function selectedTickets() {
+        return checks()
+            .filter((check) => check.checked)
+            .map((check) => check.closest(rowSelector)?.dataset.ticket)
+            .filter(Boolean)
+            .map(getTicket)
+            .filter(Boolean);
+    }
+
+    function setAssignee(ticketId, assignee = CURRENT_TECH) {
+        const ticket = getTicket(ticketId);
+        const row = getRow(ticketId);
+        if (!ticket || !row) return;
+        ticket.assigned_to = assignee;
+        row.dataset.technician = assignee;
+        row.dataset.unassigned = '0';
+        row.classList.remove('is-unassigned');
+        const pill = row.querySelector('.desk-assignee-pill');
+        if (pill) {
+            pill.classList.remove('is-unassigned');
+            pill.innerHTML = `<span class="desk-avatar">${escapeHtml(assignee.slice(0, 1))}</span>${escapeHtml(assignee)}`;
+        }
+        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
+        showToast(`Chamado #${ticket.number} atribuido a ${assignee}.`, 'success', 'Desfazer');
+    }
+
+    function cyclePriority(ticketId) {
+        const order = ['low', 'normal', 'high', 'critical'];
+        const labels = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        const next = order[(order.indexOf(ticket.priority) + 1) % order.length] || 'normal';
+        ticket.priority = next;
+        ticket.priority_label = labels[next];
+        getRow(ticketId)?.setAttribute('data-priority', next);
+        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
+        showToast(`Prioridade alterada para ${labels[next]}.`, next === 'critical' ? 'warning' : 'info');
+    }
+
+    function cycleStatus(ticketId) {
+        const order = ['new', 'in_progress', 'waiting_user', 'waiting_third_party', 'resolved'];
+        const labels = { new: 'Novo', in_progress: 'Em atendimento', waiting_user: 'Aguardando usuario', waiting_third_party: 'Aguardando terceiro', resolved: 'Resolvido' };
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        const next = order[(order.indexOf(ticket.status) + 1) % order.length] || 'in_progress';
+        ticket.status = next;
+        ticket.status_label = labels[next];
+        getRow(ticketId)?.setAttribute('data-status', next);
+        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
+        if (['resolved'].includes(next)) openBulkConfirm(`Mudar status para ${labels[next]}`, [ticket]);
+        else showToast(`Status atualizado para ${labels[next]}.`, 'success');
+    }
+
+    function copyTicketLink(ticketId) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        const url = new URL(ticketUrl(ticket), window.location.origin).toString();
+        navigator.clipboard?.writeText(url).catch(() => {});
+        showToast('Link do chamado copiado.', 'success');
+    }
+
+    function submitQuickComment(form) {
+        const ticket = getTicket(selectedTicketId);
+        const textarea = form?.querySelector('textarea');
+        const body = textarea?.value.trim();
+        if (!ticket || !body) return;
+        const internal = form.querySelector('[name="internal"]')?.checked !== false;
+        ticket.comments = ticket.comments || [];
+        ticket.comments.unshift({ author: CURRENT_TECH, when: 'agora', visibility: internal ? 'Interno' : 'Publico', body });
+        textarea.value = '';
+        renderPreview(ticket);
+        showToast('Comentario adicionado.', 'success');
     }
 
     function initFilterbar() {
@@ -35,16 +386,25 @@
             empty.innerHTML = '<i data-lucide="search-x"></i><span><strong>Nenhum chamado encontrado com os filtros atuais.</strong><small>Ajuste os filtros ou limpe a busca para ver mais resultados.</small></span>';
             tableBody.appendChild(empty);
         }
-
-        const defaults = new Map(filters.map((filter) => {
-            const summary = filter.querySelector('[data-filter-summary]');
-            return [filter, summary?.textContent?.trim() || 'Filtro'];
-        }));
+        const defaults = new Map(filters.map((filter) => [filter, filter.querySelector('[data-filter-summary]')?.textContent?.trim() || 'Filtro']));
+        const viewPresets = {
+            'Fila geral': {},
+            'Minha fila': { technician: [CURRENT_TECH] },
+            'Meus chamados': { technician: [CURRENT_TECH] },
+            'Criticos sem dono': { priority: ['critical'], flag: ['unassigned'] },
+            'Críticos sem dono': { priority: ['critical'], flag: ['unassigned'] },
+            'SLA vencendo': { sla: ['warning', 'critical'] },
+            'RMM Alertas': { origin: ['rmm'] },
+            'Sem responsavel': { flag: ['unassigned'] },
+            'Aguardando usuario': { status: ['waiting_user'] },
+            'Financeiro': { sector: ['Financeiro'] },
+            'Diretoria': { sector: ['Diretoria'] }
+        };
 
         function closeFilters(except = null) {
             filters.forEach((filter) => {
                 if (filter !== except) {
-                    filter.classList.remove('is-open', 'is-align-end');
+                    filter.classList.remove('is-open', 'is-align-end', 'is-drop-up');
                     filter.querySelector('[data-filter-trigger]')?.setAttribute('aria-expanded', 'false');
                 }
             });
@@ -68,23 +428,6 @@
             return values.includes(row.dataset[field] || '');
         }
 
-        function applyFilters(message) {
-            const active = selectedByField();
-            const activeFields = Object.keys(active);
-            let visible = 0;
-            rows.forEach((row) => {
-                const show = activeFields.every((field) => matches(row, field, active[field]));
-                row.hidden = !show;
-                if (show) visible += 1;
-            });
-            if (empty) empty.hidden = visible !== 0;
-            if (resultCount) resultCount.textContent = `${visible} de ${rows.length} chamados`;
-            updateFilterChips(active);
-            updateFilterUrl(active);
-            if (message) showToast(message);
-            window.lucide?.createIcons?.();
-        }
-
         function updateFilterChips(active) {
             let total = 0;
             filters.forEach((filter) => {
@@ -95,16 +438,12 @@
                 filter.classList.toggle('is-active', count > 0);
                 filter.querySelector('[data-filter-selected]')?.replaceChildren(document.createTextNode(`${count} selecionado${count === 1 ? '' : 's'}`));
                 if (!summary) return;
-                if (count === 0) {
-                    summary.textContent = defaults.get(filter);
-                } else if (filter.dataset.filter === 'advanced') {
-                    summary.textContent = `Mais filtros: ${count}`;
-                } else if (count === 1) {
+                if (filter.dataset.filter === 'view') return;
+                if (count === 0) summary.textContent = defaults.get(filter);
+                else if (filter.dataset.filter === 'advanced') summary.textContent = `Mais filtros: ${count}`;
+                else {
                     const label = selected[0].closest('[data-filter-option]')?.querySelector('.nw-filter-option__label')?.childNodes[0]?.textContent?.trim() || selected[0].value;
-                    summary.textContent = `${defaults.get(filter)}: ${label}`;
-                } else {
-                    const label = selected[0].closest('[data-filter-option]')?.querySelector('.nw-filter-option__label')?.childNodes[0]?.textContent?.trim() || selected[0].value;
-                    summary.textContent = `${defaults.get(filter)}: ${label} +${count - 1}`;
+                    summary.textContent = count === 1 ? `${defaults.get(filter)}: ${label}` : `${defaults.get(filter)}: ${label} +${count - 1}`;
                 }
             });
             if (globalClear) {
@@ -117,11 +456,41 @@
         function updateFilterUrl(active) {
             const params = new URLSearchParams();
             params.set('view', '{{ view_mode }}');
-            Object.entries(active).forEach(([field, values]) => {
-                if (values.length) params.set(field, values.join(','));
+            Object.entries(active).forEach(([field, values]) => values.length && params.set(field, values.join(',')));
+            window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+        }
+
+        function applyFilters(message) {
+            const active = selectedByField();
+            const fields = Object.keys(active);
+            let visible = 0;
+            rows().forEach((row) => {
+                const show = fields.every((field) => matches(row, field, active[field]));
+                row.hidden = !show;
+                if (show) visible += 1;
             });
-            const query = params.toString();
-            window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+            if (empty) empty.hidden = visible !== 0;
+            if (resultCount) resultCount.textContent = `${visible} de ${rows().length} chamados`;
+            updateFilterChips(active);
+            updateFilterUrl(active);
+            refreshSelection();
+            if (focusedTicketId && getRow(focusedTicketId)?.hidden) focusTicketRow(null, { select: false });
+            if (message) showToast(message, 'info');
+            window.lucide?.createIcons?.();
+        }
+
+        function setPreset(name) {
+            filterbar.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
+            const preset = viewPresets[name] || {};
+            Object.entries(preset).forEach(([field, values]) => {
+                values.forEach((value) => {
+                    const input = filterbar.querySelector(`[data-filter-input][data-field="${field}"][value="${CSS.escape(value)}"]`);
+                    if (input) input.checked = true;
+                });
+            });
+            filterbar.querySelector('[data-filter="view"] [data-filter-summary]').textContent = name;
+            closeFilters();
+            applyFilters(`View "${name}" aplicada.`);
         }
 
         function filterSearch(popover, term) {
@@ -147,7 +516,6 @@
                 filter.classList.toggle('is-open', shouldOpen);
                 trigger.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
                 if (shouldOpen && popover) {
-                    popover.classList.remove('is-align-end');
                     window.setTimeout(() => {
                         const rect = popover.getBoundingClientRect();
                         filter.classList.toggle('is-align-end', rect.right > window.innerWidth - 16);
@@ -159,224 +527,329 @@
             popover?.addEventListener('click', (event) => event.stopPropagation());
             popover?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilters());
             popover?.querySelector('[data-filter-search]')?.addEventListener('input', (event) => filterSearch(popover, event.target.value));
-            popover?.querySelector('[data-filter-apply]')?.addEventListener('click', () => {
-                closeFilters();
-                applyFilters('Filtros aplicados.');
-            });
+            popover?.querySelector('[data-filter-apply]')?.addEventListener('click', () => { closeFilters(); applyFilters('Filtros aplicados.'); });
             popover?.querySelector('[data-filter-clear]')?.addEventListener('click', () => {
                 popover.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
                 closeFilters();
                 applyFilters('Filtro limpo.');
             });
+            popover?.querySelectorAll('.nw-filter-view-option').forEach((view) => {
+                view.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    setPreset(view.textContent.trim());
+                });
+            });
         });
-
         globalClear?.addEventListener('click', () => {
             filterbar.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
+            filterbar.querySelector('[data-filter="view"] [data-filter-summary]').textContent = 'Fila geral';
             closeFilters();
             applyFilters('Filtros limpos.');
         });
         document.addEventListener('click', () => closeFilters());
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') closeFilters();
-        });
+        document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeFilters(); });
         applyFilters();
+        window.nwApplySavedView = setPreset;
     }
 
-    function focusRow(index) {
-        if (!rows.length) return;
-        focusedIndex = Math.max(0, Math.min(index, rows.length - 1));
-        rows[focusedIndex].focus();
+    function openBulkConfirm(actionLabel, forcedTickets = null) {
+        const tickets = forcedTickets || selectedTickets();
+        if (!bulkDialog || !tickets.length) return;
+        bulkDialog.querySelector('[data-bulk-confirm-copy]').textContent = `Esta acao afetara ${tickets.length} chamado${tickets.length === 1 ? '' : 's'}.`;
+        bulkDialog.querySelector('[data-bulk-confirm-list]').innerHTML = tickets.map((ticket) => `<label><span>#${escapeHtml(ticket.number)}</span><strong>${escapeHtml(ticket.title)}</strong></label>`).join('');
+        bulkDialog.showModal();
+        bulkDialog.dataset.action = actionLabel;
     }
 
-    function showToast(message) {
-        if (!toast) return;
-        toast.querySelector('span').textContent = message || 'Acao aplicada.';
-        toast.hidden = false;
-        clearTimeout(showToast.timer);
-        showToast.timer = setTimeout(() => { toast.hidden = true; }, 4800);
+    function openMergeDialog() {
+        const tickets = selectedTickets();
+        if (!mergeDialog || tickets.length < 2) {
+            showToast('Selecione pelo menos 2 chamados para mesclar.', 'warning');
+            return;
+        }
+        mergeDialog.querySelector('[data-merge-list]').innerHTML = tickets.map((ticket, index) => `
+            <label>
+                <input type="radio" name="merge-primary" value="${escapeHtml(ticket.number)}" ${index === 0 ? 'checked' : ''}>
+                <span>#${escapeHtml(ticket.number)}</span>
+                <strong>${escapeHtml(ticket.title)}</strong>
+                <small>${escapeHtml(ticket.requester)} &middot; ${escapeHtml(ticket.origin_label)}</small>
+            </label>
+        `).join('');
+        mergeDialog.showModal();
     }
 
-    function escapeHtml(value) {
-        return String(value || '').replace(/[&<>"']/g, (char) => ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;'
-        }[char]));
-    }
-
-    function badgeClass(value) {
-        return escapeHtml(value || 'neutral');
-    }
-
-    function renderPreview(ticket) {
-        if (!previewPanel || !ticket) return;
-        const endpoint = ticket.endpoint;
-        const rmm = ticket.rmm;
-        const comments = ticket.comments?.length
-            ? ticket.comments.map((comment) => `
-                <div class="desk-comment">
-                    <div><strong>${escapeHtml(comment.author)}</strong><span>${escapeHtml(comment.when)} &middot; ${escapeHtml(comment.visibility)}</span></div>
-                    <p>${escapeHtml(comment.body)}</p>
-                </div>
-            `).join('')
-            : '<div class="desk-empty compact"><i data-lucide="message-circle"></i><span>Nenhum comentario no preview.</span></div>';
-        const rmmHtml = rmm ? `
-            <article class="desk-rmm-mini-card risk-${badgeClass(rmm.risk)}">
-                <header>
-                    <div>
-                        <span class="desk-section-eyebrow">RMM endpoint</span>
-                        <h3>${escapeHtml(rmm.hostname)}</h3>
-                        <p><i class="desk-status-dot status-${badgeClass(endpoint?.status)}"></i>${escapeHtml(rmm.status_label)} &middot; ultimo check-in ${escapeHtml(rmm.last_seen)}</p>
-                    </div>
-                    <span class="desk-rmm-alert-pill">${escapeHtml(rmm.active_alerts)} alertas</span>
-                </header>
-                <div class="desk-rmm-metrics">
-                    <div><span>CPU</span><meter value="${escapeHtml(rmm.cpu)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.cpu)}%</strong></div>
-                    <div><span>Mem</span><meter value="${escapeHtml(rmm.memory)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.memory)}%</strong></div>
-                    <div><span>Disco</span><meter value="${escapeHtml(rmm.disk)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.disk)}%</strong></div>
-                </div>
-                <p class="desk-muted">Usuario logado: ${escapeHtml(rmm.logged_user)}</p>
-                <div class="desk-rmm-actions">
-                    <a class="desk-btn" href="{% url 'endpoint-list' %}">Ver dispositivo</a>
-                    <button class="desk-btn" type="button">Abrir no RMM</button>
-                    <button class="desk-btn desk-btn-primary" type="button">Acesso remoto</button>
-                </div>
-            </article>
-        ` : '';
-        previewPanel.classList.add('is-switching');
-        previewPanel.innerHTML = `
-            <header class="desk-detail-panel-header">
-                <div>
-                    <span class="desk-ticket-number">#${escapeHtml(ticket.number)}</span>
-                    <h2>${escapeHtml(ticket.title)}</h2>
-                    <p>${escapeHtml(ticket.requester)} &middot; ${escapeHtml(ticket.sector)} &middot; aberto ha ${escapeHtml(ticket.opened_for)}</p>
-                </div>
-                <div class="desk-preview-header-actions">
-                    <button class="desk-icon-action" type="button" aria-label="Copiar link"><i data-lucide="link"></i></button>
-                    <a class="desk-icon-action" href="/tickets/${escapeHtml(ticket.number)}/" aria-label="Abrir em tela cheia"><i data-lucide="maximize-2"></i></a>
-                </div>
-            </header>
-            <div class="desk-detail-inline-state">
-                <span class="desk-badge status-${badgeClass(ticket.status)}">${escapeHtml(ticket.status_label)}</span>
-                <span class="desk-badge priority-${badgeClass(ticket.priority)}">${escapeHtml(ticket.priority_label)}</span>
-                ${ticket.partner ? '<span class="desk-badge partner-badge">Socio / VIP</span>' : ''}
-                <span class="desk-origin-badge origin-${badgeClass(ticket.origin)}">${escapeHtml(ticket.origin_label)}</span>
-            </div>
-            <section class="desk-detail-panel-body">
-                <article class="desk-suggestion-card priority-${badgeClass(ticket.priority)}">
-                    <i data-lucide="sparkles"></i>
-                    <div><strong>Proxima melhor acao</strong><p>${escapeHtml(ticket.suggestion)}</p></div>
-                </article>
-                <div class="desk-preview-grid">
-                    <article class="desk-preview-stat"><span>SLA</span><strong>${escapeHtml(ticket.sla_label)}</strong><small>${escapeHtml(ticket.opened_for)} aberto</small></article>
-                    <article class="desk-preview-stat"><span>Responsavel</span><strong>${escapeHtml(ticket.assigned_to || 'Sem dono')}</strong><small>${escapeHtml(ticket.updated_for)} sem atualizacao</small></article>
-                </div>
-                ${rmmHtml}
-                <article class="desk-detail-section">
-                    <h3>Descricao</h3>
-                    <p>${escapeHtml(ticket.description)}</p>
-                    <div class="desk-preview-badges">
-                        <span class="desk-badge neutral">${escapeHtml(ticket.category)}</span>
-                        ${endpoint ? `<span class="desk-endpoint-chip status-${badgeClass(endpoint.status)}"><i></i><span class="mono">${escapeHtml(endpoint.hostname)}</span></span>` : ''}
-                    </div>
-                </article>
-                <article class="desk-detail-section"><h3>Ultimos comentarios</h3><div class="desk-comments">${comments}</div></article>
-                <article class="desk-detail-section">
-                    <h3>Eventos recentes</h3>
-                    <div class="desk-preview-timeline">
-                        <div><i data-lucide="ticket-check"></i><strong>Chamado criado</strong><span>Hoje, 08:40</span></div>
-                        <div><i data-lucide="user-round-check"></i><strong>${escapeHtml(ticket.assigned_to || 'Sem responsavel definido')}</strong><span>${escapeHtml(ticket.updated_for)}</span></div>
-                    </div>
-                </article>
-                <div class="desk-quick-actions">
-                    <button class="desk-btn desk-btn-primary" type="button" data-toast-action>Atribuir a mim</button>
-                    <button class="desk-btn" type="button">Mudar status</button>
-                    <button class="desk-btn" type="button">Mudar prioridade</button>
-                    <a class="desk-btn" href="/tickets/${escapeHtml(ticket.number)}/">Abrir tela cheia</a>
-                </div>
-            </section>
-            <form class="desk-comment-dock" method="post" action="/tickets/${escapeHtml(ticket.number)}/fake/comentario-adicionado/">
-                <textarea name="body" rows="3" placeholder="Comentario rapido..."></textarea>
-                <div>
-                    <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
-                    <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar</button>
-                </div>
-            </form>
-        `;
-        rows.forEach((row) => row.classList.toggle('is-selected', row.dataset.ticket === String(ticket.number)));
-        window.history.replaceState({}, '', `{% url 'tickets:central' %}?ticket=${ticket.number}&view={{ view_mode }}`);
-        setTimeout(() => previewPanel.classList.remove('is-switching'), 180);
+    function openTicketDrawer(ticketId) {
+        const ticket = getTicket(ticketId);
+        if (!drawer || !drawerBody || !ticket) return;
+        drawer.hidden = false;
+        document.body.classList.add('drawer-open');
+        drawer.querySelector('[data-drawer-number]').textContent = `#${ticket.number}`;
+        drawer.querySelector('[data-drawer-title]').textContent = ticket.title;
+        drawer.querySelector('[data-drawer-meta]').textContent = `${ticket.requester} · ${ticket.sector} · ${ticket.status_label}`;
+        drawer.querySelector('[data-drawer-full]').href = ticketUrl(ticket);
+        renderDrawerTab('overview', ticket);
+        drawer.querySelectorAll('[data-drawer-tab]').forEach((button) => {
+            button.onclick = () => {
+                drawer.querySelectorAll('[data-drawer-tab]').forEach((item) => item.classList.toggle('is-active', item === button));
+                renderDrawerTab(button.dataset.drawerTab, ticket);
+            };
+        });
         window.lucide?.createIcons?.();
     }
 
-    function selectTicket(number) {
-        const ticket = ticketData.find((item) => String(item.number) === String(number));
-        renderPreview(ticket);
+    function renderDrawerTab(tab, ticket) {
+        if (!drawerBody) return;
+        const rmm = renderRmmCard(ticket);
+        const base = {
+            overview: `
+                <article class="nw-drawer-card"><h3>Descricao</h3><p>${escapeHtml(ticket.description)}</p></article>
+                <div class="nw-drawer-grid">
+                    <article><span>Status</span><strong>${escapeHtml(ticket.status_label)}</strong></article>
+                    <article><span>Prioridade</span><strong>${escapeHtml(ticket.priority_label)}</strong></article>
+                    <article><span>Responsavel</span><strong>${escapeHtml(ticket.assigned_to || 'Sem dono')}</strong></article>
+                    <article><span>Categoria</span><strong>${escapeHtml(ticket.category)}</strong></article>
+                </div>
+                ${rmm}`,
+            comments: `<article class="nw-drawer-card"><h3>Comentarios</h3><div class="desk-comments">${renderComments(ticket)}</div></article>`,
+            activity: `<article class="nw-drawer-card"><h3>Atividade</h3><div class="desk-preview-timeline"><div><i data-lucide="ticket-check"></i><strong>Chamado criado</strong><span>Hoje, 08:40</span></div><div><i data-lucide="radio"></i><strong>Atualizacao operacional</strong><span>${escapeHtml(ticket.updated_for)}</span></div></div></article>`,
+            attachments: `<article class="nw-drawer-card"><h3>Anexos</h3><p>${ticket.attachmentsCount || 'Nenhum anexo listado neste mock.'}</p></article>`,
+            device: rmm || '<article class="nw-drawer-card"><h3>Dispositivo</h3><p>Nenhum endpoint vinculado a este chamado.</p></article>'
+        };
+        drawerBody.innerHTML = base[tab] || base.overview;
+        window.lucide?.createIcons?.();
     }
 
-    checks.forEach((check) => check.addEventListener('change', refreshSelection));
-    if (checkAll) {
-        checkAll.addEventListener('change', () => {
-            checks.forEach((check) => { check.checked = checkAll.checked; });
+    function closeDrawer() {
+        if (!drawer) return;
+        drawer.hidden = true;
+        document.body.classList.remove('drawer-open');
+    }
+
+    function showContextMenu(event, ticketId) {
+        if (!contextMenu) return;
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        event.preventDefault();
+        pendingContextTicketId = String(ticketId);
+        contextMenu.hidden = false;
+        const width = 260;
+        const x = Math.min(event.clientX, window.innerWidth - width - 14);
+        const y = Math.min(event.clientY, window.innerHeight - 330);
+        contextMenu.style.left = `${Math.max(10, x)}px`;
+        contextMenu.style.top = `${Math.max(10, y)}px`;
+        contextMenu.querySelector('[data-context-full]').href = ticketUrl(ticket);
+        contextMenu.querySelector('[data-context-action="endpoint"]').disabled = !ticket.endpoint;
+        contextMenu.querySelector('[data-context-action="rmm"]').disabled = !ticket.rmm;
+    }
+
+    function hideContextMenu() {
+        if (contextMenu) contextMenu.hidden = true;
+    }
+
+    function openCommandPalette() {
+        if (!command) return;
+        command.hidden = false;
+        const input = command.querySelector('input');
+        input.value = '';
+        renderCommandResults('');
+        input.focus();
+    }
+
+    function commandItems(query = '') {
+        const q = query.trim().toLowerCase();
+        const tickets = ticketData.filter((ticket) => {
+            const haystack = `${ticket.number} ${ticket.title} ${ticket.requester} ${ticket.category} ${ticket.status_label} ${ticket.endpoint?.hostname || ''}`.toLowerCase();
+            return !q || haystack.includes(q.replace(/^#/, ''));
+        }).slice(0, 8).map((ticket) => ({ group: 'Chamados', icon: 'ticket', label: `#${ticket.number} ${ticket.title}`, meta: `${ticket.status_label} · ${ticket.priority_label}`, action: () => selectTicketForPreview(ticket.number), secondary: () => openTicketDrawer(ticket.number) }));
+        const endpoints = ticketData.filter((ticket) => ticket.endpoint && (!q || ticket.endpoint.hostname.toLowerCase().includes(q))).slice(0, 5).map((ticket) => ({ group: 'Endpoints', icon: 'monitor', label: ticket.endpoint.hostname, meta: `${ticket.endpoint.status} · ${ticket.rmm?.active_alerts || 0} alertas`, action: () => { selectTicketForPreview(ticket.number); showToast('Endpoint selecionado no preview.', 'info'); } }));
+        const views = ['Fila geral', 'Meus chamados', 'Criticos sem dono', 'SLA vencendo', 'RMM Alertas', 'Sem responsavel', 'Aguardando usuario', 'Financeiro'].filter((name) => !q || name.toLowerCase().includes(q)).map((name) => ({ group: 'Views', icon: 'list-filter', label: name, meta: 'Aplicar view salva', action: () => window.nwApplySavedView?.(name) }));
+        const actions = [
+            { label: 'Novo chamado', icon: 'plus', meta: 'Ctrl+N', action: () => { window.location.href = createUrl; } },
+            { label: 'Ver atalhos', icon: 'keyboard', meta: '?', action: () => { shortcuts.hidden = false; } },
+            { label: 'Alternar Kanban', icon: 'columns-3', meta: 'View', action: () => { window.location.href = `${centralUrl}?view=kanban`; } },
+            { label: 'Filtrar por criticos', icon: 'alert-triangle', meta: 'Prioridade', action: () => window.nwApplySavedView?.('Criticos sem dono') },
+            { label: 'Limpar filtros', icon: 'x-circle', meta: 'Reset', action: () => document.querySelector('[data-filter-global-clear]')?.click() },
+        ].filter((item) => !q || item.label.toLowerCase().includes(q)).map((item) => ({ ...item, group: 'Acoes' }));
+        return [...tickets, ...endpoints, ...views, ...actions];
+    }
+
+    function renderCommandResults(query) {
+        const container = command?.querySelector('.desk-command-groups');
+        if (!container) return;
+        const items = commandItems(query);
+        commandIndex = Math.min(commandIndex, Math.max(0, items.length - 1));
+        if (!items.length) {
+            container.innerHTML = '<section class="nw-command-empty"><i data-lucide="search-x"></i><strong>Nenhum resultado encontrado</strong></section>';
+            window.lucide?.createIcons?.();
+            return;
+        }
+        const groups = [...new Set(items.map((item) => item.group))];
+        container.innerHTML = groups.map((group) => `
+            <section>
+                <strong>${escapeHtml(group)}</strong>
+                ${items.filter((item) => item.group === group).map((item, index) => {
+                    const globalIndex = items.indexOf(item);
+                    return `<button type="button" data-command-item="${globalIndex}" class="${globalIndex === commandIndex ? 'is-active' : ''}"><i data-lucide="${item.icon}"></i><span>${escapeHtml(item.label)}<small>${escapeHtml(item.meta || '')}</small></span>${globalIndex === commandIndex ? '<kbd>Enter</kbd>' : ''}</button>`;
+                }).join('')}
+            </section>
+        `).join('');
+        container.querySelectorAll('[data-command-item]').forEach((button) => {
+            button.addEventListener('click', () => {
+                const item = items[Number(button.dataset.commandItem)];
+                command.hidden = true;
+                item?.action?.();
+            });
+        });
+        command._items = items;
+        window.lucide?.createIcons?.();
+    }
+
+    function initEvents() {
+        checks().forEach((check, index) => {
+            check.addEventListener('click', (event) => event.stopPropagation());
+            check.addEventListener('change', (event) => {
+                if (event.shiftKey && lastCheckedIndex !== null) {
+                    const all = checks();
+                    const [start, end] = [lastCheckedIndex, index].sort((a, b) => a - b);
+                    all.slice(start, end + 1).forEach((item) => { if (!item.closest(rowSelector).hidden) item.checked = check.checked; });
+                }
+                lastCheckedIndex = index;
+                refreshSelection();
+            });
+        });
+        checkAll?.addEventListener('change', () => {
+            getVisibleTicketRows().forEach((row) => { row.querySelector('.desk-row-checkbox').checked = checkAll.checked; });
             refreshSelection();
         });
+        document.querySelector('[data-clear-selection]')?.addEventListener('click', () => {
+            checks().forEach((check) => { check.checked = false; });
+            refreshSelection();
+        });
+        rows().forEach((row) => {
+            row.addEventListener('click', (event) => {
+                if (event.target.closest('a, input, summary, details, label')) return;
+                if (event.target.closest('button') && !event.target.closest('[data-preview-trigger]')) return;
+                selectTicketForPreview(row.dataset.ticket);
+            });
+            row.addEventListener('dblclick', () => openTicketDrawer(row.dataset.ticket));
+            row.addEventListener('contextmenu', (event) => showContextMenu(event, row.dataset.ticket));
+            row.addEventListener('focus', () => focusTicketRow(row.dataset.ticket, { scroll: false, domFocus: false }));
+            row.querySelectorAll('.desk-icon-action').forEach((button) => {
+                button.addEventListener('click', (event) => {
+                    if (button.tagName === 'A') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (button.getAttribute('aria-label')?.includes('Copiar')) copyTicketLink(row.dataset.ticket);
+                    else showContextMenu(event, row.dataset.ticket);
+                });
+            });
+        });
+        selectionBar?.querySelectorAll('button').forEach((button) => {
+            const label = button.textContent.trim().toLowerCase();
+            if (label.includes('atribuir')) button.addEventListener('click', () => { selectedTickets().forEach((ticket) => setAssignee(ticket.number)); });
+            if (label.includes('prioridade')) button.addEventListener('click', () => { selectedTickets().forEach((ticket) => cyclePriority(ticket.number)); });
+            if (label.includes('status')) button.addEventListener('click', () => openBulkConfirm('Mudar status'));
+            if (label.includes('escalar') || label.includes('fechar')) button.addEventListener('click', () => openBulkConfirm(label));
+            if (label.includes('mesclar')) button.addEventListener('click', openMergeDialog);
+        });
+        previewPanel?.addEventListener('click', (event) => {
+            const action = event.target.closest('[data-preview-action]')?.dataset.previewAction;
+            if (!action || !selectedTicketId) return;
+            if (action === 'assign') setAssignee(selectedTicketId);
+            if (action === 'copy') copyTicketLink(selectedTicketId);
+            if (action === 'drawer') openTicketDrawer(selectedTicketId);
+            if (action === 'status') cycleStatus(selectedTicketId);
+            if (action === 'priority') cyclePriority(selectedTicketId);
+            if (action === 'comment') previewPanel.querySelector('.desk-comment-dock textarea')?.focus();
+            if (action === 'open-rmm' || action === 'rmm') showToast('Abrindo contexto RMM no mock.', 'info');
+            if (action === 'remote') showToast('Acesso remoto preparado no mock.', 'success');
+            if (action === 'device') window.location.href = endpointUrl;
+            if (action === 'escalate') openBulkConfirm('Escalar', [getTicket(selectedTicketId)]);
+            if (action === 'reminder') showToast('Lembrete ao solicitante preparado.', 'success');
+            if (action === 'related') openTicketDrawer(selectedTicketId);
+        });
+        previewPanel?.addEventListener('submit', (event) => {
+            if (event.target.matches('[data-comment-form]')) {
+                event.preventDefault();
+                submitQuickComment(event.target);
+            }
+        });
+        previewPanel?.addEventListener('change', (event) => {
+            if (event.target.name === 'internal') {
+                previewPanel.querySelector('[data-public-warning]').hidden = event.target.checked;
+            }
+        });
+        previewPanel?.addEventListener('keydown', (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                submitQuickComment(event.target.closest('[data-comment-form]'));
+            }
+        });
+        command?.querySelector('input')?.addEventListener('input', (event) => { commandIndex = 0; renderCommandResults(event.target.value); });
+        document.querySelectorAll('[data-command-open]').forEach((button) => button.addEventListener('click', openCommandPalette));
+        document.querySelectorAll('[data-close-overlay]').forEach((button) => button.addEventListener('click', () => button.closest('[data-shortcuts-dialog], [data-command-palette]').hidden = true));
+        command?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-command-palette')) command.hidden = true; });
+        shortcuts?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-shortcuts-overlay')) shortcuts.hidden = true; });
+        contextMenu?.addEventListener('click', (event) => {
+            const action = event.target.closest('[data-context-action]')?.dataset.contextAction;
+            if (!action || !pendingContextTicketId) return;
+            event.preventDefault();
+            hideContextMenu();
+            if (action === 'preview') selectTicketForPreview(pendingContextTicketId);
+            if (action === 'drawer') openTicketDrawer(pendingContextTicketId);
+            if (action === 'copy') copyTicketLink(pendingContextTicketId);
+            if (action === 'assign') setAssignee(pendingContextTicketId);
+            if (action === 'status') cycleStatus(pendingContextTicketId);
+            if (action === 'priority' || action === 'critical') cyclePriority(pendingContextTicketId);
+            if (action === 'endpoint') window.location.href = endpointUrl;
+            if (action === 'rmm') showToast('Abrindo no RMM mockado.', 'info');
+            if (action === 'merge') { getRow(pendingContextTicketId)?.querySelector('.desk-row-checkbox')?.click(); openMergeDialog(); }
+        });
+        document.addEventListener('click', (event) => { if (!event.target.closest('[data-ticket-context-menu]')) hideContextMenu(); });
+        drawer?.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
+        drawer?.addEventListener('click', (event) => { if (event.target === drawer) closeDrawer(); });
+        bulkDialog?.querySelector('[data-bulk-dialog-close]')?.addEventListener('click', () => bulkDialog.close());
+        bulkDialog?.querySelector('[data-bulk-confirm-accept]')?.addEventListener('click', () => showToast('Acao em lote aplicada.', 'success'));
+        mergeDialog?.querySelector('[data-merge-close]')?.addEventListener('click', () => mergeDialog.close());
+        mergeDialog?.querySelector('[data-merge-accept]')?.addEventListener('click', () => {
+            const primary = mergeDialog.querySelector('[name="merge-primary"]:checked')?.value;
+            selectedTickets().forEach((ticket) => { if (String(ticket.number) !== primary) { ticket.isMerged = true; getRow(ticket.number)?.classList.add('is-merged'); } });
+            showToast(`Chamados mesclados com #${primary}.`, 'success');
+        });
+        document.querySelector('[data-load-new]')?.addEventListener('click', (event) => {
+            event.preventDefault();
+            document.querySelector('[data-realtime-pill]')?.setAttribute('hidden', '');
+            getVisibleTicketRows().slice(0, 3).forEach((row, index) => setTimeout(() => {
+                row.classList.add('is-live-updated');
+                setTimeout(() => row.classList.remove('is-live-updated'), 3200);
+            }, index * 160));
+            showToast('3 novos chamados carregados.', 'success');
+        });
     }
-    document.querySelector('[data-clear-selection]')?.addEventListener('click', () => {
-        checks.forEach((check) => { check.checked = false; });
-        refreshSelection();
-    });
 
-    rows.forEach((row, index) => {
-        row.addEventListener('click', (event) => {
-            if (event.target.closest('a, input, summary, details, label')) return;
-            if (event.target.closest('button') && !event.target.closest('[data-preview-trigger]')) return;
-            selectTicket(row.dataset.ticket);
-        });
-        row.addEventListener('dblclick', () => {
-            window.location.href = row.dataset.detailUrl;
-        });
-        row.addEventListener('focus', () => { focusedIndex = index; });
-    });
-
-    document.addEventListener('click', (event) => {
-        if (event.target.closest('[data-toast-action]')) {
-            showToast('Acao aplicada. Voce pode desfazer por alguns segundos.');
-        }
-    });
-    document.querySelectorAll('[data-command-open]').forEach((button) => {
-        button.addEventListener('click', () => {
-            command.hidden = false;
-            command.querySelector('input')?.focus();
-        });
-    });
-    document.querySelector('[data-load-new]')?.addEventListener('click', (event) => {
-        event.preventDefault();
-        document.querySelector('[data-realtime-pill]')?.setAttribute('hidden', '');
-        showToast('Fila atualizada com os novos chamados.');
-    });
-    document.querySelectorAll('[data-sensitive-action]').forEach((button) => {
-        button.addEventListener('click', () => document.querySelector('.desk-bulk-confirm-modal')?.showModal());
-    });
-
-    document.addEventListener('keydown', (event) => {
+    function handleGlobalShortcuts(event) {
         const activeTag = document.activeElement?.tagName;
         const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag);
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
             event.preventDefault();
-            command.hidden = false;
-            command.querySelector('input')?.focus();
+            openCommandPalette();
             return;
         }
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
             event.preventDefault();
-            window.location.href = "{% url 'tickets:create' %}";
+            window.location.href = createUrl;
             return;
         }
         if (event.key === 'Escape') {
-            document.querySelectorAll('.desk-command-palette, .desk-shortcuts-overlay').forEach((item) => { item.hidden = true; });
-            document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+            closeFloatingUi();
+            rows().forEach((row) => row.classList.remove('is-key-focused'));
+            return;
+        }
+        if (!command?.hidden) {
+            const items = command._items || [];
+            if (event.key === 'ArrowDown') { event.preventDefault(); commandIndex = Math.min(items.length - 1, commandIndex + 1); renderCommandResults(command.querySelector('input').value); }
+            if (event.key === 'ArrowUp') { event.preventDefault(); commandIndex = Math.max(0, commandIndex - 1); renderCommandResults(command.querySelector('input').value); }
+            if (event.key === 'Enter') { event.preventDefault(); command.hidden = true; items[commandIndex]?.action?.(); }
             return;
         }
         if (typing) return;
@@ -385,42 +858,37 @@
             shortcuts.hidden = false;
         } else if (event.key.toLowerCase() === 'j') {
             event.preventDefault();
-            focusRow(focusedIndex + 1);
+            moveTicketFocus(1);
         } else if (event.key.toLowerCase() === 'k') {
             event.preventDefault();
-            focusRow(focusedIndex - 1);
-        } else if (event.key === 'Enter' && rows[focusedIndex]) {
+            moveTicketFocus(-1);
+        } else if (event.key === 'Enter') {
             event.preventDefault();
-            window.location.href = rows[focusedIndex].dataset.detailUrl;
-        } else if (event.key === ' ' && rows[focusedIndex]) {
+            openFocusedTicket();
+        } else if (event.key === ' ') {
             event.preventDefault();
-            const checkbox = rows[focusedIndex].querySelector('.desk-row-checkbox');
-            checkbox.checked = !checkbox.checked;
-            refreshSelection();
-        } else if (event.key.toLowerCase() === 'a') {
-            showToast('Chamado atribuido a voce.');
+            toggleFocusedTicketCheckbox();
+        } else if (event.key.toLowerCase() === 'a' && focusedTicketId) {
+            setAssignee(focusedTicketId);
+        } else if (event.key.toLowerCase() === 's' && focusedTicketId) {
+            cycleStatus(focusedTicketId);
+        } else if (event.key.toLowerCase() === 'p' && focusedTicketId) {
+            cyclePriority(focusedTicketId);
         } else if (event.key.toLowerCase() === 'c') {
-            document.querySelector('.desk-comment-dock textarea')?.focus();
+            previewPanel?.querySelector('.desk-comment-dock textarea')?.focus();
         }
-    });
+    }
 
-    document.querySelectorAll('[data-close-overlay]').forEach((button) => {
-        button.addEventListener('click', () => button.closest('[data-shortcuts-dialog], [data-command-palette]').hidden = true);
-    });
-    document.querySelector('.desk-command-palette')?.addEventListener('click', (event) => {
-        if (event.target.classList.contains('desk-command-palette')) event.currentTarget.hidden = true;
-    });
-    document.querySelector('.desk-shortcuts-overlay')?.addEventListener('click', (event) => {
-        if (event.target.classList.contains('desk-shortcuts-overlay')) event.currentTarget.hidden = true;
-    });
-
+    document.addEventListener('keydown', handleGlobalShortcuts);
+    initFilterbar();
+    initEvents();
+    refreshSelection();
+    if (focusedTicketId) focusTicketRow(focusedTicketId, { scroll: false, select: false });
     setTimeout(() => {
-        const liveRow = rows.find((row) => row.classList.contains('is-rmm')) || rows[0];
+        const liveRow = rows().find((row) => row.classList.contains('is-rmm')) || rows()[0];
         liveRow?.classList.add('is-live-updated');
         setTimeout(() => liveRow?.classList.remove('is-live-updated'), 4200);
-    }, 1400);
-
-    refreshSelection();
-    initFilterbar();
+        if (liveRow) showToast(`Renan assumiu o chamado #${liveRow.dataset.ticket}.`, 'info');
+    }, 1800);
 })();
 </script>

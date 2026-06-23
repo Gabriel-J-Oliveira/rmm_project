@@ -11750,8 +11750,41 @@ body.page-tickets .desk-icon-action {
 }
 
 body.page-tickets .desk-detail-panel {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    height: calc(100vh - 132px);
     max-height: calc(100vh - 132px);
     min-height: 520px;
+}
+
+body.page-tickets .desk-detail-panel-header,
+body.page-tickets .desk-detail-inline-state,
+body.page-tickets .desk-comment-dock {
+    flex: 0 0 auto;
+}
+
+body.page-tickets .desk-detail-panel-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 18px;
+    scrollbar-gutter: stable;
+}
+
+body.page-tickets .desk-detail-panel-body .desk-quick-actions {
+    margin-bottom: 2px;
+}
+
+@media (max-width: 1100px) {
+    body.page-tickets .desk-detail-panel {
+        height: auto;
+        max-height: none;
+        min-height: 0;
+    }
+
+    body.page-tickets .desk-detail-panel-body {
+        overflow: visible;
+        padding-bottom: 16px;
+    }
 }
 
 body.page-tickets .desk-preview-empty {
@@ -11950,7 +11983,7 @@ body.page-tickets .nw-filter.is-drop-up .nw-filter-popover {
 }
 
 body.page-tickets .nw-filter-popover--wide {
-    width: min(440px, calc(100vw - 28px));
+    width: min(480px, calc(100vw - 28px));
 }
 
 body.page-tickets .nw-filter-popover__header {
@@ -12047,7 +12080,8 @@ body.page-tickets .nw-filter-popover__advanced {
 body.page-tickets .nw-filter-popover__advanced {
     gap: 12px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    max-height: 340px;
+    max-height: 320px;
+    padding-bottom: 14px;
     padding-top: 12px;
 }
 
@@ -12179,6 +12213,17 @@ body.page-tickets .nw-filter-popover__footer {
     padding: 10px 12px;
 }
 
+body.page-tickets .nw-filter-popover--wide .nw-filter-popover__footer {
+    gap: 10px;
+    padding: 12px 14px 14px;
+}
+
+body.page-tickets .nw-filter-popover--wide .nw-filter-apply,
+body.page-tickets .nw-filter-popover--wide .nw-filter-clear {
+    min-width: 116px;
+    text-align: center;
+}
+
 body.page-tickets .nw-filter-apply,
 body.page-tickets .nw-filter-clear {
     border-radius: 10px;
@@ -12245,4 +12290,365 @@ body.page-tickets .desk-ticket-empty.is-client-filter-empty small {
         top: 118px;
         width: auto;
     }
+}
+
+/* Night Owl Desk operational UX layer: keyboard focus, context menu, drawer and bulk modals. */
+body.page-tickets .desk-ticket-row.is-key-focused {
+    outline: 2px solid rgba(125, 211, 252, 0.72);
+    outline-offset: 2px;
+    position: relative;
+    z-index: 1;
+}
+
+body.page-tickets .desk-ticket-row.is-key-focused.is-selected {
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.32), 0 0 0 4px rgba(125, 211, 252, 0.08);
+}
+
+body.page-tickets .nw-next-action {
+    align-items: center;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+body.page-tickets .nw-next-action .desk-btn {
+    white-space: nowrap;
+}
+
+body.page-tickets .nw-next-action--warning {
+    border-color: rgba(245, 158, 11, 0.36);
+    background: linear-gradient(135deg, rgba(120, 53, 15, 0.22), #080b10 42%);
+}
+
+body.page-tickets .nw-next-action--danger {
+    border-color: rgba(248, 113, 113, 0.42);
+    background: linear-gradient(135deg, rgba(127, 29, 29, 0.24), #080b10 42%);
+}
+
+body.page-tickets .nw-next-action--info {
+    border-color: rgba(96, 165, 250, 0.32);
+    background: linear-gradient(135deg, rgba(30, 64, 175, 0.18), #080b10 42%);
+}
+
+body.page-tickets .nw-comment-tools,
+body.page-tickets .nw-comment-tools > div {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+body.page-tickets .nw-comment-tools {
+    justify-content: space-between;
+}
+
+body.page-tickets .nw-comment-tools small {
+    color: #fbbf24;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+body.page-tickets .nw-ticket-context-menu {
+    background: linear-gradient(180deg, rgba(13, 17, 23, 0.98), rgba(8, 11, 16, 0.98));
+    border: 1px solid rgba(38, 50, 65, 0.96);
+    border-radius: 14px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
+    display: grid;
+    gap: 3px;
+    padding: 7px;
+    position: fixed;
+    width: 260px;
+    z-index: 900;
+}
+
+body.page-tickets .nw-ticket-context-menu[hidden],
+body.page-tickets .nw-ticket-drawer[hidden] {
+    display: none;
+}
+
+body.page-tickets .nw-ticket-context-menu button,
+body.page-tickets .nw-ticket-context-menu a {
+    align-items: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: #dbe7ef;
+    display: grid;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    gap: 9px;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    min-height: 34px;
+    padding: 7px 8px;
+    text-align: left;
+    text-decoration: none;
+}
+
+body.page-tickets .nw-ticket-context-menu button:hover,
+body.page-tickets .nw-ticket-context-menu a:hover {
+    background: rgba(15, 23, 42, 0.78);
+    border-color: rgba(38, 50, 65, 0.78);
+}
+
+body.page-tickets .nw-ticket-context-menu button:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+body.page-tickets .nw-ticket-context-menu svg {
+    color: #86efac;
+    height: 15px;
+    width: 15px;
+}
+
+body.page-tickets .nw-ticket-context-menu kbd,
+body.page-tickets .desk-command-groups button small {
+    color: #7f93aa;
+    font-size: 10px;
+}
+
+body.page-tickets .nw-ticket-context-menu hr {
+    border: 0;
+    border-top: 1px solid rgba(38, 50, 65, 0.84);
+    margin: 4px 2px;
+}
+
+body.page-tickets .nw-ticket-drawer {
+    background: rgba(2, 6, 23, 0.58);
+    inset: 0;
+    position: fixed;
+    z-index: 840;
+}
+
+body.page-tickets .nw-ticket-drawer__panel {
+    background: #0d1117;
+    border-left: 1px solid rgba(38, 50, 65, 0.96);
+    box-shadow: -22px 0 70px rgba(0, 0, 0, 0.42);
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: 100%;
+    margin-left: auto;
+    width: min(760px, 100vw);
+}
+
+body.page-tickets .nw-ticket-drawer__header {
+    align-items: flex-start;
+    border-bottom: 1px solid #1f2937;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    padding: 18px;
+}
+
+body.page-tickets .nw-ticket-drawer__header span {
+    color: #86efac;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+body.page-tickets .nw-ticket-drawer__header h2 {
+    color: #f8fafc;
+    margin: 6px 0 4px;
+}
+
+body.page-tickets .nw-ticket-drawer__header p {
+    color: #94a3b8;
+    margin: 0;
+}
+
+body.page-tickets .nw-ticket-drawer__header > div:last-child {
+    display: flex;
+    gap: 8px;
+}
+
+body.page-tickets .nw-ticket-drawer__tabs {
+    border-bottom: 1px solid #1f2937;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 10px 18px;
+}
+
+body.page-tickets .nw-ticket-drawer__tabs button {
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(38, 50, 65, 0.88);
+    border-radius: 999px;
+    color: #94a3b8;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 900;
+    padding: 7px 12px;
+    white-space: nowrap;
+}
+
+body.page-tickets .nw-ticket-drawer__tabs button.is-active {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.34);
+    color: #d1fae5;
+}
+
+body.page-tickets .nw-ticket-drawer__body {
+    display: grid;
+    gap: 12px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px;
+}
+
+body.page-tickets .nw-drawer-card,
+body.page-tickets .nw-drawer-grid article {
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    display: grid;
+    gap: 8px;
+    padding: 13px;
+}
+
+body.page-tickets .nw-drawer-card h3,
+body.page-tickets .nw-drawer-grid strong {
+    color: #f8fafc;
+}
+
+body.page-tickets .nw-drawer-card p {
+    color: #cbd5e1;
+    line-height: 1.6;
+    margin: 0;
+}
+
+body.page-tickets .nw-drawer-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-tickets .nw-drawer-grid span {
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+body.page-tickets .nw-bulk-dialog {
+    background: #0d1117;
+    border: 1px solid rgba(38, 50, 65, 0.96);
+    border-radius: 18px;
+    color: #dbe7ef;
+    max-width: min(640px, calc(100vw - 28px));
+    padding: 0;
+    width: 100%;
+}
+
+body.page-tickets .nw-bulk-dialog::backdrop {
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(6px);
+}
+
+body.page-tickets .nw-bulk-dialog form {
+    display: grid;
+    gap: 14px;
+    margin: 0;
+    padding: 16px;
+}
+
+body.page-tickets .nw-bulk-dialog header,
+body.page-tickets .nw-bulk-dialog footer {
+    display: flex;
+    gap: 14px;
+    justify-content: space-between;
+}
+
+body.page-tickets .nw-bulk-dialog footer {
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+body.page-tickets .nw-bulk-dialog header span {
+    color: #86efac;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+body.page-tickets .nw-bulk-dialog h2,
+body.page-tickets .nw-bulk-dialog p {
+    margin: 0;
+}
+
+body.page-tickets .nw-bulk-dialog p {
+    color: #94a3b8;
+    margin-top: 4px;
+}
+
+body.page-tickets .nw-bulk-dialog__list {
+    display: grid;
+    gap: 8px;
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+body.page-tickets .nw-bulk-dialog__list label {
+    align-items: center;
+    background: #080b10;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    padding: 10px;
+}
+
+body.page-tickets .nw-bulk-dialog__list span {
+    color: #86efac;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+body.page-tickets .nw-bulk-dialog__list strong {
+    color: #f8fafc;
+}
+
+body.page-tickets .nw-bulk-dialog__list small {
+    color: #94a3b8;
+}
+
+body.page-tickets .nw-bulk-dialog__comment {
+    display: grid;
+    gap: 7px;
+}
+
+body.page-tickets .nw-bulk-dialog__comment span {
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 900;
+}
+
+body.page-tickets .nw-bulk-dialog textarea {
+    background: #080b10;
+    border: 1px solid #263241;
+    border-radius: 12px;
+    color: #f8fafc;
+    padding: 10px;
+}
+
+body.page-tickets .desk-command-groups button.is-active,
+body.page-tickets .desk-command-groups a.is-active {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.34);
+}
+
+body.page-tickets .desk-command-groups button span {
+    display: grid;
+    gap: 2px;
+}
+
+body.page-tickets .nw-command-empty {
+    align-items: center;
+    color: #94a3b8;
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+    padding: 26px;
 }

@@ -92,7 +92,7 @@
     }
 
     .nw-filter-popover--wide {
-        width: min(440px, calc(100vw - 2rem));
+        width: min(480px, calc(100vw - 2rem));
     }
 
     .nw-filter-popover__header,
@@ -179,6 +179,7 @@
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 0.75rem;
+        padding-bottom: 0.8rem;
     }
 
     .nw-filter-option,
@@ -259,6 +260,19 @@
 
     .nw-filter-popover__footer {
         border-top: 1px solid rgba(148, 163, 184, 0.14);
+    }
+
+    .nw-filter-popover--wide .nw-filter-popover__footer {
+        justify-content: flex-end;
+        gap: 0.6rem;
+        padding: 0.7rem 0.85rem 0.85rem;
+    }
+
+    .nw-filter-popover--wide .nw-filter-apply,
+    .nw-filter-popover--wide .nw-filter-clear {
+        min-width: 7.25rem;
+        justify-content: center;
+        text-align: center;
     }
 
     .nw-filter-apply,
