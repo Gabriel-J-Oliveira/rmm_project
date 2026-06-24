@@ -1,16 +1,24 @@
 <aside class="desk-overview-side">
     <article class="desk-panel nw-next-action-card nw-next-action-card--neutral" data-next-action-card>
-        <div class="nw-next-action-card__icon"><i data-lucide="sparkles"></i></div>
-        <div>
-            <span>Próxima melhor ação</span>
-            <h2 data-next-action-title>Registrar próxima atualização</h2>
-            <p data-next-action-message>Revise o contexto, adicione uma atualização e avance o atendimento.</p>
+        <header class="nw-next-action-card__header">
+            <span>Proxima melhor acao</span>
+            <div class="nw-next-action-card__icon"><i data-lucide="sparkles"></i></div>
+        </header>
+        <div class="nw-next-action-card__body">
+            <h2 data-next-action-title>Registrar proxima atualizacao</h2>
+            <p data-next-action-message>Revise o contexto e avance o atendimento.</p>
         </div>
-        <button class="desk-btn" type="button" data-next-action-button data-next-action-type="focus_comment">Comentar</button>
+        <footer class="nw-next-action-card__footer">
+            <button class="desk-btn desk-btn-primary" type="button" data-next-action-button data-next-action-type="focus_comment">Comentar</button>
+            <button class="desk-btn" type="button" data-next-action-secondary data-detail-action="open-escalation">Escalar</button>
+        </footer>
     </article>
 
-    <article class="desk-panel desk-requester-card">
-        <h2><i data-lucide="user"></i>Solicitante</h2>
+    <article class="desk-panel desk-requester-card nw-side-card">
+        <div class="nw-side-card__title">
+            <h2><i data-lucide="user"></i>Solicitante</h2>
+            {% if ticket.partner %}<span class="desk-badge partner-badge">VIP</span>{% endif %}
+        </div>
         <div class="desk-person-card">
             <span class="desk-avatar">{{ ticket.requester|slice:":1" }}</span>
             <div>
@@ -18,43 +26,89 @@
                 <span>{{ ticket.sector }} &middot; {{ ticket.role }}</span>
             </div>
         </div>
-        <details class="desk-inline-popover">
-            <summary class="desk-btn">Ver historico</summary>
-            <div class="desk-popover">
-                <strong>{{ requester_history_count }} chamados anteriores</strong>
-                <span>Historico completo sera conectado ao cadastro real do solicitante.</span>
-            </div>
-        </details>
+        <div class="nw-side-actions">
+            <details class="desk-inline-popover">
+                <summary class="desk-btn">Ver historico</summary>
+                <div class="desk-popover">
+                    <strong>{{ requester_history_count }} chamados anteriores</strong>
+                    <span>Historico completo sera conectado ao cadastro real do solicitante.</span>
+                </div>
+            </details>
+            <button class="desk-btn" type="button" data-detail-action="copy-email"><i data-lucide="copy"></i>Copiar e-mail</button>
+        </div>
     </article>
 
-    <article class="desk-panel">
-        <h2><i data-lucide="sliders-horizontal"></i>Resumo editavel</h2>
-        <dl class="desk-data-list">
-            <div><dt>Status</dt><dd><span class="desk-badge status-{{ ticket.status }}" data-ticket-status-badge>{{ ticket.status_label }}</span></dd></div>
-            <div><dt>Prioridade</dt><dd><span class="desk-badge priority-{{ ticket.priority }}" data-ticket-priority-badge>{{ ticket.priority_label }}</span></dd></div>
-            <div><dt>Categoria</dt><dd><span class="desk-badge neutral">{{ ticket.category }}</span></dd></div>
-            <div>
-                <dt>Responsavel</dt>
-                <dd>
-                    <details class="desk-inline-popover">
-                        <summary class="desk-assignee-pill" data-ticket-assignee><span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>{{ ticket.assigned_to|default:"Sem responsavel" }}</summary>
-                        <div class="desk-popover desk-assignee-popover">
-                            <button class="desk-btn desk-btn-primary" type="button">Atribuir a mim</button>
-                            {% for row in workload_rows %}
-                            <button type="button">{{ row.label }} <span>{{ row.count }} abertos</span></button>
-                            {% endfor %}
-                        </div>
-                    </details>
-                </dd>
-            </div>
-        </dl>
+    <article class="desk-panel nw-side-card">
+        <div class="nw-side-card__title">
+            <h2><i data-lucide="sliders-horizontal"></i>Resumo editavel</h2>
+            <span>mock local</span>
+        </div>
+        <div class="nw-quick-edit-list">
+            <details class="desk-inline-popover nw-quick-edit" data-quick-edit="status">
+                <summary>
+                    <span>Status</span>
+                    <strong class="desk-badge status-{{ ticket.status }}" data-ticket-status-badge>{{ ticket.status_label }}</strong>
+                </summary>
+                <div class="desk-popover">
+                    <strong>Alterar status</strong>
+                    <button type="button" data-quick-status="in_progress">Em atendimento</button>
+                    <button type="button" data-quick-status="waiting_user">Aguardando usuario</button>
+                    <button type="button" data-quick-status="waiting_third_party">Aguardando terceiro</button>
+                    <button type="button" data-quick-status="escalated">Escalado</button>
+                    <button type="button" data-quick-status="resolved">Resolvido</button>
+                </div>
+            </details>
+            <details class="desk-inline-popover nw-quick-edit" data-quick-edit="priority">
+                <summary>
+                    <span>Prioridade</span>
+                    <strong class="desk-badge priority-{{ ticket.priority }}" data-ticket-priority-badge>{{ ticket.priority_label }}</strong>
+                </summary>
+                <div class="desk-popover">
+                    <strong>Alterar prioridade</strong>
+                    <button type="button" data-quick-priority="low">Baixa</button>
+                    <button type="button" data-quick-priority="normal">Normal</button>
+                    <button type="button" data-quick-priority="high">Alta</button>
+                    <button type="button" data-quick-priority="critical">Critica</button>
+                </div>
+            </details>
+            <details class="desk-inline-popover nw-quick-edit" data-quick-edit="category">
+                <summary>
+                    <span>Categoria</span>
+                    <strong class="desk-badge neutral" data-ticket-category>{{ ticket.category }}</strong>
+                </summary>
+                <div class="desk-popover">
+                    <strong>Alterar categoria</strong>
+                    {% for category in categories %}
+                    <button type="button" data-quick-category="{{ category.name }}">{{ category.name }}</button>
+                    {% endfor %}
+                </div>
+            </details>
+            <details class="desk-inline-popover nw-quick-edit" data-quick-edit="assignee">
+                <summary>
+                    <span>Responsavel</span>
+                    <strong class="desk-assignee-pill" data-ticket-assignee><span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>{{ ticket.assigned_to|default:"Sem responsavel" }}</strong>
+                </summary>
+                <div class="desk-popover desk-assignee-popover">
+                    <button class="desk-btn desk-btn-primary" type="button" data-quick-assignee="Gabriel">Atribuir a mim</button>
+                    <button type="button" data-quick-assignee="">Sem responsavel</button>
+                    {% for row in workload_rows %}
+                    <button type="button" data-quick-assignee="{{ row.label }}">{{ row.label }} <span>{{ row.count }} abertos</span></button>
+                    {% endfor %}
+                    <button type="button" data-quick-assignee="Ana">Ana <span>3 abertos</span></button>
+                    <button type="button" data-quick-assignee="Lucas">Lucas <span>2 abertos</span></button>
+                </div>
+            </details>
+        </div>
     </article>
 
-    <article class="desk-panel">
-        <h2><i data-lucide="timer"></i>SLA</h2>
+    <article class="desk-panel nw-side-card" data-sla-side-card>
+        <div class="nw-side-card__title">
+            <h2><i data-lucide="timer"></i>SLA</h2>
+            <span data-ticket-sla-state>{{ sla.level }}</span>
+        </div>
         <div class="desk-sla-progress">
-            <div><span>Tempo restante</span><strong>{{ sla.remaining }}</strong></div>
-            <i class="desk-sla-fill desk-sla-{{ sla.level }}" style="width: {{ sla.progress }}%"></i>
+            <div><span data-ticket-sla-caption>Tempo restante</span><strong data-ticket-sla-remaining>{{ sla.remaining }}</strong></div>
+            <i class="desk-sla-fill desk-sla-{{ sla.level }}" data-ticket-sla-fill style="width: {{ sla.progress }}%"></i>
         </div>
         <dl class="desk-data-list">
             <div><dt>Resposta</dt><dd>{{ sla.response_due }}</dd></div>
@@ -62,20 +116,37 @@
         </dl>
     </article>
 
-    <article class="desk-panel desk-device-summary-card">
-        <h2><i data-lucide="monitor"></i>Dispositivo</h2>
+    <article class="desk-panel desk-device-summary-card nw-side-card">
+        <div class="nw-side-card__title">
+            <h2><i data-lucide="monitor"></i>Dispositivo</h2>
+            {% if ticket.endpoint %}<span>{{ device_context.status_label }}</span>{% endif %}
+        </div>
+        {% if ticket.endpoint %}
         <div class="desk-device-summary">
             <span class="desk-device-status status-{{ device_context.status }}"></span>
             <div>
                 <strong>{{ device_context.hostname }}</strong>
-                <span>{{ device_context.status_label }} &middot; {{ device_context.last_seen }}</span>
+                <span>{{ device_context.last_seen }}</span>
             </div>
         </div>
-        <a class="desk-btn" href="#device"><i data-lucide="arrow-right"></i>Ver aba Dispositivo</a>
+        <div class="nw-side-actions">
+            <a class="desk-btn" href="#device"><i data-lucide="arrow-right"></i>Ver aba Dispositivo</a>
+            <button class="desk-btn" type="button" data-detail-action="open-rmm"><i data-lucide="external-link"></i>Abrir no RMM</button>
+        </div>
+        {% else %}
+        <div class="nw-side-empty">
+            <strong>Nenhum endpoint vinculado</strong>
+            <span>Vincule um dispositivo para ver telemetria e acoes do RMM.</span>
+            <button class="desk-btn" type="button" data-detail-action="link-endpoint">Vincular endpoint</button>
+        </div>
+        {% endif %}
     </article>
 
-    <article class="desk-panel">
-        <h2><i data-lucide="sparkles"></i>Similares resolvidos</h2>
+    <article class="desk-panel nw-side-card">
+        <div class="nw-side-card__title">
+            <h2><i data-lucide="sparkles"></i>Similares resolvidos</h2>
+            <span>{{ similar_tickets|length }}</span>
+        </div>
         <div class="desk-mini-list">
             {% for similar in similar_tickets %}
             <a href="{% url 'tickets:detail' similar.number %}"><strong>#{{ similar.number }}</strong><span>{{ similar.title }}</span><em>{{ similar.category }}</em></a>

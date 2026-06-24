@@ -316,10 +316,13 @@ def ticket_detail(request, number):
     detail_context = build_ticket_detail_context(ticket)
     device_context = detail_context.get('device_context') or {}
     sla = detail_context.get('sla') or {}
+    related_tickets = detail_context.get('related_tickets') or {}
+    related_count = sum(len(items) for items in related_tickets.values())
     context = {
         **_base_context('queue'),
         'ticket': ticket,
         **detail_context,
+        'related_count': related_count,
         'ticket_detail_state': {
             'number': ticket.number,
             'title': ticket.title,
@@ -329,6 +332,7 @@ def ticket_detail(request, number):
             'statusLabel': ticket.status_label,
             'priority': ticket.priority,
             'priorityLabel': ticket.priority_label,
+            'category': ticket.category,
             'assignedTo': ticket.assigned_to or '',
             'hasEndpoint': bool(ticket.endpoint),
             'hasRmmAlert': bool(device_context.get('alerts_count') or device_context.get('active_alerts')),

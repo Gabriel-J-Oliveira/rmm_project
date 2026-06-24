@@ -1,21 +1,38 @@
-<article id="activity" class="desk-panel desk-activity-panel">
+<article id="activity" class="desk-panel desk-activity-panel nw-activity-panel">
     <div class="desk-panel-title-row">
         <div>
             <h2><i data-lucide="activity"></i>Atividade</h2>
             <p>Comentarios e eventos do sistema em uma linha do tempo unica.</p>
         </div>
+        <span class="nw-activity-total" data-activity-total>{{ activity_items|length }} eventos</span>
     </div>
+
+    <div class="nw-activity-filters" role="toolbar" aria-label="Filtros de atividade">
+        <button class="is-active" type="button" data-activity-filter="all">Todos <span data-activity-count="all">{{ activity_items|length }}</span></button>
+        <button type="button" data-activity-filter="comment">Comentarios <span data-activity-count="comment">0</span></button>
+        <button type="button" data-activity-filter="system">Sistema <span data-activity-count="system">0</span></button>
+        <button type="button" data-activity-filter="sla">SLA <span data-activity-count="sla">0</span></button>
+        <button type="button" data-activity-filter="rmm">RMM <span data-activity-count="rmm">0</span></button>
+        <button type="button" data-activity-filter="resolution">Resolucao <span data-activity-count="resolution">0</span></button>
+        <button type="button" data-activity-filter="escalation">Escalonamento <span data-activity-count="escalation">0</span></button>
+    </div>
+
     <div class="desk-activity-feed" data-detail-activity-feed>
         {% for item in activity_items %}
-        <div class="desk-activity-item activity-{{ item.kind }}">
+        <div class="desk-activity-item activity-{{ item.kind }}" data-activity-kind="{{ item.kind }}">
             <span class="desk-activity-icon"><i data-lucide="{{ item.icon }}"></i></span>
             <div>
-                <header><strong>{{ item.title }}</strong><small>{{ item.when }}</small></header>
+                <header>
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.when }}</small>
+                    <em class="nw-activity-badge">{{ item.kind }}</em>
+                </header>
                 <p>{{ item.body }}</p>
             </div>
         </div>
         {% empty %}
         <div class="desk-empty compact"><i data-lucide="moon"></i><span>Nenhuma atividade registrada.</span></div>
         {% endfor %}
+        <div class="desk-empty compact nw-activity-empty" data-activity-empty hidden><i data-lucide="filter-x"></i><span>Nenhum evento deste tipo.</span></div>
     </div>
 </article>

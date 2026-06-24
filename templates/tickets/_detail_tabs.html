@@ -1,7 +1,7 @@
-<nav class="desk-detail-tabbar" aria-label="Navegacao do chamado">
+<nav class="desk-detail-tabbar nw-detail-tabbar" aria-label="Navegacao do chamado">
     <a href="#overview" class="active"><i data-lucide="layout-dashboard"></i>Visao geral</a>
-    <a href="#activity"><i data-lucide="messages-square"></i>Atividade</a>
-    <a href="#attachments"><i data-lucide="paperclip"></i>Anexos</a>
-    <a href="#device"><i data-lucide="monitor"></i>Dispositivo</a>
-    <a href="#related"><i data-lucide="git-branch"></i>Relacionados</a>
+    <a href="#activity"><i data-lucide="messages-square"></i>Atividade <span>{{ activity_items|length }}</span></a>
+    <a href="#attachments"><i data-lucide="paperclip"></i>Anexos <span>{{ attachments|length }}</span></a>
+    <a href="#device"><i data-lucide="monitor"></i>Dispositivo <span class="state-{{ device_context.status }}">{{ device_context.status_label }}</span></a>
+    <a href="#related"><i data-lucide="git-branch"></i>Relacionados <span>{{ related_count|default:0 }}</span></a>
 </nav>

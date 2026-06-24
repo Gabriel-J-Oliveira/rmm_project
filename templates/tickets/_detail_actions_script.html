@@ -17,10 +17,14 @@
     const escalationDrawer = document.querySelector('[data-escalation-drawer]');
     const auditDrawer = document.querySelector('.desk-audit-drawer');
     const toast = document.querySelector('[data-toast]');
+    const form = document.querySelector('[data-detail-comment-form]');
+    const textarea = document.querySelector('[data-detail-comment-textarea]');
+    const attachmentsBox = document.querySelector('[data-comment-attachments]');
     let toastUndo = null;
+    let activeActivityFilter = 'all';
 
-    function all(selector) {
-        return Array.from(document.querySelectorAll(selector));
+    function all(selector, root = document) {
+        return Array.from(root.querySelectorAll(selector));
     }
 
     function escapeHtml(value) {
@@ -78,15 +82,52 @@
         if (!feed) return;
         const item = document.createElement('div');
         item.className = `desk-activity-item activity-${kind} nw-timeline-event--${kind}`;
+        item.dataset.activityKind = kind;
         item.innerHTML = `
             <span class="desk-activity-icon"><i data-lucide="${icon}"></i></span>
             <div>
-                <header><strong>${escapeHtml(title)}</strong><small>agora - ${escapeHtml(badge)}</small></header>
+                <header>
+                    <strong>${escapeHtml(title)}</strong>
+                    <small>agora</small>
+                    <em class="nw-activity-badge">${escapeHtml(badge)}</em>
+                </header>
                 <p>${escapeHtml(body)}</p>
             </div>
         `;
         feed.prepend(item);
+        updateActivityCounts();
+        filterActivity(activeActivityFilter);
         window.lucide?.createIcons?.();
+    }
+
+    function updateActivityCounts() {
+        const rows = all('[data-activity-kind]');
+        const counts = rows.reduce((acc, row) => {
+            const kind = row.dataset.activityKind;
+            acc.all += 1;
+            acc[kind] = (acc[kind] || 0) + 1;
+            return acc;
+        }, { all: 0 });
+        all('[data-activity-count]').forEach((node) => {
+            node.textContent = counts[node.dataset.activityCount] || 0;
+        });
+        const total = document.querySelector('[data-activity-total]');
+        if (total) total.textContent = `${counts.all} eventos`;
+    }
+
+    function filterActivity(kind) {
+        activeActivityFilter = kind;
+        let visible = 0;
+        all('[data-activity-filter]').forEach((button) => {
+            button.classList.toggle('is-active', button.dataset.activityFilter === kind);
+        });
+        all('[data-activity-kind]').forEach((row) => {
+            const match = kind === 'all' || row.dataset.activityKind === kind;
+            row.hidden = !match;
+            if (match) visible += 1;
+        });
+        const empty = document.querySelector('[data-activity-empty]');
+        if (empty) empty.hidden = visible > 0;
     }
 
     function updateBadges() {
@@ -98,6 +139,9 @@
             badge.className = `desk-badge priority-${state.priority}`;
             badge.textContent = state.priorityLabel;
         });
+        all('[data-ticket-category]').forEach((badge) => {
+            badge.textContent = state.category || 'Sem categoria';
+        });
         all('[data-ticket-assignee]').forEach((assignee) => {
             assignee.innerHTML = `<span class="desk-avatar">${escapeHtml((state.assignedTo || '?').slice(0, 1))}</span>${escapeHtml(state.assignedTo || 'Sem responsavel')}`;
         });
@@ -106,30 +150,44 @@
             sla.className = `desk-sla-chip desk-sla-${level}`;
             sla.innerHTML = `<i data-lucide="timer"></i>${escapeHtml(state.resolved ? 'Resolvido agora' : state.slaLabel)}`;
         });
+        all('[data-ticket-sla-state]').forEach((node) => {
+            node.textContent = state.resolved ? 'concluido' : state.slaLevel;
+        });
+        const remaining = document.querySelector('[data-ticket-sla-remaining]');
+        const caption = document.querySelector('[data-ticket-sla-caption]');
+        const fill = document.querySelector('[data-ticket-sla-fill]');
+        if (state.resolved) {
+            if (remaining) remaining.textContent = 'Resolvido agora';
+            if (caption) caption.textContent = 'Estado';
+            if (fill) {
+                fill.className = 'desk-sla-fill desk-sla-ok';
+                fill.style.width = '100%';
+            }
+        }
         updateNextAction();
         window.lucide?.createIcons?.();
     }
 
     function getTicketNextBestAction() {
         if (state.resolved || state.status === 'resolved') {
-            return { severity: 'success', icon: 'check-circle', title: 'Chamado resolvido', message: 'O atendimento foi encerrado. Voce ainda pode consultar a auditoria ou preparar a reabertura.', label: 'Ver auditoria', type: 'audit' };
+            return { severity: 'success', icon: 'check-circle', title: 'Chamado resolvido', message: 'Atendimento encerrado. Consulte atividade ou auditoria para rastreabilidade.', label: 'Ver auditoria', type: 'audit' };
         }
         if (!state.assignedTo) {
-            return { severity: 'warning', icon: 'user-plus', title: 'Chamado sem responsavel', message: 'Assuma ou atribua este chamado para iniciar o atendimento.', label: 'Assumir atendimento', type: 'assign_to_me' };
+            return { severity: 'warning', icon: 'user-plus', title: 'Chamado sem responsavel', message: 'Assuma o chamado para iniciar o atendimento.', label: 'Assumir atendimento', type: 'assign_to_me' };
         }
         if (state.slaLevel === 'critical') {
-            return { severity: 'critical', icon: 'alarm-clock', title: 'SLA vencido', message: 'Este chamado ultrapassou o prazo. Registre uma atualizacao ou escale o atendimento.', label: 'Escalar', type: 'escalate' };
+            return { severity: 'critical', icon: 'alarm-clock', title: 'SLA vencido', message: 'Registre uma atualizacao ou escale o atendimento.', label: 'Escalar', type: 'escalate' };
         }
         if (state.slaLevel === 'warning') {
-            return { severity: 'warning', icon: 'timer', title: 'SLA vencendo em breve', message: 'Priorize uma atualizacao ou conclua o atendimento antes do vencimento.', label: 'Comentar agora', type: 'focus_comment' };
+            return { severity: 'warning', icon: 'timer', title: 'SLA vencendo em breve', message: 'Priorize uma atualizacao antes do vencimento.', label: 'Comentar agora', type: 'focus_comment' };
         }
         if (state.status === 'waiting_user') {
-            return { severity: 'neutral', icon: 'mail-question', title: 'Aguardando retorno', message: 'O chamado depende do solicitante. Considere enviar um lembrete ou registrar uma atualizacao.', label: 'Enviar lembrete', type: 'send_reminder' };
+            return { severity: 'neutral', icon: 'mail-question', title: 'Aguardando retorno', message: 'Envie um lembrete ou registre uma atualizacao.', label: 'Enviar lembrete', type: 'send_reminder' };
         }
         if (state.hasEndpoint && state.hasRmmAlert) {
-            return { severity: 'info', icon: 'activity', title: 'Alerta RMM ativo', message: 'Revise a telemetria do dispositivo antes de definir a proxima acao.', label: 'Ver dispositivo', type: 'open_device_tab' };
+            return { severity: 'info', icon: 'activity', title: 'Alerta RMM ativo', message: 'Revise a telemetria antes da proxima acao.', label: 'Ver dispositivo', type: 'open_device_tab' };
         }
-        return { severity: 'neutral', icon: 'message-square', title: 'Registrar proxima atualizacao', message: 'Revise o contexto, adicione uma atualizacao e avance o atendimento.', label: 'Comentar', type: 'focus_comment' };
+        return { severity: 'neutral', icon: 'message-square', title: 'Registrar atualizacao', message: 'Adicione contexto e avance o atendimento.', label: 'Comentar', type: 'focus_comment' };
     }
 
     function updateNextAction() {
@@ -142,6 +200,8 @@
         const button = card.querySelector('[data-next-action-button]');
         button.textContent = action.label;
         button.dataset.nextActionType = action.type;
+        const secondary = card.querySelector('[data-next-action-secondary]');
+        if (secondary) secondary.hidden = state.resolved || state.status === 'resolved';
         const icon = card.querySelector('.nw-next-action-card__icon i');
         if (icon) icon.setAttribute('data-lucide', action.icon);
         window.lucide?.createIcons?.();
@@ -160,27 +220,41 @@
     }
 
     function focusComment(text = '') {
-        const textarea = document.querySelector('[data-detail-comment-textarea]');
         if (!textarea) return;
         if (text) textarea.value = text;
         textarea.focus();
         textarea.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
 
-    function submitComposerComment(event) {
-        const form = event.target.closest('[data-detail-comment-form]');
-        if (!form) return;
-        event.preventDefault();
-        const textarea = form.querySelector('[data-detail-comment-textarea]');
+    function submitComposerComment(event, combo = 'comment') {
+        const targetForm = event?.target?.closest?.('[data-detail-comment-form]') || form;
+        if (!targetForm) return false;
+        event?.preventDefault?.();
         const body = textarea.value.trim();
         if (!body) {
             showToast('Escreva um comentario antes de enviar.');
-            return;
+            return false;
         }
-        const internal = form.querySelector('[name="internal"]')?.checked !== false;
+        const visibility = targetForm.querySelector('[data-comment-visibility-value]')?.value || 'internal';
+        const internal = visibility !== 'public';
         addActivity('comment', 'message-square', internal ? 'Comentario interno adicionado' : 'Comentario publico enviado', body, internal ? 'Comentario interno' : 'Comentario publico');
         textarea.value = '';
+        clearAttachments();
         showToast('Comentario adicionado.');
+
+        if (combo === 'assign') assignToMe();
+        if (combo === 'waiting_user') changeStatus('waiting_user');
+        if (combo === 'escalate') {
+            escalationDrawer.querySelector('[data-escalation-reason]').value = body;
+            escalationDrawer.querySelector('[data-escalation-internal]').value = body;
+            openDrawer(escalationDrawer);
+        }
+        if (combo === 'resolve') {
+            resolutionDrawer.querySelector('[data-resolution-summary]').value = body;
+            resolutionDrawer.querySelector('[data-resolution-internal-comment]').value = body;
+            openDrawer(resolutionDrawer);
+        }
+        return true;
     }
 
     function updateResolutionProgress() {
@@ -256,6 +330,37 @@
         showToast(`Chamado escalado para ${target}.`);
     }
 
+    function changeStatus(status) {
+        if (status === 'resolved') {
+            openDrawer(resolutionDrawer);
+            return;
+        }
+        if (status === 'escalated') {
+            openDrawer(escalationDrawer);
+            return;
+        }
+        const previous = state.statusLabel;
+        state.status = status;
+        state.statusLabel = STATUS_LABELS[status] || status;
+        updateBadges();
+        addActivity('system', 'shuffle', 'Status alterado', `${previous} -> ${state.statusLabel}`, 'Sistema');
+        showToast('Status atualizado.');
+    }
+
+    function changePriority(priority) {
+        if (priority === 'critical') {
+            const reason = window.prompt('Justificativa para prioridade Critica:');
+            if (!reason) return;
+            addActivity('system', 'alert-triangle', 'Justificativa de criticidade', reason, 'Sistema');
+        }
+        const previous = state.priorityLabel;
+        state.priority = priority;
+        state.priorityLabel = PRIORITY_LABELS[priority] || priority;
+        updateBadges();
+        addActivity('system', 'flag', 'Prioridade alterada', `${previous} -> ${state.priorityLabel}`, 'Sistema');
+        showToast('Prioridade atualizada.');
+    }
+
     function runNextAction(type) {
         if (type === 'assign_to_me') assignToMe();
         if (type === 'escalate') openDrawer(escalationDrawer);
@@ -266,6 +371,40 @@
         if (type === 'audit') openAudit();
     }
 
+    function setVisibility(mode) {
+        all('[data-comment-visibility]').forEach((button) => {
+            button.classList.toggle('is-active', button.dataset.commentVisibility === mode);
+        });
+        const value = document.querySelector('[data-comment-visibility-value]');
+        const hint = document.querySelector('[data-comment-visibility-hint]');
+        if (value) value.value = mode;
+        if (hint) hint.textContent = mode === 'public' ? 'Visivel ao solicitante.' : 'Somente a equipe ve este comentario.';
+    }
+
+    function insertMacro(text) {
+        if (!textarea) return;
+        const start = textarea.selectionStart || textarea.value.length;
+        const end = textarea.selectionEnd || textarea.value.length;
+        textarea.value = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
+        textarea.focus();
+        textarea.selectionStart = textarea.selectionEnd = start + text.length;
+    }
+
+    function addAttachmentPill(name) {
+        if (!attachmentsBox) return;
+        attachmentsBox.hidden = false;
+        const pill = document.createElement('span');
+        pill.innerHTML = `<i data-lucide="paperclip"></i>${escapeHtml(name)}<button type="button" aria-label="Remover anexo">x</button>`;
+        attachmentsBox.appendChild(pill);
+        window.lucide?.createIcons?.();
+    }
+
+    function clearAttachments() {
+        if (!attachmentsBox) return;
+        attachmentsBox.innerHTML = '';
+        attachmentsBox.hidden = true;
+    }
+
     document.addEventListener('click', (event) => {
         const actionButton = event.target.closest('[data-detail-action]');
         if (actionButton) {
@@ -273,6 +412,10 @@
             if (action === 'open-resolution') openDrawer(resolutionDrawer);
             if (action === 'open-escalation') openDrawer(escalationDrawer);
             if (action === 'open-audit') openAudit();
+            if (action === 'copy-email') showToast('E-mail do solicitante copiado.');
+            if (action === 'open-rmm') showToast('Abrindo endpoint no RMM.');
+            if (action === 'link-endpoint') showToast('Vinculo de endpoint preparado no mock.');
+            if (action === 'mention') focusComment('@');
         }
         if (event.target.closest('[data-drawer-close]')) closeDrawers();
         const nextAction = event.target.closest('[data-next-action-button]');
@@ -281,14 +424,79 @@
         if (event.target.closest('[data-resolution-draft]')) showToast('Rascunho da resolucao salvo no mock.');
         if (event.target.closest('[data-escalation-confirm]')) escalateTicket();
         if (event.target.closest('[data-resolution-attach], [data-escalation-attach]')) showToast('Anexo mockado preparado.');
+        const visibility = event.target.closest('[data-comment-visibility]');
+        if (visibility) setVisibility(visibility.dataset.commentVisibility);
+        const macro = event.target.closest('[data-comment-macro]');
+        if (macro) insertMacro(macro.dataset.commentMacro);
+        if (event.target.closest('[data-comment-attach]')) document.querySelector('[data-comment-file]')?.click();
+        const combo = event.target.closest('[data-comment-combo]');
+        if (combo) submitComposerComment(event, combo.dataset.commentCombo);
+        const filter = event.target.closest('[data-activity-filter]');
+        if (filter) filterActivity(filter.dataset.activityFilter);
+        const status = event.target.closest('[data-quick-status]');
+        if (status) changeStatus(status.dataset.quickStatus);
+        const priority = event.target.closest('[data-quick-priority]');
+        if (priority) changePriority(priority.dataset.quickPriority);
+        const category = event.target.closest('[data-quick-category]');
+        if (category) {
+            const previous = state.category;
+            state.category = category.dataset.quickCategory;
+            updateBadges();
+            addActivity('system', 'tag', 'Categoria alterada', `${previous} -> ${state.category}`, 'Sistema');
+            showToast('Categoria atualizada.');
+        }
+        const assignee = event.target.closest('[data-quick-assignee]');
+        if (assignee) {
+            const previous = state.assignedTo || 'Sem responsavel';
+            state.assignedTo = assignee.dataset.quickAssignee;
+            updateBadges();
+            addActivity('system', 'user-check', 'Responsavel alterado', `${previous} -> ${state.assignedTo || 'Sem responsavel'}`, 'Sistema');
+            showToast('Responsavel atualizado.');
+        }
+        const removeAttachment = event.target.closest('[data-comment-attachments] button');
+        if (removeAttachment) {
+            removeAttachment.closest('span')?.remove();
+            if (attachmentsBox && !attachmentsBox.children.length) attachmentsBox.hidden = true;
+        }
     });
 
     document.addEventListener('submit', submitComposerComment);
+    document.addEventListener('input', (event) => {
+        if (event.target.matches('[data-macro-search]')) {
+            const query = event.target.value.trim().toLowerCase();
+            const popover = event.target.closest('.desk-popover');
+            let visible = 0;
+            all('[data-comment-macro]', popover).forEach((button) => {
+                const match = button.textContent.toLowerCase().includes(query);
+                button.hidden = !match;
+                if (match) visible += 1;
+            });
+            const empty = popover.querySelector('[data-macro-empty]');
+            if (empty) empty.hidden = visible > 0;
+        }
+        if (event.target.matches('[data-detail-comment-textarea]')) {
+            const draft = document.querySelector('[data-composer-draft]');
+            if (draft) draft.hidden = !event.target.value.trim();
+        }
+    });
+    document.addEventListener('change', (event) => {
+        if (event.target.matches('[data-comment-file]')) {
+            Array.from(event.target.files || []).forEach((file) => addAttachmentPill(file.name));
+            event.target.value = '';
+        }
+    });
+    document.addEventListener('paste', (event) => {
+        const hasImage = Array.from(event.clipboardData?.items || []).some((item) => item.type.startsWith('image/'));
+        if (hasImage && event.target.closest('[data-detail-comment-form]')) {
+            addAttachmentPill('imagem-colada.png');
+            showToast('Imagem colada como anexo.');
+        }
+    });
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') closeDrawers();
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-            const form = event.target.closest('[data-detail-comment-form]');
-            if (form) submitComposerComment({ target: form, preventDefault() {} });
+            const sourceForm = event.target.closest('[data-detail-comment-form]');
+            if (sourceForm) submitComposerComment({ target: sourceForm, preventDefault() {} });
         }
     });
     resolutionDrawer?.querySelectorAll('[data-resolution-checklist] input[type="checkbox"]').forEach((check) => {
@@ -308,6 +516,8 @@
     });
 
     updateResolutionProgress();
+    updateActivityCounts();
+    filterActivity('all');
     updateNextAction();
 })();
 </script>

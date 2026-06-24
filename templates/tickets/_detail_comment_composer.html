@@ -1,27 +1,59 @@
-<article class="desk-panel desk-composer-panel">
+<article class="desk-panel desk-composer-panel nw-composer-panel">
     <div class="desk-panel-title-row">
         <div>
             <h2><i data-lucide="send"></i>Novo comentario</h2>
-            <p>Arraste arquivos, cole prints ou use uma macro para responder mais rapido.</p>
+            <p>Registre uma atualizacao, use macros ou anexe evidencias.</p>
         </div>
+        <span class="nw-composer-status" data-composer-draft hidden>Rascunho salvo localmente</span>
     </div>
-    <form class="desk-composer" method="post" action="{% url 'tickets:fake-action' ticket.number 'comentario-adicionado' %}" data-detail-comment-form>
+    <form class="desk-composer nw-composer" method="post" action="{% url 'tickets:fake-action' ticket.number 'comentario-adicionado' %}" data-detail-comment-form>
         {% csrf_token %}
-        <textarea rows="5" placeholder="Escreva um comentario para o chamado..." data-detail-comment-textarea></textarea>
-        <div class="desk-composer-toolbar">
-            <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
-            <button class="desk-btn" type="button"><i data-lucide="at-sign"></i>Mencionar</button>
-            <details class="desk-inline-popover">
+        <textarea rows="7" placeholder="Escreva uma atualizacao objetiva para este chamado..." data-detail-comment-textarea></textarea>
+
+        <div class="nw-composer-toolbar">
+            <div class="nw-visibility-toggle" role="group" aria-label="Visibilidade do comentario">
+                <button class="is-active" type="button" data-comment-visibility="internal"><i data-lucide="lock"></i>Interno</button>
+                <button type="button" data-comment-visibility="public"><i data-lucide="globe-2"></i>Publico</button>
+                <input type="hidden" name="visibility" value="internal" data-comment-visibility-value>
+            </div>
+            <small data-comment-visibility-hint>Somente a equipe ve este comentario.</small>
+        </div>
+
+        <div class="desk-composer-toolbar nw-composer-actions">
+            <button class="desk-btn" type="button" data-detail-action="mention"><i data-lucide="at-sign"></i>Mencionar</button>
+            <details class="desk-inline-popover nw-macro-popover">
                 <summary class="desk-btn"><i data-lucide="message-square-quote"></i>Macro</summary>
                 <div class="desk-popover">
-                    <button type="button">Solicitar evidencias</button>
-                    <button type="button">Informar em atendimento</button>
-                    <button type="button">Validacao com usuario</button>
+                    <label class="nw-macro-search">
+                        <i data-lucide="search"></i>
+                        <input placeholder="Buscar macro..." data-macro-search>
+                    </label>
+                    <button type="button" data-comment-macro="Ola, estamos verificando o ocorrido.">Ola, estamos verificando o ocorrido.</button>
+                    <button type="button" data-comment-macro="Poderia enviar um print ou mais detalhes do erro?">Poderia enviar um print ou mais detalhes do erro?</button>
+                    <button type="button" data-comment-macro="Realizamos ajuste e aguardamos sua validacao.">Realizamos ajuste e aguardamos sua validacao.</button>
+                    <button type="button" data-comment-macro="Acesso validado e funcionamento normalizado.">Acesso validado e funcionamento normalizado.</button>
+                    <button type="button" data-comment-macro="Chamado resolvido. Caso o problema retorne, responda este atendimento.">Chamado resolvido. Caso o problema retorne, responda este atendimento.</button>
+                    <span class="nw-macro-empty" hidden data-macro-empty>Nenhuma macro encontrada.</span>
                 </div>
             </details>
-            <button class="desk-btn" type="button"><i data-lucide="paperclip"></i>Anexar</button>
-            <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar comentario</button>
+            <button class="desk-btn" type="button" data-comment-attach><i data-lucide="paperclip"></i>Anexar</button>
+            <input type="file" data-comment-file hidden multiple>
+            <div class="nw-submit-split">
+                <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar comentario</button>
+                <details class="desk-inline-popover">
+                    <summary class="desk-btn desk-btn-primary" aria-label="Acoes combinadas"><i data-lucide="chevron-down"></i></summary>
+                    <div class="desk-popover">
+                        <button type="button" data-comment-combo="comment">Enviar comentario</button>
+                        <button type="button" data-comment-combo="assign">Enviar e assumir atendimento</button>
+                        <button type="button" data-comment-combo="waiting_user">Enviar e aguardar usuario</button>
+                        <button type="button" data-comment-combo="escalate">Enviar e escalar</button>
+                        <button type="button" data-comment-combo="resolve">Enviar e resolver</button>
+                    </div>
+                </details>
+            </div>
         </div>
-        <div class="desk-dropzone"><i data-lucide="upload-cloud"></i>Solte arquivos aqui ou cole uma imagem com Ctrl+V.</div>
+
+        <div class="nw-attachment-pills" data-comment-attachments hidden></div>
+        <div class="desk-dropzone" data-comment-dropzone><i data-lucide="upload-cloud"></i>Solte arquivos aqui ou cole uma imagem com Ctrl+V. <span>Ctrl+Enter envia.</span></div>
     </form>
 </article>
