@@ -13523,3 +13523,245 @@ body.page-tickets .desk-activity-item.activity-escalation {
         overflow: visible;
     }
 }
+
+/* Ticket detail density pass. */
+body.page-tickets .desk-detail-layout {
+    gap: 18px;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 25vw, 460px);
+}
+
+body.page-tickets .desk-overview-side {
+    max-height: calc(100vh - 178px);
+    padding-right: 5px;
+}
+
+body.page-tickets .desk-overview-side::-webkit-scrollbar,
+body.page-tickets .desk-activity-feed::-webkit-scrollbar {
+    width: 8px;
+}
+
+body.page-tickets .desk-overview-side::-webkit-scrollbar-thumb,
+body.page-tickets .desk-activity-feed::-webkit-scrollbar-thumb {
+    background: rgba(51, 65, 85, 0.7);
+    border-radius: 999px;
+}
+
+body.page-tickets .nw-next-action-card {
+    border-left: 0;
+    gap: 12px;
+    padding: 18px;
+}
+
+body.page-tickets .nw-next-action-card::before {
+    border-radius: 999px;
+    bottom: 16px;
+    opacity: 0.72;
+    top: 16px;
+    width: 3px;
+}
+
+body.page-tickets .nw-next-action-card__body h2 {
+    font-size: 19px;
+}
+
+body.page-tickets .nw-next-action-card__body p {
+    max-width: 34rem;
+}
+
+body.page-tickets .nw-side-card {
+    padding: 14px;
+}
+
+body.page-tickets .desk-requester-card .desk-person-card {
+    gap: 10px;
+}
+
+body.page-tickets .nw-side-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+body.page-tickets .nw-side-actions .desk-btn,
+body.page-tickets .nw-side-actions a.desk-btn {
+    flex: 1 1 150px;
+    justify-content: center;
+}
+
+body.page-tickets .nw-quick-edit-list {
+    gap: 7px;
+}
+
+body.page-tickets .nw-quick-edit > summary {
+    min-height: 38px;
+    padding: 7px 9px;
+}
+
+body.page-tickets .desk-sla-progress {
+    gap: 9px;
+}
+
+body.page-tickets .desk-sla-progress strong {
+    font-size: 20px;
+}
+
+body.page-tickets .nw-composer textarea {
+    max-height: 220px;
+    min-height: 96px;
+    overflow-y: auto;
+    padding: 11px 12px;
+}
+
+body.page-tickets .nw-composer-panel .desk-panel-title-row {
+    margin-bottom: 2px;
+}
+
+body.page-tickets .nw-composer-toolbar {
+    gap: 8px;
+}
+
+body.page-tickets .nw-visibility-toggle button,
+body.page-tickets .desk-composer-toolbar .desk-btn {
+    min-height: 30px;
+}
+
+body.page-tickets .desk-dropzone {
+    font-size: 12px;
+    min-height: 38px;
+    padding: 8px 10px;
+}
+
+body.page-tickets .nw-service-checklist {
+    gap: 12px;
+}
+
+body.page-tickets .nw-service-checklist__progress {
+    align-items: flex-end;
+    display: grid;
+    gap: 2px;
+    justify-items: end;
+}
+
+body.page-tickets .nw-service-checklist__progress strong {
+    color: #f8fafc;
+    font-size: 13px;
+}
+
+body.page-tickets .nw-service-checklist__progress span {
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+body.page-tickets .nw-service-checklist__bar {
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(38, 50, 65, 0.86);
+    border-radius: 999px;
+    height: 8px;
+    overflow: hidden;
+}
+
+body.page-tickets .nw-service-checklist__bar i {
+    background: linear-gradient(90deg, rgba(34, 197, 94, 0.72), rgba(125, 211, 252, 0.66));
+    display: block;
+    height: 100%;
+    transition: width 180ms ease;
+}
+
+body.page-tickets .nw-service-checklist__grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-tickets .nw-service-checklist .desk-check {
+    background: rgba(8, 11, 16, 0.62);
+    border: 1px solid rgba(38, 50, 65, 0.78);
+    border-radius: 12px;
+    padding: 8px 9px;
+}
+
+body.page-tickets .nw-service-checklist .desk-check.is-done {
+    border-color: rgba(34, 197, 94, 0.22);
+    color: #86efac;
+}
+
+body.page-tickets .nw-service-checklist .desk-check.is-done span {
+    color: #7f93aa;
+    text-decoration: line-through;
+}
+
+body.page-tickets .nw-service-checklist.is-complete {
+    border-color: rgba(34, 197, 94, 0.28);
+}
+
+body.page-tickets .desk-overview-main .desk-activity-panel .desk-activity-feed {
+    max-height: clamp(300px, 36vh, 520px);
+}
+
+body.page-tickets .desk-overview-main .desk-activity-panel .desk-activity-item,
+body.page-tickets .desk-activity-item {
+    border-radius: 12px;
+    gap: 9px;
+    padding: 9px 10px;
+}
+
+body.page-tickets .desk-overview-main .desk-activity-panel .desk-activity-icon,
+body.page-tickets .desk-activity-icon {
+    height: 28px;
+    width: 28px;
+}
+
+body.page-tickets .desk-activity-icon svg {
+    height: 14px;
+    width: 14px;
+}
+
+body.page-tickets .desk-activity-item header {
+    gap: 7px;
+}
+
+body.page-tickets .desk-activity-item header strong {
+    font-size: 13px;
+}
+
+body.page-tickets .desk-activity-item header small {
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+body.page-tickets .desk-activity-item p {
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 3px;
+}
+
+body.page-tickets .nw-activity-filters {
+    gap: 6px;
+}
+
+body.page-tickets .nw-activity-filters button {
+    font-size: 11px;
+    min-height: 26px;
+    padding: 0 8px;
+}
+
+body.page-tickets .nw-activity-badge {
+    opacity: 0.78;
+}
+
+@media (max-width: 1080px) {
+    body.page-tickets .desk-detail-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    body.page-tickets .nw-service-checklist__grid {
+        grid-template-columns: 1fr;
+    }
+
+    body.page-tickets .nw-next-action-card__footer {
+        flex-direction: column;
+    }
+}

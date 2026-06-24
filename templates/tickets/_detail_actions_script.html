@@ -22,6 +22,7 @@
     const attachmentsBox = document.querySelector('[data-comment-attachments]');
     let toastUndo = null;
     let activeActivityFilter = 'all';
+    let serviceChecklistComplete = false;
 
     function all(selector, root = document) {
         return Array.from(root.querySelectorAll(selector));
@@ -187,6 +188,9 @@
         if (state.hasEndpoint && state.hasRmmAlert) {
             return { severity: 'info', icon: 'activity', title: 'Alerta RMM ativo', message: 'Revise a telemetria antes da proxima acao.', label: 'Ver dispositivo', type: 'open_device_tab' };
         }
+        if (serviceChecklistComplete) {
+            return { severity: 'success', icon: 'check-circle-2', title: 'Pronto para resolucao', message: 'Checklist operacional concluido. Registre a solucao para encerrar.', label: 'Resolver chamado', type: 'resolve' };
+        }
         return { severity: 'neutral', icon: 'message-square', title: 'Registrar atualizacao', message: 'Adicione contexto e avance o atendimento.', label: 'Comentar', type: 'focus_comment' };
     }
 
@@ -222,8 +226,40 @@
     function focusComment(text = '') {
         if (!textarea) return;
         if (text) textarea.value = text;
+        autoGrowTextarea(textarea);
         textarea.focus();
         textarea.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+
+    function autoGrowTextarea(node) {
+        if (!node) return;
+        node.style.height = 'auto';
+        node.style.height = `${Math.min(node.scrollHeight, 220)}px`;
+    }
+
+    function updateServiceChecklist(showFeedback = false) {
+        const checklist = document.querySelector('[data-service-checklist]');
+        if (!checklist) return;
+        const checks = all('[data-service-check]', checklist);
+        const done = checks.filter((check) => check.checked).length;
+        const total = checks.length || 1;
+        const percent = Math.round((done / total) * 100);
+        serviceChecklistComplete = done === total;
+        const count = checklist.querySelector('[data-service-checklist-count]');
+        const stateNode = checklist.querySelector('[data-service-checklist-state]');
+        const bar = checklist.querySelector('[data-service-checklist-bar]');
+        if (count) count.textContent = `${done}/${total} concluido`;
+        if (stateNode) stateNode.textContent = serviceChecklistComplete ? 'Checklist concluido' : 'Em andamento';
+        if (bar) bar.style.width = `${percent}%`;
+        checklist.classList.toggle('is-complete', serviceChecklistComplete);
+        checks.forEach((check) => check.closest('label')?.classList.toggle('is-done', check.checked));
+        updateNextAction();
+        if (showFeedback) {
+            showToast('Checklist atualizado.');
+            if (serviceChecklistComplete) {
+                addActivity('system', 'list-checks', 'Checklist de atendimento concluido', 'Todas as etapas operacionais foram marcadas.', 'Sistema');
+            }
+        }
     }
 
     function submitComposerComment(event, combo = 'comment') {
@@ -239,6 +275,7 @@
         const internal = visibility !== 'public';
         addActivity('comment', 'message-square', internal ? 'Comentario interno adicionado' : 'Comentario publico enviado', body, internal ? 'Comentario interno' : 'Comentario publico');
         textarea.value = '';
+        autoGrowTextarea(textarea);
         clearAttachments();
         showToast('Comentario adicionado.');
 
@@ -477,12 +514,16 @@
         if (event.target.matches('[data-detail-comment-textarea]')) {
             const draft = document.querySelector('[data-composer-draft]');
             if (draft) draft.hidden = !event.target.value.trim();
+            autoGrowTextarea(event.target);
         }
     });
     document.addEventListener('change', (event) => {
         if (event.target.matches('[data-comment-file]')) {
             Array.from(event.target.files || []).forEach((file) => addAttachmentPill(file.name));
             event.target.value = '';
+        }
+        if (event.target.matches('[data-service-check]')) {
+            updateServiceChecklist(true);
         }
     });
     document.addEventListener('paste', (event) => {
@@ -516,6 +557,8 @@
     });
 
     updateResolutionProgress();
+    updateServiceChecklist(false);
+    autoGrowTextarea(textarea);
     updateActivityCounts();
     filterActivity('all');
     updateNextAction();
