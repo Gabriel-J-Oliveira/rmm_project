@@ -1,0 +1,90 @@
+<aside class="desk-resolution-drawer nw-drawer" aria-label="Escalar chamado" data-escalation-drawer hidden>
+    <header class="nw-drawer__header">
+        <div>
+            <span>Encaminhamento</span>
+            <h2><i data-lucide="arrow-up-right"></i>Escalar chamado</h2>
+            <p>Encaminhe este chamado para outro nível, time ou responsável.</p>
+        </div>
+        <button class="desk-icon-action" type="button" data-drawer-close aria-label="Fechar escalonamento"><i data-lucide="x"></i></button>
+    </header>
+
+    <section class="nw-drawer__body">
+        <article class="nw-resolution-summary">
+            <span class="desk-ticket-number">#{{ ticket.number }}</span>
+            <strong>{{ ticket.title }}</strong>
+            <small>{{ ticket.requester }} &middot; {{ ticket.status_label }}</small>
+        </article>
+
+        <div class="nw-form-grid">
+            <label class="nw-form-field">
+                <span>Escalar para <em>obrigatório</em></span>
+                <select data-escalation-target>
+                    <option value="">Selecionar destino...</option>
+                    <option>N2</option>
+                    <option>Infraestrutura</option>
+                    <option>Segurança</option>
+                    <option>Sistemas</option>
+                    <option>Fornecedor</option>
+                    <option>Gerência</option>
+                    <option>Plantão</option>
+                    <option>Outro</option>
+                </select>
+            </label>
+
+            <label class="nw-form-field">
+                <span>Prioridade após escalar</span>
+                <select data-escalation-priority>
+                    <option value="">Manter prioridade atual</option>
+                    <option value="low">Baixa</option>
+                    <option value="normal">Normal</option>
+                    <option value="high">Alta</option>
+                    <option value="critical">Crítica</option>
+                </select>
+            </label>
+
+            <label class="nw-form-field nw-form-field--wide">
+                <span>Responsável/time sugerido</span>
+                <select data-escalation-owner>
+                    <option>Renan</option>
+                    <option>Ana</option>
+                    <option>Lucas</option>
+                    <option>Time Infra</option>
+                    <option>Time Segurança</option>
+                    <option>Fornecedor externo</option>
+                </select>
+            </label>
+        </div>
+
+        <label class="nw-form-field">
+            <span>Motivo do escalonamento <em>obrigatório</em></span>
+            <textarea rows="5" data-escalation-reason placeholder="Explique por que este chamado precisa ser escalado..."></textarea>
+        </label>
+
+        <label class="nw-form-field">
+            <span>Comentário interno</span>
+            <textarea rows="3" data-escalation-internal placeholder="Observações internas para quem receber o chamado..."></textarea>
+        </label>
+
+        <section class="nw-checklist">
+            <header><strong>Notificações</strong></header>
+            <label class="desk-check"><input type="checkbox" checked data-escalation-notify-owner><span>Notificar novo responsável/time.</span></label>
+            <label class="desk-check"><input type="checkbox" data-escalation-notify-supervisor><span>Notificar supervisor.</span></label>
+            <label class="desk-check"><input type="checkbox" data-escalation-notify-requester><span>Notificar solicitante sobre encaminhamento.</span></label>
+        </section>
+
+        <section class="nw-evidence-box">
+            <div>
+                <strong>Anexos/evidências</strong>
+                <span>Opcional para auxiliar quem receber o chamado.</span>
+            </div>
+            <button class="desk-btn" type="button" data-escalation-attach><i data-lucide="paperclip"></i>Anexar evidência</button>
+        </section>
+
+        <div class="nw-drawer-warning" data-escalation-warning hidden></div>
+    </section>
+
+    <footer class="nw-drawer__footer">
+        <button class="desk-btn" type="button" data-drawer-close>Cancelar</button>
+        <button class="desk-btn desk-btn-primary" type="button" data-escalation-confirm>Escalar chamado</button>
+    </footer>
+</aside>

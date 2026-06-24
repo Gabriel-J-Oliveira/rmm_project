@@ -313,10 +313,29 @@ def ticket_create(request):
 
 def ticket_detail(request, number):
     ticket = get_ticket(number) or MOCK_TICKETS[0]
+    detail_context = build_ticket_detail_context(ticket)
+    device_context = detail_context.get('device_context') or {}
+    sla = detail_context.get('sla') or {}
     context = {
         **_base_context('queue'),
         'ticket': ticket,
-        **build_ticket_detail_context(ticket),
+        **detail_context,
+        'ticket_detail_state': {
+            'number': ticket.number,
+            'title': ticket.title,
+            'requester': ticket.requester,
+            'sector': ticket.sector,
+            'status': ticket.status,
+            'statusLabel': ticket.status_label,
+            'priority': ticket.priority,
+            'priorityLabel': ticket.priority_label,
+            'assignedTo': ticket.assigned_to or '',
+            'hasEndpoint': bool(ticket.endpoint),
+            'hasRmmAlert': bool(device_context.get('alerts_count') or device_context.get('active_alerts')),
+            'slaLevel': sla.get('level', 'ok'),
+            'slaLabel': sla.get('label', ''),
+            'resolved': ticket.status == 'resolved',
+        },
         'related_alerts': [
             {'title': 'Alerta RMM relacionado', 'description': 'Espaco reservado para vinculo futuro com EndpointAlert.'},
             {'title': 'Historico de inventario', 'description': 'Preview visual sem integracao real nesta fase.'},

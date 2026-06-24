@@ -5,7 +5,7 @@
             <p>Comentarios e eventos do sistema em uma linha do tempo unica.</p>
         </div>
     </div>
-    <div class="desk-activity-feed">
+    <div class="desk-activity-feed" data-detail-activity-feed>
         {% for item in activity_items %}
         <div class="desk-activity-item activity-{{ item.kind }}">
             <span class="desk-activity-icon"><i data-lucide="{{ item.icon }}"></i></span>

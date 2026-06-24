@@ -10,7 +10,7 @@
 
     <div class="desk-detail-header-meta">
         <details class="desk-inline-popover">
-            <summary class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</summary>
+            <summary class="desk-badge status-{{ ticket.status }}" data-ticket-status-badge>{{ ticket.status_label }}</summary>
             <div class="desk-popover">
                 <strong>Transicoes validas</strong>
                 {% for status in status_transitions %}
@@ -21,30 +21,31 @@
             </div>
         </details>
         <details class="desk-inline-popover">
-            <summary class="desk-badge priority-{{ ticket.priority }}">{{ ticket.priority_label }}</summary>
+            <summary class="desk-badge priority-{{ ticket.priority }}" data-ticket-priority-badge>{{ ticket.priority_label }}</summary>
             <div class="desk-popover">
                 {% for value,label in priority_labels.items %}
                 <button type="button">{{ label }}</button>
                 {% endfor %}
             </div>
         </details>
-        <span class="desk-sla-chip desk-sla-{{ sla.level }}"><i data-lucide="timer"></i>{{ sla.label }}</span>
+        <span class="desk-sla-chip desk-sla-{{ sla.level }}" data-ticket-sla-chip><i data-lucide="timer"></i>{{ sla.label }}</span>
         {% if ticket.partner %}<span class="desk-badge partner-badge">Socio / VIP</span>{% endif %}
     </div>
 
     <div class="desk-detail-actions">
-        <button class="desk-btn desk-btn-primary" type="button" data-drawer-target="resolution"><i data-lucide="check-circle"></i>Resolver</button>
+        <button class="desk-btn desk-btn-primary" type="button" data-detail-action="open-resolution"><i data-lucide="check-circle"></i>Resolver</button>
+        <button class="desk-btn" type="button" data-detail-action="open-escalation"><i data-lucide="arrow-up-right"></i>Escalar</button>
         <details class="desk-inline-popover desk-kebab-menu">
             <summary class="desk-btn" aria-label="Acoes secundarias"><i data-lucide="more-vertical"></i></summary>
             <div class="desk-popover">
-                <button type="button">Escalar</button>
+                <button type="button" data-detail-action="open-escalation">Escalar</button>
                 <button type="button">Mesclar com outro chamado</button>
                 <button type="button">Duplicar</button>
                 <button type="button">Imprimir / Exportar PDF</button>
                 <button type="button">Excluir</button>
             </div>
         </details>
-        <button class="desk-btn" type="button"><i data-lucide="history"></i>Auditoria</button>
+        <button class="desk-btn" type="button" data-detail-action="open-audit"><i data-lucide="history"></i>Auditoria</button>
     </div>
 
     <div class="desk-presence-indicator"><i data-lucide="eye"></i>Renan tambem esta visualizando este chamado.</div>

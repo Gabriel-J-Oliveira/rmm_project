@@ -1,35 +1,101 @@
-<aside class="desk-resolution-drawer" aria-label="Resolver chamado">
-    <header>
-        <h2><i data-lucide="check-circle"></i>Resolver chamado</h2>
-        <p>Fluxo preparado para confirmar a resolucao sem fechar direto pelo header.</p>
+<aside class="desk-resolution-drawer nw-drawer" aria-label="Resolver chamado" data-resolution-drawer hidden>
+    <header class="nw-drawer__header">
+        <div>
+            <span>Fluxo guiado</span>
+            <h2><i data-lucide="check-circle"></i>Resolver chamado</h2>
+            <p>Registre a solução aplicada antes de encerrar o atendimento.</p>
+        </div>
+        <button class="desk-icon-action" type="button" data-drawer-close aria-label="Fechar resolução"><i data-lucide="x"></i></button>
     </header>
-    <label>
-        <span>Tipo de resolucao</span>
-        <select>
-            {% for item in resolution_types %}
-            <option>{{ item }}</option>
-            {% endfor %}
-        </select>
-    </label>
-    <div class="desk-resolution-checklist">
-        {% for item in resolution_checklist %}
-        <label class="desk-check"><input type="checkbox"><span>{{ item }}</span></label>
-        {% endfor %}
-    </div>
-    <label>
-        <span>Resumo da resolucao</span>
-        <textarea rows="5" placeholder="Explique o que foi feito e como foi validado."></textarea>
-    </label>
-    <label>
-        <span>Tempo dedicado</span>
-        <input placeholder="Ex.: 45 min">
-    </label>
-    <label class="desk-check"><input type="checkbox"><span>Transformar em artigo da base de conhecimento</span></label>
-    <footer>
-        <button class="desk-btn" type="button">Cancelar</button>
-        <form method="post" action="{% url 'tickets:fake-action' ticket.number 'resolvido' %}">
-            {% csrf_token %}
-            <button class="desk-btn desk-btn-primary" type="submit">Confirmar resolucao</button>
-        </form>
+
+    <section class="nw-drawer__body">
+        <article class="nw-resolution-summary">
+            <span class="desk-ticket-number">#{{ ticket.number }}</span>
+            <strong>{{ ticket.title }}</strong>
+            <small>{{ ticket.requester }} &middot; {{ ticket.priority_label }} &middot; {{ sla.label }}</small>
+        </article>
+
+        <div class="nw-form-grid">
+            <label class="nw-form-field nw-form-field--wide">
+                <span>Resumo da solução <em>obrigatório</em></span>
+                <textarea rows="5" data-resolution-summary placeholder="Descreva objetivamente o que foi feito para resolver o problema..."></textarea>
+            </label>
+
+            <label class="nw-form-field">
+                <span>Causa raiz</span>
+                <select data-resolution-root-cause>
+                    <option value="">Selecionar causa...</option>
+                    <option>Configuração incorreta</option>
+                    <option>Credencial/acesso</option>
+                    <option>Falha de software</option>
+                    <option>Falha de hardware</option>
+                    <option>Rede/conectividade</option>
+                    <option>Erro operacional</option>
+                    <option>Alerta preventivo RMM</option>
+                    <option>Sem falha encontrada</option>
+                    <option>Outro</option>
+                </select>
+            </label>
+
+            <label class="nw-form-field">
+                <span>Tipo de solução</span>
+                <select data-resolution-type>
+                    <option>Configuração ajustada</option>
+                    <option>Orientação ao usuário</option>
+                    <option>Correção técnica</option>
+                    <option>Substituição</option>
+                    <option>Encaminhamento externo</option>
+                    <option>Monitoramento preventivo</option>
+                    <option>Sem ação necessária</option>
+                </select>
+            </label>
+        </div>
+
+        <label class="nw-form-field">
+            <span>Comentário público ao solicitante</span>
+            <textarea rows="3" data-resolution-public-comment placeholder="Mensagem que será visível ao solicitante..."></textarea>
+            <small>Este comentário será visível ao solicitante.</small>
+        </label>
+
+        <label class="nw-form-field">
+            <span>Comentário interno</span>
+            <textarea rows="3" data-resolution-internal-comment placeholder="Observações internas para a equipe..."></textarea>
+        </label>
+
+        <section class="nw-checklist" data-resolution-checklist>
+            <header>
+                <strong>Checklist final</strong>
+                <span data-resolution-progress>0/5 concluído</span>
+            </header>
+            <label class="desk-check"><input type="checkbox"><span>Solução testada.</span></label>
+            <label class="desk-check"><input type="checkbox"><span>Solicitante informado.</span></label>
+            <label class="desk-check"><input type="checkbox"><span>Evidência anexada ou registrada.</span></label>
+            <label class="desk-check"><input type="checkbox"><span>Categoria e prioridade revisadas.</span></label>
+            <label class="desk-check"><input type="checkbox"><span>Endpoint/RMM verificado, se houver endpoint.</span></label>
+        </section>
+
+        <section class="nw-evidence-box">
+            <div>
+                <strong>Adicionar evidência</strong>
+                <span>{% if attachments %}Evidência principal: {{ attachments.0.name }}{% else %}Nenhuma evidência principal registrada.{% endif %}</span>
+            </div>
+            <button class="desk-btn" type="button" data-resolution-attach><i data-lucide="paperclip"></i>Anexar arquivo</button>
+        </section>
+
+        <section class="nw-kb-toggle">
+            <label class="desk-check"><input type="checkbox" data-resolution-kb><span>Gerar artigo de base de conhecimento a partir desta solução</span></label>
+            <label class="nw-form-field" data-resolution-kb-title-wrap hidden>
+                <span>Título sugerido do artigo</span>
+                <input data-resolution-kb-title value="{{ ticket.title }}">
+            </label>
+        </section>
+
+        <div class="nw-drawer-warning" data-resolution-warning hidden></div>
+    </section>
+
+    <footer class="nw-drawer__footer">
+        <button class="desk-btn" type="button" data-drawer-close>Cancelar</button>
+        <button class="desk-btn" type="button" data-resolution-draft>Salvar rascunho</button>
+        <button class="desk-btn desk-btn-primary" type="button" data-resolution-confirm>Resolver chamado</button>
     </footer>
 </aside>

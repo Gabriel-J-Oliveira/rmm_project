@@ -1,4 +1,14 @@
 <aside class="desk-overview-side">
+    <article class="desk-panel nw-next-action-card nw-next-action-card--neutral" data-next-action-card>
+        <div class="nw-next-action-card__icon"><i data-lucide="sparkles"></i></div>
+        <div>
+            <span>Próxima melhor ação</span>
+            <h2 data-next-action-title>Registrar próxima atualização</h2>
+            <p data-next-action-message>Revise o contexto, adicione uma atualização e avance o atendimento.</p>
+        </div>
+        <button class="desk-btn" type="button" data-next-action-button data-next-action-type="focus_comment">Comentar</button>
+    </article>
+
     <article class="desk-panel desk-requester-card">
         <h2><i data-lucide="user"></i>Solicitante</h2>
         <div class="desk-person-card">
@@ -20,14 +30,14 @@
     <article class="desk-panel">
         <h2><i data-lucide="sliders-horizontal"></i>Resumo editavel</h2>
         <dl class="desk-data-list">
-            <div><dt>Status</dt><dd><span class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</span></dd></div>
-            <div><dt>Prioridade</dt><dd><span class="desk-badge priority-{{ ticket.priority }}">{{ ticket.priority_label }}</span></dd></div>
+            <div><dt>Status</dt><dd><span class="desk-badge status-{{ ticket.status }}" data-ticket-status-badge>{{ ticket.status_label }}</span></dd></div>
+            <div><dt>Prioridade</dt><dd><span class="desk-badge priority-{{ ticket.priority }}" data-ticket-priority-badge>{{ ticket.priority_label }}</span></dd></div>
             <div><dt>Categoria</dt><dd><span class="desk-badge neutral">{{ ticket.category }}</span></dd></div>
             <div>
                 <dt>Responsavel</dt>
                 <dd>
                     <details class="desk-inline-popover">
-                        <summary class="desk-assignee-pill"><span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>{{ ticket.assigned_to|default:"Sem responsavel" }}</summary>
+                        <summary class="desk-assignee-pill" data-ticket-assignee><span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>{{ ticket.assigned_to|default:"Sem responsavel" }}</summary>
                         <div class="desk-popover desk-assignee-popover">
                             <button class="desk-btn desk-btn-primary" type="button">Atribuir a mim</button>
                             {% for row in workload_rows %}

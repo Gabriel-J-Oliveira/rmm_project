@@ -5,9 +5,9 @@
             <p>Arraste arquivos, cole prints ou use uma macro para responder mais rapido.</p>
         </div>
     </div>
-    <form class="desk-composer" method="post" action="{% url 'tickets:fake-action' ticket.number 'comentario-adicionado' %}">
+    <form class="desk-composer" method="post" action="{% url 'tickets:fake-action' ticket.number 'comentario-adicionado' %}" data-detail-comment-form>
         {% csrf_token %}
-        <textarea rows="5" placeholder="Escreva um comentario para o chamado..."></textarea>
+        <textarea rows="5" placeholder="Escreva um comentario para o chamado..." data-detail-comment-textarea></textarea>
         <div class="desk-composer-toolbar">
             <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
             <button class="desk-btn" type="button"><i data-lucide="at-sign"></i>Mencionar</button>

@@ -1,0 +1,313 @@
+{{ ticket_detail_state|json_script:"ticket-detail-state" }}
+<script>
+(() => {
+    const stateEl = document.getElementById('ticket-detail-state');
+    const state = stateEl ? JSON.parse(stateEl.textContent) : {};
+    const CURRENT_USER = 'Gabriel';
+    const STATUS_LABELS = {
+        new: 'Novo',
+        in_progress: 'Em atendimento',
+        waiting_user: 'Aguardando usuario',
+        waiting_third_party: 'Aguardando terceiro',
+        escalated: 'Escalado',
+        resolved: 'Resolvido',
+    };
+    const PRIORITY_LABELS = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
+    const resolutionDrawer = document.querySelector('[data-resolution-drawer]');
+    const escalationDrawer = document.querySelector('[data-escalation-drawer]');
+    const auditDrawer = document.querySelector('.desk-audit-drawer');
+    const toast = document.querySelector('[data-toast]');
+    let toastUndo = null;
+
+    function all(selector) {
+        return Array.from(document.querySelectorAll(selector));
+    }
+
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[char]));
+    }
+
+    function showToast(message, actionLabel = '', undo = null) {
+        if (!toast) return;
+        toast.querySelector('span').textContent = message;
+        const button = toast.querySelector('button');
+        toastUndo = undo;
+        if (button) {
+            button.textContent = actionLabel || 'Desfazer';
+            button.hidden = !undo;
+        }
+        toast.hidden = false;
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => { toast.hidden = true; }, 5200);
+    }
+
+    function openDrawer(drawer) {
+        if (!drawer) return;
+        closeDrawers();
+        drawer.hidden = false;
+        drawer.classList.add('is-open');
+        document.body.classList.add('drawer-open');
+        window.lucide?.createIcons?.();
+    }
+
+    function closeDrawers() {
+        [resolutionDrawer, escalationDrawer].forEach((drawer) => {
+            if (!drawer) return;
+            drawer.classList.remove('is-open');
+            drawer.hidden = true;
+        });
+        if (auditDrawer) auditDrawer.style.display = '';
+        document.body.classList.remove('drawer-open');
+    }
+
+    function openAudit() {
+        if (!auditDrawer) return;
+        closeDrawers();
+        auditDrawer.style.display = 'grid';
+        auditDrawer.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+
+    function addActivity(kind, icon, title, body, badge = 'Sistema') {
+        const feed = document.querySelector('[data-detail-activity-feed]');
+        if (!feed) return;
+        const item = document.createElement('div');
+        item.className = `desk-activity-item activity-${kind} nw-timeline-event--${kind}`;
+        item.innerHTML = `
+            <span class="desk-activity-icon"><i data-lucide="${icon}"></i></span>
+            <div>
+                <header><strong>${escapeHtml(title)}</strong><small>agora - ${escapeHtml(badge)}</small></header>
+                <p>${escapeHtml(body)}</p>
+            </div>
+        `;
+        feed.prepend(item);
+        window.lucide?.createIcons?.();
+    }
+
+    function updateBadges() {
+        all('[data-ticket-status-badge]').forEach((badge) => {
+            badge.className = `desk-badge status-${state.status}`;
+            badge.textContent = state.statusLabel;
+        });
+        all('[data-ticket-priority-badge]').forEach((badge) => {
+            badge.className = `desk-badge priority-${state.priority}`;
+            badge.textContent = state.priorityLabel;
+        });
+        all('[data-ticket-assignee]').forEach((assignee) => {
+            assignee.innerHTML = `<span class="desk-avatar">${escapeHtml((state.assignedTo || '?').slice(0, 1))}</span>${escapeHtml(state.assignedTo || 'Sem responsavel')}`;
+        });
+        all('[data-ticket-sla-chip]').forEach((sla) => {
+            const level = state.resolved ? 'ok' : state.slaLevel;
+            sla.className = `desk-sla-chip desk-sla-${level}`;
+            sla.innerHTML = `<i data-lucide="timer"></i>${escapeHtml(state.resolved ? 'Resolvido agora' : state.slaLabel)}`;
+        });
+        updateNextAction();
+        window.lucide?.createIcons?.();
+    }
+
+    function getTicketNextBestAction() {
+        if (state.resolved || state.status === 'resolved') {
+            return { severity: 'success', icon: 'check-circle', title: 'Chamado resolvido', message: 'O atendimento foi encerrado. Voce ainda pode consultar a auditoria ou preparar a reabertura.', label: 'Ver auditoria', type: 'audit' };
+        }
+        if (!state.assignedTo) {
+            return { severity: 'warning', icon: 'user-plus', title: 'Chamado sem responsavel', message: 'Assuma ou atribua este chamado para iniciar o atendimento.', label: 'Assumir atendimento', type: 'assign_to_me' };
+        }
+        if (state.slaLevel === 'critical') {
+            return { severity: 'critical', icon: 'alarm-clock', title: 'SLA vencido', message: 'Este chamado ultrapassou o prazo. Registre uma atualizacao ou escale o atendimento.', label: 'Escalar', type: 'escalate' };
+        }
+        if (state.slaLevel === 'warning') {
+            return { severity: 'warning', icon: 'timer', title: 'SLA vencendo em breve', message: 'Priorize uma atualizacao ou conclua o atendimento antes do vencimento.', label: 'Comentar agora', type: 'focus_comment' };
+        }
+        if (state.status === 'waiting_user') {
+            return { severity: 'neutral', icon: 'mail-question', title: 'Aguardando retorno', message: 'O chamado depende do solicitante. Considere enviar um lembrete ou registrar uma atualizacao.', label: 'Enviar lembrete', type: 'send_reminder' };
+        }
+        if (state.hasEndpoint && state.hasRmmAlert) {
+            return { severity: 'info', icon: 'activity', title: 'Alerta RMM ativo', message: 'Revise a telemetria do dispositivo antes de definir a proxima acao.', label: 'Ver dispositivo', type: 'open_device_tab' };
+        }
+        return { severity: 'neutral', icon: 'message-square', title: 'Registrar proxima atualizacao', message: 'Revise o contexto, adicione uma atualizacao e avance o atendimento.', label: 'Comentar', type: 'focus_comment' };
+    }
+
+    function updateNextAction() {
+        const action = getTicketNextBestAction();
+        const card = document.querySelector('[data-next-action-card]');
+        if (!card) return;
+        card.className = `desk-panel nw-next-action-card nw-next-action-card--${action.severity}`;
+        card.querySelector('[data-next-action-title]').textContent = action.title;
+        card.querySelector('[data-next-action-message]').textContent = action.message;
+        const button = card.querySelector('[data-next-action-button]');
+        button.textContent = action.label;
+        button.dataset.nextActionType = action.type;
+        const icon = card.querySelector('.nw-next-action-card__icon i');
+        if (icon) icon.setAttribute('data-lucide', action.icon);
+        window.lucide?.createIcons?.();
+    }
+
+    function assignToMe() {
+        const previous = state.assignedTo;
+        state.assignedTo = CURRENT_USER;
+        updateBadges();
+        addActivity('system', 'user-check', `${CURRENT_USER} assumiu o chamado`, 'Responsavel atualizado pela acao rapida.', 'Sistema');
+        showToast(`Chamado #${state.number} atribuido a voce.`, 'Desfazer', () => {
+            state.assignedTo = previous;
+            updateBadges();
+            addActivity('system', 'rotate-ccw', 'Atribuicao desfeita', 'Responsavel restaurado no mock local.', 'Sistema');
+        });
+    }
+
+    function focusComment(text = '') {
+        const textarea = document.querySelector('[data-detail-comment-textarea]');
+        if (!textarea) return;
+        if (text) textarea.value = text;
+        textarea.focus();
+        textarea.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+
+    function submitComposerComment(event) {
+        const form = event.target.closest('[data-detail-comment-form]');
+        if (!form) return;
+        event.preventDefault();
+        const textarea = form.querySelector('[data-detail-comment-textarea]');
+        const body = textarea.value.trim();
+        if (!body) {
+            showToast('Escreva um comentario antes de enviar.');
+            return;
+        }
+        const internal = form.querySelector('[name="internal"]')?.checked !== false;
+        addActivity('comment', 'message-square', internal ? 'Comentario interno adicionado' : 'Comentario publico enviado', body, internal ? 'Comentario interno' : 'Comentario publico');
+        textarea.value = '';
+        showToast('Comentario adicionado.');
+    }
+
+    function updateResolutionProgress() {
+        const checklist = resolutionDrawer?.querySelector('[data-resolution-checklist]');
+        if (!checklist) return;
+        const checks = Array.from(checklist.querySelectorAll('input[type="checkbox"]'));
+        const done = checks.filter((check) => check.checked).length;
+        checklist.querySelector('[data-resolution-progress]').textContent = `${done}/${checks.length} concluido`;
+    }
+
+    function resolveTicket() {
+        const summary = resolutionDrawer.querySelector('[data-resolution-summary]').value.trim();
+        const rootCause = resolutionDrawer.querySelector('[data-resolution-root-cause]').value.trim();
+        const publicComment = resolutionDrawer.querySelector('[data-resolution-public-comment]').value.trim();
+        const internalComment = resolutionDrawer.querySelector('[data-resolution-internal-comment]').value.trim();
+        const kb = resolutionDrawer.querySelector('[data-resolution-kb]').checked;
+        const warning = resolutionDrawer.querySelector('[data-resolution-warning]');
+        const checks = Array.from(resolutionDrawer.querySelectorAll('[data-resolution-checklist] input[type="checkbox"]'));
+        const done = checks.filter((check) => check.checked).length;
+        if (!summary) {
+            warning.hidden = false;
+            warning.textContent = 'Preencha o resumo da solucao para resolver o chamado.';
+            showToast('Preencha os campos obrigatorios.');
+            return;
+        }
+        if (['high', 'critical'].includes(state.priority) && !rootCause) {
+            warning.hidden = false;
+            warning.textContent = 'Causa raiz e obrigatoria para prioridade Alta ou Critica.';
+            showToast('Informe a causa raiz.');
+            return;
+        }
+        if (done < checks.length) {
+            warning.hidden = false;
+            warning.textContent = `Checklist parcial: ${done}/${checks.length}. A resolucao sera registrada com pendencias declaradas.`;
+        }
+        state.status = 'resolved';
+        state.statusLabel = STATUS_LABELS.resolved;
+        state.resolved = true;
+        updateBadges();
+        addActivity('resolution', 'check-circle', `${CURRENT_USER} resolveu o chamado`, `Solucao: ${summary}`, 'Resolucao');
+        if (publicComment) addActivity('comment', 'message-square', 'Comentario publico enviado', publicComment, 'Comentario publico');
+        if (internalComment) addActivity('comment', 'message-square-lock', 'Comentario interno adicionado', internalComment, 'Comentario interno');
+        if (kb) addActivity('resolution', 'book-open', 'Rascunho de artigo criado', 'Base de conhecimento preparada a partir da solucao.', 'Resolucao');
+        closeDrawers();
+        showToast(`Chamado #${state.number} resolvido.`);
+    }
+
+    function escalateTicket() {
+        const target = escalationDrawer.querySelector('[data-escalation-target]').value.trim();
+        const reason = escalationDrawer.querySelector('[data-escalation-reason]').value.trim();
+        const owner = escalationDrawer.querySelector('[data-escalation-owner]').value.trim();
+        const priority = escalationDrawer.querySelector('[data-escalation-priority]').value;
+        const internal = escalationDrawer.querySelector('[data-escalation-internal]').value.trim();
+        const warning = escalationDrawer.querySelector('[data-escalation-warning]');
+        if (!target || !reason) {
+            warning.hidden = false;
+            warning.textContent = 'Informe o destino e o motivo do escalonamento.';
+            showToast('Preencha os campos obrigatorios.');
+            return;
+        }
+        state.status = 'escalated';
+        state.statusLabel = STATUS_LABELS.escalated;
+        state.assignedTo = owner || target;
+        if (priority) {
+            state.priority = priority;
+            state.priorityLabel = PRIORITY_LABELS[priority];
+            addActivity('escalation', 'flag', `Prioridade alterada para ${state.priorityLabel}`, 'Alteracao aplicada durante escalonamento.', 'Escalonamento');
+        }
+        updateBadges();
+        addActivity('escalation', 'arrow-up-right', `Chamado escalado para ${target}`, `Motivo: ${reason}`, 'Escalonamento');
+        if (internal) addActivity('comment', 'message-square-lock', 'Comentario interno adicionado', internal, 'Comentario interno');
+        closeDrawers();
+        showToast(`Chamado escalado para ${target}.`);
+    }
+
+    function runNextAction(type) {
+        if (type === 'assign_to_me') assignToMe();
+        if (type === 'escalate') openDrawer(escalationDrawer);
+        if (type === 'focus_comment') focusComment();
+        if (type === 'send_reminder') focusComment('Ola, seguimos aguardando seu retorno para avancar com este atendimento.');
+        if (type === 'open_device_tab') window.location.hash = 'device';
+        if (type === 'resolve') openDrawer(resolutionDrawer);
+        if (type === 'audit') openAudit();
+    }
+
+    document.addEventListener('click', (event) => {
+        const actionButton = event.target.closest('[data-detail-action]');
+        if (actionButton) {
+            const action = actionButton.dataset.detailAction;
+            if (action === 'open-resolution') openDrawer(resolutionDrawer);
+            if (action === 'open-escalation') openDrawer(escalationDrawer);
+            if (action === 'open-audit') openAudit();
+        }
+        if (event.target.closest('[data-drawer-close]')) closeDrawers();
+        const nextAction = event.target.closest('[data-next-action-button]');
+        if (nextAction) runNextAction(nextAction.dataset.nextActionType);
+        if (event.target.closest('[data-resolution-confirm]')) resolveTicket();
+        if (event.target.closest('[data-resolution-draft]')) showToast('Rascunho da resolucao salvo no mock.');
+        if (event.target.closest('[data-escalation-confirm]')) escalateTicket();
+        if (event.target.closest('[data-resolution-attach], [data-escalation-attach]')) showToast('Anexo mockado preparado.');
+    });
+
+    document.addEventListener('submit', submitComposerComment);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeDrawers();
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+            const form = event.target.closest('[data-detail-comment-form]');
+            if (form) submitComposerComment({ target: form, preventDefault() {} });
+        }
+    });
+    resolutionDrawer?.querySelectorAll('[data-resolution-checklist] input[type="checkbox"]').forEach((check) => {
+        check.addEventListener('change', () => {
+            updateResolutionProgress();
+            showToast('Checklist atualizado.');
+        });
+    });
+    resolutionDrawer?.querySelector('[data-resolution-kb]')?.addEventListener('change', (event) => {
+        resolutionDrawer.querySelector('[data-resolution-kb-title-wrap]').hidden = !event.target.checked;
+    });
+    toast?.querySelector('button')?.addEventListener('click', () => {
+        const undo = toastUndo;
+        toastUndo = null;
+        toast.hidden = true;
+        undo?.();
+    });
+
+    updateResolutionProgress();
+    updateNextAction();
+})();
+</script>

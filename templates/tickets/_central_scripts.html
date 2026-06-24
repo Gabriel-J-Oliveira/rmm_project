@@ -128,7 +128,8 @@
     }
 
     function closeFloatingUi() {
-        document.querySelectorAll('.desk-command-palette, .desk-shortcuts-overlay').forEach((item) => { item.hidden = true; });
+        closeCommandPalette();
+        document.querySelectorAll('.desk-shortcuts-overlay').forEach((item) => { item.hidden = true; });
         document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
         document.querySelectorAll('.desk-inline-popover[open]').forEach((details) => { details.open = false; });
         hideContextMenu();
@@ -887,10 +888,17 @@
     function openCommandPalette() {
         if (!command) return;
         command.hidden = false;
+        document.body.classList.add('nw-command-open');
         const input = command.querySelector('input');
         input.value = '';
         renderCommandResults('');
         input.focus();
+    }
+
+    function closeCommandPalette() {
+        if (!command) return;
+        command.hidden = true;
+        document.body.classList.remove('nw-command-open');
     }
 
     function commandItems(query = '') {
@@ -934,7 +942,7 @@
         container.querySelectorAll('[data-command-item]').forEach((button) => {
             button.addEventListener('click', () => {
                 const item = items[Number(button.dataset.commandItem)];
-                command.hidden = true;
+                closeCommandPalette();
                 item?.action?.();
             });
         });
@@ -1049,8 +1057,14 @@
         });
         command?.querySelector('input')?.addEventListener('input', (event) => { commandIndex = 0; renderCommandResults(event.target.value); });
         document.querySelectorAll('[data-command-open]').forEach((button) => button.addEventListener('click', openCommandPalette));
-        document.querySelectorAll('[data-close-overlay]').forEach((button) => button.addEventListener('click', () => button.closest('[data-shortcuts-dialog], [data-command-palette]').hidden = true));
-        command?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-command-palette')) command.hidden = true; });
+        document.querySelectorAll('[data-close-overlay]').forEach((button) => button.addEventListener('click', () => {
+            if (button.closest('[data-command-palette]')) closeCommandPalette();
+            else button.closest('[data-shortcuts-dialog]')?.setAttribute('hidden', '');
+        }));
+        command?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-command-palette')) closeCommandPalette(); });
+        command?.addEventListener('wheel', (event) => {
+            if (!event.target.closest('.desk-command-groups')) event.preventDefault();
+        }, { passive: false });
         shortcuts?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-shortcuts-overlay')) shortcuts.hidden = true; });
         toast?.querySelector('button')?.addEventListener('click', () => {
             const undo = toastUndo;
@@ -1120,7 +1134,7 @@
             const items = command._items || [];
             if (event.key === 'ArrowDown') { event.preventDefault(); commandIndex = Math.min(items.length - 1, commandIndex + 1); renderCommandResults(command.querySelector('input').value); }
             if (event.key === 'ArrowUp') { event.preventDefault(); commandIndex = Math.max(0, commandIndex - 1); renderCommandResults(command.querySelector('input').value); }
-            if (event.key === 'Enter') { event.preventDefault(); command.hidden = true; items[commandIndex]?.action?.(); }
+            if (event.key === 'Enter') { event.preventDefault(); closeCommandPalette(); items[commandIndex]?.action?.(); }
             return;
         }
         if (typing) return;
