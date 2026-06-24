@@ -24,6 +24,55 @@
     let lastCheckedIndex = null;
     let commandIndex = 0;
     let pendingContextTicketId = null;
+    let toastUndo = null;
+    const STATUS_LABELS = {
+        new: 'Novo',
+        in_progress: 'Em atendimento',
+        waiting_user: 'Aguardando usuario',
+        waiting_third_party: 'Aguardando terceiro',
+        resolved: 'Resolvido',
+        closed: 'Fechado',
+        canceled: 'Cancelado',
+        escalated: 'Escalado'
+    };
+    const PRIORITY_LABELS = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
+    const STATUS_TRANSITIONS = {
+        new: ['in_progress', 'waiting_user', 'canceled'],
+        in_progress: ['waiting_user', 'waiting_third_party', 'resolved', 'escalated'],
+        waiting_user: ['in_progress', 'resolved', 'canceled'],
+        waiting_third_party: ['in_progress', 'waiting_user', 'resolved'],
+        resolved: ['in_progress'],
+        closed: ['in_progress'],
+        canceled: ['in_progress'],
+        escalated: ['in_progress', 'resolved']
+    };
+    const SENSITIVE_STATUS = new Set(['resolved', 'closed', 'canceled']);
+    const MACROS = [
+        'Ola, estamos verificando.',
+        'Poderia enviar um print do erro?',
+        'Realizamos ajuste e aguardamos validacao.',
+        'Chamado resolvido. Favor confirmar.'
+    ];
+
+    ticketData.forEach((ticket) => {
+        ticket.events = ticket.events || [
+            { icon: 'ticket-check', text: 'Chamado criado', when: 'Hoje, 08:40', author: ticket.requester },
+            ...(ticket.origin === 'rmm' ? [{ icon: 'activity', text: 'Alerta RMM recebido', when: ticket.updated_for, author: 'RMM' }] : []),
+            { icon: 'user-round-check', text: ticket.assigned_to ? `${ticket.assigned_to} assumiu` : 'Sem responsavel definido', when: ticket.updated_for, author: ticket.assigned_to || 'Sistema' }
+        ];
+        ticket.relatedTicketIds = ticket.relatedTicketIds || ticketData
+            .filter((candidate) => candidate.number !== ticket.number && (
+                (ticket.endpoint?.hostname && candidate.endpoint?.hostname === ticket.endpoint.hostname)
+                || candidate.requester === ticket.requester
+                || candidate.category === ticket.category
+            ))
+            .slice(0, 3)
+            .map((candidate) => candidate.number);
+        if (ticket.rmm) {
+            ticket.rmm.antivirus = ticket.rmm.antivirus || (ticket.title.toLowerCase().includes('bitdefender') ? 'Alerta' : 'OK');
+            ticket.rmm.backup = ticket.rmm.backup || (ticket.title.toLowerCase().includes('backup') ? 'Falhou' : 'OK');
+        }
+    });
 
     function rows() {
         return Array.from(document.querySelectorAll(rowSelector));
@@ -63,14 +112,15 @@
         return `/tickets/${encodeURIComponent(ticket.number)}/`;
     }
 
-    function showToast(message, type = 'info', actionLabel = '') {
+    function showToast(message, type = 'info', actionLabel = '', undoCallback = null) {
         if (!toast) return;
         toast.dataset.type = type;
         toast.querySelector('span').textContent = message || 'Acao aplicada.';
         const action = toast.querySelector('button');
+        toastUndo = undoCallback;
         if (action) {
             action.textContent = actionLabel || 'Desfazer';
-            action.hidden = !actionLabel && !message?.toLowerCase().includes('atribu');
+            action.hidden = !undoCallback;
         }
         toast.hidden = false;
         clearTimeout(showToast.timer);
@@ -82,6 +132,7 @@
         document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
         document.querySelectorAll('.desk-inline-popover[open]').forEach((details) => { details.open = false; });
         hideContextMenu();
+        closeActionMenus();
         closeDrawer();
     }
 
@@ -124,12 +175,12 @@
 
     function getNextBestAction(ticket) {
         const waitingUser = ticket.status === 'waiting_user';
-        const hasRelated = Number(ticket.comments?.length || 0) > 1 || ticket.partner;
+        const hasRelated = Number(ticket.relatedTicketIds?.length || 0) > 0;
         if (!ticket.assigned_to) {
-            return { tone: 'success', icon: 'user-plus', title: 'Chamado sem responsavel', text: 'Assuma ou atribua este chamado para iniciar o atendimento.', action: 'Assumir atendimento', type: 'assign' };
+            return { tone: 'warning', icon: 'user-plus', title: 'Chamado sem responsavel', text: 'Assuma ou atribua este chamado para iniciar o atendimento.', action: 'Assumir atendimento', type: 'assign' };
         }
         if (ticket.sla_state === 'critical') {
-            return { tone: 'danger', icon: 'alarm-clock', title: 'SLA vencido', text: 'Este chamado ja ultrapassou o prazo. Registre uma atualizacao ou escale o atendimento.', action: 'Escalar', type: 'escalate' };
+            return { tone: 'critical', icon: 'alarm-clock', title: 'SLA vencido', text: 'Este chamado ultrapassou o prazo. Registre uma atualizacao ou escale o atendimento.', action: 'Escalar', type: 'escalate' };
         }
         if (ticket.sla_state === 'warning') {
             return { tone: 'warning', icon: 'timer', title: 'SLA vencendo em breve', text: 'Priorize uma primeira resposta ou atualizacao para evitar estouro de SLA.', action: 'Comentar agora', type: 'comment' };
@@ -144,27 +195,83 @@
             return { tone: 'warning', icon: 'mail-question', title: 'Aguardando retorno', text: 'Considere enviar um lembrete ao solicitante.', action: 'Enviar lembrete', type: 'reminder' };
         }
         if (hasRelated) {
-            return { tone: 'info', icon: 'git-merge', title: 'Possiveis duplicados', text: 'Ha chamados semelhantes para este solicitante ou endpoint.', action: 'Ver relacionados', type: 'related' };
+            return { tone: 'info', icon: 'git-merge', title: 'Possiveis relacionados', text: 'Ha chamados semelhantes para este solicitante ou endpoint.', action: 'Ver relacionados', type: 'related' };
         }
-        return { tone: 'success', icon: 'sparkles', title: 'Proxima melhor acao', text: ticket.suggestion || 'Revise o contexto e registre a proxima atualizacao.', action: 'Comentar agora', type: 'comment' };
+        return { tone: 'neutral', icon: 'sparkles', title: 'Chamado pronto para triagem', text: 'Revise os detalhes e registre a proxima atualizacao.', action: 'Comentar', type: 'comment' };
     }
 
     function renderComments(ticket) {
         return ticket.comments?.length
-            ? ticket.comments.map((comment) => `
+            ? ticket.comments.slice(0, 3).map((comment) => `
                 <div class="desk-comment">
-                    <div><strong>${escapeHtml(comment.author)}</strong><span>${escapeHtml(comment.when)} &middot; ${escapeHtml(comment.visibility)}</span></div>
+                    <div><strong>${escapeHtml(comment.author)}</strong><span>${escapeHtml(comment.when)} <em class="nw-comment-visibility">${escapeHtml(comment.visibility)}</em></span></div>
                     <p>${escapeHtml(comment.body)}</p>
                 </div>
             `).join('')
             : '<div class="desk-empty compact"><i data-lucide="message-circle"></i><span>Nenhum comentario no preview.</span></div>';
     }
 
+    function metricTone(value) {
+        const numeric = Number(value || 0);
+        if (numeric >= 90) return 'critical';
+        if (numeric >= 70) return 'warning';
+        return 'ok';
+    }
+
+    function renderEvents(ticket) {
+        const events = ticket.events?.slice(0, 3) || [];
+        return events.map((event) => `
+            <div>
+                <i data-lucide="${escapeHtml(event.icon || 'activity')}"></i>
+                <strong>${escapeHtml(event.text)}</strong>
+                <span>${escapeHtml(event.when || 'agora')}</span>
+            </div>
+        `).join('');
+    }
+
+    function renderRelated(ticket) {
+        const related = (ticket.relatedTicketIds || []).map(getTicket).filter(Boolean).slice(0, 3);
+        if (!related.length) return '';
+        return `
+            <article class="desk-detail-section nw-related-card">
+                <header><h3>Chamados relacionados</h3><button class="desk-btn" type="button" data-preview-action="merge-related">Mesclar duplicados</button></header>
+                <div class="nw-related-list">
+                    ${related.map((item) => `
+                        <button type="button" data-related-ticket="${escapeHtml(item.number)}">
+                            <span>#${escapeHtml(item.number)}</span>
+                            <strong>${escapeHtml(item.title)}</strong>
+                            <em>${escapeHtml(item.status_label)} &middot; ${escapeHtml(item.origin_label)}</em>
+                        </button>
+                    `).join('')}
+                </div>
+            </article>
+        `;
+    }
+
+    function renderNoEndpointCard() {
+        return `
+            <article class="desk-rmm-mini-card nw-rmm-empty">
+                <header>
+                    <div>
+                        <span class="desk-section-eyebrow">RMM endpoint</span>
+                        <h3>Nenhum endpoint vinculado</h3>
+                        <p>Vincule um dispositivo para ver telemetria e acoes do RMM.</p>
+                    </div>
+                </header>
+                <div class="desk-rmm-actions">
+                    <button class="desk-btn" type="button" data-preview-action="link-device">Vincular endpoint</button>
+                </div>
+            </article>
+        `;
+    }
+
     function renderRmmCard(ticket) {
         const endpoint = ticket.endpoint;
         const rmm = ticket.rmm;
-        if (!rmm) return '';
+        if (!endpoint) return renderNoEndpointCard();
+        if (!rmm) return renderNoEndpointCard();
         const remoteDisabled = endpoint?.status === 'offline' ? 'disabled title="Endpoint offline"' : '';
+        const diskCritical = Number(rmm.disk || 0) >= 90;
         return `
             <article class="desk-rmm-mini-card risk-${badgeClass(rmm.risk)}">
                 <header>
@@ -176,11 +283,16 @@
                     <span class="desk-rmm-alert-pill">${escapeHtml(rmm.active_alerts)} alertas</span>
                 </header>
                 <div class="desk-rmm-metrics">
-                    <div><span>CPU</span><meter value="${escapeHtml(rmm.cpu)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.cpu)}%</strong></div>
-                    <div><span>Mem</span><meter value="${escapeHtml(rmm.memory)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.memory)}%</strong></div>
-                    <div><span>Disco</span><meter value="${escapeHtml(rmm.disk)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.disk)}%</strong></div>
+                    <div class="tone-${metricTone(rmm.cpu)}"><span>CPU</span><meter value="${escapeHtml(rmm.cpu)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.cpu)}%</strong></div>
+                    <div class="tone-${metricTone(rmm.memory)}"><span>Mem</span><meter value="${escapeHtml(rmm.memory)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.memory)}%</strong></div>
+                    <div class="tone-${metricTone(rmm.disk)}"><span>Disco</span><meter value="${escapeHtml(rmm.disk)}" min="0" max="100"></meter><strong>${escapeHtml(rmm.disk)}%</strong></div>
                 </div>
-                <p class="desk-muted">Usuario logado: ${escapeHtml(rmm.logged_user)}</p>
+                <div class="nw-rmm-status-grid">
+                    <span>Usuario logado: <strong>${escapeHtml(rmm.logged_user)}</strong></span>
+                    <span>Antivirus: <strong>${escapeHtml(rmm.antivirus || 'OK')}</strong></span>
+                    <span>Backup: <strong>${escapeHtml(rmm.backup || 'OK')}</strong></span>
+                    ${diskCritical ? '<span class="is-critical">Disco critico</span>' : ''}
+                </div>
                 <div class="desk-rmm-actions">
                     <a class="desk-btn" href="${endpointUrl}">Ver dispositivo</a>
                     <button class="desk-btn" type="button" data-preview-action="open-rmm">Abrir no RMM</button>
@@ -206,6 +318,7 @@
                 <div class="desk-preview-header-actions">
                     <button class="desk-icon-action" type="button" data-preview-action="copy" aria-label="Copiar link"><i data-lucide="link"></i></button>
                     <button class="desk-icon-action" type="button" data-preview-action="drawer" aria-label="Abrir detalhe rapido"><i data-lucide="sidebar"></i></button>
+                    <button class="desk-icon-action" type="button" data-preview-action="more" aria-label="Mais acoes"><i data-lucide="more-horizontal"></i></button>
                     <a class="desk-icon-action" href="${ticketUrl(ticket)}" aria-label="Abrir em tela cheia"><i data-lucide="maximize-2"></i></a>
                 </div>
             </header>
@@ -214,6 +327,7 @@
                 <span class="desk-badge priority-${badgeClass(ticket.priority)}">${escapeHtml(ticket.priority_label)}</span>
                 ${ticket.partner ? '<span class="desk-badge partner-badge">Socio / VIP</span>' : ''}
                 <span class="desk-origin-badge origin-${badgeClass(ticket.origin)}">${escapeHtml(ticket.origin_label)}</span>
+                <span class="desk-badge neutral">${escapeHtml(ticket.category)}</span>
             </div>
             <section class="desk-detail-panel-body">
                 <article class="desk-suggestion-card nw-next-action nw-next-action--${action.tone}">
@@ -235,12 +349,10 @@
                     </div>
                 </article>
                 <article class="desk-detail-section"><h3>Ultimos comentarios</h3><div class="desk-comments" data-preview-comments>${renderComments(ticket)}</div></article>
+                ${renderRelated(ticket)}
                 <article class="desk-detail-section">
                     <h3>Eventos recentes</h3>
-                    <div class="desk-preview-timeline">
-                        <div><i data-lucide="ticket-check"></i><strong>Chamado criado</strong><span>Hoje, 08:40</span></div>
-                        <div><i data-lucide="user-round-check"></i><strong>${escapeHtml(ticket.assigned_to || 'Sem responsavel definido')}</strong><span>${escapeHtml(ticket.updated_for)}</span></div>
-                    </div>
+                    <div class="desk-preview-timeline">${renderEvents(ticket)}</div>
                 </article>
                 <div class="desk-quick-actions">
                     <button class="desk-btn desk-btn-primary" type="button" data-preview-action="assign">${escapeHtml(primaryLabel)}</button>
@@ -249,6 +361,8 @@
                     <button class="desk-btn" type="button" data-preview-action="comment">Comentar</button>
                     <a class="desk-btn" href="${ticketUrl(ticket)}">Abrir tela cheia</a>
                     ${ticket.rmm ? '<button class="desk-btn" type="button" data-preview-action="open-rmm">Abrir no RMM</button>' : ''}
+                    ${ticket.endpoint?.status === 'online' ? '<button class="desk-btn" type="button" data-preview-action="remote">Acesso remoto</button>' : ''}
+                    ${ticket.relatedTicketIds?.length ? '<button class="desk-btn" type="button" data-preview-action="related">Ver relacionados</button>' : ''}
                 </div>
             </section>
             <form class="desk-comment-dock" data-comment-form>
@@ -306,48 +420,85 @@
             .filter(Boolean);
     }
 
+    function addTicketEvent(ticket, text, icon = 'activity', author = CURRENT_TECH) {
+        ticket.events = ticket.events || [];
+        ticket.events.unshift({ icon, text, when: 'agora', author });
+    }
+
     function setAssignee(ticketId, assignee = CURRENT_TECH) {
         const ticket = getTicket(ticketId);
         const row = getRow(ticketId);
         if (!ticket || !row) return;
+        const previous = ticket.assigned_to;
         ticket.assigned_to = assignee;
         row.dataset.technician = assignee;
         row.dataset.unassigned = '0';
         row.classList.remove('is-unassigned');
+        addTicketEvent(ticket, `${assignee} assumiu o chamado`, 'user-round-check', assignee);
         const pill = row.querySelector('.desk-assignee-pill');
         if (pill) {
             pill.classList.remove('is-unassigned');
             pill.innerHTML = `<span class="desk-avatar">${escapeHtml(assignee.slice(0, 1))}</span>${escapeHtml(assignee)}`;
         }
         if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-        showToast(`Chamado #${ticket.number} atribuido a ${assignee}.`, 'success', 'Desfazer');
+        showToast(`Chamado #${ticket.number} atribuido a voce.`, 'success', 'Desfazer', () => {
+            ticket.assigned_to = previous || '';
+            row.dataset.technician = previous || 'Sem responsavel';
+            row.dataset.unassigned = previous ? '0' : '1';
+            row.classList.toggle('is-unassigned', !previous);
+            if (selectedTicketId === String(ticketId)) renderPreview(ticket);
+            showToast('Atribuicao desfeita.', 'info');
+        });
+    }
+
+    function updatePriority(ticketId, next) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        if (next === 'critical') {
+            showToast('Prioridade critica aplicada. Justificativa registrada no mock.', 'warning');
+        }
+        ticket.priority = next;
+        ticket.priority_label = PRIORITY_LABELS[next];
+        const row = getRow(ticketId);
+        row?.setAttribute('data-priority', next);
+        row?.classList.remove('priority-low', 'priority-normal', 'priority-high', 'priority-critical');
+        row?.classList.add(`priority-${next}`);
+        addTicketEvent(ticket, `Prioridade alterada para ${PRIORITY_LABELS[next]}`, 'flag');
+        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
+        showToast(`Prioridade alterada para ${PRIORITY_LABELS[next]}.`, next === 'critical' ? 'warning' : 'info');
     }
 
     function cyclePriority(ticketId) {
         const order = ['low', 'normal', 'high', 'critical'];
-        const labels = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
         const ticket = getTicket(ticketId);
         if (!ticket) return;
-        const next = order[(order.indexOf(ticket.priority) + 1) % order.length] || 'normal';
-        ticket.priority = next;
-        ticket.priority_label = labels[next];
-        getRow(ticketId)?.setAttribute('data-priority', next);
+        updatePriority(ticketId, order[(order.indexOf(ticket.priority) + 1) % order.length] || 'normal');
+    }
+
+    function updateStatus(ticketId, next) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        ticket.status = next;
+        ticket.status_label = STATUS_LABELS[next] || next;
+        const row = getRow(ticketId);
+        row?.setAttribute('data-status', next);
+        const summary = row?.querySelector('.desk-badge[class*="status-"]');
+        if (summary) {
+            summary.className = `desk-badge status-${next}`;
+            summary.textContent = ticket.status_label;
+        }
+        addTicketEvent(ticket, `Status alterado para ${ticket.status_label}`, 'workflow');
         if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-        showToast(`Prioridade alterada para ${labels[next]}.`, next === 'critical' ? 'warning' : 'info');
+        showToast(`Status atualizado para ${ticket.status_label}.`, 'success');
     }
 
     function cycleStatus(ticketId) {
-        const order = ['new', 'in_progress', 'waiting_user', 'waiting_third_party', 'resolved'];
-        const labels = { new: 'Novo', in_progress: 'Em atendimento', waiting_user: 'Aguardando usuario', waiting_third_party: 'Aguardando terceiro', resolved: 'Resolvido' };
         const ticket = getTicket(ticketId);
         if (!ticket) return;
-        const next = order[(order.indexOf(ticket.status) + 1) % order.length] || 'in_progress';
-        ticket.status = next;
-        ticket.status_label = labels[next];
-        getRow(ticketId)?.setAttribute('data-status', next);
-        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-        if (['resolved'].includes(next)) openBulkConfirm(`Mudar status para ${labels[next]}`, [ticket]);
-        else showToast(`Status atualizado para ${labels[next]}.`, 'success');
+        const options = STATUS_TRANSITIONS[ticket.status] || ['in_progress'];
+        const next = options[0] || 'in_progress';
+        if (SENSITIVE_STATUS.has(next)) openReasonDialog(`Mudar status para ${STATUS_LABELS[next]}`, () => updateStatus(ticketId, next));
+        else updateStatus(ticketId, next);
     }
 
     function copyTicketLink(ticketId) {
@@ -358,6 +509,92 @@
         showToast('Link do chamado copiado.', 'success');
     }
 
+    function closeActionMenus() {
+        document.querySelectorAll('.nw-preview-action-menu').forEach((menu) => menu.remove());
+    }
+
+    function positionActionMenu(menu, anchor) {
+        document.body.appendChild(menu);
+        const rect = anchor?.getBoundingClientRect?.();
+        if (rect) {
+            menu.style.left = `${Math.min(rect.left, window.innerWidth - 260)}px`;
+            menu.style.top = `${Math.min(rect.bottom + 8, window.innerHeight - menu.offsetHeight - 12)}px`;
+        } else {
+            const panel = previewPanel?.getBoundingClientRect();
+            menu.style.left = `${Math.max(12, (panel?.left || 24) + 24)}px`;
+            menu.style.top = `${Math.max(12, (panel?.top || 24) + 120)}px`;
+        }
+    }
+
+    function openStatusMenu(ticketId, anchor) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        closeActionMenus();
+        const menu = document.createElement('div');
+        menu.className = 'nw-preview-action-menu';
+        menu.innerHTML = `<strong>Mudar status</strong>${(STATUS_TRANSITIONS[ticket.status] || ['in_progress']).map((status) => `<button type="button" data-status="${status}">${STATUS_LABELS[status] || status}${SENSITIVE_STATUS.has(status) ? '<small>pede motivo</small>' : ''}</button>`).join('')}`;
+        menu.querySelectorAll('[data-status]').forEach((button) => button.addEventListener('click', () => {
+            const next = button.dataset.status;
+            closeActionMenus();
+            if (SENSITIVE_STATUS.has(next)) openReasonDialog(`Mudar status para ${STATUS_LABELS[next]}`, () => updateStatus(ticketId, next));
+            else updateStatus(ticketId, next);
+        }));
+        positionActionMenu(menu, anchor);
+    }
+
+    function openPriorityMenu(ticketId, anchor) {
+        closeActionMenus();
+        const menu = document.createElement('div');
+        menu.className = 'nw-preview-action-menu';
+        menu.innerHTML = `<strong>Mudar prioridade</strong>${Object.entries(PRIORITY_LABELS).map(([value, label]) => `<button type="button" data-priority="${value}">${label}${value === 'critical' ? '<small>pede justificativa</small>' : ''}</button>`).join('')}`;
+        menu.querySelectorAll('[data-priority]').forEach((button) => button.addEventListener('click', () => {
+            const next = button.dataset.priority;
+            closeActionMenus();
+            if (next === 'critical') openReasonDialog('Justificar prioridade critica', () => updatePriority(ticketId, next));
+            else updatePriority(ticketId, next);
+        }));
+        positionActionMenu(menu, anchor);
+    }
+
+    function openMacroMenu(anchor) {
+        const textarea = previewPanel?.querySelector('.desk-comment-dock textarea');
+        if (!textarea) return;
+        closeActionMenus();
+        const menu = document.createElement('div');
+        menu.className = 'nw-preview-action-menu nw-preview-action-menu--wide';
+        menu.innerHTML = `<strong>Macros rapidas</strong>${MACROS.map((macro) => `<button type="button" data-macro="${escapeHtml(macro)}">${escapeHtml(macro)}</button>`).join('')}`;
+        menu.querySelectorAll('[data-macro]').forEach((button) => button.addEventListener('click', () => {
+            textarea.value = textarea.value ? `${textarea.value}\n${button.dataset.macro}` : button.dataset.macro;
+            textarea.focus();
+            closeActionMenus();
+        }));
+        positionActionMenu(menu, anchor);
+    }
+
+    function openReasonDialog(title, onConfirm) {
+        const dialog = document.createElement('dialog');
+        dialog.className = 'nw-bulk-dialog nw-reason-dialog';
+        dialog.innerHTML = `
+            <form method="dialog">
+                <header>
+                    <div><span>Confirmacao</span><h2>${escapeHtml(title)}</h2><p>Informe uma justificativa curta para registrar no historico do chamado.</p></div>
+                    <button type="button" class="desk-icon-action" data-reason-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-bulk-dialog__comment"><span>Motivo</span><textarea rows="3" placeholder="Ex.: validado com o solicitante..."></textarea></label>
+                <footer><button class="desk-btn" value="cancel">Cancelar</button><button class="desk-btn desk-btn-primary" value="confirm">Confirmar</button></footer>
+            </form>
+        `;
+        document.body.appendChild(dialog);
+        dialog.querySelector('[data-reason-close]').addEventListener('click', () => dialog.close());
+        dialog.addEventListener('close', () => dialog.remove());
+        dialog.querySelector('[value="confirm"]').addEventListener('click', () => {
+            onConfirm?.();
+            showToast('Justificativa registrada.', 'success');
+        });
+        dialog.showModal();
+        window.lucide?.createIcons?.();
+    }
+
     function submitQuickComment(form) {
         const ticket = getTicket(selectedTicketId);
         const textarea = form?.querySelector('textarea');
@@ -366,6 +603,7 @@
         const internal = form.querySelector('[name="internal"]')?.checked !== false;
         ticket.comments = ticket.comments || [];
         ticket.comments.unshift({ author: CURRENT_TECH, when: 'agora', visibility: internal ? 'Interno' : 'Publico', body });
+        addTicketEvent(ticket, `Comentario ${internal ? 'interno' : 'publico'} adicionado`, 'message-square');
         textarea.value = '';
         renderPreview(ticket);
         showToast('Comentario adicionado.', 'success');
@@ -753,20 +991,44 @@
             if (label.includes('mesclar')) button.addEventListener('click', openMergeDialog);
         });
         previewPanel?.addEventListener('click', (event) => {
+            const related = event.target.closest('[data-related-ticket]');
+            if (related) {
+                selectTicketForPreview(related.dataset.relatedTicket);
+                return;
+            }
+            if (event.target.closest('[data-mock-macro]')) {
+                openMacroMenu(event.target.closest('[data-mock-macro]'));
+                return;
+            }
+            if (event.target.closest('[data-mock-attach]')) {
+                showToast('Anexo sera implementado em breve.', 'info');
+                return;
+            }
             const action = event.target.closest('[data-preview-action]')?.dataset.previewAction;
             if (!action || !selectedTicketId) return;
             if (action === 'assign') setAssignee(selectedTicketId);
             if (action === 'copy') copyTicketLink(selectedTicketId);
             if (action === 'drawer') openTicketDrawer(selectedTicketId);
-            if (action === 'status') cycleStatus(selectedTicketId);
-            if (action === 'priority') cyclePriority(selectedTicketId);
+            if (action === 'more') showContextMenu(event, selectedTicketId);
+            if (action === 'status') openStatusMenu(selectedTicketId, event.target.closest('[data-preview-action]'));
+            if (action === 'priority') openPriorityMenu(selectedTicketId, event.target.closest('[data-preview-action]'));
             if (action === 'comment') previewPanel.querySelector('.desk-comment-dock textarea')?.focus();
             if (action === 'open-rmm' || action === 'rmm') showToast('Abrindo contexto RMM no mock.', 'info');
-            if (action === 'remote') showToast('Acesso remoto preparado no mock.', 'success');
-            if (action === 'device') window.location.href = endpointUrl;
+            if (action === 'remote') showToast(`Iniciando acesso remoto para ${getTicket(selectedTicketId)?.endpoint?.hostname || 'endpoint'}.`, 'success');
+            if (action === 'device') showToast('Abrindo dispositivo no inventario RMM.', 'info');
+            if (action === 'link-device') showToast('Vinculo de endpoint sera conectado ao inventario RMM.', 'info');
             if (action === 'escalate') openBulkConfirm('Escalar', [getTicket(selectedTicketId)]);
             if (action === 'reminder') showToast('Lembrete ao solicitante preparado.', 'success');
             if (action === 'related') openTicketDrawer(selectedTicketId);
+            if (action === 'merge-related') {
+                const ticket = getTicket(selectedTicketId);
+                [selectedTicketId, ...(ticket?.relatedTicketIds || [])].forEach((id) => {
+                    const checkbox = getRow(id)?.querySelector('.desk-row-checkbox');
+                    if (checkbox) checkbox.checked = true;
+                });
+                refreshSelection();
+                openMergeDialog();
+            }
         });
         previewPanel?.addEventListener('submit', (event) => {
             if (event.target.matches('[data-comment-form]')) {
@@ -790,6 +1052,12 @@
         document.querySelectorAll('[data-close-overlay]').forEach((button) => button.addEventListener('click', () => button.closest('[data-shortcuts-dialog], [data-command-palette]').hidden = true));
         command?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-command-palette')) command.hidden = true; });
         shortcuts?.addEventListener('click', (event) => { if (event.target.classList.contains('desk-shortcuts-overlay')) shortcuts.hidden = true; });
+        toast?.querySelector('button')?.addEventListener('click', () => {
+            const undo = toastUndo;
+            toastUndo = null;
+            toast.hidden = true;
+            undo?.();
+        });
         contextMenu?.addEventListener('click', (event) => {
             const action = event.target.closest('[data-context-action]')?.dataset.contextAction;
             if (!action || !pendingContextTicketId) return;
@@ -805,7 +1073,10 @@
             if (action === 'rmm') showToast('Abrindo no RMM mockado.', 'info');
             if (action === 'merge') { getRow(pendingContextTicketId)?.querySelector('.desk-row-checkbox')?.click(); openMergeDialog(); }
         });
-        document.addEventListener('click', (event) => { if (!event.target.closest('[data-ticket-context-menu]')) hideContextMenu(); });
+        document.addEventListener('click', (event) => {
+            if (!event.target.closest('[data-ticket-context-menu]')) hideContextMenu();
+            if (!event.target.closest('.nw-preview-action-menu') && !event.target.closest('[data-preview-action]') && !event.target.closest('[data-mock-macro]')) closeActionMenus();
+        });
         drawer?.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
         drawer?.addEventListener('click', (event) => { if (event.target === drawer) closeDrawer(); });
         bulkDialog?.querySelector('[data-bulk-dialog-close]')?.addEventListener('click', () => bulkDialog.close());
@@ -871,9 +1142,9 @@
         } else if (event.key.toLowerCase() === 'a' && focusedTicketId) {
             setAssignee(focusedTicketId);
         } else if (event.key.toLowerCase() === 's' && focusedTicketId) {
-            cycleStatus(focusedTicketId);
+            openStatusMenu(focusedTicketId, getRow(focusedTicketId));
         } else if (event.key.toLowerCase() === 'p' && focusedTicketId) {
-            cyclePriority(focusedTicketId);
+            openPriorityMenu(focusedTicketId, getRow(focusedTicketId));
         } else if (event.key.toLowerCase() === 'c') {
             previewPanel?.querySelector('.desk-comment-dock textarea')?.focus();
         }
