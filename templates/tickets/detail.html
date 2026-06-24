@@ -4,26 +4,28 @@
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
-<section class="desk-shell desk-ticket-detail-shell">
+<section class="desk-shell desk-ticket-detail-shell nw-ticket-detail-shell">
     {% include "tickets/_detail_header.html" %}
     {% include "tickets/_desk_nav.html" %}
     {% include "tickets/_detail_tabs.html" %}
 
-    <section id="overview" class="desk-detail-tab-section">
-        {% include "tickets/_detail_overview.html" %}
-    </section>
+    <div class="nw-ticket-detail-body">
+        <section id="overview" class="desk-detail-tab-section nw-ticket-overview-section">
+            {% include "tickets/_detail_overview.html" %}
+        </section>
 
-    <section id="attachments" class="desk-detail-tab-section">
-        {% include "tickets/_detail_attachments.html" %}
-    </section>
+        <section id="attachments" class="desk-detail-tab-section">
+            {% include "tickets/_detail_attachments.html" %}
+        </section>
 
-    <section id="device" class="desk-detail-tab-section">
-        {% include "tickets/_detail_device.html" %}
-    </section>
+        <section id="device" class="desk-detail-tab-section">
+            {% include "tickets/_detail_device.html" %}
+        </section>
 
-    <section id="related" class="desk-detail-tab-section">
-        {% include "tickets/_detail_related.html" %}
-    </section>
+        <section id="related" class="desk-detail-tab-section">
+            {% include "tickets/_detail_related.html" %}
+        </section>
+    </div>
 
     {% include "tickets/_detail_resolution_drawer.html" %}
     {% include "tickets/_detail_escalation_drawer.html" %}

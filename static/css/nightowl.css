@@ -13765,3 +13765,218 @@ body.page-tickets .nw-activity-badge {
         flex-direction: column;
     }
 }
+
+/* Ticket detail scroll architecture. */
+body.page-tickets .main-area:has(.nw-ticket-detail-shell) {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    min-height: 0;
+}
+
+body.page-tickets .main-area:has(.nw-ticket-detail-shell) > .topbar {
+    flex: 0 0 auto;
+}
+
+body.page-tickets .content:has(.nw-ticket-detail-shell) {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    padding: 18px 22px 20px;
+}
+
+body.page-tickets .nw-ticket-detail-shell {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+body.page-tickets .nw-ticket-detail-shell > .desk-ticket-detail-header,
+body.page-tickets .nw-ticket-detail-shell > .desk-nav,
+body.page-tickets .nw-ticket-detail-tabs {
+    flex: 0 0 auto;
+}
+
+body.page-tickets .nw-ticket-detail-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+}
+
+body.page-tickets .nw-ticket-detail-body {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 14px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 2px 18px 0;
+    scrollbar-gutter: stable;
+}
+
+body.page-tickets .nw-ticket-detail-body::-webkit-scrollbar,
+body.page-tickets .nw-ticket-main::-webkit-scrollbar,
+body.page-tickets .nw-ticket-sidebar::-webkit-scrollbar,
+body.page-tickets .desk-mini-list::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+
+body.page-tickets .nw-ticket-detail-body::-webkit-scrollbar-track,
+body.page-tickets .nw-ticket-main::-webkit-scrollbar-track,
+body.page-tickets .nw-ticket-sidebar::-webkit-scrollbar-track,
+body.page-tickets .desk-mini-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+body.page-tickets .nw-ticket-detail-body::-webkit-scrollbar-thumb,
+body.page-tickets .nw-ticket-main::-webkit-scrollbar-thumb,
+body.page-tickets .nw-ticket-sidebar::-webkit-scrollbar-thumb,
+body.page-tickets .desk-mini-list::-webkit-scrollbar-thumb {
+    background: rgba(51, 65, 85, 0.64);
+    border-radius: 999px;
+}
+
+body.page-tickets .nw-ticket-overview-section {
+    height: 100%;
+    min-height: min(740px, 100%);
+}
+
+body.page-tickets .nw-ticket-detail-grid {
+    align-items: stretch;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 25vw, 460px);
+    height: 100%;
+    min-height: min(740px, 100%);
+    overflow: hidden;
+}
+
+body.page-tickets .nw-ticket-main,
+body.page-tickets .nw-ticket-sidebar {
+    align-content: start;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 22px;
+    scrollbar-gutter: stable;
+}
+
+body.page-tickets .nw-ticket-main {
+    min-width: 0;
+    padding-right: 3px;
+}
+
+body.page-tickets .nw-ticket-sidebar {
+    max-height: none;
+    min-width: 360px;
+    padding-right: 5px;
+}
+
+body.page-tickets .desk-overview-main .desk-activity-panel {
+    min-height: 0;
+}
+
+body.page-tickets .desk-overview-main .desk-activity-panel .desk-activity-feed {
+    max-height: none;
+    overflow-y: visible;
+    padding-right: 0;
+}
+
+body.page-tickets .desk-mini-list {
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 3px;
+}
+
+body.page-tickets .nw-composer textarea {
+    max-height: 190px;
+    min-height: 78px;
+}
+
+body.page-tickets .nw-composer-actions {
+    gap: 7px;
+}
+
+body.page-tickets .desk-dropzone {
+    min-height: 32px;
+    padding: 6px 9px;
+}
+
+body.page-tickets .nw-service-checklist {
+    gap: 10px;
+    padding: 13px;
+}
+
+body.page-tickets .nw-service-checklist .desk-panel-title-row {
+    margin-bottom: 0;
+}
+
+body.page-tickets .nw-service-checklist__bar {
+    height: 5px;
+}
+
+body.page-tickets .nw-service-checklist__grid {
+    gap: 6px;
+}
+
+body.page-tickets .nw-service-checklist .desk-check {
+    min-height: 34px;
+    padding: 6px 8px;
+}
+
+body.page-tickets .nw-service-checklist .desk-check span {
+    font-size: 12px;
+    line-height: 1.25;
+}
+
+body.page-tickets .nw-activity-filters {
+    margin-bottom: 8px;
+}
+
+body.page-tickets .nw-activity-filters button {
+    min-height: 24px;
+}
+
+body.page-tickets .desk-activity-item {
+    min-height: 0;
+}
+
+@media (max-width: 1180px) {
+    body.page-tickets .nw-ticket-detail-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 38vw);
+    }
+
+    body.page-tickets .nw-ticket-sidebar {
+        min-width: 340px;
+    }
+}
+
+@media (max-width: 980px) {
+    body.page-tickets .content:has(.nw-ticket-detail-shell),
+    body.page-tickets .nw-ticket-detail-shell {
+        overflow: visible;
+    }
+
+    body.page-tickets .nw-ticket-detail-body {
+        overflow-y: visible;
+    }
+
+    body.page-tickets .nw-ticket-detail-grid {
+        grid-template-columns: 1fr;
+        min-height: 0;
+        overflow: visible;
+    }
+
+    body.page-tickets .nw-ticket-main,
+    body.page-tickets .nw-ticket-sidebar {
+        max-height: none;
+        min-width: 0;
+        overflow: visible;
+    }
+}
