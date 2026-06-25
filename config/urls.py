@@ -22,6 +22,7 @@ from django.urls import include, path
 from dashboard import views as dashboard_views
 
 urlpatterns = [
+    path('', dashboard_views.index, name='home'),
     path('admin/', admin.site.urls),
     path('api/agent/', include('agents.urls')),
     path('api/access-inventory/', include('access_inventory.api_urls')),

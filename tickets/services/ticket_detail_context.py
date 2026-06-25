@@ -102,11 +102,85 @@ def _related_tickets(ticket):
     }
 
 
+def _related_items(ticket, related_tickets, similar_tickets):
+    rows = []
+    seen = set()
+
+    def add_many(items, reason, score):
+        for item in items:
+            if item.number in seen:
+                continue
+            seen.add(item.number)
+            rows.append({
+                'ticket': item,
+                'reason': reason,
+                'score': score,
+            })
+
+    add_many(related_tickets.get('duplicates', []), 'Possivel duplicado', 94)
+    add_many(related_tickets.get('same_device', []), 'Mesmo endpoint', 82)
+    add_many(related_tickets.get('same_requester', []), 'Mesmo solicitante', 76)
+    add_many(similar_tickets, 'Similar resolvido', 68)
+    return rows
+
+
 def _attachments_for(ticket):
+    if not ticket.endpoint:
+        return []
     return [
-        {'name': f'evidencia-{ticket.number}.png', 'type': 'image', 'size': '284 KB', 'is_primary': True},
-        {'name': 'log-diagnostico.txt', 'type': 'text', 'size': '18 KB', 'is_primary': False},
-    ] if ticket.endpoint else []
+        {
+            'id': f'att-{ticket.number}-evidence',
+            'name': f'evidencia-{ticket.number}.png',
+            'type': 'image',
+            'kind': 'image',
+            'size': '284 KB',
+            'author': ticket.assigned_to or 'Gabriel',
+            'origin': 'comentario',
+            'uploaded_at': 'ha 18 min',
+            'is_primary': True,
+            'icon': 'image',
+            'preview': 'Captura de tela com evidencias do atendimento.',
+        },
+        {
+            'id': f'att-{ticket.number}-log',
+            'name': 'log-diagnostico.txt',
+            'type': 'log',
+            'kind': 'log',
+            'size': '18 KB',
+            'author': 'NightOwl RMM',
+            'origin': 'RMM',
+            'uploaded_at': 'ha 12 min',
+            'is_primary': False,
+            'icon': 'file-terminal',
+            'preview': '[08:41:02] Agent check started\n[08:41:03] Antivirus service missing\n[08:41:04] Inventory collected\n[08:41:07] Alert emitted',
+        },
+        {
+            'id': f'att-{ticket.number}-pdf',
+            'name': 'relatorio-antivirus.pdf',
+            'type': 'pdf',
+            'kind': 'pdf',
+            'size': '620 KB',
+            'author': 'Sistema',
+            'origin': 'RMM',
+            'uploaded_at': 'ha 8 min',
+            'is_primary': False,
+            'icon': 'file-text',
+            'preview': 'Relatorio PDF gerado pelo monitoramento.',
+        },
+        {
+            'id': f'att-{ticket.number}-user-print',
+            'name': 'print-usuario.png',
+            'type': 'image',
+            'kind': 'image',
+            'size': '410 KB',
+            'author': ticket.requester,
+            'origin': 'solicitante',
+            'uploaded_at': 'ontem',
+            'is_primary': False,
+            'icon': 'image',
+            'preview': 'Print enviado pelo solicitante.',
+        },
+    ]
 
 
 def _workload_rows():
@@ -123,13 +197,15 @@ def build_ticket_detail_context(ticket):
     device = get_ticket_device_context(ticket)
     similar = _similar_tickets(ticket)
     requester_history = _requester_history(ticket)
+    related_tickets = _related_tickets(ticket)
     return {
         'device_context': device,
         'sla': _sla_for(ticket),
         'activity_items': _activity_for(ticket),
         'similar_tickets': similar,
         'requester_history_count': len(requester_history),
-        'related_tickets': _related_tickets(ticket),
+        'related_tickets': related_tickets,
+        'related_items': _related_items(ticket, related_tickets, similar),
         'attachments': _attachments_for(ticket),
         'watchers': [
             {'name': ticket.assigned_to or 'Gabriel', 'initials': (ticket.assigned_to or 'Gabriel')[:1]},

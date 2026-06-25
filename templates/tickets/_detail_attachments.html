@@ -1,29 +1,161 @@
-<article class="desk-panel">
-    <div class="desk-panel-title-row">
+<article class="desk-panel nw-attachments-page" data-attachments-page>
+    <header class="nw-attachments-header">
         <div>
+            <span class="nw-device-kicker">Evidencias do chamado</span>
             <h2><i data-lucide="paperclip"></i>Anexos</h2>
-            <p>Miniaturas, evidencias e arquivos relacionados ao atendimento.</p>
+            <p>Prints, logs, evidencias e arquivos relacionados ao atendimento.</p>
         </div>
-        <button class="desk-btn" type="button"><i data-lucide="upload"></i>Enviar arquivo</button>
-    </div>
+        <div class="nw-attachments-header__meta">
+            <strong data-attachment-counter>{{ attachments|length }} anexos</strong>
+            <span data-primary-evidence-counter>{% if attachments %}1 evidencia principal{% else %}sem evidencia principal{% endif %}</span>
+        </div>
+        <div class="nw-attachments-header__actions">
+            <button class="desk-btn desk-btn-primary" type="button" data-attachment-pick><i data-lucide="upload"></i>Enviar arquivo</button>
+            <button class="desk-btn" type="button" data-attachment-paste-hint><i data-lucide="clipboard"></i>Colar print</button>
+            <button class="desk-btn" type="button" data-attachment-download-all><i data-lucide="download"></i>Baixar todos</button>
+            <input type="file" data-attachment-file-input hidden multiple>
+        </div>
+    </header>
 
-    <div class="desk-attachment-dropzone">
+    <section class="nw-attachment-primary" data-primary-evidence {% if not attachments %}hidden{% endif %}>
+        <span><i data-lucide="badge-check"></i></span>
+        <div>
+            <strong>Evidencia principal</strong>
+            <p data-primary-evidence-name>{% for attachment in attachments %}{% if attachment.is_primary %}{{ attachment.name }}{% endif %}{% endfor %}</p>
+        </div>
+        <button class="desk-btn" type="button" data-primary-evidence-preview>Visualizar</button>
+    </section>
+
+    <section class="nw-attachment-dropzone" data-attachment-dropzone>
         <i data-lucide="upload-cloud"></i>
-        <span>Arraste arquivos aqui ou cole prints com Ctrl+V.</span>
-    </div>
+        <div>
+            <strong data-dropzone-title>Solte arquivos ou cole prints com Ctrl+V</strong>
+            <span>Imagens, PDFs, logs, documentos e arquivos compactados.</span>
+        </div>
+        <button class="desk-btn" type="button" data-attachment-pick>Selecionar</button>
+    </section>
 
-    <div class="desk-attachment-grid">
+    <section class="nw-attachment-toolbar">
+        <label class="nw-attachment-search">
+            <i data-lucide="search"></i>
+            <input type="search" placeholder="Buscar anexo por nome, tipo ou autor..." data-attachment-search>
+        </label>
+        <div class="nw-attachment-filters" role="toolbar" aria-label="Filtros de anexos">
+            <button class="is-active" type="button" data-attachment-filter="all">Todos <span data-attachment-filter-count="all">{{ attachments|length }}</span></button>
+            <button type="button" data-attachment-filter="image">Imagens</button>
+            <button type="button" data-attachment-filter="pdf">PDFs</button>
+            <button type="button" data-attachment-filter="log">Logs</button>
+            <button type="button" data-attachment-filter="document">Documentos</button>
+            <button type="button" data-attachment-filter="evidence">Evidencias</button>
+            <button type="button" data-attachment-filter="mine">Enviados por mim</button>
+        </div>
+        <label class="nw-attachment-sort">
+            <span>Ordenar</span>
+            <select data-attachment-sort>
+                <option value="recent">Mais recentes</option>
+                <option value="oldest">Mais antigos</option>
+                <option value="name">Nome</option>
+                <option value="size">Tamanho</option>
+            </select>
+        </label>
+    </section>
+
+    <section class="nw-attachment-grid" data-attachment-list>
         {% for attachment in attachments %}
-        <article class="desk-attachment-card">
-            <div class="desk-attachment-thumb">
-                <i data-lucide="{% if attachment.type == 'image' %}image{% else %}file-text{% endif %}"></i>
+        <article class="nw-attachment-card {% if attachment.is_primary %}is-primary{% endif %}"
+                 data-attachment-card
+                 data-attachment-id="{{ attachment.id }}"
+                 data-attachment-name="{{ attachment.name }}"
+                 data-attachment-type="{{ attachment.type }}"
+                 data-attachment-kind="{{ attachment.kind }}"
+                 data-attachment-size="{{ attachment.size }}"
+                 data-attachment-author="{{ attachment.author }}"
+                 data-attachment-origin="{{ attachment.origin }}"
+                 data-attachment-when="{{ attachment.uploaded_at }}"
+                 data-attachment-preview="{{ attachment.preview|escape }}"
+                 data-attachment-primary="{% if attachment.is_primary %}1{% else %}0{% endif %}">
+            <button class="nw-attachment-card__main" type="button" data-attachment-preview-open>
+                <span class="nw-attachment-thumb nw-attachment-thumb--{{ attachment.kind }}"><i data-lucide="{{ attachment.icon }}"></i></span>
+                <span class="nw-attachment-info">
+                    <strong>{{ attachment.name }}</strong>
+                    <small>{{ attachment.size }} &middot; {{ attachment.author }} &middot; {{ attachment.uploaded_at }}</small>
+                    <em>{{ attachment.origin }}</em>
+                </span>
+                {% if attachment.is_primary %}<span class="nw-attachment-primary-badge">Evidencia principal</span>{% endif %}
+                <span class="nw-attachment-upload-progress" hidden><i></i></span>
+            </button>
+            <div class="nw-attachment-actions">
+                <button type="button" title="Visualizar" aria-label="Visualizar" data-attachment-preview-open><i data-lucide="eye"></i></button>
+                <button type="button" title="Baixar" aria-label="Baixar" data-attachment-download><i data-lucide="download"></i></button>
+                <button type="button" title="Copiar link" aria-label="Copiar link" data-attachment-copy><i data-lucide="link"></i></button>
+                <button type="button" title="Marcar como evidencia" aria-label="Marcar como evidencia" data-attachment-set-primary><i data-lucide="badge-check"></i></button>
+                <button type="button" title="Remover" aria-label="Remover" data-attachment-remove><i data-lucide="trash-2"></i></button>
             </div>
-            <strong>{{ attachment.name }}</strong>
-            <span>{{ attachment.size }}</span>
-            <button class="desk-btn" type="button">{% if attachment.is_primary %}Principal{% else %}Marcar principal{% endif %}</button>
         </article>
-        {% empty %}
-        <div class="desk-empty compact"><i data-lucide="paperclip"></i><span>Nenhum anexo registrado.</span></div>
         {% endfor %}
-    </div>
+    </section>
+
+    <section class="nw-attachments-empty" data-attachments-empty {% if attachments %}hidden{% endif %}>
+        <i data-lucide="paperclip"></i>
+        <h3>Nenhum anexo neste chamado</h3>
+        <p>Adicione prints, logs ou documentos para apoiar o atendimento.</p>
+        <div>
+            <button class="desk-btn desk-btn-primary" type="button" data-attachment-pick>Enviar arquivo</button>
+            <button class="desk-btn" type="button" data-attachment-paste-hint>Colar print</button>
+        </div>
+    </section>
+    <section class="nw-attachments-empty" data-attachments-filter-empty hidden>
+        <i data-lucide="filter-x"></i>
+        <h3>Nenhum anexo encontrado com os filtros atuais.</h3>
+        <button class="desk-btn" type="button" data-attachment-clear-filters>Limpar filtros</button>
+    </section>
+
+    <aside class="nw-attachment-preview-modal" data-attachment-preview-modal hidden>
+        <div class="nw-attachment-preview-modal__backdrop" data-attachment-preview-close></div>
+        <div class="nw-attachment-preview-modal__dialog" role="dialog" aria-modal="true" aria-label="Preview de anexo">
+            <header>
+                <div>
+                    <span data-preview-type>Arquivo</span>
+                    <h3 data-preview-name>anexo</h3>
+                    <p data-preview-summary>--</p>
+                </div>
+                <button class="desk-icon-button" type="button" data-attachment-preview-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <main>
+                <button class="desk-icon-button" type="button" data-attachment-prev aria-label="Anexo anterior"><i data-lucide="chevron-left"></i></button>
+                <div class="nw-attachment-preview-stage" data-preview-stage></div>
+                <button class="desk-icon-button" type="button" data-attachment-next aria-label="Proximo anexo"><i data-lucide="chevron-right"></i></button>
+            </main>
+            <aside>
+                <div><span>Enviado por</span><strong data-preview-author>--</strong></div>
+                <div><span>Data</span><strong data-preview-when>--</strong></div>
+                <div><span>Origem</span><strong data-preview-origin>--</strong></div>
+                <div><span>Status</span><strong data-preview-primary>Arquivo comum</strong></div>
+            </aside>
+            <footer>
+                <button class="desk-btn" type="button" data-preview-download><i data-lucide="download"></i>Baixar</button>
+                <button class="desk-btn" type="button" data-preview-copy><i data-lucide="link"></i>Copiar link</button>
+                <button class="desk-btn" type="button" data-preview-primary-action><i data-lucide="badge-check"></i>Marcar evidencia</button>
+                <button class="desk-btn" type="button" data-preview-remove><i data-lucide="trash-2"></i>Remover</button>
+            </footer>
+        </div>
+    </aside>
+
+    <aside class="nw-rmm-confirm-modal" data-attachment-delete-modal hidden>
+        <div class="nw-rmm-confirm-modal__backdrop" data-attachment-delete-close></div>
+        <form class="nw-rmm-confirm-modal__dialog" data-attachment-delete-form>
+            <header>
+                <div>
+                    <span>REMOVER ANEXO</span>
+                    <h3>Confirmar remocao</h3>
+                    <p data-attachment-delete-name>Este anexo sera removido do mock local.</p>
+                </div>
+                <button type="button" class="desk-icon-button" data-attachment-delete-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <footer>
+                <button class="desk-btn" type="button" data-attachment-delete-close>Cancelar</button>
+                <button class="desk-btn desk-btn-primary" type="submit">Remover anexo</button>
+            </footer>
+        </form>
+    </aside>
 </article>

@@ -1,42 +1,183 @@
-<article class="desk-panel">
-    <div class="desk-panel-title-row">
+<article class="desk-panel nw-related-page" data-related-page>
+    <header class="nw-related-header">
         <div>
+            <span class="nw-device-kicker">Contexto cruzado</span>
             <h2><i data-lucide="git-branch"></i>Relacionados</h2>
-            <p>Duplicados, chamados do mesmo solicitante e chamados do mesmo dispositivo.</p>
+            <p>Investigue vinculos, referencias e possiveis duplicados sem sair do chamado.</p>
         </div>
+        <div>
+            <span class="nw-related-total" data-related-total>{{ related_items|length }} relacionados</span>
+            <button class="desk-btn" type="button" data-related-link-open><i data-lucide="link"></i>Vincular chamado</button>
+            <button class="desk-btn is-disabled" type="button" data-related-merge-open aria-disabled="true" title="Selecione dois ou mais chamados para mesclar."><i data-lucide="git-merge"></i><span data-related-merge-label>Mesclar</span></button>
+        </div>
+    </header>
+
+    <div class="nw-related-groups">
+        <section class="nw-related-group" data-related-group="Mesmo endpoint">
+            <header><h3>Mesmo endpoint</h3><span data-related-group-count>0</span></header>
+            <div class="nw-related-list">
+                {% for item in related_items %}
+                {% if item.reason == "Mesmo endpoint" %}
+                {% include "tickets/_detail_related_item.html" with item=item %}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="nw-related-group" data-related-group="Mesmo solicitante">
+            <header><h3>Mesmo solicitante</h3><span data-related-group-count>0</span></header>
+            <div class="nw-related-list">
+                {% for item in related_items %}
+                {% if item.reason == "Mesmo solicitante" %}
+                {% include "tickets/_detail_related_item.html" with item=item %}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="nw-related-group" data-related-group="Possivel duplicado">
+            <header><h3>Possiveis duplicados</h3><span data-related-group-count>0</span></header>
+            <div class="nw-related-list">
+                {% for item in related_items %}
+                {% if item.reason == "Possivel duplicado" %}
+                {% include "tickets/_detail_related_item.html" with item=item %}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="nw-related-group" data-related-group="Similar resolvido">
+            <header><h3>Similares resolvidos</h3><span data-related-group-count>0</span></header>
+            <div class="nw-related-list">
+                {% for item in related_items %}
+                {% if item.reason == "Similar resolvido" %}
+                {% include "tickets/_detail_related_item.html" with item=item %}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="nw-related-group" data-related-group="Vinculado manualmente" hidden>
+            <header><h3>Vinculados manualmente</h3><span data-related-group-count>0</span></header>
+            <div class="nw-related-list" data-related-manual-list></div>
+        </section>
+
+        <section class="nw-related-group" data-related-group="Duplicado mesclado" hidden>
+            <header><h3>Duplicados / mesclados</h3><span data-related-group-count>0</span></header>
+            <div class="nw-related-list" data-related-merged-list></div>
+        </section>
     </div>
 
-    <div class="desk-related-grid">
-        <section>
-            <h3>Mesmo solicitante</h3>
-            {% for related in related_tickets.same_requester %}
-            <a class="desk-related-item" href="{% url 'tickets:detail' related.number %}"><strong>#{{ related.number }}</strong><span>{{ related.title }}</span></a>
-            {% empty %}
-            <div class="desk-empty compact">Nenhum chamado anterior do solicitante.</div>
-            {% endfor %}
-        </section>
+    <aside class="desk-related-overlay nw-related-preview-shell" data-related-preview-panel>
+        <div class="nw-related-preview-empty">
+            <i data-lucide="scan-search"></i>
+            <h3>Selecione um chamado relacionado para ver detalhes rapidos.</h3>
+            <p>Use o preview para decidir se vale vincular, usar como referencia ou mesclar.</p>
+        </div>
+    </aside>
 
-        <section>
-            <h3>Mesmo dispositivo</h3>
-            {% for related in related_tickets.same_device %}
-            <a class="desk-related-item" href="{% url 'tickets:detail' related.number %}"><strong>#{{ related.number }}</strong><span>{{ related.title }}</span></a>
-            {% empty %}
-            <div class="desk-empty compact">Nenhum chamado do mesmo dispositivo.</div>
-            {% endfor %}
-        </section>
+    <aside class="nw-related-modal" data-related-link-modal hidden>
+        <div class="nw-related-modal__backdrop" data-related-modal-close></div>
+        <form class="nw-related-modal__dialog" data-related-link-form>
+            <header>
+                <div>
+                    <span>VINCULAR CHAMADO</span>
+                    <h3>Adicionar relacionamento manual</h3>
+                    <p>Busque um chamado e registre por que ele pertence a este contexto.</p>
+                </div>
+                <button class="desk-icon-button" type="button" data-related-modal-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <label class="nw-related-search">
+                <i data-lucide="search"></i>
+                <input type="search" placeholder="Buscar por ID, titulo, solicitante ou endpoint..." data-related-link-search>
+            </label>
+            <div class="nw-related-link-results" data-related-link-results>
+                {% for item in related_items|slice:":4" %}
+                {% with related=item.ticket %}
+                <label data-related-link-result>
+                    <input type="radio" name="related_ticket" value="{{ related.number }}" data-title="{{ related.title }}" data-requester="{{ related.requester }}" data-endpoint="{% if related.endpoint %}{{ related.endpoint.hostname }}{% else %}Sem endpoint{% endif %}">
+                    <span><strong>#{{ related.number }} {{ related.title }}</strong><small>{{ related.requester }} &middot; {% if related.endpoint %}{{ related.endpoint.hostname }}{% else %}Sem endpoint{% endif %}</small></span>
+                </label>
+                {% endwith %}
+                {% empty %}
+                <label data-related-link-result>
+                    <input type="radio" name="related_ticket" value="1043" data-title="Falha de impressao no Financeiro" data-requester="Mariana Souza" data-endpoint="FIN-012">
+                    <span><strong>#1043 Falha de impressao no Financeiro</strong><small>Mariana Souza &middot; FIN-012</small></span>
+                </label>
+                <label data-related-link-result>
+                    <input type="radio" name="related_ticket" value="1048" data-title="Socio sem acesso ao e-mail" data-requester="Henrique Valente" data-endpoint="DIR-NOTE-011">
+                    <span><strong>#1048 Socio sem acesso ao e-mail</strong><small>Henrique Valente &middot; DIR-NOTE-011</small></span>
+                </label>
+                <label data-related-link-result>
+                    <input type="radio" name="related_ticket" value="1049" data-title="Sistema de vendas lento na filial" data-requester="Daniel Ribeiro" data-endpoint="COM-014">
+                    <span><strong>#1049 Sistema de vendas lento na filial</strong><small>Daniel Ribeiro &middot; COM-014</small></span>
+                </label>
+                {% endfor %}
+            </div>
+            <label class="nw-form-field">
+                <span>Motivo do vinculo</span>
+                <select data-related-link-reason required>
+                    <option value="mesmo problema">Mesmo problema</option>
+                    <option value="mesmo endpoint">Mesmo endpoint</option>
+                    <option value="mesmo solicitante">Mesmo solicitante</option>
+                    <option value="dependencia">Dependencia</option>
+                    <option value="referencia">Referencia</option>
+                    <option value="duplicado">Duplicado</option>
+                </select>
+            </label>
+            <label class="nw-form-field">
+                <span>Comentario interno opcional</span>
+                <textarea data-related-link-comment placeholder="Observacao para a equipe..."></textarea>
+            </label>
+            <footer>
+                <button class="desk-btn" type="button" data-related-modal-close>Cancelar</button>
+                <button class="desk-btn desk-btn-primary" type="submit">Vincular chamado</button>
+            </footer>
+        </form>
+    </aside>
 
-        <section>
-            <h3>Duplicados / mesclados</h3>
-            {% for related in related_tickets.duplicates %}
-            <a class="desk-related-item" href="{% url 'tickets:detail' related.number %}"><strong>#{{ related.number }}</strong><span>{{ related.title }}</span></a>
-            {% empty %}
-            <div class="desk-empty compact">Nenhum duplicado identificado.</div>
-            {% endfor %}
-        </section>
-    </div>
+    <aside class="nw-related-modal nw-merge-modal" data-related-merge-modal hidden>
+        <div class="nw-related-modal__backdrop" data-related-modal-close></div>
+        <form class="nw-related-modal__dialog" data-related-merge-form>
+            <header>
+                <div>
+                    <span>MESCLAGEM</span>
+                    <h3>Mesclar chamados</h3>
+                    <p>Escolha o principal e registre o motivo da mesclagem.</p>
+                </div>
+                <button class="desk-icon-button" type="button" data-related-modal-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <div class="nw-merge-list" data-related-merge-list></div>
+            <label class="nw-form-field">
+                <span>Motivo da mesclagem</span>
+                <textarea data-related-merge-reason required placeholder="Explique por que os chamados sao duplicados..."></textarea>
+            </label>
+            <label class="nw-related-check"><input type="checkbox" data-related-merge-comment checked>Adicionar comentario nos chamados mesclados</label>
+            <label class="nw-related-check"><input type="checkbox" data-related-merge-preserve checked>Preservar comentarios e anexos</label>
+            <footer>
+                <button class="desk-btn" type="button" data-related-modal-close>Cancelar</button>
+                <button class="desk-btn desk-btn-primary" type="submit">Mesclar chamados</button>
+            </footer>
+        </form>
+    </aside>
 
-    <aside class="desk-related-overlay">
-        <h3>Painel lateral de chamado relacionado</h3>
-        <p>Estrutura preparada para abrir outro chamado sem sair deste contexto.</p>
+    <aside class="nw-related-modal nw-reference-solution" data-related-reference-modal hidden>
+        <div class="nw-related-modal__backdrop" data-related-modal-close></div>
+        <div class="nw-related-modal__dialog">
+            <header>
+                <div>
+                    <span>SOLUCAO ANTERIOR</span>
+                    <h3 data-reference-title>Usar solucao como referencia</h3>
+                    <p data-reference-subtitle>Resumo operacional de atendimento parecido.</p>
+                </div>
+                <button class="desk-icon-button" type="button" data-related-modal-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <div class="nw-reference-solution__body" data-reference-body></div>
+            <footer>
+                <button class="desk-btn" type="button" data-reference-copy>Copiar solucao</button>
+                <button class="desk-btn" type="button" data-reference-insert>Inserir no comentario</button>
+                <button class="desk-btn desk-btn-primary" type="button" data-reference-link>Vincular como referencia</button>
+            </footer>
+        </div>
     </aside>
 </article>

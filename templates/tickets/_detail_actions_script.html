@@ -20,9 +20,22 @@
     const form = document.querySelector('[data-detail-comment-form]');
     const textarea = document.querySelector('[data-detail-comment-textarea]');
     const attachmentsBox = document.querySelector('[data-comment-attachments]');
+    const rmmConfirmModal = document.querySelector('[data-rmm-confirm-modal]');
+    const rmmMessageModal = document.querySelector('[data-rmm-message-modal]');
+    const attachmentPreviewModal = document.querySelector('[data-attachment-preview-modal]');
+    const attachmentDeleteModal = document.querySelector('[data-attachment-delete-modal]');
+    const relatedLinkModal = document.querySelector('[data-related-link-modal]');
+    const relatedMergeModal = document.querySelector('[data-related-merge-modal]');
+    const relatedReferenceModal = document.querySelector('[data-related-reference-modal]');
     let toastUndo = null;
     let activeActivityFilter = 'all';
     let serviceChecklistComplete = false;
+    let pendingRmmAction = null;
+    let activeScriptRiskFilter = 'all';
+    let activeAttachmentFilter = 'all';
+    let currentAttachmentId = null;
+    let pendingAttachmentDelete = null;
+    let currentReferenceCard = null;
 
     function all(selector, root = document) {
         return Array.from(root.querySelectorAll(selector));
@@ -101,6 +114,24 @@
         window.lucide?.createIcons?.();
     }
 
+    function addDeviceHistory(kind, icon, title, status = 'registrado', origin = CURRENT_USER) {
+        const list = document.querySelector('[data-device-history-list]');
+        if (!list) return;
+        const item = document.createElement('article');
+        item.dataset.deviceHistoryKind = kind;
+        item.innerHTML = `
+            <i data-lucide="${icon}"></i>
+            <div>
+                <strong>${escapeHtml(title)}</strong>
+                <span>agora - ${escapeHtml(origin)}</span>
+            </div>
+            <em>${escapeHtml(status)}</em>
+        `;
+        list.prepend(item);
+        filterDeviceHistory(document.querySelector('[data-device-history-filter].is-active')?.dataset.deviceHistoryFilter || 'all');
+        window.lucide?.createIcons?.();
+    }
+
     function updateActivityCounts() {
         const rows = all('[data-activity-kind]');
         const counts = rows.reduce((acc, row) => {
@@ -128,7 +159,198 @@
             if (match) visible += 1;
         });
         const empty = document.querySelector('[data-activity-empty]');
+        if (empty) {
+            empty.hidden = visible > 0;
+            empty.style.display = visible > 0 ? 'none' : '';
+        }
+    }
+
+    function filterDeviceHistory(kind) {
+        let visible = 0;
+        all('[data-device-history-filter]').forEach((button) => {
+            button.classList.toggle('is-active', button.dataset.deviceHistoryFilter === kind);
+        });
+        all('[data-device-history-kind]').forEach((row) => {
+            const match = kind === 'all' || row.dataset.deviceHistoryKind === kind;
+            row.hidden = !match;
+            if (match) visible += 1;
+        });
+        const empty = document.querySelector('[data-device-history-empty]');
         if (empty) empty.hidden = visible > 0;
+    }
+
+    function relatedCards() {
+        return all('[data-related-card]');
+    }
+
+    function selectedRelatedCards() {
+        return relatedCards().filter((card) => card.querySelector('[data-related-select]')?.checked);
+    }
+
+    function updateRelatedCounts() {
+        all('[data-related-group]').forEach((group) => {
+            const count = all('[data-related-card]', group).filter((card) => !card.hidden).length;
+            group.hidden = count === 0;
+            const node = group.querySelector('[data-related-group-count]');
+            if (node) node.textContent = count;
+        });
+        const total = relatedCards().length;
+        const totalNode = document.querySelector('[data-related-total]');
+        if (totalNode) totalNode.textContent = `${total} relacionados`;
+    }
+
+    function updateRelatedSelection() {
+        const selected = selectedRelatedCards();
+        relatedCards().forEach((card) => {
+            card.classList.toggle('nw-related-item--selected', card.querySelector('[data-related-select]')?.checked);
+        });
+        const button = document.querySelector('[data-related-merge-open]');
+        const label = document.querySelector('[data-related-merge-label]');
+        if (label) label.textContent = selected.length > 0 ? `Mesclar ${selected.length}` : 'Mesclar';
+        if (button) {
+            const disabled = selected.length < 2;
+            button.classList.toggle('is-disabled', disabled);
+            button.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+            button.title = disabled ? 'Selecione dois ou mais chamados para mesclar.' : 'Mesclar chamados selecionados.';
+        }
+    }
+
+    function relatedSolution(card) {
+        return `Solucao usada no chamado #${card.dataset.relatedNumber}: validar o contexto com o solicitante, confirmar endpoint ${card.dataset.relatedEndpoint}, aplicar ajuste tecnico relacionado a ${card.dataset.relatedCategory} e registrar evidencia antes do fechamento.`;
+    }
+
+    function renderRelatedPreview(card) {
+        const panel = document.querySelector('[data-related-preview-panel]');
+        if (!card || !panel) return;
+        relatedCards().forEach((item) => item.classList.toggle('is-active', item === card));
+        const resolved = card.dataset.relatedResolved === '1';
+        panel.innerHTML = `
+            <header>
+                <span class="nw-device-kicker">Preview relacionado</span>
+                <h3>#${escapeHtml(card.dataset.relatedNumber)} ${escapeHtml(card.dataset.relatedTitle)}</h3>
+                <p>${escapeHtml(card.dataset.relatedSummary)}</p>
+            </header>
+            <dl>
+                <div><dt>Status</dt><dd>${escapeHtml(card.dataset.relatedStatus)}</dd></div>
+                <div><dt>Prioridade</dt><dd>${escapeHtml(card.dataset.relatedPriority)}</dd></div>
+                <div><dt>Solicitante</dt><dd>${escapeHtml(card.dataset.relatedRequester)}</dd></div>
+                <div><dt>Endpoint</dt><dd>${escapeHtml(card.dataset.relatedEndpoint)}</dd></div>
+                <div><dt>Categoria</dt><dd>${escapeHtml(card.dataset.relatedCategory)}</dd></div>
+                <div><dt>Relacao</dt><dd>${escapeHtml(card.dataset.relatedReason)} - ${escapeHtml(card.dataset.relatedScore)}% similar</dd></div>
+            </dl>
+            <div class="nw-related-preview-actions">
+                <a class="desk-btn desk-btn-primary" href="${escapeHtml(card.dataset.relatedUrl)}">Abrir chamado</a>
+                <button class="desk-btn" type="button" data-related-link-open>Vincular</button>
+                <button class="desk-btn" type="button" data-related-merge-open>Mesclar</button>
+                ${resolved ? '<button class="desk-btn" type="button" data-related-reference>Usar solucao como referencia</button>' : ''}
+            </div>
+        `;
+    }
+
+    function closeRelatedModals() {
+        [relatedLinkModal, relatedMergeModal, relatedReferenceModal].forEach((modal) => {
+            if (modal) modal.hidden = true;
+        });
+        currentReferenceCard = null;
+    }
+
+    function openRelatedLinkModal() {
+        if (!relatedLinkModal) return;
+        relatedLinkModal.hidden = false;
+        relatedLinkModal.querySelector('[data-related-link-search]')?.focus();
+        window.lucide?.createIcons?.();
+    }
+
+    function openRelatedMergeModal() {
+        const selected = selectedRelatedCards();
+        if (selected.length < 2 || !relatedMergeModal) {
+            showToast('Selecione dois ou mais chamados para mesclar.');
+            return;
+        }
+        const list = relatedMergeModal.querySelector('[data-related-merge-list]');
+        if (list) {
+            list.innerHTML = selected.map((card, index) => `
+                <label>
+                    <input type="radio" name="merge_primary" value="${escapeHtml(card.dataset.relatedNumber)}" ${index === 0 ? 'checked' : ''}>
+                    <span><strong>#${escapeHtml(card.dataset.relatedNumber)} ${escapeHtml(card.dataset.relatedTitle)}</strong><small>${escapeHtml(card.dataset.relatedReason)} - ${escapeHtml(card.dataset.relatedStatus)}</small></span>
+                </label>
+            `).join('');
+        }
+        relatedMergeModal.hidden = false;
+        relatedMergeModal.querySelector('[data-related-merge-reason]')?.focus();
+        window.lucide?.createIcons?.();
+    }
+
+    function openReferenceSolution(card) {
+        currentReferenceCard = card || document.querySelector('[data-related-card].is-active');
+        if (!currentReferenceCard || !relatedReferenceModal) {
+            showToast('Selecione um chamado resolvido para usar como referencia.');
+            return;
+        }
+        relatedReferenceModal.querySelector('[data-reference-title]').textContent = `Solucao do chamado #${currentReferenceCard.dataset.relatedNumber}`;
+        relatedReferenceModal.querySelector('[data-reference-subtitle]').textContent = `${currentReferenceCard.dataset.relatedReason} - ${currentReferenceCard.dataset.relatedScore}% similar`;
+        relatedReferenceModal.querySelector('[data-reference-body]').innerHTML = `<p>${escapeHtml(relatedSolution(currentReferenceCard))}</p>`;
+        relatedReferenceModal.hidden = false;
+        window.lucide?.createIcons?.();
+    }
+
+    function addManualRelated(number, title, requester, endpoint, reason) {
+        const list = document.querySelector('[data-related-manual-list]');
+        if (!list) return;
+        const card = document.createElement('article');
+        card.className = 'nw-related-item nw-related-item--selectable';
+        card.dataset.relatedCard = '';
+        card.dataset.relatedNumber = number;
+        card.dataset.relatedTitle = title;
+        card.dataset.relatedStatus = 'Vinculado';
+        card.dataset.relatedPriority = 'Normal';
+        card.dataset.relatedCategory = 'Referencia';
+        card.dataset.relatedRequester = requester;
+        card.dataset.relatedEndpoint = endpoint;
+        card.dataset.relatedSummary = `Vinculo manual criado por ${CURRENT_USER}. Motivo: ${reason}.`;
+        card.dataset.relatedReason = 'Vinculado manualmente';
+        card.dataset.relatedScore = '100';
+        card.dataset.relatedResolved = '0';
+        card.dataset.relatedUrl = `/tickets/${number}/`;
+        card.innerHTML = `
+            <label class="nw-related-select" title="Selecionar para mesclagem"><input type="checkbox" data-related-select></label>
+            <button type="button" data-related-preview>
+                <strong>#${escapeHtml(number)}</strong>
+                <span>${escapeHtml(title)}</span>
+                <small>Vinculado manualmente</small>
+                <em>Vinculado</em>
+                <b>Normal - Referencia</b>
+                <i class="nw-related-score">100% similar</i>
+            </button>
+            <div>
+                <button type="button" title="Visualizar preview" aria-label="Visualizar preview" data-related-preview><i data-lucide="eye"></i></button>
+                <a href="/tickets/${escapeHtml(number)}/" title="Abrir chamado" aria-label="Abrir chamado"><i data-lucide="external-link"></i></a>
+                <button type="button" title="Vincular chamado" aria-label="Vincular chamado" data-related-link-open><i data-lucide="link"></i></button>
+                <button type="button" title="Mesclar" aria-label="Mesclar" data-related-merge-open><i data-lucide="git-merge"></i></button>
+                <button type="button" title="Mais acoes" aria-label="Mais acoes" data-related-more><i data-lucide="ellipsis"></i></button>
+            </div>
+        `;
+        list.prepend(card);
+        updateRelatedCounts();
+        updateRelatedSelection();
+        renderRelatedPreview(card);
+        window.lucide?.createIcons?.();
+    }
+
+    function moveMergedCards(primaryNumber, reason) {
+        const list = document.querySelector('[data-related-merged-list]');
+        const selected = selectedRelatedCards();
+        if (!list) return;
+        selected.forEach((card) => {
+            const check = card.querySelector('[data-related-select]');
+            if (check) check.checked = false;
+            card.dataset.relatedReason = card.dataset.relatedNumber === primaryNumber ? 'Chamado principal' : 'Duplicado mesclado';
+            card.dataset.relatedSummary = `${card.dataset.relatedSummary} Mesclagem: ${reason}`;
+            card.querySelector('small').textContent = card.dataset.relatedReason;
+            list.appendChild(card);
+        });
+        updateRelatedCounts();
+        updateRelatedSelection();
     }
 
     function updateBadges() {
@@ -226,15 +448,26 @@
     function focusComment(text = '') {
         if (!textarea) return;
         if (text) textarea.value = text;
+        setComposerExpanded(true);
         autoGrowTextarea(textarea);
         textarea.focus();
         textarea.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
 
+    function setComposerExpanded(expanded) {
+        if (!form || !textarea) return;
+        const shouldExpand = expanded || Boolean(textarea.value.trim());
+        form.classList.toggle('is-expanded', shouldExpand);
+        form.closest('.nw-composer-panel')?.classList.toggle('is-expanded', shouldExpand);
+        if (!shouldExpand) textarea.style.height = '78px';
+    }
+
     function autoGrowTextarea(node) {
         if (!node) return;
+        const shouldExpand = form?.classList.contains('is-expanded') || Boolean(node.value.trim());
+        const minHeight = shouldExpand ? 150 : 78;
         node.style.height = 'auto';
-        node.style.height = `${Math.min(node.scrollHeight, 220)}px`;
+        node.style.height = `${Math.min(Math.max(node.scrollHeight, minHeight), 220)}px`;
     }
 
     function updateServiceChecklist(showFeedback = false) {
@@ -263,8 +496,8 @@
     }
 
     function submitComposerComment(event, combo = 'comment') {
-        const targetForm = event?.target?.closest?.('[data-detail-comment-form]') || form;
-        if (!targetForm) return false;
+        const targetForm = event?.target?.closest?.('[data-detail-comment-form]') || (!event ? form : null);
+        if (!targetForm) return true;
         event?.preventDefault?.();
         const body = textarea.value.trim();
         if (!body) {
@@ -275,6 +508,7 @@
         const internal = visibility !== 'public';
         addActivity('comment', 'message-square', internal ? 'Comentario interno adicionado' : 'Comentario publico enviado', body, internal ? 'Comentario interno' : 'Comentario publico');
         textarea.value = '';
+        setComposerExpanded(false);
         autoGrowTextarea(textarea);
         clearAttachments();
         showToast('Comentario adicionado.');
@@ -408,6 +642,141 @@
         if (type === 'audit') openAudit();
     }
 
+    function openRmmConfirm(action) {
+        if (!rmmConfirmModal) return;
+        pendingRmmAction = action;
+        const label = rmmConfirmModal.querySelector('[data-rmm-confirm-action]');
+        const note = rmmConfirmModal.querySelector('[data-rmm-confirm-note]');
+        if (label) label.textContent = action.label;
+        if (note) note.value = '';
+        rmmConfirmModal.hidden = false;
+        rmmConfirmModal.querySelector('textarea')?.focus();
+        window.lucide?.createIcons?.();
+    }
+
+    function closeRmmConfirm() {
+        if (!rmmConfirmModal) return;
+        rmmConfirmModal.hidden = true;
+        pendingRmmAction = null;
+    }
+
+    function openRmmMessageModal() {
+        if (!rmmMessageModal) return;
+        rmmMessageModal.hidden = false;
+        rmmMessageModal.querySelector('[data-rmm-message-text]')?.focus();
+        window.lucide?.createIcons?.();
+    }
+
+    function closeRmmMessageModal() {
+        if (!rmmMessageModal) return;
+        rmmMessageModal.hidden = true;
+        const text = rmmMessageModal.querySelector('[data-rmm-message-text]');
+        if (text) text.value = '';
+    }
+
+    function executeRmmAction(action) {
+        if (!action) return;
+        const hostname = document.querySelector('[data-device-page]')?.dataset.endpointHostname || 'endpoint';
+        if (action.key === 'open-rmm' && action.url) {
+            window.open(action.url, '_blank', 'noopener');
+            showToast(`Abrindo ${hostname} no RMM.`);
+            addDeviceHistory('remote', 'external-link', `Endpoint aberto no RMM`, 'aberto', CURRENT_USER);
+            return;
+        }
+        if (action.key === 'remote-access') {
+            showToast(`Iniciando acesso remoto para ${hostname}.`);
+            addActivity('rmm', 'screen-share', 'Acesso remoto iniciado', `${CURRENT_USER} iniciou acesso remoto para ${hostname}.`, 'RMM');
+            addDeviceHistory('remote', 'screen-share', 'Acesso remoto iniciado', 'iniciado', CURRENT_USER);
+            return;
+        }
+        if (action.key === 'sync-inventory') {
+            const lastSeen = document.querySelector('[data-device-last-seen]');
+            const lastSeenConfirm = document.querySelector('[data-device-last-seen-confirm]');
+            if (lastSeen) lastSeen.textContent = 'agora';
+            if (lastSeenConfirm) lastSeenConfirm.textContent = 'agora';
+            showToast(`Inventario de ${hostname} sincronizado.`);
+            addActivity('rmm', 'refresh-ccw', `Endpoint ${hostname} sincronizado via RMM`, `Ultimo check-in atualizado para agora.`, 'RMM');
+            addDeviceHistory('system', 'refresh-ccw', 'Inventario sincronizado', 'ok', 'NightOwl Desk');
+            return;
+        }
+        if (action.key === 'send-message') {
+            openRmmMessageModal();
+            return;
+        }
+        const title = action.label || 'Acao remota';
+        showToast(`${title} enviada para ${hostname}.`);
+        addActivity('rmm', action.icon || 'terminal', `Acao remota: ${title}`, `${CURRENT_USER} executou acao remota no endpoint ${hostname}.`, 'RMM');
+        addDeviceHistory(action.kind || 'system', action.icon || 'terminal', title, 'enviado', CURRENT_USER);
+        if (action.key === 'restart-device' || action.key === 'restart-agent') {
+            addDeviceHistory('system', 'power', 'Reinicializacao solicitada', 'em execucao', CURRENT_USER);
+        }
+    }
+
+    function executeRmmScript(action) {
+        const risk = action.risk || 'low';
+        if (['medium', 'high'].includes(risk)) {
+            openRmmConfirm({ ...action, icon: 'terminal', key: action.key || 'script', kind: 'script' });
+            return;
+        }
+        executeRmmAction({ ...action, icon: 'terminal', key: action.key || 'script', kind: 'script' });
+        const button = document.querySelector(`[data-rmm-script="${CSS.escape(action.key || '')}"]`);
+        if (button) {
+            button.dataset.originalText = button.textContent;
+            button.textContent = 'Executando...';
+            button.disabled = true;
+        }
+        window.setTimeout(() => {
+            if (button) {
+                button.textContent = button.dataset.originalText || 'Executar';
+                button.disabled = false;
+            }
+            showToast(`${action.label} finalizado no mock.`);
+            addDeviceHistory('script', 'check-circle-2', `${action.label} finalizado`, 'concluido', 'NightOwl');
+        }, 1600);
+    }
+
+    function filterDeviceScripts() {
+        const query = document.querySelector('[data-device-script-search]')?.value.trim().toLowerCase() || '';
+        let visible = 0;
+        all('[data-device-script-card]').forEach((card) => {
+            const matchesQuery = card.textContent.toLowerCase().includes(query);
+            const risk = card.dataset.scriptRiskValue || 'low';
+            const matchesRisk = activeScriptRiskFilter === 'all' || risk === activeScriptRiskFilter;
+            const match = matchesQuery && matchesRisk;
+            card.hidden = !match;
+            if (match) visible += 1;
+        });
+        const empty = document.querySelector('[data-device-script-empty]');
+        if (empty) empty.hidden = visible > 0;
+    }
+
+    function linkMockEndpoint(hostname) {
+        const empty = document.querySelector('[data-device-empty-state]');
+        if (!empty) return;
+        state.hasEndpoint = true;
+        state.hasRmmAlert = false;
+        empty.outerHTML = `
+            <section class="nw-device-hero" data-linked-device-mock>
+                <div class="nw-device-hero__identity">
+                    <span class="nw-device-hero__icon"><i data-lucide="monitor"></i></span>
+                    <div>
+                        <span class="nw-device-kicker">Endpoint vinculado agora</span>
+                        <h2>${escapeHtml(hostname)}</h2>
+                        <p><span class="nw-device-status nw-device-status--online"><i></i>Online</span><span>Mock RMM</span><span>sincronizado agora</span></p>
+                    </div>
+                </div>
+                <div class="nw-device-hero__actions">
+                    <button class="desk-btn" type="button" data-rmm-action="open-rmm" data-action-label="Ver no RMM"><i data-lucide="external-link"></i>Ver no RMM</button>
+                    <button class="desk-btn desk-btn-primary" type="button" data-rmm-action="sync-inventory" data-action-label="Sincronizar agora"><i data-lucide="refresh-ccw"></i>Sincronizar agora</button>
+                </div>
+            </section>
+        `;
+        addActivity('rmm', 'link', `Endpoint ${hostname} vinculado`, 'Dispositivo vinculado ao chamado no mock local.', 'RMM');
+        showToast(`Endpoint ${hostname} vinculado ao chamado.`);
+        updateNextAction();
+        window.lucide?.createIcons?.();
+    }
+
     function setVisibility(mode) {
         all('[data-comment-visibility]').forEach((button) => {
             button.classList.toggle('is-active', button.dataset.commentVisibility === mode);
@@ -423,8 +792,10 @@
         const start = textarea.selectionStart || textarea.value.length;
         const end = textarea.selectionEnd || textarea.value.length;
         textarea.value = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
+        setComposerExpanded(true);
         textarea.focus();
         textarea.selectionStart = textarea.selectionEnd = start + text.length;
+        autoGrowTextarea(textarea);
     }
 
     function addAttachmentPill(name) {
@@ -434,6 +805,261 @@
         pill.innerHTML = `<i data-lucide="paperclip"></i>${escapeHtml(name)}<button type="button" aria-label="Remover anexo">x</button>`;
         attachmentsBox.appendChild(pill);
         window.lucide?.createIcons?.();
+    }
+
+    function attachmentCards() {
+        return all('[data-attachment-card]');
+    }
+
+    function attachmentData(card) {
+        return {
+            id: card.dataset.attachmentId,
+            name: card.dataset.attachmentName,
+            type: card.dataset.attachmentType,
+            kind: card.dataset.attachmentKind,
+            size: card.dataset.attachmentSize,
+            author: card.dataset.attachmentAuthor,
+            origin: card.dataset.attachmentOrigin,
+            when: card.dataset.attachmentWhen,
+            preview: card.dataset.attachmentPreview,
+            primary: card.dataset.attachmentPrimary === '1',
+        };
+    }
+
+    function updateAttachmentCounters() {
+        const cards = attachmentCards();
+        const counter = document.querySelector('[data-attachment-counter]');
+        const primaryCounter = document.querySelector('[data-primary-evidence-counter]');
+        const primary = cards.find((card) => card.dataset.attachmentPrimary === '1');
+        if (counter) counter.textContent = `${cards.length} ${cards.length === 1 ? 'anexo' : 'anexos'}`;
+        if (primaryCounter) primaryCounter.textContent = primary ? '1 evidencia principal' : 'sem evidencia principal';
+        const primaryBox = document.querySelector('[data-primary-evidence]');
+        const primaryName = document.querySelector('[data-primary-evidence-name]');
+        if (primaryBox) primaryBox.hidden = !primary;
+        if (primaryName && primary) primaryName.textContent = primary.dataset.attachmentName;
+        const resolverEvidence = document.querySelector('.nw-evidence-box span');
+        if (resolverEvidence) {
+            resolverEvidence.textContent = primary ? `Evidencia principal: ${primary.dataset.attachmentName}` : 'Nenhuma evidencia principal selecionada.';
+        }
+        const empty = document.querySelector('[data-attachments-empty]');
+        if (empty) empty.hidden = cards.length > 0;
+    }
+
+    function filterAttachments() {
+        const query = document.querySelector('[data-attachment-search]')?.value.trim().toLowerCase() || '';
+        let visible = 0;
+        attachmentCards().forEach((card) => {
+            const data = attachmentData(card);
+            const haystack = `${data.name} ${data.type} ${data.author} ${data.origin}`.toLowerCase();
+            const matchesQuery = haystack.includes(query);
+            const matchesFilter =
+                activeAttachmentFilter === 'all'
+                || data.kind === activeAttachmentFilter
+                || data.type === activeAttachmentFilter
+                || (activeAttachmentFilter === 'evidence' && data.primary)
+                || (activeAttachmentFilter === 'mine' && data.author === CURRENT_USER);
+            const match = matchesQuery && matchesFilter;
+            card.hidden = !match;
+            if (match) visible += 1;
+        });
+        const filterEmpty = document.querySelector('[data-attachments-filter-empty]');
+        if (filterEmpty) filterEmpty.hidden = visible > 0 || attachmentCards().length === 0;
+    }
+
+    function iconForAttachment(kind) {
+        if (kind === 'image') return 'image';
+        if (kind === 'pdf') return 'file-text';
+        if (kind === 'log') return 'file-terminal';
+        if (kind === 'archive') return 'archive';
+        return 'file';
+    }
+
+    function kindForFile(name, type = '') {
+        const lower = name.toLowerCase();
+        if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(lower)) return 'image';
+        if (lower.endsWith('.pdf')) return 'pdf';
+        if (/\.(log|txt)$/i.test(lower)) return 'log';
+        if (/\.(docx?|xlsx?|pptx?)$/i.test(lower)) return 'document';
+        if (/\.(zip|rar|7z)$/i.test(lower)) return 'archive';
+        return 'file';
+    }
+
+    function createAttachmentCard(fileLike, origin = 'upload manual') {
+        const list = document.querySelector('[data-attachment-list]');
+        if (!list) return null;
+        const kind = fileLike.kind || kindForFile(fileLike.name, fileLike.type || '');
+        const id = `att-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const size = fileLike.sizeLabel || (fileLike.size ? `${Math.max(1, Math.round(fileLike.size / 1024))} KB` : '128 KB');
+        const card = document.createElement('article');
+        card.className = 'nw-attachment-card is-uploading';
+        card.dataset.attachmentCard = '';
+        card.dataset.attachmentId = id;
+        card.dataset.attachmentName = fileLike.name;
+        card.dataset.attachmentType = kind;
+        card.dataset.attachmentKind = kind;
+        card.dataset.attachmentSize = size;
+        card.dataset.attachmentAuthor = fileLike.author || CURRENT_USER;
+        card.dataset.attachmentOrigin = origin;
+        card.dataset.attachmentWhen = 'agora';
+        card.dataset.attachmentPreview = fileLike.preview || 'Preview mockado do anexo.';
+        card.dataset.attachmentPrimary = '0';
+        card.innerHTML = `
+            <button class="nw-attachment-card__main" type="button" data-attachment-preview-open>
+                <span class="nw-attachment-thumb nw-attachment-thumb--${kind}"><i data-lucide="${iconForAttachment(kind)}"></i></span>
+                <span class="nw-attachment-info">
+                    <strong>${escapeHtml(fileLike.name)}</strong>
+                    <small>${escapeHtml(size)} &middot; ${escapeHtml(fileLike.author || CURRENT_USER)} &middot; agora</small>
+                    <em>${escapeHtml(origin)}</em>
+                </span>
+                <span class="nw-attachment-upload-progress"><i></i></span>
+            </button>
+            <div class="nw-attachment-actions">
+                <button type="button" title="Visualizar" aria-label="Visualizar" data-attachment-preview-open><i data-lucide="eye"></i></button>
+                <button type="button" title="Baixar" aria-label="Baixar" data-attachment-download><i data-lucide="download"></i></button>
+                <button type="button" title="Copiar link" aria-label="Copiar link" data-attachment-copy><i data-lucide="link"></i></button>
+                <button type="button" title="Marcar como evidencia" aria-label="Marcar como evidencia" data-attachment-set-primary><i data-lucide="badge-check"></i></button>
+                <button type="button" title="Remover" aria-label="Remover" data-attachment-remove><i data-lucide="trash-2"></i></button>
+            </div>
+        `;
+        list.prepend(card);
+        const progress = card.querySelector('.nw-attachment-upload-progress i');
+        let value = 0;
+        const timer = setInterval(() => {
+            value += 25;
+            if (progress) progress.style.width = `${Math.min(value, 100)}%`;
+            if (value >= 100) {
+                clearInterval(timer);
+                card.classList.remove('is-uploading');
+                card.querySelector('.nw-attachment-upload-progress')?.setAttribute('hidden', '');
+                showToast('Arquivo anexado.');
+                addActivity('attachment', 'paperclip', 'Arquivo anexado', `${CURRENT_USER} adicionou ${fileLike.name}.`, 'Anexo');
+            }
+        }, 180);
+        updateAttachmentCounters();
+        filterAttachments();
+        updateAttachmentFilterCounts();
+        window.lucide?.createIcons?.();
+        return card;
+    }
+
+    function updateAttachmentFilterCounts() {
+        const cards = attachmentCards().map(attachmentData);
+        const counts = {
+            all: cards.length,
+            image: cards.filter((item) => item.kind === 'image').length,
+            pdf: cards.filter((item) => item.kind === 'pdf').length,
+            log: cards.filter((item) => item.kind === 'log').length,
+            document: cards.filter((item) => item.kind === 'document').length,
+            evidence: cards.filter((item) => item.primary).length,
+            mine: cards.filter((item) => item.author === CURRENT_USER).length,
+        };
+        all('[data-attachment-filter]').forEach((button) => {
+            const key = button.dataset.attachmentFilter;
+            const label = button.childNodes[0]?.textContent?.trim() || button.textContent.trim().split(' ')[0];
+            button.innerHTML = `${escapeHtml(label)} <span>${counts[key] || 0}</span>`;
+        });
+    }
+
+    function addFilesAsAttachments(files, origin = 'upload manual') {
+        const fileList = Array.from(files || []);
+        if (!fileList.length) return;
+        fileList.forEach((file) => createAttachmentCard(file, origin));
+        showToast(fileList.length === 1 ? 'Arquivo anexado.' : `${fileList.length} arquivos anexados.`);
+    }
+
+    function setPrimaryAttachment(card) {
+        if (!card) return;
+        attachmentCards().forEach((item) => {
+            item.dataset.attachmentPrimary = item === card ? '1' : '0';
+            item.classList.toggle('is-primary', item === card);
+            item.querySelector('.nw-attachment-primary-badge')?.remove();
+            if (item === card) {
+                const badge = document.createElement('span');
+                badge.className = 'nw-attachment-primary-badge';
+                badge.textContent = 'Evidencia principal';
+                item.querySelector('.nw-attachment-card__main')?.appendChild(badge);
+            }
+        });
+        updateAttachmentCounters();
+        updateAttachmentFilterCounts();
+        showToast('Evidencia principal atualizada.');
+        addActivity('attachment', 'badge-check', 'Evidencia principal alterada', `${card.dataset.attachmentName} foi marcado como evidencia principal.`, 'Anexo');
+    }
+
+    function renderAttachmentPreview(card) {
+        if (!attachmentPreviewModal || !card) return;
+        const data = attachmentData(card);
+        currentAttachmentId = data.id;
+        attachmentPreviewModal.querySelector('[data-preview-type]').textContent = data.type.toUpperCase();
+        attachmentPreviewModal.querySelector('[data-preview-name]').textContent = data.name;
+        attachmentPreviewModal.querySelector('[data-preview-summary]').textContent = `${data.size} - ${data.author} - ${data.when}`;
+        attachmentPreviewModal.querySelector('[data-preview-author]').textContent = data.author;
+        attachmentPreviewModal.querySelector('[data-preview-when]').textContent = data.when;
+        attachmentPreviewModal.querySelector('[data-preview-origin]').textContent = data.origin;
+        attachmentPreviewModal.querySelector('[data-preview-primary]').textContent = data.primary ? 'Evidencia principal' : 'Arquivo comum';
+        const stage = attachmentPreviewModal.querySelector('[data-preview-stage]');
+        if (stage) {
+            if (data.kind === 'log') {
+                stage.innerHTML = `<pre>${escapeHtml(data.preview || '[log mockado]')}</pre>`;
+            } else if (data.kind === 'image') {
+                stage.innerHTML = `<div class="nw-preview-image"><i data-lucide="image"></i><strong>${escapeHtml(data.name)}</strong><span>${escapeHtml(data.preview || 'Preview de imagem mockado')}</span></div>`;
+            } else if (data.kind === 'pdf') {
+                stage.innerHTML = `<div class="nw-preview-file"><i data-lucide="file-text"></i><strong>Preview PDF</strong><span>${escapeHtml(data.preview || 'PDF mockado')}</span></div>`;
+            } else {
+                stage.innerHTML = `<div class="nw-preview-file"><i data-lucide="${iconForAttachment(data.kind)}"></i><strong>Preview indisponivel</strong><span>${escapeHtml(data.name)}</span></div>`;
+            }
+        }
+        attachmentPreviewModal.hidden = false;
+        window.lucide?.createIcons?.();
+    }
+
+    function closeAttachmentPreview() {
+        if (attachmentPreviewModal) attachmentPreviewModal.hidden = true;
+        currentAttachmentId = null;
+    }
+
+    function currentAttachmentCard() {
+        return attachmentCards().find((card) => card.dataset.attachmentId === currentAttachmentId);
+    }
+
+    function navigateAttachment(direction) {
+        const visible = attachmentCards().filter((card) => !card.hidden);
+        if (!visible.length) return;
+        const index = Math.max(0, visible.indexOf(currentAttachmentCard()));
+        const next = visible[(index + direction + visible.length) % visible.length];
+        renderAttachmentPreview(next);
+    }
+
+    function requestAttachmentDelete(card) {
+        if (!attachmentDeleteModal || !card) return;
+        pendingAttachmentDelete = card;
+        const name = attachmentDeleteModal.querySelector('[data-attachment-delete-name]');
+        if (name) name.textContent = `${card.dataset.attachmentName} sera removido do mock local.`;
+        attachmentDeleteModal.hidden = false;
+    }
+
+    function closeAttachmentDelete() {
+        if (attachmentDeleteModal) attachmentDeleteModal.hidden = true;
+        pendingAttachmentDelete = null;
+    }
+
+    function removeAttachment(card) {
+        if (!card) return;
+        const clone = card.cloneNode(true);
+        const name = card.dataset.attachmentName;
+        const list = document.querySelector('[data-attachment-list]');
+        card.remove();
+        updateAttachmentCounters();
+        updateAttachmentFilterCounts();
+        filterAttachments();
+        addActivity('attachment', 'trash-2', 'Anexo removido', `${name} foi removido do chamado.`, 'Anexo');
+        showToast('Anexo removido.', 'Desfazer', () => {
+            list?.prepend(clone);
+            updateAttachmentCounters();
+            updateAttachmentFilterCounts();
+            filterAttachments();
+            window.lucide?.createIcons?.();
+        });
     }
 
     function clearAttachments() {
@@ -470,6 +1096,172 @@
         if (combo) submitComposerComment(event, combo.dataset.commentCombo);
         const filter = event.target.closest('[data-activity-filter]');
         if (filter) filterActivity(filter.dataset.activityFilter);
+        const historyFilter = event.target.closest('[data-device-history-filter]');
+        if (historyFilter) filterDeviceHistory(historyFilter.dataset.deviceHistoryFilter);
+        const showAlerts = event.target.closest('[data-device-show-alerts]');
+        if (showAlerts) {
+            const expanded = showAlerts.dataset.expanded === 'true';
+            all('[data-device-alert].is-extra').forEach((alert) => {
+                alert.hidden = expanded;
+            });
+            showAlerts.dataset.expanded = expanded ? 'false' : 'true';
+            showAlerts.textContent = expanded ? 'Ver todos os alertas' : 'Mostrar menos';
+        }
+        const scriptRiskFilter = event.target.closest('[data-script-risk-filter]');
+        if (scriptRiskFilter) {
+            activeScriptRiskFilter = scriptRiskFilter.dataset.scriptRiskFilter;
+            all('[data-script-risk-filter]').forEach((button) => {
+                button.classList.toggle('is-active', button === scriptRiskFilter);
+            });
+            filterDeviceScripts();
+        }
+        const rmmAction = event.target.closest('[data-rmm-action]');
+        if (rmmAction) {
+            const action = {
+                key: rmmAction.dataset.rmmAction,
+                label: rmmAction.dataset.actionLabel || rmmAction.textContent.trim(),
+                url: rmmAction.dataset.actionUrl,
+                icon: rmmAction.querySelector('i')?.getAttribute('data-lucide') || 'terminal',
+            };
+            if (rmmAction.dataset.actionSensitive === 'true') openRmmConfirm(action);
+            else executeRmmAction(action);
+        }
+        const rmmScript = event.target.closest('[data-rmm-script]');
+        if (rmmScript) {
+            executeRmmScript({
+                key: rmmScript.dataset.rmmScript,
+                label: rmmScript.dataset.actionLabel || rmmScript.textContent.trim(),
+                risk: rmmScript.dataset.scriptRisk || 'low',
+            });
+        }
+        if (event.target.closest('[data-attachment-pick]')) {
+            document.querySelector('[data-attachment-file-input]')?.click();
+        }
+        const summaryPreview = event.target.closest('[data-attachment-summary-preview]');
+        if (summaryPreview) {
+            const card = attachmentCards().find((item) => item.dataset.attachmentId === summaryPreview.dataset.attachmentSummaryPreview);
+            if (card) renderAttachmentPreview(card);
+            else window.location.hash = 'attachments';
+        }
+        const summaryCopy = event.target.closest('[data-attachment-summary-copy]');
+        if (summaryCopy) {
+            navigator.clipboard?.writeText(`${window.location.origin}/tickets/${state.number}/attachments/${summaryCopy.dataset.attachmentSummaryCopy}/`);
+            showToast('Link do anexo copiado.');
+        }
+        if (event.target.closest('[data-attachment-download-all]')) {
+            showToast('Download de todos os anexos preparado no mock.');
+        }
+        const relatedPreview = event.target.closest('[data-related-preview]');
+        if (relatedPreview) {
+            event.preventDefault();
+            const card = relatedPreview.closest('[data-related-card]');
+            if (card) renderRelatedPreview(card);
+        }
+        const relatedSelect = event.target.closest('[data-related-select]');
+        if (relatedSelect) updateRelatedSelection();
+        if (event.target.closest('[data-related-link-open]')) {
+            event.preventDefault();
+            openRelatedLinkModal();
+        }
+        if (event.target.closest('[data-related-merge-open]')) {
+            event.preventDefault();
+            openRelatedMergeModal();
+        }
+        const relatedReference = event.target.closest('[data-related-reference]');
+        if (relatedReference) {
+            event.preventDefault();
+            openReferenceSolution(relatedReference.closest('[data-related-card]') || document.querySelector('[data-related-card].is-active'));
+        }
+        const relatedMore = event.target.closest('[data-related-more]');
+        if (relatedMore) {
+            event.preventDefault();
+            const card = relatedMore.closest('[data-related-card]');
+            if (card?.dataset.relatedResolved === '1') openReferenceSolution(card);
+            else showToast('Mais acoes do relacionado preparadas no mock.');
+        }
+        if (event.target.closest('[data-related-modal-close]')) closeRelatedModals();
+        if (event.target.closest('[data-reference-copy]')) {
+            const text = currentReferenceCard ? relatedSolution(currentReferenceCard) : '';
+            navigator.clipboard?.writeText(text);
+            showToast('Solucao copiada.');
+        }
+        if (event.target.closest('[data-reference-insert]')) {
+            if (currentReferenceCard) focusComment(relatedSolution(currentReferenceCard));
+            closeRelatedModals();
+        }
+        if (event.target.closest('[data-reference-link]') && currentReferenceCard) {
+            addManualRelated(currentReferenceCard.dataset.relatedNumber, currentReferenceCard.dataset.relatedTitle, currentReferenceCard.dataset.relatedRequester, currentReferenceCard.dataset.relatedEndpoint, 'referencia');
+            addActivity('system', 'book-open', `Chamado #${currentReferenceCard.dataset.relatedNumber} vinculado como referencia`, relatedSolution(currentReferenceCard), 'Sistema');
+            showToast('Chamado vinculado como referencia.');
+            closeRelatedModals();
+        }
+        if (event.target.closest('[data-attachment-paste-hint]')) {
+            showToast('Use Ctrl+V nesta tela para colar um print como anexo.');
+        }
+        const attachmentFilter = event.target.closest('[data-attachment-filter]');
+        if (attachmentFilter) {
+            activeAttachmentFilter = attachmentFilter.dataset.attachmentFilter;
+            all('[data-attachment-filter]').forEach((button) => button.classList.toggle('is-active', button === attachmentFilter));
+            filterAttachments();
+        }
+        if (event.target.closest('[data-attachment-clear-filters]')) {
+            activeAttachmentFilter = 'all';
+            all('[data-attachment-filter]').forEach((button) => button.classList.toggle('is-active', button.dataset.attachmentFilter === 'all'));
+            const search = document.querySelector('[data-attachment-search]');
+            if (search) search.value = '';
+            filterAttachments();
+            showToast('Filtros de anexos limpos.');
+        }
+        const attachmentCard = event.target.closest('[data-attachment-card]');
+        if (event.target.closest('[data-attachment-preview-open]') && attachmentCard) renderAttachmentPreview(attachmentCard);
+        if (event.target.closest('[data-primary-evidence-preview]')) {
+            const primary = attachmentCards().find((card) => card.dataset.attachmentPrimary === '1');
+            if (primary) renderAttachmentPreview(primary);
+        }
+        if (event.target.closest('[data-attachment-copy]') && attachmentCard) {
+            navigator.clipboard?.writeText(`${window.location.origin}/tickets/${state.number}/attachments/${attachmentCard.dataset.attachmentId}/`);
+            showToast('Link do anexo copiado.');
+        }
+        if (event.target.closest('[data-attachment-download]') && attachmentCard) {
+            showToast(`Download de ${attachmentCard.dataset.attachmentName} iniciado no mock.`);
+        }
+        if (event.target.closest('[data-attachment-set-primary]') && attachmentCard) setPrimaryAttachment(attachmentCard);
+        if (event.target.closest('[data-attachment-remove]') && attachmentCard) requestAttachmentDelete(attachmentCard);
+        if (event.target.closest('[data-attachment-preview-close]')) closeAttachmentPreview();
+        if (event.target.closest('[data-attachment-prev]')) navigateAttachment(-1);
+        if (event.target.closest('[data-attachment-next]')) navigateAttachment(1);
+        if (event.target.closest('[data-preview-copy]')) {
+            const card = currentAttachmentCard();
+            if (card) {
+                navigator.clipboard?.writeText(`${window.location.origin}/tickets/${state.number}/attachments/${card.dataset.attachmentId}/`);
+                showToast('Link do anexo copiado.');
+            }
+        }
+        if (event.target.closest('[data-preview-download]')) {
+            const card = currentAttachmentCard();
+            if (card) showToast(`Download de ${card.dataset.attachmentName} iniciado no mock.`);
+        }
+        if (event.target.closest('[data-preview-primary-action]')) {
+            const card = currentAttachmentCard();
+            if (card) setPrimaryAttachment(card);
+        }
+        if (event.target.closest('[data-preview-remove]')) {
+            const card = currentAttachmentCard();
+            if (card) requestAttachmentDelete(card);
+        }
+        if (event.target.closest('[data-attachment-delete-close]')) closeAttachmentDelete();
+        if (event.target.closest('[data-rmm-confirm-close]')) closeRmmConfirm();
+        if (event.target.closest('[data-rmm-message-close]')) closeRmmMessageModal();
+        const messageTemplate = event.target.closest('[data-rmm-message-template]');
+        if (messageTemplate) {
+            const text = rmmMessageModal?.querySelector('[data-rmm-message-text]');
+            if (text) {
+                text.value = messageTemplate.dataset.rmmMessageTemplate;
+                text.focus();
+            }
+        }
+        const linkEndpoint = event.target.closest('[data-device-link]');
+        if (linkEndpoint) linkMockEndpoint(linkEndpoint.dataset.deviceLink);
         const status = event.target.closest('[data-quick-status]');
         if (status) changeStatus(status.dataset.quickStatus);
         const priority = event.target.closest('[data-quick-priority]');
@@ -498,6 +1290,67 @@
     });
 
     document.addEventListener('submit', submitComposerComment);
+    rmmConfirmModal?.querySelector('[data-rmm-confirm-form]')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const note = rmmConfirmModal.querySelector('[data-rmm-confirm-note]')?.value.trim();
+        const log = rmmConfirmModal.querySelector('[data-rmm-confirm-log]')?.checked;
+        const action = pendingRmmAction;
+        closeRmmConfirm();
+        executeRmmAction(action);
+        if (note && log) addActivity('rmm', 'notebook-pen', 'Observacao da acao remota', note, 'RMM');
+    });
+    rmmMessageModal?.querySelector('[data-rmm-message-form]')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const text = rmmMessageModal.querySelector('[data-rmm-message-text]')?.value.trim();
+        const log = rmmMessageModal.querySelector('[data-rmm-message-log]')?.checked;
+        if (!text) {
+            showToast('Escreva a mensagem antes de enviar.');
+            return;
+        }
+        const recipient = rmmMessageModal.querySelector('.nw-rmm-confirm-summary strong')?.textContent || 'usuario';
+        closeRmmMessageModal();
+        showToast(`Mensagem enviada para ${recipient}.`);
+        if (log) addActivity('rmm', 'message-square', 'Mensagem enviada ao usuario logado no endpoint', text, 'RMM');
+        addDeviceHistory('remote', 'message-square', 'Mensagem enviada ao usuario', 'enviada', CURRENT_USER);
+    });
+    attachmentDeleteModal?.querySelector('[data-attachment-delete-form]')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const card = pendingAttachmentDelete;
+        closeAttachmentDelete();
+        removeAttachment(card);
+    });
+    relatedLinkModal?.querySelector('[data-related-link-form]')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const selected = relatedLinkModal.querySelector('input[name="related_ticket"]:checked');
+        if (!selected) {
+            showToast('Selecione um chamado para vincular.');
+            return;
+        }
+        const reason = relatedLinkModal.querySelector('[data-related-link-reason]')?.value || 'referencia';
+        const comment = relatedLinkModal.querySelector('[data-related-link-comment]')?.value.trim();
+        addManualRelated(selected.value, selected.dataset.title, selected.dataset.requester, selected.dataset.endpoint, reason);
+        addActivity('system', 'link', `Chamado #${selected.value} vinculado por ${CURRENT_USER}`, comment || `Motivo do vinculo: ${reason}.`, 'Sistema');
+        showToast('Chamado vinculado.');
+        const commentField = relatedLinkModal.querySelector('[data-related-link-comment]');
+        if (commentField) commentField.value = '';
+        closeRelatedModals();
+    });
+    relatedMergeModal?.querySelector('[data-related-merge-form]')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const reason = relatedMergeModal.querySelector('[data-related-merge-reason]')?.value.trim();
+        if (!reason) {
+            showToast('Informe o motivo da mesclagem.');
+            return;
+        }
+        const selected = selectedRelatedCards();
+        const primary = relatedMergeModal.querySelector('input[name="merge_primary"]:checked')?.value || selected[0]?.dataset.relatedNumber;
+        moveMergedCards(primary, reason);
+        addActivity('system', 'git-merge', `Chamados mesclados com #${primary}`, `${selected.map((card) => `#${card.dataset.relatedNumber}`).join(', ')} foram marcados como duplicados. Motivo: ${reason}`, 'Sistema');
+        showToast('Chamados mesclados.');
+        const reasonField = relatedMergeModal.querySelector('[data-related-merge-reason]');
+        if (reasonField) reasonField.value = '';
+        closeRelatedModals();
+    });
     document.addEventListener('input', (event) => {
         if (event.target.matches('[data-macro-search]')) {
             const query = event.target.value.trim().toLowerCase();
@@ -514,16 +1367,99 @@
         if (event.target.matches('[data-detail-comment-textarea]')) {
             const draft = document.querySelector('[data-composer-draft]');
             if (draft) draft.hidden = !event.target.value.trim();
+            setComposerExpanded(Boolean(event.target.value.trim()) || document.activeElement === event.target);
             autoGrowTextarea(event.target);
+        }
+        if (event.target.matches('[data-device-script-search]')) {
+            filterDeviceScripts();
+        }
+        if (event.target.matches('[data-device-link-search]')) {
+            const query = event.target.value.trim().toLowerCase();
+            let visible = 0;
+            all('[data-device-link-card]').forEach((card) => {
+                const match = card.textContent.toLowerCase().includes(query);
+                card.hidden = !match;
+                if (match) visible += 1;
+            });
+            const empty = document.querySelector('[data-device-link-empty]');
+            if (empty) empty.hidden = visible > 0;
+        }
+        if (event.target.matches('[data-attachment-search]')) {
+            filterAttachments();
+        }
+        if (event.target.matches('[data-related-link-search]')) {
+            const query = event.target.value.trim().toLowerCase();
+            all('[data-related-link-result]').forEach((row) => {
+                row.hidden = !row.textContent.toLowerCase().includes(query);
+            });
         }
     });
     document.addEventListener('change', (event) => {
         if (event.target.matches('[data-comment-file]')) {
-            Array.from(event.target.files || []).forEach((file) => addAttachmentPill(file.name));
+            Array.from(event.target.files || []).forEach((file) => {
+                addAttachmentPill(file.name);
+                createAttachmentCard(file, 'comentario');
+            });
             event.target.value = '';
         }
         if (event.target.matches('[data-service-check]')) {
             updateServiceChecklist(true);
+        }
+        if (event.target.matches('[data-attachment-file-input]')) {
+            addFilesAsAttachments(event.target.files, 'upload manual');
+            event.target.value = '';
+        }
+        if (event.target.matches('[data-attachment-sort]')) {
+            const list = document.querySelector('[data-attachment-list]');
+            const cards = attachmentCards();
+            const value = event.target.value;
+            const sorted = cards.sort((a, b) => {
+                if (value === 'name') return a.dataset.attachmentName.localeCompare(b.dataset.attachmentName);
+                if (value === 'size') return a.dataset.attachmentSize.localeCompare(b.dataset.attachmentSize);
+                return value === 'oldest' ? 1 : -1;
+            });
+            sorted.forEach((card) => list?.appendChild(card));
+            filterAttachments();
+        }
+    });
+    document.addEventListener('dragover', (event) => {
+        const dropzone = event.target.closest('[data-attachment-dropzone]');
+        if (!dropzone) return;
+        event.preventDefault();
+        dropzone.classList.add('is-dragging');
+        const title = dropzone.querySelector('[data-dropzone-title]');
+        if (title) title.textContent = 'Solte para anexar ao chamado';
+    });
+    document.addEventListener('dragleave', (event) => {
+        const dropzone = event.target.closest('[data-attachment-dropzone]');
+        if (!dropzone) return;
+        dropzone.classList.remove('is-dragging');
+        const title = dropzone.querySelector('[data-dropzone-title]');
+        if (title) title.textContent = 'Solte arquivos ou cole prints com Ctrl+V';
+    });
+    document.addEventListener('drop', (event) => {
+        const dropzone = event.target.closest('[data-attachment-dropzone]');
+        if (!dropzone) return;
+        event.preventDefault();
+        dropzone.classList.remove('is-dragging');
+        const title = dropzone.querySelector('[data-dropzone-title]');
+        if (title) title.textContent = 'Solte arquivos ou cole prints com Ctrl+V';
+        addFilesAsAttachments(event.dataTransfer?.files, 'upload manual');
+    });
+    document.addEventListener('focusin', (event) => {
+        if (event.target.matches('[data-detail-comment-textarea]')) {
+            setComposerExpanded(true);
+            autoGrowTextarea(event.target);
+        }
+    });
+    document.addEventListener('focusout', (event) => {
+        if (event.target.matches('[data-detail-comment-textarea]')) {
+            window.setTimeout(() => {
+                if (!event.target.value.trim() && document.activeElement !== event.target) {
+                    setComposerExpanded(false);
+                    autoGrowTextarea(event.target);
+                }
+            }, 80);
         }
     });
     document.addEventListener('paste', (event) => {
@@ -532,9 +1468,29 @@
             addAttachmentPill('imagem-colada.png');
             showToast('Imagem colada como anexo.');
         }
+        if (hasImage && !event.target.closest('[data-detail-comment-form]') && document.querySelector('[data-attachments-page]')) {
+            const stamp = new Date().toISOString().slice(0, 16).replace(/[-T:]/g, '');
+            createAttachmentCard({
+                name: `print-colado-${stamp}.png`,
+                kind: 'image',
+                sizeLabel: '320 KB',
+                preview: 'Print colado da area de transferencia.',
+            }, 'print colado');
+            showToast('Print colado como anexo.');
+            addActivity('attachment', 'image', 'Print colado', 'Imagem colada como anexo do chamado.', 'Anexo');
+        }
     });
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') closeDrawers();
+        if (event.key === 'Escape') closeRmmConfirm();
+        if (event.key === 'Escape') closeRmmMessageModal();
+        if (event.key === 'Escape') {
+            closeAttachmentPreview();
+            closeAttachmentDelete();
+            closeRelatedModals();
+        }
+        if (attachmentPreviewModal && !attachmentPreviewModal.hidden && event.key === 'ArrowLeft') navigateAttachment(-1);
+        if (attachmentPreviewModal && !attachmentPreviewModal.hidden && event.key === 'ArrowRight') navigateAttachment(1);
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
             const sourceForm = event.target.closest('[data-detail-comment-form]');
             if (sourceForm) submitComposerComment({ target: sourceForm, preventDefault() {} });
@@ -558,9 +1514,15 @@
 
     updateResolutionProgress();
     updateServiceChecklist(false);
+    setComposerExpanded(false);
     autoGrowTextarea(textarea);
     updateActivityCounts();
     filterActivity('all');
+    updateAttachmentCounters();
+    updateAttachmentFilterCounts();
+    filterAttachments();
+    updateRelatedCounts();
+    updateRelatedSelection();
     updateNextAction();
 })();
 </script>

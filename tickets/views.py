@@ -316,8 +316,7 @@ def ticket_detail(request, number):
     detail_context = build_ticket_detail_context(ticket)
     device_context = detail_context.get('device_context') or {}
     sla = detail_context.get('sla') or {}
-    related_tickets = detail_context.get('related_tickets') or {}
-    related_count = sum(len(items) for items in related_tickets.values())
+    related_count = len(detail_context.get('related_items') or [])
     context = {
         **_base_context('queue'),
         'ticket': ticket,

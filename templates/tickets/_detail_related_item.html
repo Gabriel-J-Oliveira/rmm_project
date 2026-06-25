@@ -1,0 +1,35 @@
+{% with related=item.ticket %}
+<article class="nw-related-item nw-related-item--selectable"
+         data-related-card
+         data-related-number="{{ related.number }}"
+         data-related-title="{{ related.title }}"
+         data-related-status="{{ related.status_label }}"
+         data-related-priority="{{ related.priority_label }}"
+         data-related-category="{{ related.category }}"
+         data-related-requester="{{ related.requester }}"
+         data-related-endpoint="{% if related.endpoint %}{{ related.endpoint.hostname }}{% else %}Sem endpoint{% endif %}"
+         data-related-summary="{{ related.description|escape }}"
+         data-related-reason="{{ item.reason }}"
+         data-related-score="{{ item.score }}"
+         data-related-resolved="{% if related.status == 'resolved' or related.status == 'closed' or item.reason == 'Similar resolvido' %}1{% else %}0{% endif %}"
+         data-related-url="{% url 'tickets:detail' related.number %}">
+    <label class="nw-related-select" title="Selecionar para mesclagem">
+        <input type="checkbox" data-related-select>
+    </label>
+    <button type="button" data-related-preview>
+        <strong>#{{ related.number }}</strong>
+        <span>{{ related.title }}</span>
+        <small>{{ item.reason }}</small>
+        <em>{{ related.status_label }}</em>
+        <b>{{ related.priority_label }} &middot; {{ related.category }}</b>
+        <i class="nw-related-score">{{ item.score }}% similar</i>
+    </button>
+    <div>
+        <button type="button" title="Visualizar preview" aria-label="Visualizar preview" data-related-preview><i data-lucide="eye"></i></button>
+        <a href="{% url 'tickets:detail' related.number %}" title="Abrir chamado" aria-label="Abrir chamado"><i data-lucide="external-link"></i></a>
+        <button type="button" title="Vincular chamado" aria-label="Vincular chamado" data-related-link-open><i data-lucide="link"></i></button>
+        <button type="button" title="Mesclar" aria-label="Mesclar" data-related-merge-open><i data-lucide="git-merge"></i></button>
+        <button type="button" title="Mais acoes" aria-label="Mais acoes" data-related-more><i data-lucide="ellipsis"></i></button>
+    </div>
+</article>
+{% endwith %}

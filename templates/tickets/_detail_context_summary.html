@@ -1,0 +1,125 @@
+<section class="nw-ticket-context-grid" aria-label="Evidencias e relacionados do chamado">
+    <article class="desk-panel nw-ticket-evidence-summary">
+        <header>
+            <div>
+                <h2><i data-lucide="badge-check"></i>Evidencias do chamado</h2>
+                <p>Prints, logs e arquivos uteis para resolver este atendimento.</p>
+            </div>
+            <span>{{ attachments|length }} anexos</span>
+        </header>
+
+        {% with primary=attachments|first %}
+        <div class="nw-summary-primary-evidence">
+            {% if primary %}
+            <span><i data-lucide="{{ primary.icon }}"></i></span>
+            <div>
+                <strong>{{ primary.name }}</strong>
+                <small>{{ primary.type }} &middot; {{ primary.origin }} &middot; {{ primary.size }}</small>
+            </div>
+            <button class="desk-btn" type="button" data-attachment-summary-preview="{{ primary.id }}">Visualizar</button>
+            {% else %}
+            <span><i data-lucide="paperclip"></i></span>
+            <div>
+                <strong>Nenhuma evidencia principal selecionada.</strong>
+                <small>Escolha um arquivo na aba Anexos.</small>
+            </div>
+            <a class="desk-btn" href="#attachments">Escolher evidencia</a>
+            {% endif %}
+        </div>
+        {% endwith %}
+
+        <div class="nw-summary-list">
+            {% for attachment in attachments|slice:":4" %}
+            <article>
+                <i data-lucide="{{ attachment.icon }}"></i>
+                <div>
+                    <strong>{{ attachment.name }}</strong>
+                    <span>{{ attachment.origin }} &middot; {{ attachment.uploaded_at }}</span>
+                </div>
+                <em>{{ attachment.type }}</em>
+                {% if attachment.is_primary %}<b>Evidencia</b>{% endif %}
+                <button type="button" title="Visualizar" data-attachment-summary-preview="{{ attachment.id }}"><i data-lucide="eye"></i></button>
+                <button type="button" title="Copiar link" data-attachment-summary-copy="{{ attachment.id }}"><i data-lucide="link"></i></button>
+            </article>
+            {% empty %}
+            <div class="desk-empty compact">Nenhum anexo registrado.</div>
+            {% endfor %}
+        </div>
+
+        <footer>
+            <button class="desk-btn desk-btn-primary" type="button" data-attachment-pick><i data-lucide="upload"></i>Enviar arquivo</button>
+            <button class="desk-btn" type="button" data-attachment-paste-hint><i data-lucide="clipboard"></i>Colar print</button>
+            <a class="desk-btn" href="#attachments"><i data-lucide="arrow-right"></i>Ver todos</a>
+        </footer>
+    </article>
+
+    <article class="desk-panel nw-ticket-related-summary">
+        <header>
+            <div>
+                <h2><i data-lucide="git-branch"></i>Relacionados e similares</h2>
+                <p>Chamados do mesmo solicitante, endpoint ou possiveis duplicados.</p>
+            </div>
+            <span>{{ related_count }} relacionados</span>
+        </header>
+
+        <div class="nw-related-compact-groups">
+            {% if related_tickets.duplicates %}
+            <section>
+                <h3>Possiveis duplicados</h3>
+                {% for related in related_tickets.duplicates|slice:":3" %}
+                <a href="{% url 'tickets:detail' related.number %}">
+                    <strong>#{{ related.number }}</strong>
+                    <span>{{ related.title }}</span>
+                    <em>{{ related.status_label }}</em>
+                </a>
+                {% endfor %}
+            </section>
+            {% endif %}
+
+            {% if related_tickets.same_device %}
+            <section>
+                <h3>Mesmo endpoint</h3>
+                {% for related in related_tickets.same_device|slice:":3" %}
+                <a href="{% url 'tickets:detail' related.number %}">
+                    <strong>#{{ related.number }}</strong>
+                    <span>{{ related.title }}</span>
+                    <em>{{ related.category }}</em>
+                </a>
+                {% endfor %}
+            </section>
+            {% endif %}
+
+            {% if related_tickets.same_requester %}
+            <section>
+                <h3>Mesmo solicitante</h3>
+                {% for related in related_tickets.same_requester|slice:":3" %}
+                <a href="{% url 'tickets:detail' related.number %}">
+                    <strong>#{{ related.number }}</strong>
+                    <span>{{ related.title }}</span>
+                    <em>{{ related.status_label }}</em>
+                </a>
+                {% endfor %}
+            </section>
+            {% endif %}
+
+            {% if similar_tickets %}
+            <section>
+                <h3>Similares resolvidos</h3>
+                {% for related in similar_tickets|slice:":3" %}
+                <a href="{% url 'tickets:detail' related.number %}">
+                    <strong>#{{ related.number }}</strong>
+                    <span>{{ related.title }}</span>
+                    <em>{{ related.category }}</em>
+                </a>
+                {% endfor %}
+            </section>
+            {% endif %}
+        </div>
+
+        <footer>
+            <a class="desk-btn" href="#related"><i data-lucide="arrow-right"></i>Ver todos</a>
+            <a class="desk-btn" href="#related"><i data-lucide="link-2"></i>Vincular chamado</a>
+            <button class="desk-btn" type="button" data-related-merge-placeholder><i data-lucide="merge"></i>Mesclar</button>
+        </footer>
+    </article>
+</section>

@@ -1,49 +1,347 @@
-<article class="desk-panel desk-device-panel">
-    <div class="desk-panel-title-row">
-        <div>
-            <h2><i data-lucide="{{ device_context.icon|default:'monitor' }}"></i>Dispositivo</h2>
-            <p>Dados vindos do RMM interno quando disponiveis; caso contrario, mock isolado para preview.</p>
+<article class="desk-panel nw-device-page" data-device-page data-endpoint-hostname="{{ device_context.hostname }}">
+    {% if device_context.available %}
+    <section class="nw-device-hero">
+        <div class="nw-device-hero__identity">
+            <span class="nw-device-hero__icon"><i data-lucide="{{ device_context.icon|default:'monitor' }}"></i></span>
+            <div>
+                <span class="nw-device-kicker">Endpoint monitorado</span>
+                <h2>{{ device_context.hostname }}</h2>
+                <p>
+                    <span class="nw-device-status nw-device-status--{{ device_context.status }}">
+                        <i></i>{{ device_context.status_label }}
+                    </span>
+                    <span>{{ device_context.os|default:"SO sem dados" }}</span>
+                    <span>{{ device_context.ip_address|default:"IP sem dados" }}</span>
+                </p>
+            </div>
         </div>
-        {% include "tickets/_detail_remote_actions.html" %}
-    </div>
-
-    <div class="desk-device-hero-card">
-        <span class="desk-device-large-icon"><i data-lucide="{{ device_context.icon|default:'monitor' }}"></i></span>
-        <div>
-            <strong>{{ device_context.hostname }}</strong>
-            <span>{{ device_context.domain|default:"Sem dominio" }}</span>
-            <small>{{ device_context.status_label }} &middot; ultima sincronizacao {{ device_context.last_seen }}</small>
+        <div class="nw-device-hero__meta">
+            <span>Ultimo check-in <strong data-device-last-seen>{{ device_context.last_seen }}</strong></span>
+            <span>Usuario logado <strong>{{ device_context.last_user|default:"--" }}</strong></span>
+            <span>Agente <strong>{{ device_context.agent_version|default:"--" }}</strong></span>
+            <span>Uptime <strong>{{ device_context.uptime|default:"--" }}</strong></span>
         </div>
-        <span class="desk-badge status-{{ device_context.status }}">{{ device_context.status_label }}</span>
-    </div>
-
-    <section class="desk-device-metrics">
-        {% for metric in device_context.metrics %}
-        <article class="desk-device-metric metric-{{ metric.level }}">
-            <header><strong>{{ metric.name }}</strong><span>{{ metric.summary }}</span></header>
-            <div><i style="width: {{ metric.value }}%"></i></div>
-        </article>
-        {% empty %}
-        <div class="desk-empty compact">Sem telemetria recebida para este dispositivo.</div>
-        {% endfor %}
+        <div class="nw-device-hero__tags">
+            {% for tag in device_context.tags %}
+            <span>{{ tag }}</span>
+            {% endfor %}
+        </div>
+        <div class="nw-device-hero__actions">
+            {% if device_context.url %}
+            <button class="desk-btn" type="button" data-rmm-action="open-rmm" data-action-label="Ver no RMM" data-action-url="{{ device_context.url }}"><i data-lucide="external-link"></i>Ver no RMM</button>
+            {% endif %}
+            <button class="desk-btn" type="button" data-rmm-action="remote-access" data-action-label="Acesso remoto" {% if device_context.status != "online" %}disabled title="Endpoint offline"{% endif %}><i data-lucide="screen-share"></i>Acesso remoto</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-rmm-action="sync-inventory" data-action-label="Sincronizar agora"><i data-lucide="refresh-ccw"></i>Sincronizar agora</button>
+        </div>
     </section>
 
-    <section class="desk-device-status-grid">
-        <article>
-            <span>Antivirus</span>
-            <strong class="status-{{ device_context.antivirus.level }}">{{ device_context.antivirus.label }}</strong>
-        </article>
-        <article>
-            <span>Atualizacoes pendentes</span>
-            <strong>{{ device_context.updates_pending }}</strong>
-        </article>
-        <article>
-            <span>Alertas ativos</span>
-            <strong>{{ device_context.alerts_count|default:"--" }}</strong>
-        </article>
+    <section class="nw-device-risk-strip nw-device-risk-strip--{{ device_context.risk.level|default:'low' }}">
+        <div>
+            <span>Risco do endpoint</span>
+            <strong><i aria-hidden="true"></i>Risco: {{ device_context.risk.label|default:"Baixo" }}</strong>
+            <p>{{ device_context.risk.summary|default:"Endpoint sem alertas criticos no momento." }}</p>
+        </div>
+        <div class="nw-device-risk-strip__actions">
+            <button class="desk-btn" type="button" data-rmm-script="antivirus-scan" data-action-label="Executar verificacao" data-script-risk="low"><i data-lucide="shield-check"></i>Executar verificacao</button>
+            <button class="desk-btn" type="button" data-rmm-action="collect-diagnostics" data-action-label="Coletar diagnostico"><i data-lucide="file-search"></i>Coletar diagnostico</button>
+            <a class="desk-btn" href="#device-alerts"><i data-lucide="bell"></i>Ver alertas</a>
+        </div>
     </section>
 
-    {% if device_context.url %}
-    <a class="desk-btn" href="{{ device_context.url }}"><i data-lucide="external-link"></i>Ver no RMM</a>
+    <section class="nw-device-section">
+        <div class="nw-device-section__title">
+            <h3><i data-lucide="heart-pulse"></i>Saude do dispositivo</h3>
+            <p>Telemetria resumida para decisao rapida dentro do chamado.</p>
+        </div>
+        <div class="nw-device-metric-grid">
+            {% for metric in device_context.metrics %}
+            <article class="nw-device-metric-card nw-device-metric-card--{{ metric.level }}" data-device-metric="{{ metric.name|lower }}">
+                <header><span>{{ metric.name }}</span><strong>{{ metric.summary }}</strong></header>
+                <div class="nw-device-bar"><i style="width: {{ metric.value }}%"></i></div>
+                <small>{{ metric.level }}</small>
+            </article>
+            {% endfor %}
+            <article class="nw-device-metric-card nw-device-metric-card--{{ device_context.antivirus.level }}">
+                <header><span>Antivirus</span><strong>{{ device_context.antivirus.label }}</strong></header>
+                <small>Protecao endpoint</small>
+            </article>
+            <article class="nw-device-metric-card nw-device-metric-card--{{ device_context.backup.level }}">
+                <header><span>Backup</span><strong>{{ device_context.backup.label }}</strong></header>
+                <small>Ultima rotina</small>
+            </article>
+            <article class="nw-device-metric-card nw-device-metric-card--{{ device_context.patches.level }}">
+                <header><span>Patches</span><strong>{{ device_context.patches.count }} pendentes</strong></header>
+                <small>Atualizacoes</small>
+            </article>
+            <article class="nw-device-metric-card nw-device-metric-card--{{ device_context.critical_services.level }}">
+                <header><span>Servicos criticos</span><strong>{{ device_context.critical_services.label }}</strong></header>
+                <small>Ultimo reboot: {{ device_context.last_reboot }}</small>
+            </article>
+        </div>
+    </section>
+
+    <div class="nw-device-workbench">
+        <div class="nw-device-workbench__left">
+        <section id="device-alerts" class="nw-device-section nw-device-alerts">
+            <div class="nw-device-section__title">
+                <h3><i data-lucide="bell-ring"></i>Alertas ativos</h3>
+                <span>{{ device_context.alerts_count|default:0 }} alertas</span>
+            </div>
+            <div class="nw-device-alert-list">
+                {% for alert in device_context.active_alerts %}
+                <article class="nw-device-alert-card nw-device-alert-card--{{ alert.severity }} {% if forloop.counter > 2 %}is-extra{% endif %}" data-device-alert {% if forloop.counter > 2 %}hidden{% endif %}>
+                    <header>
+                        <span>{{ alert.severity }}</span>
+                        <small>{{ alert.when }} · {{ alert.origin }}</small>
+                    </header>
+                    <strong><i data-lucide="{{ alert.icon|default:'bell' }}"></i>{{ alert.title }}</strong>
+                    <p>{{ alert.description }}</p>
+                    <em>{{ alert.suggestion }}</em>
+                    <button class="desk-btn" type="button" data-rmm-script="{{ alert.action_key }}" data-action-label="{{ alert.action }}" data-script-risk="{% if alert.severity == 'critical' or alert.severity == 'high' %}medium{% else %}low{% endif %}">
+                        {{ alert.action }}
+                    </button>
+                </article>
+                {% empty %}
+                <div class="desk-empty compact"><i data-lucide="shield-check"></i><span>Nenhum alerta ativo neste endpoint.</span></div>
+                {% endfor %}
+            </div>
+            {% if device_context.active_alerts|length > 2 %}
+            <button class="nw-device-show-all" type="button" data-device-show-alerts>Ver todos os alertas</button>
+            {% endif %}
+        </section>
+
+        <section class="nw-device-section nw-device-history">
+            <div class="nw-device-section__title">
+                <h3><i data-lucide="history"></i>Historico tecnico do endpoint</h3>
+                <div class="nw-device-history-filters" role="toolbar" aria-label="Filtros do historico tecnico">
+                    <button class="is-active" type="button" data-device-history-filter="all">Todos</button>
+                    <button type="button" data-device-history-filter="alert">Alertas</button>
+                    <button type="button" data-device-history-filter="script">Scripts</button>
+                    <button type="button" data-device-history-filter="remote">Acesso remoto</button>
+                    <button type="button" data-device-history-filter="system">Sistema</button>
+                </div>
+            </div>
+            <div class="nw-device-history-list" data-device-history-list>
+                {% for event in device_context.technical_history %}
+                <article data-device-history-kind="{{ event.kind }}">
+                    <i data-lucide="{{ event.icon }}"></i>
+                    <div>
+                        <strong>{{ event.title }}</strong>
+                        <span>{{ event.when }} · {{ event.origin }}</span>
+                    </div>
+                    <em>{{ event.status }}</em>
+                </article>
+                {% endfor %}
+            </div>
+            <div class="desk-empty compact" data-device-history-empty hidden><i data-lucide="filter-x"></i><span>Nenhum evento deste tipo.</span></div>
+        </section>
+        </div>
+
+        <div class="nw-device-workbench__right">
+        <section class="nw-device-section">
+            <div class="nw-device-section__title">
+                <h3><i data-lucide="radio-tower"></i>Acoes remotas</h3>
+                <p>Operacoes simuladas registram atividade no chamado.</p>
+            </div>
+            <div class="nw-device-action-groups">
+                <div class="nw-device-action-group">
+                    <span>Acesso</span>
+                    <div class="nw-device-actions-grid">
+                {% for action in device_context.remote_actions %}
+                {% if action.key == "remote-access" or action.key == "send-message" or action.key == "processes" or action.key == "services" %}
+                <button class="nw-device-action-button {% if action.sensitive %}is-sensitive{% endif %}" type="button"
+                        data-rmm-action="{{ action.key }}"
+                        data-action-label="{{ action.label }}"
+                        data-action-sensitive="{{ action.sensitive|yesno:'true,false' }}"
+                        {% if action.requires_online and device_context.status != "online" %}disabled title="Endpoint offline"{% endif %}>
+                    <i data-lucide="{{ action.icon }}"></i>
+                    <span>{{ action.label }}</span>
+                    {% if action.sensitive %}<small>confirmacao</small>{% else %}<small>simulado</small>{% endif %}
+                </button>
+                {% endif %}
+                {% endfor %}
+                    </div>
+                </div>
+                <div class="nw-device-action-group">
+                    <span>Diagnostico</span>
+                    <div class="nw-device-actions-grid">
+                {% for action in device_context.remote_actions %}
+                {% if action.key == "collect-diagnostics" or action.key == "collect-logs" or action.key == "antivirus-scan" %}
+                <button class="nw-device-action-button" type="button"
+                        data-rmm-action="{{ action.key }}"
+                        data-action-label="{{ action.label }}"
+                        data-action-sensitive="{{ action.sensitive|yesno:'true,false' }}"
+                        {% if action.requires_online and device_context.status != "online" %}disabled title="Endpoint offline"{% endif %}>
+                    <i data-lucide="{{ action.icon }}"></i>
+                    <span>{{ action.label }}</span>
+                    <small>simulado</small>
+                </button>
+                {% endif %}
+                {% endfor %}
+                    </div>
+                </div>
+                <div class="nw-device-action-group">
+                    <span>Sistema</span>
+                    <div class="nw-device-actions-grid">
+                {% for action in device_context.remote_actions %}
+                {% if action.key == "sync-inventory" or action.key == "restart-agent" %}
+                <button class="nw-device-action-button {% if action.sensitive %}is-sensitive{% endif %}" type="button"
+                        data-rmm-action="{{ action.key }}"
+                        data-action-label="{{ action.label }}"
+                        data-action-sensitive="{{ action.sensitive|yesno:'true,false' }}"
+                        {% if action.requires_online and device_context.status != "online" %}disabled title="Endpoint offline"{% endif %}>
+                    <i data-lucide="{{ action.icon }}"></i>
+                    <span>{{ action.label }}</span>
+                    {% if action.sensitive %}<small>confirmacao</small>{% else %}<small>simulado</small>{% endif %}
+                </button>
+                {% endif %}
+                {% endfor %}
+                    </div>
+                </div>
+                <div class="nw-device-action-group">
+                    <span>Acoes sensiveis</span>
+                    <div class="nw-device-actions-grid">
+                {% for action in device_context.remote_actions %}
+                {% if action.key == "restart-device" or action.key == "lock-session" or action.key == "cleanup-temp" %}
+                <button class="nw-device-action-button is-sensitive" type="button"
+                        data-rmm-action="{{ action.key }}"
+                        data-action-label="{{ action.label }}"
+                        data-action-sensitive="true"
+                        {% if action.requires_online and device_context.status != "online" %}disabled title="Endpoint offline"{% endif %}>
+                    <i data-lucide="{{ action.icon }}"></i>
+                    <span>{{ action.label }}</span>
+                    <small>confirmacao</small>
+                </button>
+                {% endif %}
+                {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    <section class="nw-device-section nw-device-scripts">
+        <div class="nw-device-section__title">
+            <div>
+                <h3><i data-lucide="terminal-square"></i>Scripts rapidos</h3>
+                <p>Rotinas operacionais de baixa friccao para suporte remoto.</p>
+            </div>
+            <label class="nw-device-script-search">
+                <i data-lucide="search"></i>
+                <input type="search" placeholder="Buscar script..." data-device-script-search>
+            </label>
+            <div class="nw-device-risk-filters" role="toolbar" aria-label="Filtrar scripts por risco">
+                <button class="is-active" type="button" data-script-risk-filter="all">Todos</button>
+                <button type="button" data-script-risk-filter="low">Baixo</button>
+                <button type="button" data-script-risk-filter="medium">Medio</button>
+                <button type="button" data-script-risk-filter="high">Alto</button>
+            </div>
+        </div>
+        <div class="nw-device-script-grid" data-device-script-list>
+            {% for script in device_context.quick_scripts %}
+            <article class="nw-device-script-card" data-device-script-card data-script-risk-value="{{ script.risk }}">
+                <header>
+                    <strong>{{ script.name }}</strong>
+                    <span class="risk-{{ script.risk }}">{{ script.risk }}</span>
+                </header>
+                <p>{{ script.description }}</p>
+                <small>{{ script.duration }}</small>
+                <button class="desk-btn" type="button" data-rmm-script="{{ script.key }}" data-action-label="{{ script.name }}" data-script-risk="{{ script.risk }}">Executar</button>
+            </article>
+            {% endfor %}
+        </div>
+        <div class="desk-empty compact" data-device-script-empty hidden><i data-lucide="search-x"></i><span>Nenhum script encontrado.</span></div>
+    </section>
+        </div>
+    </div>
+
+    <aside class="nw-rmm-confirm-modal" data-rmm-confirm-modal hidden>
+        <div class="nw-rmm-confirm-modal__backdrop" data-rmm-confirm-close></div>
+        <form class="nw-rmm-confirm-modal__dialog" data-rmm-confirm-form>
+            <header>
+                <div>
+                    <span>ACAO REMOTA</span>
+                    <h3>Confirmar acao remota</h3>
+                    <p>Esta acao sera enviada para o endpoint {{ device_context.hostname }}.</p>
+                </div>
+                <button type="button" class="desk-icon-button" data-rmm-confirm-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <div class="nw-rmm-confirm-summary">
+                <span>Acao <strong data-rmm-confirm-action>--</strong></span>
+                <span>Endpoint <strong>{{ device_context.hostname }}</strong></span>
+                <span>Usuario logado <strong>{{ device_context.last_user|default:"--" }}</strong></span>
+                <span>Status <strong>{{ device_context.status_label }}</strong></span>
+                <span>Ultimo check-in <strong data-device-last-seen-confirm>{{ device_context.last_seen }}</strong></span>
+            </div>
+            <label>
+                <span>Motivo / observacao</span>
+                <textarea data-rmm-confirm-note placeholder="Opcional, mas recomendado para rastreabilidade."></textarea>
+            </label>
+            <label class="nw-rmm-confirm-check">
+                <input type="checkbox" data-rmm-confirm-log checked>
+                <span>Registrar esta acao na atividade do chamado</span>
+            </label>
+            <footer>
+                <button class="desk-btn" type="button" data-rmm-confirm-close>Cancelar</button>
+                <button class="desk-btn desk-btn-primary" type="submit">Confirmar acao</button>
+            </footer>
+        </form>
+    </aside>
+    <aside class="nw-rmm-confirm-modal nw-rmm-message-modal" data-rmm-message-modal hidden>
+        <div class="nw-rmm-confirm-modal__backdrop" data-rmm-message-close></div>
+        <form class="nw-rmm-confirm-modal__dialog" data-rmm-message-form>
+            <header>
+                <div>
+                    <span>MENSAGEM AO USUARIO</span>
+                    <h3>Enviar mensagem ao usuario</h3>
+                    <p>A mensagem sera enviada para {{ device_context.last_user|default:"usuario logado" }} no endpoint {{ device_context.hostname }}.</p>
+                </div>
+                <button type="button" class="desk-icon-button" data-rmm-message-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <div class="nw-rmm-confirm-summary">
+                <span>Destinatario <strong>{{ device_context.last_user|default:"--" }}</strong></span>
+                <span>Endpoint <strong>{{ device_context.hostname }}</strong></span>
+            </div>
+            <div class="nw-rmm-message-templates">
+                <button type="button" data-rmm-message-template="Ola, estamos verificando seu computador. Pode nos avisar se estiver usando agora?">Verificacao em andamento</button>
+                <button type="button" data-rmm-message-template="Precisamos reiniciar alguns servicos. Voce pode salvar seus arquivos?">Reiniciar servicos</button>
+                <button type="button" data-rmm-message-template="O suporte iniciara uma verificacao remota nos proximos minutos.">Verificacao remota</button>
+            </div>
+            <label>
+                <span>Mensagem</span>
+                <textarea data-rmm-message-text placeholder="Digite a mensagem para o usuario..."></textarea>
+            </label>
+            <label class="nw-rmm-confirm-check">
+                <input type="checkbox" data-rmm-message-log checked>
+                <span>Registrar mensagem na atividade do chamado</span>
+            </label>
+            <footer>
+                <button class="desk-btn" type="button" data-rmm-message-close>Cancelar</button>
+                <button class="desk-btn desk-btn-primary" type="submit">Enviar mensagem</button>
+            </footer>
+        </form>
+    </aside>
+    {% else %}
+    <section class="nw-device-empty" data-device-empty-state>
+        <span><i data-lucide="monitor-off"></i></span>
+        <h2>Nenhum dispositivo vinculado</h2>
+        <p>Vincule um endpoint para consultar telemetria, alertas e acoes remotas.</p>
+        <label class="nw-device-empty__search">
+            <i data-lucide="search"></i>
+            <input type="search" placeholder="Buscar por hostname, usuario ou IP..." data-device-link-search>
+        </label>
+        <div class="nw-device-link-list" data-device-link-list>
+            {% for endpoint in device_context.link_candidates %}
+            <article data-device-link-card>
+                <div>
+                    <strong>{{ endpoint.hostname }}</strong>
+                    <span>{{ endpoint.user }} · {{ endpoint.ip }}</span>
+                    <small>{{ endpoint.status }} · {{ endpoint.last_seen }}</small>
+                </div>
+                <button class="desk-btn desk-btn-primary" type="button" data-device-link="{{ endpoint.hostname }}">Vincular</button>
+            </article>
+            {% endfor %}
+        </div>
+        <div class="desk-empty compact" data-device-link-empty hidden><i data-lucide="search-x"></i><span>Nenhum endpoint encontrado.</span></div>
+    </section>
     {% endif %}
 </article>
