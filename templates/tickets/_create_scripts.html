@@ -32,7 +32,7 @@ document.addEventListener("DOMContentLoaded", function () {
         { number: 1048, title: "Socio sem acesso ao e-mail", status: "Em atendimento", reason: "Mesmo solicitante", score: 88, endpoint: "DIR-NOTE-002", requester: "Eduardo Campos", category: "Acesso" },
         { number: 1042, title: "Bitdefender ausente em FIN-012", status: "Novo", reason: "Mesmo endpoint", score: 92, endpoint: "FIN-012", requester: "Mariana Souza", category: "Seguranca" },
         { number: 1032, title: "Servidor de arquivos com alerta de disco", status: "Novo", reason: "Alerta RMM parecido", score: 84, endpoint: "SRV-FILES-01", requester: "Night Owl RMM", category: "RMM / Alerta" },
-        { number: 1039, title: "Solicitacao de acesso ao ERP", status: "Resolvido", reason: "Similar resolvido", score: 68, endpoint: "", requester: "Ana Ribeiro", category: "Acesso" },
+        { number: 1039, title: "Solicitação de acesso ao ERP", status: "Resolvido", reason: "Similar resolvido", score: 68, endpoint: "", requester: "Ana Ribeiro", category: "Acesso" },
     ];
     const subcategories = {
         "Acesso": ["E-mail", "ERP", "VPN", "MFA", "Permissao"],
@@ -49,6 +49,7 @@ document.addEventListener("DOMContentLoaded", function () {
     let selectedEndpoint = null;
     let dirty = false;
     let toastTimer = null;
+    let activeRecordType = "incident";
 
     function all(selector, root = document) {
         return Array.from(root.querySelectorAll(selector));
@@ -113,6 +114,78 @@ document.addEventListener("DOMContentLoaded", function () {
         updateProgress(sectionId);
     }
 
+    function recordTypeLabel(type = activeRecordType) {
+        return {
+            incident: "Incidente",
+            request: "Solicitação",
+            rmm: "Alerta RMM",
+            gmud: "GMUD / Mudança",
+        }[type] || "Incidente";
+    }
+
+    function setRecordType(type) {
+        activeRecordType = type || "incident";
+        const help = page.querySelector("[data-type-help]");
+        const typeInput = page.querySelector("[data-record-type-input]");
+        if (typeInput) typeInput.value = recordTypeLabel(activeRecordType);
+        all("[data-record-type]", page).forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.recordType === activeRecordType);
+        });
+        all("[data-type-panel]", page).forEach((panel) => {
+            panel.hidden = panel.dataset.typePanel !== activeRecordType;
+        });
+        const isGmud = activeRecordType === "gmud";
+        all("[data-standard-actions]", page).forEach((item) => { item.hidden = isGmud; });
+        all("[data-standard-action]", page).forEach((item) => { item.hidden = isGmud; });
+        all("[data-gmud-actions]", page).forEach((item) => { item.hidden = !isGmud; });
+        all("[data-gmud-action]", page).forEach((item) => { item.hidden = !isGmud; });
+        if (help) {
+            help.textContent = {
+                incident: "Use incidente para falhas, indisponibilidades ou degradações de serviço.",
+                request: "Use solicitação para pedidos de acesso, instalação, ajuste ou atendimento comum.",
+                rmm: "Use alerta RMM para registrar telemetria, monitoramento e evidências técnicas.",
+                gmud: "Use GMUD para mudanças planejadas com risco, rollback e aprovação.",
+            }[activeRecordType];
+        }
+        if (activeRecordType === "incident") {
+            setValue("origin", "Manual");
+            if (["", "Solicitação", "Solicitacao", "GMUD / Mudança", "GMUD / Mudanca", "RMM / Alerta"].includes(value("category"))) {
+                setValue("category", "Incidente");
+            }
+            setValue("queue", "N1 - Atendimento");
+        } else if (activeRecordType === "request") {
+            setValue("origin", "Manual");
+            setValue("category", "Solicitação");
+            setValue("priority", "normal");
+            setValue("queue", "N1 - Atendimento");
+        } else if (activeRecordType === "rmm") {
+            setValue("origin", "RMM Alert");
+            setValue("category", "RMM / Alerta");
+            setValue("priority", "high");
+            setValue("queue", "N2 - Infra");
+        } else if (activeRecordType === "gmud") {
+            setValue("origin", "Manual");
+            setValue("category", "GMUD / Mudança");
+            setValue("queue", "CAB / Mudanças");
+            if (!value("title")) setValue("title", "Mudança planejada - ");
+        }
+        updateOriginFields();
+        updateApprovalState();
+        updateSummary();
+        window.lucide?.createIcons?.();
+    }
+
+    function updateApprovalState() {
+        const risk = value("change_risk");
+        const needsApproval = activeRecordType === "gmud" && ["Médio", "Medio", "Alto"].includes(risk);
+        const badge = page.querySelector("[data-approval-badge]");
+        if (badge) badge.hidden = !needsApproval;
+        const summary = page.querySelector("[data-summary-approval]");
+        if (summary) summary.textContent = needsApproval ? "Sim" : "Não";
+        const reviewApproval = page.querySelector("[data-review-approval]");
+        if (reviewApproval) reviewApproval.textContent = needsApproval ? "Sim" : "Não";
+    }
+
     function renderResults(box, rows, renderer, emptyText) {
         if (!box) return;
         box.innerHTML = "";
@@ -170,23 +243,42 @@ document.addEventListener("DOMContentLoaded", function () {
     function updateEndpointCard() {
         const endpoint = selectedEndpoint || endpointRows.find((item) => item.hostname === value("endpoint"));
         const host = page.querySelector("[data-endpoint-host]");
-        const meta = page.querySelector("[data-endpoint-meta]");
-        const detail = page.querySelector("[data-endpoint-detail]");
+        const hostDetail = page.querySelector("[data-endpoint-host-detail]");
+        const user = page.querySelector("[data-endpoint-user]");
+        const status = page.querySelector("[data-endpoint-status]");
+        const checkin = page.querySelector("[data-endpoint-checkin]");
+        const ip = page.querySelector("[data-endpoint-ip]");
+        const os = page.querySelector("[data-endpoint-os]");
+        const alerts = page.querySelector("[data-endpoint-alerts]");
+        const riskValue = page.querySelector("[data-endpoint-risk-value]");
         const risk = page.querySelector("[data-endpoint-risk]");
         const context = page.querySelector("[data-endpoint-context]");
         if (!endpoint) {
-            if (host) host.textContent = "Nenhum endpoint";
-            if (meta) meta.textContent = "Sem vinculo";
-            if (detail) detail.textContent = "Busque por hostname, usuario ou IP para vincular telemetria RMM.";
-            if (risk) risk.textContent = "sem vinculo";
-            if (context) context.textContent = "Vincule um endpoint para trazer telemetria, alertas ativos e risco operacional.";
+            const typedEndpoint = value("endpoint");
+            if (host) host.textContent = typedEndpoint || "Nenhum contexto técnico vinculado ainda.";
+            if (hostDetail) hostDetail.textContent = typedEndpoint || "-";
+            if (user) user.textContent = "-";
+            if (status) status.textContent = "-";
+            if (checkin) checkin.textContent = "-";
+            if (ip) ip.textContent = "-";
+            if (os) os.textContent = "-";
+            if (alerts) alerts.textContent = "-";
+            if (riskValue) riskValue.textContent = "-";
+            if (risk) risk.textContent = typedEndpoint ? "VINCULADO" : "SEM VÍNCULO";
+            if (context) context.textContent = typedEndpoint ? "Endpoint informado manualmente. Selecione um item da busca para trazer telemetria RMM." : "Vincule um endpoint para trazer telemetria, alertas ativos e risco operacional.";
             return;
         }
         if (host) host.textContent = endpoint.hostname;
-        if (meta) meta.textContent = endpoint.status_label + " - " + endpoint.last_seen + " - " + endpoint.ip;
-        if (detail) detail.textContent = endpoint.os + " - usuario " + endpoint.last_user + " - " + endpoint.alerts + " - risco " + endpoint.risk;
-        if (risk) risk.textContent = "risco " + endpoint.risk;
-        if (context) context.textContent = endpoint.hostname + " esta " + endpoint.status_label.toLowerCase() + ", ultimo check-in " + endpoint.last_seen + ", " + endpoint.alerts + ".";
+        if (hostDetail) hostDetail.textContent = endpoint.hostname;
+        if (user) user.textContent = endpoint.last_user || "-";
+        if (status) status.textContent = endpoint.status_label || "-";
+        if (checkin) checkin.textContent = endpoint.last_seen || "-";
+        if (ip) ip.textContent = endpoint.ip || "-";
+        if (os) os.textContent = endpoint.os || "-";
+        if (alerts) alerts.textContent = endpoint.alerts || "-";
+        if (riskValue) riskValue.textContent = endpoint.risk || "-";
+        if (risk) risk.textContent = "RMM MOCK";
+        if (context) context.textContent = endpoint.hostname + " está " + endpoint.status_label.toLowerCase() + ", último check-in " + endpoint.last_seen + ", " + endpoint.alerts + ".";
     }
 
     function updateRequesterContext() {
@@ -204,7 +296,7 @@ document.addEventListener("DOMContentLoaded", function () {
         if (box) box.hidden = false;
         if (badge) badge.hidden = !requester.vip;
         page.querySelector("[data-requester-context-name]").textContent = requester.name || "-";
-        page.querySelector("[data-requester-context-meta]").textContent = (requester.client || "Nalen Automation") + " - " + (requester.department || "Sem setor") + " - " + (requester.role || "Funcao nao informada");
+        page.querySelector("[data-requester-context-meta]").textContent = (requester.client || "Nalen Automation") + " · " + (requester.department || "Sem setor") + " · " + (requester.role || "Função não informada");
         const history = page.querySelector("[data-requester-history]");
         if (history) {
             history.innerHTML = "";
@@ -221,7 +313,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function priorityLabel(value) {
-        return ({ low: "Baixa", normal: "Normal", high: "Alta", critical: "Critica" })[value] || value || "-";
+        return ({ low: "Baixa", normal: "Normal", high: "Alta", critical: "Crítica" })[value] || value || "-";
     }
 
     function suggestPriority() {
@@ -242,7 +334,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const sla = field("sla");
         if (suggestion) suggestion.textContent = "Prioridade sugerida: " + priorityLabel(priority);
         if (reason) reason.hidden = priority !== "critical";
-        if (sla) sla.value = priority === "critical" ? "30min primeira resposta / 4h resolucao" : priority === "high" ? "1h primeira resposta / 8h resolucao" : "4h primeira resposta / 24h resolucao";
+        if (sla) sla.value = priority === "critical" ? "30min primeira resposta / 4h resolução" : priority === "high" ? "1h primeira resposta / 8h resolução" : "4h primeira resposta / 24h resolução";
         updateSummary();
     }
 
@@ -256,6 +348,17 @@ document.addEventListener("DOMContentLoaded", function () {
     function suggestFromContext() {
         const origin = value("origin");
         const endpoint = selectedEndpoint || endpointRows.find((item) => item.hostname === value("endpoint"));
+        if (activeRecordType === "rmm") {
+            setValue("category", "RMM / Alerta");
+            setValue("priority", "high");
+            setValue("queue", "N2 - Infra");
+            if (endpoint?.hostname && !value("title")) {
+                setValue("title", endpoint.alerts?.includes("antivirus") ? "Alerta RMM em " + endpoint.hostname : "Alerta técnico em " + endpoint.hostname);
+            }
+            updateSubcategories();
+            updatePriorityUi();
+            return;
+        }
         if (origin === "RMM Alert" || endpoint?.alerts?.includes("antivirus")) {
             setValue("category", endpoint?.alerts?.includes("antivirus") ? "Seguranca" : "RMM / Alerta");
             setValue("priority", endpoint?.risk === "alto" ? "high" : "normal");
@@ -285,16 +388,20 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!list) return;
         if (!matches.length) {
             list.innerHTML = '<p class="nw-empty-small">Nenhum relacionado encontrado ainda.</p>';
+            const reviewRelated = page.querySelector("[data-review-related]");
+            if (reviewRelated) reviewRelated.textContent = "0 possíveis";
             return;
         }
         const strong = matches.some((item) => item.score >= 88);
-        list.innerHTML = (strong ? '<strong class="nw-duplicate-alert">Possivel duplicado encontrado.</strong>' : "") + matches.map((item) => `
+        list.innerHTML = (strong ? '<strong class="nw-duplicate-alert">Possível duplicado encontrado.</strong>' : "") + matches.map((item) => `
             <article>
                 <strong>#${item.number} ${item.title}</strong>
-                <span>${item.reason} - ${item.score}% similar - ${item.status}</span>
+                <span>${item.reason} · ${item.score}% similar · ${item.status}</span>
                 <footer><button type="button" data-duplicate-link>Vincular</button><button type="button" data-duplicate-preview>Preview</button></footer>
             </article>
         `).join("");
+        const reviewRelated = page.querySelector("[data-review-related]");
+        if (reviewRelated) reviewRelated.textContent = matches.length + " possíveis";
     }
 
     function updateSummary() {
@@ -307,6 +414,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const sla = value("sla");
         const queue = value("queue");
         const pairs = {
+            "[data-summary-type]": recordTypeLabel(),
             "[data-summary-requester]": requester || "-",
             "[data-summary-client]": client || "-",
             "[data-summary-endpoint]": endpoint || "-",
@@ -322,8 +430,13 @@ document.addEventListener("DOMContentLoaded", function () {
         });
         const reviewTitle = page.querySelector("[data-review-title]");
         const reviewMeta = page.querySelector("[data-review-meta]");
-        if (reviewTitle) reviewTitle.textContent = value("title") || "Chamado ainda sem titulo";
-        if (reviewMeta) reviewMeta.textContent = [requester || "sem solicitante", category || "sem categoria", priority, endpoint || "sem endpoint"].join(" - ");
+        if (reviewTitle) reviewTitle.textContent = value("title") || "Chamado ainda sem título";
+        if (reviewMeta) reviewMeta.textContent = [recordTypeLabel(), category || "sem categoria", priority, queue || "sem fila"].join(" · ");
+        const reviewRequester = page.querySelector("[data-review-requester]");
+        const reviewEndpoint = page.querySelector("[data-review-endpoint]");
+        if (reviewRequester) reviewRequester.textContent = requester || "-";
+        if (reviewEndpoint) reviewEndpoint.textContent = endpoint || "-";
+        updateApprovalState();
         updateQuality();
     }
 
@@ -348,7 +461,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function updateOriginFields() {
-        const isRmm = value("origin") === "RMM Alert";
+        const isRmm = activeRecordType === "rmm";
         const fields = page.querySelector("[data-rmm-alert-fields]");
         if (fields) fields.hidden = !isRmm;
         if (isRmm) {
@@ -376,7 +489,15 @@ document.addEventListener("DOMContentLoaded", function () {
         if (value("priority") === "critical" && !value("critical_reason") && value("requester_is_partner") !== true) {
             const reason = field("critical_reason");
             reason?.classList.add("desk-invalid-input");
-            missing.push("Justificativa critica");
+            missing.push("Justificativa crítica");
+        }
+        if (activeRecordType === "gmud") {
+            ["change_reason", "change_plan", "change_rollback"].forEach((name) => {
+                const input = field(name);
+                const empty = !input?.value.trim();
+                input?.classList.toggle("desk-invalid-input", empty);
+                if (empty) missing.push(input?.closest("label")?.querySelector("span")?.textContent || name);
+            });
         }
         const box = page.querySelector("[data-new-errors]");
         if (box) {
@@ -393,12 +514,12 @@ document.addEventListener("DOMContentLoaded", function () {
             return;
         }
         if (!validate()) {
-            showToast("Preencha os campos obrigatorios.");
+            showToast("Preencha os campos obrigatórios.");
             return;
         }
         localStorage.removeItem(draftKey);
         dirty = false;
-        showToast(mode === "assign" ? "Chamado criado e atribuido a voce." : "Chamado criado no mock.");
+        showToast(mode === "assign" ? "Chamado criado e atribuído a você." : "Chamado criado no mock.");
         window.setTimeout(() => {
             if (mode === "open" || mode === "assign") window.location.href = "{% url 'tickets:detail' 1048 %}";
             else window.location.href = "{% url 'tickets:central' %}";
@@ -406,6 +527,19 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     page.addEventListener("click", (event) => {
+        const recordType = event.target.closest("[data-record-type]");
+        if (recordType) {
+            setRecordType(recordType.dataset.recordType);
+            saveDraft(true);
+        }
+        const priorityDetails = event.target.closest("[data-toggle-priority-details]");
+        if (priorityDetails) {
+            const box = page.querySelector("[data-priority-details]");
+            if (box) {
+                box.hidden = !box.hidden;
+                priorityDetails.textContent = box.hidden ? "Mostrar detalhes de prioridade" : "Ocultar detalhes de prioridade";
+            }
+        }
         const progress = event.target.closest("[data-progress-target]");
         if (progress) scrollToSection(progress.dataset.progressTarget);
         const requesterButton = event.target.closest("[data-pick-requester]");
@@ -426,7 +560,7 @@ document.addEventListener("DOMContentLoaded", function () {
         if (template) {
             setValue("category", template.dataset.templateCategory);
             setValue("priority", template.dataset.templatePriority);
-            setValue("description", template.dataset.templateDescription + "\\n\\nSintomas:\\n- \\n\\nImpacto:\\n- \\n\\nPassos ja tentados:\\n- ");
+            setValue("description", template.dataset.templateDescription + "\\n\\nSintomas:\\n- \\n\\nImpacto:\\n- \\n\\nPassos já tentados:\\n- ");
             if (!value("title")) setValue("title", template.dataset.templateName);
             updateSubcategories();
             updatePriorityUi();
@@ -503,6 +637,10 @@ document.addEventListener("DOMContentLoaded", function () {
             event.target.dataset.userEdited = "1";
             updatePriorityUi();
         }
+        if (event.target.matches("[data-change-risk]")) {
+            updateApprovalState();
+            updateSummary();
+        }
         if (event.target.matches("#deskVipToggle")) updateVipState();
         if (event.target.matches("[data-new-file-input]")) {
             Array.from(event.target.files || []).forEach((file) => addAttachment(file.name));
@@ -570,8 +708,13 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     restoreDraft();
+    const restoredType = value("ticket_type");
+    if (restoredType.includes("Solicitação") || restoredType.includes("Solicitacao")) activeRecordType = "request";
+    else if (restoredType.includes("RMM")) activeRecordType = "rmm";
+    else if (restoredType.includes("GMUD")) activeRecordType = "gmud";
     selectedEndpoint = endpointRows.find((item) => item.hostname === value("endpoint"));
     selectedRequester = requesterRows.find((item) => item.name === value("requester_name"));
+    setRecordType(activeRecordType);
     updateVipState();
     updateOriginFields();
     updateEndpointCard();

@@ -1,0 +1,151 @@
+<aside class="nw-ticket-drawer" data-quick-ticket-drawer hidden aria-label="Novo chamado rapido">
+    <div class="nw-ticket-drawer-backdrop" data-quick-ticket-close></div>
+    <section class="nw-ticket-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="quick-ticket-title">
+        <header class="nw-ticket-drawer-header">
+            <div>
+                <span>Abertura rapida</span>
+                <h2 id="quick-ticket-title"><i data-lucide="ticket-plus"></i>Novo chamado</h2>
+                <p>Registre rapidamente uma solicitacao ou incidente.</p>
+            </div>
+            <button class="desk-icon-button" type="button" data-quick-ticket-close aria-label="Fechar novo chamado"><i data-lucide="x"></i></button>
+        </header>
+
+        <div class="nw-quick-ticket-error" data-quick-ticket-error hidden>
+            <strong>Revise os campos obrigatorios.</strong>
+            <ul></ul>
+        </div>
+
+        <form class="nw-ticket-drawer-body nw-quick-ticket-form" data-quick-ticket-form>
+            <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
+                <span>Solicitante</span>
+                <input name="requester" autocomplete="off" placeholder="Buscar por nome, e-mail ou setor" data-quick-required="Solicitante" data-quick-requester-search>
+                <div class="nw-quick-autocomplete" data-quick-requester-results hidden></div>
+            </label>
+
+            <article class="nw-quick-ticket-summary" data-quick-requester-summary hidden>
+                <div>
+                    <strong data-quick-requester-name>-</strong>
+                    <small data-quick-requester-meta>-</small>
+                </div>
+                <span data-quick-requester-vip hidden>VIP / Socio</span>
+            </article>
+
+            <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
+                <span>Titulo</span>
+                <input name="title" placeholder="Ex.: Socio sem acesso ao e-mail" data-quick-required="Titulo" data-quick-title>
+            </label>
+
+            <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
+                <span>Descricao</span>
+                <textarea name="description" rows="5" placeholder="Descreva o problema, impacto e o que ja foi tentado." data-quick-required="Descricao" data-quick-description></textarea>
+            </label>
+
+            <div class="nw-quick-ticket-template-list" aria-label="Templates rapidos">
+                <button type="button" data-quick-template="access">Problema de acesso</button>
+                <button type="button" data-quick-template="rmm">Alerta RMM</button>
+                <button type="button" data-quick-template="slow">Lentidao</button>
+                <button type="button" data-quick-template="printer">Impressora</button>
+                <button type="button" data-quick-template="mail">E-mail</button>
+                <button type="button" data-quick-template="install">Instalacao</button>
+            </div>
+
+            <div class="nw-quick-ticket-grid">
+                <label class="nw-quick-ticket-field">
+                    <span>Categoria</span>
+                    <select name="category" data-quick-required="Categoria" data-quick-category>
+                        <option value="">Selecione</option>
+                        <option>Acesso</option>
+                        <option>Hardware</option>
+                        <option>Software</option>
+                        <option>Rede</option>
+                        <option>Seguranca</option>
+                        <option>Impressora</option>
+                        <option>RMM / Alerta</option>
+                        <option>E-mail</option>
+                        <option>Sistemas internos</option>
+                    </select>
+                </label>
+                <label class="nw-quick-ticket-field">
+                    <span>Prioridade</span>
+                    <select name="priority" data-quick-required="Prioridade" data-quick-priority>
+                        <option value="low">Baixa</option>
+                        <option value="normal" selected>Normal</option>
+                        <option value="high">Alta</option>
+                        <option value="critical">Critica</option>
+                    </select>
+                </label>
+                <label class="nw-quick-ticket-field">
+                    <span>Origem</span>
+                    <select name="origin" data-quick-origin>
+                        <option>Manual</option>
+                        <option>Portal</option>
+                        <option>E-mail</option>
+                        <option>Telefone</option>
+                        <option>RMM Alert</option>
+                        <option>Monitoramento</option>
+                    </select>
+                </label>
+                <label class="nw-quick-ticket-field" data-quick-critical-wrap hidden>
+                    <span>Justificativa critica</span>
+                    <input name="critical_reason" placeholder="Impacto ou risco da criticidade" data-quick-critical-reason>
+                </label>
+            </div>
+
+            <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
+                <span>Endpoint / dispositivo opcional</span>
+                <input name="endpoint" autocomplete="off" placeholder="Buscar hostname, usuario ou IP" data-quick-endpoint-search>
+                <div class="nw-quick-autocomplete" data-quick-endpoint-results hidden></div>
+            </label>
+
+            <article class="nw-quick-ticket-endpoint" data-quick-endpoint-card hidden>
+                <div>
+                    <i></i>
+                    <div>
+                        <strong data-quick-endpoint-host>-</strong>
+                        <small data-quick-endpoint-meta>-</small>
+                    </div>
+                </div>
+                <p data-quick-endpoint-risk>-</p>
+                <footer>
+                    <button type="button" data-quick-endpoint-action="open">Ver no RMM</button>
+                    <button type="button" data-quick-endpoint-action="sync">Sincronizar</button>
+                    <button type="button" data-quick-endpoint-action="clear">Limpar</button>
+                </footer>
+            </article>
+
+            <div class="nw-quick-attachments">
+                <button type="button" data-quick-paste-hint><i data-lucide="image"></i>Colar print</button>
+                <button type="button" data-quick-file-pick><i data-lucide="paperclip"></i>Anexar arquivo</button>
+                <input type="file" multiple hidden data-quick-file-input>
+                <div data-quick-attachments-list hidden></div>
+            </div>
+
+            <section class="nw-quick-ticket-related">
+                <header>
+                    <div>
+                        <strong>Possiveis relacionados</strong>
+                        <span>Atualiza com solicitante, endpoint, titulo ou categoria.</span>
+                    </div>
+                    <em data-quick-related-count>0</em>
+                </header>
+                <div data-quick-related-list>
+                    <p>Nenhum relacionado encontrado.</p>
+                </div>
+            </section>
+
+            <div class="nw-quick-draft-line">
+                <span data-quick-draft-status>Sem rascunho recente</span>
+                <button type="button" data-quick-discard-draft>Descartar rascunho</button>
+                <a href="{% url 'tickets:create' %}" data-quick-advanced>Abrir modo avancado</a>
+            </div>
+        </form>
+
+        <footer class="nw-ticket-drawer-footer">
+            <button class="desk-btn" type="button" data-quick-ticket-close>Cancelar</button>
+            <button class="desk-btn" type="button" data-quick-save-draft>Salvar rascunho</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-quick-create="create">Criar</button>
+            <button class="desk-btn" type="button" data-quick-create="open">Criar e abrir</button>
+            <button class="desk-btn" type="button" data-quick-create="assign">Criar e assumir</button>
+        </footer>
+    </section>
+</aside>

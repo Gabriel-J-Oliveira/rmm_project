@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Novo chamado - NightOwl Desk{% endblock %}
+{% block title %}Novo registro avançado - NightOwl Desk{% endblock %}
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
@@ -9,291 +9,271 @@
 {{ category_options|json_script:"new-ticket-categories" }}
 {{ ticket_templates|json_script:"new-ticket-templates" }}
 
-<section class="desk-shell nw-new-ticket-shell" data-new-ticket-page data-draft-key="{{ draft_storage_key }}">
+<section class="desk-shell nw-new-ticket-shell nw-advanced-record-shell" data-new-ticket-page data-draft-key="{{ draft_storage_key }}">
     <header class="nw-new-ticket-header">
         <div class="nw-new-ticket-title">
-            <span class="desk-compact-icon"><i data-lucide="ticket-plus"></i></span>
+            <span class="desk-compact-icon"><i data-lucide="workflow"></i></span>
             <div>
-                <span class="nw-new-ticket-kicker">NightOwl Desk</span>
-                <h1>Novo chamado</h1>
-                <p>Registre uma solicitacao, incidente ou alerta tecnico com contexto correto desde o primeiro minuto.</p>
-                <span class="sr-only">Cria&ccedil;&atilde;o completa</span>
-                <span class="sr-only">Cria&ccedil;&atilde;o r&aacute;pida</span>
+                <span class="nw-new-ticket-kicker">Modo avançado</span>
+                <h1>Novo registro avançado</h1>
+                <p>Use este fluxo para incidentes estruturados, alertas técnicos, solicitações detalhadas ou mudanças com aprovação.</p>
             </div>
         </div>
         <div class="nw-new-ticket-actions">
-            <a class="desk-btn" href="{% url 'tickets:central' %}" data-new-cancel><i data-lucide="x"></i>Cancelar</a>
+            <a class="desk-btn" href="{% url 'tickets:central' %}"><i data-lucide="arrow-left"></i>Voltar para abertura rápida</a>
             <button class="desk-btn" type="button" data-save-draft><i data-lucide="save"></i>Salvar rascunho</button>
-            <button class="desk-btn desk-btn-primary" type="button" data-create-ticket="create"><i data-lucide="send"></i>Criar chamado</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-create-ticket="create" data-standard-action><i data-lucide="send"></i>Criar</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-create-ticket="approval" data-gmud-action hidden><i data-lucide="send"></i>Enviar para aprovação</button>
         </div>
     </header>
 
     {% include "tickets/_desk_nav.html" %}
-
-    <nav class="nw-new-progress" aria-label="Progresso do novo chamado">
-        <button type="button" class="is-active" data-progress-target="requester"><span>1</span>Solicitante</button>
-        <button type="button" data-progress-target="context"><span>2</span>Contexto</button>
-        <button type="button" data-progress-target="classification"><span>3</span>Classificacao</button>
-        <button type="button" data-progress-target="description"><span>4</span>Descricao</button>
-        <button type="button" data-progress-target="review"><span>5</span>Revisao</button>
-    </nav>
-
     {% include "tickets/_create_alert_preview.html" %}
 
-    <div class="desk-create-quick sr-only" aria-hidden="true">Cria&ccedil;&atilde;o r&aacute;pida</div>
+    <span class="sr-only" data-vip-explanation></span>
+
+    <section class="nw-record-type-panel" aria-labelledby="record-type-title">
+        <header>
+            <div>
+                <h2 id="record-type-title">Tipo de registro</h2>
+                <p>Escolha o fluxo adequado para este registro.</p>
+            </div>
+        </header>
+        <div class="nw-record-type-strip" aria-label="Tipo de registro">
+            <button class="is-active" type="button" data-record-type="incident">
+                <i data-lucide="siren"></i>
+                <strong>Incidente</strong>
+                <span>Falha, indisponibilidade ou degradação.</span>
+            </button>
+            <button type="button" data-record-type="request">
+                <i data-lucide="inbox"></i>
+                <strong>Solicitação</strong>
+                <span>Acesso, instalação, ajuste ou atendimento comum.</span>
+            </button>
+            <button type="button" data-record-type="rmm">
+                <i data-lucide="activity"></i>
+                <strong>Alerta RMM</strong>
+                <span>Registro técnico vindo de agente ou monitoramento.</span>
+            </button>
+            <button type="button" data-record-type="gmud">
+                <i data-lucide="git-branch"></i>
+                <strong>GMUD / Mudança</strong>
+                <span>Planejamento, risco, rollback e aprovação.</span>
+            </button>
+        </div>
+    </section>
 
     <div class="nw-new-ticket-layout">
         <main class="desk-form-panel desk-create-wizard nw-new-ticket-main is-active" id="deskCreateWizard">
+            <input name="ticket_type" type="hidden" value="Incidente" data-draft-field data-record-type-input>
             <div class="nw-new-error" data-new-errors hidden>
-                <strong>Revise os campos obrigatorios.</strong>
+                <strong>Revise os campos obrigatórios.</strong>
                 <ul></ul>
             </div>
 
             <section class="nw-new-section desk-create-step is-active" id="requester" data-create-step="1" data-new-section="requester">
                 <div class="nw-new-section__header">
-                    <span class="desk-step-pill">Passo 1 de 5</span>
+                    <span class="desk-step-pill">Identificação</span>
                     <div>
-                        <h2><i data-lucide="user-search"></i>Solicitante</h2>
-                        <p>Busque um usuario existente, preencha os dados e registre se ha contexto VIP.</p>
+                        <h2><i data-lucide="badge-plus"></i>Identificação</h2>
+                        <p data-type-help>Use incidente para falhas, indisponibilidades ou degradações de serviço.</p>
                     </div>
                 </div>
-                <p class="sr-only">Passo 2 de 2</p>
-                <p class="sr-only">Quem esta solicitando</p>
-                <label class="nw-search-field wide">
-                    <span>Buscar usuario existente</span>
-                    <input name="requester_search" placeholder="Buscar por nome, e-mail ou setor" autocomplete="off" data-draft-field data-requester-search>
-                    <small>Use / para focar rapidamente neste campo.</small>
-                    <div class="nw-autocomplete" data-requester-results hidden></div>
-                </label>
-                <div class="desk-form-grid nw-form-grid">
-                    <label><span>Nome</span><input name="requester_name" placeholder="Nome do solicitante" data-required="Solicitante" data-draft-field></label>
-                    <label><span>E-mail</span><input name="requester_email" type="email" placeholder="usuario@empresa.com.br" data-draft-field data-email-input></label>
-                    <label><span>Telefone</span><input name="requester_phone" placeholder="(11) 90000-0000" data-draft-field></label>
-                    <label><span>Cliente</span><input name="requester_client" placeholder="Nalen Automation" data-draft-field></label>
-                    <label><span>Setor</span><input name="requester_department" placeholder="Financeiro" data-draft-field></label>
-                    <label><span>Cargo / funcao</span><input name="requester_role" placeholder="Analista" data-draft-field></label>
-                    <label class="desk-partner-toggle desk-create-vip-toggle">
-                        <input type="checkbox" id="deskVipToggle" name="requester_is_partner" data-draft-field>
-                        <span>
-                            <strong>Solicitante e socio/VIP</strong>
-                            <small>Prioridade alterada para critica quando o contexto exigir atendimento executivo.</small>
-                        </span>
+                <div class="desk-form-grid nw-form-grid nw-compact-form-grid">
+                    <label class="wide nw-search-field">
+                        <span>Solicitante</span>
+                        <input name="requester_name" placeholder="Buscar por nome, e-mail ou setor" autocomplete="off" data-required="Solicitante" data-draft-field data-requester-search>
+                        <div class="nw-autocomplete" data-requester-results hidden></div>
                     </label>
-                    <button class="desk-btn" type="button" data-quick-requester><i data-lucide="user-plus"></i>Criar solicitante rapido</button>
+                    <input name="requester_search" type="hidden" data-draft-field>
+                    <input name="requester_email" type="hidden" data-draft-field data-email-input>
+                    <input name="requester_client" type="hidden" data-draft-field>
+                    <input name="requester_department" type="hidden" data-draft-field>
+                    <input name="requester_role" type="hidden" data-draft-field>
+                    <input name="requester_phone" type="hidden" data-draft-field>
+                    <input id="deskVipToggle" name="requester_is_partner" type="checkbox" hidden data-draft-field>
+                    <label class="wide"><span>Título</span><input name="title" value="{{ initial_ticket.title }}" placeholder="Ex.: Bitdefender ausente em FIN-012" data-required="Título" data-draft-field data-title></label>
+                    <label class="wide"><span>Descrição</span><textarea name="description" rows="5" placeholder="Descreva contexto, impacto e o que já foi observado." data-required="Descrição" data-draft-field data-description>{{ initial_ticket.description }}</textarea></label>
                 </div>
-                <div class="desk-vip-explanation" data-vip-explanation hidden>
-                    <i data-lucide="badge-alert"></i>
-                    <span>Prioridade alterada para critica porque o solicitante foi marcado como socio/VIP.</span>
-                </div>
+                <article class="nw-requester-mini" data-requester-context hidden>
+                    <div>
+                        <strong data-requester-context-name>-</strong>
+                        <small data-requester-context-meta>-</small>
+                    </div>
+                    <span data-requester-vip-badge hidden>VIP</span>
+                    <ul data-requester-history></ul>
+                </article>
+                <p class="nw-empty-small" data-requester-context-empty>Selecione um solicitante para ver dados compactos e histórico recente.</p>
             </section>
 
             <section class="nw-new-section" id="context" data-new-section="context">
                 <div class="nw-new-section__header">
-                    <span class="desk-step-pill">Passo 2 de 5</span>
+                    <span class="desk-step-pill">Contexto</span>
                     <div>
-                        <h2><i data-lucide="radar"></i>Contexto tecnico</h2>
-                        <p>Defina origem, endpoint, alerta RMM e sistema afetado antes de classificar.</p>
+                        <h2><i data-lucide="radar"></i>Contexto</h2>
+                        <p>Dados técnicos podem ser preenchidos automaticamente em registros vindos do agente/RMM.</p>
                     </div>
                 </div>
-                <p class="sr-only">Passo 1 de 2</p>
-                <p class="sr-only">O que aconteceu</p>
-                <div class="desk-form-grid nw-form-grid">
-                    <label>
-                        <span>Origem</span>
-                        <select name="origin" data-draft-field data-origin>
-                            <option>Portal</option>
-                            <option>E-mail</option>
-                            <option>Telefone</option>
-                            <option selected>Manual</option>
-                            <option>RMM Alert</option>
-                            <option>Monitoramento</option>
-                        </select>
-                    </label>
-                    <label class="wide nw-search-field">
-                        <span>Dispositivo / endpoint relacionado</span>
-                        <input name="endpoint" value="{{ selected_endpoint.hostname }}" placeholder="Buscar por hostname, usuario ou IP" autocomplete="off" data-draft-field data-endpoint-search>
-                        <div class="nw-autocomplete" data-endpoint-results hidden></div>
-                    </label>
-                    <label><span>Servico/sistema afetado</span><input name="affected_service" placeholder="E-mail, ERP, VPN, impressao..." data-draft-field></label>
-                    <label><span>Localidade/unidade</span><input name="location" placeholder="Matriz, Filial Norte..." data-draft-field></label>
+                <div class="desk-form-grid nw-form-grid nw-compact-form-grid">
+                    <label><span>Origem</span><select name="origin" data-draft-field data-origin><option>Manual</option><option>Portal</option><option>E-mail</option><option>Telefone</option><option>RMM Alert</option><option>Monitoramento</option></select></label>
+                    <label><span>Serviço afetado</span><input name="affected_service" placeholder="E-mail, ERP, VPN, impressão..." data-draft-field></label>
+                    <label class="wide nw-search-field"><span>Endpoint / ativo relacionado</span><input name="endpoint" value="{{ selected_endpoint.hostname }}" placeholder="Buscar por hostname, usuario ou IP" autocomplete="off" data-draft-field data-endpoint-search><div class="nw-autocomplete" data-endpoint-results hidden></div></label>
                 </div>
-                <article class="nw-endpoint-mini" data-endpoint-card>
-                    <div>
-                        <span class="nw-status-dot"></span>
-                        <strong data-endpoint-host>{{ selected_endpoint.hostname|default:"Nenhum endpoint" }}</strong>
-                        <small data-endpoint-meta>{{ selected_endpoint.status_label|default:"Sem vinculo" }} - {{ selected_endpoint.last_seen|default:"Selecione um dispositivo" }}</small>
-                    </div>
-                    <p data-endpoint-detail>{{ selected_endpoint.last_user|default:"Busque por hostname, usuario ou IP para vincular telemetria RMM." }}</p>
+                <article class="nw-auto-context-card" data-endpoint-card>
+                    <header>
+                        <div>
+                            <span>Contexto coletado automaticamente</span>
+                            <h3 data-endpoint-host>{{ selected_endpoint.hostname|default:"Nenhum contexto técnico vinculado ainda." }}</h3>
+                        </div>
+                        <em data-endpoint-risk>{% if selected_endpoint.hostname %}RMM MOCK{% else %}Sem vínculo{% endif %}</em>
+                    </header>
+                    <dl>
+                        <div><dt>Endpoint</dt><dd data-endpoint-host-detail>{{ selected_endpoint.hostname|default:"-" }}</dd></div>
+                        <div><dt>Usuário logado</dt><dd data-endpoint-user>{{ selected_endpoint.last_user|default:"-" }}</dd></div>
+                        <div><dt>Sistema operacional</dt><dd data-endpoint-os>Windows 11 Pro</dd></div>
+                        <div><dt>IP</dt><dd data-endpoint-ip>{{ selected_endpoint.ip|default:"-" }}</dd></div>
+                        <div><dt>Status</dt><dd data-endpoint-status>{{ selected_endpoint.status_label|default:"-" }}</dd></div>
+                        <div><dt>Último check-in</dt><dd data-endpoint-checkin>{{ selected_endpoint.last_seen|default:"-" }}</dd></div>
+                        <div><dt>Alertas ativos</dt><dd data-endpoint-alerts>-</dd></div>
+                        <div><dt>Risco calculado</dt><dd data-endpoint-risk-value>-</dd></div>
+                    </dl>
                     <footer>
                         <button class="desk-btn" type="button" data-endpoint-action="open"><i data-lucide="external-link"></i>Ver no RMM</button>
                         <button class="desk-btn" type="button" data-endpoint-action="sync"><i data-lucide="refresh-ccw"></i>Sincronizar</button>
-                        <button class="desk-btn" type="button" data-endpoint-action="clear"><i data-lucide="unlink"></i>Limpar vinculo</button>
+                        <button class="desk-btn" type="button" data-endpoint-action="clear"><i data-lucide="unlink"></i>Limpar</button>
                     </footer>
                 </article>
-                <div class="nw-rmm-alert-fields" data-rmm-alert-fields hidden>
-                    <label><span>Tipo de alerta</span><input name="rmm_alert_type" placeholder="Antivirus, disco, backup..." data-draft-field></label>
-                    <label><span>Severidade</span><select name="rmm_alert_severity" data-draft-field><option>Media</option><option>Alta</option><option>Critica</option></select></label>
-                    <label><span>Horario do alerta</span><input name="rmm_alert_time" placeholder="Hoje, 08:42" data-draft-field></label>
-                    <label class="wide"><span>Descricao tecnica</span><textarea name="rmm_alert_description" rows="3" data-draft-field></textarea></label>
-                </div>
-            </section>
-
-            <section class="nw-new-section" id="classification" data-new-section="classification">
-                <div class="nw-new-section__header">
-                    <span class="desk-step-pill">Passo 3 de 5</span>
-                    <div>
-                        <h2><i data-lucide="tags"></i>Classificacao</h2>
-                        <p>Categoria, impacto e urgencia alimentam prioridade, SLA e fila sugerida.</p>
-                    </div>
-                </div>
-                <div class="desk-form-grid nw-form-grid">
-                    <label><span>Tipo</span><select name="ticket_type" data-draft-field><option>Incidente</option><option>Solicitacao</option><option>Alerta preventivo</option><option>Duvida</option><option>Mudanca</option></select></label>
-                    <label><span>Categoria</span><input name="category" value="{{ initial_ticket.category }}" placeholder="Buscar categoria" data-required="Categoria" data-draft-field data-category-input></label>
-                    <label><span>Subcategoria</span><select name="subcategory" data-draft-field data-subcategory><option>Triagem geral</option></select></label>
-                    <label><span>Impacto</span><select name="impact" data-draft-field data-impact><option value="low">Baixo</option><option value="medium" selected>Medio</option><option value="high">Alto</option></select></label>
-                    <label><span>Urgencia</span><select name="urgency" data-draft-field data-urgency><option value="low">Baixa</option><option value="medium" selected>Media</option><option value="high">Alta</option></select></label>
-                    <label>
-                        <span>Prioridade</span>
-                        <select name="priority" id="deskPriority" data-required="Prioridade" data-draft-field data-priority>
-                            {% for priority in priority_options %}
-                            <option value="{{ priority.value }}" {% if priority.value == initial_ticket.priority %}selected{% endif %}>{{ priority.label }}</option>
-                            {% endfor %}
-                        </select>
-                    </label>
-                    <label><span>SLA sugerido</span><input name="sla" value="4h primeira resposta / 24h resolucao" data-draft-field data-sla></label>
-                    <label><span>Fila/time</span><input name="queue" value="N1 - Atendimento" data-draft-field data-queue></label>
-                    <label class="wide" data-critical-reason hidden><span>Justificativa para prioridade Critica</span><input name="critical_reason" placeholder="Explique o risco ou impacto executivo." data-draft-field></label>
-                </div>
-                <div class="nw-suggestion-line" data-priority-suggestion>Prioridade sugerida: {{ initial_ticket.priority_label }}</div>
-                <div class="desk-category-suggestions">
-                    {% for category in category_options %}
-                    <button type="button" data-category-pick="{{ category.name }}" data-priority-pick="{{ category.suggested_priority }}">
-                        <i data-lucide="{{ category.icon }}"></i>
-                        <span>{{ category.name }}</span>
-                        <small>{{ category.suggested_priority_label }}</small>
-                    </button>
-                    {% endfor %}
-                </div>
-            </section>
-
-            <section class="nw-new-section" id="description" data-new-section="description">
-                <div class="nw-new-section__header">
-                    <span class="desk-step-pill">Passo 4 de 5</span>
-                    <div>
-                        <h2><i data-lucide="file-text"></i>Descricao</h2>
-                        <p>Registre sintomas, impacto, passos tentados e evidencias iniciais.</p>
-                    </div>
-                </div>
-                <div class="desk-form-grid nw-form-grid">
-                    <label class="wide"><span>Titulo</span><input name="title" value="{{ initial_ticket.title }}" placeholder="Ex.: Bitdefender ausente em FIN-012" data-required="Titulo" data-draft-field data-title></label>
-                    <label class="wide"><span>Descricao</span><textarea name="description" rows="7" placeholder="Descreva impacto, contexto e passos ja tentados." data-required="Descricao" data-draft-field data-description>{{ initial_ticket.description }}</textarea></label>
-                    <label><span>Sintomas</span><textarea name="symptoms" rows="3" data-draft-field></textarea></label>
-                    <label><span>Passos ja tentados</span><textarea name="attempts" rows="3" data-draft-field></textarea></label>
-                    <label><span>Impacto percebido</span><textarea name="perceived_impact" rows="3" data-draft-field></textarea></label>
-                    <label><span>Tags</span><input name="tags" placeholder="vip, rmm, email" data-draft-field></label>
-                </div>
-                <div class="nw-template-bar">
-                    {% for template in ticket_templates %}
-                    <button type="button" data-template-name="{{ template.name }}" data-template-category="{{ template.category }}" data-template-priority="{{ template.priority }}" data-template-description="{{ template.description }}">{{ template.name }}</button>
-                    {% endfor %}
-                    <button type="button" data-template-name="Problema de impressora" data-template-category="Impressora" data-template-priority="normal" data-template-description="Usuario relata falha de impressao. Validar fila, spooler, impressora padrao e conectividade.">Problema de impressora</button>
-                    <button type="button" data-template-name="Alerta RMM" data-template-category="RMM / Alerta" data-template-priority="high" data-template-description="Alerta de monitoramento recebido. Validar telemetria, endpoint, severidade e acao preventiva.">Alerta RMM</button>
-                </div>
-                <div class="nw-new-dropzone" data-new-dropzone>
+                <div class="nw-new-dropzone nw-advanced-dropzone" data-new-dropzone>
                     <i data-lucide="upload-cloud"></i>
-                    <strong data-new-drop-title>Solte arquivos ou cole prints com Ctrl+V</strong>
-                    <span>Imagens, logs, PDFs e evidencias tecnicas.</span>
+                    <div>
+                        <strong data-new-drop-title>Anexos / evidências</strong>
+                        <span>Solte arquivos, cole prints com Ctrl+V ou selecione manualmente.</span>
+                    </div>
                     <button class="desk-btn" type="button" data-new-file-pick>Selecionar arquivos</button>
                     <input type="file" multiple hidden data-new-file-input>
                 </div>
                 <div class="nw-new-attachments" data-new-attachments hidden></div>
             </section>
 
-            <section class="nw-new-section" id="review" data-new-section="review">
+            <section class="nw-new-section" id="classification" data-new-section="classification">
                 <div class="nw-new-section__header">
-                    <span class="desk-step-pill">Passo 5 de 5</span>
+                    <span class="desk-step-pill">Classificação</span>
                     <div>
-                        <h2><i data-lucide="scan-check"></i>Revisao e criacao</h2>
-                        <p>Confira o resumo, escolha a acao final e crie o atendimento.</p>
+                        <h2><i data-lucide="tags"></i>Classificação</h2>
+                        <p>Campos essenciais primeiro. Detalhes de prioridade ficam recolhidos até serem necessários.</p>
                     </div>
+                    <button class="desk-btn" type="button" data-toggle-priority-details>Mostrar detalhes de prioridade</button>
                 </div>
+                <div class="desk-form-grid nw-form-grid nw-compact-form-grid">
+                    <label><span>Categoria</span><input name="category" value="{{ initial_ticket.category }}" placeholder="Buscar categoria" data-required="Categoria" data-draft-field data-category-input></label>
+                    <label><span>Prioridade</span><select name="priority" id="deskPriority" data-required="Prioridade" data-draft-field data-priority>{% for priority in priority_options %}<option value="{{ priority.value }}" {% if priority.value == initial_ticket.priority %}selected{% endif %}>{{ priority.label }}</option>{% endfor %}</select></label>
+                    <label><span>Fila responsável</span><input name="queue" value="N1 - Atendimento" data-draft-field data-queue></label>
+                    <label><span>Tags</span><input name="tags" placeholder="vip, rmm, email" data-draft-field></label>
+                </div>
+                <div class="nw-priority-details" data-priority-details hidden>
+                    <label><span>Impacto</span><select name="impact" data-draft-field data-impact><option value="low">Baixo</option><option value="medium" selected>Médio</option><option value="high">Alto</option></select></label>
+                    <label><span>Urgência</span><select name="urgency" data-draft-field data-urgency><option value="low">Baixa</option><option value="medium" selected>Média</option><option value="high">Alta</option></select></label>
+                    <label><span>SLA sugerido</span><input name="sla" value="4h primeira resposta / 24h resolução" data-draft-field data-sla></label>
+                    <label data-critical-reason hidden><span>Justificativa</span><input name="critical_reason" placeholder="Obrigatória visualmente para prioridade crítica." data-draft-field></label>
+                </div>
+                <div class="nw-suggestion-line" data-priority-suggestion>Prioridade sugerida: {{ initial_ticket.priority_label }}</div>
+            </section>
+
+            <section class="nw-new-section nw-type-panel" data-type-panel="incident">
+                <div class="nw-new-section__header"><span class="desk-step-pill">Incidente</span><div><h2><i data-lucide="siren"></i>Dados do incidente</h2><p>Use incidente para falhas, indisponibilidades ou degradações de serviço.</p></div></div>
+                <div class="desk-form-grid nw-form-grid nw-compact-form-grid">
+                    <label><span>Impacto percebido</span><textarea name="perceived_impact" rows="3" data-draft-field></textarea></label>
+                    <label><span>Usuários afetados</span><input name="affected_users" placeholder="1 usuário, setor completo, empresa..." data-draft-field></label>
+                </div>
+            </section>
+
+            <section class="nw-new-section nw-type-panel" data-type-panel="request" hidden>
+                <div class="nw-new-section__header"><span class="desk-step-pill">Solicitação</span><div><h2><i data-lucide="inbox"></i>Dados da solicitação</h2><p>Use solicitação para pedidos de acesso, instalação, ajuste ou atendimento comum.</p></div></div>
+                <label class="nw-compact-single"><span>Prazo desejado</span><input name="desired_due" placeholder="Ex.: hoje até 17h, esta semana..." data-draft-field></label>
+            </section>
+
+            <section class="nw-new-section nw-type-panel nw-rmm-alert-fields" data-type-panel="rmm" data-rmm-alert-fields hidden>
+                <div class="nw-new-section__header"><span class="desk-step-pill">Alerta RMM</span><div><h2><i data-lucide="activity"></i>Dados do alerta</h2><p>Dados ilustrativos. A integração real com o agente RMM será implementada depois.</p></div></div>
+                <label><span>Tipo do alerta</span><input name="rmm_alert_type" placeholder="Antivírus, disco, backup..." data-draft-field></label>
+                <label><span>Severidade</span><select name="rmm_alert_severity" data-draft-field><option>Média</option><option>Alta</option><option>Crítica</option></select></label>
+                <label><span>Horário detectado</span><input name="rmm_alert_time" placeholder="Hoje, 08:42" data-draft-field></label>
+                <label><span>Endpoint afetado</span><input name="rmm_alert_endpoint" placeholder="FIN-012" data-draft-field></label>
+                <label class="wide"><span>Descrição técnica</span><textarea name="rmm_alert_description" rows="3" data-draft-field></textarea></label>
+                <div class="nw-suggestion-line">Sugestão visual: categoria RMM / Alerta, prioridade Alta.</div>
+            </section>
+
+            <section class="nw-new-section nw-type-panel nw-gmud-panel" data-type-panel="gmud" hidden>
+                <div class="nw-new-section__header"><span class="desk-step-pill">GMUD</span><div><h2><i data-lucide="git-branch"></i>Planejamento da mudança</h2><p>Identifique ambiente, plano, rollback e aprovação antes de enviar.</p></div><em data-approval-badge hidden>Aprovação necessária</em></div>
+                <div class="desk-form-grid nw-form-grid nw-compact-form-grid">
+                    <label><span>Ambiente afetado</span><input name="change_environment" placeholder="Produção, homologação..." data-draft-field></label>
+                    <label><span>Serviços impactados</span><input name="change_services" placeholder="ERP, VPN, e-mail..." data-draft-field></label>
+                    <label class="wide"><span>Justificativa</span><textarea name="change_reason" rows="3" data-draft-field></textarea></label>
+                    <label class="wide"><span>Plano de execução</span><textarea name="change_plan" rows="3" data-draft-field></textarea></label>
+                    <label class="wide"><span>Plano de rollback</span><textarea name="change_rollback" rows="3" data-draft-field></textarea></label>
+                    <label><span>Janela proposta</span><input name="change_window" placeholder="Sexta, 19h-21h" data-draft-field></label>
+                    <label><span>Nível de risco</span><select name="change_risk" data-change-risk data-draft-field><option>Baixo</option><option>Médio</option><option>Alto</option></select></label>
+                    <label><span>Aprovador sugerido</span><input name="change_approver" placeholder="Gerência, Infra..." data-draft-field></label>
+                    <label><span>Comunicação necessária</span><select name="change_comms" data-draft-field><option>Não</option><option>Sim, equipe interna</option><option>Sim, usuários afetados</option></select></label>
+                </div>
+            </section>
+
+            <section class="nw-new-section" id="review" data-new-section="review">
+                <div class="nw-new-section__header"><span class="desk-step-pill">Revisão / Ações</span><div><h2><i data-lucide="scan-check"></i>Revisão</h2><p>Confira o essencial e escolha a ação final.</p></div></div>
                 <div class="nw-review-card">
-                    <strong data-review-title>Chamado ainda sem titulo</strong>
-                    <p data-review-meta>Defina solicitante, categoria e prioridade para concluir a revisao.</p>
-                    <div>
+                    <strong data-review-title>Chamado ainda sem título</strong>
+                    <p data-review-meta>tipo · categoria · prioridade · fila</p>
+                    <dl class="nw-review-summary">
+                        <div><dt>Solicitante</dt><dd data-review-requester>-</dd></div>
+                        <div><dt>Endpoint</dt><dd data-review-endpoint>-</dd></div>
+                        <div><dt>Aprovação necessária</dt><dd data-review-approval>Não</dd></div>
+                        <div><dt>Relacionados</dt><dd data-review-related>0 possíveis</dd></div>
+                    </dl>
+                    <div data-standard-actions>
+                        <a class="desk-btn" href="{% url 'tickets:central' %}">Cancelar</a>
                         <button class="desk-btn" type="button" data-create-ticket="draft"><i data-lucide="save"></i>Salvar rascunho</button>
+                        <button class="desk-btn desk-btn-primary" type="button" data-create-ticket="create"><i data-lucide="send"></i>Criar</button>
                         <button class="desk-btn" type="button" data-create-ticket="open"><i data-lucide="external-link"></i>Criar e abrir</button>
                         <button class="desk-btn desk-btn-primary" type="button" data-create-ticket="assign"><i data-lucide="user-check"></i>Criar e assumir</button>
+                    </div>
+                    <div data-gmud-actions hidden>
+                        <button class="desk-btn" type="button" data-create-ticket="draft"><i data-lucide="save"></i>Salvar rascunho</button>
+                        <button class="desk-btn desk-btn-primary" type="button" data-create-ticket="approval"><i data-lucide="send"></i>Enviar para aprovação</button>
+                        <a class="desk-btn" href="{% url 'tickets:central' %}">Cancelar</a>
                     </div>
                 </div>
             </section>
         </main>
 
-        <aside class="nw-new-ticket-sidebar">
+        <aside class="nw-new-ticket-sidebar nw-advanced-sidebar">
             <article class="desk-panel nw-new-summary">
-                <header><h2><i data-lucide="clipboard-list"></i>Resumo do chamado</h2><span data-draft-status>Rascunho local</span></header>
+                <header><h2><i data-lucide="clipboard-list"></i>Resumo</h2><span data-draft-status>Rascunho local</span></header>
                 <dl>
+                    <div><dt>Tipo</dt><dd data-summary-type>Incidente</dd></div>
                     <div><dt>Solicitante</dt><dd data-summary-requester>-</dd></div>
-                    <div><dt>Cliente / setor</dt><dd data-summary-client>-</dd></div>
-                    <div><dt>Endpoint</dt><dd data-summary-endpoint>-</dd></div>
                     <div><dt>Categoria</dt><dd data-summary-category>{{ initial_ticket.category }}</dd></div>
                     <div><dt>Prioridade</dt><dd data-summary-priority>{{ initial_ticket.priority_label }}</dd></div>
-                    <div><dt>Origem</dt><dd data-summary-origin>Manual</dd></div>
-                    <div><dt>SLA</dt><dd data-summary-sla>4h / 24h</dd></div>
+                    <div><dt>Endpoint</dt><dd data-summary-endpoint>-</dd></div>
                     <div><dt>Fila</dt><dd data-summary-queue>N1 - Atendimento</dd></div>
+                    <div><dt>Aprovação</dt><dd data-summary-approval>Não</dd></div>
                 </dl>
-            </article>
-
-            <article class="desk-panel nw-new-quality">
-                <header><h2><i data-lucide="gauge"></i>Qualidade do preenchimento</h2><strong data-quality-count>0/6</strong></header>
+                <p class="nw-essential-meter">Essenciais preenchidos: <strong data-quality-count>0/6</strong></p>
                 <span class="nw-quality-bar"><i data-quality-bar></i></span>
-                <ul>
+                <ul class="sr-only">
                     <li data-quality-item="requester">Solicitante definido</li>
-                    <li data-quality-item="title">Titulo informado</li>
+                    <li data-quality-item="title">Título informado</li>
                     <li data-quality-item="category">Categoria definida</li>
                     <li data-quality-item="priority">Prioridade definida</li>
-                    <li data-quality-item="description">Descricao com detalhes</li>
-                    <li data-quality-item="endpoint">Endpoint vinculado, se aplicavel</li>
+                    <li data-quality-item="description">Descrição com detalhes</li>
+                    <li data-quality-item="endpoint">Endpoint vinculado, se aplicável</li>
                 </ul>
             </article>
-
-            <article class="desk-panel nw-new-requester-context">
-                <header><h2><i data-lucide="user-round"></i>Contexto do solicitante</h2><span data-requester-vip-badge hidden>VIP</span></header>
-                <p data-requester-context-empty>Selecione um solicitante para ver historico, setor e chamados recentes.</p>
-                <div data-requester-context hidden>
-                    <strong data-requester-context-name>-</strong>
-                    <small data-requester-context-meta>-</small>
-                    <ul data-requester-history></ul>
-                </div>
-            </article>
-
             <article class="desk-panel nw-new-endpoint-context">
-                <header><h2><i data-lucide="monitor-dot"></i>Endpoint / RMM</h2><span data-endpoint-risk>sem vinculo</span></header>
-                <p data-endpoint-context>Vincule um endpoint para trazer telemetria, alertas ativos e risco operacional.</p>
+                <header><h2><i data-lucide="monitor-dot"></i>Contexto técnico</h2><span data-endpoint-risk>sem vínculo</span></header>
+                <p data-endpoint-context>Nenhum contexto técnico vinculado ainda.</p>
             </article>
-
             <article class="desk-panel nw-new-duplicates">
-                <header>
-                    <div>
-                        <h2><i data-lucide="copy-check"></i>Possiveis relacionados</h2>
-                        <p>Detectados por solicitante, endpoint, titulo e categoria.</p>
-                    </div>
-                    <span data-duplicate-count>0</span>
-                </header>
-                <div class="desk-duplicate-list" data-duplicates-list>
-                    {% if duplicate_candidates %}
-                        <strong class="nw-duplicate-alert">Possivel chamado duplicado</strong>
-                        {% for duplicate in duplicate_candidates %}
-                        <article data-duplicate-static>
-                            <strong>#{{ duplicate.number }} {{ duplicate.title }}</strong>
-                            <span>{{ duplicate.status_label }} - {{ duplicate.updated_for }}</span>
-                            <button type="button" data-duplicate-link>Vincular</button>
-                        </article>
-                        {% endfor %}
-                    {% else %}
-                    <p class="nw-empty-small">Nenhum relacionado encontrado ainda.</p>
-                    {% endif %}
-                </div>
+                <header><div><h2><i data-lucide="copy-check"></i>Possíveis relacionados</h2><p>Máximo 3 itens compactos.</p></div><span data-duplicate-count>0</span></header>
+                <div class="desk-duplicate-list" data-duplicates-list>{% if duplicate_candidates %}<strong class="nw-duplicate-alert">Possível chamado duplicado</strong>{% for duplicate in duplicate_candidates %}<article data-duplicate-static><strong>#{{ duplicate.number }} {{ duplicate.title }}</strong><span>{{ duplicate.status_label }} - {{ duplicate.updated_for }}</span><button type="button" data-duplicate-link>Vincular</button></article>{% endfor %}{% else %}<p class="nw-empty-small">Nenhum relacionado encontrado.</p>{% endif %}</div>
             </article>
         </aside>
     </div>

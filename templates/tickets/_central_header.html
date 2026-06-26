@@ -35,7 +35,7 @@
                 <a class="{% if view_mode == 'grouped' %}active{% endif %}" href="?view=grouped{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="users"></i>Responsavel</a>
             </div>
             <a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
-            <a class="desk-btn desk-btn-primary" href="{% url 'tickets:create' %}"><i data-lucide="ticket-plus"></i>Novo chamado</a>
+            <button class="desk-btn desk-btn-primary" type="button" data-quick-ticket-open><i data-lucide="ticket-plus"></i>Novo chamado</button>
         </div>
     </div>
 </header>

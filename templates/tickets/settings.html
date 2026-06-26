@@ -1,39 +1,574 @@
 {% extends "base.html" %}
 
-{% block title %}Configuracoes - Night Owl Desk{% endblock %}
+{% block title %}Configurações do Desk - NightOwl Desk{% endblock %}
 {% block body_class %}page-tickets{% endblock %}
 
 {% block content %}
-<section class="desk-shell desk-admin-shell">
-    <header class="desk-compact-header">
+<section class="desk-shell nw-settings-shell" data-desk-settings>
+    <header class="nw-settings-header">
         <div class="desk-compact-title">
-            <span class="desk-compact-icon"><i data-lucide="settings"></i></span>
+            <span class="desk-compact-icon"><i data-lucide="settings-2"></i></span>
             <div>
-                <h1>Configura&ccedil;&otilde;es do Desk</h1>
-                <span>Hub operacional para SLA, integra&ccedil;&otilde;es, permiss&otilde;es, notifica&ccedil;&otilde;es e auditoria.</span>
+                <h1>Configurações do Desk</h1>
+                <p>Defina categorias, filas, SLAs e regras operacionais do atendimento.</p>
             </div>
+        </div>
+        <div class="nw-settings-header__actions">
+            <button class="desk-btn" type="button" data-settings-open="category"><i data-lucide="folder-plus"></i>Nova categoria</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-settings-primary-action><i data-lucide="plus"></i>Nova categoria</button>
         </div>
     </header>
 
     {% include "tickets/_desk_nav.html" %}
 
-    <section class="desk-settings-hub">
-        {% include "tickets/_settings_nav.html" %}
-        <div class="desk-settings-content">
-            {% if settings_section == "sla" %}
-                {% include "tickets/_settings_sla.html" %}
-            {% elif settings_section == "notifications" %}
-                {% include "tickets/_settings_notifications.html" %}
-            {% elif settings_section == "integrations" %}
-                {% include "tickets/_settings_integrations.html" %}
-            {% elif settings_section == "permissions" %}
-                {% include "tickets/_settings_permissions.html" %}
-            {% elif settings_section == "audit" %}
-                {% include "tickets/_settings_audit.html" %}
-            {% else %}
-                {% include "tickets/_settings_general.html" %}
-            {% endif %}
-        </div>
-    </section>
+    <nav class="nw-settings-tabs" aria-label="Configurações do Desk">
+        <button class="is-active" type="button" data-settings-tab="categories">Categorias <span data-tab-count="categories">9</span></button>
+        <button type="button" data-settings-tab="queues">Filas <span data-tab-count="queues">5</span></button>
+        <button type="button" data-settings-tab="slas">SLAs <span data-tab-count="slas">4</span></button>
+        <button type="button" data-settings-tab="templates">Templates <span>Em breve</span></button>
+        <button type="button" data-settings-tab="gmud">GMUD <span>Em breve</span></button>
+        <button type="button" data-settings-tab="automations">Automações <span>Em breve</span></button>
+    </nav>
+
+    <div class="nw-settings-layout is-categories">
+        <main class="nw-settings-main">
+            <section class="nw-settings-panel is-active" data-settings-panel="categories">
+                <header class="nw-settings-panel__header nw-category-admin-header">
+                    <div>
+                        <h2>Categorias</h2>
+                        <p>Gerencie categorias, filas padrão, SLAs e tipos permitidos.</p>
+                    </div>
+                    <div class="nw-category-metrics" aria-label="Resumo das categorias">
+                        <span>9 categorias</span>
+                        <span>8 ativas</span>
+                        <span>2 sem SLA</span>
+                        <span>1 GMUD</span>
+                    </div>
+                </header>
+                <div class="nw-category-alert-strip">
+                    <i data-lucide="info"></i>
+                    <span>2 categorias sem SLA · 1 categoria sem fila padrão · GMUD vinculada ao CAB / Mudanças</span>
+                </div>
+                <div class="nw-settings-toolbar">
+                    <label><i data-lucide="search"></i><input type="search" placeholder="Buscar categoria..." data-settings-search="categories"></label>
+                    <div class="nw-settings-filters" data-settings-filter-group="categories">
+                        <button class="is-active" type="button" data-filter="all">Todas</button>
+                        <button type="button" data-filter="active">Ativas</button>
+                        <button type="button" data-filter="inactive">Inativas</button>
+                        <button type="button" data-filter="without-sla">Sem SLA</button>
+                        <button type="button" data-filter="gmud">GMUD</button>
+                    </div>
+                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="category"><i data-lucide="folder-plus"></i>Nova categoria</button>
+                </div>
+                <div class="nw-category-table-wrap">
+                    <table class="nw-category-table" data-settings-list="categories">
+                        <thead>
+                            <tr>
+                                <th data-sort>Categoria</th>
+                                <th>Tipo permitido</th>
+                                <th data-sort>Fila padrão</th>
+                                <th data-sort>SLA</th>
+                                <th>Prioridade</th>
+                                <th>Subcategorias</th>
+                                <th data-sort>Chamados abertos</th>
+                                <th data-sort>Status</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-config-item data-kind="category" data-name="Acesso" data-status="active" data-filter-tags="active with-sla" data-description="Credenciais, permissões, MFA, VPN e sistemas internos.">
+                                <td><span class="nw-category-name"><i data-lucide="key-round"></i><strong data-item-title>Acesso</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span><span class="nw-mini-badge">Solicitação</span></td>
+                                <td>N1 - Atendimento</td><td><span class="nw-mini-badge is-ok">Normal</span></td><td>Normal</td><td>6</td><td>12</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="Hardware" data-status="active" data-filter-tags="active with-sla" data-description="Notebooks, desktops, periféricos e componentes físicos.">
+                                <td><span class="nw-category-name"><i data-lucide="cpu"></i><strong data-item-title>Hardware</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span></td>
+                                <td>N2 - Infraestrutura</td><td><span class="nw-mini-badge is-warning">Alta</span></td><td>Alta</td><td>4</td><td>8</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="Software" data-status="active" data-filter-tags="active with-sla" data-description="Instalações, atualizações, falhas de aplicativo e licenças.">
+                                <td><span class="nw-category-name"><i data-lucide="package"></i><strong data-item-title>Software</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span><span class="nw-mini-badge">Solicitação</span></td>
+                                <td>N1 - Atendimento</td><td><span class="nw-mini-badge is-ok">Normal</span></td><td>Normal</td><td>5</td><td>15</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="Rede" data-status="active" data-filter-tags="active with-sla" data-description="Conectividade, VPN, Wi-Fi, DNS, firewall e links.">
+                                <td><span class="nw-category-name"><i data-lucide="network"></i><strong data-item-title>Rede</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span></td>
+                                <td>N2 - Infraestrutura</td><td><span class="nw-mini-badge is-warning">Alta</span></td><td>Alta</td><td>3</td><td>5</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="Segurança" data-status="active" data-filter-tags="active with-sla" data-description="Antivírus, acessos suspeitos, risco e resposta a incidente.">
+                                <td><span class="nw-category-name"><i data-lucide="shield-alert"></i><strong data-item-title>Segurança</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span><span class="nw-mini-badge">Alerta RMM</span></td>
+                                <td>Segurança</td><td><span class="nw-mini-badge is-danger">Crítica</span></td><td>Alta</td><td>4</td><td>3</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="RMM / Alerta" data-status="active" data-filter-tags="active with-sla" data-description="Eventos vindos do agente, monitoramento e telemetria.">
+                                <td><span class="nw-category-name"><i data-lucide="activity"></i><strong data-item-title>RMM / Alerta</strong></span></td>
+                                <td><span class="nw-mini-badge">Alerta RMM</span></td>
+                                <td>N2 - Infraestrutura</td><td><span class="nw-mini-badge is-warning">Alta</span></td><td>Alta</td><td>8</td><td>9</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="E-mail" data-status="active" data-filter-tags="active with-sla" data-description="Envio, recebimento, caixas compartilhadas e sincronização.">
+                                <td><span class="nw-category-name"><i data-lucide="mail"></i><strong data-item-title>E-mail</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span><span class="nw-mini-badge">Solicitação</span></td>
+                                <td>N1 - Atendimento</td><td><span class="nw-mini-badge is-ok">Normal</span></td><td>Normal</td><td>3</td><td>7</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="Impressora" data-status="active" data-filter-tags="active with-sla" data-description="Fila de impressão, drivers, spooler e mapeamento.">
+                                <td><span class="nw-category-name"><i data-lucide="printer"></i><strong data-item-title>Impressora</strong></span></td>
+                                <td><span class="nw-mini-badge">Incidente</span><span class="nw-mini-badge">Solicitação</span></td>
+                                <td>N1 - Atendimento</td><td><span class="nw-mini-badge is-ok">Normal</span></td><td>Normal</td><td>4</td><td>6</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="category" data-name="GMUD / Mudança" data-status="active" data-filter-tags="active gmud without-sla" data-description="Registros de mudança, aprovação, janela e rollback.">
+                                <td><span class="nw-category-name"><i data-lucide="git-branch"></i><strong data-item-title>GMUD / Mudança</strong></span></td>
+                                <td><span class="nw-mini-badge is-purple">GMUD</span></td>
+                                <td>CAB / Mudanças</td><td><span class="nw-mini-badge is-muted">—</span></td><td>Normal</td><td>3</td><td>2</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="nw-settings-empty" data-settings-empty="categories" hidden><strong>Nenhuma categoria encontrada.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
+            </section>
+
+            <section class="nw-settings-panel" data-settings-panel="queues" hidden>
+                <header class="nw-settings-panel__header">
+                    <div><span class="nw-config-kicker">Roteamento e capacidade</span><h2>Filas</h2><p>Controle responsáveis, membros, capacidade e tipos de atendimento aceitos.</p></div>
+                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="queue"><i data-lucide="users-round"></i>Nova fila</button>
+                </header>
+                <div class="nw-settings-toolbar">
+                    <label><i data-lucide="search"></i><input type="search" placeholder="Buscar fila..." data-settings-search="queues"></label>
+                    <div class="nw-settings-filters" data-settings-filter-group="queues">
+                        <button class="is-active" type="button" data-filter="all">Todas</button>
+                        <button type="button" data-filter="active">Ativas</button>
+                        <button type="button" data-filter="gmud">Com GMUD</button>
+                        <button type="button" data-filter="overloaded">Sobrecarregadas</button>
+                        <button type="button" data-filter="no-owner">Sem responsável</button>
+                    </div>
+                </div>
+                <div class="nw-settings-grid" data-settings-list="queues">
+                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="N1 - Atendimento" data-status="active" data-filter-tags="active">
+                        <header><span class="nw-config-icon"><i data-lucide="headphones"></i></span><div><h3>N1 - Atendimento</h3><p>Triagem, atendimento comum e solicitações de baixa complexidade.</p></div><em class="nw-config-badge is-active">Ativa</em></header>
+                        <dl><div><dt>Responsável</dt><dd>Gabriel</dd></div><div><dt>Membros</dt><dd>6</dd></div><div><dt>Horário</dt><dd>Comercial</dd></div><div><dt>Abertos</dt><dd>42 / 60</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="N2 - Infraestrutura" data-status="active" data-filter-tags="active overloaded">
+                        <header><span class="nw-config-icon is-info"><i data-lucide="server"></i></span><div><h3>N2 - Infraestrutura</h3><p>Rede, servidores, endpoint, RMM e incidentes técnicos.</p></div><em class="nw-config-badge is-warning">Sobrecarregada</em></header>
+                        <dl><div><dt>Responsável</dt><dd>Renan</dd></div><div><dt>Membros</dt><dd>4</dd></div><div><dt>Horário</dt><dd>Comercial + plantão</dd></div><div><dt>Abertos</dt><dd>38 / 35</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="Segurança" data-status="active" data-filter-tags="active">
+                        <header><span class="nw-config-icon is-warning"><i data-lucide="shield-alert"></i></span><div><h3>Segurança</h3><p>Risco, antivírus, acessos suspeitos e resposta a incidente.</p></div><em class="nw-config-badge is-active">Ativa</em></header>
+                        <dl><div><dt>Responsável</dt><dd>Ana</dd></div><div><dt>Membros</dt><dd>3</dd></div><div><dt>Horário</dt><dd>24x7</dd></div><div><dt>Abertos</dt><dd>9 / 20</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="Sistemas" data-status="active" data-filter-tags="active no-owner">
+                        <header><span class="nw-config-icon"><i data-lucide="panels-top-left"></i></span><div><h3>Sistemas</h3><p>ERP, integrações internas, regras e aplicações corporativas.</p></div><em class="nw-config-badge is-warning">Sem responsável</em></header>
+                        <dl><div><dt>Responsável</dt><dd>-</dd></div><div><dt>Membros</dt><dd>2</dd></div><div><dt>Horário</dt><dd>Comercial</dd></div><div><dt>Abertos</dt><dd>13 / 30</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="CAB / Mudanças" data-status="active" data-filter-tags="active gmud">
+                        <header><span class="nw-config-icon is-purple"><i data-lucide="git-branch"></i></span><div><h3>CAB / Mudanças</h3><p>Aprovação, planejamento e acompanhamento de GMUD.</p></div><em class="nw-config-badge is-active">Ativa</em></header>
+                        <dl><div><dt>Responsável</dt><dd>Gerência TI</dd></div><div><dt>Membros</dt><dd>5</dd></div><div><dt>Horário</dt><dd>Comercial</dd></div><div><dt>Abertos</dt><dd>2 / 15</dd></div><div><dt>GMUD</dt><dd>Sim</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                </div>
+                <div class="nw-settings-empty" data-settings-empty="queues" hidden><strong>Nenhuma fila encontrada.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
+            </section>
+
+            <section class="nw-settings-panel" data-settings-panel="slas" hidden>
+                <header class="nw-settings-panel__header">
+                    <div><span class="nw-config-kicker">Compromissos de atendimento</span><h2>SLAs</h2><p>Configure primeira resposta, resolução, calendário e pausa por prioridade.</p></div>
+                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="sla"><i data-lucide="timer-reset"></i>Nova regra de SLA</button>
+                </header>
+                <div class="nw-settings-toolbar">
+                    <label><i data-lucide="search"></i><input type="search" placeholder="Buscar SLA..." data-settings-search="slas"></label>
+                    <div class="nw-settings-filters" data-settings-filter-group="slas">
+                        <button class="is-active" type="button" data-filter="all">Todos</button>
+                        <button type="button" data-filter="active">Ativos</button>
+                        <button type="button" data-filter="24x7">24x7</button>
+                        <button type="button" data-filter="business">Horário comercial</button>
+                        <button type="button" data-filter="critical">Críticos</button>
+                    </div>
+                </div>
+                <div class="nw-settings-list" data-settings-list="slas">
+                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Baixa" data-status="active" data-filter-tags="active business">
+                        <header><span class="nw-config-icon"><i data-lucide="leaf"></i></span><div><h3>Baixa</h3><p>8h primeira resposta / 72h resolução</p></div><em class="nw-config-badge is-active">Ativa</em></header>
+                        <dl><div><dt>Calendário</dt><dd>Horário comercial</dd></div><div><dt>Pausa</dt><dd>Aguardando solicitante</dd></div><div><dt>Categorias</dt><dd>Hardware, Impressora</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Normal" data-status="active" data-filter-tags="active business">
+                        <header><span class="nw-config-icon"><i data-lucide="circle-dot"></i></span><div><h3>Normal</h3><p>4h primeira resposta / 24h resolução</p></div><em class="nw-config-badge is-active">Ativa</em></header>
+                        <dl><div><dt>Calendário</dt><dd>Horário comercial</dd></div><div><dt>Pausa</dt><dd>Solicitante e fornecedor</dd></div><div><dt>Categorias</dt><dd>Acesso, Software, E-mail</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Alta" data-status="active" data-filter-tags="active 24x7">
+                        <header><span class="nw-config-icon is-warning"><i data-lucide="alert-triangle"></i></span><div><h3>Alta</h3><p>1h primeira resposta / 8h resolução</p></div><em class="nw-config-badge is-active">Ativa</em></header>
+                        <dl><div><dt>Calendário</dt><dd>24x7</dd></div><div><dt>Pausa</dt><dd>Aguardando solicitante</dd></div><div><dt>Categorias</dt><dd>Rede, Segurança, RMM</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Crítica" data-status="active" data-filter-tags="active 24x7 critical">
+                        <header><span class="nw-config-icon is-danger"><i data-lucide="siren"></i></span><div><h3>Crítica</h3><p>15min primeira resposta / 4h resolução</p></div><em class="nw-config-badge is-danger">Crítica</em></header>
+                        <dl><div><dt>Calendário</dt><dd>24x7</dd></div><div><dt>Pausa</dt><dd>Aprovação controlada</dd></div><div><dt>Categorias</dt><dd>Segurança, RMM / Alerta</dd></div></dl>
+                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
+                    </article>
+                </div>
+                <div class="nw-settings-empty" data-settings-empty="slas" hidden><strong>Nenhuma regra de SLA encontrada.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
+            </section>
+
+            <section class="nw-settings-panel" data-settings-panel="templates" hidden>{% include "tickets/_settings_coming_soon.html" with title="Templates" text="Modelos de comentário, descrição e resolução entrarão em uma fase dedicada." %}</section>
+            <section class="nw-settings-panel" data-settings-panel="gmud" hidden>{% include "tickets/_settings_coming_soon.html" with title="GMUD" text="Aprovações, janelas e políticas de mudança serão configuradas aqui." %}</section>
+            <section class="nw-settings-panel" data-settings-panel="automations" hidden>{% include "tickets/_settings_coming_soon.html" with title="Automações" text="Regras operacionais, gatilhos e integrações serão refinados depois." %}</section>
+        </main>
+
+        <aside class="nw-settings-sidebar">
+            <article class="nw-settings-side-card">
+                <h2><i data-lucide="bar-chart-3"></i>Resumo</h2>
+                <dl>
+                    <div><dt>Categorias ativas</dt><dd data-summary-categories>8</dd></div>
+                    <div><dt>Filas ativas</dt><dd data-summary-queues>5</dd></div>
+                    <div><dt>SLAs ativos</dt><dd data-summary-slas>4</dd></div>
+                    <div><dt>Regras incompletas</dt><dd>3</dd></div>
+                </dl>
+            </article>
+            <article class="nw-settings-side-card">
+                <h2><i data-lucide="triangle-alert"></i>Alertas de consistência</h2>
+                <div class="nw-config-alert"><strong>Categorias sem SLA</strong><span>Impressora está sem SLA padrão.</span></div>
+                <div class="nw-config-alert"><strong>Filas sem responsável</strong><span>Sistemas precisa de owner.</span></div>
+                <div class="nw-config-alert"><strong>SLAs sem categoria</strong><span>Baixa tem baixa cobertura operacional.</span></div>
+                <div class="nw-config-alert is-ok"><strong>GMUD com CAB</strong><span>Fila CAB / Mudanças vinculada.</span></div>
+            </article>
+            <article class="nw-settings-side-card">
+                <h2><i data-lucide="history"></i>Últimas alterações</h2>
+                <ul class="nw-settings-history">
+                    <li><strong>Gabriel</strong><span>alterou SLA Crítica · há 12 min</span></li>
+                    <li><strong>Sistema</strong><span>criou categoria RMM / Alerta · ontem</span></li>
+                    <li><strong>Gabriel</strong><span>atualizou fila N1 · ontem</span></li>
+                </ul>
+            </article>
+            <article class="nw-settings-side-card">
+                <h2><i data-lucide="zap"></i>Ações rápidas</h2>
+                <div class="nw-settings-quick-actions">
+                    <button type="button" data-settings-open="category">Nova categoria</button>
+                    <button type="button" data-settings-open="queue">Nova fila</button>
+                    <button type="button" data-settings-open="sla">Nova regra de SLA</button>
+                </div>
+            </article>
+        </aside>
+    </div>
+
+    <div class="nw-settings-drawer" data-settings-drawer hidden>
+        <div class="nw-settings-drawer-backdrop" data-settings-close></div>
+        <section class="nw-settings-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="settings-drawer-title">
+            <header>
+                <div>
+                    <span data-drawer-kicker>Configuração</span>
+                    <h2 id="settings-drawer-title" data-drawer-title>Nova categoria</h2>
+                    <p data-drawer-subtitle>Configure o comportamento operacional deste item.</p>
+                </div>
+                <button class="desk-icon-button" type="button" data-settings-close aria-label="Fechar"><i data-lucide="x"></i></button>
+            </header>
+            <form class="nw-settings-drawer-form" data-settings-form>
+                <input type="hidden" name="kind" data-drawer-kind>
+                <label><span>Nome</span><input name="name" data-drawer-name placeholder="Nome da configuração"></label>
+                <label><span>Descrição</span><textarea name="description" rows="3" data-drawer-description placeholder="Descrição curta para operação"></textarea></label>
+                <div class="nw-settings-drawer-grid" data-category-fields>
+                    <label><span>Ícone</span><select name="icon"><option>key-round</option><option>shield-alert</option><option>activity</option><option>git-branch</option></select></label>
+                    <label><span>Cor/badge</span><select name="color"><option>Verde</option><option>Ciano</option><option>Âmbar</option><option>Roxo</option></select></label>
+                    <label><span>Status</span><select name="status"><option>Ativa</option><option>Inativa</option></select></label>
+                    <label><span>Prioridade padrão</span><select name="default_priority"><option>Baixa</option><option selected>Normal</option><option>Alta</option><option>Crítica</option></select></label>
+                    <label><span>Fila padrão</span><select name="default_queue"><option>N1 - Atendimento</option><option>N2 - Infraestrutura</option><option>Segurança</option><option>CAB / Mudanças</option></select></label>
+                    <label><span>SLA padrão</span><select name="default_sla"><option>Baixa</option><option selected>Normal</option><option>Alta</option><option>Crítica</option><option>Sem SLA</option></select></label>
+                    <label class="wide"><span>Tipos permitidos</span><select name="allowed_type"><option>Incidente</option><option>Solicitação</option><option>Alerta RMM</option><option>GMUD</option></select></label>
+                    <label class="wide"><span>Subcategorias mockadas</span><input name="subcategories" placeholder="MFA, VPN, E-mail, ERP"></label>
+                    <label class="wide"><span>Template padrão</span><input name="template" placeholder="Template opcional"></label>
+                </div>
+                <div class="nw-settings-drawer-grid" data-queue-fields hidden>
+                    <label><span>Responsável</span><select name="owner"><option>Gabriel</option><option>Renan</option><option>Ana</option><option>Gerência TI</option></select></label>
+                    <label><span>Membros</span><input name="members" value="Gabriel, Técnico N1, Infraestrutura"></label>
+                    <label><span>Horário</span><select name="hours"><option>Horário comercial</option><option>24x7</option><option>Plantão</option></select></label>
+                    <label><span>Capacidade máxima</span><input name="capacity" type="number" value="40"></label>
+                    <label><span>Chamados comuns</span><select name="common"><option>Sim</option><option>Não</option></select></label>
+                    <label><span>Alertas RMM</span><select name="rmm"><option>Sim</option><option>Não</option></select></label>
+                    <label><span>Recebe GMUD</span><select name="gmud"><option>Não</option><option>Sim</option></select></label>
+                    <label><span>Status</span><select name="status"><option>Ativa</option><option>Inativa</option></select></label>
+                </div>
+                <div class="nw-settings-drawer-grid" data-sla-fields hidden>
+                    <label><span>Primeira resposta</span><input name="first_response" value="4"></label>
+                    <label><span>Resolução</span><input name="resolution" value="24"></label>
+                    <label><span>Unidade</span><select name="unit"><option>minutos</option><option selected>horas</option><option>dias</option></select></label>
+                    <label><span>Calendário</span><select name="calendar"><option>Horário comercial</option><option>24x7</option></select></label>
+                    <label class="wide"><span>Pausar quando</span><input name="pause" value="Aguardando solicitante, aguardando fornecedor"></label>
+                    <label><span>Categorias vinculadas</span><input name="categories" value="Acesso, Software"></label>
+                    <label><span>Filas vinculadas</span><input name="queues" value="N1 - Atendimento"></label>
+                    <label><span>Status</span><select name="status"><option>Ativa</option><option>Inativa</option></select></label>
+                </div>
+            </form>
+            <footer>
+                <button class="desk-btn" type="button" data-settings-close>Cancelar</button>
+                <button class="desk-btn desk-btn-primary" type="button" data-settings-save>Salvar</button>
+            </footer>
+        </section>
+    </div>
+
+    <div class="nw-settings-confirm" data-settings-confirm hidden>
+        <section>
+            <h2>Confirmar alteração</h2>
+            <p data-confirm-text>Deseja alterar o status deste item?</p>
+            <footer><button class="desk-btn" type="button" data-confirm-cancel>Cancelar</button><button class="desk-btn desk-btn-primary" type="button" data-confirm-ok>Confirmar</button></footer>
+        </section>
+    </div>
+
+    <div class="nw-new-toast" data-settings-toast hidden><span></span><button type="button" hidden>Desfazer</button></div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const root = document.querySelector("[data-desk-settings]");
+    if (!root) return;
+    const all = (selector, scope = root) => Array.from(scope.querySelectorAll(selector));
+    let activeTab = "categories";
+    let pendingToggle = null;
+    const labels = {
+        categories: { singular: "categoria", open: "category", action: "Nova categoria" },
+        queues: { singular: "fila", open: "queue", action: "Nova fila" },
+        slas: { singular: "regra de SLA", open: "sla", action: "Nova regra de SLA" },
+    };
+
+    function showToast(message) {
+        const toast = root.querySelector("[data-settings-toast]");
+        if (!toast) return;
+        toast.querySelector("span").textContent = message;
+        toast.hidden = false;
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => { toast.hidden = true; }, 3600);
+    }
+
+    function setTab(tab) {
+        activeTab = tab;
+        root.querySelector(".nw-settings-layout")?.classList.toggle("is-categories", tab === "categories");
+        all("[data-settings-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.settingsTab === tab));
+        all("[data-settings-panel]").forEach((panel) => {
+            panel.hidden = panel.dataset.settingsPanel !== tab;
+            panel.classList.toggle("is-active", panel.dataset.settingsPanel === tab);
+        });
+        const primary = root.querySelector("[data-settings-primary-action]");
+        const config = labels[tab];
+        if (primary && config) {
+            primary.hidden = false;
+            primary.dataset.settingsOpen = config.open;
+            primary.innerHTML = '<i data-lucide="plus"></i>' + config.action;
+        } else if (primary) {
+            primary.hidden = true;
+        }
+        window.lucide?.createIcons?.();
+    }
+
+    function applyFilters(tab) {
+        const panel = root.querySelector(`[data-settings-panel="${tab}"]`);
+        if (!panel) return;
+        const search = (panel.querySelector(`[data-settings-search="${tab}"]`)?.value || "").trim().toLowerCase();
+        const activeFilter = panel.querySelector("[data-settings-filter-group] .is-active")?.dataset.filter || "all";
+        let visible = 0;
+        all("[data-config-item]", panel).forEach((item) => {
+            const name = (item.dataset.name || "").toLowerCase();
+            const tags = item.dataset.filterTags || "";
+            const status = item.dataset.status || "";
+            const matchesSearch = !search || name.includes(search) || item.textContent.toLowerCase().includes(search);
+            const matchesFilter = activeFilter === "all" || tags.includes(activeFilter) || status === activeFilter;
+            const show = matchesSearch && matchesFilter;
+            item.hidden = !show;
+            if (show) visible += 1;
+        });
+        const empty = root.querySelector(`[data-settings-empty="${tab}"]`);
+        if (empty) empty.hidden = visible !== 0;
+        const count = root.querySelector(`[data-tab-count="${tab}"]`);
+        if (count) count.textContent = visible;
+    }
+
+    function closeCategoryMenus(except = null) {
+        all(".nw-category-action-menu", root).forEach((menu) => {
+            if (menu !== except) menu.hidden = true;
+        });
+    }
+
+    function openDrawer(kind, source = null) {
+        const drawer = root.querySelector("[data-settings-drawer]");
+        const form = root.querySelector("[data-settings-form]");
+        if (!drawer || !form) return;
+        const title = source?.dataset.name || "";
+        form.reset();
+        form.querySelector("[data-drawer-kind]").value = kind;
+        form.querySelector("[data-drawer-name]").value = title;
+        form.querySelector("[data-drawer-description]").value = source?.dataset.description || source?.querySelector("p")?.textContent || "";
+        const copy = {
+            category: ["Categoria", "Configure categoria, fila padrão, SLA e subcategorias."],
+            queue: ["Fila", "Configure membros, capacidade e tipos de atendimento aceitos."],
+            sla: ["SLA", "Configure prazos, calendário, pausas e vínculos."],
+        }[kind] || ["Configuração", "Configure este item."];
+        root.querySelector("[data-drawer-kicker]").textContent = source ? "Editar " + copy[0] : "Nova " + copy[0].toLowerCase();
+        root.querySelector("[data-drawer-title]").textContent = source ? "Editar " + title : "Nova " + copy[0].toLowerCase();
+        root.querySelector("[data-drawer-subtitle]").textContent = copy[1];
+        root.querySelector("[data-category-fields]").hidden = kind !== "category";
+        root.querySelector("[data-queue-fields]").hidden = kind !== "queue";
+        root.querySelector("[data-sla-fields]").hidden = kind !== "sla";
+        drawer.hidden = false;
+        drawer.dataset.editingName = title;
+        setTimeout(() => form.querySelector("[data-drawer-name]")?.focus(), 0);
+        window.lucide?.createIcons?.();
+    }
+
+    function closeDrawer() {
+        const drawer = root.querySelector("[data-settings-drawer]");
+        if (drawer) drawer.hidden = true;
+    }
+
+    function saveDrawer() {
+        const form = root.querySelector("[data-settings-form]");
+        const drawer = root.querySelector("[data-settings-drawer]");
+        const kind = form.querySelector("[data-drawer-kind]").value;
+        const name = form.querySelector("[data-drawer-name]").value.trim() || "Configuração sem nome";
+        const previous = drawer.dataset.editingName;
+        const item = previous ? root.querySelector(`[data-config-item][data-name="${CSS.escape(previous)}"]`) : null;
+        if (item) {
+            item.dataset.name = name;
+            item.dataset.description = form.querySelector("[data-drawer-description]").value || item.dataset.description || "";
+            const titleNode = item.querySelector("[data-item-title], h3");
+            const descriptionNode = item.querySelector("[data-item-description], p");
+            if (titleNode) titleNode.textContent = name;
+            if (descriptionNode) descriptionNode.textContent = form.querySelector("[data-drawer-description]").value || descriptionNode.textContent;
+        } else {
+            const target = kind === "category" ? "categories" : kind === "queue" ? "queues" : "slas";
+            const list = root.querySelector(`[data-settings-list="${target}"]`);
+            if (kind === "category") {
+                const row = document.createElement("tr");
+                row.dataset.configItem = "";
+                row.dataset.kind = "category";
+                row.dataset.name = name;
+                row.dataset.status = "active";
+                row.dataset.filterTags = "active with-sla";
+                row.dataset.description = form.querySelector("[data-drawer-description]").value || "Categoria criada no mock local.";
+                row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="folder"></i><strong data-item-title>${name}</strong></span></td><td><span class="nw-mini-badge">Incidente</span></td><td>N1 - Atendimento</td><td><span class="nw-mini-badge is-ok">Normal</span></td><td>Normal</td><td>0</td><td>0</td><td><em class="nw-config-badge is-active">Ativa</em></td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>`;
+                list?.querySelector("tbody")?.prepend(row);
+            } else {
+                const article = document.createElement("article");
+                article.className = `nw-settings-card ${kind === "queue" ? "nw-queue-card" : "nw-sla-rule"}`;
+                article.dataset.configItem = "";
+                article.dataset.kind = kind;
+                article.dataset.name = name;
+                article.dataset.status = "active";
+                article.dataset.filterTags = "active with-sla";
+                article.innerHTML = `<header><span class="nw-config-icon"><i data-lucide="${kind === "sla" ? "timer" : "users-round"}"></i></span><div><h3>${name}</h3><p>${form.querySelector("[data-drawer-description]").value || "Item criado no mock local."}</p></div><em class="nw-config-badge is-active">Ativa</em></header><dl><div><dt>Status</dt><dd>Ativa</dd></div><div><dt>Origem</dt><dd>Mock local</dd></div><div><dt>Uso</dt><dd>0 chamados</dd></div></dl><footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>`;
+                list?.prepend(article);
+            }
+        }
+        closeDrawer();
+        applyFilters(activeTab);
+        showToast("Configuração salva.");
+        window.lucide?.createIcons?.();
+    }
+
+    function askToggle(item) {
+        pendingToggle = item;
+        const modal = root.querySelector("[data-settings-confirm]");
+        const status = item.dataset.status === "inactive" ? "ativar" : "desativar";
+        modal.querySelector("[data-confirm-text]").textContent = `Deseja ${status} "${item.dataset.name}"?`;
+        modal.hidden = false;
+        closeCategoryMenus();
+    }
+
+    function confirmToggle() {
+        if (!pendingToggle) return;
+        const inactive = pendingToggle.dataset.status !== "inactive";
+        pendingToggle.dataset.status = inactive ? "inactive" : "active";
+        pendingToggle.dataset.filterTags = inactive ? "inactive without-sla" : "active with-sla";
+        const badge = pendingToggle.querySelector(".nw-config-badge");
+        if (badge) {
+            badge.textContent = inactive ? "Inativa" : "Ativa";
+            badge.classList.toggle("is-muted", inactive);
+            badge.classList.toggle("is-active", !inactive);
+        }
+        const toggle = pendingToggle.querySelector("[data-settings-toggle]");
+        if (toggle) {
+            const label = inactive ? "Ativar" : "Desativar";
+            toggle.title = label;
+            toggle.setAttribute("aria-label", `${label} categoria`);
+            if (toggle.closest(".nw-category-action-menu")) {
+                toggle.innerHTML = `<i data-lucide="power"></i>${label}`;
+            } else if (!toggle.closest(".nw-category-actions")) {
+                toggle.textContent = label;
+            }
+        }
+        root.querySelector("[data-settings-confirm]").hidden = true;
+        showToast(inactive ? "Item desativado." : "Item ativado.");
+        applyFilters(activeTab);
+        window.lucide?.createIcons?.();
+        pendingToggle = null;
+    }
+
+    root.addEventListener("click", (event) => {
+        const tab = event.target.closest("[data-settings-tab]");
+        if (tab) {
+            setTab(tab.dataset.settingsTab);
+            applyFilters(tab.dataset.settingsTab);
+        }
+        const filter = event.target.closest("[data-filter]");
+        if (filter) {
+            const group = filter.closest("[data-settings-filter-group]");
+            all("button", group).forEach((button) => button.classList.toggle("is-active", button === filter));
+            applyFilters(group.dataset.settingsFilterGroup);
+        }
+        const opener = event.target.closest("[data-settings-open]");
+        if (opener) openDrawer(opener.dataset.settingsOpen);
+        const categoryMenu = event.target.closest("[data-category-menu]");
+        if (categoryMenu) {
+            const menu = categoryMenu.parentElement.querySelector(".nw-category-action-menu");
+            const nextHidden = !menu?.hidden;
+            closeCategoryMenus(menu);
+            if (menu) menu.hidden = nextHidden;
+        }
+        const edit = event.target.closest("[data-settings-edit]");
+        if (edit) {
+            const item = edit.closest("[data-config-item]");
+            openDrawer(item.dataset.kind, item);
+        }
+        const duplicate = event.target.closest("[data-settings-duplicate]");
+        if (duplicate) {
+            const item = duplicate.closest("[data-config-item]");
+            openDrawer(item.dataset.kind, item);
+            root.querySelector("[data-drawer-name]").value = item.dataset.name + " cópia";
+        }
+        const toggle = event.target.closest("[data-settings-toggle]");
+        if (toggle) askToggle(toggle.closest("[data-config-item]"));
+        if (event.target.closest("[data-settings-close]")) closeDrawer();
+        if (event.target.closest("[data-settings-save]")) saveDrawer();
+        if (event.target.closest("[data-confirm-cancel]")) root.querySelector("[data-settings-confirm]").hidden = true;
+        if (event.target.closest("[data-confirm-ok]")) confirmToggle();
+        if (!event.target.closest(".nw-category-actions")) closeCategoryMenus();
+    });
+
+    root.addEventListener("input", (event) => {
+        const search = event.target.closest("[data-settings-search]");
+        if (search) applyFilters(search.dataset.settingsSearch);
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            closeDrawer();
+            closeCategoryMenus();
+            const confirm = root.querySelector("[data-settings-confirm]");
+            if (confirm) confirm.hidden = true;
+        }
+    });
+
+    ["categories", "queues", "slas"].forEach(applyFilters);
+})();
+</script>
 {% endblock %}
