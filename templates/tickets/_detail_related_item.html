@@ -25,11 +25,11 @@
         <i class="nw-related-score">{{ item.score }}% similar</i>
     </button>
     <div>
-        <button type="button" title="Visualizar preview" aria-label="Visualizar preview" data-related-preview><i data-lucide="eye"></i></button>
-        <a href="{% url 'tickets:detail' related.number %}" title="Abrir chamado" aria-label="Abrir chamado"><i data-lucide="external-link"></i></a>
-        <button type="button" title="Vincular chamado" aria-label="Vincular chamado" data-related-link-open><i data-lucide="link"></i></button>
-        <button type="button" title="Mesclar" aria-label="Mesclar" data-related-merge-open><i data-lucide="git-merge"></i></button>
-        <button type="button" title="Mais acoes" aria-label="Mais acoes" data-related-more><i data-lucide="ellipsis"></i></button>
+        <button class="nw-related-action" type="button" title="Visualizar preview" aria-label="Visualizar preview" data-related-preview><i class="bi bi-eye" aria-hidden="true"></i></button>
+        <a class="nw-related-action" href="{% url 'tickets:detail' related.number %}" title="Abrir chamado" aria-label="Abrir chamado"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
+        <button class="nw-related-action" type="button" title="Vincular chamado" aria-label="Vincular chamado" data-related-link-open><i class="bi bi-link-45deg" aria-hidden="true"></i></button>
+        <button class="nw-related-action" type="button" title="Mesclar" aria-label="Mesclar" data-related-merge-open><i class="bi bi-intersect" aria-hidden="true"></i></button>
+        <button class="nw-related-action" type="button" title="Mais acoes" aria-label="Mais acoes" data-related-more><i class="bi bi-three-dots" aria-hidden="true"></i></button>
     </div>
 </article>
 {% endwith %}

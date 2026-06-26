@@ -1,80 +1,95 @@
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-    const form = document.getElementById("deskCreateWizard");
-    const priority = document.getElementById("deskPriority");
-    const vip = document.getElementById("deskVipToggle");
-    const vipExplanation = document.querySelector("[data-vip-explanation]");
-    const draftBox = document.querySelector("[data-draft-key]");
-    const draftKey = draftBox ? draftBox.dataset.draftKey : "nightowl.ticket.create.draft";
-    const fields = Array.from(document.querySelectorAll("[data-draft-field]"));
+    const page = document.querySelector("[data-new-ticket-page]");
+    if (!page) return;
 
-    function showStep(step) {
-        document.querySelectorAll("[data-create-step]").forEach(function (node) {
-            node.classList.toggle("is-active", node.dataset.createStep === String(step));
-        });
+    const requesters = JSON.parse(document.getElementById("new-ticket-requesters")?.textContent || "[]");
+    const endpointsFromContext = JSON.parse(document.getElementById("new-ticket-endpoints")?.textContent || "[]");
+    const categories = JSON.parse(document.getElementById("new-ticket-categories")?.textContent || "[]");
+    const draftKey = page.dataset.draftKey || "nightowl.ticket.create.draft";
+    const CURRENT_USER = "Gabriel";
+    const extraRequesters = [
+        { name: "Eduardo Campos", email: "eduardo.campos@nalen.local", username: "eduardo.campos", department: "Diretoria", client: "Nalen Automation", role: "Socio", vip: true },
+        { name: "Ana Ribeiro", email: "ana.ribeiro@nalen.local", username: "ana.ribeiro", department: "Juridico", client: "Nalen Automation", role: "Coordenadora juridica", vip: false },
+    ];
+    const requesterRows = [...requesters, ...extraRequesters].map((item) => ({
+        client: item.client || "Nalen Automation",
+        phone: item.phone || "",
+        ...item,
+    }));
+    const endpointRows = [
+        ...endpointsFromContext,
+        { hostname: "DIR-NOTE-002", status: "online", status_label: "Online", last_seen: "ha 2 min", last_user: "eduardo.campos", os: "Windows 11 Pro", ip: "192.168.101.42", alerts: "0 alertas", risk: "baixo" },
+        { hostname: "REC-004", status: "offline", status_label: "Offline", last_seen: "ha 2h", last_user: "recepcao", os: "Windows 10 Pro", ip: "192.168.101.74", alerts: "sem check-in", risk: "medio" },
+    ].map((item) => ({
+        os: item.os || (item.hostname?.startsWith("SRV") ? "Windows Server 2022" : "Windows 11 Pro"),
+        ip: item.ip || "192.168.101." + (item.hostname?.length || 33),
+        alerts: item.alerts || (item.hostname === "FIN-012" ? "antivirus sem protecao" : item.hostname === "SRV-FILES-01" ? "disco 92%" : "0 alertas"),
+        risk: item.risk || (item.hostname === "FIN-012" || item.hostname === "SRV-FILES-01" ? "alto" : "baixo"),
+        ...item,
+    }));
+    const duplicatePool = [
+        { number: 1048, title: "Socio sem acesso ao e-mail", status: "Em atendimento", reason: "Mesmo solicitante", score: 88, endpoint: "DIR-NOTE-002", requester: "Eduardo Campos", category: "Acesso" },
+        { number: 1042, title: "Bitdefender ausente em FIN-012", status: "Novo", reason: "Mesmo endpoint", score: 92, endpoint: "FIN-012", requester: "Mariana Souza", category: "Seguranca" },
+        { number: 1032, title: "Servidor de arquivos com alerta de disco", status: "Novo", reason: "Alerta RMM parecido", score: 84, endpoint: "SRV-FILES-01", requester: "Night Owl RMM", category: "RMM / Alerta" },
+        { number: 1039, title: "Solicitacao de acesso ao ERP", status: "Resolvido", reason: "Similar resolvido", score: 68, endpoint: "", requester: "Ana Ribeiro", category: "Acesso" },
+    ];
+    const subcategories = {
+        "Acesso": ["E-mail", "ERP", "VPN", "MFA", "Permissao"],
+        "Hardware": ["Notebook", "Monitor", "Periferico", "Desempenho"],
+        "Software": ["Instalacao", "Atualizacao", "Erro de aplicativo"],
+        "Rede": ["VPN", "Wi-Fi", "DNS", "Firewall"],
+        "Seguranca": ["Antivirus", "MFA", "Alerta EDR", "Phishing"],
+        "Impressora": ["Fila", "Spooler", "Driver", "Conectividade"],
+        "RMM / Alerta": ["Antivirus", "Disco", "Backup", "Agente offline"],
+        "E-mail": ["Sincronizacao", "Acesso", "Assinatura", "Caixa compartilhada"],
+        "Sistemas internos": ["ERP", "CRM", "Portal interno"],
+    };
+    let selectedRequester = null;
+    let selectedEndpoint = null;
+    let dirty = false;
+    let toastTimer = null;
+
+    function all(selector, root = document) {
+        return Array.from(root.querySelectorAll(selector));
     }
 
-    document.querySelectorAll("[data-next-step]").forEach(function (button) {
-        button.addEventListener("click", function () { showStep(2); });
-    });
-    document.querySelectorAll("[data-prev-step]").forEach(function (button) {
-        button.addEventListener("click", function () { showStep(1); });
-    });
-
-    document.querySelectorAll("[data-category-pick]").forEach(function (button) {
-        button.addEventListener("click", function () {
-            const input = document.querySelector("[data-category-input]");
-            if (input) input.value = button.dataset.categoryPick;
-            if (priority && button.dataset.priorityPick) priority.value = button.dataset.priorityPick;
-            saveDraft();
-        });
-    });
-
-    document.querySelectorAll("[data-requester-pick]").forEach(function (button) {
-        button.addEventListener("click", function () {
-            const map = {
-                requester_search: button.dataset.requesterPick,
-                requester_name: button.dataset.requesterPick,
-                requester_email: button.dataset.requesterEmail,
-                requester_username: button.dataset.requesterUsername,
-                requester_department: button.dataset.requesterDepartment,
-                requester_role: button.dataset.requesterRole
-            };
-            Object.keys(map).forEach(function (name) {
-                const input = document.querySelector("[name='" + name + "']");
-                if (input) input.value = map[name] || "";
-            });
-            if (vip) {
-                vip.checked = button.dataset.requesterVip === "1";
-                updateVipState();
-            }
-            saveDraft();
-        });
-    });
-
-    function updateVipState() {
-        if (!vip || !priority) return;
-        if (vip.checked) {
-            priority.value = "critical";
-            priority.classList.add("desk-critical-input");
-            if (vipExplanation) vipExplanation.hidden = false;
-        } else {
-            priority.classList.remove("desk-critical-input");
-            if (vipExplanation) vipExplanation.hidden = true;
-        }
+    function field(name) {
+        return page.querySelector("[name='" + name + "']");
     }
 
-    if (vip) vip.addEventListener("change", function () {
-        updateVipState();
-        saveDraft();
-    });
+    function value(name) {
+        const input = field(name);
+        if (!input) return "";
+        return input.type === "checkbox" ? input.checked : input.value.trim();
+    }
 
-    function saveDraft() {
+    function setValue(name, next) {
+        const input = field(name);
+        if (!input) return;
+        if (input.type === "checkbox") input.checked = Boolean(next);
+        else input.value = next || "";
+    }
+
+    function showToast(message) {
+        const toast = page.querySelector("[data-new-toast]");
+        if (!toast) return;
+        toast.querySelector("span").textContent = message;
+        toast.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toast.hidden = true; }, 4200);
+    }
+
+    function saveDraft(silent) {
         const data = {};
-        fields.forEach(function (field) {
-            data[field.name] = field.type === "checkbox" ? field.checked : field.value;
+        all("[data-draft-field]", page).forEach((input) => {
+            data[input.name] = input.type === "checkbox" ? input.checked : input.value;
         });
         localStorage.setItem(draftKey, JSON.stringify(data));
+        const status = page.querySelector("[data-draft-status]");
+        if (status) status.textContent = "Rascunho salvo agora";
+        dirty = true;
+        if (!silent) showToast("Rascunho salvo.");
     }
 
     function restoreDraft() {
@@ -82,46 +97,489 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!raw) return;
         try {
             const data = JSON.parse(raw);
-            fields.forEach(function (field) {
-                if (!(field.name in data)) return;
-                if (field.type === "checkbox") {
-                    field.checked = Boolean(data[field.name]);
-                } else {
-                    field.value = data[field.name];
-                }
-            });
-            updateVipState();
+            Object.keys(data).forEach((key) => setValue(key, data[key]));
         } catch (error) {}
     }
 
-    fields.forEach(function (field) {
-        field.addEventListener("change", saveDraft);
-        field.addEventListener("blur", saveDraft);
-    });
-
-    const restore = document.querySelector("[data-draft-restore]");
-    if (restore) restore.addEventListener("click", restoreDraft);
-
-    const email = document.querySelector("[data-email-input]");
-    if (email) {
-        email.addEventListener("blur", function () {
-            email.classList.toggle("desk-invalid-input", Boolean(email.value && !email.checkValidity()));
+    function updateProgress(sectionId) {
+        all("[data-progress-target]").forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.progressTarget === sectionId);
         });
     }
 
-    document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && fields.some(function (field) { return field.type === "checkbox" ? field.checked : field.value; })) {
-            if (confirm("Cancelar a criacao e voltar para a Central?")) {
-                window.location.href = "{% url 'tickets:central' %}";
+    function scrollToSection(sectionId) {
+        const target = page.querySelector("#" + sectionId);
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        updateProgress(sectionId);
+    }
+
+    function renderResults(box, rows, renderer, emptyText) {
+        if (!box) return;
+        box.innerHTML = "";
+        if (!rows.length) {
+            box.innerHTML = '<p class="nw-empty-small">' + emptyText + '</p>';
+        } else {
+            rows.forEach((row) => box.insertAdjacentHTML("beforeend", renderer(row)));
+        }
+        box.hidden = false;
+        window.lucide?.createIcons?.();
+    }
+
+    function pickRequester(item) {
+        selectedRequester = item;
+        setValue("requester_search", item.name);
+        setValue("requester_name", item.name);
+        setValue("requester_email", item.email);
+        setValue("requester_phone", item.phone);
+        setValue("requester_client", item.client || "Nalen Automation");
+        setValue("requester_department", item.department);
+        setValue("requester_role", item.role);
+        setValue("requester_is_partner", item.vip);
+        page.querySelector("[data-requester-results]").hidden = true;
+        updateVipState();
+        updateRequesterContext();
+        updateDuplicates();
+        updateSummary();
+        saveDraft(true);
+    }
+
+    function pickEndpoint(item) {
+        selectedEndpoint = item;
+        setValue("endpoint", item.hostname);
+        page.querySelector("[data-endpoint-results]").hidden = true;
+        updateEndpointCard();
+        suggestFromContext();
+        updateDuplicates();
+        updateSummary();
+        saveDraft(true);
+    }
+
+    function updateVipState() {
+        const vip = field("requester_is_partner");
+        const priority = field("priority");
+        const explanation = page.querySelector("[data-vip-explanation]");
+        if (vip?.checked) {
+            if (priority) priority.value = "critical";
+            if (explanation) explanation.hidden = false;
+        } else if (explanation) {
+            explanation.hidden = true;
+        }
+        updatePriorityUi();
+    }
+
+    function updateEndpointCard() {
+        const endpoint = selectedEndpoint || endpointRows.find((item) => item.hostname === value("endpoint"));
+        const host = page.querySelector("[data-endpoint-host]");
+        const meta = page.querySelector("[data-endpoint-meta]");
+        const detail = page.querySelector("[data-endpoint-detail]");
+        const risk = page.querySelector("[data-endpoint-risk]");
+        const context = page.querySelector("[data-endpoint-context]");
+        if (!endpoint) {
+            if (host) host.textContent = "Nenhum endpoint";
+            if (meta) meta.textContent = "Sem vinculo";
+            if (detail) detail.textContent = "Busque por hostname, usuario ou IP para vincular telemetria RMM.";
+            if (risk) risk.textContent = "sem vinculo";
+            if (context) context.textContent = "Vincule um endpoint para trazer telemetria, alertas ativos e risco operacional.";
+            return;
+        }
+        if (host) host.textContent = endpoint.hostname;
+        if (meta) meta.textContent = endpoint.status_label + " - " + endpoint.last_seen + " - " + endpoint.ip;
+        if (detail) detail.textContent = endpoint.os + " - usuario " + endpoint.last_user + " - " + endpoint.alerts + " - risco " + endpoint.risk;
+        if (risk) risk.textContent = "risco " + endpoint.risk;
+        if (context) context.textContent = endpoint.hostname + " esta " + endpoint.status_label.toLowerCase() + ", ultimo check-in " + endpoint.last_seen + ", " + endpoint.alerts + ".";
+    }
+
+    function updateRequesterContext() {
+        const empty = page.querySelector("[data-requester-context-empty]");
+        const box = page.querySelector("[data-requester-context]");
+        const badge = page.querySelector("[data-requester-vip-badge]");
+        if (!selectedRequester && !value("requester_name")) {
+            if (empty) empty.hidden = false;
+            if (box) box.hidden = true;
+            if (badge) badge.hidden = true;
+            return;
+        }
+        const requester = selectedRequester || { name: value("requester_name"), department: value("requester_department"), client: value("requester_client"), role: value("requester_role"), vip: value("requester_is_partner") };
+        if (empty) empty.hidden = true;
+        if (box) box.hidden = false;
+        if (badge) badge.hidden = !requester.vip;
+        page.querySelector("[data-requester-context-name]").textContent = requester.name || "-";
+        page.querySelector("[data-requester-context-meta]").textContent = (requester.client || "Nalen Automation") + " - " + (requester.department || "Sem setor") + " - " + (requester.role || "Funcao nao informada");
+        const history = page.querySelector("[data-requester-history]");
+        if (history) {
+            history.innerHTML = "";
+            duplicatePool.filter((item) => item.requester === requester.name).slice(0, 3).forEach((item) => {
+                history.insertAdjacentHTML("beforeend", "<li>#" + item.number + " " + item.title + "</li>");
+            });
+            if (!history.children.length) history.innerHTML = "<li>Nenhum chamado recente no mock.</li>";
+        }
+    }
+
+    function categoryPriority(category) {
+        const row = categories.find((item) => item.name === category);
+        return row?.suggested_priority || (category === "Seguranca" ? "critical" : category === "RMM / Alerta" ? "high" : "normal");
+    }
+
+    function priorityLabel(value) {
+        return ({ low: "Baixa", normal: "Normal", high: "Alta", critical: "Critica" })[value] || value || "-";
+    }
+
+    function suggestPriority() {
+        const impact = value("impact");
+        const urgency = value("urgency");
+        let next = categoryPriority(value("category"));
+        if (impact === "high" && urgency === "high") next = "critical";
+        else if (impact === "high" || urgency === "high") next = next === "critical" ? "critical" : "high";
+        const priority = field("priority");
+        if (priority && !priority.dataset.userEdited) priority.value = next;
+        updatePriorityUi();
+    }
+
+    function updatePriorityUi() {
+        const priority = value("priority");
+        const suggestion = page.querySelector("[data-priority-suggestion]");
+        const reason = page.querySelector("[data-critical-reason]");
+        const sla = field("sla");
+        if (suggestion) suggestion.textContent = "Prioridade sugerida: " + priorityLabel(priority);
+        if (reason) reason.hidden = priority !== "critical";
+        if (sla) sla.value = priority === "critical" ? "30min primeira resposta / 4h resolucao" : priority === "high" ? "1h primeira resposta / 8h resolucao" : "4h primeira resposta / 24h resolucao";
+        updateSummary();
+    }
+
+    function updateSubcategories() {
+        const select = page.querySelector("[data-subcategory]");
+        if (!select) return;
+        const rows = subcategories[value("category")] || ["Triagem geral"];
+        select.innerHTML = rows.map((item) => "<option>" + item + "</option>").join("");
+    }
+
+    function suggestFromContext() {
+        const origin = value("origin");
+        const endpoint = selectedEndpoint || endpointRows.find((item) => item.hostname === value("endpoint"));
+        if (origin === "RMM Alert" || endpoint?.alerts?.includes("antivirus")) {
+            setValue("category", endpoint?.alerts?.includes("antivirus") ? "Seguranca" : "RMM / Alerta");
+            setValue("priority", endpoint?.risk === "alto" ? "high" : "normal");
+            setValue("queue", endpoint?.alerts?.includes("antivirus") ? "Seguranca" : "TI / RMM");
+        }
+        if (endpoint?.hostname && !value("title")) {
+            setValue("title", endpoint.alerts?.includes("antivirus") ? "Bitdefender ausente em " + endpoint.hostname : "Alerta tecnico em " + endpoint.hostname);
+        }
+        updateSubcategories();
+        updatePriorityUi();
+    }
+
+    function updateDuplicates() {
+        const requester = value("requester_name");
+        const endpoint = value("endpoint");
+        const category = value("category");
+        const title = value("title").toLowerCase();
+        const matches = duplicatePool.filter((item) => (
+            (requester && item.requester === requester) ||
+            (endpoint && item.endpoint === endpoint) ||
+            (category && item.category === category) ||
+            (title && item.title.toLowerCase().includes(title.split(" ")[0] || "___"))
+        )).slice(0, 4);
+        const list = page.querySelector("[data-duplicates-list]");
+        const count = page.querySelector("[data-duplicate-count]");
+        if (count) count.textContent = matches.length;
+        if (!list) return;
+        if (!matches.length) {
+            list.innerHTML = '<p class="nw-empty-small">Nenhum relacionado encontrado ainda.</p>';
+            return;
+        }
+        const strong = matches.some((item) => item.score >= 88);
+        list.innerHTML = (strong ? '<strong class="nw-duplicate-alert">Possivel duplicado encontrado.</strong>' : "") + matches.map((item) => `
+            <article>
+                <strong>#${item.number} ${item.title}</strong>
+                <span>${item.reason} - ${item.score}% similar - ${item.status}</span>
+                <footer><button type="button" data-duplicate-link>Vincular</button><button type="button" data-duplicate-preview>Preview</button></footer>
+            </article>
+        `).join("");
+    }
+
+    function updateSummary() {
+        const requester = value("requester_name");
+        const client = [value("requester_client"), value("requester_department")].filter(Boolean).join(" / ");
+        const endpoint = value("endpoint");
+        const category = value("category");
+        const priority = priorityLabel(value("priority"));
+        const origin = value("origin");
+        const sla = value("sla");
+        const queue = value("queue");
+        const pairs = {
+            "[data-summary-requester]": requester || "-",
+            "[data-summary-client]": client || "-",
+            "[data-summary-endpoint]": endpoint || "-",
+            "[data-summary-category]": category || "-",
+            "[data-summary-priority]": priority,
+            "[data-summary-origin]": origin || "-",
+            "[data-summary-sla]": sla || "-",
+            "[data-summary-queue]": queue || "-",
+        };
+        Object.keys(pairs).forEach((selector) => {
+            const node = page.querySelector(selector);
+            if (node) node.textContent = pairs[selector];
+        });
+        const reviewTitle = page.querySelector("[data-review-title]");
+        const reviewMeta = page.querySelector("[data-review-meta]");
+        if (reviewTitle) reviewTitle.textContent = value("title") || "Chamado ainda sem titulo";
+        if (reviewMeta) reviewMeta.textContent = [requester || "sem solicitante", category || "sem categoria", priority, endpoint || "sem endpoint"].join(" - ");
+        updateQuality();
+    }
+
+    function updateQuality() {
+        const checks = {
+            requester: Boolean(value("requester_name")),
+            title: Boolean(value("title")),
+            category: Boolean(value("category")),
+            priority: Boolean(value("priority")),
+            description: value("description").length >= 20,
+            endpoint: Boolean(value("endpoint")) || value("origin") !== "RMM Alert",
+        };
+        const done = Object.values(checks).filter(Boolean).length;
+        const total = Object.keys(checks).length;
+        const count = page.querySelector("[data-quality-count]");
+        const bar = page.querySelector("[data-quality-bar]");
+        if (count) count.textContent = done + "/" + total;
+        if (bar) bar.style.width = Math.round((done / total) * 100) + "%";
+        Object.keys(checks).forEach((key) => {
+            page.querySelector("[data-quality-item='" + key + "']")?.classList.toggle("is-done", checks[key]);
+        });
+    }
+
+    function updateOriginFields() {
+        const isRmm = value("origin") === "RMM Alert";
+        const fields = page.querySelector("[data-rmm-alert-fields]");
+        if (fields) fields.hidden = !isRmm;
+        if (isRmm) {
+            setValue("category", "RMM / Alerta");
+            setValue("queue", "TI / RMM");
+            suggestFromContext();
+        }
+    }
+
+    function addAttachment(name) {
+        const box = page.querySelector("[data-new-attachments]");
+        if (!box) return;
+        box.hidden = false;
+        box.insertAdjacentHTML("beforeend", `<span><i data-lucide="paperclip"></i>${name}<button type="button" aria-label="Remover anexo" data-remove-new-attachment>x</button></span>`);
+        window.lucide?.createIcons?.();
+    }
+
+    function validate() {
+        const missing = [];
+        all("[data-required]", page).forEach((input) => {
+            const empty = !input.value.trim();
+            input.classList.toggle("desk-invalid-input", empty);
+            if (empty) missing.push(input.dataset.required);
+        });
+        if (value("priority") === "critical" && !value("critical_reason") && value("requester_is_partner") !== true) {
+            const reason = field("critical_reason");
+            reason?.classList.add("desk-invalid-input");
+            missing.push("Justificativa critica");
+        }
+        const box = page.querySelector("[data-new-errors]");
+        if (box) {
+            box.hidden = !missing.length;
+            box.querySelector("ul").innerHTML = missing.map((item) => "<li>" + item + "</li>").join("");
+        }
+        if (missing.length) scrollToSection("requester");
+        return !missing.length;
+    }
+
+    function createTicket(mode) {
+        if (mode === "draft") {
+            saveDraft(false);
+            return;
+        }
+        if (!validate()) {
+            showToast("Preencha os campos obrigatorios.");
+            return;
+        }
+        localStorage.removeItem(draftKey);
+        dirty = false;
+        showToast(mode === "assign" ? "Chamado criado e atribuido a voce." : "Chamado criado no mock.");
+        window.setTimeout(() => {
+            if (mode === "open" || mode === "assign") window.location.href = "{% url 'tickets:detail' 1048 %}";
+            else window.location.href = "{% url 'tickets:central' %}";
+        }, 700);
+    }
+
+    page.addEventListener("click", (event) => {
+        const progress = event.target.closest("[data-progress-target]");
+        if (progress) scrollToSection(progress.dataset.progressTarget);
+        const requesterButton = event.target.closest("[data-pick-requester]");
+        if (requesterButton) pickRequester(requesterRows.find((item) => item.name === requesterButton.dataset.pickRequester));
+        const endpointButton = event.target.closest("[data-pick-endpoint]");
+        if (endpointButton) pickEndpoint(endpointRows.find((item) => item.hostname === endpointButton.dataset.pickEndpoint));
+        const category = event.target.closest("[data-category-pick]");
+        if (category) {
+            setValue("category", category.dataset.categoryPick);
+            setValue("priority", category.dataset.priorityPick);
+            field("priority").dataset.userEdited = "";
+            updateSubcategories();
+            updatePriorityUi();
+            updateSummary();
+            saveDraft(true);
+        }
+        const template = event.target.closest("[data-template-name]");
+        if (template) {
+            setValue("category", template.dataset.templateCategory);
+            setValue("priority", template.dataset.templatePriority);
+            setValue("description", template.dataset.templateDescription + "\\n\\nSintomas:\\n- \\n\\nImpacto:\\n- \\n\\nPassos ja tentados:\\n- ");
+            if (!value("title")) setValue("title", template.dataset.templateName);
+            updateSubcategories();
+            updatePriorityUi();
+            updateSummary();
+            saveDraft(true);
+            showToast("Template aplicado.");
+        }
+        const endpointAction = event.target.closest("[data-endpoint-action]");
+        if (endpointAction) {
+            if (endpointAction.dataset.endpointAction === "clear") {
+                selectedEndpoint = null;
+                setValue("endpoint", "");
+                updateEndpointCard();
+                updateSummary();
+            } else if (endpointAction.dataset.endpointAction === "sync") {
+                showToast("Endpoint sincronizado no mock.");
+                const meta = page.querySelector("[data-endpoint-meta]");
+                if (meta && selectedEndpoint) meta.textContent = selectedEndpoint.status_label + " - agora - " + selectedEndpoint.ip;
+            } else {
+                showToast("Abrindo endpoint no RMM.");
             }
         }
-        if (event.key === "Enter" && form && document.activeElement && document.activeElement.tagName !== "TEXTAREA") {
-            const activeStep = document.querySelector("[data-create-step].is-active");
-            if (activeStep && activeStep.dataset.createStep === "1") {
-                event.preventDefault();
-                showStep(2);
-            }
+        if (event.target.closest("[data-new-file-pick]")) page.querySelector("[data-new-file-input]")?.click();
+        const removeAttachment = event.target.closest("[data-remove-new-attachment]");
+        if (removeAttachment) removeAttachment.closest("span")?.remove();
+        if (event.target.closest("[data-save-draft]")) saveDraft(false);
+        const create = event.target.closest("[data-create-ticket]");
+        if (create) createTicket(create.dataset.createTicket);
+        if (event.target.closest("[data-quick-requester]")) showToast("Criacao rapida de solicitante preparada no mock.");
+        if (event.target.closest("[data-duplicate-link]")) showToast("Chamado relacionado vinculado ao rascunho.");
+        if (event.target.closest("[data-duplicate-preview]")) showToast("Preview do relacionado preparado no mock.");
+    });
+
+    page.addEventListener("input", (event) => {
+        if (event.target.matches("[data-requester-search]")) {
+            const query = event.target.value.trim().toLowerCase();
+            const rows = requesterRows.filter((item) => [item.name, item.email, item.department].join(" ").toLowerCase().includes(query)).slice(0, 6);
+            renderResults(page.querySelector("[data-requester-results]"), query ? rows : [], (item) => `
+                <button type="button" data-pick-requester="${item.name}">
+                    <strong>${item.name}${item.vip ? " · VIP" : ""}</strong>
+                    <span>${item.email} - ${item.department}</span>
+                </button>
+            `, "Nenhum solicitante encontrado.");
+        }
+        if (event.target.matches("[data-endpoint-search]")) {
+            const query = event.target.value.trim().toLowerCase();
+            const rows = endpointRows.filter((item) => [item.hostname, item.last_user, item.ip].join(" ").toLowerCase().includes(query)).slice(0, 6);
+            renderResults(page.querySelector("[data-endpoint-results]"), query ? rows : [], (item) => `
+                <button type="button" data-pick-endpoint="${item.hostname}">
+                    <strong>${item.hostname} · ${item.status_label}</strong>
+                    <span>${item.last_user} - ${item.ip} - ${item.alerts}</span>
+                </button>
+            `, "Nenhum endpoint encontrado.");
+        }
+        if (event.target.matches("[data-title], [data-category-input], [data-description], [name='requester_name'], [name='endpoint']")) {
+            updateDuplicates();
+        }
+        if (event.target.matches("[data-draft-field]")) {
+            saveDraft(true);
+            updateSummary();
         }
     });
+
+    page.addEventListener("change", (event) => {
+        if (event.target.matches("[data-origin]")) {
+            updateOriginFields();
+            updateSummary();
+        }
+        if (event.target.matches("[data-impact], [data-urgency], [data-category-input]")) {
+            suggestPriority();
+            updateSubcategories();
+        }
+        if (event.target.matches("[data-priority]")) {
+            event.target.dataset.userEdited = "1";
+            updatePriorityUi();
+        }
+        if (event.target.matches("#deskVipToggle")) updateVipState();
+        if (event.target.matches("[data-new-file-input]")) {
+            Array.from(event.target.files || []).forEach((file) => addAttachment(file.name));
+            showToast("Arquivo anexado ao rascunho.");
+            event.target.value = "";
+        }
+        updateSummary();
+        saveDraft(true);
+    });
+
+    page.addEventListener("dragover", (event) => {
+        if (!event.target.closest("[data-new-dropzone]")) return;
+        event.preventDefault();
+        page.querySelector("[data-new-dropzone]")?.classList.add("is-dragging");
+        page.querySelector("[data-new-drop-title]").textContent = "Solte para anexar ao chamado";
+    });
+
+    page.addEventListener("dragleave", (event) => {
+        if (!event.target.closest("[data-new-dropzone]")) return;
+        page.querySelector("[data-new-dropzone]")?.classList.remove("is-dragging");
+        page.querySelector("[data-new-drop-title]").textContent = "Solte arquivos ou cole prints com Ctrl+V";
+    });
+
+    page.addEventListener("drop", (event) => {
+        if (!event.target.closest("[data-new-dropzone]")) return;
+        event.preventDefault();
+        page.querySelector("[data-new-dropzone]")?.classList.remove("is-dragging");
+        page.querySelector("[data-new-drop-title]").textContent = "Solte arquivos ou cole prints com Ctrl+V";
+        Array.from(event.dataTransfer?.files || []).forEach((file) => addAttachment(file.name));
+        showToast("Arquivo anexado ao rascunho.");
+    });
+
+    document.addEventListener("paste", (event) => {
+        if (!page.contains(document.activeElement)) return;
+        const hasImage = Array.from(event.clipboardData?.items || []).some((item) => item.type.startsWith("image/"));
+        if (hasImage) {
+            const stamp = new Date().toISOString().slice(0, 16).replace(/[-T:]/g, "");
+            addAttachment("print-colado-" + stamp + ".png");
+            showToast("Print colado como anexo.");
+        }
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+            event.preventDefault();
+            saveDraft(false);
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            event.preventDefault();
+            createTicket("create");
+        }
+        if (event.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
+            event.preventDefault();
+            page.querySelector("[data-requester-search]")?.focus();
+        }
+        if (event.key === "Escape") {
+            page.querySelectorAll(".nw-autocomplete").forEach((box) => { box.hidden = true; });
+        }
+    });
+
+    window.addEventListener("beforeunload", (event) => {
+        if (!dirty) return;
+        event.preventDefault();
+        event.returnValue = "";
+    });
+
+    restoreDraft();
+    selectedEndpoint = endpointRows.find((item) => item.hostname === value("endpoint"));
+    selectedRequester = requesterRows.find((item) => item.name === value("requester_name"));
+    updateVipState();
+    updateOriginFields();
+    updateEndpointCard();
+    updateRequesterContext();
+    updateSubcategories();
+    updatePriorityUi();
+    updateDuplicates();
+    updateSummary();
+    window.lucide?.createIcons?.();
 });
 </script>

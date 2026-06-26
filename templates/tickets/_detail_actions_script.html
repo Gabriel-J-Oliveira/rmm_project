@@ -15,7 +15,7 @@
     const PRIORITY_LABELS = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
     const resolutionDrawer = document.querySelector('[data-resolution-drawer]');
     const escalationDrawer = document.querySelector('[data-escalation-drawer]');
-    const auditDrawer = document.querySelector('.desk-audit-drawer');
+    const auditDrawer = document.querySelector('[data-audit-drawer]');
     const toast = document.querySelector('[data-toast]');
     const form = document.querySelector('[data-detail-comment-form]');
     const textarea = document.querySelector('[data-detail-comment-textarea]');
@@ -80,15 +80,117 @@
             drawer.classList.remove('is-open');
             drawer.hidden = true;
         });
-        if (auditDrawer) auditDrawer.style.display = '';
+        if (auditDrawer) {
+            auditDrawer.classList.remove('is-open');
+            auditDrawer.hidden = true;
+        }
         document.body.classList.remove('drawer-open');
     }
 
     function openAudit() {
         if (!auditDrawer) return;
         closeDrawers();
-        auditDrawer.style.display = 'grid';
-        auditDrawer.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        auditDrawer.hidden = false;
+        auditDrawer.classList.add('is-open');
+        document.body.classList.add('drawer-open');
+        updateAuditCounts();
+        filterAudit();
+        window.lucide?.createIcons?.();
+    }
+
+    function closeAudit() {
+        if (!auditDrawer) return;
+        auditDrawer.classList.remove('is-open');
+        auditDrawer.hidden = true;
+        document.body.classList.remove('drawer-open');
+    }
+
+    function auditRows() {
+        return all('[data-audit-row]');
+    }
+
+    function updateAuditCounts() {
+        const rows = auditRows();
+        const visibleRows = rows.filter((row) => !row.hidden);
+        const total = document.querySelector('[data-audit-total]');
+        const sensitive = document.querySelector('[data-audit-sensitive-total]');
+        if (total) total.textContent = visibleRows.length || rows.length;
+        if (sensitive) sensitive.textContent = rows.filter((row) => row.dataset.auditSeverity === 'sensitive').length;
+    }
+
+    function filterAudit() {
+        const query = document.querySelector('[data-audit-search]')?.value.trim().toLowerCase() || '';
+        const type = document.querySelector('[data-audit-type]')?.value || 'all';
+        const user = document.querySelector('[data-audit-user]')?.value || 'all';
+        const period = document.querySelector('[data-audit-period]')?.value || 'today';
+        let visible = 0;
+        auditRows().forEach((row) => {
+            const typeMatch = type === 'all' || row.dataset.auditType === type;
+            const userMatch = user === 'all' || row.dataset.auditUser === user;
+            const periodMatch = period === 'all' || row.dataset.auditPeriod === period || ['7d', '30d'].includes(period);
+            const queryMatch = !query || row.textContent.toLowerCase().includes(query);
+            const match = typeMatch && userMatch && periodMatch && queryMatch;
+            row.hidden = !match;
+            if (match) visible += 1;
+        });
+        const empty = document.querySelector('[data-audit-empty]');
+        if (empty) empty.hidden = visible > 0;
+        const total = document.querySelector('[data-audit-total]');
+        if (total) total.textContent = visible;
+    }
+
+    function addAuditEvent(event = {}) {
+        const list = document.querySelector('[data-audit-list]');
+        if (!list) return;
+        const type = event.type || 'field';
+        const user = event.user || CURRENT_USER;
+        const severity = event.severity || 'info';
+        const oldValue = event.oldValue || '-';
+        const newValue = event.newValue || '-';
+        const origin = event.origin || '192.168.101.47 - Web';
+        const row = document.createElement('article');
+        row.className = `nw-audit-row${severity === 'sensitive' ? ' nw-audit-row--sensitive' : ''}`;
+        row.dataset.auditRow = '';
+        row.dataset.auditType = type;
+        row.dataset.auditUser = user;
+        row.dataset.auditPeriod = 'today';
+        row.dataset.auditSeverity = severity;
+        row.innerHTML = `
+            <button type="button" data-audit-toggle>
+                <time>agora</time>
+                <strong>${escapeHtml(user)}</strong>
+                <span class="nw-audit-badge${severity === 'sensitive' ? ' nw-audit-badge--sensitive' : ''}">${escapeHtml(event.badge || type)}</span>
+                <span>${escapeHtml(event.action || 'Evento registrado')}</span>
+                <span class="nw-audit-diff"><em>${escapeHtml(event.oldValue || '—')}</em><i>-></i><b>${escapeHtml(event.newValue || '—')}</b></span>
+                <small>${escapeHtml(event.origin || '192.168.101.47 · Web')}</small>
+            </button>
+            <div class="nw-audit-event-details" hidden><pre>${escapeHtml(JSON.stringify(event.payload || event, null, 2))}</pre></div>
+        `;
+        list.prepend(row);
+        updateAuditCounts();
+        filterAudit();
+    }
+
+    function copyAuditSummary() {
+        const total = document.querySelector('[data-audit-total]')?.textContent || auditRows().length;
+        const text = `Auditoria do chamado #${state.number}: ${total} eventos, ultima alteracao por Gabriel em 09:18.`;
+        navigator.clipboard?.writeText(text);
+        showToast('Resumo da auditoria copiado.');
+    }
+
+    function exportAuditCsv() {
+        const rows = auditRows().filter((row) => !row.hidden).map((row) => {
+            const cells = Array.from(row.querySelectorAll('time,strong,.nw-audit-badge,button > span:not(.nw-audit-diff),small')).map((cell) => `"${cell.textContent.trim().replace(/"/g, '""')}"`);
+            return cells.join(',');
+        });
+        const csv = ['"Data","Usuario","Tipo","Acao","Origem"', ...rows].join('\n');
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `auditoria-chamado-${state.number}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+        showToast('Exportacao de auditoria iniciada.');
     }
 
     function addActivity(kind, icon, title, body, badge = 'Sistema') {
@@ -323,11 +425,11 @@
                 <i class="nw-related-score">100% similar</i>
             </button>
             <div>
-                <button type="button" title="Visualizar preview" aria-label="Visualizar preview" data-related-preview><i data-lucide="eye"></i></button>
-                <a href="/tickets/${escapeHtml(number)}/" title="Abrir chamado" aria-label="Abrir chamado"><i data-lucide="external-link"></i></a>
-                <button type="button" title="Vincular chamado" aria-label="Vincular chamado" data-related-link-open><i data-lucide="link"></i></button>
-                <button type="button" title="Mesclar" aria-label="Mesclar" data-related-merge-open><i data-lucide="git-merge"></i></button>
-                <button type="button" title="Mais acoes" aria-label="Mais acoes" data-related-more><i data-lucide="ellipsis"></i></button>
+                <button class="nw-related-action" type="button" title="Visualizar preview" aria-label="Visualizar preview" data-related-preview><i class="bi bi-eye" aria-hidden="true"></i></button>
+                <a class="nw-related-action" href="/tickets/${escapeHtml(number)}/" title="Abrir chamado" aria-label="Abrir chamado"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></a>
+                <button class="nw-related-action" type="button" title="Vincular chamado" aria-label="Vincular chamado" data-related-link-open><i class="bi bi-link-45deg" aria-hidden="true"></i></button>
+                <button class="nw-related-action" type="button" title="Mesclar" aria-label="Mesclar" data-related-merge-open><i class="bi bi-intersect" aria-hidden="true"></i></button>
+                <button class="nw-related-action" type="button" title="Mais acoes" aria-label="Mais acoes" data-related-more><i class="bi bi-three-dots" aria-hidden="true"></i></button>
             </div>
         `;
         list.prepend(card);
@@ -438,10 +540,26 @@
         state.assignedTo = CURRENT_USER;
         updateBadges();
         addActivity('system', 'user-check', `${CURRENT_USER} assumiu o chamado`, 'Responsavel atualizado pela acao rapida.', 'Sistema');
+        addAuditEvent({
+            type: 'field',
+            badge: 'Campo alterado',
+            action: 'Alterou responsavel',
+            oldValue: previous || 'Sem responsavel',
+            newValue: CURRENT_USER,
+            payload: { field: 'assignee', old: previous || null, new: CURRENT_USER },
+        });
         showToast(`Chamado #${state.number} atribuido a voce.`, 'Desfazer', () => {
             state.assignedTo = previous;
             updateBadges();
             addActivity('system', 'rotate-ccw', 'Atribuicao desfeita', 'Responsavel restaurado no mock local.', 'Sistema');
+            addAuditEvent({
+                type: 'field',
+                badge: 'Campo alterado',
+                action: 'Desfez atribuicao',
+                oldValue: CURRENT_USER,
+                newValue: previous || 'Sem responsavel',
+                payload: { field: 'assignee', old: CURRENT_USER, new: previous || null },
+            });
         });
     }
 
@@ -507,6 +625,14 @@
         const visibility = targetForm.querySelector('[data-comment-visibility-value]')?.value || 'internal';
         const internal = visibility !== 'public';
         addActivity('comment', 'message-square', internal ? 'Comentario interno adicionado' : 'Comentario publico enviado', body, internal ? 'Comentario interno' : 'Comentario publico');
+        addAuditEvent({
+            type: 'comment',
+            badge: internal ? 'Comentario interno' : 'Comentario publico',
+            action: internal ? 'Criou comentario interno' : 'Criou comentario publico',
+            oldValue: '-',
+            newValue: body.slice(0, 48),
+            payload: { field: 'comments', visibility, body },
+        });
         textarea.value = '';
         setComposerExpanded(false);
         autoGrowTextarea(textarea);
@@ -566,6 +692,15 @@
         state.resolved = true;
         updateBadges();
         addActivity('resolution', 'check-circle', `${CURRENT_USER} resolveu o chamado`, `Solucao: ${summary}`, 'Resolucao');
+        addAuditEvent({
+            type: 'resolution',
+            badge: 'Resolucao',
+            action: 'Resolveu chamado',
+            oldValue: 'Em atendimento',
+            newValue: 'Resolvido',
+            severity: 'sensitive',
+            payload: { field: 'status', old: 'Em atendimento', new: 'Resolvido', resolution_summary: summary, root_cause: rootCause },
+        });
         if (publicComment) addActivity('comment', 'message-square', 'Comentario publico enviado', publicComment, 'Comentario publico');
         if (internalComment) addActivity('comment', 'message-square-lock', 'Comentario interno adicionado', internalComment, 'Comentario interno');
         if (kb) addActivity('resolution', 'book-open', 'Rascunho de artigo criado', 'Base de conhecimento preparada a partir da solucao.', 'Resolucao');
@@ -596,6 +731,14 @@
         }
         updateBadges();
         addActivity('escalation', 'arrow-up-right', `Chamado escalado para ${target}`, `Motivo: ${reason}`, 'Escalonamento');
+        addAuditEvent({
+            type: 'escalation',
+            badge: 'Escalonamento',
+            action: 'Escalou chamado',
+            oldValue: 'Fila N1',
+            newValue: target,
+            payload: { field: 'queue', old: 'N1', new: target, owner, reason },
+        });
         if (internal) addActivity('comment', 'message-square-lock', 'Comentario interno adicionado', internal, 'Comentario interno');
         closeDrawers();
         showToast(`Chamado escalado para ${target}.`);
@@ -615,6 +758,14 @@
         state.statusLabel = STATUS_LABELS[status] || status;
         updateBadges();
         addActivity('system', 'shuffle', 'Status alterado', `${previous} -> ${state.statusLabel}`, 'Sistema');
+        addAuditEvent({
+            type: 'field',
+            badge: 'Campo alterado',
+            action: 'Atualizou status',
+            oldValue: previous,
+            newValue: state.statusLabel,
+            payload: { field: 'status', old: previous, new: state.statusLabel },
+        });
         showToast('Status atualizado.');
     }
 
@@ -629,6 +780,15 @@
         state.priorityLabel = PRIORITY_LABELS[priority] || priority;
         updateBadges();
         addActivity('system', 'flag', 'Prioridade alterada', `${previous} -> ${state.priorityLabel}`, 'Sistema');
+        addAuditEvent({
+            type: 'field',
+            badge: priority === 'critical' ? 'Atencao' : 'Campo alterado',
+            action: 'Alterou prioridade',
+            oldValue: previous,
+            newValue: state.priorityLabel,
+            severity: priority === 'critical' ? 'sensitive' : 'info',
+            payload: { field: 'priority', old: previous, new: state.priorityLabel },
+        });
         showToast('Prioridade atualizada.');
     }
 
@@ -687,6 +847,16 @@
             showToast(`Iniciando acesso remoto para ${hostname}.`);
             addActivity('rmm', 'screen-share', 'Acesso remoto iniciado', `${CURRENT_USER} iniciou acesso remoto para ${hostname}.`, 'RMM');
             addDeviceHistory('remote', 'screen-share', 'Acesso remoto iniciado', 'iniciado', CURRENT_USER);
+            addAuditEvent({
+                type: 'rmm',
+                user: CURRENT_USER,
+                badge: 'RMM',
+                action: 'Iniciou acesso remoto',
+                oldValue: '-',
+                newValue: hostname,
+                origin: 'Agent - RMM',
+                payload: { field: 'endpoint_action', action: 'remote-access', endpoint: hostname },
+            });
             return;
         }
         if (action.key === 'sync-inventory') {
@@ -697,6 +867,16 @@
             showToast(`Inventario de ${hostname} sincronizado.`);
             addActivity('rmm', 'refresh-ccw', `Endpoint ${hostname} sincronizado via RMM`, `Ultimo check-in atualizado para agora.`, 'RMM');
             addDeviceHistory('system', 'refresh-ccw', 'Inventario sincronizado', 'ok', 'NightOwl Desk');
+            addAuditEvent({
+                type: 'rmm',
+                user: 'NightOwl RMM',
+                badge: 'RMM',
+                action: 'Sincronizou inventario',
+                oldValue: 'check-in anterior',
+                newValue: 'agora',
+                origin: 'Agent - RMM',
+                payload: { field: 'last_seen', endpoint: hostname, new: 'agora' },
+            });
             return;
         }
         if (action.key === 'send-message') {
@@ -704,9 +884,21 @@
             return;
         }
         const title = action.label || 'Acao remota';
+        const sensitive = ['restart-device', 'lock-session', 'restart-agent'].includes(action.key) || action.kind === 'script';
         showToast(`${title} enviada para ${hostname}.`);
         addActivity('rmm', action.icon || 'terminal', `Acao remota: ${title}`, `${CURRENT_USER} executou acao remota no endpoint ${hostname}.`, 'RMM');
         addDeviceHistory(action.kind || 'system', action.icon || 'terminal', title, 'enviado', CURRENT_USER);
+        addAuditEvent({
+            type: 'rmm',
+            user: sensitive ? CURRENT_USER : 'NightOwl RMM',
+            badge: sensitive ? 'Sensivel' : 'RMM',
+            action: `Acao remota: ${title}`,
+            oldValue: '-',
+            newValue: title,
+            severity: sensitive ? 'sensitive' : 'info',
+            origin: 'Agent - RMM',
+            payload: { field: 'endpoint_action', endpoint: hostname, action: title, sensitive },
+        });
         if (action.key === 'restart-device' || action.key === 'restart-agent') {
             addDeviceHistory('system', 'power', 'Reinicializacao solicitada', 'em execucao', CURRENT_USER);
         }
@@ -933,6 +1125,14 @@
                 card.querySelector('.nw-attachment-upload-progress')?.setAttribute('hidden', '');
                 showToast('Arquivo anexado.');
                 addActivity('attachment', 'paperclip', 'Arquivo anexado', `${CURRENT_USER} adicionou ${fileLike.name}.`, 'Anexo');
+                addAuditEvent({
+                    type: 'attachment',
+                    badge: 'Anexo',
+                    action: 'Anexou arquivo',
+                    oldValue: '-',
+                    newValue: fileLike.name,
+                    payload: { field: 'attachments', action: 'create', name: fileLike.name, origin },
+                });
             }
         }, 180);
         updateAttachmentCounters();
@@ -984,6 +1184,14 @@
         updateAttachmentFilterCounts();
         showToast('Evidencia principal atualizada.');
         addActivity('attachment', 'badge-check', 'Evidencia principal alterada', `${card.dataset.attachmentName} foi marcado como evidencia principal.`, 'Anexo');
+        addAuditEvent({
+            type: 'attachment',
+            badge: 'Anexo',
+            action: 'Marcou evidencia principal',
+            oldValue: '-',
+            newValue: card.dataset.attachmentName,
+            payload: { field: 'primary_evidence', new: card.dataset.attachmentName },
+        });
     }
 
     function renderAttachmentPreview(card) {
@@ -1053,6 +1261,15 @@
         updateAttachmentFilterCounts();
         filterAttachments();
         addActivity('attachment', 'trash-2', 'Anexo removido', `${name} foi removido do chamado.`, 'Anexo');
+        addAuditEvent({
+            type: 'attachment',
+            badge: 'Sensivel',
+            action: 'Removeu anexo',
+            oldValue: name,
+            newValue: '-',
+            severity: 'sensitive',
+            payload: { field: 'attachments', removed: name },
+        });
         showToast('Anexo removido.', 'Desfazer', () => {
             list?.prepend(clone);
             updateAttachmentCounters();
@@ -1081,6 +1298,26 @@
             if (action === 'mention') focusComment('@');
         }
         if (event.target.closest('[data-drawer-close]')) closeDrawers();
+        if (event.target.closest('[data-audit-close]')) closeAudit();
+        if (event.target.closest('[data-audit-export]')) exportAuditCsv();
+        if (event.target.closest('[data-audit-copy]')) copyAuditSummary();
+        if (event.target.closest('[data-audit-clear]')) {
+            const search = document.querySelector('[data-audit-search]');
+            const type = document.querySelector('[data-audit-type]');
+            const user = document.querySelector('[data-audit-user]');
+            const period = document.querySelector('[data-audit-period]');
+            if (search) search.value = '';
+            if (type) type.value = 'all';
+            if (user) user.value = 'all';
+            if (period) period.value = 'today';
+            filterAudit();
+            showToast('Filtros de auditoria limpos.');
+        }
+        const auditToggle = event.target.closest('[data-audit-toggle]');
+        if (auditToggle) {
+            const details = auditToggle.closest('[data-audit-row]')?.querySelector('.nw-audit-event-details');
+            if (details) details.hidden = !details.hidden;
+        }
         const nextAction = event.target.closest('[data-next-action-button]');
         if (nextAction) runNextAction(nextAction.dataset.nextActionType);
         if (event.target.closest('[data-resolution-confirm]')) resolveTicket();
@@ -1192,6 +1429,14 @@
         if (event.target.closest('[data-reference-link]') && currentReferenceCard) {
             addManualRelated(currentReferenceCard.dataset.relatedNumber, currentReferenceCard.dataset.relatedTitle, currentReferenceCard.dataset.relatedRequester, currentReferenceCard.dataset.relatedEndpoint, 'referencia');
             addActivity('system', 'book-open', `Chamado #${currentReferenceCard.dataset.relatedNumber} vinculado como referencia`, relatedSolution(currentReferenceCard), 'Sistema');
+            addAuditEvent({
+                type: 'relationship',
+                badge: 'Relacionamento',
+                action: 'Vinculou referencia',
+                oldValue: '-',
+                newValue: `#${currentReferenceCard.dataset.relatedNumber}`,
+                payload: { field: 'related_ticket', new: `#${currentReferenceCard.dataset.relatedNumber}`, reason: 'referencia' },
+            });
             showToast('Chamado vinculado como referencia.');
             closeRelatedModals();
         }
@@ -1272,6 +1517,14 @@
             state.category = category.dataset.quickCategory;
             updateBadges();
             addActivity('system', 'tag', 'Categoria alterada', `${previous} -> ${state.category}`, 'Sistema');
+            addAuditEvent({
+                type: 'field',
+                badge: 'Campo alterado',
+                action: 'Alterou categoria',
+                oldValue: previous,
+                newValue: state.category,
+                payload: { field: 'category', old: previous, new: state.category },
+            });
             showToast('Categoria atualizada.');
         }
         const assignee = event.target.closest('[data-quick-assignee]');
@@ -1280,6 +1533,14 @@
             state.assignedTo = assignee.dataset.quickAssignee;
             updateBadges();
             addActivity('system', 'user-check', 'Responsavel alterado', `${previous} -> ${state.assignedTo || 'Sem responsavel'}`, 'Sistema');
+            addAuditEvent({
+                type: 'field',
+                badge: 'Campo alterado',
+                action: 'Alterou responsavel',
+                oldValue: previous,
+                newValue: state.assignedTo || 'Sem responsavel',
+                payload: { field: 'assignee', old: previous, new: state.assignedTo || null },
+            });
             showToast('Responsavel atualizado.');
         }
         const removeAttachment = event.target.closest('[data-comment-attachments] button');
@@ -1330,6 +1591,14 @@
         const comment = relatedLinkModal.querySelector('[data-related-link-comment]')?.value.trim();
         addManualRelated(selected.value, selected.dataset.title, selected.dataset.requester, selected.dataset.endpoint, reason);
         addActivity('system', 'link', `Chamado #${selected.value} vinculado por ${CURRENT_USER}`, comment || `Motivo do vinculo: ${reason}.`, 'Sistema');
+        addAuditEvent({
+            type: 'relationship',
+            badge: 'Relacionamento',
+            action: 'Vinculou chamado',
+            oldValue: '-',
+            newValue: `#${selected.value}`,
+            payload: { field: 'related_ticket', new: `#${selected.value}`, reason, comment },
+        });
         showToast('Chamado vinculado.');
         const commentField = relatedLinkModal.querySelector('[data-related-link-comment]');
         if (commentField) commentField.value = '';
@@ -1346,6 +1615,15 @@
         const primary = relatedMergeModal.querySelector('input[name="merge_primary"]:checked')?.value || selected[0]?.dataset.relatedNumber;
         moveMergedCards(primary, reason);
         addActivity('system', 'git-merge', `Chamados mesclados com #${primary}`, `${selected.map((card) => `#${card.dataset.relatedNumber}`).join(', ')} foram marcados como duplicados. Motivo: ${reason}`, 'Sistema');
+        addAuditEvent({
+            type: 'relationship',
+            badge: 'Sensivel',
+            action: 'Mesclou chamados',
+            oldValue: selected.map((card) => `#${card.dataset.relatedNumber}`).join(', '),
+            newValue: `#${primary} principal`,
+            severity: 'sensitive',
+            payload: { action: 'merge', primary: `#${primary}`, secondary: selected.map((card) => `#${card.dataset.relatedNumber}`), reason },
+        });
         showToast('Chamados mesclados.');
         const reasonField = relatedMergeModal.querySelector('[data-related-merge-reason]');
         if (reasonField) reasonField.value = '';
@@ -1393,6 +1671,9 @@
                 row.hidden = !row.textContent.toLowerCase().includes(query);
             });
         }
+        if (event.target.matches('[data-audit-search]')) {
+            filterAudit();
+        }
     });
     document.addEventListener('change', (event) => {
         if (event.target.matches('[data-comment-file]')) {
@@ -1420,6 +1701,9 @@
             });
             sorted.forEach((card) => list?.appendChild(card));
             filterAttachments();
+        }
+        if (event.target.matches('[data-audit-type], [data-audit-user], [data-audit-period]')) {
+            filterAudit();
         }
     });
     document.addEventListener('dragover', (event) => {
@@ -1478,10 +1762,19 @@
             }, 'print colado');
             showToast('Print colado como anexo.');
             addActivity('attachment', 'image', 'Print colado', 'Imagem colada como anexo do chamado.', 'Anexo');
+            addAuditEvent({
+                type: 'attachment',
+                badge: 'Anexo',
+                action: 'Print colado',
+                oldValue: '-',
+                newValue: `print-colado-${stamp}.png`,
+                payload: { field: 'attachments', action: 'paste_image', name: `print-colado-${stamp}.png` },
+            });
         }
     });
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') closeDrawers();
+        if (event.key === 'Escape') closeAudit();
         if (event.key === 'Escape') closeRmmConfirm();
         if (event.key === 'Escape') closeRmmMessageModal();
         if (event.key === 'Escape') {

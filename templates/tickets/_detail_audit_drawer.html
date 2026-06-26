@@ -1,16 +1,189 @@
-<aside class="desk-audit-drawer" aria-label="Auditoria do chamado">
-    <header>
-        <h2><i data-lucide="history"></i>Auditoria completa</h2>
-        <p>Registro tecnico de quem alterou o que e quando.</p>
-    </header>
-    <div class="desk-activity-feed">
-        <div class="desk-activity-item">
-            <span class="desk-activity-icon"><i data-lucide="user-check"></i></span>
-            <div><header><strong>Sistema</strong><small>{{ ticket.created_at }}</small></header><p>Chamado registrado no Desk.</p></div>
-        </div>
-        <div class="desk-activity-item">
-            <span class="desk-activity-icon"><i data-lucide="bell"></i></span>
-            <div><header><strong>Watchers</strong><small>Preview</small></header><p>{% for watcher in watchers %}{{ watcher.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</p></div>
-        </div>
-    </div>
+<aside class="desk-audit-drawer nw-audit-drawer" data-audit-drawer hidden aria-label="Auditoria do chamado">
+    <div class="nw-audit-backdrop" data-audit-close></div>
+    <section class="nw-audit-panel" role="dialog" aria-modal="true" aria-labelledby="audit-title">
+        <header class="nw-audit-header">
+            <div>
+                <span class="nw-device-kicker">Chamado #{{ ticket.number }}</span>
+                <h2 id="audit-title"><i data-lucide="history"></i>Auditoria do chamado</h2>
+                <span class="sr-only">Auditoria completa</span>
+                <p>Registro tecnico de alteracoes, acoes e acessos deste atendimento.</p>
+            </div>
+            <div>
+                <button class="desk-btn" type="button" data-audit-export><i data-lucide="download"></i>Exportar CSV</button>
+                <button class="desk-btn" type="button" data-audit-copy><i data-lucide="copy"></i>Copiar resumo</button>
+                <button class="desk-icon-button" type="button" data-audit-close aria-label="Fechar auditoria"><i data-lucide="x"></i></button>
+            </div>
+        </header>
+
+        <section class="nw-audit-summary">
+            <article><span>Total de eventos</span><strong data-audit-total>10</strong></article>
+            <article><span>Ultima alteracao</span><strong>Hoje, 09:18</strong></article>
+            <article><span>Ultimo usuario</span><strong>Gabriel</strong></article>
+            <article><span>Origem recente</span><strong>Web - 192.168.101.47</strong></article>
+            <article class="nw-audit-summary__sensitive"><span>Acoes sensiveis</span><strong data-audit-sensitive-total>3</strong></article>
+        </section>
+
+        <section class="nw-audit-filters" aria-label="Filtros da auditoria">
+            <label class="nw-audit-search">
+                <i data-lucide="search"></i>
+                <input type="search" placeholder="Buscar usuario, campo, acao ou valor..." data-audit-search>
+            </label>
+            <label>
+                <span>Tipo</span>
+                <select data-audit-type>
+                    <option value="all">Todos</option>
+                    <option value="field">Campo alterado</option>
+                    <option value="comment">Comentario</option>
+                    <option value="attachment">Anexo</option>
+                    <option value="rmm">RMM</option>
+                    <option value="resolution">Resolucao</option>
+                    <option value="escalation">Escalonamento</option>
+                    <option value="relationship">Relacionamento</option>
+                    <option value="security">Seguranca</option>
+                </select>
+            </label>
+            <label>
+                <span>Usuario</span>
+                <select data-audit-user>
+                    <option value="all">Todos</option>
+                    <option value="Gabriel">Gabriel</option>
+                    <option value="Sistema">Sistema</option>
+                    <option value="NightOwl RMM">NightOwl RMM</option>
+                    <option value="{{ ticket.requester }}">{{ ticket.requester }}</option>
+                </select>
+            </label>
+            <label>
+                <span>Periodo</span>
+                <select data-audit-period>
+                    <option value="today">Hoje</option>
+                    <option value="7d">7 dias</option>
+                    <option value="30d">30 dias</option>
+                    <option value="all">Tudo</option>
+                </select>
+            </label>
+            <button class="desk-btn" type="button" data-audit-clear>Limpar filtros</button>
+        </section>
+
+        <section class="nw-audit-table" data-audit-list>
+            <article class="nw-audit-row" data-audit-row data-audit-type="field" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 08:51</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge">Campo alterado</span>
+                    <span>Atualizou status</span>
+                    <span class="nw-audit-diff"><em>Novo</em><i>-></i><b>Em atendimento</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden>
+                    <p>ID interno: AUD-1042-001 - Request ID: req-ticket-detail-8f1 - User agent: NightOwl Desk Web</p>
+                    <pre>{"field":"status","old":"Novo","new":"Em atendimento","source":"ticket_detail"}</pre>
+                </div>
+            </article>
+            <article class="nw-audit-row" data-audit-row data-audit-type="field" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 08:53</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge">Campo alterado</span>
+                    <span>Alterou responsavel</span>
+                    <span class="nw-audit-diff"><em>Sem responsavel</em><i>-></i><b>Gabriel</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><p>ID interno: AUD-1042-002</p><pre>{"field":"assignee","old":null,"new":"Gabriel"}</pre></div>
+            </article>
+            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="field" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="sensitive">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 08:55</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge nw-audit-badge--warning">Atencao</span>
+                    <span>Alterou prioridade</span>
+                    <span class="nw-audit-diff"><em>Alta</em><i>-></i><b>Critica</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><p>Justificativa: solicitante VIP e risco de fechamento do mes.</p><pre>{"field":"priority","old":"Alta","new":"Critica","sensitive":true}</pre></div>
+            </article>
+            <article class="nw-audit-row" data-audit-row data-audit-type="comment" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 08:58</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge">Comentario</span>
+                    <span>Criou comentario interno</span>
+                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>Vou validar inventario...</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><pre>{"field":"comments","visibility":"internal","body":"Vou validar inventario e console do antivirus."}</pre></div>
+            </article>
+            <article class="nw-audit-row" data-audit-row data-audit-type="attachment" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 09:02</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge">Anexo</span>
+                    <span>Marcou evidencia principal</span>
+                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>evidencia-{{ ticket.number }}.png</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><pre>{"field":"primary_evidence","new":"evidencia-{{ ticket.number }}.png"}</pre></div>
+            </article>
+            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="rmm" data-audit-user="NightOwl RMM" data-audit-period="today" data-audit-severity="sensitive">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 09:05</time>
+                    <strong>NightOwl RMM</strong>
+                    <span class="nw-audit-badge nw-audit-badge--sensitive">Sensivel</span>
+                    <span>Executou script</span>
+                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>Verificar antivirus</b></span>
+                    <small>Agent - RMM</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><p>Request ID: rmm-job-7721 - Endpoint: {{ device_context.hostname|default:"FIN-012" }}</p><pre>{"field":"endpoint_action","new":"Verificar antivirus","channel":"RMM"}</pre></div>
+            </article>
+            <article class="nw-audit-row" data-audit-row data-audit-type="relationship" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 09:08</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge">Relacionamento</span>
+                    <span>Vinculou chamado</span>
+                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>#1043</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><pre>{"field":"related_ticket","new":"#1043","reason":"mesmo endpoint"}</pre></div>
+            </article>
+            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="relationship" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="sensitive">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 09:11</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge nw-audit-badge--sensitive">Sensivel</span>
+                    <span>Mesclou chamados</span>
+                    <span class="nw-audit-diff"><em>#1046</em><i>-></i><b>#1045 principal</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><pre>{"action":"merge","secondary":["#1046"],"primary":"#1045"}</pre></div>
+            </article>
+            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="resolution" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="sensitive">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 09:15</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge nw-audit-badge--sensitive">Resolucao</span>
+                    <span>Resolveu chamado</span>
+                    <span class="nw-audit-diff"><em>Em atendimento</em><i>-></i><b>Resolvido</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><pre>{"field":"status","old":"Em atendimento","new":"Resolvido","resolution_summary":"Credenciais validadas."}</pre></div>
+            </article>
+            <article class="nw-audit-row" data-audit-row data-audit-type="escalation" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+                <button type="button" data-audit-toggle>
+                    <time>Hoje, 09:18</time>
+                    <strong>Gabriel</strong>
+                    <span class="nw-audit-badge">Escalonamento</span>
+                    <span>Escalou chamado</span>
+                    <span class="nw-audit-diff"><em>Fila N1</em><i>-></i><b>Infraestrutura</b></span>
+                    <small>192.168.101.47 - Web</small>
+                </button>
+                <div class="nw-audit-event-details" hidden><pre>{"field":"queue","old":"N1","new":"Infraestrutura"}</pre></div>
+            </article>
+        </section>
+
+        <section class="nw-audit-empty" data-audit-empty hidden>
+            <i data-lucide="search-x"></i>
+            <strong>Nenhum evento encontrado com os filtros atuais.</strong>
+            <p>Ajuste a busca ou limpe os filtros para ver mais registros.</p>
+        </section>
+    </section>
 </aside>
