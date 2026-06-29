@@ -19,7 +19,8 @@
     --text-disabled: #64748b;
     --nw-text-primary: #F3F6FB;
     --nw-text-secondary: #C7D2E0;
-    --nw-text-muted: #94A3B8;
+    --nw-text-muted: #8FA0B8;
+    --nw-text-subtle: #7F8FA6;
     --nw-text-label: #9FB2CC;
     --nw-text-placeholder: #74849A;
     --nw-table-heading: #AFC4E8;
@@ -42,7 +43,8 @@ body.page-tickets {
     --border-active: #263241;
     --nw-text-primary: #F3F6FB;
     --nw-text-secondary: #C7D2E0;
-    --nw-text-muted: #94A3B8;
+    --nw-text-muted: #8FA0B8;
+    --nw-text-subtle: #7F8FA6;
     --nw-text-label: #9FB2CC;
     --nw-text-placeholder: #74849A;
     --nw-table-heading: #AFC4E8;
@@ -57,6 +59,51 @@ body.page-tickets {
 body.page-tickets input::placeholder,
 body.page-tickets textarea::placeholder {
     color: var(--nw-text-placeholder);
+}
+
+body.page-tickets .brand-subtitle,
+body.page-tickets .nav-group-label,
+body.page-tickets .topbar-kicker,
+body.page-tickets .desk-ticket-meta,
+body.page-tickets .desk-ticket-side,
+body.page-tickets .desk-mini-flag,
+body.page-tickets .desk-muted,
+body.page-tickets .desk-presence-indicator,
+body.page-tickets .desk-detail-tabbar a,
+body.page-tickets .nw-quick-draft-line {
+    color: var(--nw-text-muted);
+}
+
+body.page-tickets .desk-row-preview p,
+body.page-tickets .desk-row-preview small,
+body.page-tickets .desk-comment span,
+body.page-tickets .desk-comment p,
+body.page-tickets .desk-empty,
+body.page-tickets .desk-empty p,
+body.page-tickets .nw-related-item--selectable > button small,
+body.page-tickets .nw-related-preview-empty p,
+body.page-tickets .nw-related-preview-shell p,
+body.page-tickets .nw-settings-empty,
+body.page-tickets .nw-settings-coming-soon span,
+body.page-tickets .nw-quick-autocomplete span,
+body.page-tickets .nw-quick-autocomplete p {
+    color: var(--nw-text-subtle);
+}
+
+body.page-tickets .desk-ticket-title,
+body.page-tickets .desk-editable-title h1,
+body.page-tickets .desk-row-preview strong,
+body.page-tickets .desk-form-panel h2,
+body.page-tickets .desk-panel h2,
+body.page-tickets .nw-related-preview-shell h3,
+body.page-tickets .nw-related-preview-shell dd,
+body.page-tickets .nw-settings-card dd,
+body.page-tickets .nw-review-summary dd,
+body.page-tickets .nw-quick-autocomplete strong,
+body.page-tickets .nw-quick-ticket-summary strong,
+body.page-tickets .nw-quick-ticket-endpoint strong,
+body.page-tickets .nw-quick-ticket-related strong {
+    color: var(--nw-text-primary);
 }
 
 body.page-access-inventory {
@@ -18884,4 +18931,140 @@ body.page-tickets .nw-quick-draft-line {
     body.page-tickets .nw-new-ticket-actions {
         justify-content: flex-start;
     }
+}
+
+/* NightOwl typography hierarchy: keep operational values strong while metadata stays quieter. */
+body.page-tickets .page-title,
+body.page-tickets .desk-ticket-title,
+body.page-tickets .desk-editable-title h1,
+body.page-tickets .desk-row-preview strong,
+body.page-tickets .desk-form-panel h2,
+body.page-tickets .desk-panel h2,
+body.page-tickets .desk-activity-item strong,
+body.page-tickets .desk-sla-progress strong,
+body.page-tickets .desk-sla-gauge strong,
+body.page-tickets .nw-category-name,
+body.page-tickets .nw-category-table td,
+body.page-tickets .nw-settings-header h1,
+body.page-tickets .nw-settings-panel h2,
+body.page-tickets .nw-settings-side-card h2,
+body.page-tickets .nw-settings-card h3,
+body.page-tickets .nw-settings-card dd,
+body.page-tickets .nw-settings-side-card dd,
+body.page-tickets .nw-related-preview-shell h3,
+body.page-tickets .nw-related-preview-shell dd,
+body.page-tickets .nw-related-modal__dialog h3,
+body.page-tickets .nw-review-summary dd,
+body.page-tickets .nw-ticket-drawer-header h2,
+body.page-tickets .nw-quick-autocomplete strong,
+body.page-tickets .nw-quick-ticket-summary strong,
+body.page-tickets .nw-quick-ticket-endpoint strong,
+body.page-tickets .nw-quick-ticket-related strong {
+    color: var(--nw-text-primary);
+}
+
+body.page-tickets .page-subtitle,
+body.page-tickets .desk-btn,
+body.page-tickets .nav-item,
+body.page-tickets .topbar-status,
+body.page-tickets .nw-settings-header p,
+body.page-tickets .nw-settings-panel p,
+body.page-tickets .nw-settings-side-card span,
+body.page-tickets .nw-settings-card p,
+body.page-tickets .nw-settings-tabs button,
+body.page-tickets .nw-settings-filters button,
+body.page-tickets .nw-settings-card footer button,
+body.page-tickets .nw-settings-quick-actions button,
+body.page-tickets .nw-category-action-menu button,
+body.page-tickets .nw-settings-confirm p,
+body.page-tickets .nw-record-type-panel p,
+body.page-tickets .nw-record-type-strip button,
+body.page-tickets .nw-ticket-drawer-header p,
+body.page-tickets .nw-quick-ticket-endpoint footer button,
+body.page-tickets .nw-quick-ticket-related button,
+body.page-tickets .nw-quick-attachments button,
+body.page-tickets .nw-quick-draft-line button,
+body.page-tickets .nw-quick-draft-line a,
+body.page-tickets .nw-quick-ticket-template-list button {
+    color: var(--nw-text-secondary);
+}
+
+body.page-tickets .brand-subtitle,
+body.page-tickets .nav-group-label,
+body.page-tickets .topbar-kicker,
+body.page-tickets .desk-ticket-meta,
+body.page-tickets .desk-ticket-side,
+body.page-tickets .desk-mini-flag,
+body.page-tickets .desk-muted,
+body.page-tickets .desk-presence-indicator,
+body.page-tickets .desk-detail-tabbar a,
+body.page-tickets .desk-row-preview p,
+body.page-tickets .desk-row-preview small,
+body.page-tickets .desk-comment span,
+body.page-tickets .desk-comment p,
+body.page-tickets .desk-sla-progress span,
+body.page-tickets .desk-sla-gauge span,
+body.page-tickets .nw-related-total,
+body.page-tickets .nw-related-item--selectable > button small,
+body.page-tickets .nw-related-preview-empty p,
+body.page-tickets .nw-related-preview-shell p,
+body.page-tickets .nw-related-modal__dialog p,
+body.page-tickets .nw-related-search,
+body.page-tickets .nw-settings-empty,
+body.page-tickets .nw-settings-coming-soon span,
+body.page-tickets .nw-quick-autocomplete span,
+body.page-tickets .nw-quick-autocomplete p,
+body.page-tickets .nw-quick-ticket-summary small,
+body.page-tickets .nw-quick-ticket-endpoint small,
+body.page-tickets .nw-quick-ticket-endpoint p,
+body.page-tickets .nw-quick-ticket-related span,
+body.page-tickets .nw-quick-ticket-related p,
+body.page-tickets .nw-quick-draft-line {
+    color: var(--nw-text-muted);
+}
+
+body.page-tickets .nw-category-table th,
+body.page-tickets .nw-settings-card dt,
+body.page-tickets .nw-settings-side-card dt,
+body.page-tickets .nw-settings-drawer-form span,
+body.page-tickets .nw-related-preview-shell dt,
+body.page-tickets .nw-related-modal__dialog header span,
+body.page-tickets .nw-related-modal__dialog .nw-form-field > span,
+body.page-tickets .nw-auto-context-card dt,
+body.page-tickets .nw-review-summary dt,
+body.page-tickets .nw-quick-ticket-field > span {
+    color: var(--nw-text-label);
+}
+
+body.page-tickets .nw-category-table th {
+    color: var(--nw-table-heading);
+}
+
+body.page-tickets .desk-detail-tabbar a.active,
+body.page-tickets .desk-detail-tabbar a:hover,
+body.page-tickets .nav-item:hover,
+body.page-tickets .nav-item.active,
+body.page-tickets .desk-btn:hover,
+body.page-tickets .nw-settings-tabs button.is-active,
+body.page-tickets .nw-settings-tabs button:hover,
+body.page-tickets .nw-settings-filters button.is-active,
+body.page-tickets .nw-settings-filters button:hover,
+body.page-tickets .nw-settings-card footer button:hover,
+body.page-tickets .nw-settings-quick-actions button:hover,
+body.page-tickets .nw-category-actions button:hover,
+body.page-tickets .nw-category-action-menu button:hover,
+body.page-tickets .nw-record-type-strip button:hover,
+body.page-tickets .nw-record-type-strip button.is-active,
+body.page-tickets .nw-ticket-drawer-header .desk-icon-button[data-quick-ticket-close]:hover,
+body.page-tickets .nw-quick-ticket-endpoint footer button:hover,
+body.page-tickets .nw-quick-ticket-related button:hover,
+body.page-tickets .nw-quick-attachments button:hover,
+body.page-tickets .nw-quick-draft-line a:hover,
+body.page-tickets .nw-quick-ticket-template-list button:hover {
+    color: var(--nw-text-primary);
+}
+
+body.page-tickets .desk-btn-primary,
+body.page-tickets .desk-btn-primary:hover {
+    color: #04100b;
 }
