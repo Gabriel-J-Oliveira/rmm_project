@@ -137,86 +137,145 @@
             </section>
 
             <section class="nw-settings-panel" data-settings-panel="queues" hidden>
-                <header class="nw-settings-panel__header">
-                    <div><span class="nw-config-kicker">Roteamento e capacidade</span><h2>Filas</h2><p>Controle responsáveis, membros, capacidade e tipos de atendimento aceitos.</p></div>
-                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="queue"><i data-lucide="users-round"></i>Nova fila</button>
+                <header class="nw-settings-panel__header nw-category-admin-header">
+                    <div>
+                        <h2>Filas</h2>
+                        <p>Gerencie times respons&aacute;veis, capacidade e roteamento dos chamados.</p>
+                    </div>
+                    <div class="nw-category-metrics" aria-label="Resumo das filas">
+                        <span>5 filas</span>
+                        <span>5 ativas</span>
+                        <span>1 recebe GMUD</span>
+                        <span>1 sobrecarregada</span>
+                    </div>
                 </header>
+                <div class="nw-category-alert-strip">
+                    <i data-lucide="info"></i>
+                    <span>1 fila sem respons&aacute;vel &middot; N1 pr&oacute;ximo da capacidade &middot; CAB recebe mudan&ccedil;as</span>
+                </div>
                 <div class="nw-settings-toolbar">
                     <label><i data-lucide="search"></i><input type="search" placeholder="Buscar fila..." data-settings-search="queues"></label>
                     <div class="nw-settings-filters" data-settings-filter-group="queues">
                         <button class="is-active" type="button" data-filter="all">Todas</button>
                         <button type="button" data-filter="active">Ativas</button>
+                        <button type="button" data-filter="inactive">Inativas</button>
                         <button type="button" data-filter="gmud">Com GMUD</button>
                         <button type="button" data-filter="overloaded">Sobrecarregadas</button>
-                        <button type="button" data-filter="no-owner">Sem responsável</button>
+                        <button type="button" data-filter="no-owner">Sem respons&aacute;vel</button>
                     </div>
+                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="queue"><i data-lucide="users-round"></i>Nova fila</button>
                 </div>
-                <div class="nw-settings-grid" data-settings-list="queues">
-                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="N1 - Atendimento" data-status="active" data-filter-tags="active">
-                        <header><span class="nw-config-icon"><i data-lucide="headphones"></i></span><div><h3>N1 - Atendimento</h3><p>Triagem, atendimento comum e solicitações de baixa complexidade.</p></div><em class="nw-config-badge is-active">Ativa</em></header>
-                        <dl><div><dt>Responsável</dt><dd>Gabriel</dd></div><div><dt>Membros</dt><dd>6</dd></div><div><dt>Horário</dt><dd>Comercial</dd></div><div><dt>Abertos</dt><dd>42 / 60</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="N2 - Infraestrutura" data-status="active" data-filter-tags="active overloaded">
-                        <header><span class="nw-config-icon is-info"><i data-lucide="server"></i></span><div><h3>N2 - Infraestrutura</h3><p>Rede, servidores, endpoint, RMM e incidentes técnicos.</p></div><em class="nw-config-badge is-warning">Sobrecarregada</em></header>
-                        <dl><div><dt>Responsável</dt><dd>Renan</dd></div><div><dt>Membros</dt><dd>4</dd></div><div><dt>Horário</dt><dd>Comercial + plantão</dd></div><div><dt>Abertos</dt><dd>38 / 35</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="Segurança" data-status="active" data-filter-tags="active">
-                        <header><span class="nw-config-icon is-warning"><i data-lucide="shield-alert"></i></span><div><h3>Segurança</h3><p>Risco, antivírus, acessos suspeitos e resposta a incidente.</p></div><em class="nw-config-badge is-active">Ativa</em></header>
-                        <dl><div><dt>Responsável</dt><dd>Ana</dd></div><div><dt>Membros</dt><dd>3</dd></div><div><dt>Horário</dt><dd>24x7</dd></div><div><dt>Abertos</dt><dd>9 / 20</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="Sistemas" data-status="active" data-filter-tags="active no-owner">
-                        <header><span class="nw-config-icon"><i data-lucide="panels-top-left"></i></span><div><h3>Sistemas</h3><p>ERP, integrações internas, regras e aplicações corporativas.</p></div><em class="nw-config-badge is-warning">Sem responsável</em></header>
-                        <dl><div><dt>Responsável</dt><dd>-</dd></div><div><dt>Membros</dt><dd>2</dd></div><div><dt>Horário</dt><dd>Comercial</dd></div><div><dt>Abertos</dt><dd>13 / 30</dd></div><div><dt>GMUD</dt><dd>Não</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-queue-card" data-config-item data-kind="queue" data-name="CAB / Mudanças" data-status="active" data-filter-tags="active gmud">
-                        <header><span class="nw-config-icon is-purple"><i data-lucide="git-branch"></i></span><div><h3>CAB / Mudanças</h3><p>Aprovação, planejamento e acompanhamento de GMUD.</p></div><em class="nw-config-badge is-active">Ativa</em></header>
-                        <dl><div><dt>Responsável</dt><dd>Gerência TI</dd></div><div><dt>Membros</dt><dd>5</dd></div><div><dt>Horário</dt><dd>Comercial</dd></div><div><dt>Abertos</dt><dd>2 / 15</dd></div><div><dt>GMUD</dt><dd>Sim</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button">Gerenciar membros</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
+                <div class="nw-category-table-wrap">
+                    <table class="nw-category-table" data-settings-list="queues">
+                        <thead>
+                            <tr>
+                                <th data-sort>Fila</th>
+                                <th data-sort>Respons&aacute;vel</th>
+                                <th>Membros</th>
+                                <th>Hor&aacute;rio</th>
+                                <th data-sort>Capacidade</th>
+                                <th>Recebe</th>
+                                <th data-sort>Status</th>
+                                <th>A&ccedil;&otilde;es</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-config-item data-kind="queue" data-name="N1 - Atendimento" data-status="active" data-filter-tags="active overloaded" data-description="Triagem, atendimento comum e solicita&ccedil;&otilde;es de baixa complexidade.">
+                                <td><span class="nw-category-name"><i data-lucide="headphones"></i><strong data-item-title>N1 - Atendimento</strong></span></td>
+                                <td>Gabriel</td><td>4</td><td>Comercial</td><td><span class="nw-mini-badge is-warning">42/80</span></td><td><span class="nw-mini-badge">Chamados</span><span class="nw-mini-badge">RMM</span></td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="queue" data-name="N2 - Infraestrutura" data-status="active" data-filter-tags="active" data-description="Rede, servidores, endpoint, RMM e incidentes t&eacute;cnicos.">
+                                <td><span class="nw-category-name"><i data-lucide="server"></i><strong data-item-title>N2 - Infraestrutura</strong></span></td>
+                                <td>Infraestrutura</td><td>3</td><td>Comercial</td><td><span class="nw-mini-badge is-ok">18/50</span></td><td><span class="nw-mini-badge">Chamados</span><span class="nw-mini-badge">RMM</span></td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="queue" data-name="Seguran&ccedil;a" data-status="active" data-filter-tags="active" data-description="Risco, antiv&iacute;rus, acessos suspeitos e resposta a incidente.">
+                                <td><span class="nw-category-name"><i data-lucide="shield-alert"></i><strong data-item-title>Seguran&ccedil;a</strong></span></td>
+                                <td>Seguran&ccedil;a</td><td>2</td><td>Comercial</td><td><span class="nw-mini-badge is-ok">6/30</span></td><td><span class="nw-mini-badge">Seguran&ccedil;a</span><span class="nw-mini-badge">RMM</span></td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="queue" data-name="Sistemas" data-status="active" data-filter-tags="active no-owner" data-description="ERP, integra&ccedil;&otilde;es internas, regras e aplica&ccedil;&otilde;es corporativas.">
+                                <td><span class="nw-category-name"><i data-lucide="panels-top-left"></i><strong data-item-title>Sistemas</strong></span></td>
+                                <td><span class="nw-mini-badge is-warning">Sem respons&aacute;vel</span></td><td>2</td><td>Comercial</td><td><span class="nw-mini-badge is-ok">9/40</span></td><td><span class="nw-mini-badge">Sistemas</span></td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="queue" data-name="CAB / Mudan&ccedil;as" data-status="active" data-filter-tags="active gmud" data-description="Aprova&ccedil;&atilde;o, planejamento e acompanhamento de GMUD.">
+                                <td><span class="nw-category-name"><i data-lucide="git-branch"></i><strong data-item-title>CAB / Mudan&ccedil;as</strong></span></td>
+                                <td>Coordena&ccedil;&atilde;o</td><td>5</td><td>Sob demanda</td><td><span class="nw-mini-badge is-ok">6/20</span></td><td><span class="nw-mini-badge is-purple">GMUD</span></td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
                 <div class="nw-settings-empty" data-settings-empty="queues" hidden><strong>Nenhuma fila encontrada.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
             </section>
 
             <section class="nw-settings-panel" data-settings-panel="slas" hidden>
-                <header class="nw-settings-panel__header">
-                    <div><span class="nw-config-kicker">Compromissos de atendimento</span><h2>SLAs</h2><p>Configure primeira resposta, resolução, calendário e pausa por prioridade.</p></div>
-                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="sla"><i data-lucide="timer-reset"></i>Nova regra de SLA</button>
+                <header class="nw-settings-panel__header nw-category-admin-header">
+                    <div>
+                        <h2>SLAs</h2>
+                        <p>Gerencie tempos de resposta, resolu&ccedil;&atilde;o e calend&aacute;rios de atendimento.</p>
+                    </div>
+                    <div class="nw-category-metrics" aria-label="Resumo dos SLAs">
+                        <span>4 SLAs</span>
+                        <span>4 ativos</span>
+                        <span>1 cr&iacute;tico</span>
+                        <span>1 24x7</span>
+                    </div>
                 </header>
+                <div class="nw-category-alert-strip">
+                    <i data-lucide="info"></i>
+                    <span>Cr&iacute;tica usa calend&aacute;rio 24x7 &middot; 1 SLA sem categoria vinculada</span>
+                </div>
                 <div class="nw-settings-toolbar">
                     <label><i data-lucide="search"></i><input type="search" placeholder="Buscar SLA..." data-settings-search="slas"></label>
                     <div class="nw-settings-filters" data-settings-filter-group="slas">
                         <button class="is-active" type="button" data-filter="all">Todos</button>
                         <button type="button" data-filter="active">Ativos</button>
                         <button type="button" data-filter="24x7">24x7</button>
-                        <button type="button" data-filter="business">Horário comercial</button>
-                        <button type="button" data-filter="critical">Críticos</button>
+                        <button type="button" data-filter="business">Hor&aacute;rio comercial</button>
+                        <button type="button" data-filter="critical">Cr&iacute;ticos</button>
                     </div>
+                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="sla"><i data-lucide="timer-reset"></i>Nova regra de SLA</button>
                 </div>
-                <div class="nw-settings-list" data-settings-list="slas">
-                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Baixa" data-status="active" data-filter-tags="active business">
-                        <header><span class="nw-config-icon"><i data-lucide="leaf"></i></span><div><h3>Baixa</h3><p>8h primeira resposta / 72h resolução</p></div><em class="nw-config-badge is-active">Ativa</em></header>
-                        <dl><div><dt>Calendário</dt><dd>Horário comercial</dd></div><div><dt>Pausa</dt><dd>Aguardando solicitante</dd></div><div><dt>Categorias</dt><dd>Hardware, Impressora</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Normal" data-status="active" data-filter-tags="active business">
-                        <header><span class="nw-config-icon"><i data-lucide="circle-dot"></i></span><div><h3>Normal</h3><p>4h primeira resposta / 24h resolução</p></div><em class="nw-config-badge is-active">Ativa</em></header>
-                        <dl><div><dt>Calendário</dt><dd>Horário comercial</dd></div><div><dt>Pausa</dt><dd>Solicitante e fornecedor</dd></div><div><dt>Categorias</dt><dd>Acesso, Software, E-mail</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Alta" data-status="active" data-filter-tags="active 24x7">
-                        <header><span class="nw-config-icon is-warning"><i data-lucide="alert-triangle"></i></span><div><h3>Alta</h3><p>1h primeira resposta / 8h resolução</p></div><em class="nw-config-badge is-active">Ativa</em></header>
-                        <dl><div><dt>Calendário</dt><dd>24x7</dd></div><div><dt>Pausa</dt><dd>Aguardando solicitante</dd></div><div><dt>Categorias</dt><dd>Rede, Segurança, RMM</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
-                    <article class="nw-settings-card nw-sla-rule" data-config-item data-kind="sla" data-name="Crítica" data-status="active" data-filter-tags="active 24x7 critical">
-                        <header><span class="nw-config-icon is-danger"><i data-lucide="siren"></i></span><div><h3>Crítica</h3><p>15min primeira resposta / 4h resolução</p></div><em class="nw-config-badge is-danger">Crítica</em></header>
-                        <dl><div><dt>Calendário</dt><dd>24x7</dd></div><div><dt>Pausa</dt><dd>Aprovação controlada</dd></div><div><dt>Categorias</dt><dd>Segurança, RMM / Alerta</dd></div></dl>
-                        <footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>
-                    </article>
+                <div class="nw-category-table-wrap">
+                    <table class="nw-category-table" data-settings-list="slas">
+                        <thead>
+                            <tr>
+                                <th data-sort>SLA</th>
+                                <th>Primeira resposta</th>
+                                <th>Resolu&ccedil;&atilde;o</th>
+                                <th data-sort>Calend&aacute;rio</th>
+                                <th>Pausa</th>
+                                <th>Categorias</th>
+                                <th data-sort>Status</th>
+                                <th>A&ccedil;&otilde;es</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-config-item data-kind="sla" data-name="Baixa" data-status="active" data-filter-tags="active business" data-description="Regra de baixa prioridade para atendimento em hor&aacute;rio comercial.">
+                                <td><span class="nw-category-name"><i data-lucide="leaf"></i><strong data-item-title>Baixa</strong></span></td>
+                                <td>8h</td><td>72h</td><td><span class="nw-mini-badge">Comercial</span></td><td>Sim</td><td>3 categorias</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar SLA"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar SLA"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar SLA"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver categorias vinculadas" aria-label="Ver categorias vinculadas"><i data-lucide="folder-tree"></i>Ver categorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="sla" data-name="Normal" data-status="active" data-filter-tags="active business" data-description="Regra padr&atilde;o de atendimento para maior parte das solicita&ccedil;&otilde;es.">
+                                <td><span class="nw-category-name"><i data-lucide="circle-dot"></i><strong data-item-title>Normal</strong></span></td>
+                                <td>4h</td><td>24h</td><td><span class="nw-mini-badge">Comercial</span></td><td>Sim</td><td>5 categorias</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar SLA"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar SLA"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar SLA"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver categorias vinculadas" aria-label="Ver categorias vinculadas"><i data-lucide="folder-tree"></i>Ver categorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="sla" data-name="Alta" data-status="active" data-filter-tags="active business" data-description="Regra acelerada para incidentes de maior impacto.">
+                                <td><span class="nw-category-name"><i data-lucide="alert-triangle"></i><strong data-item-title>Alta</strong></span></td>
+                                <td>1h</td><td>8h</td><td><span class="nw-mini-badge">Comercial</span></td><td>Sim</td><td>4 categorias</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar SLA"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar SLA"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar SLA"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver categorias vinculadas" aria-label="Ver categorias vinculadas"><i data-lucide="folder-tree"></i>Ver categorias</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="sla" data-name="Cr&iacute;tica" data-status="active" data-filter-tags="active 24x7 critical" data-description="Regra cr&iacute;tica com calend&aacute;rio cont&iacute;nuo para interrup&ccedil;&otilde;es sens&iacute;veis.">
+                                <td><span class="nw-category-name"><i data-lucide="siren"></i><strong data-item-title>Cr&iacute;tica</strong></span></td>
+                                <td>15min</td><td>4h</td><td><span class="nw-mini-badge is-danger">24x7</span></td><td>N&atilde;o</td><td>2 categorias</td><td><em class="nw-config-badge is-active">Ativa</em></td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar SLA"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar SLA"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais a&ccedil;&otilde;es" aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar SLA"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver categorias vinculadas" aria-label="Ver categorias vinculadas"><i data-lucide="folder-tree"></i>Ver categorias</button></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
                 <div class="nw-settings-empty" data-settings-empty="slas" hidden><strong>Nenhuma regra de SLA encontrada.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
             </section>
@@ -353,7 +412,7 @@
 
     function setTab(tab) {
         activeTab = tab;
-        root.querySelector(".nw-settings-layout")?.classList.toggle("is-categories", tab === "categories");
+        root.querySelector(".nw-settings-layout")?.classList.toggle("is-categories", ["categories", "queues", "slas"].includes(tab));
         all("[data-settings-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.settingsTab === tab));
         all("[data-settings-panel]").forEach((panel) => {
             panel.hidden = panel.dataset.settingsPanel !== tab;
@@ -458,15 +517,19 @@
                 row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="folder"></i><strong data-item-title>${name}</strong></span></td><td><span class="nw-mini-badge">Incidente</span></td><td>N1 - Atendimento</td><td><span class="nw-mini-badge is-ok">Normal</span></td><td>Normal</td><td>0</td><td>0</td><td><em class="nw-config-badge is-active">Ativa</em></td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar categoria"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar categoria"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar categoria"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver subcategorias" aria-label="Ver subcategorias"><i data-lucide="list-tree"></i>Ver subcategorias</button></div></td>`;
                 list?.querySelector("tbody")?.prepend(row);
             } else {
-                const article = document.createElement("article");
-                article.className = `nw-settings-card ${kind === "queue" ? "nw-queue-card" : "nw-sla-rule"}`;
-                article.dataset.configItem = "";
-                article.dataset.kind = kind;
-                article.dataset.name = name;
-                article.dataset.status = "active";
-                article.dataset.filterTags = "active with-sla";
-                article.innerHTML = `<header><span class="nw-config-icon"><i data-lucide="${kind === "sla" ? "timer" : "users-round"}"></i></span><div><h3>${name}</h3><p>${form.querySelector("[data-drawer-description]").value || "Item criado no mock local."}</p></div><em class="nw-config-badge is-active">Ativa</em></header><dl><div><dt>Status</dt><dd>Ativa</dd></div><div><dt>Origem</dt><dd>Mock local</dd></div><div><dt>Uso</dt><dd>0 chamados</dd></div></dl><footer><button type="button" data-settings-edit>Editar</button><button type="button" data-settings-duplicate>Duplicar</button><button type="button" data-settings-toggle>Desativar</button></footer>`;
-                list?.prepend(article);
+                const row = document.createElement("tr");
+                row.dataset.configItem = "";
+                row.dataset.kind = kind;
+                row.dataset.name = name;
+                row.dataset.status = "active";
+                row.dataset.filterTags = kind === "sla" ? "active business" : "active";
+                row.dataset.description = form.querySelector("[data-drawer-description]").value || "Item criado no mock local.";
+                if (kind === "queue") {
+                    row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="users-round"></i><strong data-item-title>${name}</strong></span></td><td>Gabriel</td><td>0</td><td>Comercial</td><td><span class="nw-mini-badge is-ok">0/40</span></td><td><span class="nw-mini-badge">Chamados</span></td><td><em class="nw-config-badge is-active">Ativa</em></td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>`;
+                } else {
+                    row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="timer"></i><strong data-item-title>${name}</strong></span></td><td>4h</td><td>24h</td><td><span class="nw-mini-badge">Comercial</span></td><td>Sim</td><td>0 categorias</td><td><em class="nw-config-badge is-active">Ativa</em></td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar SLA"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar SLA"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar SLA"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver categorias vinculadas" aria-label="Ver categorias vinculadas"><i data-lucide="folder-tree"></i>Ver categorias</button></div></td>`;
+                }
+                list?.querySelector("tbody")?.prepend(row);
             }
         }
         closeDrawer();
@@ -498,8 +561,9 @@
         const toggle = pendingToggle.querySelector("[data-settings-toggle]");
         if (toggle) {
             const label = inactive ? "Ativar" : "Desativar";
+            const singular = labels[activeTab]?.singular || "item";
             toggle.title = label;
-            toggle.setAttribute("aria-label", `${label} categoria`);
+            toggle.setAttribute("aria-label", `${label} ${singular}`);
             if (toggle.closest(".nw-category-action-menu")) {
                 toggle.innerHTML = `<i data-lucide="power"></i>${label}`;
             } else if (!toggle.closest(".nw-category-actions")) {
