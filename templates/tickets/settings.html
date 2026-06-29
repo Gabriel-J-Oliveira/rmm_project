@@ -25,7 +25,7 @@
         <button class="is-active" type="button" data-settings-tab="categories">Categorias <span data-tab-count="categories">9</span></button>
         <button type="button" data-settings-tab="queues">Filas <span data-tab-count="queues">5</span></button>
         <button type="button" data-settings-tab="slas">SLAs <span data-tab-count="slas">4</span></button>
-        <button type="button" data-settings-tab="templates">Templates <span>Em breve</span></button>
+        <button type="button" data-settings-tab="templates">Templates <span data-tab-count="templates">8</span></button>
         <button type="button" data-settings-tab="gmud">GMUD <span>Em breve</span></button>
         <button type="button" data-settings-tab="automations">Automações <span>Em breve</span></button>
     </nav>
@@ -280,7 +280,97 @@
                 <div class="nw-settings-empty" data-settings-empty="slas" hidden><strong>Nenhuma regra de SLA encontrada.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
             </section>
 
-            <section class="nw-settings-panel" data-settings-panel="templates" hidden>{% include "tickets/_settings_coming_soon.html" with title="Templates" text="Modelos de comentário, descrição e resolução entrarão em uma fase dedicada." %}</section>
+            <section class="nw-settings-panel" data-settings-panel="templates" hidden>
+                <header class="nw-settings-panel__header nw-category-admin-header">
+                    <div>
+                        <h2>Templates</h2>
+                        <p>Padronize textos, checklists e modelos usados no atendimento.</p>
+                    </div>
+                    <div class="nw-category-metrics" aria-label="Resumo dos templates">
+                        <span>8 templates</span>
+                        <span>7 ativos</span>
+                        <span>3 de resolução</span>
+                        <span>1 GMUD</span>
+                    </div>
+                </header>
+                <div class="nw-category-alert-strip">
+                    <i data-lucide="info"></i>
+                    <span>2 categorias sem template padrão · 1 template de GMUD sem aprovador definido</span>
+                </div>
+                <div class="nw-settings-toolbar">
+                    <label><i data-lucide="search"></i><input type="search" placeholder="Buscar template..." data-settings-search="templates"></label>
+                    <div class="nw-settings-filters" data-settings-filter-group="templates">
+                        <button class="is-active" type="button" data-filter="all">Todos</button>
+                        <button type="button" data-filter="active">Ativos</button>
+                        <button type="button" data-filter="inactive">Inativos</button>
+                        <button type="button" data-filter="opening">Abertura</button>
+                        <button type="button" data-filter="comment">Comentário</button>
+                        <button type="button" data-filter="resolution">Resolução</button>
+                        <button type="button" data-filter="escalation">Escalação</button>
+                        <button type="button" data-filter="gmud">GMUD</button>
+                    </div>
+                    <button class="desk-btn desk-btn-primary" type="button" data-settings-open="template"><i data-lucide="file-plus-2"></i>Novo template</button>
+                </div>
+                <div class="nw-category-table-wrap">
+                    <table class="nw-category-table" data-settings-list="templates">
+                        <thead>
+                            <tr>
+                                <th data-sort>Template</th>
+                                <th>Tipo</th>
+                                <th>Categoria</th>
+                                <th>Aplicação</th>
+                                <th>Variáveis</th>
+                                <th data-sort>Status</th>
+                                <th data-sort>Última alteração</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-config-item data-kind="template" data-name="Problema de acesso" data-status="active" data-filter-tags="active opening" data-template-type="opening" data-description="Modelo de abertura para falhas de acesso, MFA, VPN e sistemas." data-template-content="Olá &#123;&#123;solicitante&#125;&#125;, registramos o chamado &#123;&#123;titulo&#125;&#125; na categoria &#123;&#123;categoria&#125;&#125; e estamos analisando o caso.">
+                                <td><span class="nw-category-name"><i data-lucide="file-text"></i><strong data-item-title>Problema de acesso</strong></span></td>
+                                <td><span class="nw-mini-badge">Abertura</span></td><td>Acesso</td><td>Novo chamado</td><td>4</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>Hoje</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="Alerta RMM antivírus" data-status="active" data-filter-tags="active opening" data-template-type="opening" data-description="Modelo para registros vindos do RMM com alerta de proteção." data-template-content="Alerta RMM recebido no endpoint &#123;&#123;endpoint&#125;&#125;. Prioridade sugerida: &#123;&#123;prioridade&#125;&#125;. Técnico responsável: &#123;&#123;tecnico&#125;&#125;.">
+                                <td><span class="nw-category-name"><i data-lucide="activity"></i><strong data-item-title>Alerta RMM antivírus</strong></span></td>
+                                <td><span class="nw-mini-badge">Abertura</span></td><td>RMM / Alerta</td><td>Novo registro avançado</td><td>5</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>Hoje</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="Resposta ao solicitante" data-status="active" data-filter-tags="active comment" data-template-type="comment" data-description="Resposta pública curta para atualizar o solicitante." data-template-content="Olá &#123;&#123;solicitante&#125;&#125;, estamos verificando o chamado &#123;&#123;titulo&#125;&#125; e retornaremos com uma atualização em breve.">
+                                <td><span class="nw-category-name"><i data-lucide="message-square"></i><strong data-item-title>Resposta ao solicitante</strong></span></td>
+                                <td><span class="nw-mini-badge">Comentário</span></td><td>Geral</td><td>Composer</td><td>3</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>Ontem</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="Comentário interno de triagem" data-status="active" data-filter-tags="active comment" data-template-type="comment_internal" data-description="Checklist textual interno para primeira análise." data-template-content="Triagem interna: validar contexto de &#123;&#123;categoria&#125;&#125;, endpoint &#123;&#123;endpoint&#125;&#125;, fila &#123;&#123;fila&#125;&#125; e SLA &#123;&#123;sla&#125;&#125;.">
+                                <td><span class="nw-category-name"><i data-lucide="lock-keyhole"></i><strong data-item-title>Comentário interno de triagem</strong></span></td>
+                                <td><span class="nw-mini-badge">Comentário</span></td><td>Geral</td><td>Composer interno</td><td>4</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>Ontem</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="Resolução de impressora" data-status="active" data-filter-tags="active resolution" data-template-type="resolution" data-description="Texto de encerramento para falhas de impressão." data-template-content="Solução aplicada por &#123;&#123;tecnico&#125;&#125;: serviço de impressão revisado, teste validado e solicitante orientado.">
+                                <td><span class="nw-category-name"><i data-lucide="check-circle-2"></i><strong data-item-title>Resolução de impressora</strong></span></td>
+                                <td><span class="nw-mini-badge is-ok">Resolução</span></td><td>Impressora</td><td>Resolver chamado</td><td>4</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>2 dias</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="Resolução de acesso" data-status="active" data-filter-tags="active resolution" data-template-type="resolution" data-description="Encerramento para ajustes de credencial, permissão e MFA." data-template-content="Acesso normalizado para &#123;&#123;solicitante&#125;&#125;. Credenciais e permissões revisadas em &#123;&#123;data&#125;&#125;.">
+                                <td><span class="nw-category-name"><i data-lucide="shield-check"></i><strong data-item-title>Resolução de acesso</strong></span></td>
+                                <td><span class="nw-mini-badge is-ok">Resolução</span></td><td>Acesso</td><td>Resolver chamado</td><td>5</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>3 dias</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="Escalação para Infra" data-status="active" data-filter-tags="active escalation" data-template-type="escalation" data-description="Motivo padrão para encaminhar casos de rede e infraestrutura." data-template-content="Escalar para &#123;&#123;fila&#125;&#125;. Motivo: necessária validação técnica de infraestrutura no endpoint &#123;&#123;endpoint&#125;&#125;.">
+                                <td><span class="nw-category-name"><i data-lucide="git-branch"></i><strong data-item-title>Escalação para Infra</strong></span></td>
+                                <td><span class="nw-mini-badge is-warning">Escalação</span></td><td>Rede/Infra</td><td>Escalar chamado</td><td>3</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>4 dias</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                            <tr data-config-item data-kind="template" data-name="GMUD padrão" data-status="active" data-filter-tags="active gmud" data-template-type="gmud" data-description="Modelo base para mudanças com plano, rollback e comunicação." data-template-content="GMUD solicitada por &#123;&#123;solicitante&#125;&#125;. Plano de execução, rollback e comunicação devem ser revisados pelo CAB.">
+                                <td><span class="nw-category-name"><i data-lucide="clipboard-check"></i><strong data-item-title>GMUD padrão</strong></span></td>
+                                <td><span class="nw-mini-badge is-purple">GMUD</span></td><td>GMUD / Mudança</td><td>Novo registro avançado</td><td>6</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>1 semana</td>
+                                <td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="nw-settings-empty" data-settings-empty="templates" hidden><strong>Nenhum template encontrado.</strong><span>Ajuste a busca ou limpe os filtros.</span></div>
+            </section>
             <section class="nw-settings-panel" data-settings-panel="gmud" hidden>{% include "tickets/_settings_coming_soon.html" with title="GMUD" text="Aprovações, janelas e políticas de mudança serão configuradas aqui." %}</section>
             <section class="nw-settings-panel" data-settings-panel="automations" hidden>{% include "tickets/_settings_coming_soon.html" with title="Automações" text="Regras operacionais, gatilhos e integrações serão refinados depois." %}</section>
         </main>
@@ -367,6 +457,45 @@
                     <label><span>Filas vinculadas</span><input name="queues" value="N1 - Atendimento"></label>
                     <label><span>Status</span><select name="status"><option>Ativa</option><option>Inativa</option></select></label>
                 </div>
+                <div class="nw-settings-template-fields" data-template-fields hidden>
+                    <div class="nw-settings-drawer-grid">
+                        <label><span>Tipo</span><select name="template_type" data-template-type><option value="opening">Abertura</option><option value="comment">Comentário</option><option value="comment_internal">Comentário interno</option><option value="resolution">Resolução</option><option value="escalation">Escalação</option><option value="gmud">GMUD</option></select></label>
+                        <label><span>Categoria vinculada</span><select name="template_category"><option>Geral</option><option>Acesso</option><option>RMM / Alerta</option><option>Impressora</option><option>Rede/Infra</option><option>GMUD / Mudança</option></select></label>
+                        <label><span>Aplicação</span><select name="template_application"><option>Novo chamado rápido</option><option>Novo registro avançado</option><option>Composer</option><option>Resolver chamado</option><option>Escalar chamado</option><option>GMUD</option></select></label>
+                        <label><span>Status</span><select name="template_status"><option>Ativo</option><option>Inativo</option></select></label>
+                    </div>
+                    <label class="nw-template-editor"><span>Conteúdo do template</span><textarea name="template_content" rows="8" data-template-content placeholder="Olá &#123;&#123;solicitante&#125;&#125;, registramos o chamado &#123;&#123;titulo&#125;&#125;..."></textarea></label>
+                    <div class="nw-template-variable-bank" data-template-variable-bank>
+                        <span>Variáveis disponíveis</span>
+                        <button type="button" data-template-variable="&#123;&#123;solicitante&#125;&#125;">&#123;&#123;solicitante&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;titulo&#125;&#125;">&#123;&#123;titulo&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;categoria&#125;&#125;">&#123;&#123;categoria&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;prioridade&#125;&#125;">&#123;&#123;prioridade&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;endpoint&#125;&#125;">&#123;&#123;endpoint&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;tecnico&#125;&#125;">&#123;&#123;tecnico&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;fila&#125;&#125;">&#123;&#123;fila&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;data&#125;&#125;">&#123;&#123;data&#125;&#125;</button>
+                        <button type="button" data-template-variable="&#123;&#123;sla&#125;&#125;">&#123;&#123;sla&#125;&#125;</button>
+                    </div>
+                    <div class="nw-settings-drawer-grid nw-template-special" data-template-special="resolution" hidden>
+                        <label><span>Causa raiz padrão</span><input name="root_cause" placeholder="Configuração incorreta"></label>
+                        <label><span>Checklist de encerramento</span><input name="resolution_checklist" placeholder="Testado, solicitante informado, evidência registrada"></label>
+                    </div>
+                    <div class="nw-settings-drawer-grid nw-template-special" data-template-special="escalation" hidden>
+                        <label><span>Fila sugerida</span><input name="suggested_queue" placeholder="N2 - Infraestrutura"></label>
+                        <label><span>Motivo padrão</span><input name="default_reason" placeholder="Necessária validação técnica especializada"></label>
+                    </div>
+                    <div class="nw-settings-drawer-grid nw-template-special" data-template-special="gmud" hidden>
+                        <label><span>Plano de execução padrão</span><input name="execution_plan" placeholder="Executar janela, validar serviço e comunicar partes"></label>
+                        <label><span>Plano de rollback padrão</span><input name="rollback_plan" placeholder="Reverter alteração e restaurar estado anterior"></label>
+                        <label><span>Comunicação padrão</span><input name="communication_plan" placeholder="Avisar solicitantes antes e depois da janela"></label>
+                        <label><span>Aprovação necessária</span><select name="approval_required"><option>Sim</option><option>Não</option></select></label>
+                    </div>
+                    <div class="nw-template-preview-box">
+                        <span>Prévia</span>
+                        <p data-template-preview-output>Selecione um template ou escreva o conteúdo para visualizar a prévia.</p>
+                    </div>
+                </div>
             </form>
             <footer>
                 <button class="desk-btn" type="button" data-settings-close>Cancelar</button>
@@ -399,7 +528,20 @@
         categories: { singular: "categoria", open: "category", action: "Nova categoria" },
         queues: { singular: "fila", open: "queue", action: "Nova fila" },
         slas: { singular: "regra de SLA", open: "sla", action: "Nova regra de SLA" },
+        templates: { singular: "template", open: "template", action: "Novo template" },
     };
+    const templatePreviewData = {
+        solicitante: "Mariana Souza",
+        titulo: "Bitdefender ausente em FIN-012",
+        categoria: "RMM / Alerta",
+        prioridade: "Alta",
+        endpoint: "FIN-012",
+        tecnico: "Gabriel",
+        fila: "N2 - Infraestrutura",
+        data: "hoje",
+        sla: "1h",
+    };
+    const templateToken = (key) => "{" + "{" + key + "}" + "}";
 
     function showToast(message) {
         const toast = root.querySelector("[data-settings-toast]");
@@ -412,7 +554,7 @@
 
     function setTab(tab) {
         activeTab = tab;
-        root.querySelector(".nw-settings-layout")?.classList.toggle("is-categories", ["categories", "queues", "slas"].includes(tab));
+        root.querySelector(".nw-settings-layout")?.classList.toggle("is-categories", ["categories", "queues", "slas", "templates"].includes(tab));
         all("[data-settings-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.settingsTab === tab));
         all("[data-settings-panel]").forEach((panel) => {
             panel.hidden = panel.dataset.settingsPanel !== tab;
@@ -458,6 +600,25 @@
         });
     }
 
+    function renderTemplatePreview(value) {
+        return (value || "").replace(/\{\{(\w+)\}\}/g, (_, key) => templatePreviewData[key] || templateToken(key));
+    }
+
+    function updateTemplatePreview() {
+        const textarea = root.querySelector("[data-template-content]");
+        const output = root.querySelector("[data-template-preview-output]");
+        if (!output) return;
+        const value = textarea?.value || "Selecione um template ou escreva o conteúdo para visualizar a prévia.";
+        output.textContent = renderTemplatePreview(value);
+    }
+
+    function updateTemplateSpecialFields() {
+        const type = root.querySelector("[data-template-type]")?.value || "";
+        all("[data-template-special]", root).forEach((section) => {
+            section.hidden = section.dataset.templateSpecial !== type;
+        });
+    }
+
     function openDrawer(kind, source = null) {
         const drawer = root.querySelector("[data-settings-drawer]");
         const form = root.querySelector("[data-settings-form]");
@@ -471,6 +632,7 @@
             category: ["Categoria", "Configure categoria, fila padrão, SLA e subcategorias."],
             queue: ["Fila", "Configure membros, capacidade e tipos de atendimento aceitos."],
             sla: ["SLA", "Configure prazos, calendário, pausas e vínculos."],
+            template: ["Template", "Configure texto, variáveis e aplicação do template."],
         }[kind] || ["Configuração", "Configure este item."];
         root.querySelector("[data-drawer-kicker]").textContent = source ? "Editar " + copy[0] : "Nova " + copy[0].toLowerCase();
         root.querySelector("[data-drawer-title]").textContent = source ? "Editar " + title : "Nova " + copy[0].toLowerCase();
@@ -478,6 +640,15 @@
         root.querySelector("[data-category-fields]").hidden = kind !== "category";
         root.querySelector("[data-queue-fields]").hidden = kind !== "queue";
         root.querySelector("[data-sla-fields]").hidden = kind !== "sla";
+        root.querySelector("[data-template-fields]").hidden = kind !== "template";
+        if (kind === "template") {
+            const textarea = root.querySelector("[data-template-content]");
+            const type = root.querySelector("[data-template-type]");
+            if (textarea) textarea.value = source?.dataset.templateContent || `Olá ${templateToken("solicitante")}, registramos o chamado ${templateToken("titulo")} e estamos analisando o caso.`;
+            if (type) type.value = source?.dataset.templateType || "opening";
+            updateTemplateSpecialFields();
+            updateTemplatePreview();
+        }
         drawer.hidden = false;
         drawer.dataset.editingName = title;
         setTimeout(() => form.querySelector("[data-drawer-name]")?.focus(), 0);
@@ -499,12 +670,16 @@
         if (item) {
             item.dataset.name = name;
             item.dataset.description = form.querySelector("[data-drawer-description]").value || item.dataset.description || "";
+            if (kind === "template") {
+                item.dataset.templateContent = root.querySelector("[data-template-content]")?.value || "";
+                item.dataset.templateType = root.querySelector("[data-template-type]")?.value || "opening";
+            }
             const titleNode = item.querySelector("[data-item-title], h3");
             const descriptionNode = item.querySelector("[data-item-description], p");
             if (titleNode) titleNode.textContent = name;
             if (descriptionNode) descriptionNode.textContent = form.querySelector("[data-drawer-description]").value || descriptionNode.textContent;
         } else {
-            const target = kind === "category" ? "categories" : kind === "queue" ? "queues" : "slas";
+            const target = kind === "category" ? "categories" : kind === "queue" ? "queues" : kind === "sla" ? "slas" : "templates";
             const list = root.querySelector(`[data-settings-list="${target}"]`);
             if (kind === "category") {
                 const row = document.createElement("tr");
@@ -526,8 +701,15 @@
                 row.dataset.description = form.querySelector("[data-drawer-description]").value || "Item criado no mock local.";
                 if (kind === "queue") {
                     row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="users-round"></i><strong data-item-title>${name}</strong></span></td><td>Gabriel</td><td>0</td><td>Comercial</td><td><span class="nw-mini-badge is-ok">0/40</span></td><td><span class="nw-mini-badge">Chamados</span></td><td><em class="nw-config-badge is-active">Ativa</em></td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar fila"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar fila"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar fila"><i data-lucide="power"></i>Desativar</button><button type="button" title="Gerenciar membros" aria-label="Gerenciar membros"><i data-lucide="users-round"></i>Gerenciar membros</button></div></td>`;
-                } else {
+                } else if (kind === "sla") {
                     row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="timer"></i><strong data-item-title>${name}</strong></span></td><td>4h</td><td>24h</td><td><span class="nw-mini-badge">Comercial</span></td><td>Sim</td><td>0 categorias</td><td><em class="nw-config-badge is-active">Ativa</em></td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar SLA"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar SLA"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar SLA"><i data-lucide="power"></i>Desativar</button><button type="button" title="Ver categorias vinculadas" aria-label="Ver categorias vinculadas"><i data-lucide="folder-tree"></i>Ver categorias</button></div></td>`;
+                } else {
+                    const type = root.querySelector("[data-template-type]")?.value || "opening";
+                    const typeLabels = { opening: "Abertura", comment: "Comentário", comment_internal: "Comentário", resolution: "Resolução", escalation: "Escalação", gmud: "GMUD" };
+                    row.dataset.templateType = type;
+                    row.dataset.templateContent = root.querySelector("[data-template-content]")?.value || "";
+                    row.dataset.filterTags = "active " + (type === "comment_internal" ? "comment" : type);
+                    row.innerHTML = `<td><span class="nw-category-name"><i data-lucide="file-text"></i><strong data-item-title>${name}</strong></span></td><td><span class="nw-mini-badge">${typeLabels[type] || "Template"}</span></td><td>Geral</td><td>Composer</td><td>0</td><td><em class="nw-config-badge is-active">Ativo</em></td><td>Agora</td><td class="nw-category-actions"><button type="button" data-settings-edit title="Editar" aria-label="Editar template"><i data-lucide="pencil"></i></button><button type="button" data-settings-duplicate title="Duplicar" aria-label="Duplicar template"><i data-lucide="copy"></i></button><button type="button" data-category-menu title="Mais ações" aria-label="Mais ações"><i data-lucide="more-horizontal"></i></button><div class="nw-category-action-menu" hidden><button type="button" data-settings-toggle title="Desativar" aria-label="Desativar template"><i data-lucide="power"></i>Desativar</button><button type="button" data-template-preview title="Pré-visualizar" aria-label="Pré-visualizar template"><i data-lucide="eye"></i>Pré-visualizar</button><button type="button" title="Vincular categoria" aria-label="Vincular categoria"><i data-lucide="link"></i>Vincular categoria</button></div></td>`;
                 }
                 list?.querySelector("tbody")?.prepend(row);
             }
@@ -606,8 +788,42 @@
         const duplicate = event.target.closest("[data-settings-duplicate]");
         if (duplicate) {
             const item = duplicate.closest("[data-config-item]");
+            if (item.dataset.kind === "template") {
+                const clone = item.cloneNode(true);
+                const copyName = item.dataset.name + " copia";
+                clone.dataset.name = copyName;
+                clone.querySelector("[data-item-title]").textContent = copyName;
+                item.closest("tbody")?.prepend(clone);
+                closeCategoryMenus();
+                applyFilters("templates");
+                showToast("Template duplicado.");
+                window.lucide?.createIcons?.();
+                return;
+            }
             openDrawer(item.dataset.kind, item);
             root.querySelector("[data-drawer-name]").value = item.dataset.name + " cópia";
+        }
+        const preview = event.target.closest("[data-template-preview]");
+        if (preview) {
+            const item = preview.closest("[data-config-item]");
+            if (item) {
+                openDrawer("template", item);
+                showToast("Prévia carregada.");
+            }
+        }
+        const variable = event.target.closest("[data-template-variable]");
+        if (variable) {
+            const textarea = root.querySelector("[data-template-content]");
+            const token = variable.dataset.templateVariable || "";
+            if (textarea) {
+                const start = textarea.selectionStart || textarea.value.length;
+                const end = textarea.selectionEnd || textarea.value.length;
+                textarea.value = textarea.value.slice(0, start) + token + textarea.value.slice(end);
+                textarea.focus();
+                textarea.setSelectionRange(start + token.length, start + token.length);
+                updateTemplatePreview();
+                showToast("Variável inserida.");
+            }
         }
         const toggle = event.target.closest("[data-settings-toggle]");
         if (toggle) askToggle(toggle.closest("[data-config-item]"));
@@ -621,6 +837,14 @@
     root.addEventListener("input", (event) => {
         const search = event.target.closest("[data-settings-search]");
         if (search) applyFilters(search.dataset.settingsSearch);
+        if (event.target.closest("[data-template-content]")) updateTemplatePreview();
+    });
+
+    root.addEventListener("change", (event) => {
+        if (event.target.closest("[data-template-type]")) {
+            updateTemplateSpecialFields();
+            updateTemplatePreview();
+        }
     });
 
     document.addEventListener("keydown", (event) => {
@@ -632,7 +856,7 @@
         }
     });
 
-    ["categories", "queues", "slas"].forEach(applyFilters);
+    ["categories", "queues", "slas", "templates"].forEach(applyFilters);
 })();
 </script>
 {% endblock %}

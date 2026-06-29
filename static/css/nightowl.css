@@ -17640,6 +17640,86 @@ body.page-tickets .nw-category-action-menu button:hover {
     color: var(--nw-text-primary);
 }
 
+body.page-tickets .nw-settings-template-fields {
+    display: grid;
+    gap: 12px;
+}
+
+body.page-tickets .nw-settings-template-fields[hidden],
+body.page-tickets .nw-template-special[hidden] {
+    display: none !important;
+}
+
+body.page-tickets .nw-template-editor {
+    display: grid;
+    gap: 7px;
+}
+
+body.page-tickets .nw-template-editor textarea {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace);
+    line-height: 1.55;
+    min-height: 180px;
+    resize: vertical;
+}
+
+body.page-tickets .nw-template-variable-bank {
+    background: rgba(15, 23, 42, 0.52);
+    border: 1px solid rgba(51, 65, 85, 0.72);
+    border-radius: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding: 10px;
+}
+
+body.page-tickets .nw-template-variable-bank span {
+    color: var(--nw-text-label);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    width: 100%;
+}
+
+body.page-tickets .nw-template-variable-bank button {
+    background: rgba(8, 13, 23, 0.86);
+    border: 1px solid rgba(51, 65, 85, 0.78);
+    border-radius: 999px;
+    color: var(--nw-text-secondary);
+    cursor: pointer;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace);
+    font-size: 11px;
+    padding: 6px 8px;
+}
+
+body.page-tickets .nw-template-variable-bank button:hover {
+    border-color: rgba(34, 197, 94, 0.38);
+    color: var(--nw-text-primary);
+}
+
+body.page-tickets .nw-template-preview-box {
+    background: rgba(8, 13, 23, 0.74);
+    border: 1px solid rgba(51, 65, 85, 0.76);
+    border-radius: 12px;
+    display: grid;
+    gap: 8px;
+    padding: 11px;
+}
+
+body.page-tickets .nw-template-preview-box span {
+    color: var(--nw-text-label);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+body.page-tickets .nw-template-preview-box p {
+    color: var(--nw-text-primary);
+    line-height: 1.55;
+    margin: 0;
+}
+
 body.page-tickets .nw-settings-card {
     background: rgba(8, 13, 23, 0.92);
     border: 1px solid rgba(51, 65, 85, 0.78);
