@@ -21730,14 +21730,34 @@ body.desk-portal-drawer-open {
 /* Requester center layout final override */
 body.page-ticket-portal .content {
     box-sizing: border-box;
-    margin: 0 auto;
-    max-width: 1600px;
-    padding-left: clamp(18px, 2vw, 32px);
-    padding-right: clamp(18px, 2vw, 32px);
-    width: 100%;
+    margin: 0;
+    max-width: none !important;
+    padding: 20px !important;
+    width: 100% !important;
 }
 
 body.page-ticket-portal .main-area {
+    width: 100%;
+}
+
+body.page-ticket-portal .topbar {
+    padding-left: 20px;
+    padding-right: 20px;
+}
+
+.requester-page {
+    box-sizing: border-box;
+    display: grid;
+    gap: 14px;
+    margin-left: calc(50% - 50vw + 20px);
+    margin-right: 0;
+    max-width: none;
+    width: calc(100vw - 40px);
+}
+
+.requester-top {
+    display: grid;
+    gap: 14px;
     width: 100%;
 }
 
@@ -21746,7 +21766,8 @@ body.page-ticket-portal .main-area {
 .desk-portal-metrics,
 .desk-portal-toolbar,
 .desk-portal-filters,
-.desk-portal-center-grid {
+.desk-portal-center-grid,
+.requester-workspace {
     width: 100%;
 }
 
@@ -21831,8 +21852,17 @@ body.page-ticket-portal .main-area {
 
 @media (max-width: 640px) {
     body.page-ticket-portal .content {
+        padding: 14px !important;
+    }
+
+    body.page-ticket-portal .topbar {
         padding-left: 14px;
         padding-right: 14px;
+    }
+
+    .requester-page {
+        margin-left: calc(50% - 50vw + 14px);
+        width: calc(100vw - 28px);
     }
 
     .desk-portal-metrics,

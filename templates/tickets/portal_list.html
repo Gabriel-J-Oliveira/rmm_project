@@ -11,6 +11,8 @@
 {% endblock %}
 
 {% block content %}
+<div class="requester-page">
+<section class="requester-top">
 <section class="desk-portal-header">
     <div>
         <span class="desk-portal-header__icon"><i data-lucide="messages-square"></i></span>
@@ -131,8 +133,9 @@
     <a class="{% if filters.status == 'resolved' %}is-active{% endif %}" href="?status=resolved{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Resolvidos <span>{{ counts.resolved }}</span></a>
     <a class="{% if filters.status == 'closed' %}is-active{% endif %}" href="?status=closed{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Encerrados <span>{{ counts.closed }}</span></a>
 </nav>
+</section>
 
-<div class="desk-portal-center-grid">
+<section class="requester-workspace desk-portal-center-grid">
     <section class="desk-portal-list" aria-label="Lista de chamados">
         {% for ticket in tickets %}
         <article
@@ -236,6 +239,7 @@
         </div>
         {% endif %}
     </aside>
+</section>
 </div>
 {% endblock %}
 
