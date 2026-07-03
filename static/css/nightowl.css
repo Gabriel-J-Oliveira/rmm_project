@@ -21726,3 +21726,128 @@ body.desk-portal-drawer-open {
         position: static;
     }
 }
+
+/* Requester center layout final override */
+body.page-ticket-portal .content {
+    box-sizing: border-box;
+    margin: 0 auto;
+    max-width: 1600px;
+    padding-left: clamp(18px, 2vw, 32px);
+    padding-right: clamp(18px, 2vw, 32px);
+    width: 100%;
+}
+
+body.page-ticket-portal .main-area {
+    width: 100%;
+}
+
+.desk-portal-breadcrumbs,
+.desk-portal-header,
+.desk-portal-metrics,
+.desk-portal-toolbar,
+.desk-portal-filters,
+.desk-portal-center-grid {
+    width: 100%;
+}
+
+.desk-portal-header {
+    box-sizing: border-box;
+}
+
+.desk-portal-metrics {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    margin-bottom: 14px;
+}
+
+.desk-portal-toolbar {
+    align-items: stretch;
+    background: #0d1117;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    box-sizing: border-box;
+    padding: 12px;
+}
+
+.desk-portal-toolbar label {
+    flex: 1 1 520px;
+    min-width: min(100%, 360px);
+}
+
+.desk-portal-filters {
+    background: #0d1117;
+    border: 1px solid #1f2937;
+    border-radius: 14px;
+    box-sizing: border-box;
+    padding: 12px;
+}
+
+.desk-portal-center-grid {
+    align-items: start;
+    display: grid;
+    gap: clamp(16px, 1.5vw, 24px);
+    grid-template-columns: minmax(0, 1fr) minmax(380px, 420px);
+}
+
+.desk-portal-list {
+    min-width: 0;
+}
+
+.desk-portal-preview {
+    min-width: 0;
+    position: sticky;
+    top: 18px;
+}
+
+.desk-portal-preview > .desk-portal-card {
+    border-color: #263241;
+    min-height: 460px;
+}
+
+.desk-portal-preview .desk-portal-status {
+    justify-self: start;
+}
+
+.desk-portal-preview-comment {
+    margin-top: 2px;
+}
+
+.desk-portal-ticket.is-selected {
+    box-shadow: inset 3px 0 0 #22c55e;
+}
+
+@media (max-width: 1180px) {
+    .desk-portal-center-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .desk-portal-preview {
+        position: static;
+    }
+
+    .desk-portal-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    body.page-ticket-portal .content {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+
+    .desk-portal-metrics,
+    .desk-portal-center-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .desk-portal-toolbar,
+    .desk-portal-filters,
+    .desk-portal-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .desk-portal-toolbar label {
+        min-width: 0;
+    }
+}
