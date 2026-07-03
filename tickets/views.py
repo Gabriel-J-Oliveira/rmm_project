@@ -1301,6 +1301,8 @@ def _portal_actor(request, ticket):
     user = getattr(request, 'user', None)
     if user and user.is_authenticated:
         return user.get_full_name() or user.get_username() or user.email or 'Solicitante'
+    if ticket is None:
+        return 'Solicitante'
     return ticket.requester_name or ticket.requester_email or 'Solicitante'
 
 
@@ -1408,7 +1410,11 @@ def _portal_category_options():
 
 def _portal_list_context(request, requester_mode=False):
     queryset, requester_email = _portal_queryset(request)
-    tickets = _portal_filter_queryset(queryset, request).order_by('-updated_at')[:100]
+    tickets = list(_portal_filter_queryset(queryset, request).order_by('-updated_at')[:100])
+    for ticket in tickets:
+        ticket.portal_last_public_comment = (
+            ticket.comments.filter(visibility=TicketComment.VISIBILITY_PUBLIC).order_by('-created_at').first()
+        )
     counts_queryset = queryset
     route_context = _portal_route_context(request, requester_mode=requester_mode)
     context = {
@@ -1417,6 +1423,7 @@ def _portal_list_context(request, requester_mode=False):
         'portal_missing_email': request.user.is_authenticated and not requester_email,
         'portal_categories': _portal_category_options(),
         'tickets': tickets,
+        'preview_ticket': tickets[0] if tickets else None,
         'filters': {
             'q': request.GET.get('q', ''),
             'status': request.GET.get('status', 'all'),

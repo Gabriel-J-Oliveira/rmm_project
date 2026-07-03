@@ -14,12 +14,13 @@ As rotas antigas `/portal/chamados/` continuam existindo como base autenticada/c
 
 Nesta fase, a regra e simples:
 
-- `gabriel.oliveira` e superusuarios podem acessar a area tecnica.
+- Usuarios `is_staff` ou `is_superuser` acessam a area tecnica.
+- Usuarios configurados em `NIGHTOWL_TECHNICAL_USERNAMES` tambem acessam a area tecnica, mesmo quando necessario manter uma allowlist temporaria.
 - Usuarios autenticados comuns sao redirecionados para `/meus-chamados/` ao tentar acessar areas internas tecnicas.
 - A lista e o detalhe do solicitante filtram chamados por `request.user.email`.
 - Se o usuario nao tiver e-mail cadastrado, a central mostra estado vazio/aviso e nao exibe chamados de terceiros.
 
-A lista de tecnicos permitidos pode ser ajustada via:
+A allowlist temporaria pode ser ajustada via:
 
 ```env
 NIGHTOWL_TECHNICAL_USERNAMES=gabriel.oliveira
@@ -80,7 +81,7 @@ O portal nao exibe:
 
 - Nao ha token publico nesta fase.
 - Nao ha RBAC avancado por grupo AD nesta fase.
-- A permissao tecnica e uma allowlist simples.
+- A permissao tecnica usa `is_staff`/`is_superuser` e uma allowlist simples.
 - O usuario precisa ter e-mail preenchido para ver seus chamados.
 
 ## Proximos passos

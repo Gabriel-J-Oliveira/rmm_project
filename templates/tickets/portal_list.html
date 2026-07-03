@@ -131,34 +131,84 @@
     <a class="{% if filters.status == 'closed' %}is-active{% endif %}" href="?status=closed{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Encerrados <span>{{ counts.closed }}</span></a>
 </nav>
 
-<section class="desk-portal-list" aria-label="Lista de chamados">
-    {% for ticket in tickets %}
-    <article class="desk-portal-ticket {% if ticket.status == 'waiting_user' %}is-waiting-user{% endif %}">
-        <div class="desk-portal-ticket__main">
-            <span class="desk-portal-code">#{{ ticket.number }}</span>
-            <h2>{{ ticket.title }}</h2>
-            <p>{{ ticket.description|truncatechars:130 }}</p>
-            <div class="desk-portal-meta">
-                <span><i data-lucide="folder"></i>{% if ticket.category %}{{ ticket.category.name }}{% else %}Sem categoria{% endif %}</span>
-                <span><i data-lucide="calendar-plus"></i>{{ ticket.created_at|date:"d/m/Y H:i" }}</span>
-                <span><i data-lucide="refresh-cw"></i>{{ ticket.updated_at|date:"d/m/Y H:i" }}</span>
-                <span><i data-lucide="users"></i>{{ ticket.assigned_to|default:ticket.queue|default:"Equipe de atendimento" }}</span>
+<div class="desk-portal-center-grid">
+    <section class="desk-portal-list" aria-label="Lista de chamados">
+        {% for ticket in tickets %}
+        <article
+            class="desk-portal-ticket {% if forloop.first %}is-selected{% endif %} {% if ticket.status == 'waiting_user' %}is-waiting-user{% endif %}"
+            tabindex="0"
+            role="button"
+            data-portal-preview
+            data-preview-number="#{{ ticket.number }}"
+            data-preview-title="{{ ticket.title }}"
+            data-preview-status="{{ ticket.get_status_display }}"
+            data-preview-status-key="{{ ticket.status }}"
+            data-preview-category="{% if ticket.category %}{{ ticket.category.name }}{% else %}Sem categoria{% endif %}"
+            data-preview-description="{{ ticket.description|truncatechars:220 }}"
+            data-preview-updated="{{ ticket.updated_at|date:'d/m/Y H:i' }}"
+            data-preview-team="{{ ticket.assigned_to|default:ticket.queue|default:'Equipe de atendimento' }}"
+            data-preview-comment="{% if ticket.portal_last_public_comment %}{{ ticket.portal_last_public_comment.body|truncatechars:180 }}{% else %}Nenhum comentario publico ainda.{% endif %}"
+            data-preview-url="{% url portal_detail_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}"
+        >
+            <div class="desk-portal-ticket__main">
+                <span class="desk-portal-code">#{{ ticket.number }}</span>
+                <h2>{{ ticket.title }}</h2>
+                <p>{{ ticket.description|truncatechars:130 }}</p>
+                <div class="desk-portal-meta">
+                    <span><i data-lucide="folder"></i>{% if ticket.category %}{{ ticket.category.name }}{% else %}Sem categoria{% endif %}</span>
+                    <span><i data-lucide="calendar-plus"></i>{{ ticket.created_at|date:"d/m/Y H:i" }}</span>
+                    <span><i data-lucide="refresh-cw"></i>{{ ticket.updated_at|date:"d/m/Y H:i" }}</span>
+                    <span><i data-lucide="users"></i>{{ ticket.assigned_to|default:ticket.queue|default:"Equipe de atendimento" }}</span>
+                </div>
             </div>
+            <div class="desk-portal-ticket__side">
+                <span class="desk-portal-status status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
+                {% if ticket.status == 'waiting_user' %}<span class="desk-portal-waiting"><i data-lucide="reply"></i>Aguardando voce</span>{% endif %}
+                <a class="desk-portal-action" href="{% url portal_detail_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Ver chamado</a>
+            </div>
+        </article>
+        {% empty %}
+        <article class="desk-portal-empty">
+            <i data-lucide="inbox"></i>
+            <h2>Nenhum chamado encontrado</h2>
+            <p>Nao encontramos chamados para sua conta e filtros atuais.</p>
+        </article>
+        {% endfor %}
+    </section>
+
+    <aside class="desk-portal-preview" aria-label="Previa do chamado">
+        {% if preview_ticket %}
+        <div class="desk-portal-card">
+            <span class="desk-portal-code" data-preview-target="number">#{{ preview_ticket.number }}</span>
+            <h2 data-preview-target="title">{{ preview_ticket.title }}</h2>
+            <span class="desk-portal-status status-{{ preview_ticket.status }}" data-preview-target="status">{{ preview_ticket.get_status_display }}</span>
+            <dl>
+                <dt>Categoria</dt>
+                <dd data-preview-target="category">{% if preview_ticket.category %}{{ preview_ticket.category.name }}{% else %}Sem categoria{% endif %}</dd>
+                <dt>Equipe</dt>
+                <dd data-preview-target="team">{{ preview_ticket.assigned_to|default:preview_ticket.queue|default:"Equipe de atendimento" }}</dd>
+                <dt>Ultima atualizacao</dt>
+                <dd data-preview-target="updated">{{ preview_ticket.updated_at|date:"d/m/Y H:i" }}</dd>
+            </dl>
+            <section>
+                <small>Descricao</small>
+                <p data-preview-target="description">{{ preview_ticket.description|truncatechars:220 }}</p>
+            </section>
+            <section>
+                <small>Ultimo comentario publico</small>
+                <p data-preview-target="comment">{% if preview_ticket.portal_last_public_comment %}{{ preview_ticket.portal_last_public_comment.body|truncatechars:180 }}{% else %}Nenhum comentario publico ainda.{% endif %}</p>
+            </section>
+            <a class="desk-portal-action" data-preview-target="url" href="{% url portal_detail_url_name preview_ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Abrir consulta</a>
         </div>
-        <div class="desk-portal-ticket__side">
-            <span class="desk-portal-status status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
-            {% if ticket.status == 'waiting_user' %}<span class="desk-portal-waiting"><i data-lucide="reply"></i>Aguardando voce</span>{% endif %}
-            <a class="desk-portal-action" href="{% url portal_detail_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Ver chamado</a>
+        {% else %}
+        <div class="desk-portal-card desk-portal-preview-empty">
+            <i data-lucide="panel-right"></i>
+            <h2>Selecione um chamado</h2>
+            <p>Quando houver chamados, a previa exibira status, resumo e ultimo comentario publico.</p>
         </div>
-    </article>
-    {% empty %}
-    <article class="desk-portal-empty">
-        <i data-lucide="inbox"></i>
-        <h2>Nenhum chamado encontrado</h2>
-        <p>Nao encontramos chamados para sua conta e filtros atuais.</p>
-    </article>
-    {% endfor %}
-</section>
+        {% endif %}
+    </aside>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -166,22 +216,63 @@
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const drawer = document.querySelector('[data-requester-ticket-drawer]');
-    if (!drawer) return;
-    const openers = document.querySelectorAll('[data-requester-open-ticket]');
-    const closers = drawer.querySelectorAll('[data-requester-close-ticket]');
-    const setOpen = function (open) {
-        drawer.hidden = !open;
-        drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
-        document.body.classList.toggle('desk-portal-drawer-open', open);
-        if (open) {
-            const first = drawer.querySelector('input, textarea, select, button');
-            if (first) first.focus();
-        }
+    if (drawer) {
+        const openers = document.querySelectorAll('[data-requester-open-ticket]');
+        const closers = drawer.querySelectorAll('[data-requester-close-ticket]');
+        const setOpen = function (open) {
+            drawer.hidden = !open;
+            drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+            document.body.classList.toggle('desk-portal-drawer-open', open);
+            if (open) {
+                const first = drawer.querySelector('input, textarea, select, button');
+                if (first) first.focus();
+            }
+        };
+        openers.forEach(function (button) { button.addEventListener('click', function () { setOpen(true); }); });
+        closers.forEach(function (button) { button.addEventListener('click', function () { setOpen(false); }); });
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && !drawer.hidden) setOpen(false);
+        });
+    }
+
+    const previewItems = document.querySelectorAll('[data-portal-preview]');
+    const previewTargets = {
+        number: document.querySelector('[data-preview-target="number"]'),
+        title: document.querySelector('[data-preview-target="title"]'),
+        status: document.querySelector('[data-preview-target="status"]'),
+        category: document.querySelector('[data-preview-target="category"]'),
+        team: document.querySelector('[data-preview-target="team"]'),
+        updated: document.querySelector('[data-preview-target="updated"]'),
+        description: document.querySelector('[data-preview-target="description"]'),
+        comment: document.querySelector('[data-preview-target="comment"]'),
+        url: document.querySelector('[data-preview-target="url"]')
     };
-    openers.forEach(function (button) { button.addEventListener('click', function () { setOpen(true); }); });
-    closers.forEach(function (button) { button.addEventListener('click', function () { setOpen(false); }); });
-    document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape' && !drawer.hidden) setOpen(false);
+    const updatePreview = function (item) {
+        if (!previewTargets.title) return;
+        previewItems.forEach(function (row) { row.classList.remove('is-selected'); });
+        item.classList.add('is-selected');
+        previewTargets.number.textContent = item.dataset.previewNumber || '';
+        previewTargets.title.textContent = item.dataset.previewTitle || '';
+        previewTargets.status.textContent = item.dataset.previewStatus || '';
+        previewTargets.status.className = 'desk-portal-status status-' + (item.dataset.previewStatusKey || '');
+        previewTargets.category.textContent = item.dataset.previewCategory || '';
+        previewTargets.team.textContent = item.dataset.previewTeam || '';
+        previewTargets.updated.textContent = item.dataset.previewUpdated || '';
+        previewTargets.description.textContent = item.dataset.previewDescription || '';
+        previewTargets.comment.textContent = item.dataset.previewComment || '';
+        previewTargets.url.href = item.dataset.previewUrl || '#';
+    };
+    previewItems.forEach(function (item) {
+        item.addEventListener('click', function (event) {
+            if (event.target.closest('a')) return;
+            updatePreview(item);
+        });
+        item.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                updatePreview(item);
+            }
+        });
     });
 });
 </script>

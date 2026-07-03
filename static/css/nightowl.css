@@ -21404,6 +21404,93 @@ body.desk-portal-drawer-open {
     margin-top: 6px;
 }
 
+.desk-portal-center-grid {
+    align-items: start;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+}
+
+.desk-portal-ticket {
+    cursor: pointer;
+    transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.desk-portal-ticket:hover,
+.desk-portal-ticket:focus-visible,
+.desk-portal-ticket.is-selected {
+    background:
+        linear-gradient(135deg, rgba(34, 197, 94, 0.055), transparent 42%),
+        #0d1117;
+    border-color: rgba(34, 197, 94, 0.36);
+    outline: none;
+}
+
+.desk-portal-preview {
+    position: sticky;
+    top: 18px;
+}
+
+.desk-portal-preview .desk-portal-card {
+    display: grid;
+    gap: 13px;
+}
+
+.desk-portal-preview h2 {
+    font-size: 20px;
+    line-height: 1.2;
+    margin: -4px 0 0;
+}
+
+.desk-portal-preview dl {
+    background: #080b10;
+    border: 1px solid #263241;
+    border-radius: 12px;
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 12px;
+}
+
+.desk-portal-preview dt,
+.desk-portal-preview small {
+    color: #7b9186;
+    display: block;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.desk-portal-preview dd {
+    color: #f8fafc;
+    font-weight: 700;
+    margin: 0 0 4px;
+}
+
+.desk-portal-preview section {
+    background: rgba(8, 11, 16, 0.62);
+    border: 1px solid rgba(38, 50, 65, 0.74);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.desk-portal-preview section p {
+    margin: 6px 0 0;
+}
+
+.desk-portal-preview-empty {
+    min-height: 260px;
+    place-items: center;
+    text-align: center;
+}
+
+.desk-portal-preview-empty svg {
+    color: #22c55e;
+    height: 30px;
+    width: 30px;
+}
+
 .desk-portal-drawer[hidden] {
     display: none;
 }
@@ -21536,6 +21623,14 @@ body.desk-portal-drawer-open {
     .desk-portal-metrics,
     .desk-portal-create-form__grid {
         grid-template-columns: 1fr;
+    }
+
+    .desk-portal-center-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .desk-portal-preview {
+        position: static;
     }
 
     .desk-portal-header__actions,
