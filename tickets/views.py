@@ -1410,20 +1410,32 @@ def _portal_category_options():
 
 def _portal_list_context(request, requester_mode=False):
     queryset, requester_email = _portal_queryset(request)
+    route_context = _portal_route_context(request, requester_mode=requester_mode)
     tickets = list(_portal_filter_queryset(queryset, request).order_by('-updated_at')[:100])
+    selected_number = str(request.GET.get('selected') or '').lstrip('#')
     for ticket in tickets:
         ticket.portal_last_public_comment = (
             ticket.comments.filter(visibility=TicketComment.VISIBILITY_PUBLIC).order_by('-created_at').first()
         )
+        ticket.portal_public_attachments = list(ticket.attachments.filter(visibility=TicketAttachment.VISIBILITY_PUBLIC).order_by('-created_at')[:5])
+        ticket.portal_attachment_summary = ', '.join(attachment.original_name for attachment in ticket.portal_public_attachments) or 'Nenhum anexo publico.'
+        ticket.portal_can_reply = ticket.status not in {Ticket.STATUS_RESOLVED, Ticket.STATUS_CLOSED, Ticket.STATUS_CANCELED}
+        ticket.portal_is_selected = bool(selected_number and selected_number == str(ticket.number))
+        ticket.portal_comment_url = reverse(route_context['portal_comment_url_name'], kwargs={'number': ticket.number})
+        if requester_email and route_context['portal_mode'] != 'requester':
+            ticket.portal_comment_url = f'{ticket.portal_comment_url}?{urlencode({"email": requester_email})}'
+    if selected_number and not any(ticket.portal_is_selected for ticket in tickets):
+        selected_number = ''
+    if not selected_number and tickets:
+        tickets[0].portal_is_selected = True
     counts_queryset = queryset
-    route_context = _portal_route_context(request, requester_mode=requester_mode)
     context = {
         'active_nav': 'ticket_portal',
         'requester_email': requester_email,
         'portal_missing_email': request.user.is_authenticated and not requester_email,
         'portal_categories': _portal_category_options(),
         'tickets': tickets,
-        'preview_ticket': tickets[0] if tickets else None,
+        'preview_ticket': next((ticket for ticket in tickets if ticket.portal_is_selected), tickets[0] if tickets else None),
         'filters': {
             'q': request.GET.get('q', ''),
             'status': request.GET.get('status', 'all'),
@@ -1560,7 +1572,8 @@ def ticket_requester_create(request):
         )
         prepare_ticket_notification(ticket, 'ticket_created', user=actor)
     messages.success(request, 'Chamado aberto com sucesso.')
-    return redirect('requester-ticket-detail', number=ticket.number)
+    url = f'{reverse("requester-ticket-list")}?{urlencode({"selected": ticket.number})}'
+    return redirect(url)
 
 
 @require_POST

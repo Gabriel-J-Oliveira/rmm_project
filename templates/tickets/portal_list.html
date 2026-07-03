@@ -111,6 +111,7 @@
     <article><span>{{ counts.in_progress }}</span><small>Em atendimento</small></article>
     <article><span>{{ counts.waiting_user }}</span><small>Aguardando minha resposta</small></article>
     <article><span>{{ counts.resolved }}</span><small>Resolvidos</small></article>
+    <article><span>{{ counts.closed }}</span><small>Encerrados</small></article>
 </section>
 
 <form class="desk-portal-toolbar" method="get">
@@ -135,7 +136,7 @@
     <section class="desk-portal-list" aria-label="Lista de chamados">
         {% for ticket in tickets %}
         <article
-            class="desk-portal-ticket {% if forloop.first %}is-selected{% endif %} {% if ticket.status == 'waiting_user' %}is-waiting-user{% endif %}"
+            class="desk-portal-ticket {% if ticket.portal_is_selected %}is-selected{% endif %} {% if ticket.status == 'waiting_user' %}is-waiting-user{% endif %}"
             tabindex="0"
             role="button"
             data-portal-preview
@@ -144,11 +145,14 @@
             data-preview-status="{{ ticket.get_status_display }}"
             data-preview-status-key="{{ ticket.status }}"
             data-preview-category="{% if ticket.category %}{{ ticket.category.name }}{% else %}Sem categoria{% endif %}"
+            data-preview-created="{{ ticket.created_at|date:'d/m/Y H:i' }}"
             data-preview-description="{{ ticket.description|truncatechars:220 }}"
             data-preview-updated="{{ ticket.updated_at|date:'d/m/Y H:i' }}"
             data-preview-team="{{ ticket.assigned_to|default:ticket.queue|default:'Equipe de atendimento' }}"
             data-preview-comment="{% if ticket.portal_last_public_comment %}{{ ticket.portal_last_public_comment.body|truncatechars:180 }}{% else %}Nenhum comentario publico ainda.{% endif %}"
-            data-preview-url="{% url portal_detail_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}"
+            data-preview-attachments="{{ ticket.portal_attachment_summary }}"
+            data-preview-can-reply="{% if ticket.portal_can_reply %}1{% else %}0{% endif %}"
+            data-preview-comment-url="{{ ticket.portal_comment_url }}"
         >
             <div class="desk-portal-ticket__main">
                 <span class="desk-portal-code">#{{ ticket.number }}</span>
@@ -187,6 +191,8 @@
                 <dd data-preview-target="category">{% if preview_ticket.category %}{{ preview_ticket.category.name }}{% else %}Sem categoria{% endif %}</dd>
                 <dt>Equipe</dt>
                 <dd data-preview-target="team">{{ preview_ticket.assigned_to|default:preview_ticket.queue|default:"Equipe de atendimento" }}</dd>
+                <dt>Criado em</dt>
+                <dd data-preview-target="created">{{ preview_ticket.created_at|date:"d/m/Y H:i" }}</dd>
                 <dt>Ultima atualizacao</dt>
                 <dd data-preview-target="updated">{{ preview_ticket.updated_at|date:"d/m/Y H:i" }}</dd>
             </dl>
@@ -198,7 +204,29 @@
                 <small>Ultimo comentario publico</small>
                 <p data-preview-target="comment">{% if preview_ticket.portal_last_public_comment %}{{ preview_ticket.portal_last_public_comment.body|truncatechars:180 }}{% else %}Nenhum comentario publico ainda.{% endif %}</p>
             </section>
-            <a class="desk-portal-action" data-preview-target="url" href="{% url portal_detail_url_name preview_ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Abrir consulta</a>
+            <section>
+                <small>Anexos publicos</small>
+                <p data-preview-target="attachments">{{ preview_ticket.portal_attachment_summary }}</p>
+            </section>
+            <form
+                class="desk-portal-preview-comment {% if not preview_ticket.portal_can_reply %}is-hidden{% endif %}"
+                method="post"
+                enctype="multipart/form-data"
+                data-preview-target="commentForm"
+                action="{{ preview_ticket.portal_comment_url }}"
+            >
+                {% csrf_token %}
+                <label>
+                    <small>Comentar no chamado</small>
+                    <textarea name="body" rows="4" required placeholder="Escreva um comentario publico para a equipe..."></textarea>
+                </label>
+                <label class="desk-portal-file"><i data-lucide="paperclip"></i><span>Anexar arquivos</span><input type="file" name="attachments" multiple></label>
+                <button type="submit"><i data-lucide="send"></i>Enviar comentario</button>
+            </form>
+            <div class="desk-portal-readonly-note {% if preview_ticket.portal_can_reply %}is-hidden{% endif %}" data-preview-target="readonlyNote">
+                <i data-lucide="lock"></i>
+                <span>Este chamado esta em modo somente leitura.</span>
+            </div>
         </div>
         {% else %}
         <div class="desk-portal-card desk-portal-preview-empty">
@@ -211,7 +239,7 @@
 </div>
 {% endblock %}
 
-{% block extra_scripts %}
+{% block scripts %}
 {{ block.super }}
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -242,10 +270,13 @@ document.addEventListener('DOMContentLoaded', function () {
         status: document.querySelector('[data-preview-target="status"]'),
         category: document.querySelector('[data-preview-target="category"]'),
         team: document.querySelector('[data-preview-target="team"]'),
+        created: document.querySelector('[data-preview-target="created"]'),
         updated: document.querySelector('[data-preview-target="updated"]'),
         description: document.querySelector('[data-preview-target="description"]'),
         comment: document.querySelector('[data-preview-target="comment"]'),
-        url: document.querySelector('[data-preview-target="url"]')
+        attachments: document.querySelector('[data-preview-target="attachments"]'),
+        commentForm: document.querySelector('[data-preview-target="commentForm"]'),
+        readonlyNote: document.querySelector('[data-preview-target="readonlyNote"]')
     };
     const updatePreview = function (item) {
         if (!previewTargets.title) return;
@@ -257,10 +288,19 @@ document.addEventListener('DOMContentLoaded', function () {
         previewTargets.status.className = 'desk-portal-status status-' + (item.dataset.previewStatusKey || '');
         previewTargets.category.textContent = item.dataset.previewCategory || '';
         previewTargets.team.textContent = item.dataset.previewTeam || '';
+        previewTargets.created.textContent = item.dataset.previewCreated || '';
         previewTargets.updated.textContent = item.dataset.previewUpdated || '';
         previewTargets.description.textContent = item.dataset.previewDescription || '';
         previewTargets.comment.textContent = item.dataset.previewComment || '';
-        previewTargets.url.href = item.dataset.previewUrl || '#';
+        previewTargets.attachments.textContent = item.dataset.previewAttachments || 'Nenhum anexo publico.';
+        if (previewTargets.commentForm) {
+            const canReply = item.dataset.previewCanReply === '1';
+            previewTargets.commentForm.action = item.dataset.previewCommentUrl || '#';
+            previewTargets.commentForm.classList.toggle('is-hidden', !canReply);
+            previewTargets.readonlyNote.classList.toggle('is-hidden', canReply);
+            const textarea = previewTargets.commentForm.querySelector('textarea');
+            if (textarea) textarea.value = '';
+        }
     };
     previewItems.forEach(function (item) {
         item.addEventListener('click', function (event) {

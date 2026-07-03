@@ -39,6 +39,8 @@ A area do solicitante mostra apenas:
 - anexos publicos;
 - solucao quando resolvido.
 
+Na central `/meus-chamados/`, a lista usa um preview lateral. Ao selecionar um chamado, o preview mostra somente dados publicos do atendimento e permite comentar apenas quando o chamado esta aberto/em atendimento/aguardando solicitante. Chamados resolvidos, encerrados ou cancelados ficam em modo somente leitura no preview.
+
 ## Drawer de abertura
 
 O drawer do solicitante permite:
@@ -65,6 +67,8 @@ Nao sao exibidos no modo solicitante:
 - SLA interno detalhado;
 - responsavel;
 - acoes administrativas.
+
+Depois da criacao, o usuario retorna para `/meus-chamados/?selected=<numero>` e o novo chamado fica selecionado na previa lateral.
 
 ## Dados ocultos
 
