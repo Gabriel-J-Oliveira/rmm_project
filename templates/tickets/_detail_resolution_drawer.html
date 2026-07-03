@@ -17,6 +17,16 @@
 
         <div class="nw-form-grid">
             <label class="nw-form-field nw-form-field--wide">
+                <span>Template de resolucao</span>
+                <select data-resolution-template>
+                    <option value="">Sem template</option>
+                    {% for template in resolution_templates %}
+                    <option value="{{ template.id }}" data-template-content="{{ template.content }}">{{ template.name }}</option>
+                    {% endfor %}
+                </select>
+                <small>O texto pode ser editado antes de resolver.</small>
+            </label>
+            <label class="nw-form-field nw-form-field--wide">
                 <span>Resumo da solução <em>obrigatório</em></span>
                 <textarea rows="5" data-resolution-summary placeholder="Descreva objetivamente o que foi feito para resolver o problema..."></textarea>
             </label>

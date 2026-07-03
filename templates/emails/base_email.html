@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="supported-color-schemes" content="dark">
+    <title>{{ email_title }}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#05080D;color:#F3F6FB;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{ email_subtitle|default:email_title }}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:#05080D;">
+        <tr>
+            <td align="center" style="padding:38px 16px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:720px;background-color:#0B1117;border:1px solid #263244;border-radius:16px;overflow:hidden;">
+                    <tr>
+                        <td style="padding:24px 30px;border-bottom:1px solid #263244;background-color:#0B1117;">
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                                <tr>
+                                    <td style="vertical-align:middle;padding-right:18px;">
+                                        <div style="font-size:24px;line-height:1.15;font-weight:800;color:#F3F6FB;letter-spacing:-0.02em;">NightOwl <span style="color:#22C55E;">Desk</span></div>
+                                        <div style="margin-top:7px;font-size:13px;line-height:1.45;color:#B8C4D6;">Central interna de atendimento</div>
+                                    </td>
+                                    {% if email_badge %}
+                                    <td align="right" style="vertical-align:middle;width:1%;white-space:nowrap;">
+                                        <span style="display:inline-block;padding:8px 12px;border:1px solid #14532D;border-radius:999px;background-color:#0F2A1A;color:#86EFAC;font-size:11px;line-height:1;font-weight:800;text-transform:uppercase;letter-spacing:0.03em;">{{ email_badge }}</span>
+                                    </td>
+                                    {% endif %}
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:34px 30px 26px;">
+                            <h1 style="margin:0;color:#F3F6FB;font-size:30px;line-height:1.18;font-weight:800;letter-spacing:-0.03em;">{{ email_title }}</h1>
+                            {% if email_subtitle %}
+                            <p style="margin:10px 0 0;color:#B8C4D6;font-size:15px;line-height:1.6;">{{ email_subtitle }}</p>
+                            {% endif %}
+                            <div style="margin-top:24px;color:#F3F6FB;font-size:15px;line-height:1.75;">{{ email_body|linebreaksbr }}</div>
+                        </td>
+                    </tr>
+                    {% if ticket %}
+                    <tr>
+                        <td style="padding:0 30px 28px;">
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:#101826;border:1px solid #263244;border-radius:12px;overflow:hidden;">
+                                <tr>
+                                    <td colspan="2" style="padding:16px 18px;border-bottom:1px solid #263244;color:#86EFAC;font-size:12px;line-height:1.3;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;">Dados do chamado</td>
+                                </tr>
+                                <tr>
+                                    <td style="width:50%;padding:15px 18px;border-bottom:1px solid #263244;color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Código<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">#{{ ticket.number }}</strong></td>
+                                    <td style="width:50%;padding:15px 18px;border-bottom:1px solid #263244;color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Status<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">{{ ticket.get_status_display }}</strong></td>
+                                </tr>
+                                <tr>
+                                    <td colspan="2" style="padding:15px 18px;border-bottom:1px solid #263244;color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Título<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.5;text-transform:none;letter-spacing:0;">{{ ticket.title }}</strong></td>
+                                </tr>
+                                <tr>
+                                    <td style="width:50%;padding:15px 18px;border-bottom:1px solid #263244;color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Prioridade<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">{{ ticket.get_priority_display }}</strong></td>
+                                    <td style="width:50%;padding:15px 18px;border-bottom:1px solid #263244;color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Categoria<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">{% if ticket.category %}{{ ticket.category.name }}{% else %}Não informada{% endif %}</strong></td>
+                                </tr>
+                                <tr>
+                                    <td style="width:50%;padding:15px 18px{% if ticket.endpoint or ticket.endpoint_name %};border-bottom:1px solid #263244{% endif %};color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Fila<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">{{ ticket.queue|default:"Não informada" }}</strong></td>
+                                    <td style="width:50%;padding:15px 18px{% if ticket.endpoint or ticket.endpoint_name %};border-bottom:1px solid #263244{% endif %};color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Responsável<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">{{ ticket.assigned_to|default:"Aguardando atribuição" }}</strong></td>
+                                </tr>
+                                {% if ticket.endpoint or ticket.endpoint_name %}
+                                <tr>
+                                    <td colspan="2" style="padding:15px 18px;color:#7F8FA6;font-size:11px;line-height:1.5;text-transform:uppercase;letter-spacing:0.04em;">Endpoint<br><strong style="display:block;margin-top:4px;color:#F3F6FB;font-size:14px;line-height:1.45;text-transform:none;letter-spacing:0;">{% if ticket.endpoint %}{{ ticket.endpoint.hostname }}{% else %}{{ ticket.endpoint_name }}{% endif %}</strong></td>
+                                </tr>
+                                {% endif %}
+                            </table>
+                        </td>
+                    </tr>
+                    {% endif %}
+                    {% if action_url %}
+                    <tr>
+                        <td align="center" style="padding:0 30px 32px;">
+                            <a href="{{ action_url }}" style="display:inline-block;padding:14px 24px;border-radius:10px;background-color:#22C55E;color:#04100B;text-decoration:none;font-size:14px;line-height:1;font-weight:800;">{{ action_label|default:"Abrir chamado" }}</a>
+                        </td>
+                    </tr>
+                    {% elif show_desk_hint %}
+                    <tr>
+                        <td style="padding:0 30px 30px;color:#B8C4D6;font-size:13px;line-height:1.6;text-align:center;">Acesse o NightOwl Desk para acompanhar este chamado.</td>
+                    </tr>
+                    {% endif %}
+                    <tr>
+                        <td style="padding:20px 30px;border-top:1px solid #263244;color:#7F8FA6;font-size:11px;line-height:1.65;text-align:center;background-color:#090F16;">{{ footer_text|default:"Mensagem automática do NightOwl Desk. Por favor, não responda a este e-mail." }}</td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

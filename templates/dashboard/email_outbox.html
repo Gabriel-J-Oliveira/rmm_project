@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+
+{% block title %}Night Owl | Fila de E-mails{% endblock %}
+{% block body_class %}page-maintenance page-email-outbox{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i>
+    <a href="{% url 'maintenance-list' %}">Manutencao</a><i data-lucide="chevron-right"></i>
+    <strong>Fila de E-mails</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="email-outbox-header">
+    <div>
+        <span class="email-outbox-icon"><i data-lucide="mail-check"></i></span>
+        <div>
+            <h1>Fila de E-mails</h1>
+            <p>Envios transacionais do Night Owl, falhas SMTP e reprocessamento.</p>
+        </div>
+    </div>
+    <div class="email-outbox-header__actions">
+        <span class="email-smtp-state email-smtp-state--{{ smtp_status.code }}" title="{{ smtp_status.detail }}">
+            <i data-lucide="{% if smtp_status.configured %}shield-check{% elif smtp_status.code == 'conflict' %}shield-alert{% else %}shield-question{% endif %}"></i>
+            {{ smtp_status.label }}
+        </span>
+        <form method="post" action="{% url 'email-outbox-process' %}">
+            {% csrf_token %}
+            <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="play"></i>Processar pendentes</button>
+        </form>
+        <form method="post" action="{% url 'email-outbox-retry-all' %}">
+            {% csrf_token %}
+            <button class="desk-btn" type="submit"><i data-lucide="refresh-cw"></i>Reenviar erros</button>
+        </form>
+    </div>
+</section>
+
+<nav class="maintenance-subnav" aria-label="Areas de manutencao">
+    <a href="{% url 'maintenance-list' %}"><i data-lucide="wrench"></i>Rotinas</a>
+    <a class="is-active" href="{% url 'email-outbox-list' %}"><i data-lucide="mail"></i>Fila de E-mails</a>
+</nav>
+
+<section class="email-outbox-metrics" aria-label="Resumo da fila">
+    <article><i data-lucide="clock-3"></i><span>Pendentes</span><strong>{{ pending_count }}</strong></article>
+    <article class="is-success"><i data-lucide="check-circle-2"></i><span>Enviados hoje</span><strong>{{ sent_today_count }}</strong></article>
+    <article class="is-error"><i data-lucide="circle-alert"></i><span>Com erro</span><strong>{{ failed_count }}</strong></article>
+    <article class="is-muted"><i data-lucide="ban"></i><span>Ignorados/cancelados</span><strong>{{ inactive_count }}</strong></article>
+</section>
+
+{% if not pending_count and not failed_count %}
+<div class="email-outbox-notice"><i data-lucide="check-circle"></i>A fila nao possui pendencias operacionais.</div>
+{% elif failed_count %}
+<div class="email-outbox-notice is-warning"><i data-lucide="alert-triangle"></i>Existem envios com erro. Abra o detalhe para consultar a resposta SMTP.</div>
+{% endif %}
+
+<section class="email-outbox-panel">
+    <nav class="email-outbox-quick-filters" aria-label="Filtros rapidos">
+        <a href="{% url 'email-outbox-list' %}">Todos</a>
+        <a href="?status=pending">Pendentes</a>
+        <a href="?status=sent">Enviados</a>
+        <a href="?status=failed">Erro</a>
+        <a href="?status=skipped">Ignorados</a>
+        <a href="?source=desk">Desk</a>
+        <a href="?source=system">Sistema</a>
+        <a href="?today=1">Hoje</a>
+    </nav>
+    <form class="email-outbox-toolbar" method="get">
+        <label>
+            <i data-lucide="search"></i>
+            <input type="search" name="q" value="{{ filters.q }}" placeholder="Destinatario, assunto, ticket ou erro...">
+        </label>
+        <select name="status" aria-label="Status">
+            <option value="">Todos os status</option>
+            {% for value, label in status_choices %}
+            <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <select name="source" aria-label="Origem">
+            <option value="">Todas as origens</option>
+            {% for value, label in source_choices %}
+            <option value="{{ value }}" {% if filters.source == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <label class="email-outbox-today"><input type="checkbox" name="today" value="1" {% if filters.today %}checked{% endif %}>Hoje</label>
+        <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="filter"></i>Filtrar</button>
+        <a class="desk-btn" href="{% url 'email-outbox-list' %}">Limpar</a>
+    </form>
+
+    <div class="email-outbox-table-wrap">
+        <table class="email-outbox-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Origem</th>
+                    <th>Evento</th>
+                    <th>Destinatario</th>
+                    <th>Assunto</th>
+                    <th>Tentativas</th>
+                    <th>Ultimo erro</th>
+                    <th>Criado em</th>
+                    <th>Enviado em</th>
+                    <th>Acoes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for email in emails %}
+                <tr>
+                    <td><span class="email-status email-status--{{ email.status }}">{{ email.get_status_display }}</span></td>
+                    <td><span class="email-source">{{ email.get_source_app_display }}</span></td>
+                    <td><code>{{ email.event_type }}</code></td>
+                    <td><strong>{{ email.recipient_name|default:"Sem nome" }}</strong><small>{{ email.recipient_email|default:"Sem e-mail" }}</small></td>
+                    <td>
+                        <strong>{{ email.subject|default:"Sem assunto"|truncatechars:58 }}</strong>
+                        {% if email.ticket %}<small>Chamado #{{ email.ticket.number }}</small>{% endif %}
+                    </td>
+                    <td><span class="email-attempts">{{ email.attempts }}/{{ email.max_attempts }}</span></td>
+                    <td><span class="email-error-preview">{{ email.last_error|default:"-"|truncatechars:70 }}</span></td>
+                    <td>{{ email.created_at|date:"d/m/Y H:i" }}</td>
+                    <td>{{ email.sent_at|date:"d/m/Y H:i"|default:"-" }}</td>
+                    <td>
+                        <div class="email-row-actions">
+                            <button type="button" data-email-detail="{{ email.pk }}" title="Ver detalhes"><i data-lucide="eye"></i></button>
+                            {% if email.status == "failed" or email.status == "pending" %}
+                            <form method="post" action="{% url 'email-outbox-retry' email.pk %}">{% csrf_token %}<button type="submit" title="Reenviar"><i data-lucide="refresh-cw"></i></button></form>
+                            {% endif %}
+                            {% if email.status != "sent" and email.status != "cancelled" %}
+                            <form method="post" action="{% url 'email-outbox-cancel' email.pk %}">{% csrf_token %}<button type="submit" title="Cancelar"><i data-lucide="ban"></i></button></form>
+                            {% endif %}
+                            {% if email.status == "failed" or email.status == "skipped" or email.status == "cancelled" %}
+                            <form method="post" action="{% url 'email-outbox-pending' email.pk %}">{% csrf_token %}<button type="submit" title="Marcar como pendente"><i data-lucide="clock-3"></i></button></form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="10" class="empty-cell">Nenhum e-mail encontrado para os filtros atuais.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{{ email_payload|json_script:"email-outbox-data" }}
+<aside class="email-detail-drawer" data-email-drawer hidden>
+    <button class="email-detail-drawer__backdrop" type="button" data-email-close aria-label="Fechar"></button>
+    <section>
+        <header>
+            <div><span>Detalhes tecnicos</span><h2>Registro de e-mail</h2></div>
+            <button type="button" data-email-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="email-detail-drawer__body">
+            <div class="email-detail-grid">
+                <article><span>Status</span><strong data-email-field="status_label"></strong></article>
+                <article><span>Origem</span><strong data-email-field="source_label"></strong></article>
+                <article><span>Evento</span><strong data-email-field="event_type"></strong></article>
+                <article><span>Template</span><strong data-email-field="template"></strong></article>
+                <article><span>Destinatario</span><strong data-email-field="recipient"></strong></article>
+                <article><span>CC / BCC</span><strong data-email-field="copies"></strong></article>
+                <article><span>Tentativas</span><strong data-email-field="attempts"></strong></article>
+                <article><span>Datas</span><strong data-email-field="dates"></strong></article>
+            </div>
+            <article class="email-detail-block"><span>Assunto</span><strong data-email-field="subject"></strong></article>
+            <article class="email-detail-block email-preview">
+                <span>Conteudo</span>
+                <div class="email-preview__tabs" role="tablist" aria-label="Formato do e-mail">
+                    <button class="is-active" type="button" role="tab" aria-selected="true" data-email-preview-tab="text">Texto</button>
+                    <button type="button" role="tab" aria-selected="false" data-email-preview-tab="html">HTML / Previa</button>
+                </div>
+                <div class="email-preview__pane is-active" role="tabpanel" data-email-preview-pane="text">
+                    <pre data-email-field="body_text"></pre>
+                </div>
+                <div class="email-preview__pane" role="tabpanel" data-email-preview-pane="html" hidden>
+                    <iframe title="Previa segura do e-mail HTML" sandbox="" referrerpolicy="no-referrer" data-email-html-preview></iframe>
+                    <p data-email-html-empty>Previa HTML indisponivel para este e-mail.</p>
+                </div>
+            </article>
+            <article class="email-detail-block is-error"><span>Ultimo erro</span><pre data-email-field="last_error"></pre></article>
+            <article class="email-detail-block"><span>Metadata</span><pre data-email-field="metadata"></pre></article>
+        </div>
+        <footer>
+            <a class="desk-btn" data-email-ticket hidden><i data-lucide="ticket"></i>Abrir chamado</a>
+            <form method="post" data-email-retry>{% csrf_token %}<button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="refresh-cw"></i>Reenviar</button></form>
+            <form method="post" data-email-cancel>{% csrf_token %}<button class="desk-btn" type="submit"><i data-lucide="ban"></i>Cancelar</button></form>
+        </footer>
+    </section>
+</aside>
+
+<script>
+(() => {
+    const drawer = document.querySelector('[data-email-drawer]');
+    const payload = JSON.parse(document.getElementById('email-outbox-data')?.textContent || '[]');
+    const records = new Map(payload.map((item) => [item.id, item]));
+    const selectPreviewTab = (name) => {
+        drawer?.querySelectorAll('[data-email-preview-tab]').forEach((button) => {
+            const active = button.dataset.emailPreviewTab === name;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-selected', String(active));
+        });
+        drawer?.querySelectorAll('[data-email-preview-pane]').forEach((pane) => {
+            const active = pane.dataset.emailPreviewPane === name;
+            pane.classList.toggle('is-active', active);
+            pane.hidden = !active;
+        });
+    };
+    const setField = (name, value) => {
+        const node = drawer?.querySelector(`[data-email-field="${name}"]`);
+        if (node) node.textContent = value || '-';
+    };
+    const closeDrawer = () => {
+        if (!drawer) return;
+        drawer.hidden = true;
+        document.body.classList.remove('email-drawer-open');
+    };
+    document.addEventListener('click', (event) => {
+        if (event.target.closest('[data-email-close]')) closeDrawer();
+        const trigger = event.target.closest('[data-email-detail]');
+        if (!trigger || !drawer) return;
+        const item = records.get(trigger.dataset.emailDetail);
+        if (!item) return;
+        setField('status_label', item.status_label);
+        setField('source_label', item.source_label);
+        setField('event_type', item.event_type);
+        setField('template', item.template);
+        setField('recipient', `${item.recipient_name || 'Sem nome'} <${item.recipient_email || 'sem e-mail'}>`);
+        setField('copies', `CC: ${(item.cc || []).join(', ') || '-'} | BCC: ${(item.bcc || []).join(', ') || '-'}`);
+        setField('attempts', `${item.attempts}/${item.max_attempts}`);
+        setField('dates', `Criado: ${item.created_at} | Tentativa: ${item.last_attempt_at || '-'} | Enviado: ${item.sent_at || '-'}`);
+        setField('subject', item.subject);
+        setField('body_text', item.body_text);
+        const htmlPreview = drawer.querySelector('[data-email-html-preview]');
+        const htmlEmpty = drawer.querySelector('[data-email-html-empty]');
+        const htmlTab = drawer.querySelector('[data-email-preview-tab="html"]');
+        const hasRawDjangoSyntax = /({[{%#]|[%#}]})/.test(item.body_html || '');
+        const hasRenderableHtml = Boolean(item.body_html) && !hasRawDjangoSyntax;
+        htmlTab.disabled = !hasRenderableHtml;
+        htmlEmpty.hidden = hasRenderableHtml;
+        if (hasRenderableHtml) {
+            const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:;">`;
+            htmlPreview.srcdoc = item.body_html.includes('<head>')
+                ? item.body_html.replace('<head>', `<head>${csp}`)
+                : `${csp}${item.body_html}`;
+        } else {
+            htmlPreview.removeAttribute('srcdoc');
+        }
+        htmlPreview.hidden = !hasRenderableHtml;
+        selectPreviewTab(hasRenderableHtml ? 'html' : 'text');
+        setField('last_error', item.last_error);
+        setField('metadata', JSON.stringify(item.metadata || {}, null, 2));
+        const ticketLink = drawer.querySelector('[data-email-ticket]');
+        ticketLink.hidden = !item.ticket_url;
+        ticketLink.href = item.ticket_url || '#';
+        drawer.querySelector('[data-email-retry]').action = item.retry_url;
+        drawer.querySelector('[data-email-cancel]').action = item.cancel_url;
+        drawer.hidden = false;
+        document.body.classList.add('email-drawer-open');
+        window.lucide?.createIcons?.();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeDrawer();
+    });
+    drawer?.addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-email-preview-tab]');
+        if (tab && !tab.disabled) selectPreviewTab(tab.dataset.emailPreviewTab);
+    });
+})();
+</script>
+{% endblock %}

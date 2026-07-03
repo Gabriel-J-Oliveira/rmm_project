@@ -28,11 +28,15 @@
                         <i data-lucide="search"></i>
                         <input placeholder="Buscar macro..." data-macro-search>
                     </label>
+                    {% for template in composer_templates %}
+                    <button type="button" data-comment-macro="{{ template.content }}" data-comment-template-id="{{ template.id }}" data-comment-template-channel="{{ template.channel }}">{{ template.name }} &middot; {{ template.type }}</button>
+                    {% empty %}
                     <button type="button" data-comment-macro="Ola, estamos verificando o ocorrido.">Ola, estamos verificando o ocorrido.</button>
                     <button type="button" data-comment-macro="Poderia enviar um print ou mais detalhes do erro?">Poderia enviar um print ou mais detalhes do erro?</button>
                     <button type="button" data-comment-macro="Realizamos ajuste e aguardamos sua validacao.">Realizamos ajuste e aguardamos sua validacao.</button>
                     <button type="button" data-comment-macro="Acesso validado e funcionamento normalizado.">Acesso validado e funcionamento normalizado.</button>
                     <button type="button" data-comment-macro="Chamado resolvido. Caso o problema retorne, responda este atendimento.">Chamado resolvido. Caso o problema retorne, responda este atendimento.</button>
+                    {% endfor %}
                     <span class="nw-macro-empty" hidden data-macro-empty>Nenhuma macro encontrada.</span>
                 </div>
             </details>

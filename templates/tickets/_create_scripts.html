@@ -7,7 +7,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const endpointsFromContext = JSON.parse(document.getElementById("new-ticket-endpoints")?.textContent || "[]");
     const categories = JSON.parse(document.getElementById("new-ticket-categories")?.textContent || "[]");
     const draftKey = page.dataset.draftKey || "nightowl.ticket.create.draft";
-    const CURRENT_USER = "Gabriel";
+    const CURRENT_USER = "{{ current_user_name|default:'Técnico'|escapejs }}";
     const extraRequesters = [
         { name: "Eduardo Campos", email: "eduardo.campos@nalen.local", username: "eduardo.campos", department: "Diretoria", client: "Nalen Automation", role: "Socio", vip: true },
         { name: "Ana Ribeiro", email: "ana.ribeiro@nalen.local", username: "ana.ribeiro", department: "Juridico", client: "Nalen Automation", role: "Coordenadora juridica", vip: false },

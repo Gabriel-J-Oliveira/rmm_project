@@ -1,8 +1,7 @@
 <nav class="desk-module-nav">
-    <a class="{% if desk_active_section == 'central' %}active{% endif %}" href="{% url 'tickets:central' %}"><i data-lucide="radio"></i>Central de Atendimento</a>
-    <a class="{% if desk_active_section == 'my' %}active{% endif %}" href="{% url 'tickets:my' %}"><i data-lucide="user-check"></i>Meus chamados</a>
-    <a class="{% if desk_active_section == 'dashboard' %}active{% endif %}" href="{% url 'tickets:dashboard' %}"><i data-lucide="bar-chart-3"></i>Dashboards</a>
-    <a class="{% if desk_active_section == 'categories' %}active{% endif %}" href="{% url 'tickets:categories' %}"><i data-lucide="folder-cog"></i>Categorias</a>
-    <a class="{% if desk_active_section == 'automation' %}active{% endif %}" href="{% url 'tickets:automation' %}"><i data-lucide="workflow"></i>Automacoes</a>
-    <a class="{% if desk_active_section == 'settings' %}active{% endif %}" href="{% url 'tickets:settings' %}"><i data-lucide="settings"></i>Configuracoes</a>
+    <a class="{% if desk_active_section == 'central' or desk_active_section == 'my' %}active{% endif %}" href="{% url 'tickets:central' %}"><i data-lucide="radio"></i>Central de Atendimento</a>
+    <a class="{% if desk_active_section == 'settings' and request.GET.tab == 'queues' %}active{% endif %}" href="{% url 'tickets:settings' %}?tab=queues"><i data-lucide="inbox"></i>Filas</a>
+    <a class="{% if desk_active_section == 'settings' and request.GET.tab == 'gmud' %}active{% endif %}" href="{% url 'tickets:settings' %}?tab=gmud"><i data-lucide="git-pull-request"></i>GMUD</a>
+    <a class="{% if desk_active_section == 'dashboard' %}active{% endif %}" href="{% url 'tickets:dashboard' %}"><i data-lucide="bar-chart-3"></i>Dashboard</a>
+    <a class="{% if desk_active_section == 'categories' or desk_active_section == 'automation' or desk_active_section == 'settings' and request.GET.tab != 'queues' and request.GET.tab != 'gmud' %}active{% endif %}" href="{% url 'tickets:settings' %}"><i data-lucide="settings"></i>Configurações</a>
 </nav>

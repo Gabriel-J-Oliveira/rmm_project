@@ -7,12 +7,20 @@
                     <p>Editado ha {{ ticket.updated_for }}.</p>
                 </div>
             </div>
-            <p class="desk-description">{{ ticket.description }}</p>
+            <p class="desk-description">{{ ticket.description|linebreaksbr }}</p>
         </article>
 
         {% include "tickets/_detail_comment_composer.html" %}
         {% include "tickets/_detail_checklist.html" %}
-        {% include "tickets/_detail_context_summary.html" %}
+        <div class="nw-ticket-context-grid nw-ticket-context-grid--tabs">
+            <section id="attachments" class="desk-detail-tab-section nw-ticket-evidence-panel">
+                {% include "tickets/_detail_attachments.html" %}
+            </section>
+
+            <section id="related" class="desk-detail-tab-section nw-ticket-related-panel">
+                {% include "tickets/_detail_related.html" %}
+            </section>
+        </div>
         {% include "tickets/_detail_activity.html" %}
     </main>
 

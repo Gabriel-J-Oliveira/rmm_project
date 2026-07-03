@@ -38,6 +38,16 @@ from agents.software_catalog import (
     normalize_key,
 )
 from agents.versioning import agent_version_state
+from tickets.models import NotificationOutbox
+from tickets.services.email_outbox import (
+    cancel_email,
+    mark_email_pending,
+    process_pending_emails,
+    retry_all_failed,
+    retry_failed_email,
+    send_email_outbox_item,
+    smtp_configuration_status,
+)
 
 
 REMOTE_ACCESS_TERMS = REMOTE_ACCESS_SOFTWARE
@@ -908,6 +918,149 @@ def maintenance_list(request):
         'running_count': status_counts.get(MaintenanceRun.STATUS_RUNNING, 0),
     }
     return render(request, 'dashboard/maintenance.html', context)
+
+
+def email_outbox_list(request):
+    queryset = NotificationOutbox.objects.select_related('ticket', 'template').order_by('-created_at')
+    status_filter = (request.GET.get('status') or '').strip()
+    source_filter = (request.GET.get('source') or '').strip()
+    query = (request.GET.get('q') or '').strip()
+    today_only = request.GET.get('today') == '1'
+
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    if source_filter:
+        queryset = queryset.filter(source_app=source_filter)
+    if today_only:
+        queryset = queryset.filter(created_at__date=timezone.localdate())
+    if query:
+        search_filter = (
+            Q(recipient_name__icontains=query)
+            | Q(recipient_email__icontains=query)
+            | Q(subject__icontains=query)
+            | Q(last_error__icontains=query)
+            | Q(source_id__icontains=query)
+        )
+        if query.lstrip('#').isdigit():
+            search_filter |= Q(ticket__number=int(query.lstrip('#')))
+        queryset = queryset.filter(search_filter)
+
+    items = list(queryset[:250])
+    payload = [
+        {
+            'id': str(item.pk),
+            'status': item.status,
+            'status_label': item.get_status_display(),
+            'source_app': item.source_app,
+            'source_label': item.get_source_app_display(),
+            'event_type': item.event_type,
+            'recipient_name': item.recipient_name,
+            'recipient_email': item.recipient_email,
+            'cc': item.cc,
+            'bcc': item.bcc,
+            'subject': item.subject,
+            'body_text': item.body_text,
+            'body_html': item.body_html,
+            'priority': item.get_priority_display(),
+            'attempts': item.attempts,
+            'max_attempts': item.max_attempts,
+            'last_error': item.last_error,
+            'last_attempt_at': timezone.localtime(item.last_attempt_at).strftime('%d/%m/%Y %H:%M:%S') if item.last_attempt_at else '',
+            'created_at': timezone.localtime(item.created_at).strftime('%d/%m/%Y %H:%M:%S'),
+            'updated_at': timezone.localtime(item.updated_at).strftime('%d/%m/%Y %H:%M:%S'),
+            'sent_at': timezone.localtime(item.sent_at).strftime('%d/%m/%Y %H:%M:%S') if item.sent_at else '',
+            'metadata': item.metadata,
+            'ticket_number': item.ticket.number if item.ticket else '',
+            'ticket_url': f'/tickets/{item.ticket.number}/' if item.ticket else '',
+            'template': item.template.name if item.template else '',
+            'retry_url': f'/maintenance/email-outbox/{item.pk}/retry/',
+            'cancel_url': f'/maintenance/email-outbox/{item.pk}/cancel/',
+            'pending_url': f'/maintenance/email-outbox/{item.pk}/pending/',
+        }
+        for item in items
+    ]
+    today = timezone.localdate()
+    context = {
+        'active_nav': 'maintenance',
+        'maintenance_tab': 'email',
+        'emails': items,
+        'email_payload': payload,
+        'filters': {
+            'q': query,
+            'status': status_filter,
+            'source': source_filter,
+            'today': today_only,
+        },
+        'status_choices': NotificationOutbox.STATUS_CHOICES,
+        'source_choices': NotificationOutbox.SOURCE_CHOICES,
+        'pending_count': NotificationOutbox.objects.filter(status=NotificationOutbox.STATUS_PENDING).count(),
+        'sent_today_count': NotificationOutbox.objects.filter(status=NotificationOutbox.STATUS_SENT, sent_at__date=today).count(),
+        'failed_count': NotificationOutbox.objects.filter(status=NotificationOutbox.STATUS_FAILED).count(),
+        'inactive_count': NotificationOutbox.objects.filter(
+            status__in=[NotificationOutbox.STATUS_SKIPPED, NotificationOutbox.STATUS_CANCELLED],
+        ).count(),
+        'smtp_status': smtp_configuration_status(),
+    }
+    return render(request, 'dashboard/email_outbox.html', context)
+
+
+def _email_action_actor(request):
+    if request.user.is_authenticated:
+        return request.user.get_full_name() or request.user.get_username()
+    return 'Night Owl Web'
+
+
+@require_POST
+def email_outbox_process(request):
+    result = process_pending_emails(limit=50, actor=_email_action_actor(request))
+    messages.success(
+        request,
+        f"Fila processada: {result['sent']} enviado(s), {result['failed']} falha(s).",
+    )
+    return redirect('email-outbox-list')
+
+
+@require_POST
+def email_outbox_retry_all(request):
+    result = retry_all_failed(actor=_email_action_actor(request), send_now=True)
+    messages.info(
+        request,
+        f"{result['retried']} reprocessado(s): {result['sent']} enviado(s), {result['failed']} falha(s).",
+    )
+    return redirect('email-outbox-list')
+
+
+@require_POST
+def email_outbox_retry(request, pk):
+    item = get_object_or_404(NotificationOutbox, pk=pk)
+    if item.status == NotificationOutbox.STATUS_FAILED:
+        retry_failed_email(
+            item.pk,
+            actor=_email_action_actor(request),
+            reset_attempts=item.attempts >= item.max_attempts,
+        )
+    result = send_email_outbox_item(item.pk, actor=_email_action_actor(request))
+    if result.status == NotificationOutbox.STATUS_SENT:
+        messages.success(request, 'E-mail enviado.')
+    elif result.status == NotificationOutbox.STATUS_FAILED:
+        messages.error(request, 'Falha no envio. Consulte os detalhes da fila.')
+    else:
+        messages.info(request, f'E-mail permanece com status {result.get_status_display()}.')
+    return redirect('email-outbox-list')
+
+
+@require_POST
+def email_outbox_cancel(request, pk):
+    cancel_email(pk, actor=_email_action_actor(request))
+    messages.info(request, 'E-mail cancelado.')
+    return redirect('email-outbox-list')
+
+
+@require_POST
+def email_outbox_pending(request, pk):
+    mark_email_pending(pk, actor=_email_action_actor(request), reset_attempts=True)
+    messages.info(request, 'E-mail marcado como pendente.')
+    return redirect('email-outbox-list')
 
 
 @require_POST

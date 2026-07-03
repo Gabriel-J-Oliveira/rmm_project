@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}NightOwl Desk | Meus chamados{% endblock %}
+{% block body_class %}page-ticket-portal{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs desk-portal-breadcrumbs" aria-label="Breadcrumb">
+    <span>NightOwl Desk</span><i data-lucide="chevron-right"></i>
+    <strong>Meus chamados</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="desk-portal-header">
+    <div>
+        <span class="desk-portal-header__icon"><i data-lucide="messages-square"></i></span>
+        <div>
+            <p>Portal do solicitante</p>
+            <h1>Meus chamados</h1>
+            <span>Acompanhe suas solicitacoes e abra novos atendimentos.</span>
+        </div>
+    </div>
+    <div class="desk-portal-header__actions">
+        {% if requester_can_create %}
+        <button type="button" class="desk-portal-primary" data-requester-open-ticket><i data-lucide="ticket-plus"></i>Abrir chamado</button>
+        {% endif %}
+        {% if requester_email %}
+        <strong><i data-lucide="mail"></i>{{ requester_email }}</strong>
+        {% else %}
+        <strong><i data-lucide="shield-question"></i>Sem e-mail cadastrado</strong>
+        {% endif %}
+    </div>
+</section>
+
+{% if portal_missing_email %}
+<section class="desk-portal-notice">
+    <i data-lucide="mail-warning"></i>
+    <span>Seu usuario autenticado nao possui e-mail cadastrado no NightOwl. Atualize o e-mail para consultar e abrir chamados.</span>
+</section>
+{% elif not requester_email %}
+<section class="desk-portal-notice">
+    <i data-lucide="info"></i>
+    <span>Informe um e-mail no usuario autenticado para consultar e abrir chamados pelo portal.</span>
+</section>
+{% endif %}
+
+{% if requester_can_create %}
+<aside class="desk-portal-drawer" data-requester-ticket-drawer hidden aria-hidden="true">
+    <div class="desk-portal-drawer__backdrop" data-requester-close-ticket></div>
+    <section class="desk-portal-drawer__panel" role="dialog" aria-modal="true" aria-labelledby="requester-ticket-title">
+        <header>
+            <div>
+                <span><i data-lucide="ticket-plus"></i></span>
+                <div>
+                    <p>Novo atendimento</p>
+                    <h2 id="requester-ticket-title">Abrir chamado</h2>
+                </div>
+            </div>
+            <button type="button" data-requester-close-ticket aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <form class="desk-portal-create-form" method="post" enctype="multipart/form-data" action="{% url portal_create_url_name %}">
+            {% csrf_token %}
+            <label>
+                <span>Titulo</span>
+                <input type="text" name="title" required maxlength="200" placeholder="Ex.: Nao consigo acessar o ERP">
+            </label>
+            <label>
+                <span>Descricao</span>
+                <textarea name="description" rows="6" required placeholder="Descreva o que aconteceu, quando comecou e qualquer mensagem de erro."></textarea>
+            </label>
+            <div class="desk-portal-create-form__grid">
+                <label>
+                    <span>Categoria</span>
+                    <select name="category">
+                        <option value="">Selecionar automaticamente</option>
+                        {% for category in portal_categories %}
+                        <option value="{{ category.id }}">{{ category.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    <span>Impacto</span>
+                    <select name="priority">
+                        <option value="normal">Normal</option>
+                        <option value="low">Baixo</option>
+                        <option value="high">Alto</option>
+                        <option value="critical">Critico</option>
+                    </select>
+                </label>
+            </div>
+            <label>
+                <span>Dispositivo ou endpoint relacionado</span>
+                <input type="text" name="endpoint_name" placeholder="Opcional: nome do computador, se souber">
+            </label>
+            <label class="desk-portal-file">
+                <i data-lucide="paperclip"></i>
+                <span>Anexar arquivos</span>
+                <input type="file" name="attachments" multiple>
+            </label>
+            <footer>
+                <button type="button" class="desk-portal-secondary" data-requester-close-ticket>Cancelar</button>
+                <button type="submit"><i data-lucide="send"></i>Abrir chamado</button>
+            </footer>
+        </form>
+    </section>
+</aside>
+{% endif %}
+
+<section class="desk-portal-metrics" aria-label="Resumo dos chamados">
+    <article><span>{{ counts.open }}</span><small>Abertos</small></article>
+    <article><span>{{ counts.in_progress }}</span><small>Em atendimento</small></article>
+    <article><span>{{ counts.waiting_user }}</span><small>Aguardando minha resposta</small></article>
+    <article><span>{{ counts.resolved }}</span><small>Resolvidos</small></article>
+</section>
+
+<form class="desk-portal-toolbar" method="get">
+    {% if requester_email and portal_mode != 'requester' %}<input type="hidden" name="email" value="{{ requester_email }}">{% endif %}
+    <label>
+        <i data-lucide="search"></i>
+        <input type="search" name="q" value="{{ filters.q }}" placeholder="Buscar por numero, titulo ou categoria">
+    </label>
+    <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+    <a href="{% url portal_list_url_name %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Limpar</a>
+</form>
+
+<nav class="desk-portal-filters" aria-label="Filtros do portal">
+    <a class="{% if filters.status == 'all' %}is-active{% endif %}" href="?status=all{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Todos <span>{{ counts.all }}</span></a>
+    <a class="{% if filters.status == 'open' %}is-active{% endif %}" href="?status=open{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Abertos <span>{{ counts.open }}</span></a>
+    <a class="{% if filters.status == 'waiting_user' %}is-active{% endif %}" href="?status=waiting_user{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Aguardando minha resposta <span>{{ counts.waiting_user }}</span></a>
+    <a class="{% if filters.status == 'resolved' %}is-active{% endif %}" href="?status=resolved{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Resolvidos <span>{{ counts.resolved }}</span></a>
+    <a class="{% if filters.status == 'closed' %}is-active{% endif %}" href="?status=closed{% if requester_email and portal_mode != 'requester' %}&email={{ requester_email|urlencode }}{% endif %}">Encerrados <span>{{ counts.closed }}</span></a>
+</nav>
+
+<section class="desk-portal-list" aria-label="Lista de chamados">
+    {% for ticket in tickets %}
+    <article class="desk-portal-ticket {% if ticket.status == 'waiting_user' %}is-waiting-user{% endif %}">
+        <div class="desk-portal-ticket__main">
+            <span class="desk-portal-code">#{{ ticket.number }}</span>
+            <h2>{{ ticket.title }}</h2>
+            <p>{{ ticket.description|truncatechars:130 }}</p>
+            <div class="desk-portal-meta">
+                <span><i data-lucide="folder"></i>{% if ticket.category %}{{ ticket.category.name }}{% else %}Sem categoria{% endif %}</span>
+                <span><i data-lucide="calendar-plus"></i>{{ ticket.created_at|date:"d/m/Y H:i" }}</span>
+                <span><i data-lucide="refresh-cw"></i>{{ ticket.updated_at|date:"d/m/Y H:i" }}</span>
+                <span><i data-lucide="users"></i>{{ ticket.assigned_to|default:ticket.queue|default:"Equipe de atendimento" }}</span>
+            </div>
+        </div>
+        <div class="desk-portal-ticket__side">
+            <span class="desk-portal-status status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
+            {% if ticket.status == 'waiting_user' %}<span class="desk-portal-waiting"><i data-lucide="reply"></i>Aguardando voce</span>{% endif %}
+            <a class="desk-portal-action" href="{% url portal_detail_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Ver chamado</a>
+        </div>
+    </article>
+    {% empty %}
+    <article class="desk-portal-empty">
+        <i data-lucide="inbox"></i>
+        <h2>Nenhum chamado encontrado</h2>
+        <p>Nao encontramos chamados para sua conta e filtros atuais.</p>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+{{ block.super }}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const drawer = document.querySelector('[data-requester-ticket-drawer]');
+    if (!drawer) return;
+    const openers = document.querySelectorAll('[data-requester-open-ticket]');
+    const closers = drawer.querySelectorAll('[data-requester-close-ticket]');
+    const setOpen = function (open) {
+        drawer.hidden = !open;
+        drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+        document.body.classList.toggle('desk-portal-drawer-open', open);
+        if (open) {
+            const first = drawer.querySelector('input, textarea, select, button');
+            if (first) first.focus();
+        }
+    };
+    openers.forEach(function (button) { button.addEventListener('click', function () { setOpen(true); }); });
+    closers.forEach(function (button) { button.addEventListener('click', function () { setOpen(false); }); });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !drawer.hidden) setOpen(false);
+    });
+});
+</script>
+{% endblock %}

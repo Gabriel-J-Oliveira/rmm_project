@@ -1,6 +1,8 @@
+from .desk_mvp2 import normalize_category_color, normalize_category_icon
 from .ticket_alert_mapping import alert_mapping_summary, category_for_alert, priority_for_alert
 from .ticket_creation_rmm import get_endpoint_preview, get_ticket_creation_endpoints
 from ..mock_data import CATEGORIES, MOCK_TICKETS, PRIORITY_LABELS
+from ..models import Ticket, TicketCategory
 
 
 CATEGORY_ICONS = {
@@ -86,6 +88,26 @@ TICKET_TEMPLATES = [
 
 def _category_rows():
     rows = []
+    categories = TicketCategory.objects.select_related('default_queue', 'default_sla').filter(is_active=True).order_by('name')
+    if categories.exists():
+        for category in categories:
+            priority = category.default_priority or Ticket.PRIORITY_NORMAL
+            rows.append({
+                'id': str(category.pk),
+                'name': category.name,
+                'description': category.description,
+                'color': normalize_category_color(category.color),
+                'icon': normalize_category_icon(category.icon),
+                'suggested_priority': priority,
+                'suggested_priority_label': PRIORITY_LABELS.get(priority, priority),
+                'default_priority': priority,
+                'default_queue': category.default_queue.name if category.default_queue else '',
+                'default_sla': category.default_sla.name if category.default_sla else '',
+                'allowed_types': category.allowed_types or [],
+                'subcategories': category.subcategories or [],
+            })
+        return rows
+
     for category in CATEGORIES:
         name = category['name']
         priority = CATEGORY_PRIORITY_HINTS.get(name, 'normal')

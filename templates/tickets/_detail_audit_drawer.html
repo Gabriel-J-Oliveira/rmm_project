@@ -16,11 +16,11 @@
         </header>
 
         <section class="nw-audit-summary">
-            <article><span>Total de eventos</span><strong data-audit-total>10</strong></article>
-            <article><span>Ultima alteracao</span><strong>Hoje, 09:18</strong></article>
-            <article><span>Ultimo usuario</span><strong>Gabriel</strong></article>
-            <article><span>Origem recente</span><strong>Web - 192.168.101.47</strong></article>
-            <article class="nw-audit-summary__sensitive"><span>Acoes sensiveis</span><strong data-audit-sensitive-total>3</strong></article>
+            <article><span>Total de eventos</span><strong data-audit-total>{{ audit_events|length|default:"10" }}</strong></article>
+            <article><span>Ultima alteracao</span><strong>{% if audit_events %}{{ audit_events.0.when }}{% else %}Hoje, 09:18{% endif %}</strong></article>
+            <article><span>Ultimo usuario</span><strong>{% if audit_events %}{{ audit_events.0.actor }}{% else %}Sem eventos{% endif %}</strong></article>
+            <article><span>Origem recente</span><strong>{% if audit_events %}{{ audit_events.0.origin }}{% else %}Web - 192.168.101.47{% endif %}</strong></article>
+            <article class="nw-audit-summary__sensitive"><span>Acoes sensiveis</span><strong data-audit-sensitive-total>0</strong></article>
         </section>
 
         <section class="nw-audit-filters" aria-label="Filtros da auditoria">
@@ -46,7 +46,7 @@
                 <span>Usuario</span>
                 <select data-audit-user>
                     <option value="all">Todos</option>
-                    <option value="Gabriel">Gabriel</option>
+                    <option value="{{ current_user_name|default:'Técnico' }}">{{ current_user_name|default:'Técnico' }}</option>
                     <option value="Sistema">Sistema</option>
                     <option value="NightOwl RMM">NightOwl RMM</option>
                     <option value="{{ ticket.requester }}">{{ ticket.requester }}</option>
@@ -65,119 +65,35 @@
         </section>
 
         <section class="nw-audit-table" data-audit-list>
-            <article class="nw-audit-row" data-audit-row data-audit-type="field" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
+            {% if audit_events %}
+            {% for event in audit_events %}
+            <article class="nw-audit-row{% if event.severity == 'sensitive' %} nw-audit-row--sensitive{% endif %}" data-audit-row data-audit-type="{{ event.filter_type }}" data-audit-user="{{ event.actor }}" data-audit-period="today" data-audit-severity="{{ event.severity }}">
                 <button type="button" data-audit-toggle>
-                    <time>Hoje, 08:51</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge">Campo alterado</span>
-                    <span>Atualizou status</span>
-                    <span class="nw-audit-diff"><em>Novo</em><i>-></i><b>Em atendimento</b></span>
-                    <small>192.168.101.47 - Web</small>
+                    <time>{{ event.when }}</time>
+                    <strong>{{ event.actor }}</strong>
+                    <span class="nw-audit-badge{% if event.severity == 'sensitive' %} nw-audit-badge--sensitive{% endif %}">{{ event.event_type }}</span>
+                    <span>{{ event.action }}</span>
+                    <span class="nw-audit-diff"><em>{{ event.old_value }}</em><i>-&gt;</i><b>{{ event.new_value }}</b></span>
+                    <small>{{ event.origin }}</small>
                 </button>
                 <div class="nw-audit-event-details" hidden>
-                    <p>ID interno: AUD-1042-001 - Request ID: req-ticket-detail-8f1 - User agent: NightOwl Desk Web</p>
-                    <pre>{"field":"status","old":"Novo","new":"Em atendimento","source":"ticket_detail"}</pre>
+                    <p>ID interno: {{ event.id }}{% if event.field_name %} · Campo: {{ event.field_name }}{% endif %}</p>
+                    <pre>{{ event.metadata_json }}</pre>
                 </div>
             </article>
-            <article class="nw-audit-row" data-audit-row data-audit-type="field" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 08:53</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge">Campo alterado</span>
-                    <span>Alterou responsavel</span>
-                    <span class="nw-audit-diff"><em>Sem responsavel</em><i>-></i><b>Gabriel</b></span>
-                    <small>192.168.101.47 - Web</small>
+            {% endfor %}
+            {% else %}
+            <article class="nw-audit-row" data-audit-row data-audit-type="empty" data-audit-user="" data-audit-period="all" data-audit-severity="info">
+                <button type="button" disabled>
+                    <time>--</time>
+                    <strong>Sistema</strong>
+                    <span class="nw-audit-badge">Sem eventos</span>
+                    <span>Nenhum evento real registrado para este chamado ainda.</span>
+                    <span class="nw-audit-diff"><em>--</em><i>-&gt;</i><b>--</b></span>
+                    <small>Auditoria real</small>
                 </button>
-                <div class="nw-audit-event-details" hidden><p>ID interno: AUD-1042-002</p><pre>{"field":"assignee","old":null,"new":"Gabriel"}</pre></div>
             </article>
-            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="field" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="sensitive">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 08:55</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge nw-audit-badge--warning">Atencao</span>
-                    <span>Alterou prioridade</span>
-                    <span class="nw-audit-diff"><em>Alta</em><i>-></i><b>Critica</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><p>Justificativa: solicitante VIP e risco de fechamento do mes.</p><pre>{"field":"priority","old":"Alta","new":"Critica","sensitive":true}</pre></div>
-            </article>
-            <article class="nw-audit-row" data-audit-row data-audit-type="comment" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 08:58</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge">Comentario</span>
-                    <span>Criou comentario interno</span>
-                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>Vou validar inventario...</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><pre>{"field":"comments","visibility":"internal","body":"Vou validar inventario e console do antivirus."}</pre></div>
-            </article>
-            <article class="nw-audit-row" data-audit-row data-audit-type="attachment" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 09:02</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge">Anexo</span>
-                    <span>Marcou evidencia principal</span>
-                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>evidencia-{{ ticket.number }}.png</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><pre>{"field":"primary_evidence","new":"evidencia-{{ ticket.number }}.png"}</pre></div>
-            </article>
-            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="rmm" data-audit-user="NightOwl RMM" data-audit-period="today" data-audit-severity="sensitive">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 09:05</time>
-                    <strong>NightOwl RMM</strong>
-                    <span class="nw-audit-badge nw-audit-badge--sensitive">Sensivel</span>
-                    <span>Executou script</span>
-                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>Verificar antivirus</b></span>
-                    <small>Agent - RMM</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><p>Request ID: rmm-job-7721 - Endpoint: {{ device_context.hostname|default:"FIN-012" }}</p><pre>{"field":"endpoint_action","new":"Verificar antivirus","channel":"RMM"}</pre></div>
-            </article>
-            <article class="nw-audit-row" data-audit-row data-audit-type="relationship" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 09:08</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge">Relacionamento</span>
-                    <span>Vinculou chamado</span>
-                    <span class="nw-audit-diff"><em>-</em><i>-></i><b>#1043</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><pre>{"field":"related_ticket","new":"#1043","reason":"mesmo endpoint"}</pre></div>
-            </article>
-            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="relationship" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="sensitive">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 09:11</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge nw-audit-badge--sensitive">Sensivel</span>
-                    <span>Mesclou chamados</span>
-                    <span class="nw-audit-diff"><em>#1046</em><i>-></i><b>#1045 principal</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><pre>{"action":"merge","secondary":["#1046"],"primary":"#1045"}</pre></div>
-            </article>
-            <article class="nw-audit-row nw-audit-row--sensitive" data-audit-row data-audit-type="resolution" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="sensitive">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 09:15</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge nw-audit-badge--sensitive">Resolucao</span>
-                    <span>Resolveu chamado</span>
-                    <span class="nw-audit-diff"><em>Em atendimento</em><i>-></i><b>Resolvido</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><pre>{"field":"status","old":"Em atendimento","new":"Resolvido","resolution_summary":"Credenciais validadas."}</pre></div>
-            </article>
-            <article class="nw-audit-row" data-audit-row data-audit-type="escalation" data-audit-user="Gabriel" data-audit-period="today" data-audit-severity="info">
-                <button type="button" data-audit-toggle>
-                    <time>Hoje, 09:18</time>
-                    <strong>Gabriel</strong>
-                    <span class="nw-audit-badge">Escalonamento</span>
-                    <span>Escalou chamado</span>
-                    <span class="nw-audit-diff"><em>Fila N1</em><i>-></i><b>Infraestrutura</b></span>
-                    <small>192.168.101.47 - Web</small>
-                </button>
-                <div class="nw-audit-event-details" hidden><pre>{"field":"queue","old":"N1","new":"Infraestrutura"}</pre></div>
-            </article>
+            {% endif %}
         </section>
 
         <section class="nw-audit-empty" data-audit-empty hidden>

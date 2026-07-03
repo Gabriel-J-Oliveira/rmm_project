@@ -67,6 +67,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'config.middleware.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -179,6 +180,35 @@ REST_FRAMEWORK = {
     ],
 }
 
+AUTHENTICATION_BACKENDS = [
+    'config.auth_backends.ActiveDirectoryBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+LOGIN_URL = '/accounts/login/'
+LOGIN_REDIRECT_URL = '/tickets/'
+LOGOUT_REDIRECT_URL = '/accounts/login/'
+NIGHTOWL_TECHNICAL_USERNAMES = {
+    item.strip().casefold()
+    for item in env.list('NIGHTOWL_TECHNICAL_USERNAMES', default=['gabriel.oliveira'])
+    if item.strip()
+}
+
+# Global e-mail outbox. Credentials are read only from the environment.
+EMAIL_BACKEND = env(
+    'EMAIL_BACKEND',
+    default='django.core.mail.backends.smtp.EmailBackend',
+)
+EMAIL_HOST = env('EMAIL_HOST', default='')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)
+EMAIL_TIMEOUT = env.int('EMAIL_TIMEOUT', default=20)
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
+SERVER_EMAIL = env('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
+NIGHTOWL_PUBLIC_URL = env('NIGHTOWL_PUBLIC_URL', default='').strip().rstrip('/')
+
 NIGHTOWL_RECOMMENDED_AGENT_VERSION = '0.1.0'
 NIGHTOWL_AGENT_HEARTBEAT_URL = env(
     'NIGHTOWL_AGENT_HEARTBEAT_URL',
@@ -188,3 +218,23 @@ NIGHTOWL_AGENT_SOURCE_PATH = env(
     'NIGHTOWL_AGENT_SOURCE_PATH',
     default=r'\\192.168.104.120\controlsul\Comum\_Agents',
 )
+
+AD_AUTH_ENABLED = env.bool('AD_AUTH_ENABLED', default=False)
+AD_AUTH_CONFIG = {
+    'ENABLED': AD_AUTH_ENABLED,
+    'SERVER_URI': env('AD_SERVER_URI', default=''),
+    'DOMAIN': env('AD_DOMAIN', default=''),
+    'REALM': env('AD_REALM', default=''),
+    'BIND_DN': env('AD_BIND_DN', default=''),
+    'BIND_PASSWORD': env('AD_BIND_PASSWORD', default=''),
+    'USER_SEARCH_BASE': env('AD_USER_SEARCH_BASE', default=''),
+    'GROUP_SEARCH_BASE': env('AD_GROUP_SEARCH_BASE', default=''),
+    'USER_ATTR': env('AD_USER_ATTR', default='sAMAccountName'),
+    'EMAIL_ATTR': env('AD_EMAIL_ATTR', default='mail'),
+    'FIRST_NAME_ATTR': env('AD_FIRST_NAME_ATTR', default='givenName'),
+    'LAST_NAME_ATTR': env('AD_LAST_NAME_ATTR', default='sn'),
+    'REQUIRE_TLS': env.bool('AD_REQUIRE_TLS', default=False),
+    'ADMIN_GROUP': env('AD_ADMIN_GROUP', default=''),
+    'TECH_GROUP': env('AD_TECH_GROUP', default=''),
+    'TIMEOUT': env.int('AD_TIMEOUT', default=8),
+}

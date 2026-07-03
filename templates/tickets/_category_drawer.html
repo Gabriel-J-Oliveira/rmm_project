@@ -1,20 +1,54 @@
-<aside class="desk-config-drawer" aria-label="Editar categoria">
+<aside class="desk-config-drawer desk-category-drawer" aria-label="Editar categoria" data-category-drawer hidden>
     <header>
         <h2><i data-lucide="folder-plus"></i>Editor de categoria</h2>
-        <p>Drawer reutilizavel para nova categoria ou ajuste da linha selecionada.</p>
+        <p>Categoria real usada na abertura, Central e detalhe dos chamados.</p>
     </header>
-    <form class="desk-stack-form">
-        <label><span>Nome</span><input value="Nova categoria"></label>
-        <label><span>Icone</span><input list="deskCategoryIconOptions" value="folder-cog"></label>
+    <form class="desk-stack-form" data-category-form>
+        {% csrf_token %}
+        <input type="hidden" name="id" data-category-id>
+        <label><span>Nome</span><input name="name" value="Nova categoria" required data-category-name></label>
+        <label><span>Descri&ccedil;&atilde;o</span><textarea name="description" rows="3" data-category-description></textarea></label>
+        <label><span>&Iacute;cone</span><input name="icon" list="deskCategoryIconOptions" value="bi-folder" data-category-icon></label>
         <datalist id="deskCategoryIconOptions">
             {% for icon in category_icon_options %}<option value="{{ icon }}"></option>{% endfor %}
         </datalist>
-        <label><span>SLA primeira resposta</span><input value="1h"></label>
-        <label><span>SLA resolucao</span><input value="8h"></label>
-        <label><span>Checklist padrao</span><textarea rows="5">Entender demanda&#10;Executar atendimento&#10;Validar com usuario</textarea></label>
+        <label><span>Cor</span>
+            <select name="color" data-category-color>
+                {% for color in category_color_options %}<option value="{{ color }}">{{ color }}</option>{% endfor %}
+            </select>
+        </label>
+        <label><span>Status</span>
+            <select name="is_active" data-category-active>
+                <option value="true">Ativa</option>
+                <option value="false">Inativa</option>
+            </select>
+        </label>
+        <label><span>Prioridade padr&atilde;o</span>
+            <select name="default_priority" data-category-priority>
+                {% for priority in category_priority_options %}<option value="{{ priority.value }}">{{ priority.label }}</option>{% endfor %}
+            </select>
+        </label>
+        <label><span>Fila padr&atilde;o</span>
+            <select name="default_queue" data-category-queue>
+                <option value="">Sem fila padr&atilde;o</option>
+                {% for queue in category_queue_options %}<option value="{{ queue.name }}">{{ queue.name }}</option>{% endfor %}
+            </select>
+        </label>
+        <label><span>SLA padr&atilde;o</span>
+            <select name="default_sla" data-category-sla>
+                <option value="">Sem SLA padr&atilde;o</option>
+                {% for sla in category_sla_options %}<option value="{{ sla.name }}">{{ sla.name }}</option>{% endfor %}
+            </select>
+        </label>
+        <label><span>Tipos permitidos</span>
+            <select name="allowed_types" multiple data-category-types>
+                {% for type in category_type_options %}<option value="{{ type.value }}">{{ type.label }}</option>{% endfor %}
+            </select>
+        </label>
+        <label><span>Subcategorias</span><textarea name="subcategories" rows="3" placeholder="Uma por linha ou separadas por virgula" data-category-subcategories></textarea></label>
         <footer>
-            <button class="desk-btn" type="button">Cancelar</button>
-            <button class="desk-btn desk-btn-primary" type="button">Salvar categoria</button>
+            <button class="desk-btn" type="button" data-category-drawer-close>Cancelar</button>
+            <button class="desk-btn desk-btn-primary" type="submit">Salvar categoria</button>
         </footer>
     </form>
 </aside>

@@ -22,11 +22,22 @@
             </thead>
             <tbody>
                 {% for category in category_rows %}
-                <tr>
+                <tr data-category-row
+                    data-category-id="{{ category.id }}"
+                    data-category-name="{{ category.name }}"
+                    data-category-description="{{ category.description }}"
+                    data-category-icon="{{ category.icon }}"
+                    data-category-color="{{ category.color }}"
+                    data-category-active="{% if category.active %}true{% else %}false{% endif %}"
+                    data-category-priority="{{ category.default_priority }}"
+                    data-category-queue="{{ category.default_queue }}"
+                    data-category-sla="{{ category.default_sla }}"
+                    data-category-types="{{ category.allowed_type_values }}"
+                    data-category-subcategories="{{ category.subcategories }}">
                     <td><span class="desk-drag-handle"><i data-lucide="grip-vertical"></i>{{ category.order }}</span></td>
                     <td>
                         <div class="desk-category-inline">
-                            <span class="desk-category-icon"><i data-lucide="{{ category.icon }}"></i></span>
+                            <span class="desk-category-icon category-color-{{ category.color }}"><i class="bi {{ category.icon }}" aria-hidden="true"></i></span>
                             <div>
                                 <strong>{{ category.name }}</strong>
                                 <small>{{ category.description }}</small>
@@ -56,7 +67,7 @@
                     </td>
                     <td>
                         <label class="desk-toggle-row">
-                            <input type="checkbox" {% if category.active %}checked{% endif %}>
+                            <input type="checkbox" {% if category.active %}checked{% endif %} data-category-toggle>
                             <span>{% if category.active %}Ativa{% else %}Inativa{% endif %}</span>
                         </label>
                         {% if category.has_open_tickets %}
@@ -67,8 +78,8 @@
                         <details class="desk-inline-popover">
                             <summary class="desk-btn"><i data-lucide="more-horizontal"></i>Acoes</summary>
                             <div class="desk-popover">
-                                <button type="button">Editar no drawer</button>
-                                <button type="button">Mesclar categoria</button>
+                                <button type="button" data-category-drawer-open>Editar no drawer</button>
+                                <button type="button" data-category-merge-open>Mesclar categoria</button>
                                 <button type="button">Duplicar checklist</button>
                             </div>
                         </details>

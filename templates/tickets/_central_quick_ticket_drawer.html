@@ -16,6 +16,7 @@
         </div>
 
         <form class="nw-ticket-drawer-body nw-quick-ticket-form" data-quick-ticket-form>
+            {% csrf_token %}
             <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
                 <span>Solicitante</span>
                 <input name="requester" autocomplete="off" placeholder="Buscar por nome, e-mail ou setor" data-quick-required="Solicitante" data-quick-requester-search>
@@ -29,6 +30,30 @@
                 </div>
                 <span data-quick-requester-vip hidden>VIP / Socio</span>
             </article>
+
+            <section class="nw-quick-requester-create" data-quick-requester-create hidden>
+                <header>
+                    <strong>Criar solicitante rápido</strong>
+                    <button type="button" data-quick-requester-create-close aria-label="Fechar criação de solicitante">×</button>
+                </header>
+                <div class="nw-quick-requester-create-grid">
+                    <label>
+                        <span>Nome</span>
+                        <input name="quick_requester_name" placeholder="Nome do solicitante" data-quick-new-requester-name>
+                    </label>
+                    <label>
+                        <span>E-mail</span>
+                        <input name="quick_requester_email" placeholder="email@empresa.com" data-quick-new-requester-email>
+                    </label>
+                    <label>
+                        <span>Setor</span>
+                        <input name="quick_requester_sector" placeholder="Setor ou área" data-quick-new-requester-sector>
+                    </label>
+                </div>
+                <footer>
+                    <button type="button" data-quick-requester-create-save>Salvar solicitante</button>
+                </footer>
+            </section>
 
             <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
                 <span>Titulo</span>
@@ -54,15 +79,9 @@
                     <span>Categoria</span>
                     <select name="category" data-quick-required="Categoria" data-quick-category>
                         <option value="">Selecione</option>
-                        <option>Acesso</option>
-                        <option>Hardware</option>
-                        <option>Software</option>
-                        <option>Rede</option>
-                        <option>Seguranca</option>
-                        <option>Impressora</option>
-                        <option>RMM / Alerta</option>
-                        <option>E-mail</option>
-                        <option>Sistemas internos</option>
+                        {% for category in categories %}
+                        <option value="{{ category.name }}" data-default-priority="{{ category.default_priority|default:'normal' }}" data-default-queue="{{ category.default_queue }}" data-default-sla="{{ category.default_sla }}">{{ category.name }}</option>
+                        {% endfor %}
                     </select>
                 </label>
                 <label class="nw-quick-ticket-field">
@@ -90,6 +109,13 @@
                     <input name="critical_reason" placeholder="Impacto ou risco da criticidade" data-quick-critical-reason>
                 </label>
             </div>
+
+            <article class="nw-quick-ticket-summary" data-quick-category-defaults hidden>
+                <div>
+                    <strong>Padroes da categoria</strong>
+                    <small data-quick-category-defaults-text>-</small>
+                </div>
+            </article>
 
             <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
                 <span>Endpoint / dispositivo opcional</span>
@@ -124,10 +150,15 @@
                 <header>
                     <div>
                         <strong>Possiveis relacionados</strong>
-                        <span>Atualiza com solicitante, endpoint, titulo ou categoria.</span>
+                        <span>Vincule chamados recentes ou busque por ID, titulo, solicitante, categoria ou endpoint.</span>
                     </div>
                     <em data-quick-related-count>0</em>
                 </header>
+                <div class="nw-quick-linked-related" data-quick-linked-related hidden></div>
+                <label class="nw-quick-related-search">
+                    <span>Buscar chamados</span>
+                    <input type="search" placeholder="Buscar chamado para vincular..." data-quick-related-search>
+                </label>
                 <div data-quick-related-list>
                     <p>Nenhum relacionado encontrado.</p>
                 </div>
@@ -144,7 +175,6 @@
             <button class="desk-btn" type="button" data-quick-ticket-close>Cancelar</button>
             <button class="desk-btn" type="button" data-quick-save-draft>Salvar rascunho</button>
             <button class="desk-btn desk-btn-primary" type="button" data-quick-create="create">Criar</button>
-            <button class="desk-btn" type="button" data-quick-create="open">Criar e abrir</button>
             <button class="desk-btn" type="button" data-quick-create="assign">Criar e assumir</button>
         </footer>
     </section>

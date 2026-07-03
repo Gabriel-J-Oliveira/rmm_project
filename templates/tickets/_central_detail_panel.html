@@ -83,9 +83,11 @@
 
         <article id="overview" class="desk-detail-section">
             <h3>Descricao</h3>
-            <p>{{ selected_ticket.description }}</p>
+            <p>{{ selected_ticket.description|linebreaksbr }}</p>
             <div class="desk-preview-badges">
-                <span class="desk-badge neutral">{{ selected_ticket.category }}</span>
+                <span class="desk-badge neutral category-color-{{ selected_ticket.category_color }}">
+                    <i class="bi {{ selected_ticket.category_icon }}" aria-hidden="true"></i>{{ selected_ticket.category }}
+                </span>
                 <span class="desk-badge priority-{{ selected_ticket.priority }}">{{ selected_ticket.priority_label }}</span>
                 {% if selected_ticket.endpoint %}<span class="desk-endpoint-chip status-{{ selected_ticket.central.endpoint_status }}"><i></i><span class="mono">{{ selected_ticket.endpoint.hostname }}</span></span>{% endif %}
             </div>

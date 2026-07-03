@@ -1,4 +1,4 @@
-<dialog class="desk-modal desk-category-merge-modal">
+<dialog class="desk-modal desk-category-merge-modal" data-category-merge-modal>
     <h2>Mesclar categorias</h2>
     <p>Reatribui chamados da categoria removida para a categoria mantida. Chamados existentes nao sao apagados.</p>
     <div class="desk-form-grid">
@@ -6,7 +6,7 @@
         <label><span>Categoria mantida</span><select><option>Acesso</option><option>Hardware</option></select></label>
     </div>
     <div class="desk-form-actions">
-        <button class="desk-btn" type="button">Cancelar</button>
-        <button class="desk-btn desk-btn-primary" type="button">Mesclar</button>
+        <button class="desk-btn" type="button" data-category-merge-close>Cancelar</button>
+        <button class="desk-btn desk-btn-primary" type="button" data-category-merge-close>Mesclar</button>
     </div>
 </dialog>

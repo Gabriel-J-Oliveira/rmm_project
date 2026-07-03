@@ -3,7 +3,10 @@
 (() => {
     const stateEl = document.getElementById('ticket-detail-state');
     const state = stateEl ? JSON.parse(stateEl.textContent) : {};
-    const CURRENT_USER = 'Gabriel';
+    const CURRENT_USER = '{{ current_user_name|default:"Técnico"|escapejs }}';
+    const ticketUpdateUrl = "{% url 'tickets:api-update' ticket.number %}";
+    const ticketCommentUrl = "{% url 'tickets:api-comment' ticket.number %}";
+    const ticketActionUrl = "{% url 'tickets:api-action' ticket.number %}";
     const STATUS_LABELS = {
         new: 'Novo',
         in_progress: 'Em atendimento',
@@ -36,6 +39,7 @@
     let currentAttachmentId = null;
     let pendingAttachmentDelete = null;
     let currentReferenceCard = null;
+    let selectedComposerTemplateId = '';
 
     function all(selector, root = document) {
         return Array.from(root.querySelectorAll(selector));
@@ -49,6 +53,56 @@
             '"': '&quot;',
             "'": '&#39;',
         }[char]));
+    }
+
+    function csrfToken() {
+        return document.cookie.split('; ').find((row) => row.startsWith('csrftoken='))?.split('=')[1] || '';
+    }
+
+    async function persistTicketField(field, value) {
+        try {
+            const response = await fetch(ticketUpdateUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken(),
+                },
+                body: JSON.stringify({ field, value }),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                showToast(result.error || 'Nao foi possivel salvar a alteracao.');
+                return null;
+            }
+            return result;
+        } catch (error) {
+            showToast('Falha ao comunicar com o servidor.');
+            return null;
+        }
+    }
+
+    async function persistTicketAction(payload) {
+        try {
+            const response = await fetch(ticketActionUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken(),
+                },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                showToast(result.error || 'Nao foi possivel concluir a acao.');
+                return null;
+            }
+            return result;
+        } catch (error) {
+            showToast('Falha ao comunicar com o servidor.');
+            return null;
+        }
     }
 
     function showToast(message, actionLabel = '', undo = null) {
@@ -173,7 +227,7 @@
 
     function copyAuditSummary() {
         const total = document.querySelector('[data-audit-total]')?.textContent || auditRows().length;
-        const text = `Auditoria do chamado #${state.number}: ${total} eventos, ultima alteracao por Gabriel em 09:18.`;
+        const text = `Auditoria do chamado #${state.number}: ${total} eventos, ultima alteracao por ${CURRENT_USER} em 09:18.`;
         navigator.clipboard?.writeText(text);
         showToast('Resumo da auditoria copiado.');
     }
@@ -465,7 +519,16 @@
             badge.textContent = state.priorityLabel;
         });
         all('[data-ticket-category]').forEach((badge) => {
-            badge.textContent = state.category || 'Sem categoria';
+            const icon = state.categoryIcon || 'bi-folder';
+            const color = state.categoryColor || 'gray';
+            badge.className = `desk-badge neutral category-color-${color}`;
+            badge.innerHTML = `<i class="bi ${escapeHtml(icon)}" aria-hidden="true"></i>${escapeHtml(state.category || 'Sem categoria')}`;
+        });
+        all('[data-ticket-queue]').forEach((node) => {
+            node.textContent = state.queue || 'N1 - Atendimento';
+        });
+        all('[data-ticket-sla-name]').forEach((node) => {
+            node.textContent = state.slaName || state.slaLabel || 'Sem SLA';
         });
         all('[data-ticket-assignee]').forEach((assignee) => {
             assignee.innerHTML = `<span class="desk-avatar">${escapeHtml((state.assignedTo || '?').slice(0, 1))}</span>${escapeHtml(state.assignedTo || 'Sem responsavel')}`;
@@ -535,8 +598,10 @@
         window.lucide?.createIcons?.();
     }
 
-    function assignToMe() {
+    async function assignToMe() {
         const previous = state.assignedTo;
+        const result = await persistTicketField('assigned_to', CURRENT_USER);
+        if (!result) return;
         state.assignedTo = CURRENT_USER;
         updateBadges();
         addActivity('system', 'user-check', `${CURRENT_USER} assumiu o chamado`, 'Responsavel atualizado pela acao rapida.', 'Sistema');
@@ -548,7 +613,9 @@
             newValue: CURRENT_USER,
             payload: { field: 'assignee', old: previous || null, new: CURRENT_USER },
         });
-        showToast(`Chamado #${state.number} atribuido a voce.`, 'Desfazer', () => {
+        showToast(`Chamado #${state.number} atribuido a voce.`, 'Desfazer', async () => {
+            const undone = await persistTicketField('assigned_to', previous || '');
+            if (!undone) return;
             state.assignedTo = previous;
             updateBadges();
             addActivity('system', 'rotate-ccw', 'Atribuicao desfeita', 'Responsavel restaurado no mock local.', 'Sistema');
@@ -613,7 +680,7 @@
         }
     }
 
-    function submitComposerComment(event, combo = 'comment') {
+    async function submitComposerComment(event, combo = 'comment') {
         const targetForm = event?.target?.closest?.('[data-detail-comment-form]') || (!event ? form : null);
         if (!targetForm) return true;
         event?.preventDefault?.();
@@ -624,6 +691,26 @@
         }
         const visibility = targetForm.querySelector('[data-comment-visibility-value]')?.value || 'internal';
         const internal = visibility !== 'public';
+        let result;
+        try {
+            const response = await fetch(ticketCommentUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken(),
+                },
+                body: JSON.stringify({ body, visibility, template_id: selectedComposerTemplateId }),
+            });
+            result = await response.json();
+            if (!response.ok || !result.ok) {
+                showToast(result.error || 'Nao foi possivel adicionar o comentario.');
+                return false;
+            }
+        } catch (error) {
+            showToast('Falha ao comunicar com o servidor.');
+            return false;
+        }
         addActivity('comment', 'message-square', internal ? 'Comentario interno adicionado' : 'Comentario publico enviado', body, internal ? 'Comentario interno' : 'Comentario publico');
         addAuditEvent({
             type: 'comment',
@@ -634,6 +721,7 @@
             payload: { field: 'comments', visibility, body },
         });
         textarea.value = '';
+        selectedComposerTemplateId = '';
         setComposerExpanded(false);
         autoGrowTextarea(textarea);
         clearAttachments();
@@ -662,7 +750,7 @@
         checklist.querySelector('[data-resolution-progress]').textContent = `${done}/${checks.length} concluido`;
     }
 
-    function resolveTicket() {
+    async function resolveTicket() {
         const summary = resolutionDrawer.querySelector('[data-resolution-summary]').value.trim();
         const rootCause = resolutionDrawer.querySelector('[data-resolution-root-cause]').value.trim();
         const publicComment = resolutionDrawer.querySelector('[data-resolution-public-comment]').value.trim();
@@ -687,6 +775,16 @@
             warning.hidden = false;
             warning.textContent = `Checklist parcial: ${done}/${checks.length}. A resolucao sera registrada com pendencias declaradas.`;
         }
+        const selectedTemplate = resolutionDrawer.querySelector('[data-resolution-template]')?.value || '';
+        const persisted = await persistTicketAction({
+            action: 'resolve',
+            summary,
+            root_cause: rootCause,
+            public_comment: publicComment,
+            internal_comment: internalComment,
+            template_id: selectedTemplate,
+        });
+        if (!persisted) return;
         state.status = 'resolved';
         state.statusLabel = STATUS_LABELS.resolved;
         state.resolved = true;
@@ -708,7 +806,7 @@
         showToast(`Chamado #${state.number} resolvido.`);
     }
 
-    function escalateTicket() {
+    async function escalateTicket() {
         const target = escalationDrawer.querySelector('[data-escalation-target]').value.trim();
         const reason = escalationDrawer.querySelector('[data-escalation-reason]').value.trim();
         const owner = escalationDrawer.querySelector('[data-escalation-owner]').value.trim();
@@ -721,12 +819,24 @@
             showToast('Preencha os campos obrigatorios.');
             return;
         }
-        state.status = 'escalated';
-        state.statusLabel = STATUS_LABELS.escalated;
-        state.assignedTo = owner || target;
+        const selectedTemplate = escalationDrawer.querySelector('[data-escalation-template]')?.value || '';
+        const persisted = await persistTicketAction({
+            action: 'escalate',
+            target,
+            reason,
+            owner,
+            priority,
+            internal_comment: internal,
+            template_id: selectedTemplate,
+        });
+        if (!persisted) return;
+        state.status = persisted.ticket.status;
+        state.statusLabel = persisted.ticket.statusLabel;
+        state.assignedTo = persisted.ticket.assignedTo || owner || target;
+        state.queue = persisted.ticket.queue || target;
         if (priority) {
-            state.priority = priority;
-            state.priorityLabel = PRIORITY_LABELS[priority];
+            state.priority = persisted.ticket.priority;
+            state.priorityLabel = persisted.ticket.priorityLabel;
             addActivity('escalation', 'flag', `Prioridade alterada para ${state.priorityLabel}`, 'Alteracao aplicada durante escalonamento.', 'Escalonamento');
         }
         updateBadges();
@@ -744,7 +854,7 @@
         showToast(`Chamado escalado para ${target}.`);
     }
 
-    function changeStatus(status) {
+    async function changeStatus(status) {
         if (status === 'resolved') {
             openDrawer(resolutionDrawer);
             return;
@@ -754,8 +864,10 @@
             return;
         }
         const previous = state.statusLabel;
+        const result = await persistTicketField('status', status);
+        if (!result) return;
         state.status = status;
-        state.statusLabel = STATUS_LABELS[status] || status;
+        state.statusLabel = result.ticket.statusLabel || STATUS_LABELS[status] || status;
         updateBadges();
         addActivity('system', 'shuffle', 'Status alterado', `${previous} -> ${state.statusLabel}`, 'Sistema');
         addAuditEvent({
@@ -769,15 +881,17 @@
         showToast('Status atualizado.');
     }
 
-    function changePriority(priority) {
+    async function changePriority(priority) {
         if (priority === 'critical') {
             const reason = window.prompt('Justificativa para prioridade Critica:');
             if (!reason) return;
             addActivity('system', 'alert-triangle', 'Justificativa de criticidade', reason, 'Sistema');
         }
         const previous = state.priorityLabel;
+        const result = await persistTicketField('priority', priority);
+        if (!result) return;
         state.priority = priority;
-        state.priorityLabel = PRIORITY_LABELS[priority] || priority;
+        state.priorityLabel = result.ticket.priorityLabel || PRIORITY_LABELS[priority] || priority;
         updateBadges();
         addActivity('system', 'flag', 'Prioridade alterada', `${previous} -> ${state.priorityLabel}`, 'Sistema');
         addAuditEvent({
@@ -977,17 +1091,20 @@
         const hint = document.querySelector('[data-comment-visibility-hint]');
         if (value) value.value = mode;
         if (hint) hint.textContent = mode === 'public' ? 'Visivel ao solicitante.' : 'Somente a equipe ve este comentario.';
+        all('[data-comment-template-channel]').forEach((button) => {
+            button.hidden = button.dataset.commentTemplateChannel !== mode;
+        });
+        selectedComposerTemplateId = '';
     }
 
     function insertMacro(text) {
         if (!textarea) return;
-        const start = textarea.selectionStart || textarea.value.length;
-        const end = textarea.selectionEnd || textarea.value.length;
-        textarea.value = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
+        textarea.value = text;
         setComposerExpanded(true);
         textarea.focus();
-        textarea.selectionStart = textarea.selectionEnd = start + text.length;
+        textarea.selectionStart = textarea.selectionEnd = text.length;
         autoGrowTextarea(textarea);
+        showToast('Template inserido.');
     }
 
     function addAttachmentPill(name) {
@@ -1285,7 +1402,7 @@
         attachmentsBox.hidden = true;
     }
 
-    document.addEventListener('click', (event) => {
+    document.addEventListener('click', async (event) => {
         const actionButton = event.target.closest('[data-detail-action]');
         if (actionButton) {
             const action = actionButton.dataset.detailAction;
@@ -1296,6 +1413,19 @@
             if (action === 'open-rmm') showToast('Abrindo endpoint no RMM.');
             if (action === 'link-endpoint') showToast('Vinculo de endpoint preparado no mock.');
             if (action === 'mention') focusComment('@');
+            if (action === 'edit-title') {
+                const nextTitle = window.prompt('Novo titulo do chamado:', state.title || '');
+                if (nextTitle?.trim() && nextTitle.trim() !== state.title) {
+                    const previous = state.title;
+                    const persisted = await persistTicketField('title', nextTitle.trim());
+                    if (!persisted) return;
+                    state.title = persisted.ticket.title;
+                    const titleNode = document.querySelector('[data-ticket-title]');
+                    if (titleNode) titleNode.textContent = state.title;
+                    addActivity('system', 'pencil', 'Titulo alterado', `${previous} -> ${state.title}`, 'Sistema');
+                    showToast('Titulo atualizado.');
+                }
+            }
         }
         if (event.target.closest('[data-drawer-close]')) closeDrawers();
         if (event.target.closest('[data-audit-close]')) closeAudit();
@@ -1327,7 +1457,10 @@
         const visibility = event.target.closest('[data-comment-visibility]');
         if (visibility) setVisibility(visibility.dataset.commentVisibility);
         const macro = event.target.closest('[data-comment-macro]');
-        if (macro) insertMacro(macro.dataset.commentMacro);
+        if (macro) {
+            selectedComposerTemplateId = macro.dataset.commentTemplateId || '';
+            insertMacro(macro.dataset.commentMacro);
+        }
         if (event.target.closest('[data-comment-attach]')) document.querySelector('[data-comment-file]')?.click();
         const combo = event.target.closest('[data-comment-combo]');
         if (combo) submitComposerComment(event, combo.dataset.commentCombo);
@@ -1514,7 +1647,15 @@
         const category = event.target.closest('[data-quick-category]');
         if (category) {
             const previous = state.category;
-            state.category = category.dataset.quickCategory;
+            const persisted = await persistTicketField('category', category.dataset.quickCategory);
+            if (!persisted) return;
+            state.category = persisted.ticket?.category || category.dataset.quickCategory;
+            state.categoryIcon = persisted.ticket?.categoryIcon || state.categoryIcon || 'bi-folder';
+            state.categoryColor = persisted.ticket?.categoryColor || state.categoryColor || 'gray';
+            state.priority = persisted.ticket?.priority || state.priority;
+            state.priorityLabel = persisted.ticket?.priorityLabel || state.priorityLabel;
+            state.queue = persisted.ticket?.queue || state.queue;
+            state.slaLabel = persisted.ticket?.sla || persisted.ticket?.slaLabel || state.slaLabel;
             updateBadges();
             addActivity('system', 'tag', 'Categoria alterada', `${previous} -> ${state.category}`, 'Sistema');
             addAuditEvent({
@@ -1527,9 +1668,50 @@
             });
             showToast('Categoria atualizada.');
         }
+        const queue = event.target.closest('[data-quick-queue]');
+        if (queue) {
+            const previous = state.queue || 'Sem fila';
+            const persisted = await persistTicketField('queue', queue.dataset.quickQueue);
+            if (!persisted) return;
+            state.queue = persisted.ticket?.queue || queue.dataset.quickQueue || '';
+            updateBadges();
+            addActivity('system', 'inbox', 'Fila alterada', `${previous} -> ${state.queue || 'Sem fila'}`, 'Sistema');
+            addAuditEvent({
+                type: 'field',
+                badge: 'Campo alterado',
+                action: 'Alterou fila',
+                oldValue: previous,
+                newValue: state.queue || 'Sem fila',
+                payload: { field: 'queue', old: previous, new: state.queue || null },
+            });
+            showToast('Fila atualizada.');
+        }
+        const sla = event.target.closest('[data-quick-sla]');
+        if (sla) {
+            const previous = state.slaName || state.slaLabel || 'Sem SLA';
+            const persisted = await persistTicketField('sla', sla.dataset.quickSla);
+            if (!persisted) return;
+            state.slaName = persisted.ticket?.sla || 'Sem SLA';
+            state.slaLabel = persisted.ticket?.slaLabel || persisted.ticket?.sla || 'Sem SLA';
+            state.slaLevel = persisted.ticket?.slaLevel || state.slaLevel || 'ok';
+            state.dueAt = persisted.ticket?.dueAt || '';
+            updateBadges();
+            addActivity('sla', 'timer', 'SLA alterado', `${previous} -> ${state.slaName}`, 'Sistema');
+            addAuditEvent({
+                type: 'field',
+                badge: 'Campo alterado',
+                action: 'Alterou SLA',
+                oldValue: previous,
+                newValue: state.slaName,
+                payload: { field: 'sla', old: previous, new: state.slaName, due_at: state.dueAt },
+            });
+            showToast('SLA atualizado.');
+        }
         const assignee = event.target.closest('[data-quick-assignee]');
         if (assignee) {
             const previous = state.assignedTo || 'Sem responsavel';
+            const persisted = await persistTicketField('assigned_to', assignee.dataset.quickAssignee);
+            if (!persisted) return;
             state.assignedTo = assignee.dataset.quickAssignee;
             updateBadges();
             addActivity('system', 'user-check', 'Responsavel alterado', `${previous} -> ${state.assignedTo || 'Sem responsavel'}`, 'Sistema');
@@ -1635,7 +1817,9 @@
             const popover = event.target.closest('.desk-popover');
             let visible = 0;
             all('[data-comment-macro]', popover).forEach((button) => {
-                const match = button.textContent.toLowerCase().includes(query);
+                const currentVisibility = document.querySelector('[data-comment-visibility-value]')?.value || 'internal';
+                const channelMatches = !button.dataset.commentTemplateChannel || button.dataset.commentTemplateChannel === currentVisibility;
+                const match = channelMatches && button.textContent.toLowerCase().includes(query);
                 button.hidden = !match;
                 if (match) visible += 1;
             });
@@ -1798,6 +1982,24 @@
     resolutionDrawer?.querySelector('[data-resolution-kb]')?.addEventListener('change', (event) => {
         resolutionDrawer.querySelector('[data-resolution-kb-title-wrap]').hidden = !event.target.checked;
     });
+    resolutionDrawer?.querySelector('[data-resolution-template]')?.addEventListener('change', (event) => {
+        const option = event.target.selectedOptions[0];
+        const content = option?.dataset.templateContent || '';
+        if (!content) return;
+        const summary = resolutionDrawer.querySelector('[data-resolution-summary]');
+        const publicComment = resolutionDrawer.querySelector('[data-resolution-public-comment]');
+        if (summary && !summary.value.trim()) summary.value = content;
+        if (publicComment) publicComment.value = content;
+    });
+    escalationDrawer?.querySelector('[data-escalation-template]')?.addEventListener('change', (event) => {
+        const option = event.target.selectedOptions[0];
+        const content = option?.dataset.templateContent || '';
+        if (!content) return;
+        const reason = escalationDrawer.querySelector('[data-escalation-reason]');
+        const internal = escalationDrawer.querySelector('[data-escalation-internal]');
+        if (reason) reason.value = content;
+        if (internal) internal.value = content;
+    });
     toast?.querySelector('button')?.addEventListener('click', () => {
         const undo = toastUndo;
         toastUndo = null;
@@ -1808,6 +2010,7 @@
     updateResolutionProgress();
     updateServiceChecklist(false);
     setComposerExpanded(false);
+    setVisibility(document.querySelector('[data-comment-visibility-value]')?.value || 'internal');
     autoGrowTextarea(textarea);
     updateActivityCounts();
     filterActivity('all');

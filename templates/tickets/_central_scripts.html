@@ -1,10 +1,12 @@
 <script>
 (() => {
-    const CURRENT_TECH = 'Gabriel';
+    const CURRENT_TECH = '{{ current_user_name|default:"Técnico"|escapejs }}';
     const centralUrl = "{% url 'tickets:central' %}";
     const createUrl = "{% url 'tickets:create' %}";
+    const createTicketApiUrl = "{% url 'tickets:api-create' %}";
     const endpointUrl = "{% url 'endpoint-list' %}";
     const rowSelector = '.desk-ticket-row';
+    const listPane = document.querySelector('.desk-central-list-pane');
     const previewPanel = document.querySelector('[data-preview-panel]');
     const selectionBar = document.querySelector('.desk-selection-bar');
     const selectedLabel = document.querySelector('[data-selected-label]');
@@ -29,6 +31,9 @@
     let toastUndo = null;
     let selectedQuickRequester = null;
     let selectedQuickEndpoint = null;
+    let quickLinkedRelatedIds = new Set();
+    let lastQuickClipboardImageSignature = '';
+    let quickClipboardReadInProgress = false;
     const quickDraftKey = 'nightowl.central.quickTicketDraft';
     const STATUS_LABELS = {
         new: 'Novo',
@@ -71,12 +76,12 @@
         { hostname: 'REC-004', status: 'offline', label: 'Offline', user: 'recepcao', lastSeen: 'ha 2h', ip: '192.168.101.74', alerts: 'sem check-in', risk: 'medio' }
     ];
     const QUICK_TEMPLATES = {
-        access: { category: 'Acesso', priority: 'normal', title: 'Problema de acesso', description: 'Solicitante relata problema de acesso.\\n\\nSistema/servico afetado:\\nImpacto:\\nMensagem de erro:\\nPassos ja tentados:' },
-        rmm: { category: 'RMM / Alerta', priority: 'high', title: 'Alerta RMM em endpoint', description: 'Alerta de monitoramento recebido.\\n\\nEndpoint:\\nAlerta:\\nSeveridade:\\nAcao inicial:' },
-        slow: { category: 'Hardware', priority: 'normal', title: 'Lentidao no equipamento', description: 'Usuario relata lentidao no equipamento.\\n\\nQuando iniciou:\\nAplicacoes afetadas:\\nImpacto no trabalho:' },
-        printer: { category: 'Impressora', priority: 'normal', title: 'Problema de impressao', description: 'Falha de impressao reportada.\\n\\nImpressora/fila:\\nErro exibido:\\nUsuarios afetados:' },
-        mail: { category: 'E-mail', priority: 'normal', title: 'Problema de e-mail', description: 'Problema relacionado a e-mail.\\n\\nConta afetada:\\nSintoma:\\nImpacto:' },
-        install: { category: 'Software', priority: 'normal', title: 'Solicitacao de instalacao', description: 'Solicitacao de instalacao ou liberacao de software.\\n\\nSoftware:\\nJustificativa:\\nPrazo:' }
+        access: { category: 'Acesso', priority: 'normal', title: 'Problema de acesso', description: 'Solicitante relata problema de acesso.\n\nSistema/servico afetado:\nImpacto:\nMensagem de erro:\nPassos ja tentados:' },
+        rmm: { category: 'RMM / Alerta', priority: 'high', title: 'Alerta RMM em endpoint', description: 'Alerta de monitoramento recebido.\n\nEndpoint:\nAlerta:\nSeveridade:\nAcao inicial:' },
+        slow: { category: 'Hardware', priority: 'normal', title: 'Lentidao no equipamento', description: 'Usuario relata lentidao no equipamento.\n\nQuando iniciou:\nAplicacoes afetadas:\nImpacto no trabalho:' },
+        printer: { category: 'Impressora', priority: 'normal', title: 'Problema de impressao', description: 'Falha de impressao reportada.\n\nImpressora/fila:\nErro exibido:\nUsuarios afetados:' },
+        mail: { category: 'E-mail', priority: 'normal', title: 'Problema de e-mail', description: 'Problema relacionado a e-mail.\n\nConta afetada:\nSintoma:\nImpacto:' },
+        install: { category: 'Software', priority: 'normal', title: 'Solicitacao de instalacao', description: 'Solicitacao de instalacao ou liberacao de software.\n\nSoftware:\nJustificativa:\nPrazo:' }
     };
 
     ticketData.forEach((ticket) => {
@@ -129,6 +134,10 @@
         }[char]));
     }
 
+    function csrfToken() {
+        return document.cookie.split('; ').find((row) => row.startsWith('csrftoken='))?.split('=')[1] || '';
+    }
+
     function badgeClass(value) {
         return escapeHtml(value || 'neutral');
     }
@@ -162,7 +171,11 @@
 
     function setQuickValue(name, value) {
         const field = quickField(name);
-        if (field) field.value = value || '';
+        if (field) field.value = normalizeEscapedNewlines(value || '');
+    }
+
+    function normalizeEscapedNewlines(value) {
+        return String(value ?? '').replace(/\\n/g, '\n');
     }
 
     function openQuickTicketDrawer() {
@@ -213,9 +226,11 @@
         quickTicketForm?.reset();
         selectedQuickRequester = null;
         selectedQuickEndpoint = null;
+        quickLinkedRelatedIds = new Set();
         quickTicketDrawer?.querySelector('[data-quick-requester-summary]')?.setAttribute('hidden', '');
         quickTicketDrawer?.querySelector('[data-quick-endpoint-card]')?.setAttribute('hidden', '');
         quickTicketDrawer?.querySelector('[data-quick-attachments-list]')?.setAttribute('hidden', '');
+        quickTicketDrawer?.querySelector('[data-quick-requester-create]')?.setAttribute('hidden', '');
         const status = quickTicketDrawer?.querySelector('[data-quick-draft-status]');
         if (status) status.textContent = 'Rascunho descartado';
         updateQuickRelated();
@@ -224,9 +239,45 @@
 
     function renderQuickResults(box, rows, renderer, emptyText) {
         if (!box) return;
-        box.innerHTML = rows.length ? rows.map(renderer).join('') : `<p>${escapeHtml(emptyText)}</p>`;
+        box.innerHTML = rows.length ? rows.map(renderer).join('') : `<p>${emptyText}</p>`;
         box.hidden = false;
         window.lucide?.createIcons?.();
+    }
+
+    function openQuickRequesterCreate() {
+        const panel = quickTicketDrawer?.querySelector('[data-quick-requester-create]');
+        if (!panel) return;
+        panel.hidden = false;
+        const name = quickTicketDrawer.querySelector('[data-quick-new-requester-name]');
+        if (name && !name.value.trim()) name.value = quickValue('requester');
+        quickTicketDrawer.querySelector('[data-quick-requester-results]').hidden = true;
+        name?.focus();
+    }
+
+    function closeQuickRequesterCreate() {
+        quickTicketDrawer?.querySelector('[data-quick-requester-create]')?.setAttribute('hidden', '');
+    }
+
+    function saveQuickRequesterCreate() {
+        const name = quickTicketDrawer?.querySelector('[data-quick-new-requester-name]')?.value.trim();
+        if (!name) {
+            showToast('Informe o nome do solicitante.', 'warning');
+            return;
+        }
+        const email = quickTicketDrawer.querySelector('[data-quick-new-requester-email]')?.value.trim() || '';
+        const sector = quickTicketDrawer.querySelector('[data-quick-new-requester-sector]')?.value.trim() || 'Triagem';
+        selectedQuickRequester = { name, email, sector, client: 'Cadastro rapido', vip: false };
+        setQuickValue('requester', name);
+        const summary = quickTicketDrawer?.querySelector('[data-quick-requester-summary]');
+        if (summary) summary.hidden = false;
+        quickTicketDrawer.querySelector('[data-quick-requester-name]').textContent = name;
+        quickTicketDrawer.querySelector('[data-quick-requester-meta]').textContent = `${email || 'Sem e-mail'} · ${sector} · Cadastro rapido`;
+        const vip = quickTicketDrawer.querySelector('[data-quick-requester-vip]');
+        if (vip) vip.hidden = true;
+        closeQuickRequesterCreate();
+        updateQuickRelated();
+        saveQuickDraft(true);
+        showToast('Solicitante adicionado ao rascunho.', 'success');
     }
 
     function pickQuickRequester(name) {
@@ -277,6 +328,29 @@
         if (wrap) wrap.hidden = quickValue('priority') !== 'critical';
     }
 
+    function quickSelectedCategoryConfig() {
+        const option = quickTicketDrawer?.querySelector('[data-quick-category]')?.selectedOptions?.[0];
+        return {
+            priority: option?.dataset.defaultPriority || '',
+            queue: option?.dataset.defaultQueue || '',
+            sla: option?.dataset.defaultSla || '',
+        };
+    }
+
+    function applyQuickCategoryDefaults() {
+        const config = quickSelectedCategoryConfig();
+        if (config.priority) setQuickValue('priority', config.priority);
+        const summary = quickTicketDrawer?.querySelector('[data-quick-category-defaults]');
+        const text = quickTicketDrawer?.querySelector('[data-quick-category-defaults-text]');
+        if (summary && text) {
+            const priorityLabel = PRIORITY_LABELS[config.priority] || 'Normal';
+            const queue = config.queue || 'N1 - Atendimento';
+            const sla = config.sla || 'Sem SLA';
+            text.textContent = `Prioridade ${priorityLabel} · Fila ${queue} · SLA ${sla}`;
+            summary.hidden = !quickValue('category');
+        }
+    }
+
     function quickRelatedMatches() {
         const requester = quickValue('requester');
         const endpoint = quickValue('endpoint');
@@ -290,10 +364,94 @@
         )).slice(0, 3);
     }
 
+    function quickRelatedReason(ticket) {
+        const requester = quickValue('requester');
+        const endpoint = quickValue('endpoint');
+        const category = quickValue('category');
+        const titleToken = quickValue('title').toLowerCase().split(/\s+/).find(Boolean);
+        if (endpoint && ticket.endpoint?.hostname === endpoint) return { reason: 'Mesmo endpoint', score: 92 };
+        if (requester && ticket.requester === requester) return { reason: 'Mesmo solicitante', score: 84 };
+        if (category && ticket.category === category) return { reason: 'Mesma categoria', score: 72 };
+        if (titleToken && ticket.title.toLowerCase().includes(titleToken)) return { reason: 'Titulo parecido', score: 68 };
+        return { reason: 'Chamado recente', score: 0 };
+    }
+
+    function quickRelatedSearchResults() {
+        const query = quickTicketDrawer?.querySelector('[data-quick-related-search]')?.value.trim().toLowerCase() || '';
+        if (!query) return [];
+        return ticketData.filter((ticket) => [
+            `#${ticket.number}`,
+            String(ticket.number),
+            ticket.title,
+            ticket.requester,
+            ticket.category,
+            ticket.endpoint?.hostname || ''
+        ].join(' ').toLowerCase().includes(query)).slice(0, 5);
+    }
+
+    function renderQuickRelatedItem(ticket, reasonOverride = '') {
+        const meta = reasonOverride ? { reason: reasonOverride, score: 0 } : quickRelatedReason(ticket);
+        const linked = quickLinkedRelatedIds.has(String(ticket.number));
+        const score = meta.score ? ` · ${meta.score}% similar` : '';
+        return `
+            <article>
+                <div>
+                    <strong>#${ticket.number} ${escapeHtml(ticket.title)}</strong>
+                    <span>${escapeHtml(ticket.status_label || ticket.status || 'Novo')} · ${escapeHtml(ticket.requester || ticket.category || 'Desk')}</span>
+                    <span>${escapeHtml(meta.reason)}${score}</span>
+                </div>
+                <button type="button" data-quick-link-related="${ticket.number}" ${linked ? 'disabled' : ''}>${linked ? 'Vinculado' : 'Vincular'}</button>
+            </article>
+        `;
+    }
+
+    function updateQuickLinkedRelated() {
+        const box = quickTicketDrawer?.querySelector('[data-quick-linked-related]');
+        const count = quickTicketDrawer?.querySelector('[data-quick-related-count]');
+        if (count) count.textContent = quickLinkedRelatedIds.size;
+        if (!box) return;
+        const linked = Array.from(quickLinkedRelatedIds).map((id) => getTicket(id)).filter(Boolean);
+        box.hidden = !linked.length;
+        box.innerHTML = linked.length ? `
+            <strong>${linked.length} vinculado${linked.length > 1 ? 's' : ''}</strong>
+            <div>
+                ${linked.map((ticket) => `
+                    <span>#${ticket.number}
+                        <button type="button" data-quick-unlink-related="${ticket.number}" aria-label="Remover vinculo com #${ticket.number}">×</button>
+                    </span>
+                `).join('')}
+            </div>
+        ` : '';
+    }
+
     function updateQuickRelated() {
         const list = quickTicketDrawer?.querySelector('[data-quick-related-list]');
         const count = quickTicketDrawer?.querySelector('[data-quick-related-count]');
         if (!list) return;
+        const linkedCount = quickLinkedRelatedIds.size;
+        if (count) count.textContent = linkedCount;
+        const matchesNow = quickRelatedMatches();
+        const searchQuery = quickTicketDrawer?.querySelector('[data-quick-related-search]')?.value.trim() || '';
+        const searchResults = quickRelatedSearchResults();
+        const latest = ticketData.slice(0, 5);
+        list.innerHTML = `
+            <div class="nw-quick-related-block">
+                <strong>Últimos chamados</strong>
+                ${latest.length ? latest.map((ticket) => renderQuickRelatedItem(ticket, 'Recente')).join('') : '<p>Nenhum chamado recente.</p>'}
+            </div>
+            <div class="nw-quick-related-block">
+                <strong>${searchQuery ? 'Resultados da busca' : 'Sugestões'}</strong>
+                ${
+                    searchResults.length
+                        ? searchResults.map((ticket) => renderQuickRelatedItem(ticket)).join('')
+                        : matchesNow.length
+                            ? matchesNow.map((ticket) => renderQuickRelatedItem(ticket)).join('')
+                            : '<p>Nenhum relacionado encontrado.</p>'
+                }
+            </div>
+        `;
+        updateQuickLinkedRelated();
+        return;
         const matches = quickRelatedMatches();
         if (count) count.textContent = matches.length;
         if (!matches.length) {
@@ -321,7 +479,7 @@
         const template = QUICK_TEMPLATES[key];
         if (!template) return;
         if (!quickValue('title')) setQuickValue('title', template.title);
-        setQuickValue('description', template.description);
+        setQuickValue('description', normalizeEscapedNewlines(template.description));
         setQuickValue('category', template.category);
         setQuickValue('priority', template.priority);
         updateQuickCritical();
@@ -330,12 +488,81 @@
         showToast('Template aplicado.', 'success');
     }
 
-    function addQuickAttachment(name) {
+    function linkQuickRelated(ticketId) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        quickLinkedRelatedIds.add(String(ticketId));
+        updateQuickRelated();
+        showToast(`Chamado #${ticketId} vinculado ao rascunho.`, 'success');
+    }
+
+    function unlinkQuickRelated(ticketId) {
+        quickLinkedRelatedIds.delete(String(ticketId));
+        updateQuickRelated();
+        showToast(`Vinculo com #${ticketId} removido.`, 'info');
+    }
+
+    function quickPrintAttachmentName() {
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[-T:]/g, '');
+        return `print-colado-${stamp}.png`;
+    }
+
+    function addQuickAttachment(name, signature = '') {
         const list = quickTicketDrawer?.querySelector('[data-quick-attachments-list]');
-        if (!list) return;
+        if (!list) return false;
+        if (signature && Array.from(list.querySelectorAll('[data-quick-attachment-signature]')).some((item) => item.dataset.quickAttachmentSignature === signature)) return false;
         list.hidden = false;
-        list.insertAdjacentHTML('beforeend', `<span><i data-lucide="paperclip"></i>${escapeHtml(name)}<button type="button" data-quick-remove-attachment aria-label="Remover anexo">x</button></span>`);
+        const signatureAttr = signature ? ` data-quick-attachment-signature="${escapeHtml(signature)}"` : '';
+        list.insertAdjacentHTML('beforeend', `<span${signatureAttr}><i data-lucide="paperclip"></i>${escapeHtml(name)}<button type="button" data-quick-remove-attachment aria-label="Remover anexo">x</button></span>`);
         window.lucide?.createIcons?.();
+        return true;
+    }
+
+    async function quickImageSignature(blob, imageType) {
+        if (globalThis.crypto?.subtle && blob?.arrayBuffer) {
+            const buffer = await blob.arrayBuffer();
+            const digest = await globalThis.crypto.subtle.digest('SHA-256', buffer);
+            return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        }
+        return `${imageType}:${blob?.size || 0}`;
+    }
+
+    async function pasteQuickPrintFromClipboard() {
+        if (quickClipboardReadInProgress) return;
+        if (!navigator.clipboard?.read) {
+            showToast('Use Ctrl+V nesta área para colar o print.', 'info');
+            return;
+        }
+        quickClipboardReadInProgress = true;
+        showToast('Verificando área de transferência...', 'info');
+        try {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const item of clipboardItems) {
+                const imageType = item.types.find((type) => type.startsWith('image/'));
+                if (!imageType) continue;
+                const blob = await item.getType(imageType);
+                const signature = await quickImageSignature(blob, imageType);
+                if (signature === lastQuickClipboardImageSignature) {
+                    showToast('Print já está nos anexos.', 'info');
+                    return;
+                }
+                const added = addQuickAttachment(quickPrintAttachmentName(), signature);
+                lastQuickClipboardImageSignature = signature;
+                showToast(added ? 'Print adicionado aos anexos.' : 'Print já está nos anexos.', added ? 'success' : 'info');
+                return;
+            }
+            showToast('Nenhuma imagem encontrada na área de transferência.', 'info');
+        } catch (error) {
+            showToast('Use Ctrl+V nesta área para colar o print.', 'info');
+        } finally {
+            quickClipboardReadInProgress = false;
+        }
+    }
+
+    function handleQuickPasteButton(event) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        pasteQuickPrintFromClipboard();
     }
 
     function validateQuickTicket() {
@@ -384,7 +611,7 @@
             events: [{ icon: 'ticket-check', text: 'Chamado criado via abertura rapida', when: 'agora', author: CURRENT_TECH }],
             rmm: endpoint ? { active_alerts: endpoint.alerts.includes('0') ? 0 : 1, cpu: 32, memory: 58, disk: endpoint.hostname === 'SRV-FILES-01' ? 92 : 46 } : null,
             sla_state: priority === 'critical' ? 'critical' : priority === 'high' ? 'warning' : 'ok',
-            relatedTicketIds: quickRelatedMatches().map((ticket) => ticket.number)
+            relatedTicketIds: Array.from(quickLinkedRelatedIds).map(Number)
         };
     }
 
@@ -419,28 +646,71 @@
             <div role="cell"><span class="desk-badge status-new">Novo</span></div>
             <div role="cell"><span class="desk-assignee-pill ${ticket.assigned_to ? '' : 'is-unassigned'}"><span class="desk-avatar">${ticket.assigned_to ? ticket.assigned_to.slice(0, 1) : '?'}</span>${ticket.assigned_to || 'Sem dono'}</span></div>
             <div role="cell">${ticket.endpoint ? `<span class="desk-endpoint-chip status-${ticket.endpoint.status}"><i></i><span class="mono">${escapeHtml(ticket.endpoint.hostname)}</span></span>` : '<span class="desk-muted">Sem endpoint</span>'}</div>
-            <div class="desk-category-cell" role="cell"><span class="desk-badge neutral">${escapeHtml(ticket.category)}</span></div>
-            <div class="desk-row-actions-cell" role="cell"><span class="desk-row-hover-actions"><a class="desk-icon-action" href="${ticketUrl(ticket)}"><i data-lucide="maximize-2"></i></a><button class="desk-icon-action" type="button"><i data-lucide="link"></i></button><button class="desk-icon-action" type="button"><i data-lucide="more-horizontal"></i></button></span></div>
+            <div class="desk-category-cell" role="cell"><span class="desk-badge neutral category-color-${escapeHtml(ticket.category_color || 'gray')}"><i class="bi ${escapeHtml(ticket.category_icon || 'bi-folder')}" aria-hidden="true"></i>${escapeHtml(ticket.category)}</span></div>
+            <div class="desk-row-actions-cell" role="cell"><span class="desk-row-hover-actions"><a class="desk-icon-action" href="${ticketUrl(ticket)}" data-row-action="open" aria-label="Abrir chamado ${escapeHtml(ticket.number)} em tela cheia"><i data-lucide="maximize-2"></i></a><button class="desk-icon-action" type="button" data-row-action="copy" aria-label="Copiar link do chamado ${escapeHtml(ticket.number)}"><i data-lucide="link"></i></button><button class="desk-icon-action" type="button" data-row-action="more" aria-label="Menu de contexto do chamado ${escapeHtml(ticket.number)}"><i data-lucide="more-horizontal"></i></button></span></div>
         `;
         body.prepend(row);
         setTimeout(() => row.classList.remove('is-live-updated'), 3600);
         window.lucide?.createIcons?.();
     }
 
-    function createQuickTicket(mode) {
+    async function createQuickTicket(mode) {
         if (!validateQuickTicket()) {
             showToast('Preencha os campos obrigatorios.', 'warning');
             return;
         }
-        const ticket = quickTicketPayload(mode);
-        prependQuickTicketRow(ticket);
-        localStorage.removeItem(quickDraftKey);
-        closeQuickTicketDrawer();
-        showToast(mode === 'assign' ? `Chamado #${ticket.number} criado e assumido.` : `Chamado #${ticket.number} criado.`, 'success');
-        if (mode === 'open' || mode === 'assign') {
-            setTimeout(() => { window.location.href = ticketUrl(ticket); }, 650);
-        } else {
-            selectTicketForPreview(ticket.number);
+        const localPayload = quickTicketPayload(mode);
+        const createButtons = quickTicketDrawer?.querySelectorAll('[data-quick-create]') || [];
+        createButtons.forEach((button) => { button.disabled = true; });
+        try {
+            const response = await fetch(createTicketApiUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken(),
+                },
+                body: JSON.stringify({
+                    ...localPayload,
+                    mode,
+                    requester_email: selectedQuickRequester?.email || '',
+                    requester_department: selectedQuickRequester?.sector || localPayload.sector,
+                    requester_is_partner: Boolean(selectedQuickRequester?.vip),
+                    endpoint_name: selectedQuickEndpoint?.hostname || quickValue('endpoint'),
+                    critical_reason: quickValue('critical_reason'),
+                    related_ticket_ids: Array.from(quickLinkedRelatedIds).map(Number),
+                    queue: quickSelectedCategoryConfig().queue || 'N1 - Atendimento',
+                    sla_name: quickSelectedCategoryConfig().sla || '',
+                }),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                const errors = Object.values(result.errors || { request: result.error || 'Nao foi possivel criar o chamado.' });
+                const box = quickTicketDrawer?.querySelector('[data-quick-ticket-error]');
+                if (box) {
+                    box.hidden = false;
+                    box.querySelector('ul').innerHTML = errors.map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+                }
+                showToast('Revise os campos do chamado.', 'warning');
+                return;
+            }
+            const ticket = result.ticket;
+            ticket.relatedTicketIds = localPayload.relatedTicketIds || [];
+            prependQuickTicketRow(ticket);
+            localStorage.removeItem(quickDraftKey);
+            closeQuickTicketDrawer();
+            quickLinkedRelatedIds = new Set();
+            updateQuickRelated();
+            showToast(mode === 'assign' ? `Chamado #${ticket.number} criado e assumido.` : `Chamado #${ticket.number} criado.`, 'success');
+            if (mode === 'assign') {
+                setTimeout(() => { window.location.href = ticket.detail_url || ticketUrl(ticket); }, 450);
+            } else {
+                selectTicketForPreview(ticket.number);
+            }
+        } catch (error) {
+            showToast('Falha ao comunicar com o servidor.', 'warning');
+        } finally {
+            createButtons.forEach((button) => { button.disabled = false; });
         }
     }
 
@@ -932,6 +1202,7 @@
         const filterbar = document.querySelector('[data-filterbar]');
         if (!filterbar) return;
         const filters = Array.from(filterbar.querySelectorAll('.nw-filter'));
+        const quickViews = Array.from(filterbar.querySelectorAll('[data-quick-view]'));
         const globalClear = filterbar.querySelector('[data-filter-global-clear]');
         const resultCount = filterbar.querySelector('[data-filter-result-count]');
         const tableBody = document.querySelector('.desk-ticket-grid-body');
@@ -946,11 +1217,15 @@
         const defaults = new Map(filters.map((filter) => [filter, filter.querySelector('[data-filter-summary]')?.textContent?.trim() || 'Filtro']));
         const viewPresets = {
             'Fila geral': {},
-            'Minha fila': { technician: [CURRENT_TECH] },
-            'Meus chamados': { technician: [CURRENT_TECH] },
+            'Atribuídos a mim': { technician: ['__me__'] },
+            'Minha fila': { technician: ['__me__'] },
+            'Meus chamados': { technician: ['__me__'] },
+            'Sem responsável': { flag: ['unassigned'] },
+            'Críticos': { priority: ['critical'] },
             'Criticos sem dono': { priority: ['critical'], flag: ['unassigned'] },
             'Críticos sem dono': { priority: ['critical'], flag: ['unassigned'] },
             'SLA vencendo': { sla: ['warning', 'critical'] },
+            'RMM': { origin: ['rmm'] },
             'RMM Alertas': { origin: ['rmm'] },
             'Sem responsavel': { flag: ['unassigned'] },
             'Aguardando usuario': { status: ['waiting_user'] },
@@ -982,7 +1257,18 @@
             if (field === 'flag') return values.some((value) => row.dataset[value] === '1');
             if (field === 'rmm') return values.some((value) => row.dataset[`rmm${value.charAt(0).toUpperCase()}${value.slice(1)}`] === '1');
             if (field === 'stale') return row.dataset.stale === '1';
+            if (field === 'technician') {
+                if (values.includes('__all__')) return true;
+                const normalized = values.map((value) => value === '__me__' ? CURRENT_TECH : value === '__unassigned__' ? 'Sem responsavel' : value);
+                return normalized.includes(row.dataset.technician || '');
+            }
             return values.includes(row.dataset[field] || '');
+        }
+
+        function markQuickView(name) {
+            const aliases = { 'Minha fila': 'Atribuídos a mim', 'Meus chamados': 'Atribuídos a mim', 'RMM Alertas': 'RMM' };
+            const activeName = aliases[name] || name;
+            quickViews.forEach((button) => button.classList.toggle('is-active', button.dataset.quickView === activeName));
         }
 
         function updateFilterChips(active) {
@@ -1046,6 +1332,7 @@
                 });
             });
             filterbar.querySelector('[data-filter="view"] [data-filter-summary]').textContent = name;
+            markQuickView(name);
             closeFilters();
             applyFilters(`View "${name}" aplicada.`);
         }
@@ -1084,9 +1371,10 @@
             popover?.addEventListener('click', (event) => event.stopPropagation());
             popover?.querySelector('[data-filter-close]')?.addEventListener('click', () => closeFilters());
             popover?.querySelector('[data-filter-search]')?.addEventListener('input', (event) => filterSearch(popover, event.target.value));
-            popover?.querySelector('[data-filter-apply]')?.addEventListener('click', () => { closeFilters(); applyFilters('Filtros aplicados.'); });
+            popover?.querySelector('[data-filter-apply]')?.addEventListener('click', () => { markQuickView(''); closeFilters(); applyFilters('Filtros aplicados.'); });
             popover?.querySelector('[data-filter-clear]')?.addEventListener('click', () => {
                 popover.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
+                markQuickView('');
                 closeFilters();
                 applyFilters('Filtro limpo.');
             });
@@ -1097,9 +1385,11 @@
                 });
             });
         });
+        quickViews.forEach((button) => button.addEventListener('click', () => setPreset(button.dataset.quickView)));
         globalClear?.addEventListener('click', () => {
             filterbar.querySelectorAll('[data-filter-input]').forEach((input) => { input.checked = false; });
             filterbar.querySelector('[data-filter="view"] [data-filter-summary]').textContent = 'Fila geral';
+            markQuickView('Fila geral');
             closeFilters();
             applyFilters('Filtros limpos.');
         });
@@ -1226,7 +1516,7 @@
             return !q || haystack.includes(q.replace(/^#/, ''));
         }).slice(0, 8).map((ticket) => ({ group: 'Chamados', icon: 'ticket', label: `#${ticket.number} ${ticket.title}`, meta: `${ticket.status_label} · ${ticket.priority_label}`, action: () => selectTicketForPreview(ticket.number), secondary: () => openTicketDrawer(ticket.number) }));
         const endpoints = ticketData.filter((ticket) => ticket.endpoint && (!q || ticket.endpoint.hostname.toLowerCase().includes(q))).slice(0, 5).map((ticket) => ({ group: 'Endpoints', icon: 'monitor', label: ticket.endpoint.hostname, meta: `${ticket.endpoint.status} · ${ticket.rmm?.active_alerts || 0} alertas`, action: () => { selectTicketForPreview(ticket.number); showToast('Endpoint selecionado no preview.', 'info'); } }));
-        const views = ['Fila geral', 'Meus chamados', 'Criticos sem dono', 'SLA vencendo', 'RMM Alertas', 'Sem responsavel', 'Aguardando usuario', 'Financeiro'].filter((name) => !q || name.toLowerCase().includes(q)).map((name) => ({ group: 'Views', icon: 'list-filter', label: name, meta: 'Aplicar view salva', action: () => window.nwApplySavedView?.(name) }));
+        const views = ['Fila geral', 'Atribuídos a mim', 'Críticos', 'SLA vencendo', 'RMM', 'Sem responsável', 'Aguardando usuario', 'Financeiro'].filter((name) => !q || name.toLowerCase().includes(q)).map((name) => ({ group: 'Views', icon: 'list-filter', label: name, meta: 'Aplicar view salva', action: () => window.nwApplySavedView?.(name) }));
         const actions = [
             { label: 'Novo chamado', icon: 'plus', meta: 'Ctrl+N', action: () => { window.location.href = createUrl; } },
             { label: 'Ver atalhos', icon: 'keyboard', meta: '?', action: () => { shortcuts.hidden = false; } },
@@ -1296,17 +1586,26 @@
                 selectTicketForPreview(row.dataset.ticket);
             });
             row.addEventListener('dblclick', () => openTicketDrawer(row.dataset.ticket));
-            row.addEventListener('contextmenu', (event) => showContextMenu(event, row.dataset.ticket));
             row.addEventListener('focus', () => focusTicketRow(row.dataset.ticket, { scroll: false, domFocus: false }));
-            row.querySelectorAll('.desk-icon-action').forEach((button) => {
-                button.addEventListener('click', (event) => {
-                    if (button.tagName === 'A') return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (button.getAttribute('aria-label')?.includes('Copiar')) copyTicketLink(row.dataset.ticket);
-                    else showContextMenu(event, row.dataset.ticket);
-                });
-            });
+        });
+        listPane?.addEventListener('contextmenu', (event) => {
+            const row = event.target.closest(rowSelector);
+            if (!row || !listPane.contains(row)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            showContextMenu(event, row.dataset.ticket);
+        });
+        listPane?.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('[data-row-action]');
+            if (!actionButton || !listPane.contains(actionButton)) return;
+            const row = actionButton.closest(rowSelector);
+            if (!row) return;
+            const action = actionButton.dataset.rowAction;
+            if (action === 'open') return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (action === 'copy') copyTicketLink(row.dataset.ticket);
+            if (action === 'more') showContextMenu(event, row.dataset.ticket);
         });
         selectionBar?.querySelectorAll('button').forEach((button) => {
             const label = button.textContent.trim().toLowerCase();
@@ -1413,6 +1712,9 @@
             event.preventDefault();
             openQuickTicketDrawer();
         }));
+        quickTicketDrawer?.querySelectorAll('[data-quick-paste-hint]').forEach((button) => {
+            button.addEventListener('click', handleQuickPasteButton);
+        });
         quickTicketDrawer?.querySelectorAll('[data-quick-ticket-close]').forEach((button) => button.addEventListener('click', closeQuickTicketDrawer));
         quickTicketDrawer?.addEventListener('click', (event) => {
             if (event.target.matches('[data-quick-ticket-drawer], [data-quick-ticket-close]')) closeQuickTicketDrawer();
@@ -1426,11 +1728,16 @@
             if (create) createQuickTicket(create.dataset.quickCreate);
             if (event.target.closest('[data-quick-save-draft]')) saveQuickDraft(false);
             if (event.target.closest('[data-quick-discard-draft]')) clearQuickDraft();
+            if (event.target.closest('[data-quick-open-requester-create]')) openQuickRequesterCreate();
+            if (event.target.closest('[data-quick-requester-create-close]')) closeQuickRequesterCreate();
+            if (event.target.closest('[data-quick-requester-create-save]')) saveQuickRequesterCreate();
             if (event.target.closest('[data-quick-file-pick]')) quickTicketDrawer.querySelector('[data-quick-file-input]')?.click();
-            if (event.target.closest('[data-quick-paste-hint]')) showToast('Use Ctrl+V com o drawer aberto para colar um print.', 'info');
+            if (event.target.closest('[data-quick-paste-hint]')) handleQuickPasteButton(event);
             if (event.target.closest('[data-quick-remove-attachment]')) event.target.closest('span')?.remove();
             const related = event.target.closest('[data-quick-link-related]');
-            if (related) showToast(`Chamado #${related.dataset.quickLinkRelated} vinculado ao rascunho.`, 'success');
+            if (related) linkQuickRelated(related.dataset.quickLinkRelated);
+            const unlinkRelated = event.target.closest('[data-quick-unlink-related]');
+            if (unlinkRelated) unlinkQuickRelated(unlinkRelated.dataset.quickUnlinkRelated);
             const endpointAction = event.target.closest('[data-quick-endpoint-action]');
             if (endpointAction) {
                 if (endpointAction.dataset.quickEndpointAction === 'clear') {
@@ -1456,7 +1763,7 @@
                         <strong>${escapeHtml(item.name)}${item.vip ? ' · VIP' : ''}</strong>
                         <span>${escapeHtml(item.email)} · ${escapeHtml(item.sector)}</span>
                     </button>
-                `, 'Nenhum solicitante encontrado. Criar solicitante rapido.');
+                `, 'Nenhum solicitante encontrado. <button type="button" data-quick-open-requester-create>Criar solicitante rápido</button>');
             }
             const endpointSearch = event.target.closest('[data-quick-endpoint-search]');
             if (endpointSearch) {
@@ -1469,14 +1776,12 @@
                     </button>
                 `, 'Nenhum endpoint encontrado.');
             }
-            if (event.target.closest('[data-quick-title], [data-quick-category], [data-quick-requester-search], [data-quick-endpoint-search]')) updateQuickRelated();
+            if (event.target.closest('[data-quick-title], [data-quick-category], [data-quick-requester-search], [data-quick-endpoint-search], [data-quick-related-search]')) updateQuickRelated();
             saveQuickDraft(true);
         });
         quickTicketDrawer?.addEventListener('change', (event) => {
             if (event.target.matches('[data-quick-category]')) {
-                const category = quickValue('category');
-                if (category === 'Seguranca') setQuickValue('priority', 'critical');
-                if (category === 'RMM / Alerta') setQuickValue('priority', 'high');
+                applyQuickCategoryDefaults();
                 updateQuickRelated();
             }
             if (event.target.matches('[data-quick-priority], [data-quick-category]')) updateQuickCritical();
@@ -1489,11 +1794,13 @@
         });
         document.addEventListener('paste', (event) => {
             if (!quickTicketDrawer || quickTicketDrawer.hidden) return;
-            const hasImage = Array.from(event.clipboardData?.items || []).some((item) => item.type.startsWith('image/'));
-            if (!hasImage) return;
-            const stamp = new Date().toISOString().slice(0, 16).replace(/[-T:]/g, '');
-            addQuickAttachment(`print-colado-${stamp}.png`);
-            showToast('Print colado como anexo.', 'success');
+            const imageItem = Array.from(event.clipboardData?.items || []).find((item) => item.type.startsWith('image/'));
+            if (!imageItem) return;
+            const file = imageItem.getAsFile();
+            const signature = file ? `${file.type}:${file.size}` : '';
+            const added = addQuickAttachment(quickPrintAttachmentName(), signature);
+            if (signature) lastQuickClipboardImageSignature = signature;
+            showToast(added ? 'Print colado como anexo.' : 'Print já está nos anexos.', added ? 'success' : 'info');
         });
         drawer?.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
         drawer?.addEventListener('click', (event) => { if (event.target === drawer) closeDrawer(); });

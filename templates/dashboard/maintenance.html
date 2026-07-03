@@ -29,6 +29,11 @@
     </div>
 </section>
 
+<nav class="maintenance-subnav" aria-label="Areas de manutencao">
+    <a class="is-active" href="{% url 'maintenance-list' %}"><i data-lucide="wrench"></i>Rotinas</a>
+    <a href="{% url 'email-outbox-list' %}"><i data-lucide="mail"></i>Fila de E-mails</a>
+</nav>
+
 <section class="metric-grid events-metrics" aria-label="Resumo de manuten&ccedil;&otilde;es">
     <article class="metric-card command-metric">
         <span class="metric-icon"><i data-lucide="activity"></i></span>

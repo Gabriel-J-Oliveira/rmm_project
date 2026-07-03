@@ -3,8 +3,8 @@
         <a class="desk-btn" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}"><i data-lucide="arrow-left"></i>Voltar</a>
         <span class="desk-ticket-number">#{{ ticket.number }}</span>
         <div class="desk-editable-title">
-            <h1>{{ ticket.title }}</h1>
-            <button type="button" aria-label="Editar titulo"><i data-lucide="pencil"></i></button>
+            <h1 data-ticket-title>{{ ticket.title }}</h1>
+            <button type="button" data-detail-action="edit-title" aria-label="Editar titulo"><i data-lucide="pencil"></i></button>
         </div>
     </div>
 

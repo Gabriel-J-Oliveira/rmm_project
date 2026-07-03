@@ -14,7 +14,7 @@
             </div>
         </div>
         <div class="desk-compact-actions">
-            <button class="desk-btn desk-btn-primary" type="button"><i data-lucide="plus"></i>Nova categoria</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-category-drawer-open><i data-lucide="plus"></i>Nova categoria</button>
         </div>
     </header>
 
@@ -23,4 +23,143 @@
     {% include "tickets/_category_drawer.html" %}
     {% include "tickets/_category_merge_modal.html" %}
 </section>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const drawer = document.querySelector("[data-category-drawer]");
+    const form = document.querySelector("[data-category-form]");
+    const mergeModal = document.querySelector("[data-category-merge-modal]");
+    const openButtons = document.querySelectorAll("[data-category-drawer-open]");
+    const closeButtons = document.querySelectorAll("[data-category-drawer-close]");
+    const mergeButtons = document.querySelectorAll("[data-category-merge-open]");
+    const configUrl = "{% url 'tickets:settings-api' %}";
+
+    function refreshIcons() {
+        if (window.lucide && typeof window.lucide.createIcons === "function") {
+            window.lucide.createIcons();
+        }
+    }
+
+    function setSelectValue(selector, value) {
+        const field = form?.querySelector(selector);
+        if (field) field.value = value || "";
+    }
+
+    function setMultiValues(selector, rawValue) {
+        const field = form?.querySelector(selector);
+        if (!field) return;
+        const values = String(rawValue || "").split(",").map((item) => item.trim()).filter(Boolean);
+        Array.from(field.options).forEach((option) => {
+            option.selected = values.includes(option.value);
+        });
+    }
+
+    function fillFormFromRow(row) {
+        if (!form) return;
+        form.reset();
+        form.querySelector("[data-category-id]").value = row?.dataset.categoryId || "";
+        form.querySelector("[data-category-name]").value = row?.dataset.categoryName || "Nova categoria";
+        form.querySelector("[data-category-description]").value = row?.dataset.categoryDescription || "";
+        form.querySelector("[data-category-icon]").value = row?.dataset.categoryIcon || "bi-folder";
+        form.querySelector("[data-category-subcategories]").value = row?.dataset.categorySubcategories || "";
+        setSelectValue("[data-category-color]", row?.dataset.categoryColor || "gray");
+        setSelectValue("[data-category-active]", row?.dataset.categoryActive || "true");
+        setSelectValue("[data-category-priority]", row?.dataset.categoryPriority || "normal");
+        setSelectValue("[data-category-queue]", row?.dataset.categoryQueue || "");
+        setSelectValue("[data-category-sla]", row?.dataset.categorySla || "");
+        setMultiValues("[data-category-types]", row?.dataset.categoryTypes || "incident");
+    }
+
+    function openDrawer(row) {
+        if (!drawer) return;
+        fillFormFromRow(row);
+        drawer.hidden = false;
+        drawer.classList.add("is-open");
+        document.body.classList.add("drawer-open");
+        drawer.querySelector("input")?.focus();
+        refreshIcons();
+    }
+
+    function closeDrawer() {
+        if (!drawer) return;
+        drawer.classList.remove("is-open");
+        drawer.hidden = true;
+        document.body.classList.remove("drawer-open");
+    }
+
+    openButtons.forEach((button) => {
+        button.addEventListener("click", function () {
+            openDrawer(button.closest("[data-category-row]"));
+        });
+    });
+
+    closeButtons.forEach((button) => {
+        button.addEventListener("click", closeDrawer);
+    });
+
+    mergeButtons.forEach((button) => {
+        button.addEventListener("click", function () {
+            if (mergeModal && typeof mergeModal.showModal === "function") {
+                mergeModal.showModal();
+                refreshIcons();
+            }
+        });
+    });
+
+    mergeModal?.querySelectorAll("[data-category-merge-close]").forEach((button) => {
+        button.addEventListener("click", () => mergeModal.close());
+    });
+
+    document.querySelectorAll("[data-category-toggle]").forEach((toggle) => {
+        toggle.addEventListener("change", async function () {
+            const row = toggle.closest("[data-category-row]");
+            if (!row) return;
+            const csrf = form?.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
+            await fetch(configUrl, {
+                method: "POST",
+                headers: {"Content-Type": "application/json", "X-CSRFToken": csrf},
+                body: JSON.stringify({kind: "category", action: "toggle", id: row.dataset.categoryId}),
+            });
+            window.location.reload();
+        });
+    });
+
+    form?.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        const csrf = form.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
+        const types = Array.from(form.querySelector("[data-category-types]").selectedOptions).map((option) => option.value);
+        const payload = {
+            kind: "category",
+            action: "save",
+            id: form.querySelector("[data-category-id]").value,
+            name: form.querySelector("[data-category-name]").value,
+            description: form.querySelector("[data-category-description]").value,
+            icon: form.querySelector("[data-category-icon]").value,
+            color: form.querySelector("[data-category-color]").value,
+            is_active: form.querySelector("[data-category-active]").value,
+            default_priority: form.querySelector("[data-category-priority]").value,
+            default_queue: form.querySelector("[data-category-queue]").value,
+            default_sla: form.querySelector("[data-category-sla]").value,
+            allowed_types: types,
+            subcategories: form.querySelector("[data-category-subcategories]").value,
+        };
+        const response = await fetch(configUrl, {
+            method: "POST",
+            headers: {"Content-Type": "application/json", "X-CSRFToken": csrf},
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            alert("Nao foi possivel salvar a categoria.");
+            return;
+        }
+        window.location.reload();
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && drawer && !drawer.hidden) {
+            closeDrawer();
+        }
+    });
+});
+</script>
 {% endblock %}

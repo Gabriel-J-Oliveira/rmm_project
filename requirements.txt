@@ -4,3 +4,4 @@ django-environ>=0.12,<0.13
 gunicorn>=23.0,<24.0
 psycopg[binary]>=3.2,<3.3
 whitenoise>=6.9,<7.0
+ldap3>=2.9,<3.0

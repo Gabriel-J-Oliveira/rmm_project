@@ -17,6 +17,51 @@
         min-width: 0;
     }
 
+    .nw-filterbar__quick {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-right: 0.2rem;
+        padding-right: 0.6rem;
+        border-right: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .nw-filterbar__quick button {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.32rem;
+        min-height: 2rem;
+        padding: 0.35rem 0.62rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 999px;
+        background: rgba(8, 13, 23, 0.72);
+        color: var(--nw-text-muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.72rem;
+        font-weight: 760;
+        white-space: nowrap;
+        transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+
+    .nw-filterbar__quick button svg {
+        width: 0.82rem;
+        height: 0.82rem;
+    }
+
+    .nw-filterbar__quick button:hover {
+        border-color: rgba(94, 234, 212, 0.3);
+        color: var(--nw-text-primary);
+    }
+
+    .nw-filterbar__quick button.is-active {
+        border-color: rgba(34, 197, 94, 0.4);
+        background: rgba(34, 197, 94, 0.12);
+        color: #d1fae5;
+    }
+
     .nw-filter {
         position: relative;
         display: inline-flex;
@@ -334,11 +379,28 @@
         .nw-filter-popover__advanced {
             grid-template-columns: 1fr;
         }
+
+        .nw-filterbar__quick {
+            width: 100%;
+            border-right: 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+            margin: 0 0 0.2rem;
+            padding: 0 0 0.5rem;
+        }
     }
 </style>
 
 <section class="nw-filterbar" data-filterbar data-total-count="{{ tickets|length }}" aria-label="Filtros da Central">
     <div class="nw-filterbar__track">
+        <div class="nw-filterbar__quick" aria-label="Filtros rápidos da fila">
+            <button class="{% if not is_my_queue and not request.GET %}is-active{% endif %}" type="button" data-quick-view="Fila geral"><i data-lucide="list-filter"></i>Fila geral</button>
+            <button class="{% if is_my_queue or request.GET.assigned_to == '__me__' or request.GET.technician == '__me__' %}is-active{% endif %}" type="button" data-quick-view="Atribuídos a mim"><i data-lucide="user-check"></i>Atribuídos a mim</button>
+            <button class="{% if request.GET.unassigned or request.GET.flag == 'unassigned' %}is-active{% endif %}" type="button" data-quick-view="Sem responsável"><i data-lucide="user-x"></i>Sem responsável</button>
+            <button class="{% if request.GET.priority == 'critical' %}is-active{% endif %}" type="button" data-quick-view="Críticos"><i data-lucide="siren"></i>Críticos</button>
+            <button class="{% if request.GET.sla == 'warning,critical' %}is-active{% endif %}" type="button" data-quick-view="SLA vencendo"><i data-lucide="timer"></i>SLA vencendo</button>
+            <button class="{% if request.GET.origin == 'rmm' %}is-active{% endif %}" type="button" data-quick-view="RMM"><i data-lucide="activity"></i>RMM</button>
+        </div>
+
         <div class="nw-filter" data-filter="view">
             <button class="nw-filter-chip nw-filter-chip--view" type="button" data-filter-trigger aria-expanded="false">
                 <span class="nw-filter-chip__label">View</span>
@@ -353,7 +415,7 @@
                 <div class="nw-filter-popover__list">
                     {% for view in saved_views %}
                     <a class="nw-filter-view-option" href="{% url 'tickets:central' %}{{ view.query }}">
-                        <i data-lucide="{% if view.name == 'RMM Alertas' %}activity{% elif view.name == 'Minha fila' %}user-check{% else %}list-filter{% endif %}"></i>
+                        <i data-lucide="{% if view.name == 'RMM Alertas' %}activity{% elif view.name == 'Atribuídos a mim' %}user-check{% else %}list-filter{% endif %}"></i>
                         <span>{{ view.name }}</span>
                     </a>
                     {% endfor %}
@@ -435,14 +497,31 @@
                 </header>
                 <label class="nw-filter-popover__search"><i data-lucide="search"></i><input type="search" placeholder="Buscar tecnico..." data-filter-search></label>
                 <div class="nw-filter-popover__list">
-                    {% for option in filter_options.assigned_to %}
                     <label class="nw-filter-option nw-filter-option--person" data-filter-option>
-                        <input type="checkbox" data-filter-input data-field="technician" value="{{ option.value }}">
-                        <span class="nw-filter-avatar">{{ option.label|slice:":1" }}</span>
-                        <span class="nw-filter-option__label">{{ option.label }}<small>{% cycle 'Online' 'Ocupado' 'Online' 'Ausente' %}</small></span>
-                        <em class="nw-filter-option__count">{{ option.count }}</em>
+                        <input type="checkbox" data-filter-input data-field="technician" value="__me__">
+                        <span class="nw-filter-avatar">E</span>
+                        <span class="nw-filter-option__label">Eu<small>Usuário atual · {{ current_user_name|default:"Técnico" }}</small></span>
                     </label>
-                    {% endfor %}
+                    <label class="nw-filter-option nw-filter-option--person" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="technician" value="__unassigned__">
+                        <span class="nw-filter-avatar">?</span>
+                        <span class="nw-filter-option__label">Sem dono<small>Chamados não atribuídos</small></span>
+                    </label>
+                    <label class="nw-filter-option nw-filter-option--person" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="technician" value="__all__">
+                        <span class="nw-filter-avatar">*</span>
+                        <span class="nw-filter-option__label">Todos<small>Qualquer responsável</small></span>
+                    </label>
+                    <label class="nw-filter-option nw-filter-option--person" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="technician" value="Gabriel">
+                        <span class="nw-filter-avatar">G</span>
+                        <span class="nw-filter-option__label">Gabriel<small>Online</small></span>
+                    </label>
+                    <label class="nw-filter-option nw-filter-option--person" data-filter-option>
+                        <input type="checkbox" data-filter-input data-field="technician" value="Renan">
+                        <span class="nw-filter-avatar">R</span>
+                        <span class="nw-filter-option__label">Renan<small>Online</small></span>
+                    </label>
                     <div class="nw-filter-empty" data-filter-empty>Nenhum resultado encontrado</div>
                 </div>
                 <footer class="nw-filter-popover__footer">
@@ -551,6 +630,14 @@
                         <strong class="nw-filter-group__title">Origem</strong>
                         {% for option in origin_options %}
                         <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="origin" value="{{ option.value }}"><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Fila</strong>
+                        {% for option in filter_options.queue %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="queue" value="{{ option.value }}"><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% empty %}
+                        <span class="nw-filter-option__label">Nenhuma fila encontrada</span>
                         {% endfor %}
                     </section>
                     <section class="nw-filter-group">

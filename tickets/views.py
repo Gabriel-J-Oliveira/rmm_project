@@ -1,32 +1,75 @@
+import json
+from urllib.parse import urlencode
+
 from django.contrib import messages
-from django.shortcuts import redirect, render
+from django.db import OperationalError, ProgrammingError, transaction
+from django.db.models import Q
+from django.http import Http404, JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .mock_data import CATEGORIES, MOCK_TICKETS, PRIORITY_LABELS, STATUS_LABELS, filter_tickets, get_ticket, summary_for
+from .models import DeskQueue, DeskSLA, DeskTemplate, Ticket, TicketAttachment, TicketCategory, TicketComment
 from .services.automation_rules_context import build_automation_rules_context
 from .services.category_settings_context import build_category_settings_context
 from .services.dashboard_context import build_ticket_dashboard_context
-from .services.settings_context import build_ticket_settings_context
+from .services.desk_mvp1 import (
+    CURRENT_TECHNICIAN,
+    active_category_context,
+    adapt_ticket,
+    create_audit_event,
+    display_time,
+    filtered_ticket_views,
+    get_ticket_view,
+    ticket_queryset,
+    ticket_summary,
+)
+from .services.desk_mvp2 import (
+    build_settings_context,
+    composer_template_context,
+    normalize_category_color,
+    normalize_category_icon,
+)
 from .services.ticket_create_context import build_ticket_create_context
 from .services.ticket_detail_context import build_ticket_detail_context
+from .services.desk_templates import templates_for_ticket
+from .services.automation_outbox import prepare_ticket_notification
 
 
 def _base_context(active_section='queue'):
+    try:
+        categories = active_category_context() or CATEGORIES
+        desk_queues = DeskQueue.objects.filter(is_active=True, receives_tickets=True).order_by('name')
+        desk_slas = DeskSLA.objects.filter(is_active=True).order_by('resolution_minutes', 'name')
+    except (OperationalError, ProgrammingError):
+        categories = CATEGORIES
+        desk_queues = []
+        desk_slas = []
     return {
         'active_nav': 'tickets',
         'body_class': 'page-tickets',
         'desk_active_section': active_section,
-        'categories': CATEGORIES,
+        'categories': categories,
+        'desk_queue_options': desk_queues,
+        'desk_sla_options': desk_slas,
         'status_labels': STATUS_LABELS,
         'priority_labels': PRIORITY_LABELS,
     }
 
 
 def _open_tickets():
-    return [
-        ticket for ticket in MOCK_TICKETS
-        if ticket.status not in {'resolved', 'closed', 'canceled'}
-    ]
+    try:
+        return [
+            adapt_ticket(ticket)
+            for ticket in ticket_queryset().filter(status__in=['new', 'in_progress', 'waiting_user', 'waiting_third_party'])
+        ]
+    except (OperationalError, ProgrammingError):
+        return [
+            ticket for ticket in MOCK_TICKETS
+            if ticket.status not in {'resolved', 'closed', 'canceled'}
+        ]
 
 
 def _priority_rank(ticket):
@@ -61,6 +104,9 @@ def _decorate_central_ticket(ticket):
     endpoint_status = ticket.endpoint.status if ticket.endpoint else 'none'
     endpoint_online = endpoint_status == 'online'
     rmm_card = None
+    due_label = ''
+    if getattr(ticket, 'due_at', None):
+        due_label = timezone.localtime(ticket.due_at).strftime('%d/%m %H:%M')
     if ticket.endpoint:
         rmm_card = {
             'hostname': ticket.endpoint.hostname,
@@ -98,6 +144,7 @@ def _decorate_central_ticket(ticket):
         'is_merged': is_merged,
         'sla_state': sla_state,
         'sla_label': 'vence agora' if sla_state == 'critical' else 'vence em breve' if sla_state == 'warning' else 'no prazo',
+        'sla_due_label': due_label,
         'alert_label': alert_label,
         'endpoint_status': endpoint_status,
         'rmm': rmm_card,
@@ -123,6 +170,11 @@ def _central_ticket_payload(ticket):
         'status': ticket.status,
         'status_label': ticket.status_label,
         'category': ticket.category,
+        'category_icon': getattr(ticket, 'category_icon', 'bi-folder'),
+        'category_color': getattr(ticket, 'category_color', 'gray'),
+        'queue': getattr(ticket, 'queue', ''),
+        'sla': getattr(ticket, 'sla', ''),
+        'due_at': ticket.record.due_at.isoformat() if getattr(ticket, 'record', None) and ticket.record.due_at else '',
         'assigned_to': ticket.assigned_to or '',
         'opened_for': ticket.opened_for,
         'updated_for': ticket.updated_for,
@@ -160,13 +212,50 @@ def _count_by(items, attr_name):
     return counts
 
 
+def _request_user_display(request):
+    user = getattr(request, 'user', None)
+    if user and user.is_authenticated:
+        return user.get_full_name() or user.get_username()
+    return CURRENT_TECHNICIAN
+
+
+def _request_user_aliases(request):
+    user = getattr(request, 'user', None)
+    if not user or not user.is_authenticated:
+        return [CURRENT_TECHNICIAN]
+    aliases = [
+        user.get_username(),
+        user.get_full_name(),
+        getattr(user, 'email', ''),
+        getattr(user, 'first_name', ''),
+    ]
+    cleaned = []
+    for alias in aliases:
+        alias = str(alias or '').strip()
+        if alias and alias.casefold() not in {item.casefold() for item in cleaned}:
+            cleaned.append(alias)
+    return cleaned or [CURRENT_TECHNICIAN]
+
+
 def _central_context(request, active_section='central', assigned_to=None):
-    tickets = filter_tickets(request.GET)
-    if assigned_to:
-        tickets = filter_tickets(request.GET, assigned_to=assigned_to)
+    using_persisted_data = True
+    current_user_name = _request_user_display(request)
+    current_user_aliases = _request_user_aliases(request)
+    try:
+        tickets = filtered_ticket_views(
+            request.GET,
+            assigned_to=assigned_to,
+            current_user_aliases=current_user_aliases,
+        )
+        all_tickets = filtered_ticket_views({}, current_user_aliases=current_user_aliases)
+    except (OperationalError, ProgrammingError):
+        using_persisted_data = False
+        mock_assignee = assigned_to[0] if isinstance(assigned_to, (list, tuple, set)) and assigned_to else assigned_to
+        tickets = filter_tickets(request.GET, assigned_to=mock_assignee)
+        all_tickets = list(MOCK_TICKETS)
     open_tickets = _open_tickets()
     selected_number = request.GET.get('ticket')
-    selected_ticket = get_ticket(selected_number) if selected_number else None
+    selected_ticket = (get_ticket_view(selected_number) if using_persisted_data else get_ticket(selected_number)) if selected_number else None
     sorted_tickets = [_decorate_central_ticket(ticket) for ticket in sorted(tickets, key=_ticket_sort_key)]
     if selected_ticket:
         selected_ticket = _decorate_central_ticket(selected_ticket)
@@ -202,11 +291,12 @@ def _central_context(request, active_section='central', assigned_to=None):
         for owner, count in sorted(_count_by(open_tickets, 'assigned_to').items())
     ]
     filter_counts = {
-        'status': _count_by(MOCK_TICKETS, 'status'),
-        'priority': _count_by(MOCK_TICKETS, 'priority'),
-        'assigned_to': _count_by(MOCK_TICKETS, 'assigned_to'),
-        'sector': _count_by(MOCK_TICKETS, 'sector'),
-        'category': _count_by(MOCK_TICKETS, 'category'),
+        'status': _count_by(all_tickets, 'status'),
+        'priority': _count_by(all_tickets, 'priority'),
+        'assigned_to': _count_by(all_tickets, 'assigned_to'),
+        'sector': _count_by(all_tickets, 'sector'),
+        'category': _count_by(all_tickets, 'category'),
+        'queue': _count_by(all_tickets, 'queue'),
     }
     filter_options = {
         'status': [
@@ -233,9 +323,19 @@ def _central_context(request, active_section='central', assigned_to=None):
             {'value': value, 'label': value, 'count': count}
             for value, count in sorted(filter_counts['category'].items())
         ],
+        'queue': [
+            {'value': value, 'label': value, 'count': count}
+            for value, count in sorted(filter_counts['queue'].items())
+        ],
     }
-    current_summary = summary_for(tickets)
-    global_summary = summary_for()
+    current_summary = ticket_summary(tickets) if using_persisted_data else summary_for(tickets)
+    global_summary = ticket_summary(all_tickets) if using_persisted_data else summary_for(all_tickets)
+    unassigned_count = len([ticket for ticket in all_tickets if not ticket.assigned_to])
+    rmm_count = len([
+        ticket for ticket in all_tickets
+        if getattr(ticket, 'source', '') in {Ticket.SOURCE_RMM_ALERT, Ticket.SOURCE_MONITORING}
+        or ticket.category == 'RMM / Alerta'
+    ])
     context = {
         **_base_context(active_section),
         'tickets': sorted_tickets,
@@ -248,39 +348,42 @@ def _central_context(request, active_section='central', assigned_to=None):
         'workload_rows': workload_rows,
         'filter_counts': filter_counts,
         'filter_options': filter_options,
-        'unassigned_count': len([ticket for ticket in MOCK_TICKETS if not ticket.assigned_to]),
+        'unassigned_count': unassigned_count,
         'saved_views': [
             {'name': 'Fila geral', 'query': '?view=list', 'active': True},
             {'name': 'Criticos sem dono', 'query': '?priority=critical&unassigned=1', 'active': False},
-            {'name': 'Minha fila', 'query': '?assigned_to=Gabriel', 'active': False},
+            {'name': 'Atribuídos a mim', 'query': '?assigned_to=__me__', 'active': False},
             {'name': 'RMM Alertas', 'query': '?origin=rmm', 'active': False},
             {'name': 'Financeiro', 'query': '?sector=Financeiro', 'active': False},
         ],
         'central_kpis': [
             {'label': 'Abertos', 'value': global_summary['open'], 'url': '?view=list', 'icon': 'inbox', 'trend': '+8%', 'spark': [12, 16, 14, 18, 22, 21]},
             {'label': 'Criticos', 'value': global_summary['critical'], 'url': '?priority=critical', 'icon': 'alert-triangle', 'trend': '+2', 'spark': [4, 5, 5, 6, 8, 7], 'variant': 'critical'},
-            {'label': 'Sem dono', 'value': len([ticket for ticket in MOCK_TICKETS if not ticket.assigned_to]), 'url': '?unassigned=1', 'icon': 'user-x', 'trend': '-1', 'spark': [6, 5, 7, 5, 4, 4], 'variant': 'warning'},
+            {'label': 'Sem dono', 'value': unassigned_count, 'url': '?unassigned=1', 'icon': 'user-x', 'trend': '-1', 'spark': [6, 5, 7, 5, 4, 4], 'variant': 'warning'},
             {'label': 'SLA vencendo', 'value': 3, 'url': '?stale=1', 'icon': 'timer', 'trend': '+1', 'spark': [1, 1, 2, 2, 3, 3], 'variant': 'warning'},
             {'label': '1a resposta', 'value': global_summary['avg_first_response'], 'url': '?view=list', 'icon': 'clock-3', 'trend': '-6%', 'spark': [28, 25, 24, 22, 20, 18]},
-            {'label': 'Resolucao', 'value': '2h14', 'url': '?status=resolved', 'icon': 'check-circle', 'trend': '-11%', 'spark': [34, 31, 29, 28, 25, 22]},
+            {'label': 'Resolvidos hoje', 'value': global_summary['resolved_today'], 'url': '?status=resolved', 'icon': 'check-circle', 'trend': 'real', 'spark': [1, 1, 2, 2, 3, global_summary['resolved_today']]},
             {'label': 'Em atendimento', 'value': global_summary['in_progress'], 'url': '?status=in_progress', 'icon': 'radio', 'trend': '+4', 'spark': [4, 6, 7, 8, 9, 9]},
-            {'label': 'Alertas RMM', 'value': len([ticket for ticket in MOCK_TICKETS if ticket.category == 'RMM / Alerta' or 'alerta' in ticket.title.casefold() or 'Bitdefender' in ticket.title]), 'url': '?origin=rmm', 'icon': 'activity', 'trend': '+3', 'spark': [1, 2, 2, 4, 4, 5], 'variant': 'rmm'},
+            {'label': 'Alertas RMM', 'value': rmm_count, 'url': '?origin=rmm', 'icon': 'activity', 'trend': '+3', 'spark': [1, 2, 2, 4, 4, 5], 'variant': 'rmm'},
         ],
         'origin_options': [
-            {'value': 'manual', 'label': 'Manual', 'count': len([ticket for ticket in MOCK_TICKETS if ticket.category != 'RMM / Alerta'])},
-            {'value': 'rmm', 'label': 'RMM Alert', 'count': len([ticket for ticket in MOCK_TICKETS if ticket.category == 'RMM / Alerta' or 'alerta' in ticket.title.casefold() or 'Bitdefender' in ticket.title])},
+            {'value': 'manual', 'label': 'Manual', 'count': len(all_tickets) - rmm_count},
+            {'value': 'rmm', 'label': 'RMM Alert', 'count': rmm_count},
             {'value': 'email', 'label': 'E-mail', 'count': 2},
             {'value': 'phone', 'label': 'Telefone', 'count': 1},
         ],
         'command_actions': [
             {'icon': 'ticket-plus', 'label': 'Novo chamado', 'shortcut': 'Ctrl N'},
             {'icon': 'activity', 'label': 'Abrir RMM Alertas', 'shortcut': 'R M M'},
-            {'icon': 'user-check', 'label': 'Ver meus chamados', 'shortcut': 'G M'},
+            {'icon': 'user-check', 'label': 'Atribuídos a mim', 'shortcut': 'G M'},
             {'icon': 'bar-chart-3', 'label': 'Abrir dashboard', 'shortcut': 'G D'},
             {'icon': 'columns-3', 'label': 'Alternar Kanban', 'shortcut': 'V K'},
         ],
         'view_mode': request.GET.get('view', 'list'),
-        'new_ticket_count': 3,
+        'new_ticket_count': current_summary['new'],
+        'using_persisted_tickets': using_persisted_data,
+        'current_user_name': current_user_name,
+        'current_user_aliases': current_user_aliases,
         'page_title': 'Central de Atendimento',
         'page_subtitle': 'Trabalhe a fila, acompanhe o kanban e abra detalhes sem perder o contexto.',
     }
@@ -292,9 +395,9 @@ def ticket_central(request):
 
 
 def ticket_my(request):
-    context = _central_context(request, active_section='my', assigned_to='Gabriel')
+    context = _central_context(request, active_section='my', assigned_to=_request_user_aliases(request))
     context['page_title'] = 'Meus chamados'
-    context['page_subtitle'] = 'Atendimentos atribuidos ao tecnico atual dentro da Central.'
+    context['page_subtitle'] = 'Atendimentos atribuidos ao usuario atual dentro da Central.'
     context['is_my_queue'] = True
     return render(request, 'tickets/central.html', context)
 
@@ -307,20 +410,53 @@ def ticket_create(request):
     context = {
         **_base_context('new'),
         **build_ticket_create_context(request),
+        'current_user_name': _request_user_display(request),
+        'current_user_aliases': _request_user_aliases(request),
     }
     return render(request, 'tickets/form.html', context)
 
 
 def ticket_detail(request, number):
-    ticket = get_ticket(number) or MOCK_TICKETS[0]
+    try:
+        ticket = get_ticket_view(number)
+    except (OperationalError, ProgrammingError):
+        ticket = None
+    ticket = ticket or get_ticket(number)
+    if not ticket:
+        raise Http404('Chamado nao encontrado.')
     detail_context = build_ticket_detail_context(ticket)
     device_context = detail_context.get('device_context') or {}
     sla = detail_context.get('sla') or {}
     related_count = len(detail_context.get('related_items') or [])
+    audit_events = []
+    if getattr(ticket, 'record', None):
+        audit_events = [
+            {
+                'id': str(event.pk),
+                'actor': event.actor or 'Sistema',
+                'event_type': event.event_type,
+                'filter_type': {
+                    'ticket_created': 'field',
+                    'field_changed': 'field',
+                    'comment_created': 'comment',
+                }.get(event.event_type, event.event_type),
+                'action': event.action,
+                'field_name': event.field_name,
+                'old_value': event.old_value or '—',
+                'new_value': event.new_value or '—',
+                'metadata': event.metadata or {},
+                'metadata_json': json.dumps(event.metadata or {}, ensure_ascii=False, indent=2),
+                'severity': (event.metadata or {}).get('severity', 'info'),
+                'origin': (event.metadata or {}).get('origin', 'Web'),
+                'when': display_time(event.created_at),
+            }
+            for event in ticket.record.audit_events.all()
+        ]
     context = {
         **_base_context('queue'),
         'ticket': ticket,
         **detail_context,
+        'audit_events': audit_events,
         'related_count': related_count,
         'ticket_detail_state': {
             'number': ticket.number,
@@ -332,19 +468,502 @@ def ticket_detail(request, number):
             'priority': ticket.priority,
             'priorityLabel': ticket.priority_label,
             'category': ticket.category,
+            'categoryIcon': getattr(ticket, 'category_icon', 'bi-folder'),
+            'categoryColor': getattr(ticket, 'category_color', 'gray'),
+            'queue': getattr(ticket, 'queue', 'N1 - Atendimento'),
             'assignedTo': ticket.assigned_to or '',
             'hasEndpoint': bool(ticket.endpoint),
             'hasRmmAlert': bool(device_context.get('alerts_count') or device_context.get('active_alerts')),
             'slaLevel': sla.get('level', 'ok'),
             'slaLabel': sla.get('label', ''),
+            'slaName': getattr(ticket, 'sla', '') or 'Sem SLA',
+            'dueAt': ticket.record.due_at.isoformat() if getattr(ticket, 'record', None) and ticket.record.due_at else '',
             'resolved': ticket.status == 'resolved',
         },
         'related_alerts': [
             {'title': 'Alerta RMM relacionado', 'description': 'Espaco reservado para vinculo futuro com EndpointAlert.'},
             {'title': 'Historico de inventario', 'description': 'Preview visual sem integracao real nesta fase.'},
         ] if ticket.endpoint else [],
+        'composer_templates': composer_template_context(ticket, user=request.user),
+        'resolution_templates': templates_for_ticket(
+            ticket.record,
+            [DeskTemplate.APP_RESOLVE_TICKET],
+            user=request.user,
+        ) if getattr(ticket, 'record', None) else [],
+        'escalation_templates': templates_for_ticket(
+            ticket.record,
+            [DeskTemplate.APP_ESCALATE_TICKET],
+            user=request.user,
+        ) if getattr(ticket, 'record', None) else [],
+        'current_user_name': _request_user_display(request),
+        'current_user_aliases': _request_user_aliases(request),
     }
     return render(request, 'tickets/detail.html', context)
+
+
+def _request_actor(request):
+    return _request_user_display(request)
+
+
+def _audit_config_event(request, event_type, title, metadata=None):
+    try:
+        from agents.audit import create_audit_event as create_global_audit_event
+
+        create_global_audit_event(
+            event_type=event_type,
+            title=title,
+            severity='info',
+            actor_type='system',
+            actor_name=_request_actor(request),
+            metadata=metadata or {},
+            request=request,
+        )
+    except Exception:
+        pass
+
+
+def _json_payload(request):
+    try:
+        return json.loads(request.body.decode('utf-8') or '{}')
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _source_value(value):
+    normalized = (value or '').strip().casefold()
+    return {
+        'manual': Ticket.SOURCE_MANUAL,
+        'portal': Ticket.SOURCE_PORTAL,
+        'e-mail': Ticket.SOURCE_EMAIL,
+        'email': Ticket.SOURCE_EMAIL,
+        'telefone': Ticket.SOURCE_PHONE,
+        'rmm alert': Ticket.SOURCE_RMM_ALERT,
+        'rmm': Ticket.SOURCE_RMM_ALERT,
+        'monitoramento': Ticket.SOURCE_MONITORING,
+    }.get(normalized, Ticket.SOURCE_MANUAL)
+
+
+def _api_ticket_payload(ticket):
+    view = _decorate_central_ticket(adapt_ticket(ticket))
+    payload = _central_ticket_payload(view)
+    payload['detail_url'] = f'/tickets/{ticket.number}/'
+    return payload
+
+
+@require_POST
+def ticket_api_create(request):
+    payload = _json_payload(request)
+    if payload is None:
+        return JsonResponse({'ok': False, 'errors': {'request': 'JSON invalido.'}}, status=400)
+
+    required = {
+        'requester': 'Solicitante',
+        'title': 'Titulo',
+        'description': 'Descricao',
+        'category': 'Categoria',
+        'priority': 'Prioridade',
+    }
+    errors = {
+        field: f'{label} e obrigatorio.'
+        for field, label in required.items()
+        if not str(payload.get(field) or '').strip()
+    }
+    priority = payload.get('priority')
+    if priority not in dict(Ticket.PRIORITY_CHOICES):
+        errors['priority'] = 'Prioridade invalida.'
+    if priority == Ticket.PRIORITY_CRITICAL and not str(payload.get('critical_reason') or '').strip():
+        errors['critical_reason'] = 'Justificativa da prioridade critica e obrigatoria.'
+    if errors:
+        return JsonResponse({'ok': False, 'errors': errors}, status=400)
+
+    category, _ = TicketCategory.objects.select_related('default_queue', 'default_sla').get_or_create(
+        name=str(payload['category']).strip(),
+        defaults={'description': 'Categoria criada pelo Backend MVP 1.', 'is_active': True},
+    )
+    sla = DeskSLA.objects.filter(name=str(payload.get('sla_name') or '').strip()).first() or category.default_sla
+    if not sla:
+        sla = DeskSLA.objects.filter(is_active=True, priority=priority).order_by('resolution_minutes').first()
+    queue = str(payload.get('queue') or '').strip()
+    if not queue:
+        queue = category.default_queue.name if category.default_queue else 'N1 - Atendimento'
+    mode = payload.get('mode') or 'create'
+    actor = _request_actor(request)
+    with transaction.atomic():
+        ticket = Ticket.objects.create(
+            title=str(payload['title']).strip(),
+            description=str(payload['description']).strip(),
+            requester_name=str(payload['requester']).strip(),
+            requester_email=str(payload.get('requester_email') or '').strip(),
+            requester_department=str(payload.get('requester_department') or 'Triagem').strip(),
+            requester_is_partner=bool(payload.get('requester_is_partner')),
+            status=Ticket.STATUS_NEW,
+            priority=priority,
+            category=category,
+            queue=queue,
+            sla=sla,
+            assigned_to=actor if mode == 'assign' else '',
+            source=_source_value(payload.get('origin')),
+            endpoint_name=str(payload.get('endpoint_name') or '').strip(),
+        )
+        create_audit_event(
+            ticket,
+            actor=actor,
+            event_type='ticket_created',
+            action='Criou chamado',
+            field_name='ticket',
+            new_value=f'#{ticket.number}',
+            metadata={
+                'source': 'quick_ticket_drawer',
+                'mode': mode,
+                'critical_reason': payload.get('critical_reason') or '',
+                'related_ticket_ids': payload.get('related_ticket_ids') or [],
+                'queue': queue,
+                'sla': sla.name if sla else '',
+                'origin': 'Web',
+            },
+        )
+        prepare_ticket_notification(ticket, 'ticket_created', user=actor)
+        if ticket.assigned_to:
+            create_audit_event(
+                ticket,
+                actor=actor,
+                event_type='field_changed',
+                action='Assumiu chamado',
+                field_name='assigned_to',
+                old_value='Sem responsavel',
+                new_value=actor,
+                metadata={'origin': 'Web'},
+            )
+            prepare_ticket_notification(ticket, 'ticket_assigned', user=actor)
+    return JsonResponse({'ok': True, 'ticket': _api_ticket_payload(ticket)}, status=201)
+
+
+@require_POST
+def ticket_api_update(request, number):
+    payload = _json_payload(request)
+    if payload is None:
+        return JsonResponse({'ok': False, 'error': 'JSON invalido.'}, status=400)
+    ticket = get_object_or_404(Ticket.objects.select_related('category', 'sla'), number=number)
+    actor = _request_actor(request)
+    field = payload.get('field')
+    value = payload.get('value')
+    previous_status = ticket.status
+    previous_assigned_to = ticket.assigned_to
+    allowed = {'status', 'priority', 'category', 'queue', 'sla', 'assigned_to', 'title'}
+    if field not in allowed:
+        return JsonResponse({'ok': False, 'error': 'Campo nao permitido.'}, status=400)
+
+    old_display = ''
+    new_display = ''
+    if field == 'status':
+        if value not in dict(Ticket.STATUS_CHOICES):
+            return JsonResponse({'ok': False, 'error': 'Status invalido.'}, status=400)
+        old_display = ticket.get_status_display()
+        ticket.status = value
+        new_display = dict(Ticket.STATUS_CHOICES)[value]
+    elif field == 'priority':
+        if value not in dict(Ticket.PRIORITY_CHOICES):
+            return JsonResponse({'ok': False, 'error': 'Prioridade invalida.'}, status=400)
+        old_display = ticket.get_priority_display()
+        ticket.priority = value
+        new_display = dict(Ticket.PRIORITY_CHOICES)[value]
+    elif field == 'category':
+        old_display = ticket.category.name if ticket.category else 'Sem categoria'
+        category, _ = TicketCategory.objects.select_related('default_queue', 'default_sla').get_or_create(name=str(value).strip(), defaults={'is_active': True})
+        ticket.category = category
+        if category.default_priority:
+            ticket.priority = category.default_priority
+        if category.default_queue:
+            ticket.queue = category.default_queue.name
+        if category.default_sla:
+            ticket.sla = category.default_sla
+            ticket.due_at = ticket.created_at + timezone.timedelta(minutes=category.default_sla.resolution_minutes)
+        else:
+            ticket.sla = None
+            ticket.due_at = None
+        new_display = category.name
+    elif field == 'queue':
+        old_display = ticket.queue or 'Sem fila'
+        queue_name = str(value or '').strip()
+        if queue_name and not DeskQueue.objects.filter(name=queue_name, is_active=True).exists():
+            return JsonResponse({'ok': False, 'error': 'Fila invalida ou inativa.'}, status=400)
+        ticket.queue = queue_name
+        new_display = ticket.queue or 'Sem fila'
+    elif field == 'sla':
+        old_display = ticket.sla.name if ticket.sla else 'Sem SLA'
+        sla_name = str(value or '').strip()
+        sla = DeskSLA.objects.filter(name=sla_name, is_active=True).first() if sla_name else None
+        if sla_name and not sla:
+            return JsonResponse({'ok': False, 'error': 'SLA invalido ou inativo.'}, status=400)
+        ticket.sla = sla
+        ticket.due_at = ticket.created_at + timezone.timedelta(minutes=sla.resolution_minutes) if sla else None
+        new_display = sla.name if sla else 'Sem SLA'
+    elif field == 'assigned_to':
+        old_display = ticket.assigned_to or 'Sem responsavel'
+        ticket.assigned_to = str(value or '').strip()
+        new_display = ticket.assigned_to or 'Sem responsavel'
+    else:
+        old_display = ticket.title
+        ticket.title = str(value or '').strip()
+        if not ticket.title:
+            return JsonResponse({'ok': False, 'error': 'Titulo e obrigatorio.'}, status=400)
+        new_display = ticket.title
+
+    ticket.save()
+    create_audit_event(
+        ticket,
+        actor=actor,
+        event_type='field_changed',
+        action=f'Alterou {field}',
+        field_name=field,
+        old_value=old_display,
+        new_value=new_display,
+        metadata={
+            'origin': 'Web',
+            'severity': 'sensitive' if field == 'priority' and value == Ticket.PRIORITY_CRITICAL else 'info',
+        },
+    )
+    if field == 'assigned_to' and not previous_assigned_to and ticket.assigned_to:
+        prepare_ticket_notification(ticket, 'ticket_assigned', user=actor)
+    elif field == 'status' and previous_status != ticket.status:
+        if ticket.status == Ticket.STATUS_WAITING_USER:
+            prepare_ticket_notification(ticket, 'waiting_requester', user=actor)
+        elif ticket.status == Ticket.STATUS_RESOLVED:
+            prepare_ticket_notification(ticket, 'ticket_resolved', user=actor)
+        elif previous_status == Ticket.STATUS_RESOLVED and ticket.is_open:
+            prepare_ticket_notification(ticket, 'ticket_reopened', user=actor)
+    return JsonResponse({
+        'ok': True,
+        'field': field,
+        'value': value,
+        'display': new_display,
+        'ticket': {
+            'status': ticket.status,
+            'statusLabel': ticket.get_status_display(),
+            'priority': ticket.priority,
+            'priorityLabel': ticket.get_priority_display(),
+            'category': ticket.category.name if ticket.category else 'Sem categoria',
+            'categoryIcon': normalize_category_icon(ticket.category.icon) if ticket.category else 'bi-folder',
+            'categoryColor': normalize_category_color(ticket.category.color) if ticket.category else 'gray',
+            'queue': ticket.queue,
+            'sla': ticket.sla.name if ticket.sla else '',
+            'slaLabel': ticket.sla.name if ticket.sla else 'Sem SLA',
+            'slaLevel': 'critical' if ticket.priority == Ticket.PRIORITY_CRITICAL else 'warning' if ticket.priority == Ticket.PRIORITY_HIGH else 'ok',
+            'dueAt': ticket.due_at.isoformat() if ticket.due_at else '',
+            'assignedTo': ticket.assigned_to,
+            'title': ticket.title,
+        },
+    })
+
+
+@require_POST
+def ticket_api_comment(request, number):
+    payload = _json_payload(request)
+    if payload is None:
+        return JsonResponse({'ok': False, 'error': 'JSON invalido.'}, status=400)
+    body = str(payload.get('body') or '').strip()
+    visibility = payload.get('visibility') or TicketComment.VISIBILITY_INTERNAL
+    if not body:
+        return JsonResponse({'ok': False, 'error': 'Comentario e obrigatorio.'}, status=400)
+    if visibility not in dict(TicketComment.VISIBILITY_CHOICES):
+        return JsonResponse({'ok': False, 'error': 'Visibilidade invalida.'}, status=400)
+
+    ticket = get_object_or_404(Ticket, number=number)
+    actor = _request_actor(request)
+    selected_template = None
+    template_id = str(payload.get('template_id') or '').strip()
+    if template_id:
+        selected_template = DeskTemplate.objects.filter(
+            pk=template_id,
+            is_active=True,
+            application__in=[
+                DeskTemplate.APP_COMPOSER_PUBLIC,
+                DeskTemplate.APP_COMPOSER_INTERNAL,
+            ],
+        ).first()
+    with transaction.atomic():
+        comment = TicketComment.objects.create(ticket=ticket, author_name=actor, body=body, visibility=visibility)
+        create_audit_event(
+            ticket,
+            actor=actor,
+            event_type='comment_created',
+            action='Criou comentario publico' if visibility == TicketComment.VISIBILITY_PUBLIC else 'Criou comentario interno',
+            field_name='comments',
+            new_value=body,
+            metadata={
+                'visibility': visibility,
+                'origin': 'Web',
+                'template_id': str(selected_template.pk) if selected_template else '',
+                'template_name': selected_template.name if selected_template else '',
+            },
+        )
+        if selected_template:
+            create_audit_event(
+                ticket,
+                actor=actor,
+                event_type='template_used',
+                action=f'Usou template {selected_template.name}',
+                field_name='template',
+                new_value=selected_template.name,
+                metadata={
+                    'origin': 'Web',
+                    'application': selected_template.application,
+                    'template_id': str(selected_template.pk),
+                },
+            )
+    return JsonResponse({
+        'ok': True,
+        'comment': {
+            'id': str(comment.pk),
+            'author': actor,
+            'body': comment.body,
+            'visibility': visibility,
+            'visibilityLabel': comment.get_visibility_display(),
+            'when': 'agora',
+        },
+    }, status=201)
+
+
+@require_POST
+def ticket_api_action(request, number):
+    payload = _json_payload(request)
+    if payload is None:
+        return JsonResponse({'ok': False, 'error': 'JSON invalido.'}, status=400)
+
+    ticket = get_object_or_404(Ticket.objects.select_related('category', 'endpoint', 'sla'), number=number)
+    actor = _request_actor(request)
+    action = str(payload.get('action') or '').strip()
+    template_id = str(payload.get('template_id') or '').strip()
+    expected_application = {
+        'resolve': DeskTemplate.APP_RESOLVE_TICKET,
+        'escalate': DeskTemplate.APP_ESCALATE_TICKET,
+    }.get(action)
+    if not expected_application:
+        return JsonResponse({'ok': False, 'error': 'Acao nao suportada.'}, status=400)
+
+    selected_template = None
+    if template_id:
+        selected_template = DeskTemplate.objects.filter(
+            pk=template_id,
+            is_active=True,
+            application=expected_application,
+        ).first()
+        if not selected_template:
+            return JsonResponse({'ok': False, 'error': 'Template invalido ou inativo.'}, status=400)
+
+    with transaction.atomic():
+        if action == 'resolve':
+            summary = str(payload.get('summary') or '').strip()
+            public_comment = str(payload.get('public_comment') or '').strip()
+            internal_comment = str(payload.get('internal_comment') or '').strip()
+            if not summary:
+                return JsonResponse({'ok': False, 'error': 'Resumo da solucao e obrigatorio.'}, status=400)
+            old_status = ticket.get_status_display()
+            ticket.status = Ticket.STATUS_RESOLVED
+            ticket.save()
+            if public_comment:
+                TicketComment.objects.create(
+                    ticket=ticket,
+                    author_name=actor,
+                    body=public_comment,
+                    visibility=TicketComment.VISIBILITY_PUBLIC,
+                )
+            if internal_comment:
+                TicketComment.objects.create(
+                    ticket=ticket,
+                    author_name=actor,
+                    body=internal_comment,
+                    visibility=TicketComment.VISIBILITY_INTERNAL,
+                )
+            create_audit_event(
+                ticket,
+                actor=actor,
+                event_type='ticket_resolved',
+                action='Resolveu chamado',
+                field_name='status',
+                old_value=old_status,
+                new_value=ticket.get_status_display(),
+                metadata={
+                    'origin': 'Web',
+                    'resolution_summary': summary,
+                    'root_cause': str(payload.get('root_cause') or ''),
+                    'template_id': str(selected_template.pk) if selected_template else '',
+                },
+            )
+            if selected_template:
+                create_audit_event(
+                    ticket,
+                    actor=actor,
+                    event_type='template_used',
+                    action=f'Notificacao de resolucao preparada a partir do template {selected_template.name}.',
+                    field_name='template',
+                    new_value=selected_template.name,
+                    metadata={
+                        'origin': 'Web',
+                        'application': selected_template.application,
+                        'template_id': str(selected_template.pk),
+                        'email_sent': False,
+                    },
+                )
+            prepare_ticket_notification(
+                ticket,
+                'ticket_resolved',
+                user=actor,
+                extra_context={'solucao': summary},
+            )
+        else:
+            target = str(payload.get('target') or '').strip()
+            reason = str(payload.get('reason') or '').strip()
+            owner = str(payload.get('owner') or '').strip()
+            priority = str(payload.get('priority') or '').strip()
+            internal_comment = str(payload.get('internal_comment') or '').strip()
+            if not target or not reason:
+                return JsonResponse({'ok': False, 'error': 'Destino e motivo sao obrigatorios.'}, status=400)
+            if priority and priority not in dict(Ticket.PRIORITY_CHOICES):
+                return JsonResponse({'ok': False, 'error': 'Prioridade invalida.'}, status=400)
+            old_queue = ticket.queue
+            ticket.queue = target
+            ticket.assigned_to = owner or ticket.assigned_to
+            ticket.status = Ticket.STATUS_IN_PROGRESS
+            if priority:
+                ticket.priority = priority
+            ticket.save()
+            TicketComment.objects.create(
+                ticket=ticket,
+                author_name=actor,
+                body=internal_comment or reason,
+                visibility=TicketComment.VISIBILITY_INTERNAL,
+            )
+            create_audit_event(
+                ticket,
+                actor=actor,
+                event_type='ticket_escalated',
+                action=f'Escalou chamado para {target}',
+                field_name='queue',
+                old_value=old_queue,
+                new_value=target,
+                metadata={
+                    'origin': 'Web',
+                    'reason': reason,
+                    'owner': owner,
+                    'priority': priority,
+                    'template_id': str(selected_template.pk) if selected_template else '',
+                    'template_name': selected_template.name if selected_template else '',
+                },
+            )
+
+    return JsonResponse({
+        'ok': True,
+        'action': action,
+        'ticket': {
+            'status': ticket.status,
+            'statusLabel': ticket.get_status_display(),
+            'priority': ticket.priority,
+            'priorityLabel': ticket.get_priority_display(),
+            'queue': ticket.queue,
+            'assignedTo': ticket.assigned_to,
+        },
+    })
 
 
 def ticket_dashboard(request):
@@ -371,12 +990,265 @@ def ticket_automation_rules(request):
     return render(request, 'tickets/automation_rules.html', context)
 
 
+def _bool_from_value(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'sim', 'ativa', 'ativo', 'active'}
+
+
+def _split_csv(value):
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in str(value or '').split(',') if part.strip()]
+
+
+def _category_by_id_or_name(payload):
+    item_id = payload.get('id')
+    if item_id:
+        found = TicketCategory.objects.filter(pk=item_id).first()
+        if found:
+            return found
+    name = str(payload.get('name') or '').strip()
+    return TicketCategory.objects.filter(name=name).first()
+
+
+def _queue_by_id_or_name(payload):
+    item_id = payload.get('id')
+    if item_id:
+        found = DeskQueue.objects.filter(pk=item_id).first()
+        if found:
+            return found
+    name = str(payload.get('name') or '').strip()
+    return DeskQueue.objects.filter(name=name).first()
+
+
+def _sla_by_id_or_name(payload):
+    item_id = payload.get('id')
+    if item_id:
+        found = DeskSLA.objects.filter(pk=item_id).first()
+        if found:
+            return found
+    name = str(payload.get('name') or '').strip()
+    return DeskSLA.objects.filter(name=name).first()
+
+
+def _template_by_id_or_name(payload):
+    item_id = payload.get('id')
+    if item_id:
+        found = DeskTemplate.objects.filter(pk=item_id).first()
+        if found:
+            return found
+    name = str(payload.get('name') or '').strip()
+    return DeskTemplate.objects.filter(name=name).first()
+
+
 def ticket_settings(request):
     context = {
         **_base_context('settings'),
-        **build_ticket_settings_context(request),
+        **build_settings_context(),
     }
     return render(request, 'tickets/settings.html', context)
+
+
+@require_POST
+def ticket_settings_api(request):
+    payload = _json_payload(request)
+    if payload is None:
+        return JsonResponse({'ok': False, 'error': 'JSON invalido.'}, status=400)
+
+    kind = payload.get('kind')
+    action = payload.get('action') or 'save'
+    name = str(payload.get('name') or '').strip()
+    if action in {'save', 'duplicate'} and not name:
+        return JsonResponse({'ok': False, 'error': 'Nome e obrigatorio.'}, status=400)
+
+    if kind == 'category':
+        item = _category_by_id_or_name(payload)
+        if action == 'duplicate' and item:
+            name = f'{item.name} cópia'
+            item = None
+        if action == 'toggle' and item:
+            item.is_active = not item.is_active
+            item.save(update_fields=['is_active', 'updated_at'])
+            _audit_config_event(
+                request,
+                'desk.category_toggled',
+                'Categoria alterada',
+                {'category_id': str(item.pk), 'category_name': item.name, 'is_active': item.is_active},
+            )
+            return JsonResponse({'ok': True, 'id': str(item.pk), 'active': item.is_active})
+        queue = DeskQueue.objects.filter(name=str(payload.get('default_queue') or '').strip()).first()
+        sla = DeskSLA.objects.filter(name=str(payload.get('default_sla') or '').strip()).first()
+        allowed = _split_csv(payload.get('allowed_types')) or [TicketCategory.TYPE_INCIDENT]
+        subcategories = _split_csv(payload.get('subcategories'))
+        values = {
+            'name': name,
+            'description': payload.get('description') or '',
+            'icon': normalize_category_icon(payload.get('icon')),
+            'color': normalize_category_color(payload.get('color')),
+            'default_priority': payload.get('default_priority') or Ticket.PRIORITY_NORMAL,
+            'default_queue': queue,
+            'default_sla': sla,
+            'allowed_types': allowed,
+            'subcategories': subcategories,
+            'is_active': _bool_from_value(payload.get('is_active'), True),
+        }
+        was_existing = bool(item)
+        if item:
+            for field, field_value in values.items():
+                setattr(item, field, field_value)
+            item.save()
+        else:
+            item = TicketCategory.objects.create(**values)
+        _audit_config_event(
+            request,
+            'desk.category_updated' if was_existing else 'desk.category_created',
+            'Categoria salva',
+            {
+                'category_id': str(item.pk),
+                'category_name': item.name,
+                'icon': item.icon,
+                'color': item.color,
+                'default_priority': item.default_priority,
+                'default_queue': item.default_queue.name if item.default_queue else '',
+                'default_sla': item.default_sla.name if item.default_sla else '',
+                'allowed_types': item.allowed_types,
+                'subcategories': item.subcategories,
+            },
+        )
+        return JsonResponse({'ok': True, 'id': str(item.pk), 'name': item.name})
+
+    if kind == 'queue':
+        item = _queue_by_id_or_name(payload)
+        if action == 'duplicate' and item:
+            name = f'{item.name} cópia'
+            item = None
+        if action == 'toggle' and item:
+            item.is_active = not item.is_active
+            item.save(update_fields=['is_active', 'updated_at'])
+            _audit_config_event(
+                request,
+                'desk.queue_toggled',
+                'Fila alterada',
+                {'queue_id': str(item.pk), 'queue_name': item.name, 'is_active': item.is_active},
+            )
+            return JsonResponse({'ok': True, 'id': str(item.pk), 'active': item.is_active})
+        values = {
+            'name': name,
+            'description': payload.get('description') or '',
+            'responsible': payload.get('responsible') or '',
+            'members': _split_csv(payload.get('members')),
+            'business_hours': payload.get('business_hours') or 'Comercial',
+            'capacity': int(payload.get('capacity') or 0) or None,
+            'receives_tickets': _bool_from_value(payload.get('receives_tickets'), True),
+            'receives_rmm': _bool_from_value(payload.get('receives_rmm'), False),
+            'receives_gmud': _bool_from_value(payload.get('receives_gmud'), False),
+            'is_active': _bool_from_value(payload.get('is_active'), True),
+        }
+        was_existing = bool(item)
+        if item:
+            for field, field_value in values.items():
+                setattr(item, field, field_value)
+            item.save()
+        else:
+            item = DeskQueue.objects.create(**values)
+        _audit_config_event(
+            request,
+            'desk.queue_updated' if was_existing else 'desk.queue_created',
+            'Fila salva',
+            {
+                'queue_id': str(item.pk),
+                'queue_name': item.name,
+                'responsible': item.responsible,
+                'receives_tickets': item.receives_tickets,
+                'receives_rmm': item.receives_rmm,
+                'receives_gmud': item.receives_gmud,
+                'capacity': item.capacity,
+            },
+        )
+        return JsonResponse({'ok': True, 'id': str(item.pk), 'name': item.name})
+
+    if kind == 'sla':
+        item = _sla_by_id_or_name(payload)
+        if action == 'duplicate' and item:
+            name = f'{item.name} cópia'
+            item = None
+        if action == 'toggle' and item:
+            item.is_active = not item.is_active
+            item.save(update_fields=['is_active', 'updated_at'])
+            _audit_config_event(
+                request,
+                'desk.sla_toggled',
+                'SLA alterado',
+                {'sla_id': str(item.pk), 'sla_name': item.name, 'is_active': item.is_active},
+            )
+            return JsonResponse({'ok': True, 'id': str(item.pk), 'active': item.is_active})
+        values = {
+            'name': name,
+            'description': payload.get('description') or '',
+            'priority': payload.get('priority') or Ticket.PRIORITY_NORMAL,
+            'first_response_minutes': int(payload.get('first_response_minutes') or 240),
+            'resolution_minutes': int(payload.get('resolution_minutes') or 1440),
+            'calendar_type': DeskSLA.CALENDAR_24X7 if payload.get('calendar_type') == '24x7' else DeskSLA.CALENDAR_BUSINESS,
+            'pause_on_waiting_requester': _bool_from_value(payload.get('pause_on_waiting_requester'), True),
+            'pause_on_waiting_supplier': _bool_from_value(payload.get('pause_on_waiting_supplier'), False),
+            'pause_on_waiting_approval': _bool_from_value(payload.get('pause_on_waiting_approval'), False),
+            'is_active': _bool_from_value(payload.get('is_active'), True),
+        }
+        was_existing = bool(item)
+        if item:
+            for field, field_value in values.items():
+                setattr(item, field, field_value)
+            item.save()
+        else:
+            item = DeskSLA.objects.create(**values)
+        _audit_config_event(
+            request,
+            'desk.sla_updated' if was_existing else 'desk.sla_created',
+            'SLA salvo',
+            {
+                'sla_id': str(item.pk),
+                'sla_name': item.name,
+                'priority': item.priority,
+                'first_response_minutes': item.first_response_minutes,
+                'resolution_minutes': item.resolution_minutes,
+                'calendar_type': item.calendar_type,
+            },
+        )
+        return JsonResponse({'ok': True, 'id': str(item.pk), 'name': item.name})
+
+    if kind == 'template':
+        item = _template_by_id_or_name(payload)
+        if action == 'duplicate' and item:
+            name = f'{item.name} cópia'
+            item = None
+        if action == 'toggle' and item:
+            item.is_active = not item.is_active
+            item.save(update_fields=['is_active', 'updated_at'])
+            return JsonResponse({'ok': True, 'id': str(item.pk), 'active': item.is_active})
+        category = TicketCategory.objects.filter(name=str(payload.get('category') or '').strip()).first()
+        values = {
+            'name': name,
+            'description': payload.get('description') or '',
+            'template_type': payload.get('template_type') or DeskTemplate.TYPE_PUBLIC_REPLY,
+            'application': payload.get('application') or '',
+            'category': category,
+            'channel': payload.get('channel') or DeskTemplate.CHANNEL_PUBLIC,
+            'subject': payload.get('subject') or '',
+            'trigger': payload.get('trigger') or '',
+            'content': payload.get('content') or '',
+            'variables': _split_csv(payload.get('variables')),
+            'is_active': _bool_from_value(payload.get('is_active'), True),
+        }
+        if item:
+            for field, field_value in values.items():
+                setattr(item, field, field_value)
+            item.save()
+        else:
+            item = DeskTemplate.objects.create(**values)
+        return JsonResponse({'ok': True, 'id': str(item.pk), 'name': item.name})
+
+    return JsonResponse({'ok': False, 'error': 'Tipo de configuracao nao suportado.'}, status=400)
 
 
 @require_POST
@@ -385,3 +1257,394 @@ def ticket_fake_action(request, number=None, action='updated'):
     if number:
         return redirect('tickets:detail', number=number)
     return redirect('tickets:central')
+
+
+PORTAL_OPEN_STATUSES = {
+    Ticket.STATUS_NEW,
+    Ticket.STATUS_IN_PROGRESS,
+    Ticket.STATUS_WAITING_USER,
+    Ticket.STATUS_WAITING_THIRD_PARTY,
+}
+
+
+def _portal_requester_email(request):
+    if request.user.is_authenticated:
+        return (getattr(request.user, 'email', '') or '').strip()
+    return (request.GET.get('email') or request.session.get('portal_requester_email') or '').strip()
+
+
+def _portal_queryset(request):
+    queryset = Ticket.objects.select_related('category', 'endpoint', 'sla').prefetch_related('comments', 'attachments')
+    requester_email = _portal_requester_email(request)
+    if request.user.is_authenticated:
+        if not requester_email:
+            return queryset.none(), requester_email
+        queryset = queryset.filter(requester_email__iexact=requester_email)
+    elif requester_email:
+        queryset = queryset.filter(requester_email__iexact=requester_email)
+    return queryset, requester_email
+
+
+def _portal_detail_redirect(ticket, request):
+    if request.path_info.startswith('/meus-chamados/'):
+        route_name = 'requester-ticket-detail'
+    else:
+        route_name = 'ticket-portal-detail'
+    url = reverse(route_name, kwargs={'number': ticket.number})
+    requester_email = _portal_requester_email(request)
+    if requester_email and route_name == 'ticket-portal-detail':
+        url = f'{url}?{urlencode({"email": requester_email})}'
+    return redirect(url)
+
+
+def _portal_actor(request, ticket):
+    user = getattr(request, 'user', None)
+    if user and user.is_authenticated:
+        return user.get_full_name() or user.get_username() or user.email or 'Solicitante'
+    return ticket.requester_name or ticket.requester_email or 'Solicitante'
+
+
+def _portal_status_message(ticket):
+    messages_by_status = {
+        Ticket.STATUS_NEW: 'Recebemos sua solicitacao e ela aguarda triagem.',
+        Ticket.STATUS_IN_PROGRESS: 'Nossa equipe esta trabalhando neste chamado.',
+        Ticket.STATUS_WAITING_USER: 'Precisamos do seu retorno para continuar o atendimento.',
+        Ticket.STATUS_WAITING_THIRD_PARTY: 'O atendimento aguarda retorno de terceiro ou fornecedor.',
+        Ticket.STATUS_RESOLVED: 'Este chamado foi marcado como resolvido. Voce pode reabrir se o problema continuar.',
+        Ticket.STATUS_CLOSED: 'Este chamado foi encerrado.',
+        Ticket.STATUS_CANCELED: 'Este chamado foi cancelado.',
+    }
+    return messages_by_status.get(ticket.status, 'Acompanhe as atualizacoes deste atendimento.')
+
+
+def _portal_filter_queryset(queryset, request):
+    query = (request.GET.get('q') or '').strip()
+    status = (request.GET.get('status') or 'all').strip()
+    if query:
+        q_filter = Q(title__icontains=query) | Q(category__name__icontains=query)
+        if query.lstrip('#').isdigit():
+            q_filter |= Q(number=int(query.lstrip('#')))
+        queryset = queryset.filter(q_filter)
+    if status == 'open':
+        queryset = queryset.filter(status__in=PORTAL_OPEN_STATUSES)
+    elif status == 'waiting_user':
+        queryset = queryset.filter(status=Ticket.STATUS_WAITING_USER)
+    elif status == 'resolved':
+        queryset = queryset.filter(status=Ticket.STATUS_RESOLVED)
+    elif status == 'closed':
+        queryset = queryset.filter(status__in=[Ticket.STATUS_CLOSED, Ticket.STATUS_CANCELED])
+    return queryset
+
+
+def _portal_public_timeline(ticket):
+    items = [
+        {
+            'kind': 'created',
+            'icon': 'ticket-plus',
+            'title': 'Chamado aberto',
+            'body': ticket.description,
+            'author': ticket.requester_name or ticket.requester_email or 'Solicitante',
+            'created_at': ticket.created_at,
+        }
+    ]
+    for comment in ticket.comments.filter(visibility=TicketComment.VISIBILITY_PUBLIC).order_by('created_at'):
+        items.append({
+            'kind': 'comment',
+            'icon': 'message-square',
+            'title': 'Comentario publico',
+            'body': comment.body,
+            'author': comment.author_name or 'NightOwl Desk',
+            'created_at': comment.created_at,
+            'attachments': list(comment.attachments.filter(visibility=TicketAttachment.VISIBILITY_PUBLIC)),
+        })
+    if ticket.status == Ticket.STATUS_RESOLVED and ticket.resolved_at:
+        items.append({
+            'kind': 'resolved',
+            'icon': 'check-circle',
+            'title': 'Chamado resolvido',
+            'body': 'Atendimento marcado como resolvido.',
+            'author': ticket.assigned_to or 'NightOwl Desk',
+            'created_at': ticket.resolved_at,
+        })
+    return sorted(items, key=lambda item: item['created_at'])
+
+
+def _portal_solution(ticket):
+    if ticket.status != Ticket.STATUS_RESOLVED:
+        return None
+    comment = ticket.comments.filter(visibility=TicketComment.VISIBILITY_PUBLIC).order_by('-created_at').first()
+    return {
+        'summary': comment.body if comment else 'Chamado marcado como resolvido pela equipe de atendimento.',
+        'resolved_at': ticket.resolved_at,
+        'responsible': ticket.assigned_to or 'Equipe de atendimento',
+    }
+
+
+def _portal_route_context(request, requester_mode=False):
+    if requester_mode or request.path_info.startswith('/meus-chamados/'):
+        return {
+            'portal_mode': 'requester',
+            'portal_list_url_name': 'requester-ticket-list',
+            'portal_detail_url_name': 'requester-ticket-detail',
+            'portal_comment_url_name': 'requester-ticket-comment',
+            'portal_reopen_url_name': 'requester-ticket-reopen',
+            'portal_create_url_name': 'requester-ticket-create',
+            'requester_can_create': True,
+        }
+    return {
+        'portal_mode': 'portal',
+        'portal_list_url_name': 'ticket-portal-list',
+        'portal_detail_url_name': 'ticket-portal-detail',
+        'portal_comment_url_name': 'ticket-portal-comment',
+        'portal_reopen_url_name': 'ticket-portal-reopen',
+        'portal_create_url_name': '',
+        'requester_can_create': False,
+    }
+
+
+def _portal_category_options():
+    return TicketCategory.objects.filter(is_active=True).select_related('default_queue', 'default_sla').order_by('name')
+
+
+def _portal_list_context(request, requester_mode=False):
+    queryset, requester_email = _portal_queryset(request)
+    tickets = _portal_filter_queryset(queryset, request).order_by('-updated_at')[:100]
+    counts_queryset = queryset
+    route_context = _portal_route_context(request, requester_mode=requester_mode)
+    context = {
+        'active_nav': 'ticket_portal',
+        'requester_email': requester_email,
+        'portal_missing_email': request.user.is_authenticated and not requester_email,
+        'portal_categories': _portal_category_options(),
+        'tickets': tickets,
+        'filters': {
+            'q': request.GET.get('q', ''),
+            'status': request.GET.get('status', 'all'),
+        },
+        'counts': {
+            'all': counts_queryset.count(),
+            'open': counts_queryset.filter(status__in=PORTAL_OPEN_STATUSES).count(),
+            'in_progress': counts_queryset.filter(status=Ticket.STATUS_IN_PROGRESS).count(),
+            'waiting_user': counts_queryset.filter(status=Ticket.STATUS_WAITING_USER).count(),
+            'resolved': counts_queryset.filter(status=Ticket.STATUS_RESOLVED).count(),
+            'closed': counts_queryset.filter(status__in=[Ticket.STATUS_CLOSED, Ticket.STATUS_CANCELED]).count(),
+        },
+    }
+    context.update(route_context)
+    return context
+
+
+def ticket_portal_list(request):
+    context = _portal_list_context(request, requester_mode=False)
+    return render(request, 'tickets/portal_list.html', context)
+
+
+def _portal_detail_context(request, number, requester_mode=False):
+    queryset, requester_email = _portal_queryset(request)
+    ticket = get_object_or_404(queryset, number=number)
+    public_attachments = ticket.attachments.filter(visibility=TicketAttachment.VISIBILITY_PUBLIC)
+    route_context = _portal_route_context(request, requester_mode=requester_mode)
+    context = {
+        'active_nav': 'ticket_portal',
+        'requester_email': requester_email,
+        'ticket': ticket,
+        'status_message': _portal_status_message(ticket),
+        'public_comments': ticket.comments.filter(visibility=TicketComment.VISIBILITY_PUBLIC).order_by('created_at'),
+        'public_attachments': public_attachments,
+        'timeline': _portal_public_timeline(ticket),
+        'solution': _portal_solution(ticket),
+        'can_reply': ticket.status not in {Ticket.STATUS_RESOLVED, Ticket.STATUS_CLOSED, Ticket.STATUS_CANCELED},
+        'can_reopen': ticket.status == Ticket.STATUS_RESOLVED,
+    }
+    context.update(route_context)
+    return context
+
+
+def ticket_portal_detail(request, number):
+    context = _portal_detail_context(request, number, requester_mode=False)
+    return render(request, 'tickets/portal_detail.html', context)
+
+
+def ticket_requester_list(request):
+    context = _portal_list_context(request, requester_mode=True)
+    return render(request, 'tickets/portal_list.html', context)
+
+
+def ticket_requester_detail(request, number):
+    context = _portal_detail_context(request, number, requester_mode=True)
+    return render(request, 'tickets/portal_detail.html', context)
+
+
+@require_POST
+def ticket_requester_create(request):
+    requester_email = _portal_requester_email(request)
+    if not requester_email:
+        messages.error(request, 'Seu usuario precisa ter e-mail cadastrado para abrir chamados.')
+        return redirect('requester-ticket-list')
+
+    title = str(request.POST.get('title') or '').strip()
+    description = str(request.POST.get('description') or '').strip()
+    category_id = str(request.POST.get('category') or '').strip()
+    priority = str(request.POST.get('priority') or Ticket.PRIORITY_NORMAL).strip()
+    endpoint_name = str(request.POST.get('endpoint_name') or '').strip()
+    if not title or not description:
+        messages.error(request, 'Informe titulo e descricao para abrir o chamado.')
+        return redirect('requester-ticket-list')
+    if priority not in dict(Ticket.PRIORITY_CHOICES):
+        priority = Ticket.PRIORITY_NORMAL
+
+    category = None
+    if category_id:
+        category = TicketCategory.objects.filter(pk=category_id, is_active=True).select_related('default_queue', 'default_sla').first()
+    if not category:
+        category = TicketCategory.objects.filter(is_active=True).select_related('default_queue', 'default_sla').order_by('name').first()
+
+    if category and category.default_priority:
+        priority = category.default_priority
+    sla = category.default_sla if category else None
+    if not sla:
+        sla = DeskSLA.objects.filter(is_active=True, priority=priority).order_by('resolution_minutes', 'name').first()
+    queue = category.default_queue.name if category and category.default_queue else 'N1 - Atendimento'
+    actor = _portal_actor(request, None)
+    user = getattr(request, 'user', None)
+    requester_name = user.get_full_name() if user and user.is_authenticated else ''
+    requester_name = requester_name or (user.get_username() if user and user.is_authenticated else '') or requester_email
+
+    with transaction.atomic():
+        ticket = Ticket.objects.create(
+            title=title,
+            description=description,
+            requester_name=requester_name,
+            requester_email=requester_email,
+            requester_username=user.get_username() if user and user.is_authenticated else '',
+            status=Ticket.STATUS_NEW,
+            priority=priority,
+            category=category,
+            queue=queue,
+            sla=sla,
+            source=Ticket.SOURCE_PORTAL,
+            endpoint_name=endpoint_name,
+        )
+        opening_comment = TicketComment.objects.create(
+            ticket=ticket,
+            author_name=actor,
+            body=f'Abertura pelo portal do solicitante:\n\n{description}',
+            visibility=TicketComment.VISIBILITY_PUBLIC,
+        )
+        for uploaded in request.FILES.getlist('attachments'):
+            TicketAttachment.objects.create(
+                ticket=ticket,
+                comment=opening_comment,
+                file=uploaded,
+                original_name=uploaded.name,
+                content_type=getattr(uploaded, 'content_type', '') or '',
+                size=getattr(uploaded, 'size', 0) or 0,
+                uploaded_by=actor,
+                visibility=TicketAttachment.VISIBILITY_PUBLIC,
+            )
+        create_audit_event(
+            ticket,
+            actor=actor,
+            event_type='ticket_created',
+            action='Solicitante abriu chamado',
+            field_name='ticket',
+            new_value=f'#{ticket.number}',
+            metadata={'origin': 'RequesterPortal', 'queue': queue, 'sla': sla.name if sla else ''},
+        )
+        prepare_ticket_notification(ticket, 'ticket_created', user=actor)
+    messages.success(request, 'Chamado aberto com sucesso.')
+    return redirect('requester-ticket-detail', number=ticket.number)
+
+
+@require_POST
+def ticket_portal_comment(request, number):
+    queryset, _ = _portal_queryset(request)
+    ticket = get_object_or_404(queryset, number=number)
+    if ticket.status in {Ticket.STATUS_RESOLVED, Ticket.STATUS_CLOSED, Ticket.STATUS_CANCELED}:
+        messages.error(request, 'Este chamado nao aceita novas respostas neste status.')
+        return _portal_detail_redirect(ticket, request)
+    body = str(request.POST.get('body') or '').strip()
+    if not body:
+        messages.error(request, 'Informe uma mensagem para enviar sua resposta.')
+        return _portal_detail_redirect(ticket, request)
+    actor = _portal_actor(request, ticket)
+    with transaction.atomic():
+        comment = TicketComment.objects.create(
+            ticket=ticket,
+            author_name=actor,
+            body=body,
+            visibility=TicketComment.VISIBILITY_PUBLIC,
+        )
+        for uploaded in request.FILES.getlist('attachments'):
+            TicketAttachment.objects.create(
+                ticket=ticket,
+                comment=comment,
+                file=uploaded,
+                original_name=uploaded.name,
+                content_type=getattr(uploaded, 'content_type', '') or '',
+                size=getattr(uploaded, 'size', 0) or 0,
+                uploaded_by=actor,
+                visibility=TicketAttachment.VISIBILITY_PUBLIC,
+            )
+        if ticket.status == Ticket.STATUS_WAITING_USER:
+            ticket.status = Ticket.STATUS_IN_PROGRESS
+        ticket.save(update_fields=['status', 'updated_at'])
+        create_audit_event(
+            ticket,
+            actor=actor,
+            event_type='portal_comment_created',
+            action='Solicitante respondeu pelo portal',
+            field_name='comments',
+            new_value=body,
+            metadata={'origin': 'Portal', 'visibility': TicketComment.VISIBILITY_PUBLIC},
+        )
+    messages.success(request, 'Resposta enviada.')
+    return _portal_detail_redirect(ticket, request)
+
+
+@require_POST
+def ticket_requester_comment(request, number):
+    return ticket_portal_comment(request, number)
+
+
+@require_POST
+def ticket_portal_reopen(request, number):
+    queryset, _ = _portal_queryset(request)
+    ticket = get_object_or_404(queryset, number=number)
+    if ticket.status != Ticket.STATUS_RESOLVED:
+        messages.error(request, 'Somente chamados resolvidos podem ser reabertos pelo portal.')
+        return _portal_detail_redirect(ticket, request)
+    reason = str(request.POST.get('reason') or '').strip()
+    if not reason:
+        messages.error(request, 'Informe o motivo para reabrir o chamado.')
+        return _portal_detail_redirect(ticket, request)
+    actor = _portal_actor(request, ticket)
+    old_status = ticket.get_status_display()
+    with transaction.atomic():
+        ticket.status = Ticket.STATUS_IN_PROGRESS
+        ticket.resolved_at = None
+        ticket.save(update_fields=['status', 'resolved_at', 'updated_at'])
+        TicketComment.objects.create(
+            ticket=ticket,
+            author_name=actor,
+            body=f'Reabertura solicitada: {reason}',
+            visibility=TicketComment.VISIBILITY_PUBLIC,
+        )
+        create_audit_event(
+            ticket,
+            actor=actor,
+            event_type='ticket_reopened',
+            action='Solicitante reabriu chamado pelo portal',
+            field_name='status',
+            old_value=old_status,
+            new_value=ticket.get_status_display(),
+            metadata={'origin': 'Portal', 'reason': reason},
+        )
+        prepare_ticket_notification(ticket, 'ticket_reopened', user=actor)
+    messages.success(request, 'Chamado reaberto.')
+    return _portal_detail_redirect(ticket, request)
+
+
+@require_POST
+def ticket_requester_reopen(request, number):
+    return ticket_portal_reopen(request, number)

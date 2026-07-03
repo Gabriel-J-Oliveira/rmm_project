@@ -1,5 +1,6 @@
 from .rmm_context import get_ticket_device_context
 from ..mock_data import MOCK_TICKETS
+from django.utils import timezone
 
 
 def _status_transitions(status):
@@ -15,10 +16,49 @@ def _status_transitions(status):
     return transitions.get(status, [])
 
 
+def _minutes_label(minutes):
+    if minutes is None:
+        return 'sem SLA'
+    if minutes >= 1440 and minutes % 1440 == 0:
+        days = minutes // 1440
+        return f'{days}d'
+    if minutes >= 60 and minutes % 60 == 0:
+        hours = minutes // 60
+        return f'{hours}h'
+    return f'{minutes} min'
+
+
 def _sla_for(ticket):
+    due_at = getattr(getattr(ticket, 'record', None), 'due_at', None)
+    sla_record = getattr(getattr(ticket, 'record', None), 'sla', None)
+    if due_at:
+        now = timezone.now()
+        total_seconds = max((due_at - getattr(ticket.record, 'created_at', now)).total_seconds(), 1)
+        remaining_seconds = (due_at - now).total_seconds()
+        elapsed_ratio = max(0, min(1, 1 - (remaining_seconds / total_seconds)))
+        progress = int(elapsed_ratio * 100)
+        if remaining_seconds <= 0:
+            level = 'critical'
+            remaining = 'vencido'
+        elif remaining_seconds <= 3600:
+            level = 'warning'
+            remaining = f'{max(1, int(remaining_seconds // 60))} min'
+        else:
+            level = 'ok'
+            hours = int(remaining_seconds // 3600)
+            minutes = int((remaining_seconds % 3600) // 60)
+            remaining = f'{hours}h {minutes}min'
+        return {
+            'label': sla_record.name if sla_record else f'SLA {remaining}',
+            'remaining': remaining,
+            'progress': progress,
+            'level': level,
+            'response_due': _minutes_label(sla_record.first_response_minutes) if sla_record else remaining,
+            'resolution_due': timezone.localtime(due_at).strftime('%d/%m/%Y %H:%M'),
+        }
     level = 'critical' if ticket.priority == 'critical' else 'warning' if ticket.priority == 'high' else 'ok'
-    remaining = '32 min' if ticket.priority == 'critical' else '1h 18min' if ticket.priority == 'high' else '4h 20min'
-    progress = 82 if ticket.priority == 'critical' else 64 if ticket.priority == 'high' else 38
+    remaining = 'sem SLA'
+    progress = 0
     return {
         'label': f'SLA {remaining}',
         'remaining': remaining,
@@ -55,6 +95,16 @@ def _activity_for(ticket):
             'body': comment.body,
             'when': f'{comment.visibility} - {comment.when}',
         })
+    record = getattr(ticket, 'record', None)
+    if record:
+        for event in record.audit_events.exclude(event_type__in=['ticket_created', 'comment_created'])[:12]:
+            items.append({
+                'kind': 'system',
+                'icon': 'history',
+                'title': event.action,
+                'body': f'{event.old_value or "—"} -> {event.new_value or "—"}',
+                'when': event.created_at,
+            })
     if ticket.priority == 'critical':
         items.append({
             'kind': 'sla',
@@ -134,7 +184,7 @@ def _attachments_for(ticket):
             'type': 'image',
             'kind': 'image',
             'size': '284 KB',
-            'author': ticket.assigned_to or 'Gabriel',
+            'author': ticket.assigned_to or 'Equipe NightOwl',
             'origin': 'comentario',
             'uploaded_at': 'ha 18 min',
             'is_primary': True,
@@ -208,7 +258,7 @@ def build_ticket_detail_context(ticket):
         'related_items': _related_items(ticket, related_tickets, similar),
         'attachments': _attachments_for(ticket),
         'watchers': [
-            {'name': ticket.assigned_to or 'Gabriel', 'initials': (ticket.assigned_to or 'Gabriel')[:1]},
+            {'name': ticket.assigned_to or 'Equipe NightOwl', 'initials': (ticket.assigned_to or 'Equipe NightOwl')[:1]},
             {'name': 'Equipe TI', 'initials': 'TI'},
         ],
         'resolution_types': ['Resolvido definitivamente', 'Contorno aplicado', 'Encaminhado para fornecedor', 'Sem acao necessaria'],

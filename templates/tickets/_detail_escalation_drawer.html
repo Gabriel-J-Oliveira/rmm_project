@@ -16,6 +16,16 @@
         </article>
 
         <div class="nw-form-grid">
+            <label class="nw-form-field nw-form-field--wide">
+                <span>Template de escalacao</span>
+                <select data-escalation-template>
+                    <option value="">Sem template</option>
+                    {% for template in escalation_templates %}
+                    <option value="{{ template.id }}" data-template-content="{{ template.content }}">{{ template.name }}</option>
+                    {% endfor %}
+                </select>
+                <small>O motivo pode ser editado antes do escalonamento.</small>
+            </label>
             <label class="nw-form-field">
                 <span>Escalar para <em>obrigatório</em></span>
                 <select data-escalation-target>

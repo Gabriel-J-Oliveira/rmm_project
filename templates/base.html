@@ -14,7 +14,7 @@
 </head>
 <body class="{% block body_class %}page-dashboard{% endblock %}">
     <div class="app-shell">
-        {% if active_nav != 'access_inventory' %}
+        {% if active_nav != 'access_inventory' and active_nav != 'ticket_portal' and request.resolver_match.url_name != 'login' %}
         <aside class="sidebar">
             <div class="brand">
                 <div class="brand-logo" aria-hidden="true">
@@ -22,8 +22,8 @@
                     <span>NO</span>
                 </div>
                 <div>
-                    <div class="brand-name">{% if active_nav == 'tickets' %}Night Owl Desk{% else %}Night Owl{% endif %}</div>
-                    <div class="brand-subtitle">{% if active_nav == 'tickets' %}Chamados internos{% else %}RMM interno{% endif %}</div>
+                    <div class="brand-name">{% if active_nav == 'tickets' or active_nav == 'ticket_portal' %}Night Owl Desk{% else %}Night Owl{% endif %}</div>
+                    <div class="brand-subtitle">{% if active_nav == 'tickets' %}Chamados internos{% elif active_nav == 'ticket_portal' %}Portal de chamados{% else %}RMM interno{% endif %}</div>
                 </div>
             </div>
 
@@ -53,16 +53,18 @@
         {% endif %}
 
         <div class="main-area">
+            {% if request.resolver_match.url_name != 'login' %}
             <header class="topbar">
                 <div>
-                    <span class="topbar-kicker">{% if active_nav == 'tickets' %}Atendimento interno{% else %}Monitoramento{% endif %}</span>
-                    <strong>{% if active_nav == 'tickets' %}Night Owl Desk{% else %}Night Owl{% endif %}</strong>
+                    <span class="topbar-kicker">{% if active_nav == 'tickets' %}Atendimento interno{% elif active_nav == 'ticket_portal' %}Portal do solicitante{% else %}Monitoramento{% endif %}</span>
+                    <strong>{% if active_nav == 'tickets' or active_nav == 'ticket_portal' %}Night Owl Desk{% else %}Night Owl{% endif %}</strong>
                 </div>
                 <div class="topbar-status">
-                    <i data-lucide="{% if active_nav == 'tickets' %}inbox{% else %}moon{% endif %}"></i>
-                    {% if active_nav == 'tickets' %}Preview do Desk{% else %}Piloto interno{% endif %}
+                    <i data-lucide="{% if active_nav == 'tickets' or active_nav == 'ticket_portal' %}inbox{% else %}moon{% endif %}"></i>
+                    {% if active_nav == 'tickets' %}Preview do Desk{% elif active_nav == 'ticket_portal' %}Consulta de chamados{% else %}Piloto interno{% endif %}
                 </div>
             </header>
+            {% endif %}
 
             <main class="content">
                 {% block breadcrumbs %}{% endblock %}

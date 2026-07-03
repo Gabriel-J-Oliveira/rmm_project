@@ -41,9 +41,23 @@
     <article class="desk-panel nw-side-card">
         <div class="nw-side-card__title">
             <h2><i data-lucide="sliders-horizontal"></i>Resumo editavel</h2>
-            <span>mock local</span>
+            <span>Backend MVP</span>
         </div>
         <div class="nw-quick-edit-list">
+            <details class="desk-inline-popover nw-quick-edit" data-quick-edit="queue">
+                <summary>
+                    <span>Fila</span>
+                    <strong data-ticket-queue>{{ ticket.queue|default:"N1 - Atendimento" }}</strong>
+                </summary>
+                <div class="desk-popover">
+                    <strong>Alterar fila</strong>
+                    {% for queue in desk_queue_options %}
+                    <button type="button" data-quick-queue="{{ queue.name }}">{{ queue.name }}</button>
+                    {% empty %}
+                    <button type="button" data-quick-queue="N1 - Atendimento">N1 - Atendimento</button>
+                    {% endfor %}
+                </div>
+            </details>
             <details class="desk-inline-popover nw-quick-edit" data-quick-edit="status">
                 <summary>
                     <span>Status</span>
@@ -74,12 +88,27 @@
             <details class="desk-inline-popover nw-quick-edit" data-quick-edit="category">
                 <summary>
                     <span>Categoria</span>
-                    <strong class="desk-badge neutral" data-ticket-category>{{ ticket.category }}</strong>
+                    <strong class="desk-badge neutral category-color-{{ ticket.category_color }}" data-ticket-category>
+                        <i class="bi {{ ticket.category_icon }}" aria-hidden="true"></i>{{ ticket.category }}
+                    </strong>
                 </summary>
                 <div class="desk-popover">
                     <strong>Alterar categoria</strong>
                     {% for category in categories %}
                     <button type="button" data-quick-category="{{ category.name }}">{{ category.name }}</button>
+                    {% endfor %}
+                </div>
+            </details>
+            <details class="desk-inline-popover nw-quick-edit" data-quick-edit="sla">
+                <summary>
+                    <span>SLA</span>
+                    <strong data-ticket-sla-name>{{ ticket.sla|default:"Sem SLA" }}</strong>
+                </summary>
+                <div class="desk-popover">
+                    <strong>Alterar SLA</strong>
+                    <button type="button" data-quick-sla="">Sem SLA</button>
+                    {% for sla_option in desk_sla_options %}
+                    <button type="button" data-quick-sla="{{ sla_option.name }}">{{ sla_option.name }}</button>
                     {% endfor %}
                 </div>
             </details>
@@ -89,7 +118,7 @@
                     <strong class="desk-assignee-pill" data-ticket-assignee><span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>{{ ticket.assigned_to|default:"Sem responsavel" }}</strong>
                 </summary>
                 <div class="desk-popover desk-assignee-popover">
-                    <button class="desk-btn desk-btn-primary" type="button" data-quick-assignee="Gabriel">Atribuir a mim</button>
+                    <button class="desk-btn desk-btn-primary" type="button" data-quick-assignee="{{ current_user_name|default:'Técnico' }}">Atribuir a mim</button>
                     <button type="button" data-quick-assignee="">Sem responsavel</button>
                     {% for row in workload_rows %}
                     <button type="button" data-quick-assignee="{{ row.label }}">{{ row.label }} <span>{{ row.count }} abertos</span></button>
