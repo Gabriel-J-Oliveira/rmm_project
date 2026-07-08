@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load nightowl_time %}
+{% load static nightowl_time %}
 
 {% block title %}Night Owl | Eventos{% endblock %}
 {% block body_class %}page-events{% endblock %}
@@ -11,135 +11,249 @@
 {% endblock %}
 
 {% block content %}
-<section class="alerts-command-header events-hero page-header">
-    <div class="alerts-command-title">
-        <span class="command-icon page-header-icon"><i data-lucide="history"></i></span>
+<section class="events-page" data-events-root>
+    <section class="alerts-command-header events-hero page-header">
+        <div class="alerts-command-title">
+            <span class="command-icon page-header-icon"><i data-lucide="history"></i></span>
+            <div>
+                <h1 class="page-title">Eventos</h1>
+                <p class="page-subtitle">Linha do tempo técnica e auditoria operacional do NightOwl. Eventos podem gerar alertas, mas não são alertas.</p>
+            </div>
+        </div>
+        <div class="alerts-header-actions page-actions">
+            <span class="auto-refresh-chip module-badge"><i data-lucide="scroll-text"></i>Log técnico</span>
+            <span class="auto-refresh-chip module-badge"><i data-lucide="shield-check"></i>Somente auditoria</span>
+            <span class="ops-chip"><i data-lucide="satellite"></i>Última leitura <strong data-operational-opened-at>--</strong></span>
+            <span class="ops-chip"><i data-lucide="clock-3"></i>Idade <strong data-operational-age>agora</strong></span>
+            <span class="ops-chip"><i data-lucide="sparkles"></i>Novo desde abertura <strong data-operational-new-count>0</strong></span>
+            <span class="ops-chip ops-command-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+            <button type="button" class="refresh-button" data-events-export><i data-lucide="download"></i>Exportar eventos</button>
+        </div>
+    </section>
+
+    <section class="metric-grid events-metrics" aria-label="Resumo de eventos">
+        <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="clock"></i></span><span class="metric-label">Eventos 24h</span><strong class="metric-value">{{ events_24h_count }}</strong></article>
+        <article class="metric-card command-metric"><span class="metric-icon critical"><i data-lucide="alert-triangle"></i></span><span class="metric-label">Registros críticos</span><strong class="metric-value status-text-critical">{{ critical_count }}</strong></article>
+        <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield"></i></span><span class="metric-label">Segurança</span><strong class="metric-value status-text-security">{{ security_count }}</strong></article>
+        <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="bot"></i></span><span class="metric-label">Sistema/Jobs</span><strong class="metric-value">{{ system_count }}</strong></article>
+        <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="user"></i></span><span class="metric-label">Usuários</span><strong class="metric-value">{{ user_count }}</strong></article>
+    </section>
+
+    <section class="panel command-filter-panel events-filter-panel">
+        <form class="endpoint-filters events-filters" method="get" data-events-filter-form>
+            <input type="hidden" name="category" value="{{ filters.category }}" data-events-category-input>
+            <label class="filter-field filter-search">
+                <span><i data-lucide="search"></i>Texto livre</span>
+                <input type="search" name="q" value="{{ filters.q }}" placeholder="Código, descrição, endpoint, ator ou origem">
+            </label>
+            <label class="filter-field">
+                <span>Severidade</span>
+                <select name="severity">
+                    <option value="all" {% if filters.severity == "all" %}selected{% endif %}>Todas</option>
+                    {% for value, label in severity_options %}
+                    <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Tipo de evento</span>
+                <select name="event_type">
+                    <option value="all" {% if filters.event_type == "all" %}selected{% endif %}>Todos</option>
+                    {% for event_type in event_type_options %}
+                    <option value="{{ event_type }}" {% if filters.event_type == event_type %}selected{% endif %}>{{ event_type }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Ator/origem</span>
+                <select name="actor_type">
+                    <option value="all" {% if filters.actor_type == "all" %}selected{% endif %}>Todos</option>
+                    {% for value, label in actor_type_options %}
+                    <option value="{{ value }}" {% if filters.actor_type == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Endpoint</span>
+                <select name="endpoint">
+                    <option value="">Todos</option>
+                    {% for endpoint in endpoint_options %}
+                    <option value="{{ endpoint.id }}" {% if filters.endpoint == endpoint.id|stringformat:"s" %}selected{% endif %}>{{ endpoint.hostname }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Período</span>
+                <select name="period">
+                    {% for value, label in period_options %}
+                    <option value="{{ value }}" {% if filters.period == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="filter-actions">
+                <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+                <a href="{% url 'events-list' %}">Limpar</a>
+            </div>
+        </form>
+        <div class="ops-filter-summary">
+            <span><i data-lucide="funnel"></i><strong data-filtered-count>{{ events|length }}</strong> eventos filtrados</span>
+            <a href="{% url 'events-list' %}"><i data-lucide="x-circle"></i>Limpar filtros</a>
+        </div>
+
+        <div class="event-category-strip" aria-label="Categorias de eventos">
+            {% for value, label in category_options %}
+            <button type="button" class="{% if filters.category == value %}is-active{% endif %}" data-event-category="{{ value }}">
+                {% if value == "agent" %}<i data-lucide="radio"></i>
+                {% elif value == "system" %}<i data-lucide="server-cog"></i>
+                {% elif value == "alerts" %}<i data-lucide="alert-triangle"></i>
+                {% elif value == "jobs" %}<i data-lucide="briefcase-business"></i>
+                {% elif value == "security" %}<i data-lucide="shield"></i>
+                {% elif value == "inventory" %}<i data-lucide="package-search"></i>
+                {% elif value == "maintenance" %}<i data-lucide="wrench"></i>
+                {% else %}<i data-lucide="list-filter"></i>{% endif %}
+                {{ label }}
+            </button>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="events-toolbar" aria-label="Visualização de eventos">
         <div>
-            <h1 class="page-title">Eventos</h1>
-            <p class="page-subtitle">Linha do tempo operacional e auditoria do Night Owl.</p>
+            <strong>{{ events|length }} evento{{ events|length|pluralize }} exibido{{ events|length|pluralize }}</strong>
+            <span>Ordenado do mais recente para o mais antigo.</span>
         </div>
+        <div class="alert-view-toggle">
+            <button type="button" class="is-active" data-events-view="timeline"><i data-lucide="git-commit-vertical"></i>Timeline</button>
+            <button type="button" data-events-view="table"><i data-lucide="table-2"></i>Tabela técnica</button>
+        </div>
+    </section>
+    <div class="ops-skeleton-row" data-skeleton aria-hidden="true">
+        <span></span><span></span><span></span>
     </div>
-    <div class="alerts-header-actions page-actions">
-        <span class="auto-refresh-chip module-badge"><i data-lucide="activity"></i>Auditoria operacional</span>
-    </div>
-</section>
 
-<section class="metric-grid events-metrics" aria-label="Resumo de eventos">
-    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="clock"></i></span><span class="metric-label">Eventos 24h</span><strong class="metric-value">{{ events_24h_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon critical"><i data-lucide="alert-triangle"></i></span><span class="metric-label">Cr&iacute;ticos</span><strong class="metric-value status-text-critical">{{ critical_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield"></i></span><span class="metric-label">Seguran&ccedil;a</span><strong class="metric-value status-text-security">{{ security_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="bot"></i></span><span class="metric-label">Sistema</span><strong class="metric-value">{{ system_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="user"></i></span><span class="metric-label">Usu&aacute;rios</span><strong class="metric-value">{{ user_count }}</strong></article>
-</section>
-
-<section class="panel command-filter-panel">
-    <form class="endpoint-filters events-filters" method="get">
-        <label class="filter-field filter-search">
-            <span><i data-lucide="search"></i>Busca</span>
-            <input type="search" name="q" value="{{ filters.q }}" placeholder="Evento, endpoint, ator ou descri&ccedil;&atilde;o">
-        </label>
-        <label class="filter-field">
-            <span>Severidade</span>
-            <select name="severity">
-                <option value="all" {% if filters.severity == "all" %}selected{% endif %}>Todas</option>
-                {% for value, label in severity_options %}
-                <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Evento</span>
-            <select name="event_type">
-                <option value="all" {% if filters.event_type == "all" %}selected{% endif %}>Todos</option>
-                {% for event_type in event_type_options %}
-                <option value="{{ event_type }}" {% if filters.event_type == event_type %}selected{% endif %}>{{ event_type }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Ator</span>
-            <select name="actor_type">
-                <option value="all" {% if filters.actor_type == "all" %}selected{% endif %}>Todos</option>
-                {% for value, label in actor_type_options %}
-                <option value="{{ value }}" {% if filters.actor_type == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Endpoint</span>
-            <select name="endpoint">
-                <option value="">Todos</option>
-                {% for endpoint in endpoint_options %}
-                <option value="{{ endpoint.id }}" {% if filters.endpoint == endpoint.id|stringformat:"s" %}selected{% endif %}>{{ endpoint.hostname }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Per&iacute;odo</span>
-            <select name="period">
-                {% for value, label in period_options %}
-                <option value="{{ value }}" {% if filters.period == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <div class="filter-actions">
-            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
-            <a href="{% url 'events-list' %}">Limpar</a>
-        </div>
-    </form>
-</section>
-
-<section class="event-list" aria-label="Linha do tempo de auditoria">
-    {% for event in events %}
-    <article class="event-row">
-        <div class="event-time">
-            <strong>{{ event.created_at|date:"H:i" }}</strong>
-            <span>{{ event.created_at|date:"d/m/Y" }}</span>
-        </div>
-        <div class="event-icon severity-{{ event.severity }}">
-            {% if event.severity == "success" %}
+    <section class="event-log-stream" data-events-timeline aria-label="Linha do tempo técnica e auditoria">
+        {% for event in events %}
+        {% if event.event_type|slice:":6" == "agent." %}
+            {% with origin="Agent" icon="radio" category="agent" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% elif event.event_type|slice:":6" == "alert." %}
+            {% with origin="System" icon="alert-triangle" category="alerts" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% elif event.event_type|slice:":4" == "job." %}
+            {% with origin="Job" icon="briefcase-business" category="jobs" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% elif event.event_type|slice:":12" == "maintenance." %}
+            {% with origin="Job" icon="wrench" category="maintenance" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% elif event.event_type|slice:":7" == "policy." or event.event_type|slice:":16" == "software_policy." or event.event_type|slice:":9" == "security." %}
+            {% with origin="Policy" icon="shield" category="security" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% elif event.event_type|slice:":10" == "inventory." or event.event_type|slice:":9" == "software." %}
+            {% with origin="Agent" icon="package-search" category="inventory" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% elif event.actor_type == "user" %}
+            {% with origin="User" icon="user" category="system" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% else %}
+            {% with origin="System" icon="activity" category="system" %}
+            {% include "dashboard/partials/event_timeline_item.html" %}
+            {% endwith %}
+        {% endif %}
+        {% empty %}
+        <div class="panel empty-alert-state">
             <i data-lucide="check-circle"></i>
-            {% elif event.severity == "security" %}
-            <i data-lucide="shield"></i>
-            {% elif event.severity == "critical" or event.severity == "warning" %}
-            <i data-lucide="alert-triangle"></i>
-            {% elif event.actor_type == "user" %}
-            <i data-lucide="user"></i>
-            {% else %}
-            <i data-lucide="activity"></i>
-            {% endif %}
+            <strong>Nenhum evento encontrado com os filtros atuais.</strong>
+            <p>A trilha de auditoria registra ações e mudanças técnicas. Ajuste filtros ou período para ampliar a busca.</p>
         </div>
-        <div class="event-main">
-            <div class="event-title-line">
-                <span class="severity-badge severity-{{ event.severity }}">{{ event.get_severity_display }}</span>
-                <strong>{{ event.title }}</strong>
-                <span class="mono">{{ event.event_type }}</span>
+        {% endfor %}
+    </section>
+
+    <section class="event-table-panel" data-events-table hidden aria-label="Tabela técnica de eventos">
+        <div class="event-table-scroll">
+            <table class="event-tech-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Código</th>
+                        <th>Severidade</th>
+                        <th>Origem</th>
+                        <th>Endpoint</th>
+                        <th>Ator</th>
+                        <th>Descrição</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in events %}
+                    <tr data-event-table-row="{{ forloop.counter0 }}">
+                        <td class="mono">{{ event.created_at|date:"d/m/Y H:i:s" }}</td>
+                        <td class="mono">{{ event.event_type }}</td>
+                        <td><span class="severity-badge severity-{{ event.severity }}">{{ event.get_severity_display }}</span></td>
+                        <td>{{ event.get_actor_type_display }}</td>
+                        <td>{% if event.endpoint %}<span class="mono">{{ event.endpoint.hostname }}</span>{% else %}-{% endif %}</td>
+                        <td>{{ event.actor_name|default:"Sistema" }}</td>
+                        <td>{{ event.description|default:"Sem descrição."|truncatechars:110 }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="7">Nenhum evento encontrado.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <div class="event-drawer-backdrop" data-event-drawer-backdrop hidden></div>
+    <aside class="event-drawer" data-event-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span>Evento técnico</span>
+                <h2 data-event-drawer-title>Selecione um evento</h2>
+                <p data-event-drawer-subtitle>Trilha de auditoria operacional</p>
             </div>
-            <p>{{ event.description|default:"Sem descri&ccedil;&atilde;o."|truncatechars:180 }}</p>
-            <div class="event-meta">
-                {% if event.endpoint %}
-                <a class="table-link mono" href="{% url 'endpoint-detail' event.endpoint.id %}"><i data-lucide="monitor"></i>{{ event.endpoint.hostname }}</a>
-                {% else %}
-                <span><i data-lucide="monitor"></i>Endpoint -</span>
-                {% endif %}
-                {% if event.alert %}
-                {% if event.endpoint %}
-                <a class="table-link" href="{% url 'alerts-list' %}?q={{ event.endpoint.hostname }}"><i data-lucide="alert-triangle"></i>Ver alerta</a>
-                {% else %}
-                <a class="table-link" href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i>Ver alerta</a>
-                {% endif %}
-                {% endif %}
-                <span><i data-lucide="{% if event.actor_type == 'user' %}user{% else %}bot{% endif %}"></i>{{ event.get_actor_type_display }}{% if event.actor_name %}: {{ event.actor_name }}{% endif %}</span>
-                <span>{{ event.created_at|relative_time }}</span>
+            <button type="button" data-event-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="event-drawer-body">
+            <section>
+                <h3>Detalhes</h3>
+                <dl>
+                    <div><dt>Timestamp</dt><dd data-event-field="timestamp">--</dd></div>
+                    <div><dt>Tipo</dt><dd data-event-field="type">--</dd></div>
+                    <div><dt>Origem</dt><dd data-event-field="origin">--</dd></div>
+                    <div><dt>Severidade</dt><dd data-event-field="severity">--</dd></div>
+                    <div><dt>Endpoint</dt><dd data-event-field="endpoint">--</dd></div>
+                    <div><dt>Ator</dt><dd data-event-field="actor">--</dd></div>
+                </dl>
+                <p data-event-field="description"></p>
+            </section>
+            <section>
+                <h3>Links relacionados</h3>
+                <div class="event-drawer-links">
+                    <a data-event-link-endpoint href="#" hidden><i data-lucide="monitor"></i>Abrir endpoint</a>
+                    <a data-event-link-alert href="#" hidden><i data-lucide="alert-triangle"></i>Ver alerta relacionado</a>
+                    <span data-event-link-empty>Nenhum vínculo técnico direto neste evento.</span>
+                </div>
+            </section>
+            <section>
+                <h3>Payload técnico</h3>
+                <pre data-event-payload>{}</pre>
+            </section>
+            <div class="event-drawer-actions">
+                <button type="button" data-event-copy><i data-lucide="copy"></i>Copiar detalhes</button>
             </div>
         </div>
-    </article>
-    {% empty %}
-    <div class="panel empty-alert-state">
-        <i data-lucide="check-circle"></i>
-        <strong>Nenhum evento encontrado com os filtros atuais.</strong>
-        <p>A auditoria registra mudan&ccedil;as e a&ccedil;&otilde;es relevantes, n&atilde;o heartbeats normais.</p>
-    </div>
-    {% endfor %}
+    </aside>
+    <div class="alert-action-toast event-action-toast" data-event-toast hidden></div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
+<script src="{% static 'js/nightowl_operational.js' %}"></script>
+<script src="{% static 'js/events.js' %}"></script>
 {% endblock %}

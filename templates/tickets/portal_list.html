@@ -56,6 +56,7 @@
                 <div>
                     <p>Novo atendimento</p>
                     <h2 id="requester-ticket-title">Abrir chamado</h2>
+                    <small>Descreva sua solicitacao para a equipe de TI.</small>
                 </div>
             </div>
             <button type="button" data-requester-close-ticket aria-label="Fechar"><i data-lucide="x"></i></button>
@@ -155,7 +156,9 @@
             data-preview-comment="{% if ticket.portal_last_public_comment %}{{ ticket.portal_last_public_comment.body|truncatechars:180 }}{% else %}Nenhum comentario publico ainda.{% endif %}"
             data-preview-attachments="{{ ticket.portal_attachment_summary }}"
             data-preview-can-reply="{% if ticket.portal_can_reply %}1{% else %}0{% endif %}"
+            data-preview-can-reopen="{% if ticket.portal_can_reopen %}1{% else %}0{% endif %}"
             data-preview-comment-url="{{ ticket.portal_comment_url }}"
+            data-preview-detail-url="{{ ticket.portal_detail_url }}"
         >
             <div class="desk-portal-ticket__main">
                 <span class="desk-portal-code">#{{ ticket.number }}</span>
@@ -171,7 +174,7 @@
             <div class="desk-portal-ticket__side">
                 <span class="desk-portal-status status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
                 {% if ticket.status == 'waiting_user' %}<span class="desk-portal-waiting"><i data-lucide="reply"></i>Aguardando voce</span>{% endif %}
-                <a class="desk-portal-action" href="{% url portal_detail_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">Ver chamado</a>
+                <a class="desk-portal-action" href="{{ ticket.portal_detail_url }}">Ver chamado</a>
             </div>
         </article>
         {% empty %}
@@ -228,8 +231,9 @@
             </form>
             <div class="desk-portal-readonly-note {% if preview_ticket.portal_can_reply %}is-hidden{% endif %}" data-preview-target="readonlyNote">
                 <i data-lucide="lock"></i>
-                <span>Este chamado esta em modo somente leitura.</span>
+                <span>{% if preview_ticket.portal_can_reopen %}Este chamado foi resolvido. Abra a consulta para contestar a solucao se o problema continuar.{% else %}Este chamado esta em modo somente leitura.{% endif %}</span>
             </div>
+            <a class="desk-portal-action {% if not preview_ticket.portal_can_reopen %}is-hidden{% endif %}" data-preview-target="reopenLink" href="{{ preview_ticket.portal_detail_url }}">Ver detalhes e contestar</a>
         </div>
         {% else %}
         <div class="desk-portal-card desk-portal-preview-empty">
@@ -280,7 +284,8 @@ document.addEventListener('DOMContentLoaded', function () {
         comment: document.querySelector('[data-preview-target="comment"]'),
         attachments: document.querySelector('[data-preview-target="attachments"]'),
         commentForm: document.querySelector('[data-preview-target="commentForm"]'),
-        readonlyNote: document.querySelector('[data-preview-target="readonlyNote"]')
+        readonlyNote: document.querySelector('[data-preview-target="readonlyNote"]'),
+        reopenLink: document.querySelector('[data-preview-target="reopenLink"]')
     };
     const updatePreview = function (item) {
         if (!previewTargets.title) return;
@@ -299,9 +304,17 @@ document.addEventListener('DOMContentLoaded', function () {
         previewTargets.attachments.textContent = item.dataset.previewAttachments || 'Nenhum anexo publico.';
         if (previewTargets.commentForm) {
             const canReply = item.dataset.previewCanReply === '1';
+            const canReopen = item.dataset.previewCanReopen === '1';
             previewTargets.commentForm.action = item.dataset.previewCommentUrl || '#';
             previewTargets.commentForm.classList.toggle('is-hidden', !canReply);
             previewTargets.readonlyNote.classList.toggle('is-hidden', canReply);
+            previewTargets.readonlyNote.querySelector('span').textContent = canReopen
+                ? 'Este chamado foi resolvido. Abra a consulta para contestar a solucao se o problema continuar.'
+                : 'Este chamado esta em modo somente leitura.';
+            if (previewTargets.reopenLink) {
+                previewTargets.reopenLink.href = item.dataset.previewDetailUrl || '#';
+                previewTargets.reopenLink.classList.toggle('is-hidden', !canReopen);
+            }
             const textarea = previewTargets.commentForm.querySelector('textarea');
             if (textarea) textarea.value = '';
         }

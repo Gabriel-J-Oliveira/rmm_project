@@ -5,7 +5,7 @@ from django.utils import timezone
 
 def _status_transitions(status):
     transitions = {
-        'new': ['in_progress', 'waiting_user', 'canceled'],
+        'new': ['in_progress', 'waiting_user', 'resolved', 'canceled'],
         'in_progress': ['waiting_user', 'waiting_third_party', 'resolved'],
         'waiting_user': ['in_progress', 'resolved', 'canceled'],
         'waiting_third_party': ['in_progress', 'resolved', 'canceled'],

@@ -46,6 +46,7 @@ urlpatterns = [
     path('noc/', dashboard_views.noc_view, name='noc'),
     path('alerts/', dashboard_views.alerts_list, name='alerts-list'),
     path('events/', dashboard_views.events_list, name='events-list'),
+    path('jobs/', dashboard_views.jobs_list, name='jobs-list'),
     path('maintenance/', dashboard_views.maintenance_list, name='maintenance-list'),
     path('maintenance/email-outbox/', dashboard_views.email_outbox_list, name='email-outbox-list'),
     path('maintenance/email-outbox/process/', dashboard_views.email_outbox_process, name='email-outbox-process'),

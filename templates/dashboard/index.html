@@ -1,131 +1,555 @@
 {% extends "base.html" %}
-{% load nightowl_time %}
+{% load nightowl_time static %}
 
-{% block title %}Night Owl | Dashboard{% endblock %}
-{% block body_class %}page-dashboard{% endblock %}
+{% block title %}NightOwl Pulse | Dashboard{% endblock %}
+{% block body_class %}page-dashboard page-pulse{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs" aria-label="Breadcrumb">
-    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Dashboard</strong>
+<nav class="breadcrumbs pulse-breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Pulse</strong>
 </nav>
 {% endblock %}
 
 {% block content %}
-<section class="hero page-header dashboard-hero">
-    <div>
-        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="layout-dashboard"></i></span>Night Owl</h1>
-        <p class="page-subtitle">O pulso silencioso da infraestrutura.</p>
-    </div>
-    <div class="hero-chip module-badge">Dark-only MVP</div>
-</section>
-
-<section class="metric-grid dashboard-metrics" aria-label="Resumo dos endpoints">
-    <article class="metric-card">
-        <span class="metric-label">Total de endpoints</span>
-        <strong class="metric-value">{{ total_endpoints }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Online</span>
-        <strong class="metric-value status-text-online">{{ online_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Offline</span>
-        <strong class="metric-value status-text-offline">{{ offline_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Unknown</span>
-        <strong class="metric-value {% if unknown_count > 0 %}status-text-unknown{% else %}status-text-muted{% endif %}">{{ unknown_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Alertas abertos</span>
-        <strong class="metric-value {% if open_alerts_count > 0 %}status-text-security{% else %}status-text-muted{% endif %}">{{ open_alerts_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Cr&iacute;ticos</span>
-        <strong class="metric-value {% if critical_alerts_count > 0 %}status-text-critical{% else %}status-text-muted{% endif %}">{{ critical_alerts_count }}</strong>
-    </article>
-</section>
-
-<section class="dashboard-grid">
-    <article class="panel endpoints-panel" id="endpoints">
-        <div class="panel-header">
+<section class="pulse-shell" data-pulse-root>
+    <header class="pulse-header">
+        <div class="pulse-header__identity">
+            <span class="pulse-header__icon"><i data-lucide="radar"></i></span>
             <div>
-                <h2>Endpoints</h2>
-                <p>&Uacute;ltimas comunica&ccedil;&otilde;es recebidas pelos agentes.</p>
+                <span class="pulse-kicker">RMM / NOC operacional</span>
+                <h1>NightOwl Pulse</h1>
+                <p>Operação em tempo real da infraestrutura</p>
             </div>
         </div>
 
-        <div class="table-wrap">
-            <table class="endpoint-table">
-                <thead>
-                    <tr>
-                        <th>Status</th>
-                        <th>Endpoint</th>
-                        <th>Usu&aacute;rio</th>
-                        <th>IP</th>
-                        <th>Sistema</th>
-                        <th>&Uacute;ltima comunica&ccedil;&atilde;o</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for endpoint in endpoints %}
-                    <tr>
-                        <td>
-                            <span class="status-badge status-{{ endpoint.status }}">
-                                {{ endpoint.get_status_display|default:"Unknown" }}
-                            </span>
-                        </td>
-                        <td class="mono strong">
-                            <a class="table-link" href="{% url 'endpoint-detail' endpoint.id %}">
-                                {% if endpoint.hostname %}{{ endpoint.hostname }}{% else %}&mdash;{% endif %}
-                            </a>
-                        </td>
-                        <td>{% if endpoint.last_logged_user %}{{ endpoint.last_logged_user }}{% else %}&mdash;{% endif %}</td>
-                        <td class="mono">{% if endpoint.last_ip %}{{ endpoint.last_ip }}{% else %}&mdash;{% endif %}</td>
-                        <td>{% if endpoint.os_name %}{{ endpoint.os_name }}{% else %}&mdash;{% endif %}</td>
-                        <td>
-                            {% if endpoint.last_seen_at %}
-                            <span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>
-                            {% else %}
-                            &mdash;
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="6" class="empty-state">Nenhum endpoint registrado ainda.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
-
-    <aside class="panel alerts-panel">
-        <div class="panel-header">
-            <div>
-                <h2>Aten&ccedil;&atilde;o agora</h2>
-                <p>Alertas operacionais recentes.</p>
+        <div class="pulse-header__ops">
+            <label class="pulse-search">
+                <i data-lucide="search"></i>
+                <input type="search" data-pulse-search placeholder="Buscar hostname, IP, usuario, setor ou sistema" autocomplete="off">
+                <kbd>Ctrl K</kbd>
+            </label>
+            <div class="pulse-header__actions">
+                <button type="button" class="pulse-btn" data-pulse-refresh><i data-lucide="refresh-cw"></i>Atualizar</button>
+                <button type="button" class="pulse-btn pulse-btn-primary" data-pulse-noc><i data-lucide="radio-tower"></i>Modo NOC</button>
+                <button type="button" class="pulse-icon-btn" data-pulse-toast="Visoes salvas chegam na proxima fase." aria-label="Filtros e visao">
+                    <i data-lucide="sliders-horizontal"></i>
+                </button>
             </div>
         </div>
-        <div class="mini-alert-list">
-            {% for alert in recent_alerts %}
-            <a class="mini-alert" href="{% url 'endpoint-detail' alert.endpoint.id %}">
-                <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
-                <strong>{{ alert.title }}</strong>
-                <small>{{ alert.endpoint.hostname }} · {{ alert.last_seen_at|relative_time }}</small>
-            </a>
-            {% empty %}
-            <div class="alert-placeholder">
-                <span class="alert-dot"></span>
-                <div>
-                    <strong>Nenhum alerta aberto no momento</strong>
-                    <p>Monitoramento em fase piloto</p>
+    </header>
+
+    <section class="pulse-health" aria-label="Saude operacional">
+        <button type="button" class="pulse-health-card is-active" data-pulse-filter="all">
+            <span><i data-lucide="heart-pulse"></i>Saúde geral</span>
+            <strong>{{ pulse_health.score }}%</strong>
+            <small>Ambiente monitorado</small>
+        </button>
+        <button type="button" class="pulse-health-card status-ok" data-pulse-filter="online">
+            <span><i data-lucide="wifi"></i>Online</span>
+            <strong>{{ pulse_health.online }}</strong>
+            <small>Endpoints comunicando</small>
+        </button>
+        <button type="button" class="pulse-health-card status-offline" data-pulse-filter="offline">
+            <span><i data-lucide="wifi-off"></i>Offline</span>
+            <strong>{{ pulse_health.offline }}</strong>
+            <small>Sem heartbeat</small>
+        </button>
+        <button type="button" class="pulse-health-card status-critical" data-pulse-filter="critical">
+            <span><i data-lucide="siren"></i>Críticos</span>
+            <strong>{{ pulse_health.critical }}</strong>
+            <small>Exigem ação</small>
+        </button>
+        <button type="button" class="pulse-health-card status-warning" data-pulse-filter="attention">
+            <span><i data-lucide="bell-ring"></i>Alertas</span>
+            <strong>{{ pulse_health.attention }}</strong>
+            <small>Em atenção</small>
+        </button>
+        <button type="button" class="pulse-health-card status-unknown" data-pulse-filter="stale">
+            <span><i data-lucide="database-zap"></i>Unknown</span>
+            <strong>{{ pulse_health.unknown }}</strong>
+            <small>Inventário vencido</small>
+        </button>
+    </section>
+
+    <section class="pulse-layout" data-pulse-layout>
+        <main class="pulse-main">
+            <section class="pulse-panel pulse-action-panel">
+                <div class="pulse-panel__header">
+                    <div>
+                        <h2><i data-lucide="sparkles"></i>Ação recomendada</h2>
+                        <p>Fila priorizada por severidade, impacto e tempo sem tratamento.</p>
+                    </div>
+                    <a class="pulse-panel-link" href="{% url 'alerts-list' %}">Ver alertas</a>
                 </div>
+                <div class="pulse-action-list">
+                    {% for item in pulse_recommended %}
+                    <article class="pulse-action-item severity-{{ item.severity }}">
+                        <div class="pulse-action-item__rank">{{ forloop.counter }}</div>
+                        <div class="pulse-action-item__body">
+                            <div class="pulse-action-item__top">
+                                <span class="pulse-badge severity-{{ item.severity }}">{{ item.severity_label }}</span>
+                                <strong>{{ item.endpoint.hostname|default:"Endpoint" }}</strong>
+                                <small>{{ item.age_at|relative_time }}</small>
+                            </div>
+                            <h3>{{ item.title }}</h3>
+                            <p>{{ item.impact }}</p>
+                        </div>
+                        <div class="pulse-action-item__actions">
+                            <a href="{% url 'endpoint-detail' item.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                            <a href="{% url 'tickets:create' %}?endpoint={{ item.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                            <a href="{% url 'alerts-list' %}?q={{ item.endpoint.hostname }}"><i data-lucide="bell"></i>Ver alerta</a>
+                            <button type="button" data-pulse-toast="Verificação disparada para {{ item.endpoint.hostname }}."><i data-lucide="scan-line"></i>Verificar</button>
+                        </div>
+                    </article>
+                    {% empty %}
+                    <div class="pulse-empty compact">
+                        <i data-lucide="shield-check"></i>
+                        <strong>Nenhuma ação crítica agora</strong>
+                        <span>O ambiente não tem alertas abertos de alta prioridade.</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="pulse-panel pulse-endpoints-panel">
+                <div class="pulse-panel__header">
+                    <div>
+                        <h2><i data-lucide="monitor-dot"></i>Endpoints em operação</h2>
+                        <p><span data-pulse-count>{{ pulse_endpoint_rows|length }}</span> endpoints encontrados com os filtros atuais.</p>
+                    </div>
+                    <div class="pulse-table-tools">
+                        <label class="pulse-mini-search">
+                            <i data-lucide="search"></i>
+                            <input type="search" data-pulse-local-search placeholder="Busca local">
+                        </label>
+                        <select data-pulse-sort aria-label="Ordenar endpoints">
+                            <option value="criticality">Criticidade</option>
+                            <option value="last-seen">Último contato</option>
+                            <option value="health">Saúde</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="pulse-filter-row" aria-label="Filtros rápidos">
+                    <button type="button" class="is-active" data-pulse-filter="all">Todos</button>
+                    <button type="button" data-pulse-filter="critical">Críticos</button>
+                    <button type="button" data-pulse-filter="offline">Offline</button>
+                    <button type="button" data-pulse-filter="server">Servidores</button>
+                    <button type="button" data-pulse-filter="workstation">Workstations</button>
+                    <button type="button" data-pulse-filter="no-av">Sem antivírus</button>
+                    <button type="button" data-pulse-filter="disk">Disco cheio</button>
+                    <button type="button" data-pulse-filter="stale">Inventário vencido</button>
+                </div>
+
+                <div class="pulse-table-wrap">
+                    <table class="pulse-endpoint-table">
+                        <thead>
+                            <tr>
+                                <th>Status</th>
+                                <th>Endpoint</th>
+                                <th>Usuário/Setor</th>
+                                <th>Saúde</th>
+                                <th>Alertas</th>
+                                <th>Recurso crítico</th>
+                                <th>Último contato</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody data-pulse-rows>
+                            {% for row in pulse_endpoint_rows %}
+                            <tr data-endpoint-row
+                                data-id="{{ row.id }}"
+                                data-hostname="{{ row.hostname|default:'Endpoint'|escape }}"
+                                data-status="{{ row.status }}"
+                                data-status-label="{{ row.status_label|escape }}"
+                                data-user="{{ row.logged_user|default:'Sem usuário'|escape }}"
+                                data-sector="{{ row.sector|escape }}"
+                                data-ip="{{ row.primary_ip|default:'-' }}"
+                                data-os="{{ row.os_name|default:'Sistema não informado'|escape }}"
+                                data-health="{{ row.health_score }}"
+                                data-health-level="{{ row.health_level }}"
+                                data-alerts="{{ row.alert_count }}"
+                                data-critical="{{ row.critical_count|yesno:'1,0' }}"
+                                data-offline="{% if row.status == 'offline' %}1{% else %}0{% endif %}"
+                                data-server="{{ row.is_server|yesno:'1,0' }}"
+                                data-workstation="{{ row.is_workstation|yesno:'1,0' }}"
+                                data-no-av="{{ row.no_av|yesno:'1,0' }}"
+                                data-disk="{{ row.disk_critical|yesno:'1,0' }}"
+                                data-stale="{{ row.stale_inventory|yesno:'1,0' }}"
+                                data-last-seen="{{ row.last_seen_at|date:'U'|default:'0' }}"
+                                data-last-seen-label="{{ row.last_seen_label }}"
+                                data-resource="{{ row.resource_label|escape }}"
+                                data-resource-level="{{ row.resource_level }}"
+                                data-alert-titles="{{ row.alert_titles|default:'Nenhum alerta ativo'|escape }}"
+                                data-cpu="{{ row.cpu_percent }}"
+                                data-ram="{{ row.ram_percent }}"
+                                data-disk-used="{{ row.disk_percent }}"
+                                data-url="{% url 'endpoint-detail' row.id %}">
+                                <td>
+                                    <span class="pulse-status-dot status-{{ row.status }}"></span>
+                                    <span class="pulse-status-text">{{ row.status_label }}</span>
+                                </td>
+                                <td>
+                                    <button type="button" class="pulse-row-main" data-open-drawer>
+                                        <strong>{{ row.hostname|default:"Endpoint" }}</strong>
+                                        <small>{{ row.primary_ip|default:"IP não informado" }} · {{ row.os_name|default:"Sistema não informado" }}</small>
+                                    </button>
+                                </td>
+                                <td>
+                                    <strong class="pulse-cell-user">{{ row.logged_user|default:"Sem usuário" }}</strong>
+                                    <small>{{ row.sector }}</small>
+                                </td>
+                                <td>
+                                    <span class="pulse-health-pill health-{{ row.health_level }}">{{ row.health_score }}% · {{ row.health_label }}</span>
+                                </td>
+                                <td>
+                                    {% if row.alert_count %}
+                                    <span class="pulse-alert-count">{{ row.alert_count }}</span>
+                                    {% if row.critical_count %}<span class="pulse-badge critical">Crítico</span>{% endif %}
+                                    {% else %}
+                                    <span class="pulse-muted">Sem alertas</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="pulse-badge resource-{{ row.resource_level }}">{{ row.resource_label }}</span>
+                                    {% if row.no_av %}<span class="pulse-badge security">Sem AV</span>{% endif %}
+                                    {% if row.stale_inventory %}<span class="pulse-badge stale">Inventário</span>{% endif %}
+                                </td>
+                                <td>
+                                    <span title="{{ row.last_seen_at|date:'d/m/Y H:i:s' }}">{{ row.last_seen_label }}</span>
+                                </td>
+                                <td>
+                                    <div class="pulse-row-actions">
+                                        <a href="{% url 'endpoint-detail' row.id %}" aria-label="Abrir endpoint"><i data-lucide="external-link"></i></a>
+                                        <button type="button" data-copy-ip aria-label="Copiar IP"><i data-lucide="copy"></i></button>
+                                        <button type="button" data-row-action="Criar chamado"><i data-lucide="ticket"></i></button>
+                                        <button type="button" data-row-action="Forçar inventário"><i data-lucide="refresh-ccw"></i></button>
+                                        <button type="button" data-row-action="Ping"><i data-lucide="terminal"></i></button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="8">
+                                    <div class="pulse-empty">
+                                        <i data-lucide="monitor-x"></i>
+                                        <strong>Nenhum endpoint registrado</strong>
+                                        <span>Assim que os agentes enviarem heartbeat, eles aparecerão aqui.</span>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <div class="pulse-empty" data-pulse-empty hidden>
+                        <i data-lucide="search-x"></i>
+                        <strong>Nenhum endpoint encontrado</strong>
+                        <span>Ajuste busca ou filtros para ampliar o resultado.</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <aside class="pulse-side">
+            <section class="pulse-panel pulse-intel-panel">
+                <div class="pulse-panel__header compact">
+                    <div>
+                        <h2><i data-lucide="brain-circuit"></i>Inteligência NOC</h2>
+                        <p>Prioridades, eventos e contexto operacional.</p>
+                    </div>
+                </div>
+                <div class="pulse-tabs" role="tablist" aria-label="Painel inteligente">
+                    <button type="button" class="is-active" data-pulse-tab="attention">Atenção</button>
+                    <button type="button" data-pulse-tab="events">Eventos</button>
+                    <button type="button" data-pulse-tab="tickets">Chamados</button>
+                    <button type="button" data-pulse-tab="tasks">Tarefas</button>
+                </div>
+
+                <div class="pulse-tab-panel is-active" data-pulse-tab-panel="attention">
+                    {% for alert in pulse_alerts %}
+                    <a class="pulse-side-alert severity-{{ alert.severity }}" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                        <span>{{ alert.get_severity_display }}</span>
+                        <strong>{{ alert.title }}</strong>
+                        <small>{{ alert.endpoint.hostname }} · {{ alert.last_seen_at|relative_time }}</small>
+                    </a>
+                    {% empty %}
+                    <div class="pulse-empty compact"><i data-lucide="shield-check"></i><strong>Sem alertas abertos</strong><span>Monitoramento estável.</span></div>
+                    {% endfor %}
+                </div>
+
+                <div class="pulse-tab-panel" data-pulse-tab-panel="events" hidden>
+                    <div class="pulse-timeline">
+                        {% for event in pulse_events %}
+                        <article>
+                            <span class="event-{{ event.severity }}"></span>
+                            <div>
+                                <strong>{{ event.title }}</strong>
+                                <small>{{ event.endpoint.hostname|default:"Sistema" }} · {{ event.created_at|relative_time }}</small>
+                                <p>{{ event.description|default:event.event_type }}</p>
+                            </div>
+                        </article>
+                        {% empty %}
+                        <div class="pulse-empty compact"><i data-lucide="history"></i><strong>Nenhum evento recente</strong><span>A timeline aparecerá conforme o RMM registrar atividade.</span></div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="pulse-tab-panel" data-pulse-tab-panel="tickets" hidden>
+                    <div class="pulse-placeholder">
+                        <i data-lucide="inbox"></i>
+                        <strong>Chamados relacionados</strong>
+                        <p>Integração operacional com NightOwl Desk preparada para abrir e acompanhar tickets por endpoint.</p>
+                        <a href="{% url 'tickets:central' %}">Abrir Desk</a>
+                    </div>
+                </div>
+
+                <div class="pulse-tab-panel" data-pulse-tab-panel="tasks" hidden>
+                    <div class="pulse-placeholder">
+                        <i data-lucide="terminal-square"></i>
+                        <strong>Tarefas rápidas</strong>
+                        <p>Fila de verificação, inventário forçado e scripts remotos aparecerão aqui em fase posterior.</p>
+                        <a href="{% url 'jobs-list' %}">Ver fila</a>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </section>
+
+    <div class="pulse-drawer-backdrop" data-pulse-drawer-backdrop hidden></div>
+    <aside class="pulse-drawer" data-pulse-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span class="pulse-kicker">Endpoint selecionado</span>
+                <h2 data-drawer-hostname>Endpoint</h2>
+                <p><span data-drawer-user>Usuário</span> · <span data-drawer-ip>IP</span></p>
             </div>
-            {% endfor %}
+            <button type="button" data-pulse-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="pulse-drawer__body">
+            <div class="pulse-drawer-summary">
+                <span class="pulse-status-dot" data-drawer-status-dot></span>
+                <strong data-drawer-status>Status</strong>
+                <small data-drawer-os>Sistema operacional</small>
+            </div>
+            <section>
+                <h3>Saúde geral</h3>
+                <div class="pulse-health-meter">
+                    <span data-drawer-health-bar></span>
+                </div>
+                <p><strong data-drawer-health>0%</strong> · <span data-drawer-resource>Recurso</span></p>
+            </section>
+            <section>
+                <h3>Recursos</h3>
+                <div class="pulse-resource-grid">
+                    <span>CPU <strong data-drawer-cpu>0%</strong></span>
+                    <span>RAM <strong data-drawer-ram>0%</strong></span>
+                    <span>Disco <strong data-drawer-disk>0%</strong></span>
+                </div>
+            </section>
+            <section>
+                <h3>Alertas ativos</h3>
+                <p data-drawer-alerts>Nenhum alerta ativo.</p>
+            </section>
+            <section>
+                <h3>Últimas comunicações</h3>
+                <p>Último contato <strong data-drawer-last-seen>--</strong>. Eventos recentes aparecem na timeline do painel NOC.</p>
+            </section>
+            <div class="pulse-drawer-actions">
+                <a data-drawer-url href="#"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                <a data-drawer-ticket href="{% url 'tickets:create' %}"><i data-lucide="ticket"></i>Criar chamado</a>
+                <button type="button" data-pulse-toast="Ping enviado para o endpoint selecionado."><i data-lucide="terminal"></i>Ping</button>
+                <button type="button" data-pulse-toast="Inventário forçado em modo preview."><i data-lucide="refresh-ccw"></i>Forçar inventário</button>
+            </div>
         </div>
-        <a class="panel-link" href="{% url 'alerts-list' %}">Ver todos os alertas</a>
     </aside>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
+<script>
+(() => {
+    const root = document.querySelector("[data-pulse-root]");
+    if (!root) return;
+    const mockApi = window.MockNightowlApi;
+    if (mockApi && typeof mockApi.getDashboardSummary === "function") {
+        mockApi.getDashboardSummary().then((summary) => {
+            root.__nightowlDashboardMock = summary;
+        });
+    }
+
+    const rowsBody = root.querySelector("[data-pulse-rows]");
+    const rows = Array.from(root.querySelectorAll("[data-endpoint-row]"));
+    const globalSearch = root.querySelector("[data-pulse-search]");
+    const localSearch = root.querySelector("[data-pulse-local-search]");
+    const count = root.querySelector("[data-pulse-count]");
+    const empty = root.querySelector("[data-pulse-empty]");
+    const drawer = root.querySelector("[data-pulse-drawer]");
+    const backdrop = root.querySelector("[data-pulse-drawer-backdrop]");
+    let activeFilter = "all";
+
+    function toast(message) {
+        const stack = document.querySelector(".message-toast-stack") || document.body;
+        const item = document.createElement("div");
+        item.className = "alert-toast toast-info";
+        item.innerHTML = `<i data-lucide="info"></i><span><strong>${message}</strong><small>NightOwl Pulse</small></span>`;
+        stack.appendChild(item);
+        window.lucide?.createIcons?.();
+        setTimeout(() => item.classList.add("is-hidden"), 2800);
+        setTimeout(() => item.remove(), 3400);
+    }
+
+    function rowText(row) {
+        return [
+            row.dataset.hostname,
+            row.dataset.ip,
+            row.dataset.user,
+            row.dataset.sector,
+            row.dataset.os,
+            row.dataset.resource,
+            row.dataset.alertTitles,
+        ].join(" ").toLowerCase();
+    }
+
+    function matchesFilter(row) {
+        const value = (name) => row.dataset[name] === "1";
+        if (activeFilter === "all") return true;
+        if (activeFilter === "online") return row.dataset.status === "online";
+        if (activeFilter === "offline") return value("offline");
+        if (activeFilter === "critical") return value("critical") || row.dataset.healthLevel === "critical";
+        if (activeFilter === "attention") return Number(row.dataset.alerts || 0) > 0;
+        if (activeFilter === "server") return value("server");
+        if (activeFilter === "workstation") return value("workstation");
+        if (activeFilter === "no-av") return value("noAv");
+        if (activeFilter === "disk") return value("disk");
+        if (activeFilter === "stale") return value("stale");
+        return true;
+    }
+
+    function applyFilters() {
+        const search = `${globalSearch?.value || ""} ${localSearch?.value || ""}`.trim().toLowerCase();
+        let visible = 0;
+        rows.forEach((row) => {
+            const show = matchesFilter(row) && (!search || rowText(row).includes(search));
+            row.hidden = !show;
+            if (show) visible += 1;
+        });
+        if (count) count.textContent = visible;
+        if (empty) empty.hidden = visible !== 0;
+    }
+
+    function sortRows(mode) {
+        const sorted = [...rows].sort((a, b) => {
+            if (mode === "last-seen") return Number(a.dataset.lastSeen || 0) - Number(b.dataset.lastSeen || 0);
+            if (mode === "health") return Number(a.dataset.health || 0) - Number(b.dataset.health || 0);
+            const aScore = (a.dataset.healthLevel === "critical" ? 0 : a.dataset.healthLevel === "warning" ? 1 : 2) * 1000 - Number(a.dataset.alerts || 0);
+            const bScore = (b.dataset.healthLevel === "critical" ? 0 : b.dataset.healthLevel === "warning" ? 1 : 2) * 1000 - Number(b.dataset.alerts || 0);
+            return aScore - bScore;
+        });
+        sorted.forEach((row) => rowsBody.appendChild(row));
+    }
+
+    function setActiveFilter(filter) {
+        activeFilter = filter || "all";
+        root.querySelectorAll("[data-pulse-filter]").forEach((button) => {
+            button.classList.toggle("is-active", button.dataset.pulseFilter === activeFilter);
+        });
+        applyFilters();
+    }
+
+    function openDrawer(row) {
+        rows.forEach((item) => item.classList.toggle("is-selected", item === row));
+        drawer.querySelector("[data-drawer-hostname]").textContent = row.dataset.hostname || "Endpoint";
+        drawer.querySelector("[data-drawer-user]").textContent = row.dataset.user || "Sem usuário";
+        drawer.querySelector("[data-drawer-ip]").textContent = row.dataset.ip || "-";
+        drawer.querySelector("[data-drawer-status]").textContent = row.dataset.statusLabel || "Unknown";
+        drawer.querySelector("[data-drawer-os]").textContent = row.dataset.os || "Sistema não informado";
+        drawer.querySelector("[data-drawer-health]").textContent = `${row.dataset.health || 0}%`;
+        drawer.querySelector("[data-drawer-health-bar]").style.width = `${row.dataset.health || 0}%`;
+        drawer.querySelector("[data-drawer-resource]").textContent = row.dataset.resource || "Normal";
+        drawer.querySelector("[data-drawer-cpu]").textContent = `${row.dataset.cpu || 0}%`;
+        drawer.querySelector("[data-drawer-ram]").textContent = `${row.dataset.ram || 0}%`;
+        drawer.querySelector("[data-drawer-disk]").textContent = `${row.dataset.diskUsed || 0}%`;
+        drawer.querySelector("[data-drawer-alerts]").textContent = row.dataset.alertTitles || "Nenhum alerta ativo.";
+        drawer.querySelector("[data-drawer-last-seen]").textContent = row.dataset.lastSeenLabel || "--";
+        drawer.querySelector("[data-drawer-url]").href = row.dataset.url || "#";
+        drawer.querySelector("[data-drawer-ticket]").href = `{% url 'tickets:create' %}?endpoint=${encodeURIComponent(row.dataset.id || "")}`;
+        const dot = drawer.querySelector("[data-drawer-status-dot]");
+        dot.className = `pulse-status-dot status-${row.dataset.status || "unknown"}`;
+        drawer.classList.add("is-open");
+        drawer.setAttribute("aria-hidden", "false");
+        backdrop.hidden = false;
+        window.lucide?.createIcons?.();
+    }
+
+    function closeDrawer() {
+        drawer.classList.remove("is-open");
+        drawer.setAttribute("aria-hidden", "true");
+        backdrop.hidden = true;
+    }
+
+    root.querySelectorAll("[data-pulse-filter]").forEach((button) => {
+        button.addEventListener("click", () => setActiveFilter(button.dataset.pulseFilter));
+    });
+    [globalSearch, localSearch].forEach((input) => input?.addEventListener("input", applyFilters));
+    root.querySelector("[data-pulse-sort]")?.addEventListener("change", (event) => {
+        sortRows(event.target.value);
+        applyFilters();
+    });
+    rows.forEach((row) => {
+        row.addEventListener("click", (event) => {
+            if (event.target.closest("a, button:not([data-open-drawer])")) return;
+            openDrawer(row);
+        });
+        row.querySelector("[data-open-drawer]")?.addEventListener("click", () => openDrawer(row));
+        row.querySelector("[data-copy-ip]")?.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            try {
+                await navigator.clipboard.writeText(row.dataset.ip || "");
+                toast(`IP ${row.dataset.ip || ""} copiado.`);
+            } catch {
+                toast("Não foi possível copiar o IP.");
+            }
+        });
+        row.querySelectorAll("[data-row-action]").forEach((button) => {
+            button.addEventListener("click", (event) => {
+                event.stopPropagation();
+                toast(`${button.dataset.rowAction} solicitado para ${row.dataset.hostname}.`);
+            });
+        });
+    });
+
+    root.querySelectorAll("[data-pulse-tab]").forEach((button) => {
+        button.addEventListener("click", () => {
+            root.querySelectorAll("[data-pulse-tab]").forEach((item) => item.classList.toggle("is-active", item === button));
+            root.querySelectorAll("[data-pulse-tab-panel]").forEach((panel) => {
+                const active = panel.dataset.pulseTabPanel === button.dataset.pulseTab;
+                panel.hidden = !active;
+                panel.classList.toggle("is-active", active);
+            });
+        });
+    });
+
+    root.querySelector("[data-pulse-refresh]")?.addEventListener("click", () => window.location.reload());
+    root.querySelector("[data-pulse-noc]")?.addEventListener("click", (event) => {
+        root.classList.toggle("is-noc-mode");
+        event.currentTarget.classList.toggle("is-active", root.classList.contains("is-noc-mode"));
+        toast(root.classList.contains("is-noc-mode") ? "Modo NOC ativado." : "Modo NOC desativado.");
+    });
+    root.querySelectorAll("[data-pulse-toast]").forEach((button) => {
+        button.addEventListener("click", () => toast(button.dataset.pulseToast || "Ação registrada."));
+    });
+    root.querySelector("[data-pulse-drawer-close]")?.addEventListener("click", closeDrawer);
+    backdrop?.addEventListener("click", closeDrawer);
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeDrawer();
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+            event.preventDefault();
+            globalSearch?.focus();
+        }
+    });
+    sortRows("criticality");
+    applyFilters();
+})();
+</script>
 {% endblock %}

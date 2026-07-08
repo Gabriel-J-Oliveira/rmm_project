@@ -20,6 +20,9 @@ def _user_name(user):
 
 def template_context(ticket, user=None, extra_context=None):
     endpoint = ticket.endpoint.hostname if ticket.endpoint else ticket.endpoint_name
+    action_url = ''
+    if extra_context and extra_context.get('action_url'):
+        action_url = str(extra_context.get('action_url') or '').strip()
     context = {
         'ticket_code': f'#{ticket.number}',
         'titulo': ticket.title,
@@ -30,7 +33,16 @@ def template_context(ticket, user=None, extra_context=None):
         'fila': ticket.queue,
         'endpoint': endpoint or '',
         'solucao': '',
+        'status': ticket.get_status_display(),
+        'responsavel': ticket.assigned_to or 'Equipe Night Owl',
+        'mensagem': '',
+        'motivo': '',
+        'resumo': ticket.description,
+        'action_url': action_url,
+        'link_acompanhamento': action_url or 'Acesse o NightOwl Desk para acompanhar este chamado.',
         'data': timezone.localtime().strftime('%d/%m/%Y %H:%M'),
+        'data_abertura': timezone.localtime(ticket.created_at).strftime('%d/%m/%Y %H:%M') if getattr(ticket, 'created_at', None) else '',
+        'data_resolucao': timezone.localtime(ticket.resolved_at).strftime('%d/%m/%Y %H:%M') if getattr(ticket, 'resolved_at', None) else '',
     }
     if extra_context:
         context.update({key: '' if value is None else str(value) for key, value in extra_context.items()})

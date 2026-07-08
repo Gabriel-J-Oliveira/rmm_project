@@ -397,11 +397,14 @@
             <button class="{% if is_my_queue or request.GET.assigned_to == '__me__' or request.GET.technician == '__me__' %}is-active{% endif %}" type="button" data-quick-view="Atribuídos a mim"><i data-lucide="user-check"></i>Atribuídos a mim</button>
             <button class="{% if request.GET.unassigned or request.GET.flag == 'unassigned' %}is-active{% endif %}" type="button" data-quick-view="Sem responsável"><i data-lucide="user-x"></i>Sem responsável</button>
             <button class="{% if request.GET.priority == 'critical' %}is-active{% endif %}" type="button" data-quick-view="Críticos"><i data-lucide="siren"></i>Críticos</button>
-            <button class="{% if request.GET.sla == 'warning,critical' %}is-active{% endif %}" type="button" data-quick-view="SLA vencendo"><i data-lucide="timer"></i>SLA vencendo</button>
-            <button class="{% if request.GET.origin == 'rmm' %}is-active{% endif %}" type="button" data-quick-view="RMM"><i data-lucide="activity"></i>RMM</button>
+        </div>
+        <div class="nw-filterbar__quick nw-filterbar__quick--kanban" aria-label="Filtros rapidos do Kanban">
+            <button type="button" data-quick-view="SLA vencendo"><i data-lucide="timer"></i>SLA vencendo</button>
+            <button type="button" data-quick-view="Reabertos"><i data-lucide="rotate-ccw"></i>Reabertos</button>
+            <button type="button" data-quick-view="RMM"><i data-lucide="activity"></i>RMM</button>
         </div>
 
-        <div class="nw-filter" data-filter="view">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="view">
             <button class="nw-filter-chip nw-filter-chip--view" type="button" data-filter-trigger aria-expanded="false">
                 <span class="nw-filter-chip__label">View</span>
                 <strong data-filter-summary>Fila geral</strong>
@@ -427,7 +430,7 @@
             </div>
         </div>
 
-        <div class="nw-filter" data-filter="status">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="status">
             <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
                 <i data-lucide="workflow"></i><span data-filter-summary>Status</span>
             </button>
@@ -456,7 +459,7 @@
             </div>
         </div>
 
-        <div class="nw-filter" data-filter="priority">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="priority">
             <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
                 <i data-lucide="flag"></i><span data-filter-summary>Prioridade</span>
             </button>
@@ -485,7 +488,7 @@
             </div>
         </div>
 
-        <div class="nw-filter" data-filter="technician">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="technician">
             <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
                 <i data-lucide="headphones"></i><span data-filter-summary>Tecnico</span>
             </button>
@@ -531,7 +534,7 @@
             </div>
         </div>
 
-        <div class="nw-filter" data-filter="client">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="client">
             <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
                 <i data-lucide="building-2"></i><span data-filter-summary>Cliente</span>
             </button>
@@ -559,7 +562,7 @@
             </div>
         </div>
 
-        <div class="nw-filter" data-filter="sector">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="sector">
             <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
                 <i data-lucide="network"></i><span data-filter-summary>Setor</span>
             </button>
@@ -587,7 +590,7 @@
             </div>
         </div>
 
-        <div class="nw-filter" data-filter="category">
+        <div class="nw-filter nw-filter--drawer-only" data-filter="category">
             <button class="nw-filter-chip" type="button" data-filter-trigger aria-expanded="false">
                 <i data-lucide="folder-cog"></i><span data-filter-summary>Categoria</span>
             </button>
@@ -626,6 +629,43 @@
                     <button type="button" class="nw-filter-popover__close" data-filter-close aria-label="Fechar"><i data-lucide="x"></i></button>
                 </header>
                 <div class="nw-filter-popover__advanced">
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Status</strong>
+                        {% for option in filter_options.status %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="status" value="{{ option.value }}"><span class="nw-filter-option__dot status-{{ option.value }}"></span><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Prioridade</strong>
+                        {% for option in filter_options.priority %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="priority" value="{{ option.value }}"><span class="nw-filter-option__dot priority-{{ option.value }}"></span><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Responsavel / Tecnico</strong>
+                        <label class="nw-filter-option nw-filter-option--person" data-filter-option><input type="checkbox" data-filter-input data-field="technician" value="__me__"><span class="nw-filter-avatar">E</span><span class="nw-filter-option__label">Eu<small>{{ current_user_name|default:"Tecnico" }}</small></span></label>
+                        <label class="nw-filter-option nw-filter-option--person" data-filter-option><input type="checkbox" data-filter-input data-field="technician" value="__unassigned__"><span class="nw-filter-avatar">?</span><span class="nw-filter-option__label">Sem dono<small>Chamados nao atribuidos</small></span></label>
+                        <label class="nw-filter-option nw-filter-option--person" data-filter-option><input type="checkbox" data-filter-input data-field="technician" value="Gabriel"><span class="nw-filter-avatar">G</span><span class="nw-filter-option__label">Gabriel</span></label>
+                        <label class="nw-filter-option nw-filter-option--person" data-filter-option><input type="checkbox" data-filter-input data-field="technician" value="Renan"><span class="nw-filter-avatar">R</span><span class="nw-filter-option__label">Renan</span></label>
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Cliente</strong>
+                        {% for option in filter_options.client %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="client" value="{{ option.value }}"><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Setor</strong>
+                        {% for option in filter_options.sector %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="sector" value="{{ option.value }}"><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
+                    <section class="nw-filter-group">
+                        <strong class="nw-filter-group__title">Categoria</strong>
+                        {% for option in filter_options.category %}
+                        <label class="nw-filter-option" data-filter-option><input type="checkbox" data-filter-input data-field="category" value="{{ option.value }}"><span class="nw-filter-option__label">{{ option.label }}</span><em class="nw-filter-option__count">{{ option.count }}</em></label>
+                        {% endfor %}
+                    </section>
                     <section class="nw-filter-group">
                         <strong class="nw-filter-group__title">Origem</strong>
                         {% for option in origin_options %}
@@ -671,9 +711,10 @@
             </div>
         </div>
 
-        <button class="nw-filter-global-clear" type="button" data-filter-global-clear disabled>
+        <button class="nw-filter-global-clear" type="button" data-filter-global-clear disabled hidden>
             <i data-lucide="x-circle"></i><span>Limpar</span>
         </button>
     </div>
+    <div class="nw-filterbar__applied" data-filter-applied-chips hidden></div>
     <div class="nw-filterbar__meta"><span data-filter-result-count>{{ tickets|length }} de {{ tickets|length }} chamados</span></div>
 </section>

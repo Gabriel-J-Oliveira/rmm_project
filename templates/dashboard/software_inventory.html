@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Central de Softwares | Night Owl{% endblock %}
 {% block body_class %}page-software{% endblock %}
@@ -10,98 +11,128 @@
 {% endblock %}
 
 {% block content %}
-<section class="hero software-hero page-header">
-    <div>
-        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="package"></i></span>Central de Softwares</h1>
-        <p class="page-subtitle">Inventário consolidado dos programas detectados nos endpoints.</p>
-    </div>
-    <div class="noc-actions page-actions">
-        <span class="topbar-status"><i data-lucide="clock"></i>Atualizado em {{ updated_at|date:"H:i" }}</span>
-        <a class="refresh-button" href="{% url 'software-inventory' %}?{{ request.GET.urlencode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
-    </div>
-</section>
-
-<section class="metric-grid software-metrics">
-    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="boxes"></i></span><span class="metric-label">Softwares únicos</span><strong class="metric-value">{{ summary.unique_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="package"></i></span><span class="metric-label">Instalações</span><strong class="metric-value">{{ summary.install_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon security"><i data-lucide="shield-alert"></i></span><span class="metric-label">Acesso remoto</span><strong class="metric-value">{{ summary.remote_access_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon warning"><i data-lucide="network"></i></span><span class="metric-label">Admin/Rede</span><strong class="metric-value">{{ summary.admin_network_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon success"><i data-lucide="shield"></i></span><span class="metric-label">Segurança</span><strong class="metric-value">{{ summary.security_count }}</strong></article>
-    <article class="metric-card command-metric"><span class="metric-icon"><i data-lucide="circle-help"></i></span><span class="metric-label">Desconhecidos</span><strong class="metric-value">{{ summary.unknown_count }}</strong></article>
-</section>
-
-<section class="panel filter-panel software-filter-panel">
-    <form class="endpoint-filters software-filters" method="get">
-        <label class="filter-field">
-            <span><i data-lucide="search"></i>Busca</span>
-            <input type="search" name="q" value="{{ filters.q }}" placeholder="Software, fabricante, versão ou endpoint">
-        </label>
-        <label class="filter-field">
-            <span>Categoria</span>
-            <select name="category">
-                {% for value,label in category_options %}
-                <option value="{{ value }}" {% if filters.category == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Risco</span>
-            <select name="risk">
-                {% for value,label in risk_options %}
-                <option value="{{ value }}" {% if filters.risk == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Sensível</span>
-            <select name="sensitive">
-                <option value="all" {% if filters.sensitive == "all" %}selected{% endif %}>Todos</option>
-                <option value="yes" {% if filters.sensitive == "yes" %}selected{% endif %}>Sim</option>
-                <option value="no" {% if filters.sensitive == "no" %}selected{% endif %}>Não</option>
-            </select>
-        </label>
-        <div class="filter-actions">
-            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
-            <a href="{% url 'software-inventory' %}">Limpar</a>
-            <a href="{% url 'software-export' %}?{{ request.GET.urlencode }}"><i data-lucide="download"></i>CSV</a>
+<section class="software-center" data-software-root>
+    <section class="software-command-header page-header">
+        <div class="alerts-command-title">
+            <span class="command-icon page-header-icon"><i data-lucide="package"></i></span>
+            <div>
+                <h1 class="page-title">Central de Softwares</h1>
+                <p class="page-subtitle">Invent&aacute;rio, cat&aacute;logo e implanta&ccedil;&atilde;o remota de aplica&ccedil;&otilde;es.</p>
+            </div>
         </div>
-    </form>
-</section>
+        <div class="alerts-header-actions page-actions">
+            <button type="button" class="refresh-button" data-software-action="upload"><i data-lucide="upload-cloud"></i>Upload pacote</button>
+            <button type="button" class="refresh-button" data-software-action="new-software"><i data-lucide="package-plus"></i>Novo software</button>
+            <button type="button" class="refresh-button" data-software-action="new-deployment"><i data-lucide="rocket"></i>Nova implanta&ccedil;&atilde;o</button>
+            <button type="button" class="refresh-button" data-software-refresh><i data-lucide="refresh-cw"></i>Atualizar invent&aacute;rio</button>
+        </div>
+    </section>
 
-<section class="software-list">
-    {% for software in rows %}
-    <article class="software-card software-risk-{{ software.risk_level }}">
-        <div class="software-icon"><i data-lucide="{% if software.category == 'remote_access' %}shield-alert{% elif software.category == 'admin_network' %}network{% elif software.category == 'security' %}shield{% elif software.category == 'browser' %}globe{% elif software.category == 'office' %}file-text{% elif software.category == 'development' %}code{% else %}package{% endif %}"></i></div>
-        <div class="software-main">
-            <div class="software-title-row">
-                <div>
-                    <h2>{{ software.name }}</h2>
-                    <p>{{ software.publisher|default:"Fabricante não informado" }}</p>
+    <section class="metric-grid software-command-metrics" data-software-metrics></section>
+
+    <nav class="software-module-tabs" aria-label="M&oacute;dulos de software">
+        <button class="is-active" type="button" data-software-tab="inventory"><i data-lucide="boxes"></i>Invent&aacute;rio</button>
+        <button type="button" data-software-tab="catalog"><i data-lucide="library"></i>Cat&aacute;logo</button>
+        <button type="button" data-software-tab="deployments"><i data-lucide="rocket"></i>Implanta&ccedil;&otilde;es</button>
+        <button type="button" data-software-tab="updates"><i data-lucide="download"></i>Atualiza&ccedil;&otilde;es</button>
+        <button type="button" data-software-tab="rules"><i data-lucide="shield-check"></i>Regras</button>
+        <button type="button" data-software-tab="packages"><i data-lucide="package-open"></i>Pacotes</button>
+    </nav>
+
+    <section class="panel software-command-panel">
+        <form class="endpoint-filters software-command-filters" data-software-filters>
+            <label class="filter-field software-search-field">
+                <span><i data-lucide="search"></i>Busca</span>
+                <input type="search" data-software-filter="q" placeholder="Software, fabricante, vers&atilde;o, endpoint ou pacote">
+            </label>
+            <label class="filter-field">
+                <span>Categoria</span>
+                <select data-software-filter="category">
+                    <option value="all">Todas</option>
+                    <option value="microsoft">Microsoft</option>
+                    <option value="security">Seguran&ccedil;a</option>
+                    <option value="remote">Acesso remoto</option>
+                    <option value="admin">Admin/Rede</option>
+                    <option value="browser">Navegador</option>
+                    <option value="office">Produtividade</option>
+                    <option value="other">Outros</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Risco</span>
+                <select data-software-filter="risk">
+                    <option value="all">Todos</option>
+                    <option value="low">Baixo</option>
+                    <option value="medium">M&eacute;dio</option>
+                    <option value="high">Alto</option>
+                    <option value="critical">Cr&iacute;tico</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Status</span>
+                <select data-software-filter="status">
+                    <option value="all">Todos</option>
+                    <option value="approved">Aprovado</option>
+                    <option value="sensitive">Sens&iacute;vel</option>
+                    <option value="forbidden">Proibido</option>
+                    <option value="unknown">Desconhecido</option>
+                    <option value="evaluating">Em avalia&ccedil;&atilde;o</option>
+                    <option value="required">Obrigat&oacute;rio</option>
+                    <option value="draft">Rascunho</option>
+                    <option value="testing">Teste</option>
+                    <option value="retired">Inativo</option>
+                    <option value="queued">Em fila</option>
+                    <option value="running">Em execu&ccedil;&atilde;o</option>
+                    <option value="completed">Conclu&iacute;do</option>
+                    <option value="failed">Falha</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Endpoint</span>
+                <select data-software-filter="endpointId"><option value="">Todos</option></select>
+            </label>
+            <div class="filter-actions">
+                <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+                <button type="button" data-software-clear><i data-lucide="x-circle"></i>Limpar</button>
+                <button type="button" data-software-export><i data-lucide="download"></i>Exportar CSV</button>
+                <div class="software-view-toggle">
+                    <button class="is-active" type="button" data-software-view="cards"><i data-lucide="layout-grid"></i>Cards</button>
+                    <button type="button" data-software-view="table"><i data-lucide="table-2"></i>Tabela</button>
                 </div>
-                <div class="software-badges">
-                    <span class="software-badge category-{{ software.category }}">{{ software.category_label }}</span>
-                    <span class="software-badge risk-{{ software.risk_level }}">{{ software.risk_label }}</span>
-                </div>
             </div>
-            <div class="software-meta-grid">
-                <div><span>Endpoints</span><strong>{{ software.endpoint_count }}</strong></div>
-                <div><span>Versões</span><strong>{{ software.versions_display }}</strong></div>
-                <div><span>Última detecção</span><strong>{{ software.latest_seen_at|date:"d/m/Y H:i" }}</strong></div>
+        </form>
+    </section>
+
+    <section class="software-tab-panel is-active" data-software-panel="inventory">
+        <section class="software-view software-card-grid" data-software-inventory-cards></section>
+        <section class="panel software-table-panel" data-software-inventory-table hidden></section>
+    </section>
+
+    <section class="software-tab-panel" data-software-panel="catalog" hidden></section>
+    <section class="software-tab-panel" data-software-panel="deployments" hidden></section>
+    <section class="software-tab-panel" data-software-panel="updates" hidden></section>
+    <section class="software-tab-panel" data-software-panel="rules" hidden></section>
+    <section class="software-tab-panel" data-software-panel="packages" hidden></section>
+
+    <div class="event-drawer-backdrop software-drawer-backdrop" data-software-drawer-backdrop hidden></div>
+    <aside class="event-drawer software-drawer" data-software-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span data-software-drawer-kicker>Software</span>
+                <h2 data-software-drawer-title>Selecione um item</h2>
+                <p data-software-drawer-subtitle>Detalhes operacionais</p>
             </div>
-            <div class="software-examples">
-                {% for item in software.example_endpoints %}
-                <a href="{% url 'endpoint-detail' item.endpoint.id %}">{{ item.endpoint.hostname }}</a>
-                {% empty %}
-                <span>Sem endpoints associados.</span>
-                {% endfor %}
-            </div>
-        </div>
-        <div class="software-actions">
-            <a class="copy-btn link-btn" href="{% url 'software-detail' %}?name={{ software.name|urlencode }}&publisher={{ software.publisher|urlencode }}">Ver endpoints</a>
-        </div>
-    </article>
-    {% empty %}
-    <div class="panel empty-state padded">Nenhum software encontrado com os filtros atuais.</div>
-    {% endfor %}
+            <button type="button" data-software-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="event-drawer-body" data-software-drawer-body></div>
+    </aside>
+
+    <div class="jobs-toast operational-toast" data-software-toast hidden></div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
+<script src="{% static 'js/nightowl_operational.js' %}"></script>
+<script src="{% static 'js/software_center.js' %}"></script>
 {% endblock %}

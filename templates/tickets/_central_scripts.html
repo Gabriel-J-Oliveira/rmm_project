@@ -5,9 +5,11 @@
     const createUrl = "{% url 'tickets:create' %}";
     const createTicketApiUrl = "{% url 'tickets:api-create' %}";
     const endpointUrl = "{% url 'endpoint-list' %}";
-    const rowSelector = '.desk-ticket-row';
+    const rowSelector = '.desk-ticket-row, .kanban-card';
     const listPane = document.querySelector('.desk-central-list-pane');
+    const centralWorkspace = document.querySelector('[data-central-workspace]');
     const previewPanel = document.querySelector('[data-preview-panel]');
+    const previewOpenButton = document.querySelector('[data-preview-open]');
     const selectionBar = document.querySelector('.desk-selection-bar');
     const selectedLabel = document.querySelector('[data-selected-label]');
     const checkAll = document.querySelector('.desk-row-check-all');
@@ -35,6 +37,7 @@
     let lastQuickClipboardImageSignature = '';
     let quickClipboardReadInProgress = false;
     const quickDraftKey = 'nightowl.central.quickTicketDraft';
+    const previewClosedKey = 'nightowl.central.previewClosed';
     const STATUS_LABELS = {
         new: 'Novo',
         in_progress: 'Em atendimento',
@@ -47,16 +50,16 @@
     };
     const PRIORITY_LABELS = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
     const STATUS_TRANSITIONS = {
-        new: ['in_progress', 'waiting_user', 'canceled'],
+        new: ['in_progress', 'waiting_user', 'resolved', 'canceled'],
         in_progress: ['waiting_user', 'waiting_third_party', 'resolved', 'escalated'],
         waiting_user: ['in_progress', 'resolved', 'canceled'],
         waiting_third_party: ['in_progress', 'waiting_user', 'resolved'],
-        resolved: ['in_progress'],
-        closed: ['in_progress'],
-        canceled: ['in_progress'],
+        resolved: ['closed', 'in_progress'],
+        closed: [],
+        canceled: [],
         escalated: ['in_progress', 'resolved']
     };
-    const SENSITIVE_STATUS = new Set(['resolved', 'closed', 'canceled']);
+    const SENSITIVE_STATUS = new Set(['waiting_user', 'waiting_third_party', 'resolved', 'closed', 'canceled']);
     const MACROS = [
         'Ola, estamos verificando.',
         'Poderia enviar um print do erro?',
@@ -144,6 +147,96 @@
 
     function ticketUrl(ticket) {
         return `/tickets/${encodeURIComponent(ticket.number)}/`;
+    }
+
+    function ticketApiUrl(ticketId, endpoint) {
+        return `/tickets/${encodeURIComponent(ticketId)}/api/${endpoint}/`;
+    }
+
+    async function postTicketJson(ticketId, endpoint, payload) {
+        const response = await fetch(ticketApiUrl(ticketId, endpoint), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken(),
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: JSON.stringify(payload || {}),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) {
+            throw new Error(data.error || data.errors?.request || 'Falha ao salvar alteracao.');
+        }
+        return data;
+    }
+
+    async function postTicketForm(ticketId, endpoint, formData) {
+        const response = await fetch(ticketApiUrl(ticketId, endpoint), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'X-CSRFToken': csrfToken(),
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: formData,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.ok === false) {
+            throw new Error(data.error || 'Falha ao enviar arquivo.');
+        }
+        return data;
+    }
+
+    function kanbanCards() {
+        return Array.from(document.querySelectorAll('.kanban-card'));
+    }
+
+    function getKanbanCard(ticketId) {
+        return kanbanCards().find((card) => card.dataset.ticket === String(ticketId));
+    }
+
+    function updateKanbanCounts() {
+        document.querySelectorAll('[data-kanban-column-body]').forEach((body) => {
+            const status = body.dataset.kanbanColumnBody;
+            const count = Array.from(body.querySelectorAll('.kanban-card')).filter((card) => !card.hidden).length;
+            const badge = document.querySelector(`[data-kanban-count="${CSS.escape(status)}"]`);
+            if (badge) badge.textContent = count;
+            const empty = body.querySelector('.nw-kanban-empty');
+            if (empty) empty.hidden = count > 0;
+        });
+    }
+
+    function updateKanbanCardFromTicket(ticketId) {
+        const ticket = getTicket(ticketId);
+        const card = getKanbanCard(ticketId);
+        if (!ticket || !card) return;
+        card.dataset.status = ticket.status;
+        card.dataset.priority = ticket.priority;
+        card.dataset.technician = ticket.assigned_to || 'Sem responsavel';
+        card.dataset.category = ticket.category || '';
+        card.dataset.queue = ticket.queue || '';
+        card.dataset.sla = ticket.sla_state || '';
+        card.dataset.unassigned = ticket.assigned_to ? '0' : '1';
+        card.dataset.reopened = ticket.is_reopened ? '1' : '0';
+        card.className = `kanban-card nw-kanban-card priority-${ticket.priority} origin-${ticket.origin || 'manual'} sla-${ticket.sla_state || 'ok'} ${ticket.assigned_to ? '' : 'is-unassigned'} ${ticket.origin === 'rmm' ? 'is-rmm' : ''} ${ticket.partner ? 'is-vip' : ''} ${ticket.sla_state === 'critical' ? 'is-stale' : ''} ${ticket.is_reopened ? 'is-reopened' : ''}`;
+        if (selectedTicketId === String(ticket.number)) card.classList.add('is-selected');
+        const statusColumn = document.querySelector(`[data-kanban-column-body="${CSS.escape(ticket.status)}"]`);
+        if (statusColumn && card.parentElement !== statusColumn) statusColumn.appendChild(card);
+        const title = card.querySelector('h3');
+        if (title) title.textContent = ticket.title || `Chamado #${ticket.number}`;
+        const priority = card.querySelector('.nw-kanban-card__top .desk-badge');
+        if (priority) {
+            priority.className = `desk-badge priority-${badgeClass(ticket.priority)}`;
+            priority.textContent = ticket.priority_label || PRIORITY_LABELS[ticket.priority] || ticket.priority;
+        }
+        const assignee = card.querySelector('[data-kanban-assignee]');
+        if (assignee) assignee.textContent = ticket.assigned_to || 'Sem dono';
+        const sla = card.querySelector('[data-kanban-sla]');
+        if (sla) sla.textContent = ticket.sla_label || ticket.opened_for || 'Sem SLA';
+        const updated = card.querySelector('footer small');
+        if (updated) updated.textContent = `Atualizado ${ticket.updated_for || 'agora'}`;
+        updateKanbanCounts();
     }
 
     function showToast(message, type = 'info', actionLabel = '', undoCallback = null) {
@@ -641,13 +734,12 @@
             <div role="cell"><input class="desk-row-checkbox" type="checkbox" aria-label="Selecionar chamado ${ticket.number}"></div>
             <div role="cell"><span class="desk-row-origin-icon"><i data-lucide="${ticket.origin === 'rmm' ? 'activity' : 'user'}"></i></span></div>
             <div role="cell"><div class="desk-row-title"><span class="desk-ticket-number">#${ticket.number}</span><div class="desk-row-title-copy"><button class="desk-ticket-title" type="button" data-preview-trigger>${escapeHtml(ticket.title)}</button><div class="desk-ticket-meta"><span>${escapeHtml(ticket.requester)}</span><span>${escapeHtml(ticket.sector)}</span></div></div></div></div>
-            <div role="cell"><span class="desk-origin-badge origin-${ticket.origin}"><i data-lucide="${ticket.origin === 'rmm' ? 'activity' : 'user'}"></i>${ticket.origin === 'rmm' ? 'RMM Alert' : 'Manual'}</span></div>
-            <div role="cell"><div class="desk-sla-cell"><span class="desk-sla-indicator priority-${ticket.priority} sla-${ticket.sla_state}"><i data-lucide="clock-3"></i><span>agora</span></span><small>novo SLA</small></div></div>
+            <div role="cell"><div class="desk-row-person"><strong>${escapeHtml(ticket.requester)}</strong><small>${escapeHtml(ticket.sector)}</small></div></div>
             <div role="cell"><span class="desk-badge status-new">Novo</span></div>
             <div role="cell"><span class="desk-assignee-pill ${ticket.assigned_to ? '' : 'is-unassigned'}"><span class="desk-avatar">${ticket.assigned_to ? ticket.assigned_to.slice(0, 1) : '?'}</span>${ticket.assigned_to || 'Sem dono'}</span></div>
-            <div role="cell">${ticket.endpoint ? `<span class="desk-endpoint-chip status-${ticket.endpoint.status}"><i></i><span class="mono">${escapeHtml(ticket.endpoint.hostname)}</span></span>` : '<span class="desk-muted">Sem endpoint</span>'}</div>
-            <div class="desk-category-cell" role="cell"><span class="desk-badge neutral category-color-${escapeHtml(ticket.category_color || 'gray')}"><i class="bi ${escapeHtml(ticket.category_icon || 'bi-folder')}" aria-hidden="true"></i>${escapeHtml(ticket.category)}</span></div>
-            <div class="desk-row-actions-cell" role="cell"><span class="desk-row-hover-actions"><a class="desk-icon-action" href="${ticketUrl(ticket)}" data-row-action="open" aria-label="Abrir chamado ${escapeHtml(ticket.number)} em tela cheia"><i data-lucide="maximize-2"></i></a><button class="desk-icon-action" type="button" data-row-action="copy" aria-label="Copiar link do chamado ${escapeHtml(ticket.number)}"><i data-lucide="link"></i></button><button class="desk-icon-action" type="button" data-row-action="more" aria-label="Menu de contexto do chamado ${escapeHtml(ticket.number)}"><i data-lucide="more-horizontal"></i></button></span></div>
+            <div role="cell"><div class="desk-sla-cell"><span class="desk-sla-indicator priority-${ticket.priority} sla-${ticket.sla_state}"><i data-lucide="${ticket.priority === 'critical' ? 'siren' : 'clock-3'}"></i><span>${escapeHtml(ticket.priority_label || 'Normal')}</span></span><small>${escapeHtml(ticket.sla_label || 'novo SLA')}</small></div></div>
+            <div role="cell"><div class="desk-row-time"><strong>agora</strong><small>novo chamado</small></div></div>
+            <div class="desk-row-actions-cell" role="cell"><span class="desk-row-hover-actions"><a class="desk-icon-action" href="${ticketUrl(ticket)}" data-row-action="open" aria-label="Abrir chamado ${escapeHtml(ticket.number)} em tela cheia"><i data-lucide="maximize-2"></i></a><button class="desk-icon-action" type="button" data-row-action="more" aria-label="Menu de contexto do chamado ${escapeHtml(ticket.number)}"><i data-lucide="more-horizontal"></i></button></span></div>
         `;
         body.prepend(row);
         setTimeout(() => row.classList.remove('is-live-updated'), 3600);
@@ -754,6 +846,62 @@
         if (ticket) openTicketDrawer(ticket.number);
     }
 
+    function setPreviewClosed(closed) {
+        if (!centralWorkspace || !previewPanel) return;
+        centralWorkspace.classList.toggle('is-preview-closed', closed);
+        if (previewOpenButton) previewOpenButton.hidden = !closed;
+        try {
+            window.localStorage?.setItem(previewClosedKey, closed ? '1' : '0');
+        } catch (error) {
+            // Browser storage can be unavailable in restricted modes.
+        }
+    }
+
+    function initPreviewToggle() {
+        if (!centralWorkspace || !previewPanel) return;
+        let saved = '0';
+        try {
+            saved = window.localStorage?.getItem(previewClosedKey) || '0';
+        } catch (error) {
+            saved = '0';
+        }
+        setPreviewClosed(saved === '1');
+        previewOpenButton?.addEventListener('click', () => setPreviewClosed(false));
+    }
+
+    function renderEmptyPreview() {
+        if (!previewPanel) return;
+        previewPanel.innerHTML = `
+            <div class="desk-preview-empty" data-preview-empty>
+                <button class="desk-icon-action desk-preview-empty-close" type="button" data-preview-hide aria-label="Ocultar preview"><i data-lucide="panel-right-close"></i></button>
+                <i data-lucide="radar"></i>
+                <strong>Selecione um chamado para ver mais detalhes</strong>
+                <span>Escolha um item da fila para visualizar status, SLA, comentarios, endpoint, anexos e contexto RMM.</span>
+                <div class="desk-preview-empty-features" aria-label="Aqui voce vera">
+                    <p>Aqui voce vera</p>
+                    <ul>
+                        <li><i data-lucide="timer"></i>SLA e prioridade</li>
+                        <li><i data-lucide="message-square"></i>Ultimos comentarios</li>
+                        <li><i data-lucide="paperclip"></i>Anexos e relacionados</li>
+                        <li><i data-lucide="activity"></i>Contexto RMM</li>
+                    </ul>
+                </div>
+            </div>
+        `;
+        window.lucide?.createIcons?.();
+    }
+
+    function clearPreviewSelection() {
+        selectedTicketId = null;
+        focusedTicketId = null;
+        rows().forEach((row) => row.classList.remove('is-selected', 'is-key-focused'));
+        const params = new URLSearchParams(window.location.search);
+        params.delete('ticket');
+        if (!params.has('view')) params.set('view', '{{ view_mode }}');
+        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+        renderEmptyPreview();
+    }
+
     function toggleFocusedTicketCheckbox() {
         const row = getRow(focusedTicketId);
         const checkbox = row?.querySelector('.desk-row-checkbox');
@@ -763,6 +911,12 @@
     }
 
     function getNextBestAction(ticket) {
+        if (ticket.status === 'closed' || ticket.status === 'canceled') {
+            return { tone: 'neutral', icon: 'lock', title: 'Chamado somente leitura', text: 'Este chamado foi encerrado e fica disponivel para consulta.', action: 'Abrir tela cheia', type: 'drawer' };
+        }
+        if (ticket.status === 'resolved') {
+            return { tone: 'info', icon: 'check-circle', title: 'Chamado resolvido', text: 'Confira a solucao ou encerre o chamado se nao houver pendencia.', action: 'Mudar status', type: 'status' };
+        }
         const waitingUser = ticket.status === 'waiting_user';
         const hasRelated = Number(ticket.relatedTicketIds?.length || 0) > 0;
         if (!ticket.assigned_to) {
@@ -837,6 +991,22 @@
         `;
     }
 
+    function renderAttachments(ticket) {
+        const attachments = ticket.attachments || [];
+        return `
+            <article class="desk-detail-section nw-preview-attachments">
+                <h3>Anexos</h3>
+                ${attachments.length ? `
+                    <div class="nw-preview-attachment-list">
+                        ${attachments.slice(0, 4).map((item) => `
+                            <span><i data-lucide="paperclip"></i><strong>${escapeHtml(item.name || item.original_name || 'Anexo')}</strong><small>${escapeHtml(item.visibility || 'Interno')} &middot; ${escapeHtml(item.when || 'agora')}</small></span>
+                        `).join('')}
+                    </div>
+                ` : '<div class="desk-empty compact"><i data-lucide="paperclip"></i><span>Nenhum anexo registrado.</span></div>'}
+            </article>
+        `;
+    }
+
     function renderNoEndpointCard() {
         return `
             <article class="desk-rmm-mini-card nw-rmm-empty">
@@ -896,6 +1066,9 @@
         const endpoint = ticket.endpoint;
         const action = getNextBestAction(ticket);
         const primaryLabel = !ticket.assigned_to ? 'Assumir atendimento' : 'Atribuir a mim';
+        const canAssume = !['resolved', 'closed', 'canceled'].includes(ticket.status);
+        const canComment = !['resolved', 'closed', 'canceled'].includes(ticket.status);
+        const canChangeStatus = (STATUS_TRANSITIONS[ticket.status] || []).length > 0;
         previewPanel.classList.add('is-switching');
         previewPanel.innerHTML = `
             <header class="desk-detail-panel-header">
@@ -909,6 +1082,8 @@
                     <button class="desk-icon-action" type="button" data-preview-action="drawer" aria-label="Abrir detalhe rapido"><i data-lucide="sidebar"></i></button>
                     <button class="desk-icon-action" type="button" data-preview-action="more" aria-label="Mais acoes"><i data-lucide="more-horizontal"></i></button>
                     <a class="desk-icon-action" href="${ticketUrl(ticket)}" aria-label="Abrir em tela cheia"><i data-lucide="maximize-2"></i></a>
+                    <button class="desk-icon-action" type="button" data-preview-hide aria-label="Ocultar preview"><i data-lucide="panel-right-close"></i></button>
+                    <button class="desk-icon-action" type="button" data-preview-clear aria-label="Limpar selecao"><i data-lucide="x"></i></button>
                 </div>
             </header>
             <div class="desk-detail-inline-state">
@@ -938,35 +1113,37 @@
                     </div>
                 </article>
                 <article class="desk-detail-section"><h3>Ultimos comentarios</h3><div class="desk-comments" data-preview-comments>${renderComments(ticket)}</div></article>
+                ${renderAttachments(ticket)}
                 ${renderRelated(ticket)}
                 <article class="desk-detail-section">
                     <h3>Eventos recentes</h3>
                     <div class="desk-preview-timeline">${renderEvents(ticket)}</div>
                 </article>
                 <div class="desk-quick-actions">
-                    <button class="desk-btn desk-btn-primary" type="button" data-preview-action="assign">${escapeHtml(primaryLabel)}</button>
-                    <button class="desk-btn" type="button" data-preview-action="status">Mudar status</button>
+                    ${canAssume ? `<button class="desk-btn desk-btn-primary" type="button" data-preview-action="assign">${escapeHtml(primaryLabel)}</button>` : ''}
+                    ${canChangeStatus ? '<button class="desk-btn" type="button" data-preview-action="status">Mudar status</button>' : ''}
                     <button class="desk-btn" type="button" data-preview-action="priority">Mudar prioridade</button>
-                    <button class="desk-btn" type="button" data-preview-action="comment">Comentar</button>
+                    ${canComment ? '<button class="desk-btn" type="button" data-preview-action="comment">Comentar</button>' : ''}
                     <a class="desk-btn" href="${ticketUrl(ticket)}">Abrir tela cheia</a>
                     ${ticket.rmm ? '<button class="desk-btn" type="button" data-preview-action="open-rmm">Abrir no RMM</button>' : ''}
                     ${ticket.endpoint?.status === 'online' ? '<button class="desk-btn" type="button" data-preview-action="remote">Acesso remoto</button>' : ''}
                     ${ticket.relatedTicketIds?.length ? '<button class="desk-btn" type="button" data-preview-action="related">Ver relacionados</button>' : ''}
                 </div>
             </section>
-            <form class="desk-comment-dock" data-comment-form>
+            ${canComment ? `<form class="desk-comment-dock" data-comment-form>
                 <textarea name="body" rows="3" placeholder="Comentario rapido..."></textarea>
                 <div class="nw-comment-tools">
                     <div>
                         <button class="desk-icon-action" type="button" data-mock-macro aria-label="Inserir macro"><i data-lucide="text-cursor-input"></i></button>
-                        <button class="desk-icon-action" type="button" data-mock-attach aria-label="Anexar arquivo"><i data-lucide="paperclip"></i></button>
+                        <button class="desk-icon-action" type="button" data-preview-attach aria-label="Anexar arquivo"><i data-lucide="paperclip"></i></button>
+                        <input type="file" data-preview-attachment-input hidden multiple>
                         <label class="desk-check"><input type="checkbox" name="internal" checked><span>Interno</span></label>
                     </div>
                     <small data-public-warning hidden>Este comentario sera visivel ao solicitante.</small>
                     <span class="desk-muted">Ctrl+Enter para enviar</span>
                     <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="send"></i>Enviar</button>
                 </div>
-            </form>
+            </form>` : '<div class="desk-comment-dock desk-readonly-note"><span>Chamado em modo somente leitura.</span></div>'}
         `;
         selectedTicketId = String(ticket.number);
         focusedTicketId = String(ticket.number);
@@ -1014,47 +1191,115 @@
         ticket.events.unshift({ icon, text, when: 'agora', author });
     }
 
-    function setAssignee(ticketId, assignee = CURRENT_TECH) {
+    function applyServerTicket(ticket, serverTicket = {}) {
+        if (!ticket || !serverTicket) return;
+        ticket.status = serverTicket.status || ticket.status;
+        ticket.status_label = serverTicket.statusLabel || ticket.status_label;
+        ticket.priority = serverTicket.priority || ticket.priority;
+        ticket.priority_label = serverTicket.priorityLabel || ticket.priority_label;
+        ticket.category = serverTicket.category || ticket.category;
+        ticket.category_icon = serverTicket.categoryIcon || ticket.category_icon;
+        ticket.category_color = serverTicket.categoryColor || ticket.category_color;
+        ticket.queue = serverTicket.queue || ticket.queue;
+        ticket.sla = serverTicket.sla || ticket.sla;
+        ticket.sla_label = serverTicket.slaLabel || ticket.sla_label;
+        ticket.sla_state = serverTicket.slaLevel || ticket.sla_state;
+        ticket.due_at = serverTicket.dueAt || ticket.due_at;
+        ticket.assigned_to = serverTicket.assignedTo ?? ticket.assigned_to;
+        ticket.title = serverTicket.title || ticket.title;
+        ticket.updated_for = 'agora';
+    }
+
+    function updateRowFromTicket(ticketId) {
         const ticket = getTicket(ticketId);
         const row = getRow(ticketId);
         if (!ticket || !row) return;
-        const previous = ticket.assigned_to;
-        ticket.assigned_to = assignee;
-        row.dataset.technician = assignee;
-        row.dataset.unassigned = '0';
-        row.classList.remove('is-unassigned');
-        addTicketEvent(ticket, `${assignee} assumiu o chamado`, 'user-round-check', assignee);
+        updateKanbanCardFromTicket(ticketId);
+        row.dataset.status = ticket.status;
+        row.dataset.priority = ticket.priority;
+        row.dataset.technician = ticket.assigned_to || 'Sem responsavel';
+        row.dataset.category = ticket.category || '';
+        row.dataset.queue = ticket.queue || '';
+        row.dataset.sla = ticket.sla_state || '';
+        row.dataset.unassigned = ticket.assigned_to ? '0' : '1';
+        row.classList.toggle('is-unassigned', !ticket.assigned_to);
+        row.classList.remove('priority-low', 'priority-normal', 'priority-high', 'priority-critical');
+        row.classList.add(`priority-${ticket.priority}`);
+        row.classList.remove('sla-ok', 'sla-warning', 'sla-critical');
+        if (ticket.sla_state) row.classList.add(`sla-${ticket.sla_state}`);
+
+        const statusBadge = row.querySelector('.desk-badge[class*="status-"]');
+        if (statusBadge) {
+            statusBadge.className = `desk-badge status-${badgeClass(ticket.status)}`;
+            statusBadge.textContent = ticket.status_label;
+        }
         const pill = row.querySelector('.desk-assignee-pill');
         if (pill) {
-            pill.classList.remove('is-unassigned');
+            pill.classList.toggle('is-unassigned', !ticket.assigned_to);
+            const assignee = ticket.assigned_to || 'Sem dono';
             pill.innerHTML = `<span class="desk-avatar">${escapeHtml(assignee.slice(0, 1))}</span>${escapeHtml(assignee)}`;
         }
-        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-        showToast(`Chamado #${ticket.number} atribuido a voce.`, 'success', 'Desfazer', () => {
-            ticket.assigned_to = previous || '';
-            row.dataset.technician = previous || 'Sem responsavel';
-            row.dataset.unassigned = previous ? '0' : '1';
-            row.classList.toggle('is-unassigned', !previous);
-            if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-            showToast('Atribuicao desfeita.', 'info');
-        });
+        const sla = row.querySelector('.desk-sla-cell');
+        if (sla) {
+            sla.innerHTML = `
+                <span class="desk-sla-indicator priority-${badgeClass(ticket.priority)} sla-${badgeClass(ticket.sla_state)}">
+                    <i data-lucide="${ticket.priority === 'critical' ? 'siren' : 'clock-3'}"></i>
+                    <span>${escapeHtml(ticket.priority_label)}</span>
+                </span>
+                <small>${escapeHtml(ticket.sla_label || 'Sem SLA')}</small>
+            `;
+        }
+        const time = row.querySelector('.desk-row-time');
+        if (time) {
+            time.innerHTML = `<strong>${escapeHtml(ticket.updated_for || 'agora')}</strong><small>aberto ha ${escapeHtml(ticket.opened_for || '--')}</small>`;
+        }
+        window.lucide?.createIcons?.();
     }
 
-    function updatePriority(ticketId, next) {
+    async function updateTicketField(ticketId, field, value, successMessage = 'Chamado atualizado.', extraPayload = {}) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return null;
+        const data = await postTicketJson(ticketId, 'update', { field, value, ...extraPayload });
+        applyServerTicket(ticket, data.ticket);
+        updateRowFromTicket(ticketId);
+        addTicketEvent(ticket, `Alterou ${field}`, 'activity');
+        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
+        window.nwRefreshCentralFilters?.();
+        showToast(successMessage, 'success');
+        return data;
+    }
+
+    async function setAssignee(ticketId, assignee = CURRENT_TECH) {
+        const ticket = getTicket(ticketId);
+        if (!ticket) return;
+        const previous = ticket.assigned_to;
+        try {
+            await updateTicketField(ticketId, 'assigned_to', assignee, `Chamado #${ticket.number} atribuido a voce.`);
+            addTicketEvent(ticket, `${assignee} assumiu o chamado`, 'user-round-check', assignee);
+            showToast(`Chamado #${ticket.number} atribuido a voce.`, 'success', 'Desfazer', async () => {
+                try {
+                    await updateTicketField(ticketId, 'assigned_to', previous || '', 'Atribuicao desfeita.');
+                } catch (error) {
+                    showToast(error.message || 'Nao foi possivel desfazer.', 'warning');
+                }
+            });
+        } catch (error) {
+            showToast(error.message || 'Nao foi possivel assumir o chamado.', 'warning');
+        }
+    }
+
+    async function updatePriority(ticketId, next) {
         const ticket = getTicket(ticketId);
         if (!ticket) return;
         if (next === 'critical') {
-            showToast('Prioridade critica aplicada. Justificativa registrada no mock.', 'warning');
+            showToast('Prioridade critica aplicada. Justificativa registrada na auditoria.', 'warning');
         }
-        ticket.priority = next;
-        ticket.priority_label = PRIORITY_LABELS[next];
-        const row = getRow(ticketId);
-        row?.setAttribute('data-priority', next);
-        row?.classList.remove('priority-low', 'priority-normal', 'priority-high', 'priority-critical');
-        row?.classList.add(`priority-${next}`);
-        addTicketEvent(ticket, `Prioridade alterada para ${PRIORITY_LABELS[next]}`, 'flag');
-        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-        showToast(`Prioridade alterada para ${PRIORITY_LABELS[next]}.`, next === 'critical' ? 'warning' : 'info');
+        try {
+            await updateTicketField(ticketId, 'priority', next, `Prioridade alterada para ${PRIORITY_LABELS[next]}.`);
+            addTicketEvent(ticket, `Prioridade alterada para ${PRIORITY_LABELS[next]}`, 'flag');
+        } catch (error) {
+            showToast(error.message || 'Nao foi possivel alterar prioridade.', 'warning');
+        }
     }
 
     function cyclePriority(ticketId) {
@@ -1064,21 +1309,24 @@
         updatePriority(ticketId, order[(order.indexOf(ticket.priority) + 1) % order.length] || 'normal');
     }
 
-    function updateStatus(ticketId, next) {
+    async function updateStatus(ticketId, next, reason = '') {
         const ticket = getTicket(ticketId);
-        if (!ticket) return;
-        ticket.status = next;
-        ticket.status_label = STATUS_LABELS[next] || next;
-        const row = getRow(ticketId);
-        row?.setAttribute('data-status', next);
-        const summary = row?.querySelector('.desk-badge[class*="status-"]');
-        if (summary) {
-            summary.className = `desk-badge status-${next}`;
-            summary.textContent = ticket.status_label;
+        if (!ticket) return null;
+        const previousStatus = ticket.status;
+        try {
+            const result = await updateTicketField(ticketId, 'status', next, `Status atualizado para ${STATUS_LABELS[next] || next}.`, { reason });
+            if (previousStatus === 'resolved' && next === 'in_progress') {
+                ticket.is_reopened = true;
+                const row = getRow(ticketId);
+                if (row) row.dataset.reopened = '1';
+                updateKanbanCardFromTicket(ticketId);
+            }
+            addTicketEvent(ticket, `Status alterado para ${ticket.status_label}`, 'workflow');
+            return result;
+        } catch (error) {
+            showToast(error.message || 'Nao foi possivel alterar status.', 'warning');
+            return null;
         }
-        addTicketEvent(ticket, `Status alterado para ${ticket.status_label}`, 'workflow');
-        if (selectedTicketId === String(ticketId)) renderPreview(ticket);
-        showToast(`Status atualizado para ${ticket.status_label}.`, 'success');
     }
 
     function cycleStatus(ticketId) {
@@ -1086,7 +1334,7 @@
         if (!ticket) return;
         const options = STATUS_TRANSITIONS[ticket.status] || ['in_progress'];
         const next = options[0] || 'in_progress';
-        if (SENSITIVE_STATUS.has(next)) openReasonDialog(`Mudar status para ${STATUS_LABELS[next]}`, () => updateStatus(ticketId, next));
+        if (SENSITIVE_STATUS.has(next)) openReasonDialog(`Mudar status para ${STATUS_LABELS[next]}`, (reason) => updateStatus(ticketId, next, reason));
         else updateStatus(ticketId, next);
     }
 
@@ -1125,7 +1373,7 @@
         menu.querySelectorAll('[data-status]').forEach((button) => button.addEventListener('click', () => {
             const next = button.dataset.status;
             closeActionMenus();
-            if (SENSITIVE_STATUS.has(next)) openReasonDialog(`Mudar status para ${STATUS_LABELS[next]}`, () => updateStatus(ticketId, next));
+            if (SENSITIVE_STATUS.has(next)) openReasonDialog(`Mudar status para ${STATUS_LABELS[next]}`, (reason) => updateStatus(ticketId, next, reason));
             else updateStatus(ticketId, next);
         }));
         positionActionMenu(menu, anchor);
@@ -1176,26 +1424,208 @@
         document.body.appendChild(dialog);
         dialog.querySelector('[data-reason-close]').addEventListener('click', () => dialog.close());
         dialog.addEventListener('close', () => dialog.remove());
-        dialog.querySelector('[value="confirm"]').addEventListener('click', () => {
-            onConfirm?.();
+        dialog.querySelector('[value="confirm"]').addEventListener('click', (event) => {
+            const reason = dialog.querySelector('textarea')?.value?.trim() || '';
+            if (!reason) {
+                event.preventDefault();
+                showToast('Informe um motivo para continuar.', 'warning');
+                return;
+            }
+            onConfirm?.(reason);
             showToast('Justificativa registrada.', 'success');
         });
         dialog.showModal();
         window.lucide?.createIcons?.();
     }
 
-    function submitQuickComment(form) {
+    function needsKanbanReason(ticket, nextStatus) {
+        return nextStatus === 'waiting_user'
+            || nextStatus === 'waiting_third_party'
+            || nextStatus === 'resolved'
+            || nextStatus === 'closed'
+            || nextStatus === 'canceled'
+            || (nextStatus === 'in_progress' && ticket?.status === 'resolved');
+    }
+
+    function openKanbanTransitionDialog(ticket, nextStatus, onConfirm) {
+        const isResolution = nextStatus === 'resolved';
+        const isWaiting = nextStatus === 'waiting_user';
+        const isReopen = nextStatus === 'in_progress' && ticket?.status === 'resolved';
+        const title = isResolution
+            ? 'Resolver chamado'
+            : isWaiting
+                ? 'Aguardar usuario'
+                : isReopen
+                    ? 'Reabrir chamado'
+                    : `Mover para ${STATUS_LABELS[nextStatus] || nextStatus}`;
+        const label = isResolution
+            ? 'Solucao aplicada'
+            : isWaiting
+                ? 'Mensagem publica ao solicitante'
+                : isReopen
+                    ? 'Motivo da reabertura'
+                    : 'Motivo';
+        const hint = isResolution
+            ? 'A solucao ficara visivel ao solicitante e gerara notificacao.'
+            : isWaiting
+                ? 'Esta mensagem sera publica e enviada ao solicitante.'
+                : isReopen
+                    ? 'A reabertura sera registrada na timeline publica.'
+                    : 'A justificativa sera registrada no historico do chamado.';
+        const dialog = document.createElement('dialog');
+        dialog.className = 'nw-bulk-dialog nw-reason-dialog nw-kanban-transition-dialog';
+        dialog.innerHTML = `
+            <form method="dialog">
+                <header>
+                    <div><span>Workflow</span><h2>${escapeHtml(title)}</h2><p>Chamado #${escapeHtml(ticket?.number)} - ${escapeHtml(ticket?.title || '')}</p></div>
+                    <button type="button" class="desk-icon-action" data-reason-close aria-label="Fechar"><i data-lucide="x"></i></button>
+                </header>
+                <label class="nw-bulk-dialog__comment">
+                    <span>${escapeHtml(label)}</span>
+                    <textarea rows="4" placeholder="${escapeHtml(hint)}"></textarea>
+                    <small>${escapeHtml(hint)}</small>
+                </label>
+                <footer><button class="desk-btn" value="cancel">Cancelar</button><button class="desk-btn desk-btn-primary" value="confirm">Confirmar</button></footer>
+            </form>
+        `;
+        document.body.appendChild(dialog);
+        dialog.querySelector('[data-reason-close]').addEventListener('click', () => dialog.close());
+        dialog.addEventListener('close', () => dialog.remove());
+        dialog.querySelector('[value="confirm"]').addEventListener('click', (event) => {
+            const value = dialog.querySelector('textarea')?.value?.trim() || '';
+            if (!value) {
+                event.preventDefault();
+                showToast(`${label} e obrigatorio.`, 'warning');
+                return;
+            }
+            onConfirm?.(value);
+        });
+        dialog.showModal();
+        dialog.querySelector('textarea')?.focus();
+        window.lucide?.createIcons?.();
+    }
+
+    async function moveKanbanTicket(ticketId, nextStatus, reason = '') {
+        const ticket = getTicket(ticketId);
+        if (!ticket || ticket.status === nextStatus) return true;
+        const allowed = STATUS_TRANSITIONS[ticket.status] || [];
+        if (!allowed.includes(nextStatus)) {
+            showToast(`Transicao de ${ticket.status_label} para ${STATUS_LABELS[nextStatus] || nextStatus} nao permitida.`, 'warning');
+            return false;
+        }
+        if (ticket.status === 'new' && nextStatus === 'in_progress' && !ticket.assigned_to) {
+            try {
+                await updateTicketField(ticketId, 'assigned_to', CURRENT_TECH, `Chamado #${ticket.number} assumido e iniciado.`);
+                addTicketEvent(ticket, `${CURRENT_TECH} assumiu o chamado`, 'user-round-check', CURRENT_TECH);
+                return true;
+            } catch (error) {
+                showToast(error.message || 'Nao foi possivel assumir o chamado.', 'warning');
+                return false;
+            }
+        }
+        const result = await updateStatus(ticketId, nextStatus, reason);
+        return Boolean(result);
+    }
+
+    function initKanbanBoard() {
+        const board = document.querySelector('[data-kanban-board]');
+        if (!board) return;
+        let draggingId = null;
+
+        board.querySelectorAll('.kanban-card').forEach((card) => {
+            card.addEventListener('dragstart', (event) => {
+                draggingId = card.dataset.ticket;
+                card.classList.add('is-dragging');
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', draggingId);
+            });
+            card.addEventListener('dragend', () => {
+                card.classList.remove('is-dragging');
+                board.querySelectorAll('.nw-kanban-column').forEach((column) => column.classList.remove('is-drop-target', 'is-drop-blocked'));
+                draggingId = null;
+            });
+        });
+
+        board.querySelectorAll('.nw-kanban-column').forEach((column) => {
+            column.addEventListener('dragover', (event) => {
+                if (!draggingId) return;
+                const ticket = getTicket(draggingId);
+                const target = column.dataset.kanbanStatus;
+                if (!ticket || ticket.status === target) return;
+                event.preventDefault();
+                const allowed = (STATUS_TRANSITIONS[ticket.status] || []).includes(target);
+                column.classList.toggle('is-drop-target', allowed);
+                column.classList.toggle('is-drop-blocked', !allowed);
+            });
+            column.addEventListener('dragleave', () => column.classList.remove('is-drop-target', 'is-drop-blocked'));
+            column.addEventListener('drop', (event) => {
+                event.preventDefault();
+                const ticketId = event.dataTransfer.getData('text/plain') || draggingId;
+                const ticket = getTicket(ticketId);
+                const nextStatus = column.dataset.kanbanStatus;
+                column.classList.remove('is-drop-target', 'is-drop-blocked');
+                if (!ticket || ticket.status === nextStatus) return;
+                const run = (reason = '') => moveKanbanTicket(ticketId, nextStatus, reason);
+                if (needsKanbanReason(ticket, nextStatus)) openKanbanTransitionDialog(ticket, nextStatus, run);
+                else run();
+            });
+        });
+
+        updateKanbanCounts();
+    }
+
+    async function submitQuickComment(form) {
         const ticket = getTicket(selectedTicketId);
         const textarea = form?.querySelector('textarea');
         const body = textarea?.value.trim();
         if (!ticket || !body) return;
         const internal = form.querySelector('[name="internal"]')?.checked !== false;
-        ticket.comments = ticket.comments || [];
-        ticket.comments.unshift({ author: CURRENT_TECH, when: 'agora', visibility: internal ? 'Interno' : 'Publico', body });
-        addTicketEvent(ticket, `Comentario ${internal ? 'interno' : 'publico'} adicionado`, 'message-square');
-        textarea.value = '';
-        renderPreview(ticket);
-        showToast('Comentario adicionado.', 'success');
+        try {
+            const data = await postTicketJson(ticket.number, 'comments', {
+                body,
+                visibility: internal ? 'internal' : 'public',
+            });
+            ticket.comments = ticket.comments || [];
+            ticket.comments.unshift({
+                author: data.comment?.author || CURRENT_TECH,
+                when: data.comment?.when || 'agora',
+                visibility: data.comment?.visibilityLabel || (internal ? 'Interno' : 'Publico'),
+                body: data.comment?.body || body,
+            });
+            ticket.updated_for = 'agora';
+            addTicketEvent(ticket, `Comentario ${internal ? 'interno' : 'publico'} adicionado`, 'message-square');
+            updateRowFromTicket(ticket.number);
+            textarea.value = '';
+            renderPreview(ticket);
+            showToast('Comentario adicionado.', 'success');
+        } catch (error) {
+            showToast(error.message || 'Nao foi possivel adicionar comentario.', 'warning');
+        }
+    }
+
+    async function uploadPreviewAttachments(input) {
+        const ticket = getTicket(selectedTicketId);
+        const files = Array.from(input?.files || []);
+        if (!ticket || !files.length) return;
+        const form = input.closest('[data-comment-form]');
+        const internal = form?.querySelector('[name="internal"]')?.checked !== false;
+        const data = new FormData();
+        files.forEach((file) => data.append('attachments', file));
+        data.append('visibility', internal ? 'internal' : 'public');
+        try {
+            const response = await postTicketForm(ticket.number, 'attachments', data);
+            ticket.attachments = [...(response.attachments || []), ...(ticket.attachments || [])];
+            ticket.attachments_count = response.attachmentsCount ?? ticket.attachments.length;
+            ticket.updated_for = 'agora';
+            addTicketEvent(ticket, `${files.length} anexo${files.length === 1 ? '' : 's'} adicionado${files.length === 1 ? '' : 's'}`, 'paperclip');
+            updateRowFromTicket(ticket.number);
+            renderPreview(ticket);
+            showToast('Anexo enviado ao chamado.', 'success');
+        } catch (error) {
+            showToast(error.message || 'Nao foi possivel anexar arquivo.', 'warning');
+        } finally {
+            input.value = '';
+        }
     }
 
     function initFilterbar() {
@@ -1205,6 +1635,7 @@
         const quickViews = Array.from(filterbar.querySelectorAll('[data-quick-view]'));
         const globalClear = filterbar.querySelector('[data-filter-global-clear]');
         const resultCount = filterbar.querySelector('[data-filter-result-count]');
+        const appliedChips = filterbar.querySelector('[data-filter-applied-chips]');
         const tableBody = document.querySelector('.desk-ticket-grid-body');
         let empty = tableBody?.querySelector('.desk-ticket-empty.is-client-filter-empty');
         if (tableBody && !empty) {
@@ -1228,6 +1659,7 @@
             'RMM': { origin: ['rmm'] },
             'RMM Alertas': { origin: ['rmm'] },
             'Sem responsavel': { flag: ['unassigned'] },
+            'Reabertos': { flag: ['reopened'] },
             'Aguardando usuario': { status: ['waiting_user'] },
             'Financeiro': { sector: ['Financeiro'] },
             'Diretoria': { sector: ['Diretoria'] }
@@ -1273,6 +1705,21 @@
 
         function updateFilterChips(active) {
             let total = 0;
+            const applied = [];
+            const fieldLabels = {
+                status: 'Status',
+                priority: 'Prioridade',
+                technician: 'Tecnico',
+                client: 'Cliente',
+                sector: 'Setor',
+                category: 'Categoria',
+                origin: 'Origem',
+                queue: 'Fila',
+                sla: 'SLA',
+                stale: 'Tempo',
+                flag: 'Caracteristica',
+                rmm: 'RMM'
+            };
             filters.forEach((filter) => {
                 const summary = filter.querySelector('[data-filter-summary]');
                 const selected = Array.from(filter.querySelectorAll('[data-filter-input]:checked'));
@@ -1288,9 +1735,18 @@
                     const label = selected[0].closest('[data-filter-option]')?.querySelector('.nw-filter-option__label')?.childNodes[0]?.textContent?.trim() || selected[0].value;
                     summary.textContent = count === 1 ? `${defaults.get(filter)}: ${label}` : `${defaults.get(filter)}: ${label} +${count - 1}`;
                 }
+                selected.forEach((input) => {
+                    const label = input.closest('[data-filter-option]')?.querySelector('.nw-filter-option__label')?.childNodes[0]?.textContent?.trim() || input.value;
+                    applied.push({ field: fieldLabels[input.dataset.field] || 'Filtro', label });
+                });
             });
+            if (appliedChips) {
+                appliedChips.hidden = applied.length === 0;
+                appliedChips.innerHTML = applied.map((chip) => `<span class="nw-applied-filter-chip">${escapeHtml(chip.field)}: <strong>${escapeHtml(chip.label)}</strong></span>`).join('');
+            }
             if (globalClear) {
                 globalClear.disabled = total === 0;
+                globalClear.hidden = total === 0;
                 globalClear.classList.toggle('is-active', total > 0);
                 globalClear.querySelector('span').textContent = total ? `Limpar ${total}` : 'Limpar';
             }
@@ -1314,10 +1770,12 @@
             });
             if (empty) empty.hidden = visible !== 0;
             if (resultCount) resultCount.textContent = `${visible} de ${rows().length} chamados`;
+            updateKanbanCounts();
             updateFilterChips(active);
             updateFilterUrl(active);
             refreshSelection();
-            if (focusedTicketId && getRow(focusedTicketId)?.hidden) focusTicketRow(null, { select: false });
+            if (selectedTicketId && getRow(selectedTicketId)?.hidden) clearPreviewSelection();
+            else if (focusedTicketId && getRow(focusedTicketId)?.hidden) focusTicketRow(null, { select: false });
             if (message) showToast(message, 'info');
             window.lucide?.createIcons?.();
         }
@@ -1397,6 +1855,7 @@
         document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeFilters(); });
         applyFilters();
         window.nwApplySavedView = setPreset;
+        window.nwRefreshCentralFilters = () => applyFilters();
     }
 
     function openBulkConfirm(actionLabel, forcedTickets = null) {
@@ -1572,7 +2031,10 @@
             });
         });
         checkAll?.addEventListener('change', () => {
-            getVisibleTicketRows().forEach((row) => { row.querySelector('.desk-row-checkbox').checked = checkAll.checked; });
+            getVisibleTicketRows().forEach((row) => {
+                const checkbox = row.querySelector('.desk-row-checkbox');
+                if (checkbox) checkbox.checked = checkAll.checked;
+            });
             refreshSelection();
         });
         document.querySelector('[data-clear-selection]')?.addEventListener('click', () => {
@@ -1616,6 +2078,16 @@
             if (label.includes('mesclar')) button.addEventListener('click', openMergeDialog);
         });
         previewPanel?.addEventListener('click', (event) => {
+            if (event.target.closest('[data-preview-clear]')) {
+                event.preventDefault();
+                clearPreviewSelection();
+                return;
+            }
+            if (event.target.closest('[data-preview-hide]')) {
+                event.preventDefault();
+                setPreviewClosed(true);
+                return;
+            }
             const related = event.target.closest('[data-related-ticket]');
             if (related) {
                 selectTicketForPreview(related.dataset.relatedTicket);
@@ -1625,8 +2097,8 @@
                 openMacroMenu(event.target.closest('[data-mock-macro]'));
                 return;
             }
-            if (event.target.closest('[data-mock-attach]')) {
-                showToast('Anexo sera implementado em breve.', 'info');
+            if (event.target.closest('[data-preview-attach]')) {
+                event.target.closest('[data-comment-form]')?.querySelector('[data-preview-attachment-input]')?.click();
                 return;
             }
             const action = event.target.closest('[data-preview-action]')?.dataset.previewAction;
@@ -1638,10 +2110,22 @@
             if (action === 'status') openStatusMenu(selectedTicketId, event.target.closest('[data-preview-action]'));
             if (action === 'priority') openPriorityMenu(selectedTicketId, event.target.closest('[data-preview-action]'));
             if (action === 'comment') previewPanel.querySelector('.desk-comment-dock textarea')?.focus();
-            if (action === 'open-rmm' || action === 'rmm') showToast('Abrindo contexto RMM no mock.', 'info');
-            if (action === 'remote') showToast(`Iniciando acesso remoto para ${getTicket(selectedTicketId)?.endpoint?.hostname || 'endpoint'}.`, 'success');
-            if (action === 'device') showToast('Abrindo dispositivo no inventario RMM.', 'info');
-            if (action === 'link-device') showToast('Vinculo de endpoint sera conectado ao inventario RMM.', 'info');
+            if (action === 'open-rmm' || action === 'rmm') {
+                const ticket = getTicket(selectedTicketId);
+                if (ticket?.endpoint) {
+                    showToast('Abrindo inventario de endpoints. Contexto RMM detalhado ainda sera conectado.', 'info');
+                    window.location.href = endpointUrl;
+                } else {
+                    showToast('Este chamado nao possui endpoint vinculado.', 'warning');
+                }
+            }
+            if (action === 'remote') showToast('Acesso remoto ainda nao esta implementado nesta fase.', 'warning');
+            if (action === 'device') {
+                const ticket = getTicket(selectedTicketId);
+                if (ticket?.endpoint) window.location.href = endpointUrl;
+                else showToast('Este chamado nao possui endpoint vinculado.', 'warning');
+            }
+            if (action === 'link-device') showToast('Vinculo de endpoint ainda nao esta conectado nesta tela.', 'info');
             if (action === 'escalate') openBulkConfirm('Escalar', [getTicket(selectedTicketId)]);
             if (action === 'reminder') showToast('Lembrete ao solicitante preparado.', 'success');
             if (action === 'related') openTicketDrawer(selectedTicketId);
@@ -1664,6 +2148,9 @@
         previewPanel?.addEventListener('change', (event) => {
             if (event.target.name === 'internal') {
                 previewPanel.querySelector('[data-public-warning]').hidden = event.target.checked;
+            }
+            if (event.target.matches('[data-preview-attachment-input]')) {
+                uploadPreviewAttachments(event.target);
             }
         });
         previewPanel?.addEventListener('keydown', (event) => {
@@ -1877,9 +2364,14 @@
 
     document.addEventListener('keydown', handleGlobalShortcuts);
     initFilterbar();
+    initPreviewToggle();
     initEvents();
+    initKanbanBoard();
     refreshSelection();
-    if (focusedTicketId) focusTicketRow(focusedTicketId, { scroll: false, select: false });
+    if (focusedTicketId) {
+        focusTicketRow(focusedTicketId, { scroll: false, select: false });
+        selectTicketForPreview(focusedTicketId);
+    }
     setTimeout(() => {
         const liveRow = rows().find((row) => row.classList.contains('is-rmm')) || rows()[0];
         liveRow?.classList.add('is-live-updated');

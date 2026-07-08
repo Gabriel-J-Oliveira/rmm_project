@@ -1,0 +1,46 @@
+{% load nightowl_time %}
+<article class="event-row event-log-entry severity-border-{{ event.severity }}"
+    data-event-card
+    data-event-id="{{ event.id }}"
+    data-event-title="{{ event.title|escape }}"
+    data-event-type="{{ event.event_type|escape }}"
+    data-event-origin="{{ origin }}"
+    data-event-category="{{ category }}"
+    data-event-severity="{{ event.get_severity_display }}"
+    data-event-actor="{{ event.get_actor_type_display }}{% if event.actor_name %}: {{ event.actor_name }}{% endif %}"
+    data-event-endpoint="{% if event.endpoint %}{{ event.endpoint.hostname|escape }}{% else %}Sem endpoint{% endif %}"
+    data-event-description="{{ event.description|default:'Sem descrição.'|escape }}"
+    data-event-timestamp="{{ event.created_at|date:'d/m/Y H:i:s' }}"
+    data-event-relative="{{ event.created_at|relative_time }}"
+    data-event-endpoint-url="{% if event.endpoint %}{% url 'endpoint-detail' event.endpoint.id %}{% endif %}"
+    data-event-alert-url="{% if event.alert %}{% if event.endpoint %}{% url 'alerts-list' %}?q={{ event.endpoint.hostname|urlencode }}{% else %}{% url 'alerts-list' %}{% endif %}{% endif %}">
+    <div class="event-time">
+        <strong>{{ event.created_at|date:"H:i:s" }}</strong>
+        <span>{{ event.created_at|date:"d/m/Y" }}</span>
+        <small>{{ event.created_at|relative_time }}</small>
+    </div>
+    <div class="event-icon severity-{{ event.severity }}">
+        <i data-lucide="{{ icon }}"></i>
+    </div>
+    <div class="event-main">
+        <div class="event-title-line">
+            <span class="event-origin-chip event-origin-{{ category }}">{{ origin }}</span>
+            <span class="severity-badge severity-{{ event.severity }}">{{ event.get_severity_display }}</span>
+            <strong>{{ event.title }}</strong>
+            <code>{{ event.event_type }}</code>
+        </div>
+        <p>{{ event.description|default:"Sem descrição."|truncatechars:190 }}</p>
+        <div class="event-meta">
+            {% if event.endpoint %}
+            <a class="table-link mono" href="{% url 'endpoint-detail' event.endpoint.id %}"><i data-lucide="monitor"></i>{{ event.endpoint.hostname }}</a>
+            {% else %}
+            <span><i data-lucide="monitor"></i>Endpoint -</span>
+            {% endif %}
+            <span><i data-lucide="{% if event.actor_type == 'user' %}user{% elif event.actor_type == 'agent' %}radio{% else %}bot{% endif %}"></i>{{ event.get_actor_type_display }}{% if event.actor_name %}: {{ event.actor_name }}{% endif %}</span>
+            {% if event.alert %}
+            <a class="table-link" href="{% if event.endpoint %}{% url 'alerts-list' %}?q={{ event.endpoint.hostname|urlencode }}{% else %}{% url 'alerts-list' %}{% endif %}"><i data-lucide="alert-triangle"></i>Alerta relacionado</a>
+            {% endif %}
+            <button type="button" data-event-open><i data-lucide="panel-right-open"></i>Detalhes</button>
+        </div>
+    </div>
+</article>

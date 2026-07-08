@@ -1,0 +1,26 @@
+Lembrete de tarefa operacional NightOwl
+
+Tarefa: {{ task.title }}
+Prazo: {% if due_at %}{{ due_at|date:"d/m/Y H:i" }}{% else %}Sem prazo{% endif %}
+Tempo restante: {{ remaining_label }}
+
+Status: {{ task.get_status_display }}
+Prioridade: {{ task.get_priority_display }}
+Categoria: {{ task.get_category_display }}
+Responsavel: {{ task.responsible|default:"Nao definido" }}
+Checklist: {{ checklist_label }}
+
+{% if task.description %}Descricao:
+{{ task.description }}
+{% endif %}
+{% if linked_ticket_label %}Chamado vinculado: {{ linked_ticket_label }}
+{% endif %}
+{% if linked_endpoint_label %}Endpoint vinculado: {{ linked_endpoint_label }}
+{% endif %}
+{% if task.linked_user %}Usuario relacionado: {{ task.linked_user }}
+{% endif %}
+{% if task_url %}Abrir NightOwl: {{ task_url }}
+{% else %}Acesse o NightOwl para acompanhar esta tarefa.
+{% endif %}
+
+Mensagem automatica do NightOwl. Nao responda este e-mail.

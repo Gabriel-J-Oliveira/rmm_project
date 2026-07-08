@@ -1,0 +1,31 @@
+{% load nightowl_time %}
+<ol class="noc-timeline endpoint-audit-timeline endpoint-compact-timeline">
+    {% for event in audit_events %}
+    <li>
+        <span class="severity-dot severity-dot-{{ event.severity }}"></span>
+        <div>
+            <strong>{{ event.title }}</strong>
+            <p>
+                {% if event.event_type == "software.installed" %}Software instalado
+                {% elif event.event_type == "software.removed" %}Software removido
+                {% elif event.event_type == "software.updated" %}Software atualizado
+                {% elif event.event_type == "network.ip_changed" %}IP alterado
+                {% elif event.event_type == "user.logged_user_changed" %}Usu&aacute;rio alterado
+                {% elif event.event_type == "security.defender_changed" %}Seguran&ccedil;a alterada
+                {% elif event.event_type == "disk.state_changed" %}Disco alterado
+                {% elif event.event_type == "os.build_changed" %}Windows atualizado
+                {% else %}{{ event.event_type }}{% endif %}
+                &middot; {{ event.created_at|relative_time }}
+            </p>
+        </div>
+    </li>
+    {% empty %}
+    <li>
+        <span class="severity-dot"></span>
+        <div>
+            <strong>Nenhum evento recente para este endpoint.</strong>
+            <p>A linha do tempo aparecer&aacute; quando houver mudan&ccedil;as ou a&ccedil;&otilde;es relevantes.</p>
+        </div>
+    </li>
+    {% endfor %}
+</ol>

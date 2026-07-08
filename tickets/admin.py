@@ -4,6 +4,7 @@ from .models import (
     DeskQueue,
     DeskSLA,
     DeskTemplate,
+    InboundEmailMessage,
     NotificationOutbox,
     Ticket,
     TicketAttachment,
@@ -58,6 +59,21 @@ class NotificationOutboxAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(InboundEmailMessage)
+class InboundEmailMessageAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'status', 'ticket', 'from_email', 'subject', 'received_at', 'processed_at')
+    list_filter = ('status', 'created_at', 'processed_at')
+    search_fields = ('message_id', 'ticket__number', 'ticket__title', 'from_name', 'from_email', 'subject', 'error')
+    readonly_fields = (
+        'id', 'message_id', 'ticket', 'from_name', 'from_email', 'subject',
+        'received_at', 'processed_at', 'status', 'error', 'raw_metadata',
+        'created_comment', 'created_at',
+    )
+
+    def has_add_permission(self, request):
         return False
 
 

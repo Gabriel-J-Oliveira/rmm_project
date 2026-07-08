@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#05080d;color:#f3f6fb;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;background:#05080d;padding:28px 14px;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:720px;background:#0b1117;border:1px solid #263244;border-radius:14px;overflow:hidden;">
+                    <tr>
+                        <td style="padding:22px 24px;border-bottom:1px solid #263244;background:#080d14;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                                <tr>
+                                    <td>
+                                        <div style="font-size:20px;font-weight:800;color:#f3f6fb;">NightOwl <span style="color:#22c55e;">Tasks</span></div>
+                                        <div style="margin-top:4px;color:#b8c4d6;font-size:13px;">Lembrete operacional de prazo</div>
+                                    </td>
+                                    <td align="right">
+                                        <span style="display:inline-block;border:1px solid #14532d;border-radius:999px;background:#082f1a;color:#86efac;font-size:11px;font-weight:800;padding:7px 10px;text-transform:uppercase;">{{ remaining_label }}</span>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:24px;">
+                            <h1 style="margin:0 0 8px;color:#f3f6fb;font-size:24px;line-height:1.2;">{{ task.title }}</h1>
+                            <p style="margin:0 0 18px;color:#b8c4d6;font-size:14px;line-height:1.55;">
+                                Esta tarefa operacional tem prazo definido para
+                                <strong style="color:#f3f6fb;">{% if due_at %}{{ due_at|date:"d/m/Y H:i" }}{% else %}sem prazo{% endif %}</strong>.
+                            </p>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#101826;border:1px solid #263244;border-radius:12px;margin-bottom:18px;">
+                                <tr>
+                                    <td style="padding:14px;">
+                                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                                            <tr>
+                                                <td style="padding:8px 6px;color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;">Status</td>
+                                                <td style="padding:8px 6px;color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;">Prioridade</td>
+                                                <td style="padding:8px 6px;color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;">Categoria</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:0 6px 10px;color:#f3f6fb;font-size:14px;font-weight:700;">{{ task.get_status_display }}</td>
+                                                <td style="padding:0 6px 10px;color:#f3f6fb;font-size:14px;font-weight:700;">{{ task.get_priority_display }}</td>
+                                                <td style="padding:0 6px 10px;color:#f3f6fb;font-size:14px;font-weight:700;">{{ task.get_category_display }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:8px 6px;color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;">Responsavel</td>
+                                                <td style="padding:8px 6px;color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;">Checklist</td>
+                                                <td style="padding:8px 6px;color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;">Prazo</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding:0 6px;color:#f3f6fb;font-size:14px;font-weight:700;">{{ task.responsible|default:"Nao definido" }}</td>
+                                                <td style="padding:0 6px;color:#f3f6fb;font-size:14px;font-weight:700;">{{ checklist_label }}</td>
+                                                <td style="padding:0 6px;color:#f3f6fb;font-size:14px;font-weight:700;">{% if due_at %}{{ due_at|date:"d/m H:i" }}{% else %}--{% endif %}</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            {% if task.description %}
+                            <div style="background:#101826;border:1px solid #263244;border-radius:12px;padding:14px;margin-bottom:18px;">
+                                <div style="color:#7f8fa6;font-size:11px;font-weight:800;text-transform:uppercase;margin-bottom:7px;">Descricao</div>
+                                <div style="color:#dbe5f4;font-size:14px;line-height:1.55;">{{ task.description|linebreaksbr }}</div>
+                            </div>
+                            {% endif %}
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:18px;">
+                                {% if linked_ticket_label %}
+                                <tr><td style="padding:5px 0;color:#b8c4d6;font-size:13px;">Chamado vinculado: <strong style="color:#f3f6fb;">{{ linked_ticket_label }}</strong></td></tr>
+                                {% endif %}
+                                {% if linked_endpoint_label %}
+                                <tr><td style="padding:5px 0;color:#b8c4d6;font-size:13px;">Endpoint vinculado: <strong style="color:#f3f6fb;">{{ linked_endpoint_label }}</strong></td></tr>
+                                {% endif %}
+                                {% if task.linked_user %}
+                                <tr><td style="padding:5px 0;color:#b8c4d6;font-size:13px;">Usuario relacionado: <strong style="color:#f3f6fb;">{{ task.linked_user }}</strong></td></tr>
+                                {% endif %}
+                            </table>
+
+                            {% if task_url %}
+                            <div style="text-align:center;margin:22px 0 4px;">
+                                <a href="{{ task_url }}" style="display:inline-block;background:#22c55e;color:#04100b;text-decoration:none;font-size:14px;font-weight:800;padding:12px 18px;border-radius:10px;">Abrir Tarefas no NightOwl</a>
+                            </div>
+                            {% else %}
+                            <p style="margin:18px 0 4px;color:#7f8fa6;font-size:13px;text-align:center;">Acesse o NightOwl para acompanhar esta tarefa.</p>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:16px 24px;border-top:1px solid #263244;color:#7f8fa6;font-size:12px;text-align:center;">
+                            Mensagem automatica do NightOwl. Nao responda este e-mail.
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

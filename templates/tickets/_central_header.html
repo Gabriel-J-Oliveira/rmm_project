@@ -30,11 +30,10 @@
 
         <div class="desk-header-actions">
             <div class="desk-view-switcher" aria-label="Alternar visualizacao">
-                <a class="{% if view_mode == 'list' %}active{% endif %}" href="?view=list{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="list"></i>Lista</a>
-                <a class="{% if view_mode == 'kanban' %}active{% endif %}" href="?view=kanban{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="columns-3"></i>Kanban</a>
-                <a class="{% if view_mode == 'grouped' %}active{% endif %}" href="?view=grouped{% if request.GET.q %}&q={{ request.GET.q }}{% endif %}"><i data-lucide="users"></i>Responsavel</a>
+                <a class="{% if view_mode == 'list' %}active{% endif %}" href="{{ list_view_url }}"><i data-lucide="list"></i>Lista</a>
+                <a class="{% if view_mode == 'kanban' %}active{% endif %}" href="{{ kanban_view_url }}"><i data-lucide="columns-3"></i>Kanban</a>
             </div>
-            <a class="desk-btn" href="{% url 'tickets:central' %}?view={{ view_mode }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
+            <a class="desk-btn" href="{{ refresh_url }}"><i data-lucide="refresh-cw"></i>Atualizar</a>
             <button class="desk-btn desk-btn-primary" type="button" data-quick-ticket-open><i data-lucide="ticket-plus"></i>Novo chamado</button>
         </div>
     </div>

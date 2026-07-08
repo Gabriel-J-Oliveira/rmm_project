@@ -462,3 +462,54 @@ class NotificationOutbox(models.Model):
     def __str__(self):
         reference = f'#{self.ticket.number}' if self.ticket else self.source_id or self.source_app
         return f'{self.event_type} - {reference} - {self.status}'
+
+
+class InboundEmailMessage(models.Model):
+    STATUS_PROCESSED = 'processed'
+    STATUS_SKIPPED = 'skipped'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PROCESSED, 'Processado'),
+        (STATUS_SKIPPED, 'Ignorado'),
+        (STATUS_FAILED, 'Falhou'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message_id = models.CharField(max_length=255, unique=True)
+    ticket = models.ForeignKey(
+        Ticket,
+        related_name='inbound_email_messages',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
+    from_name = models.CharField(max_length=180, blank=True)
+    from_email = models.EmailField(blank=True)
+    subject = models.CharField(max_length=255, blank=True)
+    received_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_PROCESSED)
+    error = models.TextField(blank=True)
+    raw_metadata = models.JSONField(default=dict, blank=True)
+    created_comment = models.ForeignKey(
+        TicketComment,
+        related_name='inbound_email_messages',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['ticket', '-created_at']),
+            models.Index(fields=['from_email', '-created_at']),
+        ]
+        verbose_name = 'Inbound e-mail message'
+        verbose_name_plural = 'Inbound e-mail messages'
+
+    def __str__(self):
+        reference = f'#{self.ticket.number}' if self.ticket else 'sem chamado'
+        return f'{reference} - {self.from_email or self.message_id} - {self.status}'

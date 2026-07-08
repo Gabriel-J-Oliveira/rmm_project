@@ -17,7 +17,11 @@
         <div>
             <p>Chamado #{{ ticket.number }}</p>
             <h1>{{ ticket.title }}</h1>
-            <span>Aberto em {{ ticket.created_at|date:"d/m/Y H:i" }} - Atualizado em {{ ticket.updated_at|date:"d/m/Y H:i" }}</span>
+            <div class="desk-portal-detail-meta">
+                <span class="desk-portal-status status-{{ ticket.status }}">{{ ticket.get_status_display }}</span>
+                <span>Aberto em {{ ticket.created_at|date:"d/m/Y H:i" }}</span>
+                <span>Atualizado em {{ ticket.updated_at|date:"d/m/Y H:i" }}</span>
+            </div>
         </div>
     </div>
     <a class="desk-portal-back" href="{% url portal_list_url_name %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}"><i data-lucide="arrow-left"></i>Voltar</a>
@@ -72,7 +76,7 @@
                         {% if item.attachments %}
                         <div class="desk-portal-attachment-inline">
                             {% for attachment in item.attachments %}
-                            <a href="{{ attachment.file.url }}" target="_blank" rel="noopener"><i data-lucide="paperclip"></i>{{ attachment.original_name }}</a>
+                            <a href="{% url 'tickets:attachment-download' attachment.id %}" target="_blank" rel="noopener"><i data-lucide="paperclip"></i>{{ attachment.original_name }}</a>
                             {% endfor %}
                         </div>
                         {% endif %}
@@ -89,7 +93,7 @@
             </div>
             <div class="desk-portal-attachments">
                 {% for attachment in public_attachments %}
-                <a href="{{ attachment.file.url }}" target="_blank" rel="noopener">
+                <a href="{% url 'tickets:attachment-download' attachment.id %}" target="_blank" rel="noopener">
                     <i data-lucide="file"></i>
                     <span><strong>{{ attachment.original_name }}</strong><small>{{ attachment.size|filesizeformat }} - {{ attachment.created_at|date:"d/m/Y H:i" }}</small></span>
                 </a>
@@ -100,7 +104,7 @@
         </section>
 
         {% if can_reply %}
-        <section class="desk-portal-card">
+        <section class="desk-portal-card desk-portal-reply-card">
             <div class="desk-portal-section-title">
                 <i data-lucide="reply"></i>
                 <h2>Responder chamado</h2>
@@ -108,26 +112,28 @@
             <form class="desk-portal-form" method="post" enctype="multipart/form-data" action="{% url portal_comment_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">
                 {% csrf_token %}
                 <textarea name="body" rows="5" required placeholder="Escreva sua resposta para a equipe..."></textarea>
-                <label class="desk-portal-file"><i data-lucide="paperclip"></i><span>Anexar arquivos</span><input type="file" name="attachments" multiple></label>
-                <button type="submit"><i data-lucide="send"></i>Enviar resposta</button>
+                <div class="desk-portal-form-actions">
+                    <label class="desk-portal-file"><i data-lucide="paperclip"></i><span>Anexar arquivos</span><input type="file" name="attachments" multiple></label>
+                    <button type="submit"><i data-lucide="send"></i>Enviar resposta</button>
+                </div>
             </form>
         </section>
         {% elif can_reopen %}
         <section class="desk-portal-card">
             <div class="desk-portal-section-title">
                 <i data-lucide="rotate-ccw"></i>
-                <h2>Problema nao resolvido?</h2>
+                <h2>Contestar solucao</h2>
             </div>
             <form class="desk-portal-form" method="post" action="{% url portal_reopen_url_name ticket.number %}{% if requester_email and portal_mode != 'requester' %}?email={{ requester_email|urlencode }}{% endif %}">
                 {% csrf_token %}
-                <textarea name="reason" rows="4" required placeholder="Conte o que ainda nao funcionou para reabrirmos o atendimento..."></textarea>
-                <button type="submit"><i data-lucide="rotate-ccw"></i>Reabrir chamado</button>
+                <textarea name="reason" rows="4" required placeholder="Conte por que a solucao nao atendeu sua solicitacao..."></textarea>
+                <button type="submit"><i data-lucide="rotate-ccw"></i>Contestar e reabrir</button>
             </form>
         </section>
         {% else %}
         <section class="desk-portal-card desk-portal-closed">
             <i data-lucide="lock"></i>
-            <strong>Este chamado nao aceita novas respostas pelo portal.</strong>
+            <strong>Este chamado esta em modo somente leitura.</strong>
         </section>
         {% endif %}
     </main>
@@ -143,9 +149,17 @@
             <h2>Resumo</h2>
             <dl>
                 <dt>Status</dt><dd>{{ ticket.get_status_display }}</dd>
-                <dt>Equipe</dt><dd>{{ ticket.queue|default:"Equipe de atendimento" }}</dd>
                 <dt>Categoria</dt><dd>{% if ticket.category %}{{ ticket.category.name }}{% else %}Sem categoria{% endif %}</dd>
+                <dt>Prioridade</dt><dd>{{ ticket.get_priority_display }}</dd>
                 <dt>Fonte</dt><dd>{{ ticket.get_source_display }}</dd>
+            </dl>
+        </section>
+        <section class="desk-portal-card">
+            <h2>Atendimento</h2>
+            <dl>
+                <dt>Equipe</dt><dd>{{ ticket.queue|default:"Equipe de atendimento" }}</dd>
+                <dt>Responsavel</dt><dd>{{ ticket.assigned_to|default:"A definir" }}</dd>
+                {% if ticket.due_at %}<dt>Previsao</dt><dd>{{ ticket.due_at|date:"d/m/Y H:i" }}</dd>{% endif %}
             </dl>
         </section>
     </aside>

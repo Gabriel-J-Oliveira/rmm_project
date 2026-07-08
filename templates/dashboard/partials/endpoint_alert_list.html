@@ -1,0 +1,26 @@
+{% load nightowl_time %}
+<div class="endpoint-alert-list endpoint-compact-list">
+    {% for alert in endpoint_alerts %}
+    <article class="endpoint-alert-item"
+        data-alert-card
+        data-alert-id="{{ alert.id }}"
+        data-mock-alert-id="{{ alert.title|escape }}"
+        data-title="{{ alert.title|escape }}"
+        data-endpoint="{{ alert.endpoint.hostname|default:'Endpoint'|escape }}"
+        data-status="{{ alert.get_status_display }}">
+        <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
+        <div>
+            <strong>{{ alert.title }}</strong>
+            <p>{{ alert.description|truncatechars:150 }}</p>
+            <small>
+                <span data-alert-inline-status>{{ alert.get_status_display }}</span> &middot; {{ alert.last_seen_at|relative_time }}
+                {% if alert.is_muted %}
+                &middot; Silenciado at&eacute; {{ alert.muted_until|date:"d/m H:i" }}
+                {% endif %}
+            </small>
+        </div>
+    </article>
+    {% empty %}
+    <div class="positive-empty">Nenhum alerta aberto para este endpoint.</div>
+    {% endfor %}
+</div>

@@ -18,7 +18,6 @@ class LoginRequiredMiddleware:
     }
     PUBLIC_PREFIXES = (
         '/static/',
-        '/media/',
         '/admin/',
         '/api/agent/',
         '/api/access-inventory/agent/',
@@ -27,6 +26,7 @@ class LoginRequiredMiddleware:
     REQUESTER_PREFIXES = (
         '/meus-chamados/',
         '/portal/chamados/',
+        '/tickets/attachments/',
     )
     REQUESTER_EXACT_PATHS = {
         '/meus-chamados',

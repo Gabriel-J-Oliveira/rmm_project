@@ -65,11 +65,13 @@
                 </summary>
                 <div class="desk-popover">
                     <strong>Alterar status</strong>
-                    <button type="button" data-quick-status="in_progress">Em atendimento</button>
-                    <button type="button" data-quick-status="waiting_user">Aguardando usuario</button>
-                    <button type="button" data-quick-status="waiting_third_party">Aguardando terceiro</button>
-                    <button type="button" data-quick-status="escalated">Escalado</button>
-                    <button type="button" data-quick-status="resolved">Resolvido</button>
+                    {% for status in status_transitions %}
+                    <button type="button" data-quick-status="{{ status }}">
+                        {% if status == "in_progress" %}Em atendimento{% elif status == "waiting_user" %}Aguardando usuario{% elif status == "waiting_third_party" %}Aguardando terceiro{% elif status == "resolved" %}Resolvido{% elif status == "closed" %}Encerrado{% elif status == "canceled" %}Cancelado{% else %}{{ status }}{% endif %}
+                    </button>
+                    {% empty %}
+                    <button type="button" disabled>Sem transicoes disponiveis</button>
+                    {% endfor %}
                 </div>
             </details>
             <details class="desk-inline-popover nw-quick-edit" data-quick-edit="priority">

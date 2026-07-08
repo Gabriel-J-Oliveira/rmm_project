@@ -23,7 +23,10 @@ urlpatterns = [
     path('fake/<str:action>/', views.ticket_fake_action, name='fake-action-root'),
     path('<int:number>/api/update/', views.ticket_api_update, name='api-update'),
     path('<int:number>/api/comments/', views.ticket_api_comment, name='api-comment'),
+    path('<int:number>/api/public-conversation/', views.ticket_api_public_conversation, name='api-public-conversation'),
+    path('<int:number>/api/attachments/', views.ticket_api_attachment, name='api-attachment'),
     path('<int:number>/api/actions/', views.ticket_api_action, name='api-action'),
+    path('attachments/<uuid:attachment_id>/', views.ticket_attachment_download, name='attachment-download'),
     path('<int:number>/', views.ticket_detail, name='detail'),
     path('<int:number>/fake/<str:action>/', views.ticket_fake_action, name='fake-action'),
 ]

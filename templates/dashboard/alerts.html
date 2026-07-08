@@ -11,271 +11,390 @@
 {% endblock %}
 
 {% block content %}
-<section class="alerts-command-header page-header">
-    <div class="alerts-command-title">
-        <span class="command-icon page-header-icon"><i data-lucide="alert-triangle"></i></span>
-        <div>
-            <h1 class="page-title">Central de Alertas</h1>
-            <p class="page-subtitle">Sinais operacionais que exigem aten&ccedil;&atilde;o.</p>
-        </div>
-    </div>
-    <div class="alerts-header-actions page-actions">
-        <span class="refresh-meta">Atualizado em {{ last_updated_at|date:"H:i:s" }}</span>
-        <span class="auto-refresh-chip"><i data-lucide="refresh-cw"></i>Auto-refresh <span data-refresh-countdown>60s</span></span>
-        <button type="button" class="refresh-button" data-refresh-now><i data-lucide="refresh-cw"></i>Atualizar</button>
-    </div>
-</section>
-
-<section class="metric-grid alerts-command-metrics" aria-label="Resumo dos alertas">
-    <article class="metric-card command-metric">
-        <span class="metric-icon"><i data-lucide="bell"></i></span>
-        <span class="metric-label">Alertas abertos</span>
-        <strong class="metric-value">{{ open_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon critical"><i data-lucide="alert-triangle"></i></span>
-        <span class="metric-label">Cr&iacute;ticos</span>
-        <strong class="metric-value status-text-critical">{{ critical_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon warning"><i data-lucide="alert-triangle"></i></span>
-        <span class="metric-label">Warning</span>
-        <strong class="metric-value status-text-unknown">{{ warning_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon security"><i data-lucide="shield"></i></span>
-        <span class="metric-label">Seguran&ccedil;a</span>
-        <strong class="metric-value status-text-security">{{ security_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon"><i data-lucide="monitor"></i></span>
-        <span class="metric-label">Endpoints afetados</span>
-        <strong class="metric-value">{{ affected_endpoint_count }}</strong>
-    </article>
-</section>
-
-<section class="panel command-filter-panel">
-    <form class="endpoint-filters alerts-command-filters" method="get">
-        <label class="filter-field filter-search">
-            <span><i data-lucide="search"></i>Busca</span>
-            <input type="search" name="q" value="{{ filters.q }}" placeholder="Endpoint, usu&aacute;rio, IP, t&iacute;tulo ou descri&ccedil;&atilde;o">
-        </label>
-        <label class="filter-field">
-            <span>Status</span>
-            <select name="status">
-                <option value="open" {% if filters.status == "open" %}selected{% endif %}>Open</option>
-                <option value="acknowledged" {% if filters.status == "acknowledged" %}selected{% endif %}>Acknowledged</option>
-                <option value="resolved" {% if filters.status == "resolved" %}selected{% endif %}>Resolved</option>
-                <option value="all" {% if filters.status == "all" %}selected{% endif %}>Todos</option>
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Severidade</span>
-            <select name="severity">
-                <option value="all" {% if filters.severity == "all" %}selected{% endif %}>Todas</option>
-                {% for value, label in severity_options %}
-                <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Tipo</span>
-            <select name="type">
-                <option value="all" {% if filters.type == "all" %}selected{% endif %}>Todos</option>
-                {% for value, label in alert_type_options %}
-                <option value="{{ value }}" {% if filters.type == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="filter-field">
-            <span>Per&iacute;odo</span>
-            <select name="period">
-                {% for value, label in period_options %}
-                <option value="{{ value }}" {% if filters.period == value %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <div class="filter-actions">
-            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
-            <a href="{% url 'alerts-list' %}">Limpar</a>
-        </div>
-    </form>
-</section>
-
-<section class="alerts-command-grid">
-    <div class="alert-card-list" aria-label="Lista operacional de alertas">
-        <div class="section-heading">
+<section class="alerts-page" data-alerts-root>
+    <section class="alerts-command-header page-header">
+        <div class="alerts-command-title">
+            <span class="command-icon page-header-icon"><i data-lucide="alert-triangle"></i></span>
             <div>
-                <h2>O que exige aten&ccedil;&atilde;o agora</h2>
-                <p>Ordenado por urg&ecirc;ncia operacional e &uacute;ltima ocorr&ecirc;ncia.</p>
+                <h1 class="page-title">Central de Alertas</h1>
+                <p class="page-subtitle">Fila operacional de problemas tratáveis: reconhecer, atribuir, silenciar, resolver ou abrir chamado.</p>
             </div>
         </div>
+        <div class="alerts-header-actions page-actions">
+            <span class="refresh-meta">Atualizado em {{ last_updated_at|date:"H:i:s" }}</span>
+            <span class="ops-chip"><i data-lucide="clock-3"></i>Idade <strong data-operational-age>agora</strong></span>
+            <span class="ops-chip"><i data-lucide="sparkles"></i>Novo desde abertura <strong data-operational-new-count>0</strong></span>
+            <span class="ops-chip"><i data-lucide="list-filter"></i>Filtrados <strong data-filtered-count>{{ alerts|length }}</strong></span>
+            <span class="ops-chip ops-command-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+            <span class="auto-refresh-chip"><i data-lucide="refresh-cw"></i>Auto-refresh <span data-refresh-countdown>60s</span></span>
+            <button type="button" class="refresh-button" data-refresh-now><i data-lucide="refresh-cw"></i>Atualizar</button>
+        </div>
+    </section>
 
-        {% for alert in alerts %}
-        <article class="alert-operation-card severity-border-{{ alert.severity }} status-card-{{ alert.status }} {% if alert.is_muted %}is-muted{% endif %}">
-            <div class="alert-type-icon severity-{{ alert.severity }}">
-                {% if alert.alert_type == "disk_low" %}
-                <i data-lucide="hard-drive"></i>
-                {% elif alert.alert_type == "endpoint_offline" %}
-                <i data-lucide="monitor-x"></i>
-                {% elif alert.alert_type == "security_antivirus" or alert.alert_type == "security_alternative_av" %}
-                <i data-lucide="shield"></i>
-                {% elif alert.alert_type == "high_uptime" %}
-                <i data-lucide="clock"></i>
-                {% elif alert.alert_type == "remote_access_software" or alert.alert_type == "admin_network_tool" %}
-                <i data-lucide="package"></i>
-                {% elif alert.alert_type == "software_policy_violation" %}
-                <i data-lucide="shield-alert"></i>
-                {% else %}
-                <i data-lucide="info"></i>
-                {% endif %}
+    <section class="metric-grid alerts-command-metrics" aria-label="Resumo dos alertas">
+        <article class="metric-card command-metric">
+            <span class="metric-icon"><i data-lucide="bell"></i></span>
+            <span class="metric-label">Alertas abertos</span>
+            <strong class="metric-value">{{ open_count }}</strong>
+        </article>
+        <article class="metric-card command-metric">
+            <span class="metric-icon critical"><i data-lucide="alert-triangle"></i></span>
+            <span class="metric-label">Críticos</span>
+            <strong class="metric-value status-text-critical">{{ critical_count }}</strong>
+        </article>
+        <article class="metric-card command-metric">
+            <span class="metric-icon warning"><i data-lucide="alert-triangle"></i></span>
+            <span class="metric-label">Warning</span>
+            <strong class="metric-value status-text-unknown">{{ warning_count }}</strong>
+        </article>
+        <article class="metric-card command-metric">
+            <span class="metric-icon security"><i data-lucide="shield"></i></span>
+            <span class="metric-label">Segurança</span>
+            <strong class="metric-value status-text-security">{{ security_count }}</strong>
+        </article>
+        <article class="metric-card command-metric">
+            <span class="metric-icon"><i data-lucide="monitor"></i></span>
+            <span class="metric-label">Endpoints afetados</span>
+            <strong class="metric-value">{{ affected_endpoint_count }}</strong>
+        </article>
+    </section>
+
+    <section class="panel command-filter-panel">
+        <form class="endpoint-filters alerts-command-filters" method="get">
+            <label class="filter-field filter-search">
+                <span><i data-lucide="search"></i>Busca</span>
+                <input type="search" name="q" value="{{ filters.q }}" placeholder="Endpoint, usuário, IP, título ou descrição">
+            </label>
+            <label class="filter-field">
+                <span>Status</span>
+                <select name="status">
+                    <option value="open" {% if filters.status == "open" %}selected{% endif %}>Abertos</option>
+                    <option value="acknowledged" {% if filters.status == "acknowledged" %}selected{% endif %}>Reconhecidos</option>
+                    <option value="muted" {% if filters.status == "muted" %}selected{% endif %}>Silenciados</option>
+                    <option value="resolved" {% if filters.status == "resolved" %}selected{% endif %}>Resolvidos</option>
+                    <option value="all" {% if filters.status == "all" %}selected{% endif %}>Todos</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Severidade</span>
+                <select name="severity">
+                    <option value="all" {% if filters.severity == "all" %}selected{% endif %}>Todas</option>
+                    {% for value, label in severity_options %}
+                    <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Tipo</span>
+                <select name="type">
+                    <option value="all" {% if filters.type == "all" %}selected{% endif %}>Todos</option>
+                    {% for value, label in alert_type_options %}
+                    <option value="{{ value }}" {% if filters.type == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Período</span>
+                <select name="period">
+                    {% for value, label in period_options %}
+                    <option value="{{ value }}" {% if filters.period == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="filter-actions">
+                <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+                <a href="{% url 'alerts-list' %}">Limpar</a>
             </div>
-            <div class="alert-operation-body">
-                <div class="alert-operation-topline">
-                    <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
-                    <span class="alert-status alert-status-{{ alert.status }}">{{ alert.get_status_display }}</span>
-                    {% if alert.is_temporary %}
-                    <span class="alert-status alert-status-temporary"><i data-lucide="clock"></i>Mudan&ccedil;a recente</span>
-                    {% if alert.expires_at %}
-                    <span class="relative-chip">Expira {{ alert.expires_at|time_until }}</span>
-                    {% endif %}
-                    {% endif %}
-                    {% if alert.is_muted %}
-                    <span class="alert-status alert-status-muted"><i data-lucide="bell-off"></i>Silenciado at&eacute; {{ alert.muted_until|date:"d/m H:i" }}</span>
-                    {% endif %}
-                    <span class="relative-chip">{{ alert.last_seen_at|relative_time }}</span>
+        </form>
+        <div class="ops-filter-summary">
+            <span><i data-lucide="funnel"></i><strong data-filtered-count>{{ alerts|length }}</strong> itens na fila atual</span>
+            <a href="{% url 'alerts-list' %}"><i data-lucide="x-circle"></i>Limpar filtros</a>
+        </div>
+    </section>
+
+    <section class="alerts-command-grid">
+        <div class="alert-card-list" aria-label="Lista operacional de alertas">
+            <div class="section-heading alert-queue-heading">
+                <div>
+                    <h2>Fila de tratamento</h2>
+                    <p>Problemas tratáveis com status, responsável, recorrência, SLA e histórico contextual.</p>
                 </div>
-                <h3>{{ alert.title }}</h3>
-                <p>{{ alert.description|truncatechars:170 }}</p>
-                <div class="alert-operation-meta">
-                    <a class="table-link mono" href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="monitor"></i>{{ alert.endpoint.hostname|default:"-" }}</a>
-                    <span class="mono">{{ alert.alert_type }}</span>
-                    <span>Primeira: <time title="{{ alert.first_seen_at|date:'d/m/Y H:i:s' }}">{{ alert.first_seen_at|relative_time }}</time></span>
-                    <span>&Uacute;ltima: <time title="{{ alert.last_seen_at|date:'d/m/Y H:i:s' }}">{{ alert.last_seen_at|date:"d/m H:i" }}</time></span>
+                <div class="alert-view-toggle" aria-label="Alternar visualização">
+                    <button type="button" class="is-active" data-alert-view="comfortable"><i data-lucide="rows-3"></i>Confortável</button>
+                    <button type="button" data-alert-view="compact"><i data-lucide="list"></i>Compacta</button>
+                    <button type="button" data-alert-view="grouped"><i data-lucide="blocks"></i>Por endpoint</button>
                 </div>
-                <div class="quick-actions">
-                    <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Ver endpoint</a>
-                    {% if alert.status == "open" %}
-                    <form method="post" action="{% url 'alert-acknowledge' alert.id %}">
-                        {% csrf_token %}
-                        <button type="submit"><i data-lucide="eye"></i>Reconhecer</button>
-                    </form>
-                    {% endif %}
-                    {% if alert.status != "resolved" %}
-                    <form method="post" action="{% url 'alert-resolve' alert.id %}">
-                        {% csrf_token %}
-                        <button type="submit" {% if alert.severity == "critical" %}data-confirm="Se a condi&ccedil;&atilde;o ainda existir, o alerta poder&aacute; voltar na pr&oacute;xima avalia&ccedil;&atilde;o. Resolver mesmo assim?"{% endif %}><i data-lucide="check-circle"></i>Resolver</button>
-                    </form>
-                    <details class="quick-action-menu">
-                        <summary><i data-lucide="bell-off"></i>Silenciar</summary>
-                        <div class="quick-action-popover">
-                            {% for duration, label in mute_durations %}
-                            <form method="post" action="{% url 'alert-mute' alert.id %}">
+            </div>
+
+            <div class="alert-bulk-bar" data-alert-bulk-bar>
+                <label><input type="checkbox" data-alert-select-all> Selecionar visíveis</label>
+                <span><strong data-alert-selected-count>0</strong> selecionado(s)</span>
+                <button type="button" data-bulk-action="Reconhecer"><i data-lucide="eye"></i>Reconhecer</button>
+                <button type="button" data-bulk-action="Silenciar"><i data-lucide="bell-off"></i>Silenciar</button>
+                <button type="button" data-bulk-action="Resolver"><i data-lucide="check-circle"></i>Resolver</button>
+                <button type="button" data-bulk-action="Criar chamado"><i data-lucide="ticket"></i>Criar chamado</button>
+            </div>
+            <div class="ops-skeleton-row" data-skeleton aria-hidden="true">
+                <span></span><span></span><span></span>
+            </div>
+
+            <div class="alert-queue" data-alert-queue>
+                {% for alert in alerts %}
+                <article class="alert-operation-card severity-border-{{ alert.severity }} status-card-{{ alert.status }} {% if alert.is_muted %}is-muted{% endif %}"
+                    data-alert-card
+                    data-alert-id="{{ alert.id }}"
+                    data-mock-alert-id="{{ alert.title|escape }}"
+                    data-endpoint="{{ alert.endpoint.hostname|default:'Endpoint'|escape }}"
+                    data-title="{{ alert.title|escape }}"
+                    data-description="{{ alert.description|escape }}"
+                    data-status="{% if alert.is_muted %}Silenciado{% elif alert.status == 'open' %}Novo{% elif alert.status == 'acknowledged' %}Reconhecido{% elif alert.status == 'resolved' %}Resolvido{% else %}{{ alert.get_status_display }}{% endif %}"
+                    data-severity="{{ alert.get_severity_display }}"
+                    data-type="{{ alert.alert_type|escape }}"
+                    data-owner="{% cycle 'Não atribuído' 'Gabriel Oliveira' 'Não atribuído' 'Renan Santos' as owner_cycle silent %}{{ owner_cycle }}"
+                    data-ticket="{% if alert.severity == 'critical' %}#1042{% elif alert.alert_type == 'disk_low' %}#1032{% else %}Sem chamado vinculado{% endif %}"
+                    data-recurrence="{{ alert.events.all|length }} ocorrência(s)"
+                    data-open-time="{{ alert.first_seen_at|relative_time }}"
+                    data-sla="{% if alert.severity == 'critical' %}30 min{% elif alert.severity == 'security' %}2h{% elif alert.severity == 'warning' %}4h{% else %}8h{% endif %}"
+                    data-events="{% for event in alert.events.all %}{% if forloop.counter <= 4 %}{{ event.get_event_type_display }} · {{ event.created_at|relative_time }}{% if not forloop.last %} | {% endif %}{% endif %}{% empty %}Sem eventos relacionados{% endfor %}"
+                    data-endpoint-url="{% url 'endpoint-detail' alert.endpoint.id %}">
+                    <div class="alert-select-cell">
+                        <input type="checkbox" data-alert-select aria-label="Selecionar alerta {{ alert.title }}">
+                    </div>
+                    <button type="button" class="alert-type-icon severity-{{ alert.severity }}" data-alert-open aria-label="Abrir detalhes do alerta">
+                        {% if alert.alert_type == "disk_low" %}
+                        <i data-lucide="hard-drive"></i>
+                        {% elif alert.alert_type == "endpoint_offline" %}
+                        <i data-lucide="monitor-x"></i>
+                        {% elif alert.alert_type == "security_antivirus" or alert.alert_type == "security_alternative_av" %}
+                        <i data-lucide="shield"></i>
+                        {% elif alert.alert_type == "high_uptime" %}
+                        <i data-lucide="clock"></i>
+                        {% elif alert.alert_type == "remote_access_software" or alert.alert_type == "admin_network_tool" %}
+                        <i data-lucide="package"></i>
+                        {% elif alert.alert_type == "software_policy_violation" %}
+                        <i data-lucide="shield-alert"></i>
+                        {% else %}
+                        <i data-lucide="info"></i>
+                        {% endif %}
+                    </button>
+                    <div class="alert-operation-body">
+                        <div class="alert-operation-topline">
+                            <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
+                            {% if alert.is_muted %}
+                            <span class="alert-status alert-status-muted"><i data-lucide="bell-off"></i>Silenciado</span>
+                            {% elif alert.status == "open" %}
+                            <span class="alert-status alert-status-open"><i data-lucide="sparkles"></i>Novo</span>
+                            {% elif alert.status == "acknowledged" %}
+                            <span class="alert-status alert-status-acknowledged"><i data-lucide="eye"></i>Reconhecido</span>
+                            {% elif alert.status == "resolved" %}
+                            <span class="alert-status alert-status-resolved"><i data-lucide="check-circle"></i>Resolvido</span>
+                            {% else %}
+                            <span class="alert-status alert-status-{{ alert.status }}">{{ alert.get_status_display }}</span>
+                            {% endif %}
+                            {% if alert.is_temporary %}
+                            <span class="alert-status alert-status-temporary"><i data-lucide="clock"></i>Mudança recente</span>
+                            {% endif %}
+                            <span class="relative-chip">Aberto {{ alert.first_seen_at|relative_time }}</span>
+                            <span class="relative-chip">SLA {% if alert.severity == "critical" %}30 min{% elif alert.severity == "security" %}2h{% elif alert.severity == "warning" %}4h{% else %}8h{% endif %}</span>
+                        </div>
+                        <button type="button" class="alert-title-button" data-alert-open>
+                            <h3>{{ alert.title }}</h3>
+                            <p>{{ alert.description|truncatechars:170 }}</p>
+                        </button>
+                        <div class="alert-operation-meta">
+                            <a class="table-link mono" href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="monitor"></i>{{ alert.endpoint.hostname|default:"-" }}</a>
+                            <span class="mono">{{ alert.alert_type }}</span>
+                            <span><i data-lucide="user-round"></i><span data-owner-label>{{ owner_cycle }}</span></span>
+                            {% if alert.severity == "critical" %}
+                            <span><i data-lucide="ticket"></i>Chamado <span data-ticket-label>#1042</span></span>
+                            {% elif alert.alert_type == "disk_low" %}
+                            <span><i data-lucide="ticket"></i>Chamado <span data-ticket-label>#1032</span></span>
+                            {% else %}
+                            <span><i data-lucide="ticket-plus"></i><span data-ticket-label>Sem chamado</span></span>
+                            {% endif %}
+                            <span><i data-lucide="repeat-2"></i>{{ alert.events.all|length }} ocorrência(s)</span>
+                            <span>Última: <time title="{{ alert.last_seen_at|date:'d/m/Y H:i:s' }}">{{ alert.last_seen_at|date:"d/m H:i" }}</time></span>
+                        </div>
+                        <div class="quick-actions">
+                            <button type="button" data-assign-me><i data-lucide="user-plus"></i>Atribuir a mim</button>
+                            <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                            <a href="{% url 'events-list' %}?q={{ alert.endpoint.hostname|urlencode }}"><i data-lucide="history"></i>Ver eventos</a>
+                            <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                            {% if alert.status == "open" %}
+                            <form method="post" action="{% url 'alert-acknowledge' alert.id %}">
                                 {% csrf_token %}
-                                <input type="hidden" name="duration" value="{{ duration }}">
-                                <input type="text" name="reason" placeholder="Motivo opcional">
-                                <button type="submit">{{ label }}</button>
+                                <button type="submit"><i data-lucide="eye"></i>Reconhecer</button>
                             </form>
+                            {% endif %}
+                            {% if alert.status != "resolved" %}
+                            <form method="post" action="{% url 'alert-resolve' alert.id %}">
+                                {% csrf_token %}
+                                <button type="submit" {% if alert.severity == "critical" %}data-confirm="Se a condição ainda existir, o alerta poderá voltar na próxima avaliação. Resolver mesmo assim?"{% endif %}><i data-lucide="check-circle"></i>Resolver</button>
+                            </form>
+                            <details class="quick-action-menu">
+                                <summary><i data-lucide="bell-off"></i>Silenciar</summary>
+                                <div class="quick-action-popover">
+                                    {% for duration, label in mute_durations %}
+                                    <form method="post" action="{% url 'alert-mute' alert.id %}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="duration" value="{{ duration }}">
+                                        <input type="text" name="reason" placeholder="Motivo opcional">
+                                        <button type="submit">{{ label }}</button>
+                                    </form>
+                                    {% endfor %}
+                                </div>
+                            </details>
+                            <details class="quick-action-menu comment-menu">
+                                <summary><i data-lucide="message-square"></i>Observação</summary>
+                                <form class="quick-action-popover comment-popover" method="post" action="{% url 'alert-comment' alert.id %}">
+                                    {% csrf_token %}
+                                    <textarea name="message" rows="3" placeholder="Nota operacional curta"></textarea>
+                                    <button type="submit">Salvar observação</button>
+                                </form>
+                            </details>
+                            {% endif %}
+                        </div>
+                        {% if alert.events.all %}
+                        <div class="alert-event-strip">
+                            {% for event in alert.events.all %}
+                            {% if forloop.counter <= 3 %}
+                            <span>{{ event.get_event_type_display }} · {{ event.created_at|relative_time }}</span>
+                            {% endif %}
                             {% endfor %}
                         </div>
-                    </details>
-                    <details class="quick-action-menu comment-menu">
-                        <summary><i data-lucide="message-square"></i>Observa&ccedil;&atilde;o</summary>
-                        <form class="quick-action-popover comment-popover" method="post" action="{% url 'alert-comment' alert.id %}">
-                            {% csrf_token %}
-                            <textarea name="message" rows="3" placeholder="Nota operacional curta"></textarea>
-                            <button type="submit">Salvar observa&ccedil;&atilde;o</button>
-                        </form>
-                    </details>
-                    {% endif %}
+                        {% endif %}
+                    </div>
+                </article>
+                {% empty %}
+                <div class="panel empty-alert-state">
+                    <i data-lucide="check-circle"></i>
+                    <strong>Nenhum alerta encontrado com os filtros atuais.</strong>
+                    <p>Ajuste os filtros ou aguarde a próxima avaliação. Eventos técnicos sem problema tratável ficam em Eventos.</p>
                 </div>
-                {% if alert.events.all %}
-                <div class="alert-event-strip">
-                    {% for event in alert.events.all %}
-                    {% if forloop.counter <= 3 %}
-                    <span>{{ event.get_event_type_display }} &middot; {{ event.created_at|relative_time }}</span>
-                    {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <aside class="alerts-side-panel" aria-label="Resumo lateral de alertas">
+            <section class="panel side-card">
+                <div class="panel-header compact-header">
+                    <div>
+                        <h2><i data-lucide="activity"></i>Movimentos de tratamento</h2>
+                        <p>Últimas mudanças dentro da fila de alertas.</p>
+                    </div>
+                </div>
+                <div class="side-list">
+                    {% for alert in recent_activity %}
+                    <a class="side-list-item" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                        <span class="severity-dot severity-dot-{{ alert.severity }}"></span>
+                        <span>
+                            <strong>{{ alert.title }}</strong>
+                            <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.updated_at|relative_time }}</small>
+                        </span>
+                    </a>
+                    {% empty %}
+                    <div class="side-empty">Nenhum movimento recente na fila.</div>
                     {% endfor %}
                 </div>
-                {% endif %}
+            </section>
+
+            <section class="panel side-card">
+                <div class="panel-header compact-header">
+                    <div>
+                        <h2><i data-lucide="check-circle"></i>Resolvidos recentemente</h2>
+                        <p>Normalizações percebidas pelo RMM.</p>
+                    </div>
+                </div>
+                <div class="side-list">
+                    {% for alert in resolved_recent %}
+                    <a class="side-list-item resolved-item" href="{% url 'endpoint-detail' alert.endpoint.id %}">
+                        <i data-lucide="check-circle"></i>
+                        <span>
+                            <strong>{{ alert.title }}</strong>
+                            <small>{{ alert.endpoint.hostname|default:"-" }} · resolvido {{ alert.resolved_at|relative_time }}</small>
+                        </span>
+                    </a>
+                    {% empty %}
+                    <div class="side-empty">Nenhum alerta resolvido recentemente.</div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <section class="panel side-card">
+                <div class="panel-header compact-header">
+                    <div>
+                        <h2><i data-lucide="server"></i>Top endpoints afetados</h2>
+                        <p>Maior volume de alertas abertos.</p>
+                    </div>
+                </div>
+                <div class="affected-list">
+                    {% for item in top_endpoints %}
+                    <a class="affected-row" href="{% url 'endpoint-detail' item.endpoint.id %}">
+                        <span>
+                            <strong class="mono">{{ item.endpoint.hostname|default:"-" }}</strong>
+                            <small>{{ item.count }} alerta{{ item.count|pluralize }} aberto{{ item.count|pluralize }}</small>
+                        </span>
+                        <span class="severity-badge severity-{{ item.max_severity }}">{{ item.max_severity|title }}</span>
+                    </a>
+                    {% empty %}
+                    <div class="side-empty">Nenhum endpoint com alerta aberto.</div>
+                    {% endfor %}
+                </div>
+            </section>
+        </aside>
+    </section>
+
+    <div class="alert-drawer-backdrop" data-alert-drawer-backdrop hidden></div>
+    <aside class="alert-drawer" data-alert-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span>Detalhe do alerta</span>
+                <h2 data-alert-drawer-title>Selecione um alerta</h2>
+                <p data-alert-drawer-subtitle>Contexto operacional de tratamento</p>
             </div>
-        </article>
-        {% empty %}
-        <div class="panel empty-alert-state">
-            <i data-lucide="check-circle"></i>
-            <strong>Nenhum alerta encontrado com os filtros atuais.</strong>
-            <p>Ajuste os filtros ou aguarde a pr&oacute;xima avalia&ccedil;&atilde;o do comando de alertas.</p>
+            <button type="button" data-alert-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="alert-drawer-body">
+            <section>
+                <h3>Detalhes</h3>
+                <dl>
+                    <div><dt>Status</dt><dd data-alert-drawer-status>--</dd></div>
+                    <div><dt>Severidade</dt><dd data-alert-drawer-severity>--</dd></div>
+                    <div><dt>Tipo</dt><dd data-alert-drawer-type>--</dd></div>
+                    <div><dt>Responsável</dt><dd data-alert-drawer-owner>--</dd></div>
+                    <div><dt>SLA</dt><dd data-alert-drawer-sla>--</dd></div>
+                </dl>
+                <p data-alert-drawer-description></p>
+            </section>
+            <section>
+                <h3>Endpoint relacionado</h3>
+                <p><strong data-alert-drawer-endpoint>--</strong></p>
+                <a data-alert-drawer-endpoint-url href="#"><i data-lucide="external-link"></i>Abrir endpoint</a>
+            </section>
+            <section>
+                <h3>Chamado vinculado</h3>
+                <p data-alert-drawer-ticket>--</p>
+            </section>
+            <section>
+                <h3>Histórico e eventos relacionados</h3>
+                <p>Recorrência: <strong data-alert-drawer-recurrence>--</strong></p>
+                <p data-alert-drawer-events>--</p>
+            </section>
+            <section>
+                <h3>Observações</h3>
+                <textarea rows="4" data-alert-drawer-note placeholder="Registrar observação operacional"></textarea>
+                <button type="button" data-alert-note-save><i data-lucide="save"></i>Salvar observação</button>
+            </section>
+            <div class="alert-drawer-actions">
+                <button type="button" data-drawer-action="Reconhecer"><i data-lucide="eye"></i>Reconhecer</button>
+                <button type="button" data-drawer-action="Silenciar"><i data-lucide="bell-off"></i>Silenciar</button>
+                <button type="button" data-drawer-action="Resolver"><i data-lucide="check-circle"></i>Resolver</button>
+                <button type="button" data-drawer-action="Criar chamado"><i data-lucide="ticket"></i>Criar chamado</button>
+                <button type="button" data-drawer-action="open_events"><i data-lucide="history"></i>Ver eventos</button>
+            </div>
         </div>
-        {% endfor %}
-    </div>
-
-    <aside class="alerts-side-panel" aria-label="Resumo lateral de alertas">
-        <section class="panel side-card">
-            <div class="panel-header compact-header">
-                <div>
-                    <h2><i data-lucide="activity"></i>Atividade recente</h2>
-                    <p>&Uacute;ltimos movimentos registrados.</p>
-                </div>
-            </div>
-            <div class="side-list">
-                {% for alert in recent_activity %}
-                <a class="side-list-item" href="{% url 'endpoint-detail' alert.endpoint.id %}">
-                    <span class="severity-dot severity-dot-{{ alert.severity }}"></span>
-                    <span>
-                        <strong>{{ alert.title }}</strong>
-                        <small>{{ alert.endpoint.hostname|default:"-" }} &middot; {{ alert.updated_at|relative_time }}</small>
-                    </span>
-                </a>
-                {% empty %}
-                <div class="side-empty">Nenhuma atividade recente.</div>
-                {% endfor %}
-            </div>
-        </section>
-
-        <section class="panel side-card">
-            <div class="panel-header compact-header">
-                <div>
-                    <h2><i data-lucide="check-circle"></i>Resolvidos recentemente</h2>
-                    <p>Normaliza&ccedil;&otilde;es percebidas pelo RMM.</p>
-                </div>
-            </div>
-            <div class="side-list">
-                {% for alert in resolved_recent %}
-                <a class="side-list-item resolved-item" href="{% url 'endpoint-detail' alert.endpoint.id %}">
-                    <i data-lucide="check-circle"></i>
-                    <span>
-                        <strong>{{ alert.title }}</strong>
-                        <small>{{ alert.endpoint.hostname|default:"-" }} &middot; resolvido {{ alert.resolved_at|relative_time }}</small>
-                    </span>
-                </a>
-                {% empty %}
-                <div class="side-empty">Nenhum alerta resolvido recentemente.</div>
-                {% endfor %}
-            </div>
-        </section>
-
-        <section class="panel side-card">
-            <div class="panel-header compact-header">
-                <div>
-                    <h2><i data-lucide="server"></i>Top endpoints afetados</h2>
-                    <p>Maior volume de alertas abertos.</p>
-                </div>
-            </div>
-            <div class="affected-list">
-                {% for item in top_endpoints %}
-                <a class="affected-row" href="{% url 'endpoint-detail' item.endpoint.id %}">
-                    <span>
-                        <strong class="mono">{{ item.endpoint.hostname|default:"-" }}</strong>
-                        <small>{{ item.count }} alerta{{ item.count|pluralize }} aberto{{ item.count|pluralize }}</small>
-                    </span>
-                    <span class="severity-badge severity-{{ item.max_severity }}">{{ item.max_severity|title }}</span>
-                </a>
-                {% empty %}
-                <div class="side-empty">Nenhum endpoint com alerta aberto.</div>
-                {% endfor %}
-            </div>
-        </section>
     </aside>
+    <div class="alert-action-toast" data-alert-action-toast hidden></div>
 </section>
 
 {% if toast_resolved_alerts %}
@@ -294,5 +413,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
+<script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/alerts.js' %}"></script>
 {% endblock %}

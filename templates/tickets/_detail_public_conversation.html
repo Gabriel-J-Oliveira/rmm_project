@@ -1,0 +1,224 @@
+{{ public_conversation|json_script:"ticket-public-conversation-state" }}
+<div class="nw-public-chat" data-public-chat data-reply-url="{% url 'tickets:api-public-conversation' ticket.number %}">
+    <button class="nw-public-chat__fab" type="button" data-public-chat-toggle title="Conversa publica do chamado" aria-label="Conversa publica do chamado">
+        <i data-lucide="messages-square"></i>
+    </button>
+
+    <section class="nw-public-chat__panel" data-public-chat-panel hidden aria-label="Conversa publica do chamado">
+        <header class="nw-public-chat__header">
+            <div class="nw-public-chat__avatar"><i data-lucide="user-round"></i></div>
+            <div>
+                <span>Conversa publica</span>
+                <h2>Conversa com {{ ticket.requester }}</h2>
+                <p>{{ ticket.requester_email|default:"sem e-mail cadastrado" }} &middot; Chamado #{{ ticket.number }}</p>
+            </div>
+            <em class="nw-public-chat__status">{{ ticket.status_label }}</em>
+            <button class="desk-icon-button" type="button" data-public-chat-close aria-label="Fechar conversa"><i data-lucide="x"></i></button>
+        </header>
+
+        <div class="nw-public-chat__messages" data-public-chat-messages>
+            <div class="nw-public-chat__empty" data-public-chat-empty hidden>
+                <i data-lucide="message-circle"></i>
+                <strong>Ainda nao ha mensagens publicas neste chamado.</strong>
+                <span>Envie uma resposta para iniciar a conversa com o solicitante.</span>
+            </div>
+        </div>
+
+        <form class="nw-public-chat__composer" data-public-chat-form {% if not public_conversation.can_reply %}hidden{% endif %}>
+            <label>
+                <span>Resposta publica</span>
+                <textarea rows="3" name="body" data-public-chat-body placeholder="Escreva uma resposta publica para o solicitante..."></textarea>
+            </label>
+            <div class="nw-public-chat__attachments" data-public-chat-attachment-list hidden></div>
+            <footer>
+                <small><i data-lucide="mail"></i>Mensagem publica. O solicitante recebera por e-mail.</small>
+                <div>
+                    <button class="desk-btn" type="button" data-public-chat-pick><i data-lucide="paperclip"></i>Anexar</button>
+                    <input type="file" name="attachments" data-public-chat-file hidden multiple>
+                    <button class="desk-btn desk-btn-primary" type="submit" data-public-chat-submit><i data-lucide="send"></i>Enviar</button>
+                </div>
+            </footer>
+        </form>
+
+        <div class="nw-public-chat__readonly" data-public-chat-readonly {% if public_conversation.can_reply %}hidden{% endif %}>
+            <i data-lucide="lock"></i>
+            <span>{{ public_conversation.readonly_message }}</span>
+        </div>
+    </section>
+</div>
+
+<script>
+(() => {
+    const root = document.querySelector('[data-public-chat]');
+    if (!root) return;
+    const stateEl = document.getElementById('ticket-public-conversation-state');
+    const initialState = stateEl ? JSON.parse(stateEl.textContent) : { messages: [], can_reply: false };
+    const panel = root.querySelector('[data-public-chat-panel]');
+    const toggle = root.querySelector('[data-public-chat-toggle]');
+    const closeButton = root.querySelector('[data-public-chat-close]');
+    const messagesEl = root.querySelector('[data-public-chat-messages]');
+    const emptyEl = root.querySelector('[data-public-chat-empty]');
+    const form = root.querySelector('[data-public-chat-form]');
+    const textarea = root.querySelector('[data-public-chat-body]');
+    const submit = root.querySelector('[data-public-chat-submit]');
+    const fileInput = root.querySelector('[data-public-chat-file]');
+    const attachmentList = root.querySelector('[data-public-chat-attachment-list]');
+    let selectedFiles = [];
+
+    function csrfToken() {
+        return document.cookie.split('; ').find((row) => row.startsWith('csrftoken='))?.split('=')[1] || '';
+    }
+
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[char]));
+    }
+
+    function messageClass(kind) {
+        if (kind === 'requester') return 'is-requester';
+        if (kind === 'system') return 'is-system';
+        return 'is-team';
+    }
+
+    function renderAttachment(attachment) {
+        const label = `${attachment.name || 'anexo'}${attachment.size ? ` · ${attachment.size} bytes` : ''}`;
+        if (attachment.url) {
+            return `<a href="${escapeHtml(attachment.url)}" target="_blank" rel="noopener"><i data-lucide="paperclip"></i>${escapeHtml(label)}</a>`;
+        }
+        return `<span><i data-lucide="paperclip"></i>${escapeHtml(label)}</span>`;
+    }
+
+    function renderMessage(message) {
+        const attachments = (message.attachments || []).length
+            ? `<div class="nw-public-chat-message__attachments">${message.attachments.map(renderAttachment).join('')}</div>`
+            : '';
+        const body = escapeHtml(message.body).replace(/\n/g, '<br>');
+        return `
+            <article class="nw-public-chat-message ${messageClass(message.kind)}" data-public-chat-message="${escapeHtml(message.id)}">
+                <div>
+                    <header>
+                        <strong>${escapeHtml(message.author)}</strong>
+                        ${message.source === 'email_inbound' ? '<em>E-mail recebido</em>' : ''}
+                        <time>${escapeHtml(message.when)}</time>
+                    </header>
+                    <p>${body}</p>
+                    ${attachments}
+                </div>
+            </article>
+        `;
+    }
+
+    function renderMessages(messages) {
+        const realMessages = messages || [];
+        messagesEl.querySelectorAll('[data-public-chat-message]').forEach((node) => node.remove());
+        if (emptyEl) emptyEl.hidden = realMessages.length > 0;
+        messagesEl.insertAdjacentHTML('beforeend', realMessages.map(renderMessage).join(''));
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        window.lucide?.createIcons?.();
+    }
+
+    function openPanel() {
+        panel.hidden = false;
+        root.classList.add('is-open');
+        setTimeout(() => textarea?.focus(), 30);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        window.lucide?.createIcons?.();
+    }
+
+    function closePanel() {
+        root.classList.remove('is-open');
+        panel.hidden = true;
+    }
+
+    function showToast(message) {
+        const toast = document.querySelector('[data-toast]');
+        if (!toast) return;
+        toast.querySelector('span').textContent = message;
+        const button = toast.querySelector('button');
+        if (button) button.hidden = true;
+        toast.hidden = false;
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => { toast.hidden = true; }, 4200);
+    }
+
+    function renderSelectedFiles() {
+        if (!attachmentList) return;
+        attachmentList.hidden = selectedFiles.length === 0;
+        attachmentList.innerHTML = selectedFiles.map((file, index) => `
+            <span>
+                <i data-lucide="paperclip"></i>${escapeHtml(file.name)}
+                <button type="button" data-public-chat-remove-file="${index}" aria-label="Remover anexo"><i data-lucide="x"></i></button>
+            </span>
+        `).join('');
+        window.lucide?.createIcons?.();
+    }
+
+    async function submitReply(event) {
+        event.preventDefault();
+        const body = textarea?.value.trim() || '';
+        if (!body) {
+            showToast('Escreva uma mensagem antes de enviar.');
+            textarea?.focus();
+            return;
+        }
+        const data = new FormData();
+        data.append('body', body);
+        selectedFiles.forEach((file) => data.append('attachments', file));
+        submit.disabled = true;
+        submit.classList.add('is-loading');
+        try {
+            const response = await fetch(root.dataset.replyUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'X-CSRFToken': csrfToken() },
+                body: data,
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+                showToast(result.error || 'Nao foi possivel enviar a mensagem.');
+                return;
+            }
+            initialState.messages = [...(initialState.messages || []), result.message];
+            renderMessages(initialState.messages);
+            textarea.value = '';
+            selectedFiles = [];
+            renderSelectedFiles();
+            showToast(result.notificationStatus === 'pending' ? 'Mensagem enviada e e-mail preparado.' : 'Mensagem enviada.');
+        } catch (error) {
+            showToast('Falha ao comunicar com o servidor.');
+        } finally {
+            submit.disabled = false;
+            submit.classList.remove('is-loading');
+        }
+    }
+
+    renderMessages(initialState.messages || []);
+    toggle?.addEventListener('click', () => panel.hidden ? openPanel() : closePanel());
+    closeButton?.addEventListener('click', closePanel);
+    form?.addEventListener('submit', submitReply);
+    root.querySelector('[data-public-chat-pick]')?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', (event) => {
+        selectedFiles = [...selectedFiles, ...Array.from(event.target.files || [])];
+        event.target.value = '';
+        renderSelectedFiles();
+    });
+    attachmentList?.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-public-chat-remove-file]');
+        if (!button) return;
+        selectedFiles.splice(Number(button.dataset.publicChatRemoveFile), 1);
+        renderSelectedFiles();
+    });
+    document.addEventListener('click', (event) => {
+        if (panel.hidden) return;
+        if (!root.contains(event.target)) closePanel();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !panel.hidden) closePanel();
+    });
+})();
+</script>

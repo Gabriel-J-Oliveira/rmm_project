@@ -1,224 +1,385 @@
 {% extends "base.html" %}
 {% load static nightowl_time %}
 
-{% block title %}Night Owl | NOC{% endblock %}
+{% block title %}NightOwl NOC | Ao vivo{% endblock %}
 {% block body_class %}page-noc{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs" aria-label="Breadcrumb">
+<nav class="breadcrumbs noc-breadcrumbs" aria-label="Breadcrumb">
     <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>NOC</strong>
 </nav>
 {% endblock %}
 
 {% block content %}
-<section class="noc-hero page-header">
-    <div class="noc-title-wrap">
-        <span class="noc-mark page-header-icon"><i data-lucide="activity"></i></span>
-        <div>
-            <h1 class="page-title">Night Owl NOC</h1>
-            <p class="page-subtitle">Monitoramento operacional dos endpoints internos.</p>
+<section class="noc-wallboard" data-noc-root>
+    <header class="noc-hero page-header">
+        <div class="noc-title-wrap">
+            <span class="noc-mark page-header-icon"><i data-lucide="radio-tower"></i></span>
+            <div>
+                <span class="noc-live-pill"><span></span>LIVE</span>
+                <h1 class="page-title">NightOwl NOC</h1>
+                <p class="page-subtitle">Wallboard operacional: críticos, offline, segurança e capacidade agora.</p>
+            </div>
         </div>
+        <div class="noc-actions page-actions">
+            <span class="noc-update-meta">Atualizado em {{ last_updated_at|date:"H:i:s" }}</span>
+            <span class="ops-chip"><i data-lucide="satellite"></i>Última leitura <strong data-operational-opened-at>--</strong></span>
+            <span class="ops-chip"><i data-lucide="clock-3"></i>Idade <strong data-operational-age>agora</strong></span>
+            <span class="ops-chip"><i data-lucide="sparkles"></i>Novo desde abertura <strong data-operational-new-count>0</strong></span>
+            <span class="ops-chip ops-command-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+            <button type="button" class="noc-control is-active" data-noc-auto aria-pressed="true">
+                <i data-lucide="timer-reset"></i>Auto <span data-noc-countdown>30s</span>
+            </button>
+            <button type="button" class="noc-control" data-noc-refresh><i data-lucide="refresh-cw"></i>Atualizar agora</button>
+            <button type="button" class="noc-control" data-noc-copy-summary><i data-lucide="copy"></i>Copiar resumo</button>
+            <button type="button" class="noc-control" data-noc-tv aria-pressed="false"><i data-lucide="tv"></i>Modo TV</button>
+            <button type="button" class="noc-control" data-noc-sound aria-pressed="false"><i data-lucide="volume-x"></i>Som desligado</button>
+        </div>
+    </header>
+
+    <section class="noc-summary-strip" aria-label="Resumo ao vivo">
+        <article>
+            <span>Endpoints monitorados</span>
+            <strong>{{ total_endpoints }}</strong>
+        </article>
+        <article class="is-critical">
+            <span>Críticos</span>
+            <strong>{{ open_critical_count }}</strong>
+        </article>
+        <article class="is-offline">
+            <span>Offline</span>
+            <strong>{{ offline_count }}</strong>
+        </article>
+        <article class="is-warning">
+            <span>Afetados</span>
+            <strong>{{ affected_endpoints_count }}</strong>
+        </article>
+    </section>
+
+    <section class="noc-kpi-grid" aria-label="Saude operacional compacta">
+        <article class="noc-kpi">
+            <i data-lucide="heart-pulse"></i>
+            <span>Saúde geral</span>
+            <strong>{{ noc_health_score }}%</strong>
+        </article>
+        <article class="noc-kpi kpi-online">
+            <i data-lucide="check-circle"></i>
+            <span>Online</span>
+            <strong>{{ online_count }}</strong>
+        </article>
+        <article class="noc-kpi kpi-offline">
+            <i data-lucide="wifi-off"></i>
+            <span>Offline</span>
+            <strong>{{ offline_count }}</strong>
+        </article>
+        <article class="noc-kpi kpi-unknown">
+            <i data-lucide="circle-help"></i>
+            <span>Unknown / inventário</span>
+            <strong>{{ unknown_count }}</strong>
+        </article>
+        <article class="noc-kpi kpi-critical">
+            <i data-lucide="siren"></i>
+            <span>Críticos abertos</span>
+            <strong>{{ open_critical_count }}</strong>
+        </article>
+        <article class="noc-kpi kpi-warning">
+            <i data-lucide="hard-drive"></i>
+            <span>Capacidade</span>
+            <strong>{{ open_warning_count }}</strong>
+        </article>
+        <article class="noc-kpi kpi-security">
+            <i data-lucide="shield-alert"></i>
+            <span>Segurança</span>
+            <strong>{{ open_security_count }}</strong>
+        </article>
+        <article class="noc-kpi">
+            <i data-lucide="server"></i>
+            <span>Afetados</span>
+            <strong>{{ affected_endpoints_count }}</strong>
+        </article>
+    </section>
+    <div class="ops-skeleton-row" data-skeleton aria-hidden="true">
+        <span></span><span></span><span></span>
     </div>
-    <div class="noc-actions page-actions">
-        <span>Atualizado em {{ last_updated_at|date:"H:i:s" }}</span>
-        <span class="noc-refresh-chip"><i data-lucide="refresh-cw"></i>Auto-refresh <span data-noc-countdown>30s</span></span>
-        <button type="button" data-noc-refresh><i data-lucide="refresh-cw"></i>Atualizar agora</button>
-    </div>
-</section>
 
-<section class="noc-kpi-grid" aria-label="Estado geral do ambiente">
-    <article class="noc-kpi">
-        <i data-lucide="monitor"></i>
-        <span>Total de endpoints</span>
-        <strong>{{ total_endpoints }}</strong>
-    </article>
-    <article class="noc-kpi kpi-online">
-        <i data-lucide="check-circle"></i>
-        <span>Online</span>
-        <strong>{{ online_count }}</strong>
-    </article>
-    <article class="noc-kpi kpi-offline">
-        <i data-lucide="wifi-off"></i>
-        <span>Offline</span>
-        <strong>{{ offline_count }}</strong>
-    </article>
-    <article class="noc-kpi kpi-unknown">
-        <i data-lucide="circle-help"></i>
-        <span>Unknown</span>
-        <strong>{{ unknown_count }}</strong>
-    </article>
-    <article class="noc-kpi kpi-critical">
-        <i data-lucide="alert-triangle"></i>
-        <span>Cr&iacute;ticos abertos</span>
-        <strong>{{ open_critical_count }}</strong>
-    </article>
-    <article class="noc-kpi kpi-warning">
-        <i data-lucide="alert-triangle"></i>
-        <span>Warnings abertos</span>
-        <strong>{{ open_warning_count }}</strong>
-    </article>
-    <article class="noc-kpi kpi-security">
-        <i data-lucide="shield"></i>
-        <span>Seguran&ccedil;a abertos</span>
-        <strong>{{ open_security_count }}</strong>
-    </article>
-    <article class="noc-kpi">
-        <i data-lucide="server"></i>
-        <span>Endpoints afetados</span>
-        <strong>{{ affected_endpoints_count }}</strong>
-    </article>
-</section>
-
-<section class="noc-grid">
-    <article class="panel noc-panel noc-panel-critical">
-        <div class="noc-panel-header">
-            <div>
-                <h2><i data-lucide="alert-triangle"></i>Cr&iacute;ticos agora</h2>
-                <p>Alertas critical abertos mais recentes.</p>
-            </div>
-            <span class="severity-badge severity-critical">{{ open_critical_count }}</span>
-        </div>
-        <div class="noc-list">
-            {% for alert in critical_alerts %}
-            <a class="noc-alert-row" href="{% url 'endpoint-detail' alert.endpoint.id %}">
-                <span class="noc-row-icon severity-critical"><i data-lucide="alert-triangle"></i></span>
-                <span>
-                    <strong>{{ alert.title }}</strong>
-                    <small>{{ alert.endpoint.hostname|default:"-" }} &middot; {{ alert.last_seen_at|relative_time }}</small>
-                    <em>{{ alert.description|truncatechars:92 }}</em>
-                </span>
-            </a>
-            {% empty %}
-            <div class="noc-positive">
-                <i data-lucide="check-circle"></i>
-                <strong>Nenhum alerta cr&iacute;tico aberto.</strong>
-                <span>O ambiente n&atilde;o apresenta cr&iacute;ticos neste momento.</span>
-            </div>
-            {% endfor %}
-        </div>
-    </article>
-
-    <article class="panel noc-panel">
-        <div class="noc-panel-header">
-            <div>
-                <h2><i data-lucide="wifi-off"></i>Endpoints offline</h2>
-                <p>Mais tempo sem comunica&ccedil;&atilde;o primeiro.</p>
-            </div>
-            <span class="status-badge status-offline">{{ offline_count }}</span>
-        </div>
-        <div class="noc-list">
-            {% for endpoint in offline_endpoints %}
-            <a class="noc-endpoint-row" href="{% url 'endpoint-detail' endpoint.id %}">
-                <span>
-                    <strong class="mono">{{ endpoint.hostname|default:"-" }}</strong>
-                    <small>{{ endpoint.last_seen_at|relative_time }} &middot; {{ endpoint.last_ip|default:"IP -" }}</small>
-                </span>
-                <span>{{ endpoint.last_logged_user|default:"Usu&aacute;rio -" }}</span>
-            </a>
-            {% empty %}
-            <div class="noc-positive muted-positive">
-                <i data-lucide="check-circle"></i>
-                <strong>Nenhum endpoint offline.</strong>
-                <span>Todos os endpoints acompanhados est&atilde;o fora da fila offline.</span>
-            </div>
-            {% endfor %}
-        </div>
-    </article>
-
-    <article class="panel noc-panel">
-        <div class="noc-panel-header">
-            <div>
-                <h2><i data-lucide="shield"></i>Seguran&ccedil;a</h2>
-                <p>Sinais de seguran&ccedil;a e ferramentas sens&iacute;veis.</p>
-            </div>
-            <span class="severity-badge severity-security">{{ open_security_count }}</span>
-        </div>
-        <div class="noc-list">
-            {% for alert in security_alerts %}
-            <a class="noc-alert-row" href="{% url 'endpoint-detail' alert.endpoint.id %}">
-                <span class="noc-row-icon severity-security"><i data-lucide="shield"></i></span>
-                <span>
-                    <strong>{{ alert.title }}</strong>
-                    <small>{{ alert.endpoint.hostname|default:"-" }} &middot; {{ alert.last_seen_at|relative_time }}</small>
-                    <em>{{ alert.description|truncatechars:96 }}</em>
-                </span>
-            </a>
-            {% empty %}
-            <div class="noc-positive">
-                <i data-lucide="check-circle"></i>
-                <strong>Nenhum alerta de seguran&ccedil;a aberto.</strong>
-                <span>Sem novos sinais de seguran&ccedil;a operacional.</span>
-            </div>
-            {% endfor %}
-        </div>
-    </article>
-
-    <article class="panel noc-panel">
-        <div class="noc-panel-header">
-            <div>
-                <h2><i data-lucide="hard-drive"></i>Disco e capacidade</h2>
-                <p>Capacidade com pouco espa&ccedil;o livre.</p>
-            </div>
-            <span class="severity-badge severity-warning">{{ disk_alerts|length }}</span>
-        </div>
-        <div class="noc-list">
-            {% for alert in disk_alerts %}
-            <a class="noc-disk-row" href="{% url 'endpoint-detail' alert.endpoint.id %}">
-                <span class="noc-disk-main">
-                    <strong>{{ alert.metadata.disk_name|default:"Disco" }} em {{ alert.endpoint.hostname|default:"-" }}</strong>
-                    <small>{{ alert.metadata.free_percent|default:"-" }}% livre &middot; {{ alert.last_seen_at|relative_time }}</small>
-                </span>
-                <span class="noc-mini-bar" aria-hidden="true">
-                    <span class="disk-{{ alert.severity }}" style="width: {{ alert.metadata.used_percent|default:0 }}%"></span>
-                </span>
-            </a>
-            {% empty %}
-            <div class="noc-positive">
-                <i data-lucide="check-circle"></i>
-                <strong>Nenhum alerta de disco baixo.</strong>
-                <span>Capacidade sem sinal cr&iacute;tico na fila atual.</span>
-            </div>
-            {% endfor %}
-        </div>
-    </article>
-
-    <article class="panel noc-panel noc-panel-wide">
-        <div class="noc-panel-header">
-            <div>
-                <h2><i data-lucide="activity"></i>Atividade recente</h2>
-                <p>Eventos mais recentes de alertas.</p>
-            </div>
-        </div>
-        <ol class="noc-timeline">
-            {% for event in recent_activity %}
-            <li>
-                <span class="severity-dot severity-dot-{{ event.severity }}"></span>
+    <section class="noc-grid">
+        <article class="panel noc-panel noc-panel-critical">
+            <div class="noc-panel-header">
                 <div>
-                    <strong>{{ event.title }}</strong>
-                    <p>{{ event.endpoint.hostname|default:"-" }} &middot; {{ event.event_type }} &middot; {{ event.created_at|relative_time }}</p>
+                    <h2><i data-lucide="alert-triangle"></i>Críticos agora</h2>
+                    <p>Incidentes abertos que podem interromper a operação.</p>
                 </div>
-            </li>
-            {% empty %}
-            <li>
-                <span class="severity-dot"></span>
-                <div>
-                    <strong>Nenhuma atividade recente</strong>
-                    <p>Os alertas aparecer&atilde;o aqui ap&oacute;s a pr&oacute;xima avalia&ccedil;&atilde;o.</p>
+                <span class="severity-badge severity-critical">{{ open_critical_count }}</span>
+            </div>
+            <div class="noc-list">
+                {% for alert in critical_alerts %}
+                <article class="noc-alert-row noc-card-actionable severity-critical" tabindex="0"
+                    data-noc-open-drawer
+                    data-alert-id="{{ alert.id }}"
+                    data-mock-alert-id="{{ alert.title|escape }}"
+                    data-drawer-kind="Alerta crítico"
+                    data-title="{{ alert.title|escape }}"
+                    data-subtitle="{{ alert.endpoint.hostname|default:'Endpoint'|escape }} · {{ alert.last_seen_at|relative_time }}"
+                    data-body="{{ alert.description|escape }}"
+                    data-status="{{ alert.get_severity_display }}"
+                    data-endpoint="{{ alert.endpoint.hostname|default:'-'|escape }}"
+                    data-ip="{{ alert.endpoint.last_ip|default:'IP -' }}"
+                    data-user="{{ alert.endpoint.last_logged_user|default:'Usuário -'|escape }}"
+                    data-url="{% url 'endpoint-detail' alert.endpoint.id %}">
+                    <span class="noc-row-icon severity-critical"><i data-lucide="alert-triangle"></i></span>
+                    <span class="noc-row-main">
+                        <strong>{{ alert.title }}</strong>
+                        <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.last_seen_at|relative_time }}</small>
+                        <em>{{ alert.description|truncatechars:92 }}</em>
+                    </span>
+                    <div class="noc-card-actions" aria-label="Ações rápidas">
+                        {% if alert.status == "open" %}
+                        <form method="post" action="{% url 'alert-acknowledge' alert.id %}">{% csrf_token %}<button type="submit"><i data-lucide="eye"></i>Reconhecer</button></form>
+                        {% endif %}
+                        <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                        <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                        <form method="post" action="{% url 'alert-mute' alert.id %}">{% csrf_token %}<input type="hidden" name="duration" value="1h"><input type="hidden" name="reason" value="Silenciado pelo NOC"><button type="submit"><i data-lucide="bell-off"></i>Silenciar</button></form>
+                        <button type="button" data-noc-feedback="Verificação enviada para {{ alert.endpoint.hostname|default:'endpoint' }}."><i data-lucide="scan-line"></i>Verificar</button>
+                    </div>
+                </article>
+                {% empty %}
+                <div class="noc-positive">
+                    <i data-lucide="check-circle"></i>
+                    <strong>Nenhum crítico aberto.</strong>
+                    <span>O ambiente não apresenta incidentes críticos neste momento.</span>
                 </div>
-            </li>
-            {% endfor %}
-        </ol>
-    </article>
-</section>
+                {% endfor %}
+            </div>
+        </article>
 
-<footer class="noc-footer">
-    <span>Night Owl observando {{ total_endpoints }} endpoints</span>
-    {% if last_alert_evaluation %}
-    <span>&Uacute;ltima avalia&ccedil;&atilde;o de alertas: {{ last_alert_evaluation|date:"H:i" }}</span>
-    {% endif %}
-</footer>
+        <article class="panel noc-panel">
+            <div class="noc-panel-header">
+                <div>
+                    <h2><i data-lucide="wifi-off"></i>Endpoints offline</h2>
+                    <p>Sem heartbeat, ordenados pelo maior tempo sem comunicação.</p>
+                </div>
+                <span class="status-badge status-offline">{{ offline_count }}</span>
+            </div>
+            <div class="noc-list">
+                {% for endpoint in offline_endpoints %}
+                <article class="noc-endpoint-row noc-card-actionable" tabindex="0"
+                    data-noc-open-drawer
+                    data-drawer-kind="Endpoint offline"
+                    data-title="{{ endpoint.hostname|default:'Endpoint'|escape }}"
+                    data-subtitle="{{ endpoint.last_seen_at|relative_time }} · {{ endpoint.last_ip|default:'IP -' }}"
+                    data-body="Endpoint sem comunicação com o RMM. Verifique conectividade, serviço do agente e disponibilidade do equipamento."
+                    data-status="{{ endpoint.get_status_display }}"
+                    data-endpoint="{{ endpoint.hostname|default:'-'|escape }}"
+                    data-ip="{{ endpoint.last_ip|default:'IP -' }}"
+                    data-user="{{ endpoint.last_logged_user|default:'Usuário -'|escape }}"
+                    data-url="{% url 'endpoint-detail' endpoint.id %}">
+                    <span>
+                        <strong class="mono">{{ endpoint.hostname|default:"-" }}</strong>
+                        <small>{{ endpoint.last_seen_at|relative_time }} · {{ endpoint.last_ip|default:"IP -" }}</small>
+                    </span>
+                    <span>{{ endpoint.last_logged_user|default:"Usuário -" }}</span>
+                    <div class="noc-card-actions" aria-label="Ações rápidas">
+                        <a href="{% url 'endpoint-detail' endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                        <a href="{% url 'tickets:create' %}?endpoint={{ endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                        <button type="button" data-noc-feedback="Ping enviado para {{ endpoint.hostname|default:'endpoint' }}."><i data-lucide="terminal"></i>Ping</button>
+                        <button type="button" data-noc-feedback="Verificação solicitada para {{ endpoint.hostname|default:'endpoint' }}."><i data-lucide="scan-line"></i>Verificar</button>
+                    </div>
+                </article>
+                {% empty %}
+                <div class="noc-positive muted-positive">
+                    <i data-lucide="check-circle"></i>
+                    <strong>Nenhum endpoint offline.</strong>
+                    <span>Todos os endpoints acompanhados estão fora da fila offline.</span>
+                </div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="panel noc-panel">
+            <div class="noc-panel-header">
+                <div>
+                    <h2><i data-lucide="shield"></i>Segurança</h2>
+                    <p>Exposições e ferramentas sensíveis em aberto.</p>
+                </div>
+                <span class="severity-badge severity-security">{{ open_security_count }}</span>
+            </div>
+            <div class="noc-list">
+                {% for alert in security_alerts %}
+                <article class="noc-alert-row noc-card-actionable severity-security" tabindex="0"
+                    data-noc-open-drawer
+                    data-alert-id="{{ alert.id }}"
+                    data-mock-alert-id="{{ alert.title|escape }}"
+                    data-drawer-kind="Alerta de segurança"
+                    data-title="{{ alert.title|escape }}"
+                    data-subtitle="{{ alert.endpoint.hostname|default:'Endpoint'|escape }} · {{ alert.last_seen_at|relative_time }}"
+                    data-body="{{ alert.description|escape }}"
+                    data-status="{{ alert.get_severity_display }}"
+                    data-endpoint="{{ alert.endpoint.hostname|default:'-'|escape }}"
+                    data-ip="{{ alert.endpoint.last_ip|default:'IP -' }}"
+                    data-user="{{ alert.endpoint.last_logged_user|default:'Usuário -'|escape }}"
+                    data-url="{% url 'endpoint-detail' alert.endpoint.id %}">
+                    <span class="noc-row-icon severity-security"><i data-lucide="shield"></i></span>
+                    <span class="noc-row-main">
+                        <strong>{{ alert.title }}</strong>
+                        <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.last_seen_at|relative_time }}</small>
+                        <em>{{ alert.description|truncatechars:96 }}</em>
+                    </span>
+                    <div class="noc-card-actions" aria-label="Ações rápidas">
+                        {% if alert.status == "open" %}
+                        <form method="post" action="{% url 'alert-acknowledge' alert.id %}">{% csrf_token %}<button type="submit"><i data-lucide="eye"></i>Reconhecer</button></form>
+                        {% endif %}
+                        <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                        <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                        <form method="post" action="{% url 'alert-mute' alert.id %}">{% csrf_token %}<input type="hidden" name="duration" value="1h"><input type="hidden" name="reason" value="Silenciado pelo NOC"><button type="submit"><i data-lucide="bell-off"></i>Silenciar</button></form>
+                        <button type="button" data-noc-feedback="Verificação de segurança solicitada para {{ alert.endpoint.hostname|default:'endpoint' }}."><i data-lucide="scan-line"></i>Verificar</button>
+                    </div>
+                </article>
+                {% empty %}
+                <div class="noc-positive">
+                    <i data-lucide="check-circle"></i>
+                    <strong>Nenhum alerta de segurança aberto.</strong>
+                    <span>Sem novos sinais de segurança operacional.</span>
+                </div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="panel noc-panel">
+            <div class="noc-panel-header">
+                <div>
+                    <h2><i data-lucide="hard-drive"></i>Disco e capacidade</h2>
+                    <p>Risco imediato por recurso baixo ou capacidade degradada.</p>
+                </div>
+                <span class="severity-badge severity-warning">{{ disk_alerts|length }}</span>
+            </div>
+            <div class="noc-list">
+                {% for alert in disk_alerts %}
+                <article class="noc-disk-row noc-card-actionable" tabindex="0"
+                    data-noc-open-drawer
+                    data-alert-id="{{ alert.id }}"
+                    data-mock-alert-id="{{ alert.title|escape }}"
+                    data-drawer-kind="Capacidade"
+                    data-title="{{ alert.metadata.disk_name|default:'Disco' }} em {{ alert.endpoint.hostname|default:'Endpoint' }}"
+                    data-subtitle="{{ alert.metadata.free_percent|default:'-' }}% livre · {{ alert.last_seen_at|relative_time }}"
+                    data-body="{{ alert.description|escape }}"
+                    data-status="{{ alert.get_severity_display }}"
+                    data-endpoint="{{ alert.endpoint.hostname|default:'-'|escape }}"
+                    data-ip="{{ alert.endpoint.last_ip|default:'IP -' }}"
+                    data-user="{{ alert.endpoint.last_logged_user|default:'Usuário -'|escape }}"
+                    data-url="{% url 'endpoint-detail' alert.endpoint.id %}">
+                    <span class="noc-disk-main">
+                        <strong>{{ alert.metadata.disk_name|default:"Disco" }} em {{ alert.endpoint.hostname|default:"-" }}</strong>
+                        <small>{{ alert.metadata.free_percent|default:"-" }}% livre · {{ alert.last_seen_at|relative_time }}</small>
+                    </span>
+                    <span class="noc-mini-bar" aria-hidden="true">
+                        <span class="disk-{{ alert.severity }}" style="width: {{ alert.metadata.used_percent|default:0 }}%"></span>
+                    </span>
+                    <div class="noc-card-actions" aria-label="Ações rápidas">
+                        {% if alert.status == "open" %}
+                        <form method="post" action="{% url 'alert-acknowledge' alert.id %}">{% csrf_token %}<button type="submit"><i data-lucide="eye"></i>Reconhecer</button></form>
+                        {% endif %}
+                        <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
+                        <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                        <form method="post" action="{% url 'alert-mute' alert.id %}">{% csrf_token %}<input type="hidden" name="duration" value="1h"><input type="hidden" name="reason" value="Silenciado pelo NOC"><button type="submit"><i data-lucide="bell-off"></i>Silenciar</button></form>
+                        <button type="button" data-noc-feedback="Verificação de capacidade solicitada para {{ alert.endpoint.hostname|default:'endpoint' }}."><i data-lucide="scan-line"></i>Verificar</button>
+                    </div>
+                </article>
+                {% empty %}
+                <div class="noc-positive">
+                    <i data-lucide="check-circle"></i>
+                    <strong>Nenhum alerta de disco baixo.</strong>
+                    <span>Capacidade sem sinal crítico na fila atual.</span>
+                </div>
+                {% endfor %}
+            </div>
+        </article>
+
+        <article class="panel noc-panel noc-panel-wide">
+            <div class="noc-panel-header">
+                <div>
+                    <h2><i data-lucide="activity"></i>Atividade recente resumida</h2>
+                    <p>Pulso curto do que mudou agora. A auditoria completa fica em Eventos.</p>
+                </div>
+            </div>
+            <ol class="noc-timeline">
+                {% for event in recent_activity %}
+                <li class="noc-card-actionable" tabindex="0"
+                    data-noc-open-drawer
+                    data-drawer-kind="Evento recente"
+                    data-title="{{ event.title|escape }}"
+                    data-subtitle="{{ event.endpoint.hostname|default:'Sistema'|escape }} · {{ event.created_at|relative_time }}"
+                    data-body="{{ event.description|default:event.event_type|escape }}"
+                    data-status="{{ event.get_severity_display }}"
+                    data-endpoint="{{ event.endpoint.hostname|default:'-'|escape }}"
+                    data-ip="{{ event.endpoint.last_ip|default:'IP -' }}"
+                    data-user="{{ event.actor_name|default:'NightOwl'|escape }}"
+                    {% if event.endpoint %}data-url="{% url 'endpoint-detail' event.endpoint.id %}"{% else %}data-url="{% url 'events-list' %}"{% endif %}>
+                    <span class="severity-dot severity-dot-{{ event.severity }}"></span>
+                    <div>
+                        <strong>{{ event.title }}</strong>
+                        <p>{{ event.endpoint.hostname|default:"Sistema" }} · {{ event.event_type }} · {{ event.created_at|relative_time }}</p>
+                    </div>
+                </li>
+                {% empty %}
+                <li>
+                    <span class="severity-dot"></span>
+                    <div>
+                        <strong>Nenhuma atividade recente</strong>
+                        <p>Os alertas aparecerão aqui após a próxima avaliação.</p>
+                    </div>
+                </li>
+                {% endfor %}
+            </ol>
+        </article>
+    </section>
+
+    <footer class="noc-footer">
+        <span>NOC observando {{ total_endpoints }} endpoints em tempo real</span>
+        {% if last_alert_evaluation %}
+        <span>Última avaliação de alertas: {{ last_alert_evaluation|date:"H:i" }}</span>
+        {% endif %}
+    </footer>
+
+    <div class="noc-drawer-backdrop" data-noc-drawer-backdrop hidden></div>
+    <aside class="noc-drawer" data-noc-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span data-noc-drawer-kind>Contexto</span>
+                <h2 data-noc-drawer-title>Selecione um item</h2>
+                <p data-noc-drawer-subtitle>Detalhes do monitoramento ao vivo</p>
+            </div>
+            <button type="button" data-noc-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="noc-drawer-body">
+            <section>
+                <h3>Status</h3>
+                <strong data-noc-drawer-status>--</strong>
+            </section>
+            <section>
+                <h3>Endpoint</h3>
+                <p><strong data-noc-drawer-endpoint>--</strong></p>
+                <p><span data-noc-drawer-ip>--</span> · <span data-noc-drawer-user>--</span></p>
+            </section>
+            <section>
+                <h3>Resumo operacional</h3>
+                <p data-noc-drawer-body>Escolha um alerta ou endpoint para ver o contexto.</p>
+            </section>
+            <div class="noc-drawer-actions">
+                <a href="#" data-noc-drawer-url><i data-lucide="external-link"></i>Abrir endpoint</a>
+                <button type="button" data-operational-action="execute_check" data-noc-feedback="Verificação executada pelo NOC."><i data-lucide="scan-line"></i>Executar verificação</button>
+                <button type="button" data-operational-action="force_inventory" data-noc-feedback="Inventário forçado pelo NOC."><i data-lucide="package-search"></i>Forçar inventário</button>
+                <button type="button" data-operational-action="check_defender" data-noc-feedback="Verificação do Defender enfileirada."><i data-lucide="shield-check"></i>Verificar Defender</button>
+                <button type="button" data-operational-action="check_disk" data-noc-feedback="Verificação de disco enfileirada."><i data-lucide="hard-drive"></i>Verificar disco</button>
+                <button type="button" data-operational-action="run_cleanup" data-noc-feedback="Limpeza remota enfileirada."><i data-lucide="sparkles"></i>Executar limpeza</button>
+            </div>
+        </div>
+    </aside>
+    <div class="noc-toast" data-noc-toast hidden></div>
+</section>
 {% endblock %}
 
 {% block scripts %}
+<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
+<script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/noc.js' %}"></script>
 {% endblock %}

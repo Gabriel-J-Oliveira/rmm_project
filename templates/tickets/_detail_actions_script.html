@@ -14,6 +14,8 @@
         waiting_third_party: 'Aguardando terceiro',
         escalated: 'Escalado',
         resolved: 'Resolvido',
+        closed: 'Fechado',
+        canceled: 'Cancelado',
     };
     const PRIORITY_LABELS = { low: 'Baixa', normal: 'Normal', high: 'Alta', critical: 'Critica' };
     const resolutionDrawer = document.querySelector('[data-resolution-drawer]');
@@ -59,7 +61,7 @@
         return document.cookie.split('; ').find((row) => row.startsWith('csrftoken='))?.split('=')[1] || '';
     }
 
-    async function persistTicketField(field, value) {
+    async function persistTicketField(field, value, extraPayload = {}) {
         try {
             const response = await fetch(ticketUpdateUrl, {
                 method: 'POST',
@@ -68,7 +70,7 @@
                     'Content-Type': 'application/json',
                     'X-CSRFToken': csrfToken(),
                 },
-                body: JSON.stringify({ field, value }),
+                body: JSON.stringify({ field, value, ...extraPayload }),
             });
             const result = await response.json();
             if (!response.ok || !result.ok) {
@@ -603,6 +605,10 @@
         const result = await persistTicketField('assigned_to', CURRENT_USER);
         if (!result) return;
         state.assignedTo = CURRENT_USER;
+        if (result.ticket?.status) {
+            state.status = result.ticket.status;
+            state.statusLabel = result.ticket.statusLabel || state.statusLabel;
+        }
         updateBadges();
         addActivity('system', 'user-check', `${CURRENT_USER} assumiu o chamado`, 'Responsavel atualizado pela acao rapida.', 'Sistema');
         addAuditEvent({
@@ -863,8 +869,16 @@
             openDrawer(escalationDrawer);
             return;
         }
+        let reason = '';
+        if (['waiting_user', 'waiting_third_party', 'closed', 'canceled'].includes(status) || (status === 'in_progress' && state.status === 'resolved')) {
+            reason = window.prompt(`Motivo para alterar para ${STATUS_LABELS[status] || status}:`) || '';
+            if (!reason.trim()) {
+                showToast('Informe um motivo para alterar o status.');
+                return;
+            }
+        }
         const previous = state.statusLabel;
-        const result = await persistTicketField('status', status);
+        const result = await persistTicketField('status', status, { reason });
         if (!result) return;
         state.status = status;
         state.statusLabel = result.ticket.statusLabel || STATUS_LABELS[status] || status;

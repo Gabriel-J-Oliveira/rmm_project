@@ -1,23 +1,95 @@
-<section class="desk-panel kanban-panel">
-    <div class="desk-panel-title-row">
+<section class="desk-panel kanban-panel nw-kanban-panel">
+    <div class="desk-panel-title-row nw-kanban-title">
         <div>
-            <h2><i data-lucide="columns-3"></i>Kanban por status</h2>
-            <p>Arraste futuramente entre colunas; transicoes sensiveis pedirao confirmacao.</p>
+            <h2><i data-lucide="columns-3"></i>Kanban operacional</h2>
+            <p>Arraste cards entre status. Mudancas sensiveis usam o workflow real e pedem motivo ou solucao.</p>
+        </div>
+        <div class="nw-kanban-title__meta">
+            <span class="desk-badge neutral">{{ tickets|length }} chamados filtrados</span>
+            <button class="desk-btn" type="button" data-preview-hide><i data-lucide="panel-right-close"></i>Ocultar preview</button>
         </div>
     </div>
-    <div class="service-kanban desk-central-kanban">
+
+    <div class="nw-kanban-board" data-kanban-board>
         {% for column in kanban_columns %}
-        <article class="kanban-column">
-            <header><strong>{{ column.label }}</strong><span>{{ column.count }}</span></header>
-            {% for ticket in column.tickets %}
-            <a class="kanban-card priority-{{ ticket.priority }}" href="{% url 'tickets:central' %}?ticket={{ ticket.number }}&view=kanban">
-                <span>#{{ ticket.number }}</span>
-                <strong>{{ ticket.title|truncatechars:48 }}</strong>
-                <small>{{ ticket.priority_label }} &middot; {{ ticket.assigned_to|default:"Sem responsavel" }}</small>
-            </a>
-            {% empty %}
-            <div class="desk-empty compact">Sem chamados.</div>
-            {% endfor %}
+        <article class="nw-kanban-column" data-kanban-status="{{ column.status }}">
+            <header>
+                <div>
+                    <strong>{{ column.label }}</strong>
+                    <small>
+                        {% if column.status == "resolved" %}
+                        consulta / contestavel
+                        {% elif column.status == "waiting_user" %}
+                        precisa retorno
+                        {% elif column.status == "waiting_third_party" %}
+                        terceiro
+                        {% else %}
+                        fila ativa
+                        {% endif %}
+                    </small>
+                </div>
+                <span data-kanban-count="{{ column.status }}">{{ column.count }}</span>
+            </header>
+            <div class="nw-kanban-column__body" data-kanban-column-body="{{ column.status }}">
+                {% for ticket in column.tickets %}
+                <article
+                    class="kanban-card nw-kanban-card priority-{{ ticket.priority }} origin-{{ ticket.central.origin }} sla-{{ ticket.central.sla_state }} {% if ticket.central.is_unassigned %}is-unassigned{% endif %} {% if ticket.central.is_rmm %}is-rmm{% endif %} {% if ticket.partner %}is-vip{% endif %} {% if ticket.central.is_stale %}is-stale{% endif %} {% if selected_ticket and selected_ticket.number == ticket.number %}is-selected{% endif %}"
+                    tabindex="0"
+                    role="button"
+                    draggable="true"
+                    data-ticket="{{ ticket.number }}"
+                    data-detail-url="{% url 'tickets:detail' ticket.number %}"
+                    data-status="{{ ticket.status }}"
+                    data-priority="{{ ticket.priority }}"
+                    data-technician="{{ ticket.assigned_to|default:'Sem responsavel' }}"
+                    data-client="{{ ticket.sector }}"
+                    data-sector="{{ ticket.sector }}"
+                    data-category="{{ ticket.category }}"
+                    data-queue="{{ ticket.queue }}"
+                    data-origin="{{ ticket.central.origin }}"
+                    data-sla="{{ ticket.central.sla_state }}"
+                    data-vip="{% if ticket.partner %}1{% else %}0{% endif %}"
+                    data-unassigned="{% if ticket.central.is_unassigned %}1{% else %}0{% endif %}"
+                    data-reopened="{% if ticket.central.is_reopened %}1{% else %}0{% endif %}"
+                    data-attachments="{% if ticket.central.has_attachment %}1{% else %}0{% endif %}"
+                    data-internal="{% if ticket.central.has_recent_internal %}1{% else %}0{% endif %}"
+                    data-merged="{% if ticket.central.is_merged %}1{% else %}0{% endif %}"
+                    data-rmm-linked="{% if ticket.endpoint %}1{% else %}0{% endif %}"
+                    data-rmm-offline="{% if ticket.central.endpoint_status == 'offline' %}1{% else %}0{% endif %}"
+                    data-rmm-alert="{% if ticket.central.is_rmm %}1{% else %}0{% endif %}"
+                    data-rmm-antivirus="{% if 'Bitdefender' in ticket.title %}1{% else %}0{% endif %}"
+                    data-rmm-disk="{% if 'disco' in ticket.title|lower %}1{% else %}0{% endif %}"
+                    data-stale="{% if ticket.central.is_stale %}1{% else %}0{% endif %}"
+                >
+                    <div class="nw-kanban-card__top">
+                        <span class="desk-ticket-number">#{{ ticket.number }}</span>
+                        <span class="desk-badge priority-{{ ticket.priority }}">{{ ticket.priority_label }}</span>
+                    </div>
+                    <h3>{{ ticket.title|truncatechars:64 }}</h3>
+                    <p>{{ ticket.requester }}{% if ticket.sector %} · {{ ticket.sector }}{% endif %}</p>
+                    <div class="nw-kanban-card__meta">
+                        <span><i data-lucide="user-round"></i><em data-kanban-assignee>{{ ticket.assigned_to|default:"Sem dono" }}</em></span>
+                        <span><i data-lucide="timer"></i><em data-kanban-sla>{{ ticket.central.sla_label|default:ticket.opened_for }}</em></span>
+                        <span><i data-lucide="{{ ticket.central.origin_icon }}"></i>{{ ticket.central.origin_label }}</span>
+                    </div>
+                    <div class="nw-kanban-card__badges">
+                        <span class="desk-badge neutral">{{ ticket.category }}</span>
+                        {% if ticket.priority == "critical" %}<span class="desk-badge status-canceled">Critico</span>{% endif %}
+                        {% if ticket.central.sla_state == "critical" %}<span class="desk-badge status-canceled">SLA vencido</span>{% elif ticket.central.sla_state == "warning" %}<span class="desk-badge status-waiting_user">SLA vencendo</span>{% endif %}
+                        {% if ticket.central.is_unassigned %}<span class="desk-badge status-waiting_user">Sem responsavel</span>{% endif %}
+                        {% if ticket.central.is_reopened %}<span class="desk-badge status-in_progress">Reaberto</span>{% endif %}
+                        {% if ticket.central.is_rmm %}<span class="desk-badge status-waiting_third_party">RMM</span>{% endif %}
+                        {% if ticket.partner %}<span class="desk-badge partner-badge">VIP</span>{% endif %}
+                    </div>
+                    <footer>
+                        <small>Atualizado {{ ticket.updated_for }}</small>
+                        <a href="{% url 'tickets:detail' ticket.number %}" aria-label="Abrir chamado {{ ticket.number }}"><i data-lucide="maximize-2"></i></a>
+                    </footer>
+                </article>
+                {% empty %}
+                <div class="desk-empty compact nw-kanban-empty"><i data-lucide="inbox"></i><span>Sem chamados nesta coluna.</span></div>
+                {% endfor %}
+            </div>
         </article>
         {% endfor %}
     </div>

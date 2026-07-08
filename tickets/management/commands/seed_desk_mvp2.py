@@ -7,20 +7,33 @@ class Command(BaseCommand):
     help = 'Seed idempotente das configuracoes reais do Desk para o Backend MVP 2.'
 
     def handle(self, *args, **options):
+        self._normalize_legacy_names()
         queues = self._seed_queues()
         slas = self._seed_slas(queues)
         categories = self._seed_categories(queues, slas)
-        self._seed_templates(categories)
+        self._seed_templates()
         self._backfill_tickets(categories, slas)
         self.stdout.write(self.style.SUCCESS('Backend MVP 2 seed aplicado com sucesso.'))
+
+    def _normalize_legacy_names(self):
+        aliases = [
+            (DeskQueue, 'Seguranca', ['Seguranca', 'Seguran\u00e7a', 'Seguran\u00c3\u00a7a']),
+            (DeskQueue, 'CAB / Mudancas', ['CAB / Mudancas', 'CAB / Mudan\u00e7as', 'CAB / Mudan\u00c3\u00a7as']),
+            (DeskSLA, 'Critica', ['Critica', 'Cr\u00edtica', 'Cr\u00c3\u00adtica']),
+            (TicketCategory, 'Seguranca', ['Seguranca', 'Seguran\u00e7a', 'Seguran\u00c3\u00a7a']),
+            (TicketCategory, 'GMUD / Mudanca', ['GMUD / Mudanca', 'GMUD / Mudan\u00e7a', 'GMUD / Mudan\u00c3\u00a7a']),
+        ]
+        for model, canonical, names in aliases:
+            if not model.objects.filter(name=canonical).exists():
+                model.objects.filter(name__in=[name for name in names if name != canonical]).update(name=canonical)
 
     def _seed_queues(self):
         specs = [
             ('N1 - Atendimento', 'Triagem, atendimento inicial e solicitacoes comuns.', 'Gabriel', ['Gabriel', 'Tecnico N1', 'Renan', 'Ana'], 'Comercial', 80, True, True, False),
             ('N2 - Infraestrutura', 'Incidentes de infraestrutura, endpoints e alertas tecnicos.', 'Infraestrutura', ['Renan', 'Infraestrutura', 'Lucas'], 'Comercial', 50, True, True, False),
-            ('Segurança', 'Incidentes de seguranca, antivirus e acessos suspeitos.', 'Segurança', ['Ana', 'Seguranca'], 'Comercial', 30, True, True, False),
+            ('Seguranca', 'Incidentes de seguranca, antivirus e acessos suspeitos.', 'Seguranca', ['Ana', 'Seguranca'], 'Comercial', 30, True, True, False),
             ('Sistemas', 'Sistemas internos, ERP e aplicacoes corporativas.', 'Sistemas', ['Lucas', 'Sistemas'], 'Comercial', 40, True, False, False),
-            ('CAB / Mudanças', 'Comite de aprovacao de mudancas.', 'Coordenacao', ['Gabriel', 'Coordenacao', 'Infraestrutura', 'Seguranca', 'Sistemas'], 'Sob demanda', 20, False, False, True),
+            ('CAB / Mudancas', 'Comite de aprovacao de mudancas.', 'Coordenacao', ['Gabriel', 'Coordenacao', 'Infraestrutura', 'Seguranca', 'Sistemas'], 'Sob demanda', 20, False, False, True),
         ]
         queues = {}
         for name, description, responsible, members, hours, capacity, tickets, rmm, gmud in specs:
@@ -46,7 +59,7 @@ class Command(BaseCommand):
             ('Baixa', Ticket.PRIORITY_LOW, 480, 4320, DeskSLA.CALENDAR_BUSINESS, True),
             ('Normal', Ticket.PRIORITY_NORMAL, 240, 1440, DeskSLA.CALENDAR_BUSINESS, True),
             ('Alta', Ticket.PRIORITY_HIGH, 60, 480, DeskSLA.CALENDAR_BUSINESS, True),
-            ('Crítica', Ticket.PRIORITY_CRITICAL, 15, 240, DeskSLA.CALENDAR_24X7, False),
+            ('Critica', Ticket.PRIORITY_CRITICAL, 15, 240, DeskSLA.CALENDAR_24X7, False),
         ]
         slas = {}
         for name, priority, first_response, resolution, calendar, pause in specs:
@@ -76,11 +89,11 @@ class Command(BaseCommand):
             ('Hardware', 'Notebooks, desktops, perifericos e componentes fisicos.', 'bi-pc-display', 'cyan', [c.TYPE_INCIDENT], Ticket.PRIORITY_HIGH, 'N2 - Infraestrutura', 'Alta', ['Notebook', 'Desktop', 'Periferico']),
             ('Software', 'Instalacoes, atualizacoes, falhas de aplicativo e licencas.', 'bi-window', 'purple', [c.TYPE_INCIDENT, c.TYPE_REQUEST], Ticket.PRIORITY_NORMAL, 'N1 - Atendimento', 'Normal', ['Instalacao', 'Licenca', 'Atualizacao']),
             ('Rede', 'Conectividade, VPN, Wi-Fi, DNS, firewall e links.', 'bi-hdd-network', 'blue', [c.TYPE_INCIDENT], Ticket.PRIORITY_HIGH, 'N2 - Infraestrutura', 'Alta', ['Wi-Fi', 'DNS', 'Link']),
-            ('Segurança', 'Antivirus, acessos suspeitos, risco e resposta a incidente.', 'bi-shield-check', 'red', [c.TYPE_INCIDENT, c.TYPE_RMM_ALERT], Ticket.PRIORITY_HIGH, 'Segurança', 'Crítica', ['Antivirus', 'Acesso suspeito', 'Risco']),
+            ('Seguranca', 'Antivirus, acessos suspeitos, risco e resposta a incidente.', 'bi-shield-check', 'red', [c.TYPE_INCIDENT, c.TYPE_RMM_ALERT], Ticket.PRIORITY_HIGH, 'Seguranca', 'Critica', ['Antivirus', 'Acesso suspeito', 'Risco']),
             ('RMM / Alerta', 'Eventos vindos do agente, monitoramento e telemetria.', 'bi-exclamation-triangle', 'amber', [c.TYPE_RMM_ALERT], Ticket.PRIORITY_HIGH, 'N2 - Infraestrutura', 'Alta', ['Endpoint', 'Inventario', 'Alerta']),
             ('E-mail', 'Envio, recebimento, caixas compartilhadas e sincronizacao.', 'bi-envelope', 'cyan', [c.TYPE_INCIDENT, c.TYPE_REQUEST], Ticket.PRIORITY_NORMAL, 'N1 - Atendimento', 'Normal', ['Conta', 'Caixa compartilhada', 'Sincronizacao']),
             ('Impressora', 'Fila de impressao, drivers, spooler e mapeamento.', 'bi-printer', 'gray', [c.TYPE_INCIDENT, c.TYPE_REQUEST], Ticket.PRIORITY_NORMAL, 'N1 - Atendimento', 'Normal', ['Driver', 'Fila', 'Mapeamento']),
-            ('GMUD / Mudança', 'Registros de mudanca, aprovacao, janela e rollback.', 'bi-diagram-3', 'purple', [c.TYPE_GMUD], Ticket.PRIORITY_NORMAL, 'CAB / Mudanças', None, ['Servidor', 'Firewall', 'Emergencial']),
+            ('GMUD / Mudanca', 'Registros de mudanca, aprovacao, janela e rollback.', 'bi-diagram-3', 'purple', [c.TYPE_GMUD], Ticket.PRIORITY_NORMAL, 'CAB / Mudancas', None, ['Servidor', 'Firewall', 'Emergencial']),
         ]
         categories = {}
         for name, description, icon, color, allowed_types, priority, queue_name, sla_name, subcategories in specs:
@@ -101,62 +114,36 @@ class Command(BaseCommand):
             categories[name] = category
         return categories
 
-    def _seed_templates_legacy(self, categories):
+    def _seed_templates(self):
         specs = [
-            ('Confirmacao de chamado criado', DeskTemplate.TYPE_AUTOMATIC_REPLY, 'Automacao: chamado criado', 'Geral', DeskTemplate.CHANNEL_AUTOMATIC, 'Ola {{solicitante}}, registramos o chamado {{titulo}} e estamos analisando o caso.'),
-            ('Pedido de mais informacoes', DeskTemplate.TYPE_PUBLIC_REPLY, 'Composer publico', 'Geral', DeskTemplate.CHANNEL_PUBLIC, 'Ola {{solicitante}}, precisamos de mais detalhes para avancar.\n\nPode nos enviar o erro exibido e o horario aproximado?'),
-            ('Aguardando solicitante', DeskTemplate.TYPE_AUTOMATIC_REPLY, 'Automacao: aguardando solicitante', 'Geral', DeskTemplate.CHANNEL_AUTOMATIC, 'Ola {{solicitante}}, ficaremos aguardando seu retorno para continuar o atendimento.'),
-            ('SLA proximo do vencimento', DeskTemplate.TYPE_AUTOMATIC_REPLY, 'Automacao: SLA proximo', 'Geral', DeskTemplate.CHANNEL_AUTOMATIC, 'Atencao: o chamado {{titulo}} esta proximo do SLA {{sla}}.'),
-            ('Encerramento ao solicitante', DeskTemplate.TYPE_PUBLIC_REPLY, 'Resolver chamado', 'Geral', DeskTemplate.CHANNEL_PUBLIC, 'Ola {{solicitante}}, o chamado {{titulo}} foi resolvido. Caso o problema retorne, responda este atendimento.'),
-            ('Comentario interno de triagem', DeskTemplate.TYPE_INTERNAL_COMMENT, 'Composer interno', 'Geral', DeskTemplate.CHANNEL_INTERNAL, 'Triagem inicial:\n- Solicitante: {{solicitante}}\n- Categoria: {{categoria}}\n- Endpoint: {{endpoint}}\n- Proxima acao:'),
-            ('Resolucao de acesso', DeskTemplate.TYPE_RESOLUTION, 'Resolver chamado', 'Acesso', DeskTemplate.CHANNEL_PUBLIC, 'Causa raiz: ajuste de permissao/acesso.\nSolucao aplicada:\nValidacao com solicitante:'),
-            ('GMUD enviada para aprovacao', DeskTemplate.TYPE_GMUD, 'GMUD: aprovacao', 'GMUD / Mudança', DeskTemplate.CHANNEL_APPROVAL, 'Mudanca {{titulo}} enviada para aprovacao.\nPlano: {{categoria}}\nResponsavel: {{tecnico}}'),
-        ]
-        variables = ['{{solicitante}}', '{{titulo}}', '{{categoria}}', '{{prioridade}}', '{{endpoint}}', '{{tecnico}}', '{{fila}}', '{{data}}', '{{sla}}']
-        for name, template_type, application, category_name, channel, content in specs:
-            category = categories.get(category_name)
-            DeskTemplate.objects.update_or_create(
-                name=name,
-                defaults={
-                    'description': f'Template MVP 2 para {application}.',
-                    'template_type': template_type,
-                    'application': application,
-                    'category': category,
-                    'channel': channel,
-                    'trigger': application if application.startswith('Automacao') else '',
-                    'content': content,
-                    'variables': variables,
-                    'is_active': True,
-                },
-            )
-
-    def _seed_templates(self, categories):
-        specs = [
-            ('Confirmação de chamado criado', DeskTemplate.TYPE_AUTOMATIC_REPLY, DeskTemplate.APP_TICKET_CREATED, DeskTemplate.CHANNEL_AUTOMATIC, '{{ticket_code}} - chamado recebido', 'Olá {{solicitante}}, o chamado {{ticket_code}} - {{titulo}} foi criado em {{data}} e direcionado para {{fila}}.'),
-            ('Chamado assumido', DeskTemplate.TYPE_PUBLIC_REPLY, DeskTemplate.APP_COMPOSER_PUBLIC, DeskTemplate.CHANNEL_PUBLIC, '{{ticket_code}} - atendimento iniciado', 'Ola {{solicitante}}, sou {{tecnico}} e assumi o atendimento do chamado {{ticket_code}} sobre {{titulo}}.'),
-            ('Aguardando solicitante', DeskTemplate.TYPE_AUTOMATIC_REPLY, DeskTemplate.APP_WAITING_REQUESTER, DeskTemplate.CHANNEL_AUTOMATIC, '{{ticket_code}} - aguardando seu retorno', 'Ola {{solicitante}}, aguardamos seu retorno no chamado {{ticket_code}} para continuar o atendimento.'),
-            ('Chamado resolvido', DeskTemplate.TYPE_RESOLUTION, DeskTemplate.APP_RESOLVE_TICKET, DeskTemplate.CHANNEL_PUBLIC, '{{ticket_code}} - chamado resolvido', 'Ola {{solicitante}}, o chamado {{ticket_code}} foi resolvido por {{tecnico}} em {{data}}.\n\nSolucao: {{solucao}}'),
-            ('Chamado reaberto por contestação', DeskTemplate.TYPE_AUTOMATIC_REPLY, DeskTemplate.APP_TICKET_REOPENED, DeskTemplate.CHANNEL_AUTOMATIC, '{{ticket_code}} - chamado reaberto', 'O chamado {{ticket_code}} - {{titulo}} foi reaberto após contestação de {{solicitante}}.'),
-            ('Comentário público padrão', DeskTemplate.TYPE_PUBLIC_REPLY, DeskTemplate.APP_COMPOSER_PUBLIC, DeskTemplate.CHANNEL_PUBLIC, '', 'Olá {{solicitante}}, estamos tratando o chamado {{ticket_code}} na fila {{fila}}. Retornaremos com uma atualização.'),
-            ('Comentário interno de triagem', DeskTemplate.TYPE_INTERNAL_COMMENT, DeskTemplate.APP_COMPOSER_INTERNAL, DeskTemplate.CHANNEL_INTERNAL, '', 'Triagem do chamado {{ticket_code}}:\n- Categoria: {{categoria}}\n- Prioridade: {{prioridade}}\n- Endpoint: {{endpoint}}\n- Técnico: {{tecnico}}\n- Próxima ação:'),
-            ('Escalação padrão', DeskTemplate.TYPE_ESCALATION, DeskTemplate.APP_ESCALATE_TICKET, DeskTemplate.CHANNEL_INTERNAL, '', 'Escalar {{ticket_code}} - {{titulo}}.\nFila atual: {{fila}}\nCategoria: {{categoria}}\nEndpoint: {{endpoint}}\nMotivo técnico:'),
+            ('Confirmacao de chamado criado', DeskTemplate.TYPE_AUTOMATIC_REPLY, DeskTemplate.APP_TICKET_CREATED, DeskTemplate.CHANNEL_AUTOMATIC, 'Chamado {{ticket_code}} recebido', 'Ola {{solicitante}},\n\nRecebemos sua solicitacao e ela esta aguardando triagem pela equipe.\n\nChamado: {{ticket_code}}\nTitulo: {{titulo}}\nCategoria: {{categoria}}\nStatus atual: {{status}}\nAberto em: {{data_abertura}}\n\nResumo:\n{{resumo}}\n\nAcompanhe pelo NightOwl Desk:\n{{link_acompanhamento}}'),
+            ('Chamado assumido', DeskTemplate.TYPE_PUBLIC_REPLY, DeskTemplate.APP_COMPOSER_PUBLIC, DeskTemplate.CHANNEL_PUBLIC, 'Chamado {{ticket_code}} em atendimento', 'Ola {{solicitante}},\n\nSua solicitacao foi assumida pela equipe e esta em atendimento.\n\nChamado: {{ticket_code}}\nTitulo: {{titulo}}\nResponsavel: {{responsavel}}\nEquipe/Fila: {{fila}}\nStatus atual: {{status}}\n\nAcompanhe pelo NightOwl Desk:\n{{link_acompanhamento}}'),
+            ('Aguardando solicitante', DeskTemplate.TYPE_AUTOMATIC_REPLY, DeskTemplate.APP_WAITING_REQUESTER, DeskTemplate.CHANNEL_AUTOMATIC, 'Precisamos da sua resposta no chamado {{ticket_code}}', 'Ola {{solicitante}},\n\nA equipe precisa de mais informacoes para continuar o atendimento.\n\nChamado: {{ticket_code}}\nTitulo: {{titulo}}\nStatus atual: {{status}}\n\nMensagem da equipe:\n{{mensagem}}\n\nAcesse o chamado e envie sua resposta:\n{{link_acompanhamento}}'),
+            ('Chamado resolvido', DeskTemplate.TYPE_RESOLUTION, DeskTemplate.APP_RESOLVE_TICKET, DeskTemplate.CHANNEL_PUBLIC, 'Chamado {{ticket_code}} resolvido', 'Ola {{solicitante}},\n\nSeu chamado foi resolvido pela equipe. Confira abaixo a solucao aplicada.\n\nChamado: {{ticket_code}}\nTitulo: {{titulo}}\nResponsavel: {{responsavel}}\nResolvido em: {{data_resolucao}}\n\nSolucao aplicada:\n{{solucao}}\n\nCaso o problema continue ou a solucao nao atenda sua solicitacao, responda este e-mail ou acesse o portal para reabrir o chamado:\n{{link_acompanhamento}}'),
+            ('Chamado reaberto por contestacao', DeskTemplate.TYPE_AUTOMATIC_REPLY, DeskTemplate.APP_TICKET_REOPENED, DeskTemplate.CHANNEL_AUTOMATIC, 'Chamado {{ticket_code}} reaberto', 'Ola {{solicitante}},\n\nO chamado foi reaberto e voltou para atendimento.\n\nChamado: {{ticket_code}}\nTitulo: {{titulo}}\nStatus atual: {{status}}\nMotivo: {{motivo}}\n\nAcompanhe pelo NightOwl Desk:\n{{link_acompanhamento}}'),
+            ('Resposta publica do chamado', DeskTemplate.TYPE_PUBLIC_REPLY, DeskTemplate.APP_COMPOSER_PUBLIC, DeskTemplate.CHANNEL_PUBLIC, 'Nova resposta no chamado {{ticket_code}}', 'Ola {{solicitante}},\n\nA equipe enviou uma nova resposta publica no seu chamado.\n\nChamado: {{ticket_code}}\nTitulo: {{titulo}}\nStatus atual: {{status}}\nTecnico: {{tecnico}}\n\nMensagem:\n{{mensagem}}\n\nAcompanhe pelo NightOwl Desk:\n{{link_acompanhamento}}'),
+            ('Comentario publico padrao', DeskTemplate.TYPE_PUBLIC_REPLY, DeskTemplate.APP_COMPOSER_PUBLIC, DeskTemplate.CHANNEL_PUBLIC, '', 'Ola {{solicitante}}, estamos tratando o chamado {{ticket_code}} na fila {{fila}}. Retornaremos com uma atualizacao.'),
+            ('Comentario interno de triagem', DeskTemplate.TYPE_INTERNAL_COMMENT, DeskTemplate.APP_COMPOSER_INTERNAL, DeskTemplate.CHANNEL_INTERNAL, '', 'Triagem do chamado {{ticket_code}}:\n- Categoria: {{categoria}}\n- Prioridade: {{prioridade}}\n- Endpoint: {{endpoint}}\n- Tecnico: {{tecnico}}\n- Proxima acao:'),
+            ('Escalacao padrao', DeskTemplate.TYPE_ESCALATION, DeskTemplate.APP_ESCALATE_TICKET, DeskTemplate.CHANNEL_INTERNAL, '', 'Escalar {{ticket_code}} - {{titulo}}.\nFila atual: {{fila}}\nCategoria: {{categoria}}\nEndpoint: {{endpoint}}\nMotivo tecnico:'),
         ]
         variables = [
             '{{ticket_code}}', '{{titulo}}', '{{solicitante}}', '{{tecnico}}',
             '{{categoria}}', '{{prioridade}}', '{{fila}}', '{{endpoint}}',
-            '{{solucao}}', '{{data}}',
+            '{{solucao}}', '{{data}}', '{{data_abertura}}', '{{data_resolucao}}',
+            '{{status}}', '{{responsavel}}', '{{mensagem}}', '{{motivo}}',
+            '{{resumo}}', '{{link_acompanhamento}}',
         ]
         legacy_names = {
-            'Confirmação de chamado criado': 'Confirmacao de chamado criado',
-            'Chamado reaberto por contestação': 'Chamado reaberto por contestacao',
-            'Comentário público padrão': 'Comentario publico padrao',
-            'Comentário interno de triagem': 'Comentario interno de triagem',
-            'Escalação padrão': 'Escalacao padrao',
+            'Confirmacao de chamado criado': ['ConfirmaÃ§Ã£o de chamado criado', 'Confirmacao de chamado criado'],
+            'Chamado reaberto por contestacao': ['Chamado reaberto por contestaÃ§Ã£o', 'Chamado reaberto por contestacao'],
+            'Comentario publico padrao': ['ComentÃ¡rio pÃºblico padrÃ£o', 'Comentario publico padrao'],
+            'Comentario interno de triagem': ['ComentÃ¡rio interno de triagem', 'Comentario interno de triagem'],
+            'Escalacao padrao': ['EscalaÃ§Ã£o padrÃ£o', 'Escalacao padrao'],
         }
+        for name, aliases in legacy_names.items():
+            if not DeskTemplate.objects.filter(name=name).exists():
+                DeskTemplate.objects.filter(name__in=[alias for alias in aliases if alias != name]).update(name=name)
         for name, template_type, application, channel, subject, content in specs:
-            legacy_name = legacy_names.get(name)
-            if legacy_name and not DeskTemplate.objects.filter(name=name).exists():
-                DeskTemplate.objects.filter(name=legacy_name).update(name=name)
             DeskTemplate.objects.update_or_create(
                 name=name,
                 defaults={

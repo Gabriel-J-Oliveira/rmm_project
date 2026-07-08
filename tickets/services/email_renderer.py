@@ -11,6 +11,7 @@ DESK_EVENT_LABELS = {
     'waiting_requester': 'Aguardando solicitante',
     'ticket_resolved': 'Chamado resolvido',
     'ticket_reopened': 'Chamado reaberto',
+    'ticket_public_reply': 'Nova resposta',
 }
 
 
@@ -63,6 +64,7 @@ def render_ticket_email_html(*, ticket, event_type, subject, body_text):
         email_badge=DESK_EVENT_LABELS.get(event_type, 'Night Owl Desk'),
         email_body=body_text,
         action_url=ticket_action_url(ticket),
+        action_label='Acompanhar chamado',
         ticket=ticket,
         footer_text='Mensagem automatica do Night Owl Desk. Por favor, nao responda a este e-mail.',
     )

@@ -1,0 +1,363 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Night Owl | Tarefas{% endblock %}
+{% block body_class %}page-jobs{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Tarefas</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="jobs-page" data-jobs-root>
+    <section class="alerts-command-header page-header">
+        <div class="alerts-command-title">
+            <span class="command-icon page-header-icon"><i data-lucide="list-checks"></i></span>
+            <div>
+                <h1 class="page-title">Tarefas</h1>
+                <p class="page-subtitle">Execu&ccedil;&otilde;es remotas e rotinas operacionais enviadas aos endpoints.</p>
+            </div>
+        </div>
+        <div class="alerts-header-actions page-actions">
+            <span class="auto-refresh-chip module-badge"><i data-lucide="plug-zap"></i>Preview agente</span>
+            <span class="ops-chip"><i data-lucide="satellite"></i>&Uacute;ltima leitura <strong data-operational-opened-at>--</strong></span>
+            <span class="ops-chip"><i data-lucide="clock-3"></i>Idade <strong data-operational-age>agora</strong></span>
+            <span class="ops-chip"><i data-lucide="sparkles"></i>Novo desde abertura <strong data-operational-new-count>0</strong></span>
+            <span class="ops-chip ops-command-hint"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+            <button type="button" class="refresh-button" data-jobs-refresh><i data-lucide="refresh-cw"></i>Atualizar</button>
+        </div>
+    </section>
+
+    <nav class="jobs-module-tabs" aria-label="Modos de tarefas">
+        <button class="is-active" type="button" data-task-tab="agenda"><i data-lucide="calendar-days"></i>Agenda</button>
+        <button type="button" data-task-tab="list"><i data-lucide="list-checks"></i>Lista</button>
+        <button type="button" data-task-tab="jobs"><i data-lucide="terminal-square"></i>Jobs t&eacute;cnicos</button>
+        <button type="button" data-task-tab="templates"><i data-lucide="clipboard-list"></i>Modelos</button>
+    </nav>
+
+    <section class="jobs-tab-panel is-active" data-task-tab-panel="agenda">
+        <section class="panel operational-calendar-panel">
+            <div class="jobs-calendar-toolbar">
+                <div>
+                    <h2><i data-lucide="calendar-days"></i>Agenda operacional</h2>
+                    <p>Tarefas humanas, prazos e rotinas vinculadas a chamados/endpoints.</p>
+                </div>
+                <div class="jobs-calendar-actions">
+                    <button type="button" data-calendar-prev><i data-lucide="chevron-left"></i></button>
+                    <strong data-calendar-label>--</strong>
+                    <button type="button" data-calendar-next><i data-lucide="chevron-right"></i></button>
+                    <button type="button" data-calendar-today>Hoje</button>
+                </div>
+            </div>
+            <div class="jobs-calendar-grid" data-task-calendar></div>
+        </section>
+    </section>
+
+    <section class="jobs-tab-panel" data-task-tab-panel="list" hidden>
+        <section class="panel command-filter-panel jobs-task-filter-panel">
+            <form class="endpoint-filters jobs-task-filters" data-task-filter-form>
+                <label class="filter-field filter-search">
+                    <span><i data-lucide="search"></i>Busca</span>
+                    <input type="search" name="q" data-task-filter="q" placeholder="T&iacute;tulo, respons&aacute;vel, categoria, usu&aacute;rio ou local">
+                </label>
+                <label class="filter-field"><span>Status</span><select data-task-filter="status"><option value="">Todos</option><option value="open">Aberta</option><option value="scheduled">Agendada</option><option value="in_progress">Em andamento</option><option value="waiting">Aguardando</option><option value="done">Conclu&iacute;da</option><option value="cancelled">Cancelada</option></select></label>
+                <label class="filter-field"><span>Respons&aacute;vel</span><select data-task-filter="responsible"><option value="">Todos</option></select></label>
+                <label class="filter-field"><span>Prioridade</span><select data-task-filter="priority"><option value="">Todas</option><option value="low">Baixa</option><option value="normal">Normal</option><option value="high">Alta</option><option value="critical">Cr&iacute;tica</option></select></label>
+                <label class="filter-field"><span>Categoria</span><select data-task-filter="category"><option value="">Todas</option><option value="support">Suporte</option><option value="maintenance">Manuten&ccedil;&atilde;o</option><option value="security">Seguran&ccedil;a</option><option value="inventory">Invent&aacute;rio</option><option value="onboarding">Onboarding</option><option value="offboarding">Offboarding</option><option value="change">Mudan&ccedil;a</option></select></label>
+                <label class="filter-field"><span>Vencimento</span><select data-task-filter="due"><option value="">Todos</option><option value="today">Hoje</option><option value="overdue">Atrasadas</option><option value="week">Esta semana</option></select></label>
+                <div class="filter-actions">
+                    <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+                    <button type="button" data-task-clear><i data-lucide="x-circle"></i>Limpar</button>
+                    <button type="button" data-task-new><i data-lucide="plus"></i>Nova tarefa</button>
+                </div>
+            </form>
+            <div class="ops-filter-summary">
+                <span><i data-lucide="funnel"></i><strong data-task-filtered-count>0</strong> tarefas humanas exibidas</span>
+                <span>Mock central: <code>getOperationalTasks()</code></span>
+            </div>
+        </section>
+
+        <section class="panel jobs-table-panel operational-task-list-panel">
+            <div class="section-heading">
+                <div>
+                    <h2>Lista operacional</h2>
+                    <p>Agenda, prazos, checklist e v&iacute;nculos de atendimento.</p>
+                </div>
+            </div>
+            <div class="table-wrap jobs-table-wrap">
+                <table class="endpoint-table jobs-table operational-task-table">
+                    <thead><tr><th>Status</th><th>Prazo</th><th>T&iacute;tulo</th><th>Respons&aacute;vel</th><th>Prioridade</th><th>Categoria</th><th>Checklist</th><th>V&iacute;nculos</th><th>A&ccedil;&otilde;es</th></tr></thead>
+                    <tbody data-task-list-body><tr><td colspan="9" class="empty-state endpoint-empty">Carregando tarefas operacionais...</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+    </section>
+
+    <section class="jobs-tab-panel" data-task-tab-panel="jobs" hidden>
+    <section class="metric-grid jobs-metrics" aria-label="Resumo de jobs t&eacute;cnicos">
+        <button type="button" class="metric-card command-metric" data-job-status-card="queued">
+            <span class="metric-icon"><i data-lucide="clock"></i></span><span class="metric-label">Em fila</span><strong class="metric-value" data-job-metric="queued">0</strong>
+        </button>
+        <button type="button" class="metric-card command-metric" data-job-status-card="running">
+            <span class="metric-icon warning"><i data-lucide="loader-circle"></i></span><span class="metric-label">Em execu&ccedil;&atilde;o</span><strong class="metric-value" data-job-metric="running">0</strong>
+        </button>
+        <button type="button" class="metric-card command-metric" data-job-status-card="completed">
+            <span class="metric-icon success"><i data-lucide="check-circle"></i></span><span class="metric-label">Conclu&iacute;das</span><strong class="metric-value" data-job-metric="completed">0</strong>
+        </button>
+        <button type="button" class="metric-card command-metric" data-job-status-card="failed">
+            <span class="metric-icon critical"><i data-lucide="circle-alert"></i></span><span class="metric-label">Falhas</span><strong class="metric-value status-text-critical" data-job-metric="failed">0</strong>
+        </button>
+        <button type="button" class="metric-card command-metric" data-job-status-card="expired">
+            <span class="metric-icon"><i data-lucide="timer-off"></i></span><span class="metric-label">Expiradas</span><strong class="metric-value" data-job-metric="expired">0</strong>
+        </button>
+    </section>
+
+    <section class="panel command-filter-panel jobs-filter-panel">
+        <form class="endpoint-filters jobs-filters" data-jobs-filter-form>
+            <label class="filter-field filter-search">
+                <span><i data-lucide="search"></i>Busca</span>
+                <input type="search" name="q" data-job-filter="q" placeholder="Endpoint, tipo, comando ou criado por">
+            </label>
+            <label class="filter-field">
+                <span>Status</span>
+                <select name="status" data-job-filter="status">
+                    <option value="">Todos</option>
+                    <option value="queued">Em fila</option>
+                    <option value="sent">Enviada</option>
+                    <option value="running">Em execu&ccedil;&atilde;o</option>
+                    <option value="completed">Conclu&iacute;da</option>
+                    <option value="failed">Falha</option>
+                    <option value="expired">Expirada</option>
+                    <option value="cancelled">Cancelada</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Tipo de tarefa</span>
+                <select name="type" data-job-filter="type">
+                    <option value="">Todos</option>
+                    <option value="force_inventory">force_inventory</option>
+                    <option value="defender_check">defender_check</option>
+                    <option value="disk_check">disk_check</option>
+                    <option value="collect_logs">collect_logs</option>
+                    <option value="ping">ping</option>
+                    <option value="cleanup_temp">cleanup_temp</option>
+                    <option value="run_script">run_script</option>
+                    <option value="install_software">install_software</option>
+                    <option value="windows_update_scan">windows_update_scan</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Endpoint</span>
+                <select name="endpoint" data-job-filter="endpoint">
+                    <option value="">Todos</option>
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Per&iacute;odo</span>
+                <select name="period" data-job-filter="period">
+                    <option value="">Todos</option>
+                    <option value="24h">24h</option>
+                    <option value="7d">7 dias</option>
+                </select>
+            </label>
+            <div class="filter-actions">
+                <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
+                <button type="button" data-jobs-clear><i data-lucide="x-circle"></i>Limpar</button>
+            </div>
+        </form>
+        <div class="ops-filter-summary">
+            <span><i data-lucide="funnel"></i><strong data-filtered-count>0</strong> tarefas exibidas</span>
+            <span>Futura API: <code>/api/jobs/</code></span>
+        </div>
+    </section>
+
+    <section class="panel jobs-table-panel">
+        <div class="section-heading">
+            <div>
+                <h2>Execu&ccedil;&otilde;es remotas / Jobs do agente</h2>
+                <p>Status local mockado: queued, sent, running, completed, failed, expired e cancelled.</p>
+            </div>
+            <div class="alert-view-toggle">
+                <button type="button" class="is-active" data-jobs-density="comfortable"><i data-lucide="rows-3"></i>Confort&aacute;vel</button>
+                <button type="button" data-jobs-density="compact"><i data-lucide="list"></i>Compacta</button>
+            </div>
+        </div>
+        <div class="ops-skeleton-row" data-jobs-loading aria-hidden="true">
+            <span></span><span></span><span></span>
+        </div>
+        <div class="table-wrap jobs-table-wrap">
+            <table class="endpoint-table jobs-table">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Tipo</th>
+                        <th>Endpoint</th>
+                        <th>Criado por</th>
+                        <th>Criado em</th>
+                        <th>Iniciado em</th>
+                        <th>Finalizado em</th>
+                        <th>Dura&ccedil;&atilde;o</th>
+                        <th>Resultado</th>
+                        <th>A&ccedil;&otilde;es</th>
+                    </tr>
+                </thead>
+                <tbody data-jobs-table-body>
+                    <tr><td colspan="10" class="empty-state endpoint-empty">Carregando tarefas mockadas...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+    </section>
+
+    <section class="jobs-tab-panel" data-task-tab-panel="templates" hidden>
+        <section class="panel task-template-panel">
+            <div class="section-heading">
+                <div>
+                    <h2>Modelos de tarefa</h2>
+                    <p>Checklists operacionais reutiliz&aacute;veis para rotinas comuns.</p>
+                </div>
+            </div>
+            <div class="task-template-grid" data-task-template-grid></div>
+        </section>
+    </section>
+
+    <div class="event-drawer-backdrop jobs-drawer-backdrop" data-task-drawer-backdrop hidden></div>
+    <aside class="event-drawer jobs-drawer task-drawer" data-task-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span data-task-drawer-kicker>Tarefa operacional</span>
+                <h2 data-task-drawer-title>Nova tarefa</h2>
+                <p data-task-drawer-subtitle>Agenda, checklist e v&iacute;nculos</p>
+            </div>
+            <button type="button" data-task-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="event-drawer-body">
+            <form data-task-form class="task-drawer-form">
+                <input type="hidden" name="id" data-task-field="id">
+                <section>
+                    <h3>Dados principais</h3>
+                    <label><span>T&iacute;tulo</span><input type="text" name="title" data-task-field="title" required></label>
+                    <label><span>Descri&ccedil;&atilde;o</span><textarea name="description" data-task-field="description" rows="4"></textarea></label>
+                    <div class="task-form-grid">
+                        <label><span>Status</span><select name="status" data-task-field="status"><option value="open">Aberta</option><option value="scheduled">Agendada</option><option value="in_progress">Em andamento</option><option value="waiting">Aguardando</option><option value="done">Conclu&iacute;da</option><option value="cancelled">Cancelada</option></select></label>
+                        <label><span>Prioridade</span><select name="priority" data-task-field="priority"><option value="low">Baixa</option><option value="normal">Normal</option><option value="high">Alta</option><option value="critical">Cr&iacute;tica</option></select></label>
+                        <label><span>Categoria</span><select name="category" data-task-field="category"><option value="support">Suporte</option><option value="maintenance">Manuten&ccedil;&atilde;o</option><option value="security">Seguran&ccedil;a</option><option value="inventory">Invent&aacute;rio</option><option value="onboarding">Onboarding</option><option value="offboarding">Offboarding</option><option value="change">Mudan&ccedil;a</option></select></label>
+                        <label><span>Respons&aacute;vel</span><input type="text" name="responsible" data-task-field="responsible"></label>
+                    </div>
+                    <div class="task-form-grid">
+                        <label><span>In&iacute;cio</span><input type="datetime-local" name="startAt" data-task-field="startAt"></label>
+                        <label><span>Prazo</span><input type="datetime-local" name="dueAt" data-task-field="dueAt"></label>
+                    </div>
+                </section>
+                <section>
+                    <h3>V&iacute;nculos</h3>
+                    <div class="task-form-grid">
+                        <label><span>Chamado</span><input type="text" name="linkedTicketId" data-task-field="linkedTicketId" placeholder="T-1048 ou #1048"></label>
+                        <label><span>Endpoint</span><select name="linkedEndpointId" data-task-field="linkedEndpointId"><option value="">Nenhum</option></select></label>
+                        <label><span>Usu&aacute;rio relacionado</span><input type="text" name="linkedUser" data-task-field="linkedUser"></label>
+                        <label><span>Local / mesa</span><input type="text" name="location" data-task-field="location"></label>
+                    </div>
+                    <div class="task-link-summary" data-task-link-summary></div>
+                    <div class="event-drawer-actions task-link-actions">
+                        <button type="button" data-task-link-ticket><i data-lucide="ticket"></i>Vincular chamado</button>
+                        <button type="button" data-task-open-ticket><i data-lucide="external-link"></i>Abrir chamado</button>
+                        <button type="button" data-task-open-endpoint><i data-lucide="monitor"></i>Abrir endpoint</button>
+                        <button type="button" data-task-open-alerts><i data-lucide="alert-triangle"></i>Ver alertas</button>
+                        <button type="button" data-task-open-events><i data-lucide="history"></i>Ver eventos</button>
+                    </div>
+                </section>
+                <section>
+                    <h3>Jobs vinculados</h3>
+                    <div class="task-linked-jobs" data-task-linked-jobs></div>
+                    <div class="task-job-options">
+                        <button type="button" data-task-create-job-type="force_inventory"><i data-lucide="package-search"></i>For&ccedil;ar invent&aacute;rio</button>
+                        <button type="button" data-task-create-job-type="defender_check"><i data-lucide="shield-check"></i>Verificar Defender</button>
+                        <button type="button" data-task-create-job-type="disk_check"><i data-lucide="hard-drive"></i>Verificar disco</button>
+                        <button type="button" data-task-create-job-type="collect_logs"><i data-lucide="file-search"></i>Coletar logs</button>
+                        <button type="button" data-task-create-job-type="ping"><i data-lucide="activity"></i>Ping</button>
+                        <button type="button" data-task-create-job-type="install_software"><i data-lucide="package-plus"></i>Instalar software</button>
+                        <button type="button" data-task-create-job-type="windows_update_scan"><i data-lucide="badge-check"></i>Verificar patches</button>
+                    </div>
+                </section>
+                <section>
+                    <h3>Checklist</h3>
+                    <div class="task-checklist-editor" data-task-checklist-editor></div>
+                    <button type="button" data-task-checklist-add><i data-lucide="plus"></i>Adicionar item</button>
+                </section>
+                <section>
+                    <h3>Coment&aacute;rios / timeline</h3>
+                    <div class="task-timeline" data-task-timeline></div>
+                </section>
+                <div class="event-drawer-actions">
+                    <button type="submit"><i data-lucide="save"></i>Salvar</button>
+                    <button type="button" data-task-complete><i data-lucide="check-circle"></i>Concluir</button>
+                    <button type="button" data-task-duplicate><i data-lucide="copy"></i>Duplicar</button>
+                    <button type="button" data-task-cancel><i data-lucide="ban"></i>Cancelar</button>
+                    <button type="button" data-task-create-job><i data-lucide="terminal"></i>Criar job vinculado</button>
+                </div>
+            </form>
+        </div>
+    </aside>
+
+    <div class="event-drawer-backdrop jobs-drawer-backdrop" data-job-drawer-backdrop hidden></div>
+    <aside class="event-drawer jobs-drawer" data-job-drawer aria-hidden="true">
+        <header>
+            <div>
+                <span data-job-drawer-kicker>Tarefa remota</span>
+                <h2 data-job-field="name">Selecione uma tarefa</h2>
+                <p><span data-job-field="id">--</span> &middot; <span data-job-field="status">--</span></p>
+            </div>
+            <button type="button" data-job-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+        </header>
+        <div class="event-drawer-body">
+            <section>
+                <h3>Informa&ccedil;&otilde;es</h3>
+                <dl>
+                    <div><dt>Tipo</dt><dd data-job-field="type">--</dd></div>
+                    <div><dt>Endpoint</dt><dd data-job-field="endpoint">--</dd></div>
+                    <div><dt>Criado por</dt><dd data-job-field="createdBy">--</dd></div>
+                    <div><dt>Criado em</dt><dd data-job-field="createdAt">--</dd></div>
+                    <div><dt>Iniciado</dt><dd data-job-field="startedAt">--</dd></div>
+                    <div><dt>Finalizado</dt><dd data-job-field="finishedAt">--</dd></div>
+                    <div><dt>Dura&ccedil;&atilde;o</dt><dd data-job-field="duration">--</dd></div>
+                    <div><dt>Exit code</dt><dd data-job-field="exitCode">--</dd></div>
+                </dl>
+            </section>
+            <section>
+                <h3>Payload / comando</h3>
+                <pre data-job-field="payload">{}</pre>
+            </section>
+            <section>
+                <h3>Sa&iacute;da</h3>
+                <pre data-job-field="stdout">stdout indispon&iacute;vel.</pre>
+                <pre class="stderr" data-job-field="stderr">stderr vazio.</pre>
+            </section>
+            <section>
+                <h3>Timeline</h3>
+                <ol class="jobs-timeline" data-job-timeline></ol>
+            </section>
+            <section>
+                <h3>Eventos relacionados</h3>
+                <div class="event-drawer-links">
+                    <a data-job-link-endpoint href="#"><i data-lucide="monitor"></i>Abrir endpoint</a>
+                    <a data-job-link-events href="#"><i data-lucide="history"></i>Ver eventos relacionados</a>
+                </div>
+            </section>
+            <div class="event-drawer-actions">
+                <button type="button" data-job-copy-output><i data-lucide="copy"></i>Copiar sa&iacute;da</button>
+                <button type="button" data-job-rerun><i data-lucide="rotate-cw"></i>Reexecutar</button>
+                <button type="button" data-job-cancel><i data-lucide="ban"></i>Cancelar</button>
+            </div>
+        </div>
+    </aside>
+    <div class="alert-action-toast jobs-toast" data-jobs-toast hidden></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
+<script src="{% static 'js/nightowl_operational.js' %}"></script>
+<script src="{% static 'js/jobs.js' %}"></script>
+{% endblock %}

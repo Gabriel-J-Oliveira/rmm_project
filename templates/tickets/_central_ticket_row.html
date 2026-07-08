@@ -1,4 +1,4 @@
-<div class="desk-ticket-grid desk-ticket-row priority-{{ ticket.priority }} origin-{{ ticket.central.origin }} sla-{{ ticket.central.sla_state }} {% if ticket.central.is_waiting %}is-paused{% endif %} {% if ticket.central.is_unassigned %}is-unassigned{% endif %} {% if ticket.central.is_rmm %}is-rmm{% endif %} {% if ticket.central.is_stale %}is-stale{% endif %} {% if selected_ticket and selected_ticket.number == ticket.number %}is-selected{% endif %}" data-ticket="{{ ticket.number }}" data-detail-url="{% url 'tickets:detail' ticket.number %}" data-status="{{ ticket.status }}" data-priority="{{ ticket.priority }}" data-technician="{{ ticket.assigned_to|default:'Sem responsavel' }}" data-client="{{ ticket.sector }}" data-sector="{{ ticket.sector }}" data-category="{{ ticket.category }}" data-queue="{{ ticket.queue }}" data-origin="{{ ticket.central.origin }}" data-sla="{{ ticket.central.sla_state }}" data-vip="{% if ticket.partner %}1{% else %}0{% endif %}" data-unassigned="{% if ticket.central.is_unassigned %}1{% else %}0{% endif %}" data-attachments="{% if ticket.central.has_attachment %}1{% else %}0{% endif %}" data-internal="{% if ticket.central.has_recent_internal %}1{% else %}0{% endif %}" data-merged="{% if ticket.central.is_merged %}1{% else %}0{% endif %}" data-rmm-linked="{% if ticket.endpoint %}1{% else %}0{% endif %}" data-rmm-offline="{% if ticket.central.endpoint_status == 'offline' %}1{% else %}0{% endif %}" data-rmm-alert="{% if ticket.central.is_rmm %}1{% else %}0{% endif %}" data-rmm-antivirus="{% if 'Bitdefender' in ticket.title %}1{% else %}0{% endif %}" data-rmm-disk="{% if 'disco' in ticket.title|lower %}1{% else %}0{% endif %}" data-stale="{% if ticket.central.is_stale %}1{% else %}0{% endif %}" role="row" tabindex="0">
+<div class="desk-ticket-grid desk-ticket-row priority-{{ ticket.priority }} origin-{{ ticket.central.origin }} sla-{{ ticket.central.sla_state }} {% if ticket.central.is_waiting %}is-paused{% endif %} {% if ticket.central.is_unassigned %}is-unassigned{% endif %} {% if ticket.central.is_rmm %}is-rmm{% endif %} {% if ticket.central.is_stale %}is-stale{% endif %} {% if selected_ticket and selected_ticket.number == ticket.number %}is-selected{% endif %}" data-ticket="{{ ticket.number }}" data-detail-url="{% url 'tickets:detail' ticket.number %}" data-status="{{ ticket.status }}" data-priority="{{ ticket.priority }}" data-technician="{{ ticket.assigned_to|default:'Sem responsavel' }}" data-client="{{ ticket.sector }}" data-sector="{{ ticket.sector }}" data-category="{{ ticket.category }}" data-queue="{{ ticket.queue }}" data-origin="{{ ticket.central.origin }}" data-sla="{{ ticket.central.sla_state }}" data-vip="{% if ticket.partner %}1{% else %}0{% endif %}" data-unassigned="{% if ticket.central.is_unassigned %}1{% else %}0{% endif %}" data-reopened="{% if ticket.central.is_reopened %}1{% else %}0{% endif %}" data-attachments="{% if ticket.central.has_attachment %}1{% else %}0{% endif %}" data-internal="{% if ticket.central.has_recent_internal %}1{% else %}0{% endif %}" data-merged="{% if ticket.central.is_merged %}1{% else %}0{% endif %}" data-rmm-linked="{% if ticket.endpoint %}1{% else %}0{% endif %}" data-rmm-offline="{% if ticket.central.endpoint_status == 'offline' %}1{% else %}0{% endif %}" data-rmm-alert="{% if ticket.central.is_rmm %}1{% else %}0{% endif %}" data-rmm-antivirus="{% if 'Bitdefender' in ticket.title %}1{% else %}0{% endif %}" data-rmm-disk="{% if 'disco' in ticket.title|lower %}1{% else %}0{% endif %}" data-stale="{% if ticket.central.is_stale %}1{% else %}0{% endif %}" role="row" tabindex="0">
     <div role="cell"><input class="desk-row-checkbox" type="checkbox" aria-label="Selecionar chamado {{ ticket.number }}"></div>
     <div role="cell"><span class="desk-row-origin-icon" title="{{ ticket.central.origin_label }}"><i data-lucide="{{ ticket.central.origin_icon }}"></i></span></div>
     <div role="cell">
@@ -10,99 +10,43 @@
                     <span>{{ ticket.requester }}</span>
                     <span>{{ ticket.sector }}</span>
                     {% if ticket.partner %}<span class="desk-badge partner-badge">Socio / VIP</span>{% endif %}
-                    {% if ticket.central.is_merged %}<span class="desk-mini-flag" title="Chamado mesclado"><i data-lucide="git-merge"></i>Mesclado</span>{% endif %}
-                    {% if ticket.central.has_attachment %}<span class="desk-mini-flag" title="Possui anexo"><i data-lucide="paperclip"></i>{{ ticket.central.attachments_count }}</span>{% endif %}
-                    {% if ticket.central.has_recent_internal %}<span class="desk-mini-flag" title="Comentario interno recente"><i data-lucide="message-square-lock"></i>Interno</span>{% endif %}
                 </div>
             </div>
         </div>
-        <div class="desk-row-preview">
-            <strong>Preview rapido</strong>
-            <p>{{ ticket.description|truncatechars:150 }}</p>
-            {% if ticket.comments %}
-                <small>Ultimo comentario: {{ ticket.comments.0.body|truncatechars:120 }}</small>
-            {% else %}
-                <small>Sem comentarios registrados no preview.</small>
-            {% endif %}
+    </div>
+    <div role="cell">
+        <div class="desk-row-person">
+            <strong>{{ ticket.requester }}</strong>
+            <small>{{ ticket.sector }}</small>
         </div>
     </div>
     <div role="cell">
-        <span class="desk-origin-badge origin-{{ ticket.central.origin }}" title="{% if ticket.central.is_rmm %}Criado a partir de alerta do RMM{% else %}Chamado criado manualmente{% endif %}">
-            <i data-lucide="{{ ticket.central.origin_icon }}"></i>{{ ticket.central.origin_label }}
-        </span>
-        {% if ticket.central.is_rmm %}
-            <small class="desk-rmm-row-note">{{ ticket.central.alert_label }}</small>
-        {% endif %}
+        <span class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</span>
     </div>
     <div role="cell">
-        <div class="desk-sla-cell" title="Sem atualizacao ha {{ ticket.updated_for }}">
+        <span class="desk-assignee-pill {% if ticket.central.is_unassigned %}is-unassigned{% endif %}">
+            <span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>
+            {{ ticket.assigned_to|default:"Sem dono" }}
+        </span>
+    </div>
+    <div role="cell">
+        <div class="desk-sla-cell" title="{{ ticket.central.sla_label }}{% if ticket.central.sla_due_label %} - {{ ticket.central.sla_due_label }}{% endif %}">
             <span class="desk-sla-indicator priority-{{ ticket.priority }} sla-{{ ticket.central.sla_state }}">
-                <i data-lucide="clock-3"></i>
-                <span>{{ ticket.opened_for }}</span>
+                <i data-lucide="{% if ticket.priority == 'critical' %}siren{% else %}clock-3{% endif %}"></i>
+                <span>{{ ticket.priority_label }}</span>
             </span>
-            <small>{{ ticket.central.sla_label }}{% if ticket.central.sla_due_label %} · {{ ticket.central.sla_due_label }}{% endif %}</small>
+            <small>{{ ticket.central.sla_label }}</small>
         </div>
     </div>
     <div role="cell">
-        <details class="desk-inline-popover">
-            <summary class="desk-badge status-{{ ticket.status }}">{{ ticket.status_label }}</summary>
-            <div class="desk-popover desk-status-popover">
-                <strong>Alterar status</strong>
-                {% if ticket.status == 'new' %}
-                    <button type="button" data-toast-action>Em atendimento <span>iniciar agora</span></button>
-                    <button type="button" data-toast-action>Aguardando usuario <span>pausar SLA</span></button>
-                    <button type="button" data-sensitive-action>Cancelar <span>pede motivo</span></button>
-                {% elif ticket.status == 'in_progress' %}
-                    <button type="button" data-toast-action>Aguardando usuario <span>follow-up</span></button>
-                    <button type="button" data-toast-action>Aguardando terceiro <span>fornecedor</span></button>
-                    <button type="button" data-sensitive-action>Resolver <span>pede resumo</span></button>
-                    <button type="button" data-toast-action>Escalado <span>supervisor</span></button>
-                {% else %}
-                    <button type="button" data-toast-action>Em atendimento <span>retomar</span></button>
-                    <button type="button" data-sensitive-action>Resolvido <span>pede resumo</span></button>
-                {% endif %}
-                <label class="desk-mini-form"><span>Motivo rapido</span><input placeholder="Opcional para transicoes sensiveis"></label>
-            </div>
-        </details>
-    </div>
-    <div role="cell">
-        <details class="desk-inline-popover">
-            <summary class="desk-assignee-pill {% if ticket.central.is_unassigned %}is-unassigned{% endif %}">
-                <span class="desk-avatar">{{ ticket.assigned_to|default:"?"|slice:":1" }}</span>
-                {{ ticket.assigned_to|default:"Sem dono" }}
-            </summary>
-            <div class="desk-popover desk-assignee-popover">
-                <input class="desk-popover-search" placeholder="Buscar tecnico...">
-                <button class="desk-btn desk-btn-primary" type="button">Atribuir a mim</button>
-                {% for row in workload_rows %}
-                    <button type="button" data-toast-action>
-                        <span class="desk-technician-status {% cycle 'online' 'busy' 'online' 'away' %}"></span>
-                        {{ row.label }}
-                        <em>{{ row.count }} abertos{% if row.critical %} &middot; {{ row.critical }} crit.{% endif %}</em>
-                    </button>
-                {% endfor %}
-            </div>
-        </details>
-    </div>
-    <div role="cell">
-        {% if ticket.endpoint %}
-            <span class="desk-endpoint-chip status-{{ ticket.central.endpoint_status }}">
-                <i></i><span class="mono">{{ ticket.endpoint.hostname }}</span>
-            </span>
-            {% if ticket.central.is_rmm %}<small class="desk-muted">{{ ticket.central.rmm.active_alerts }} alertas ativos</small>{% endif %}
-        {% else %}
-            <span class="desk-muted">Sem endpoint</span>
-        {% endif %}
-    </div>
-    <div class="desk-category-cell" role="cell">
-        <span class="desk-badge neutral category-color-{{ ticket.category_color }}">
-            <i class="bi {{ ticket.category_icon }}" aria-hidden="true"></i>{{ ticket.category }}
-        </span>
+        <div class="desk-row-time">
+            <strong>{{ ticket.updated_for }}</strong>
+            <small>aberto ha {{ ticket.opened_for }}</small>
+        </div>
     </div>
     <div class="desk-row-actions-cell" role="cell">
         <span class="desk-row-hover-actions">
             <a class="desk-icon-action" href="{% url 'tickets:detail' ticket.number %}" data-row-action="open" aria-label="Abrir chamado {{ ticket.number }} em tela cheia"><i data-lucide="maximize-2"></i></a>
-            <button class="desk-icon-action" type="button" data-row-action="copy" aria-label="Copiar link do chamado {{ ticket.number }}"><i data-lucide="link"></i></button>
             <button class="desk-icon-action" type="button" data-row-action="more" aria-label="Menu de contexto do chamado {{ ticket.number }}"><i data-lucide="more-horizontal"></i></button>
         </span>
     </div>

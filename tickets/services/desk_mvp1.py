@@ -72,6 +72,18 @@ def _comment_view(comment):
 
 def adapt_ticket(ticket):
     comments = [_comment_view(comment) for comment in ticket.comments.all()]
+    attachments = [
+        SimpleNamespace(
+            id=str(attachment.pk),
+            name=attachment.original_name,
+            original_name=attachment.original_name,
+            size=attachment.size,
+            visibility='Publico' if attachment.visibility == 'public' else 'Interno',
+            visibility_value=attachment.visibility,
+            when=relative_time(attachment.created_at),
+        )
+        for attachment in getattr(ticket, 'attachments').all()
+    ] if hasattr(ticket, 'attachments') else []
     category = ticket.category.name if ticket.category else 'Sem categoria'
     category_icon = normalize_category_icon(ticket.category.icon) if ticket.category else 'bi-folder'
     category_color = normalize_category_color(ticket.category.color) if ticket.category else 'gray'
@@ -108,11 +120,13 @@ def adapt_ticket(ticket):
         assigned_at=display_time(ticket.assigned_at),
         resolved_at=display_time(ticket.resolved_at),
         comments=comments,
+        attachments=attachments,
+        attachments_count=len(attachments),
     )
 
 
 def ticket_queryset():
-    return Ticket.objects.select_related('category', 'endpoint', 'sla').prefetch_related('comments', 'audit_events')
+    return Ticket.objects.select_related('category', 'endpoint', 'sla').prefetch_related('comments', 'attachments', 'audit_events')
 
 
 def get_ticket_view(number):
@@ -172,6 +186,10 @@ def filtered_ticket_views(params, assigned_to=None, current_user_aliases=None):
             | Q(title__icontains=query)
             | Q(requester_name__icontains=query)
             | Q(requester_email__icontains=query)
+            | Q(requester_department__icontains=query)
+            | Q(category__name__icontains=query)
+            | Q(endpoint__hostname__icontains=query)
+            | Q(endpoint_name__icontains=query)
         )
 
     statuses = _split_values(params, 'status')
@@ -186,6 +204,8 @@ def filtered_ticket_views(params, assigned_to=None, current_user_aliases=None):
 
     if statuses:
         queryset = queryset.filter(status__in=statuses)
+    elif params.get('include_all_statuses') != '1':
+        queryset = queryset.filter(status__in=OPEN_STATUSES)
     if priorities:
         queryset = queryset.filter(priority__in=priorities)
     if categories:

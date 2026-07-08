@@ -1,13 +1,15 @@
 from datetime import datetime, time, timedelta
 
 import csv
+import uuid
+from types import SimpleNamespace
 
 from django.contrib import messages
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, IntegerField, Q, Value, When
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
@@ -82,6 +84,27 @@ EVENT_PERIOD_OPTIONS = [
     ('all', 'Todos'),
 ]
 
+EVENT_CATEGORY_OPTIONS = [
+    ('all', 'Todos'),
+    ('agent', 'Agente'),
+    ('system', 'Sistema'),
+    ('alerts', 'Alertas'),
+    ('jobs', 'Jobs'),
+    ('security', 'Segurança'),
+    ('inventory', 'Inventário'),
+    ('maintenance', 'Manutenção'),
+]
+
+EVENT_CATEGORY_PREFIXES = {
+    'agent': ['agent.'],
+    'system': ['system.', 'endpoint.status_changed'],
+    'alerts': ['alert.'],
+    'jobs': ['job.', 'maintenance.task_'],
+    'security': ['security.', 'policy.', 'software_policy.'],
+    'inventory': ['inventory.', 'software.', 'network.', 'disk.', 'os.', 'user.'],
+    'maintenance': ['maintenance.'],
+}
+
 SOFTWARE_CATEGORY_OPTIONS = [('all', 'Todas'), *CATEGORY_LABELS.items()]
 SOFTWARE_RISK_OPTIONS = [('all', 'Todos'), *RISK_LABELS.items()]
 
@@ -91,6 +114,328 @@ MUTE_DURATIONS = {
     '24h': ('24 horas', timedelta(hours=24)),
     '7d': ('7 dias', timedelta(days=7)),
 }
+
+
+class MockList(list):
+    def all(self):
+        return self
+
+
+class MockEndpoint(SimpleNamespace):
+    def get_status_display(self):
+        return {
+            AgentMachine.STATUS_ONLINE: 'Online',
+            AgentMachine.STATUS_OFFLINE: 'Offline',
+            AgentMachine.STATUS_UNKNOWN: 'Unknown',
+        }.get(self.status, self.status or 'Unknown')
+
+
+class MockAlert(SimpleNamespace):
+    def get_severity_display(self):
+        return dict(EndpointAlert.SEVERITY_CHOICES).get(self.severity, self.severity.title())
+
+    def get_status_display(self):
+        return dict(EndpointAlert.STATUS_CHOICES).get(self.status, self.status.title())
+
+    @property
+    def is_muted(self):
+        return bool(getattr(self, 'muted_until', None) and self.muted_until > timezone.now())
+
+    @property
+    def is_temporary(self):
+        return bool(getattr(self, 'expires_at', None))
+
+
+class MockEvent(SimpleNamespace):
+    def get_severity_display(self):
+        return dict(AuditEvent.SEVERITY_CHOICES).get(self.severity, self.severity.title())
+
+    def get_actor_type_display(self):
+        return dict(AuditEvent.ACTOR_CHOICES).get(self.actor_type, self.actor_type.title())
+
+
+def _mock_endpoint(pk, hostname, status, user, ip, os_name, domain='CONTROL', minutes=8, agent='0.9.8'):
+    seen_at = timezone.now() - timedelta(minutes=minutes)
+    return MockEndpoint(
+        id=uuid.UUID(pk),
+        pk=uuid.UUID(pk),
+        hostname=hostname,
+        status=status,
+        domain=domain,
+        last_logged_user=user,
+        last_ip=ip,
+        os_name=os_name,
+        last_seen_at=seen_at,
+        agent_version=agent,
+    )
+
+
+def mock_rmm_endpoints():
+    return [
+        _mock_endpoint('00000000-0000-4000-8000-000000000101', 'FIN-012', AgentMachine.STATUS_ONLINE, 'mariana.souza', '192.168.104.42', 'Windows 11 Pro 23H2', minutes=3, agent='1.4.2'),
+        _mock_endpoint('00000000-0000-4000-8000-000000000102', 'JUR-PRINT-01', AgentMachine.STATUS_OFFLINE, 'juridico', '192.168.104.66', 'Windows Server 2019', minutes=185, agent='1.3.9'),
+        _mock_endpoint('00000000-0000-4000-8000-000000000103', 'REC-004', AgentMachine.STATUS_ONLINE, 'recepcao', '192.168.104.23', 'Windows 10 Pro 22H2', minutes=9, agent='1.4.2'),
+        _mock_endpoint('00000000-0000-4000-8000-000000000104', 'DIR-NB-03', AgentMachine.STATUS_ONLINE, 'claudia.ferraz', '192.168.104.88', 'Windows 11 Pro 24H2', minutes=14, agent='1.4.1'),
+        _mock_endpoint('00000000-0000-4000-8000-000000000105', 'SRV-ERP-01', AgentMachine.STATUS_ONLINE, 'svc-erp', '192.168.104.10', 'Windows Server 2022', minutes=2, agent='1.4.2'),
+        _mock_endpoint('00000000-0000-4000-8000-000000000106', 'COM-017', AgentMachine.STATUS_UNKNOWN, 'daniel.ribeiro', '192.168.104.77', 'Windows 11 Pro 23H2', minutes=54, agent=''),
+        _mock_endpoint('00000000-0000-4000-8000-000000000107', 'FIN-DC-02', AgentMachine.STATUS_OFFLINE, 'svc-backup', '192.168.104.12', 'Windows Server 2019', minutes=420, agent='1.2.7'),
+        _mock_endpoint('00000000-0000-4000-8000-000000000108', 'TI-NOC-01', AgentMachine.STATUS_ONLINE, 'gabriel.oliveira', '192.168.104.5', 'Windows 11 Enterprise', minutes=1, agent='1.4.2'),
+    ]
+
+
+def _mock_alert(pk, endpoint, title, description, severity, alert_type, minutes=12, status=None, metadata=None, expires=False):
+    now = timezone.now()
+    return MockAlert(
+        id=uuid.UUID(pk),
+        pk=uuid.UUID(pk),
+        endpoint=endpoint,
+        endpoint_id=endpoint.id,
+        title=title,
+        description=description,
+        severity=severity,
+        alert_type=alert_type,
+        status=status or EndpointAlert.STATUS_OPEN,
+        first_seen_at=now - timedelta(hours=2, minutes=minutes),
+        last_seen_at=now - timedelta(minutes=minutes),
+        updated_at=now - timedelta(minutes=max(1, minutes // 2)),
+        resolved_at=now - timedelta(minutes=minutes) if status == EndpointAlert.STATUS_RESOLVED else None,
+        muted_until=None,
+        expires_at=now + timedelta(hours=2) if expires else None,
+        metadata=metadata or {},
+        events=MockList([
+            SimpleNamespace(get_event_type_display=lambda: 'Criado', created_at=now - timedelta(minutes=minutes)),
+            SimpleNamespace(get_event_type_display=lambda: 'Reavaliado', created_at=now - timedelta(minutes=max(1, minutes // 2))),
+        ]),
+    )
+
+
+def mock_rmm_alerts(endpoints=None):
+    endpoints = endpoints or mock_rmm_endpoints()
+    by_name = {endpoint.hostname: endpoint for endpoint in endpoints}
+    return [
+        _mock_alert('00000000-0000-4000-8000-000000000201', by_name['FIN-012'], 'Bitdefender ausente em FIN-012', 'O agente detectou ausencia do Bitdefender na maquina financeira FIN-012.', EndpointAlert.SEVERITY_CRITICAL, 'security_antivirus', minutes=6),
+        _mock_alert('00000000-0000-4000-8000-000000000202', by_name['SRV-ERP-01'], 'Disco C: acima de 90%', 'Volume principal do servidor ERP esta com pouco espaco livre.', EndpointAlert.SEVERITY_WARNING, 'disk_low', minutes=18, metadata={'disk_name': 'C:', 'free_percent': 7, 'used_percent': 93}),
+        _mock_alert('00000000-0000-4000-8000-000000000203', by_name['JUR-PRINT-01'], 'Endpoint offline ha mais de 3h', 'Impressora/servidor de impressao do Juridico parou de comunicar.', EndpointAlert.SEVERITY_CRITICAL, 'endpoint_offline', minutes=185),
+        _mock_alert('00000000-0000-4000-8000-000000000204', by_name['DIR-NB-03'], 'AnyDesk detectado em notebook da diretoria', 'Software de acesso remoto identificado em endpoint sensivel.', EndpointAlert.SEVERITY_SECURITY, 'remote_access_software', minutes=27),
+        _mock_alert('00000000-0000-4000-8000-000000000205', by_name['COM-017'], 'Inventario desatualizado', 'Endpoint sem snapshot completo nas ultimas 24h.', EndpointAlert.SEVERITY_INFO, 'stale_inventory', minutes=54),
+        _mock_alert('00000000-0000-4000-8000-000000000206', by_name['REC-004'], 'Memoria baixa recorrente', 'Uso de memoria acima de 88% em tres coletas consecutivas.', EndpointAlert.SEVERITY_WARNING, 'low_memory', minutes=34),
+        _mock_alert('00000000-0000-4000-8000-000000000207', by_name['FIN-DC-02'], 'Controlador financeiro offline', 'Servidor de dominio financeiro sem heartbeat recente.', EndpointAlert.SEVERITY_CRITICAL, 'endpoint_offline', minutes=420),
+        _mock_alert('00000000-0000-4000-8000-000000000208', by_name['TI-NOC-01'], 'Alerta de politica resolvido', 'Violacao de software normalizada apos remocao.', EndpointAlert.SEVERITY_SECURITY, 'software_policy_violation', minutes=11, status=EndpointAlert.STATUS_RESOLVED),
+    ]
+
+
+def mock_rmm_events(endpoints=None, alerts=None):
+    endpoints = endpoints or mock_rmm_endpoints()
+    alerts = alerts or mock_rmm_alerts(endpoints)
+    specs = [
+        ('agent.heartbeat_received', 'Heartbeat recebido', 'FIN-012 enviou heartbeat e métricas básicas.', AuditEvent.SEVERITY_SUCCESS, AuditEvent.ACTOR_AGENT, endpoints[0], None, 2),
+        ('alert.created', 'Alerta critico criado', 'Bitdefender ausente detectado no FIN-012.', AuditEvent.SEVERITY_CRITICAL, AuditEvent.ACTOR_SYSTEM, endpoints[0], alerts[0], 5),
+        ('maintenance.run_completed', 'Rotina de manutenção concluída', 'Rotina mark_offline_agents executada com sucesso.', AuditEvent.SEVERITY_SUCCESS, AuditEvent.ACTOR_SCHEDULER, endpoints[1], None, 9),
+        ('job.completed', 'Job de inventário concluído', 'Coleta de software concluída em 47 pacotes.', AuditEvent.SEVERITY_SUCCESS, AuditEvent.ACTOR_SCHEDULER, endpoints[2], None, 12),
+        ('endpoint.status_changed', 'Endpoint ficou offline', 'JUR-PRINT-01 deixou de comunicar com o RMM.', AuditEvent.SEVERITY_WARNING, AuditEvent.ACTOR_SYSTEM, endpoints[1], alerts[2], 16),
+        ('inventory.software_changed', 'Inventário de software alterado', 'Google Chrome atualizado de 125 para 126.', AuditEvent.SEVERITY_INFO, AuditEvent.ACTOR_AGENT, endpoints[2], None, 21),
+        ('software_policy.violation', 'Politica violada', 'AnyDesk detectado em endpoint da diretoria.', AuditEvent.SEVERITY_SECURITY, AuditEvent.ACTOR_SYSTEM, endpoints[3], alerts[3], 25),
+        ('alert.acknowledged', 'Alerta reconhecido', 'Tecnico Gabriel reconheceu alerta de disco.', AuditEvent.SEVERITY_INFO, AuditEvent.ACTOR_USER, endpoints[4], alerts[1], 31),
+        ('policy.violation', 'Regra de segurança violada', 'Ferramenta de acesso remoto fora da política permitida.', AuditEvent.SEVERITY_SECURITY, AuditEvent.ACTOR_SYSTEM, endpoints[3], alerts[3], 36),
+        ('security.defender_changed', 'Defender alterado', 'Estado de antivirus mudou para atencao.', AuditEvent.SEVERITY_SECURITY, AuditEvent.ACTOR_SYSTEM, endpoints[0], alerts[0], 42),
+        ('software.installed', 'Software instalado', 'Novo software detectado no endpoint REC-004.', AuditEvent.SEVERITY_INFO, AuditEvent.ACTOR_SYSTEM, endpoints[2], None, 58),
+        ('alert.resolved_auto', 'Alerta resolvido automaticamente', 'Violacao de politica deixou de existir.', AuditEvent.SEVERITY_SUCCESS, AuditEvent.ACTOR_SCHEDULER, endpoints[7], alerts[7], 72),
+    ]
+    now = timezone.now()
+    return [
+        MockEvent(
+            id=uuid.uuid4(),
+            event_type=event_type,
+            title=title,
+            description=description,
+            severity=severity,
+            actor_type=actor_type,
+            actor_name='NightOwl' if actor_type != AuditEvent.ACTOR_USER else 'gabriel.oliveira',
+            endpoint=endpoint,
+            alert=alert,
+            created_at=now - timedelta(minutes=minutes),
+        )
+        for event_type, title, description, severity, actor_type, endpoint, alert, minutes in specs
+    ]
+
+
+def mock_endpoint_rows(endpoints=None):
+    endpoints = endpoints or mock_rmm_endpoints()
+    disk_levels = ['normal', 'warning', 'normal', 'normal', 'critical', 'warning', 'critical', 'normal']
+    defender_keys = ['attention', 'ok', 'ok', 'ok', 'ok', 'unknown', 'attention', 'ok']
+    software_counts = [47, 18, 39, 52, 31, 44, 23, 68]
+    rows = []
+    for index, endpoint in enumerate(endpoints):
+        level = disk_levels[index % len(disk_levels)]
+        used = 93 if level == 'critical' else 82 if level == 'warning' else 51
+        defender_key = defender_keys[index % len(defender_keys)]
+        primary_disk = {
+            'has_data': True,
+            'level': level,
+            'summary': f'{used}% usado',
+            'used_percent': used,
+        }
+        defender = {'key': 'ok' if defender_key == 'ok' else 'attention' if defender_key == 'attention' else 'unknown'}
+        health = calculate_health(endpoint, primary_disk, defender)
+        endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+        sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
+        rows.append({
+            'endpoint': endpoint,
+            'hostname': endpoint.hostname,
+            'domain': endpoint.domain,
+            'logged_user': endpoint.last_logged_user,
+            'sector': sector,
+            'tag': sector,
+            'endpoint_type': endpoint_type,
+            'endpoint_type_label': endpoint_type_label(endpoint_type),
+            'primary_ip': endpoint.last_ip,
+            'os_name': endpoint.os_name,
+            'last_seen_at': endpoint.last_seen_at,
+            'primary_disk': primary_disk,
+            'defender_key': defender_key,
+            'software_count': software_counts[index % len(software_counts)],
+            'has_attention': level in {'warning', 'critical'} or defender_key != 'ok' or endpoint.status == AgentMachine.STATUS_OFFLINE,
+            'health': health,
+            'attention': endpoint_attention_summary(endpoint, primary_disk, defender_key, health),
+            'agent_version': endpoint.agent_version,
+            'agent_version_state': 'current' if endpoint.agent_version == '1.4.2' else 'outdated' if endpoint.agent_version else 'unknown',
+        })
+    return rows
+
+
+def mock_software_inventory_rows(endpoints=None):
+    endpoints = endpoints or mock_rmm_endpoints()
+    def example(*indexes):
+        return [{'endpoint': endpoints[index]} for index in indexes]
+    specs = [
+        {'name': 'Bitdefender Endpoint Security Tools', 'publisher': 'Bitdefender', 'category': 'security', 'category_label': 'Seguranca', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 6, 'versions': ['7.9.12'], 'versions_display': '7.9.12', 'latest_seen_at': timezone.now() - timedelta(minutes=8), 'example_endpoints': example(1, 2, 4), 'is_sensitive': False},
+        {'name': 'AnyDesk', 'publisher': 'AnyDesk Software GmbH', 'category': 'remote_access', 'category_label': 'Acesso remoto', 'risk_level': 'high', 'risk_label': 'Alto', 'endpoint_count': 1, 'versions': ['8.0.9'], 'versions_display': '8.0.9', 'latest_seen_at': timezone.now() - timedelta(minutes=27), 'example_endpoints': example(3), 'is_sensitive': True},
+        {'name': 'Microsoft 365 Apps', 'publisher': 'Microsoft Corporation', 'category': 'office', 'category_label': 'Produtividade', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 7, 'versions': ['2406', '2407'], 'versions_display': '2406, 2407', 'latest_seen_at': timezone.now() - timedelta(minutes=12), 'example_endpoints': example(0, 2, 7), 'is_sensitive': False},
+        {'name': 'Advanced IP Scanner', 'publisher': 'Famatech', 'category': 'admin_network', 'category_label': 'Admin/Rede', 'risk_level': 'medium', 'risk_label': 'Medio', 'endpoint_count': 2, 'versions': ['2.5.4594'], 'versions_display': '2.5.4594', 'latest_seen_at': timezone.now() - timedelta(hours=1), 'example_endpoints': example(7, 5), 'is_sensitive': True},
+        {'name': 'Google Chrome', 'publisher': 'Google LLC', 'category': 'browser', 'category_label': 'Navegador', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 8, 'versions': ['126.0.6478'], 'versions_display': '126.0.6478', 'latest_seen_at': timezone.now() - timedelta(minutes=6), 'example_endpoints': example(0, 3, 6), 'is_sensitive': False},
+        {'name': 'Python 3.12', 'publisher': 'Python Software Foundation', 'category': 'development', 'category_label': 'Desenvolvimento', 'risk_level': 'medium', 'risk_label': 'Medio', 'endpoint_count': 1, 'versions': ['3.12.4'], 'versions_display': '3.12.4', 'latest_seen_at': timezone.now() - timedelta(hours=3), 'example_endpoints': example(7), 'is_sensitive': False},
+    ]
+    rows = []
+    for row in specs:
+        row['endpoints'] = row['example_endpoints']
+        rows.append(row)
+    summary = {
+        'unique_count': len(rows),
+        'install_count': sum(row['endpoint_count'] for row in rows),
+        'remote_access_count': sum(row['category'] == 'remote_access' for row in rows),
+        'admin_network_count': sum(row['category'] == 'admin_network' for row in rows),
+        'security_count': sum(row['category'] == 'security' for row in rows),
+        'unknown_count': 2,
+    }
+    return rows, summary
+
+
+def mock_policy_context(endpoints=None):
+    endpoints = endpoints or mock_rmm_endpoints()
+    policies = [
+        {
+            'id': '00000000-0000-4000-8000-000000000301',
+            'name': 'Bloquear acesso remoto nao homologado',
+            'description': 'Detecta AnyDesk, TeamViewer e ferramentas similares fora da equipe de TI.',
+            'type': 'prohibited',
+            'type_label': 'Proibido',
+            'software': 'AnyDesk',
+            'match_type': 'Contem',
+            'match_type_value': 'contains',
+            'publisher': 'AnyDesk Software GmbH',
+            'version': 'Qualquer',
+            'scope': 'Todos os endpoints',
+            'scope_type': 'all',
+            'scope_value': '',
+            'target_endpoints': [],
+            'target_endpoint_ids': [],
+            'severity': 'security',
+            'severity_label': 'Security',
+            'status': 'active',
+            'status_label': 'Ativa',
+            'is_active': True,
+            'monitor_only': False,
+            'create_alert': True,
+            'show_in_noc': True,
+            'create_audit_event': True,
+            'violations_open': 1,
+            'exceptions_active': 1,
+            'updated_at': '07/07 09:42',
+            'behavior': ['Gerar alerta', 'Mostrar no NOC', 'Criar auditoria'],
+        },
+        {
+            'id': '00000000-0000-4000-8000-000000000302',
+            'name': 'Bitdefender obrigatorio',
+            'description': 'Todos os endpoints Windows devem possuir Bitdefender ativo.',
+            'type': 'required',
+            'type_label': 'Obrigatorio',
+            'software': 'Bitdefender Endpoint Security Tools',
+            'match_type': 'Igual',
+            'match_type_value': 'equals',
+            'publisher': 'Bitdefender',
+            'version': 'Qualquer',
+            'scope': 'Todos os endpoints',
+            'scope_type': 'all',
+            'scope_value': '',
+            'target_endpoints': [],
+            'target_endpoint_ids': [],
+            'severity': 'critical',
+            'severity_label': 'Critical',
+            'status': 'active',
+            'status_label': 'Ativa',
+            'is_active': True,
+            'monitor_only': False,
+            'create_alert': True,
+            'show_in_noc': True,
+            'create_audit_event': True,
+            'violations_open': 1,
+            'exceptions_active': 0,
+            'updated_at': '07/07 10:05',
+            'behavior': ['Gerar alerta', 'Mostrar no NOC', 'Criar auditoria'],
+        },
+        {
+            'id': '00000000-0000-4000-8000-000000000303',
+            'name': 'Ferramentas admin somente TI',
+            'description': 'Monitora scanners e consoles administrativos em setores nao tecnicos.',
+            'type': 'restricted',
+            'type_label': 'Restrito',
+            'software': 'Advanced IP Scanner',
+            'match_type': 'Contem',
+            'match_type_value': 'contains',
+            'publisher': 'Famatech',
+            'version': 'Qualquer',
+            'scope': 'Departamento: TI',
+            'scope_type': 'department',
+            'scope_value': 'TI',
+            'target_endpoints': [],
+            'target_endpoint_ids': [],
+            'severity': 'warning',
+            'severity_label': 'Warning',
+            'status': 'monitor_only',
+            'status_label': 'Monitoramento',
+            'is_active': True,
+            'monitor_only': True,
+            'create_alert': False,
+            'show_in_noc': False,
+            'create_audit_event': True,
+            'violations_open': 0,
+            'exceptions_active': 0,
+            'updated_at': '06/07 17:31',
+            'behavior': ['Somente monitoramento', 'Criar auditoria'],
+        },
+    ]
+    violations = [
+        {'id': '00000000-0000-4000-8000-000000000401', 'policy_id': policies[0]['id'], 'endpoint_id': str(endpoints[3].id), 'endpoint': endpoints[3].hostname, 'endpoint_url': f'/endpoints/{endpoints[3].id}/', 'software_name': 'AnyDesk', 'software_version': '8.0.9', 'publisher': 'AnyDesk Software GmbH', 'severity': 'security', 'severity_label': 'Security', 'status': 'open', 'status_label': 'Aberta', 'first_seen_at': '07/07/2026 09:21', 'last_seen_at': '07/07/2026 10:02', 'alert_id': '', 'alert_label': 'Sem alerta', 'resolution_reason': ''},
+        {'id': '00000000-0000-4000-8000-000000000402', 'policy_id': policies[1]['id'], 'endpoint_id': str(endpoints[0].id), 'endpoint': endpoints[0].hostname, 'endpoint_url': f'/endpoints/{endpoints[0].id}/', 'software_name': 'Bitdefender Endpoint Security Tools', 'software_version': 'Ausente', 'publisher': 'Bitdefender', 'severity': 'critical', 'severity_label': 'Critical', 'status': 'open', 'status_label': 'Aberta', 'first_seen_at': '07/07/2026 08:51', 'last_seen_at': '07/07/2026 10:01', 'alert_id': '', 'alert_label': 'Sem alerta', 'resolution_reason': ''},
+    ]
+    exceptions = [
+        {'id': '00000000-0000-4000-8000-000000000501', 'policy_id': policies[0]['id'], 'policy': policies[0]['name'], 'endpoint_id': str(endpoints[7].id), 'endpoint': endpoints[7].hostname, 'endpoint_label': f'{endpoints[7].hostname} - {endpoints[7].domain} - {endpoints[7].status}', 'reason': 'Suporte remoto homologado para TI', 'exception_type': 'temporary', 'exception_type_label': 'Temporaria', 'expires_at': '31/07/2026 23:59', 'expires_value': '2026-07-31', 'status': 'active', 'status_label': 'Ativa', 'created_by': 'Night Owl', 'created_at': '07/07 08:30'},
+    ]
+    logs = {
+        policies[0]['id']: [{'time': '07/07 09:42', 'title': 'Politica criada', 'description': 'Regra de bloqueio cadastrada no preview.', 'severity': 'info', 'event_type': 'software_policy.created'}],
+        policies[1]['id']: [{'time': '07/07 10:05', 'title': 'Violacao detectada', 'description': 'FIN-012 sem Bitdefender.', 'severity': 'critical', 'event_type': 'software_policy.violation'}],
+    }
+    return policies, violations, exceptions, logs
 
 
 def redirect_back(request):
@@ -591,12 +936,23 @@ def build_endpoint_row(endpoint):
     if not primary_ip and snapshot and snapshot.ips:
         primary_ip = snapshot.ips[0]
 
+    endpoint_type = infer_endpoint_type(endpoint.hostname, os_name)
+    sector = infer_endpoint_sector(endpoint.hostname, domain, logged_user)
+    health_basis = SimpleNamespace(status=endpoint.status, last_seen_at=endpoint.last_seen_at)
+    defender = detail_defender_state(snapshot.defender_status if snapshot else {}, snapshot.installed_software if snapshot else [])
+    health = calculate_health(health_basis, primary_disk, defender)
+    attention = endpoint_attention_summary(endpoint, primary_disk, defender_key, health, snapshot)
+
     return {
         'endpoint': endpoint,
         'snapshot': snapshot,
         'hostname': endpoint.hostname or '',
         'domain': domain or '',
         'logged_user': logged_user or '',
+        'sector': sector,
+        'tag': sector,
+        'endpoint_type': endpoint_type,
+        'endpoint_type_label': endpoint_type_label(endpoint_type),
         'primary_ip': primary_ip or '',
         'os_name': os_name or '',
         'last_seen_at': endpoint.last_seen_at,
@@ -604,6 +960,8 @@ def build_endpoint_row(endpoint):
         'defender_key': defender_key,
         'software_count': software_count,
         'has_attention': defender_key == 'attention' or primary_disk['level'] in ('warning', 'critical'),
+        'health': health,
+        'attention': attention,
         'agent_version': endpoint.agent_version,
         'agent_version_state': agent_version_state(
             endpoint.agent_version,
@@ -620,14 +978,429 @@ def row_matches_query(row, query):
         row['hostname'],
         row['domain'],
         row['logged_user'],
+        row.get('sector', ''),
+        row.get('tag', ''),
+        row.get('endpoint_type_label', ''),
         str(row['primary_ip']),
         row['os_name'],
     ]).lower()
     return query.lower() in haystack
 
 
+def infer_endpoint_type(hostname, os_name):
+    text = f'{hostname or ""} {os_name or ""}'.casefold()
+    if any(term in text for term in ['server', 'srv', 'dc-', 'erp', 'print']):
+        return 'server'
+    if any(term in text for term in ['nb', 'notebook', 'laptop']):
+        return 'notebook'
+    return 'workstation'
+
+
+def endpoint_type_label(value):
+    return {
+        'server': 'Servidor',
+        'workstation': 'Workstation',
+        'notebook': 'Notebook',
+    }.get(value or '', 'Workstation')
+
+
+def infer_endpoint_sector(hostname, domain, logged_user):
+    hostname = (hostname or '').upper()
+    prefixes = {
+        'FIN': 'Financeiro',
+        'JUR': 'Juridico',
+        'DIR': 'Diretoria',
+        'REC': 'Recepcao',
+        'COM': 'Comercial',
+        'TI': 'TI',
+        'SRV': 'Infraestrutura',
+    }
+    for prefix, sector in prefixes.items():
+        if hostname.startswith(prefix):
+            return sector
+    if logged_user:
+        return 'Usuario final'
+    return domain or 'Sem setor'
+
+
+def endpoint_attention_summary(endpoint, primary_disk, defender_key, health, snapshot=None):
+    if endpoint.status == AgentMachine.STATUS_OFFLINE:
+        if endpoint.last_seen_at:
+            delta = timezone.now() - endpoint.last_seen_at
+            hours = max(1, int(delta.total_seconds() // 3600))
+            return {
+                'label': f'Offline ha {hours}h',
+                'level': 'critical',
+                'key': 'offline',
+            }
+        return {'label': 'Offline sem heartbeat', 'level': 'critical', 'key': 'offline'}
+    if defender_key == 'attention':
+        return {'label': 'Defender critico', 'level': 'critical', 'key': 'security'}
+    if primary_disk.get('level') == 'critical':
+        return {'label': f"Disco {primary_disk.get('used_percent', 0)}%", 'level': 'critical', 'key': 'disk'}
+    if primary_disk.get('level') == 'warning':
+        return {'label': f"Disco {primary_disk.get('used_percent', 0)}%", 'level': 'warning', 'key': 'disk'}
+    if endpoint.agent_version and agent_version_state(endpoint.agent_version, getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', '')) == 'outdated':
+        return {'label': 'Agente desatualizado', 'level': 'warning', 'key': 'agent'}
+    if defender_key == 'unknown':
+        return {'label': 'Inventario vencido', 'level': 'muted', 'key': 'inventory'}
+    score = health.get('score')
+    if score is not None and score < 70:
+        return {'label': 'Saude degradada', 'level': 'warning', 'key': 'health'}
+    return {'label': 'Sem acao imediata', 'level': 'normal', 'key': 'ok'}
+
+
+def endpoint_filters_from_request(request):
+    return {
+        'q': request.GET.get('q', '').strip(),
+        'status': request.GET.get('status', '').strip(),
+        'os': request.GET.get('os', '').strip(),
+        'domain': request.GET.get('domain', '').strip(),
+        'defender': request.GET.get('defender', '').strip(),
+        'disk': request.GET.get('disk', '').strip(),
+        'type': request.GET.get('type', '').strip(),
+        'sector': request.GET.get('sector', '').strip(),
+        'agent': request.GET.get('agent', '').strip(),
+        'attention': request.GET.get('attention', '').strip(),
+        'quick': request.GET.get('quick', 'all').strip() or 'all',
+    }
+
+
+def endpoint_matches_quick_filter(row, quick_filter):
+    if quick_filter in ('', 'all'):
+        return True
+    if quick_filter == 'critical':
+        return row.get('attention', {}).get('level') == 'critical' or (row.get('health', {}).get('score') or 100) < 55
+    if quick_filter == 'offline':
+        return row['endpoint'].status == AgentMachine.STATUS_OFFLINE
+    if quick_filter == 'servers':
+        return row.get('endpoint_type') == 'server'
+    if quick_filter == 'workstations':
+        return row.get('endpoint_type') == 'workstation'
+    if quick_filter == 'agent_outdated':
+        return row.get('agent_version_state') == 'outdated'
+    if quick_filter == 'security':
+        return row.get('defender_key') in ('attention', 'unknown')
+    if quick_filter == 'disk_full':
+        return row.get('primary_disk', {}).get('level') == 'critical'
+    return True
+
+
+def filter_endpoint_rows(rows, filters):
+    filtered_rows = []
+    for row in rows:
+        if not row_matches_query(row, filters['q']):
+            continue
+        if filters['status'] and row['endpoint'].status != filters['status']:
+            continue
+        if filters['os'] and row['os_name'] != filters['os']:
+            continue
+        if filters['domain'] and row['domain'] != filters['domain']:
+            continue
+        if filters['defender'] and row['defender_key'] != filters['defender']:
+            continue
+        if filters['disk'] and row['primary_disk']['level'] != filters['disk']:
+            continue
+        if filters['type'] and row.get('endpoint_type') != filters['type']:
+            continue
+        if filters['sector'] and row.get('sector') != filters['sector']:
+            continue
+        if filters['agent'] and row.get('agent_version_state') != filters['agent']:
+            continue
+        if filters['attention'] == '1' and not row.get('has_attention'):
+            continue
+        if not endpoint_matches_quick_filter(row, filters['quick']):
+            continue
+        filtered_rows.append(row)
+    return filtered_rows
+
+
+def endpoint_summary_counts(rows):
+    return {
+        'total_endpoints': len(rows),
+        'online_count': sum(row['endpoint'].status == AgentMachine.STATUS_ONLINE for row in rows),
+        'offline_count': sum(row['endpoint'].status == AgentMachine.STATUS_OFFLINE for row in rows),
+        'unknown_count': sum(row['endpoint'].status == AgentMachine.STATUS_UNKNOWN for row in rows),
+        'attention_count': sum(1 for row in rows if row.get('has_attention')),
+        'offline_critical_count': sum(row['endpoint'].status == AgentMachine.STATUS_OFFLINE and row.get('attention', {}).get('level') == 'critical' for row in rows),
+        'agent_outdated_count': sum(row.get('agent_version_state') == 'outdated' for row in rows),
+        'security_attention_count': sum(row.get('defender_key') in ('attention', 'unknown') for row in rows),
+        'disk_critical_count': sum(row.get('primary_disk', {}).get('level') == 'critical' for row in rows),
+    }
+
+
+def endpoint_filter_options(rows):
+    return {
+        'os_options': sorted({row['os_name'] for row in rows if row['os_name']}),
+        'domain_options': sorted({row['domain'] for row in rows if row['domain']}),
+        'sector_options': sorted({row.get('sector') for row in rows if row.get('sector')}),
+        'type_options': [
+            ('server', 'Servidores'),
+            ('workstation', 'Workstations'),
+            ('notebook', 'Notebooks'),
+        ],
+        'status_options': AgentMachine.STATUS_CHOICES,
+    }
+
+
+def build_endpoint_health_breakdown(endpoint, primary_disk, defender, endpoint_alerts=None, snapshot=None):
+    alerts_count = len(endpoint_alerts or [])
+    connectivity_score = 100 if endpoint.status == AgentMachine.STATUS_ONLINE else 55 if endpoint.status == AgentMachine.STATUS_UNKNOWN else 10
+    agent_state = agent_version_state(endpoint.agent_version, getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''))
+    agent_score = 100 if agent_state == 'current' else 55 if agent_state == 'outdated' else 25
+    security_score = 100 if defender.get('key') == 'ok' else 45 if defender.get('key') == 'attention' else 30
+    disk_level = primary_disk.get('level')
+    disk_score = 100 if disk_level == 'normal' else 60 if disk_level == 'warning' else 25 if disk_level == 'critical' else 40
+    inventory_score = 100 if snapshot and getattr(snapshot, 'received_at', None) else 35
+    alerts_score = max(0, 100 - (alerts_count * 22))
+    return [
+        {'label': 'Conectividade', 'score': connectivity_score, 'level': 'good' if connectivity_score >= 80 else 'critical' if connectivity_score < 40 else 'warning'},
+        {'label': 'Agente', 'score': agent_score, 'level': 'good' if agent_score >= 80 else 'critical' if agent_score < 40 else 'warning'},
+        {'label': 'Seguranca', 'score': security_score, 'level': 'good' if security_score >= 80 else 'critical' if security_score < 50 else 'warning'},
+        {'label': 'Disco', 'score': disk_score, 'level': 'good' if disk_score >= 80 else 'critical' if disk_score < 40 else 'warning'},
+        {'label': 'Inventario', 'score': inventory_score, 'level': 'good' if inventory_score >= 80 else 'warning'},
+        {'label': 'Alertas ativos', 'score': alerts_score, 'level': 'good' if alerts_score >= 80 else 'critical' if alerts_score < 50 else 'warning'},
+    ]
+
+
+def build_endpoint_patch_rows(endpoint):
+    now = timezone.now()
+    return [
+        {
+            'name': 'Windows Update - Qualidade',
+            'status': 'Pendente' if endpoint.status != AgentMachine.STATUS_OFFLINE else 'Nao coletado',
+            'severity': 'warning' if endpoint.status != AgentMachine.STATUS_OFFLINE else 'muted',
+            'installed_at': now - timedelta(days=11),
+        },
+        {
+            'name': 'Microsoft Defender Platform',
+            'status': 'Atualizado' if endpoint.status == AgentMachine.STATUS_ONLINE else 'Verificar',
+            'severity': 'success' if endpoint.status == AgentMachine.STATUS_ONLINE else 'warning',
+            'installed_at': now - timedelta(days=3),
+        },
+        {
+            'name': 'Drivers e firmware',
+            'status': 'Mock preview',
+            'severity': 'info',
+            'installed_at': None,
+        },
+    ]
+
+
+def build_endpoint_task_rows(endpoint):
+    now = timezone.now()
+    return [
+        {'name': 'Coleta de inventario', 'status': 'completed', 'started_at': now - timedelta(minutes=18), 'source': 'Agente'},
+        {'name': 'Verificacao de disco', 'status': 'queued', 'started_at': now - timedelta(minutes=4), 'source': 'Operador'},
+        {'name': 'Verificacao Defender', 'status': 'preview', 'started_at': None, 'source': 'Mock'},
+    ]
+
+
+def _pulse_value(value, fallback=''):
+    return value if value not in (None, '') else fallback
+
+
+def _pulse_sector_from_endpoint(row):
+    hostname = (row.get('hostname') or '').upper()
+    domain = row.get('domain') or 'CONTROL'
+    prefixes = {
+        'FIN': 'Financeiro',
+        'JUR': 'Juridico',
+        'DIR': 'Diretoria',
+        'REC': 'Recepcao',
+        'COM': 'Comercial',
+        'TI': 'TI',
+        'SRV': 'Infraestrutura',
+    }
+    for prefix, sector in prefixes.items():
+        if hostname.startswith(prefix):
+            return sector
+    return domain or 'Operacao'
+
+
+def _pulse_resource_label(row):
+    disk = row.get('primary_disk') or {}
+    defender_key = row.get('defender_key')
+    if defender_key == 'attention':
+        return 'Sem AV', 'critical'
+    if disk.get('level') == 'critical':
+        return disk.get('summary') or 'Disco critico', 'critical'
+    if disk.get('level') == 'warning':
+        return disk.get('summary') or 'Disco em atencao', 'warning'
+    if defender_key == 'unknown':
+        return 'AV desconhecido', 'warning'
+    return 'Normal', 'ok'
+
+
+def _pulse_health(row, alerts):
+    status = getattr(row['endpoint'], 'status', AgentMachine.STATUS_UNKNOWN)
+    critical_alerts = sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in alerts)
+    warning_alerts = sum(alert.severity in {EndpointAlert.SEVERITY_WARNING, EndpointAlert.SEVERITY_SECURITY} for alert in alerts)
+    disk = row.get('primary_disk') or {}
+    defender_key = row.get('defender_key')
+    score = 94
+    if status == AgentMachine.STATUS_OFFLINE:
+        score -= 42
+    elif status == AgentMachine.STATUS_UNKNOWN:
+        score -= 26
+    score -= critical_alerts * 24
+    score -= warning_alerts * 11
+    if disk.get('level') == 'critical':
+        score -= 18
+    elif disk.get('level') == 'warning':
+        score -= 9
+    if defender_key == 'attention':
+        score -= 20
+    elif defender_key == 'unknown':
+        score -= 10
+    score = max(8, min(100, score))
+    if score < 45:
+        return score, 'critical', 'Critica'
+    if score < 72:
+        return score, 'warning', 'Degradada'
+    return score, 'ok', 'Saudavel'
+
+
+def _pulse_recent_label(value):
+    if not value:
+        return 'Sem contato'
+    delta = timezone.now() - value
+    minutes = max(1, int(delta.total_seconds() // 60))
+    if minutes < 60:
+        return f'ha {minutes} min'
+    hours = minutes // 60
+    if hours < 24:
+        return f'ha {hours}h'
+    return f'ha {hours // 24}d'
+
+
+def build_pulse_context(endpoint_rows, alerts, events):
+    alerts_by_endpoint = {}
+    for alert in alerts:
+        alerts_by_endpoint.setdefault(str(alert.endpoint_id), []).append(alert)
+
+    pulse_rows = []
+    stale_cutoff = timezone.now() - timedelta(hours=24)
+    for index, row in enumerate(endpoint_rows):
+        endpoint = row['endpoint']
+        endpoint_alerts = alerts_by_endpoint.get(str(endpoint.id), [])
+        resource_label, resource_level = _pulse_resource_label(row)
+        health_score, health_level, health_label = _pulse_health(row, endpoint_alerts)
+        os_name = row.get('os_name') or ''
+        hostname = row.get('hostname') or endpoint.hostname or ''
+        status = endpoint.status or AgentMachine.STATUS_UNKNOWN
+        is_server = 'server' in os_name.lower() or hostname.upper().startswith(('SRV', 'DC'))
+        last_seen_at = row.get('last_seen_at')
+        is_stale = not last_seen_at or last_seen_at < stale_cutoff or status == AgentMachine.STATUS_UNKNOWN
+        disk = row.get('primary_disk') or {}
+        disk_used = disk.get('used_percent') or (93 if disk.get('level') == 'critical' else 82 if disk.get('level') == 'warning' else 48)
+        no_av = row.get('defender_key') == 'attention'
+        cpu = 82 if health_level == 'critical' else 66 if health_level == 'warning' else 34 + (index * 5) % 22
+        ram = 88 if resource_level == 'critical' and 'Disco' not in resource_label else 63 + (index * 7) % 18
+        pulse_rows.append({
+            **row,
+            'id': endpoint.id,
+            'status': status,
+            'status_label': endpoint.get_status_display(),
+            'sector': _pulse_sector_from_endpoint(row),
+            'is_server': is_server,
+            'is_workstation': not is_server,
+            'alert_count': len(endpoint_alerts),
+            'critical_count': sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in endpoint_alerts),
+            'alert_titles': ' | '.join(alert.title for alert in endpoint_alerts[:3]),
+            'health_score': health_score,
+            'health_level': health_level,
+            'health_label': health_label,
+            'resource_label': resource_label,
+            'resource_level': resource_level,
+            'no_av': no_av,
+            'disk_critical': disk.get('level') == 'critical',
+            'stale_inventory': is_stale,
+            'last_seen_label': _pulse_recent_label(last_seen_at),
+            'cpu_percent': min(99, cpu),
+            'ram_percent': min(99, ram),
+            'disk_percent': min(99, disk_used),
+        })
+
+    status_counts = {
+        'online': sum(row['status'] == AgentMachine.STATUS_ONLINE for row in pulse_rows),
+        'offline': sum(row['status'] == AgentMachine.STATUS_OFFLINE for row in pulse_rows),
+        'unknown': sum(row['status'] == AgentMachine.STATUS_UNKNOWN or row['stale_inventory'] for row in pulse_rows),
+    }
+    critical_rows = [row for row in pulse_rows if row['critical_count'] or row['health_level'] == 'critical']
+    open_attention = [alert for alert in alerts if alert.status == EndpointAlert.STATUS_OPEN]
+    health_score = round((sum(row['health_score'] for row in pulse_rows) / len(pulse_rows)) if pulse_rows else 100)
+
+    severity_rank = {
+        EndpointAlert.SEVERITY_CRITICAL: 0,
+        EndpointAlert.SEVERITY_SECURITY: 1,
+        EndpointAlert.SEVERITY_WARNING: 2,
+        EndpointAlert.SEVERITY_INFO: 3,
+    }
+    sorted_alerts = sorted(
+        open_attention,
+        key=lambda alert: (severity_rank.get(alert.severity, 9), alert.last_seen_at or timezone.now()),
+    )
+    recommended = []
+    for alert in sorted_alerts[:6]:
+        endpoint = alert.endpoint
+        impact = 'Interrompe atendimento ou servico critico' if alert.severity == EndpointAlert.SEVERITY_CRITICAL else 'Pode degradar a operacao se nao tratado'
+        if alert.alert_type == 'security_antivirus':
+            impact = 'Endpoint exposto sem protecao homologada'
+        elif alert.alert_type == 'disk_low':
+            impact = 'Risco de parada por falta de espaco'
+        elif alert.alert_type == 'endpoint_offline':
+            impact = 'Dispositivo fora do monitoramento'
+        recommended.append({
+            'severity': alert.severity,
+            'severity_label': alert.get_severity_display(),
+            'endpoint': endpoint,
+            'title': alert.title,
+            'description': alert.description,
+            'impact': impact,
+            'age_at': alert.last_seen_at,
+            'alert': alert,
+        })
+
+    return {
+        'pulse_endpoint_rows': pulse_rows,
+        'pulse_alerts': sorted_alerts[:10],
+        'pulse_events': list(events)[:12],
+        'pulse_recommended': recommended,
+        'pulse_health': {
+            'score': health_score,
+            'online': status_counts['online'],
+            'offline': status_counts['offline'],
+            'critical': len(critical_rows),
+            'attention': len(open_attention),
+            'unknown': status_counts['unknown'],
+        },
+    }
+
+
 def index(request):
     now = timezone.now()
+    if request.GET.get('mock') == '1' or not AgentMachine.objects.exists():
+        endpoints = mock_rmm_endpoints()
+        all_alerts = mock_rmm_alerts(endpoints)
+        alerts = [alert for alert in all_alerts if alert.status == EndpointAlert.STATUS_OPEN]
+        endpoint_rows = mock_endpoint_rows(endpoints)
+        events = mock_rmm_events(endpoints, all_alerts)
+        pulse_context = build_pulse_context(endpoint_rows, alerts, events)
+        context = {
+            'total_endpoints': len(endpoints),
+            'online_count': sum(endpoint.status == AgentMachine.STATUS_ONLINE for endpoint in endpoints),
+            'offline_count': sum(endpoint.status == AgentMachine.STATUS_OFFLINE for endpoint in endpoints),
+            'unknown_count': sum(endpoint.status == AgentMachine.STATUS_UNKNOWN for endpoint in endpoints),
+            'endpoints': endpoints,
+            'open_alerts_count': len(alerts),
+            'critical_alerts_count': sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in alerts),
+            'recent_alerts': sorted(alerts, key=lambda item: item.last_seen_at, reverse=True)[:8],
+            'using_mock_rmm_data': True,
+            **pulse_context,
+        }
+        return render(request, 'dashboard/index.html', context)
+
     status_counts = {
         item['status']: item['count']
         for item in AgentMachine.objects.values('status').annotate(count=Count('id'))
@@ -637,6 +1410,9 @@ def index(request):
         Q(muted_until__isnull=True) | Q(muted_until__lte=now),
     )
     recent_alerts = open_alerts.select_related('endpoint').order_by('-last_seen_at')[:8]
+    endpoint_rows = [build_endpoint_row(endpoint) for endpoint in endpoints]
+    events = AuditEvent.objects.select_related('endpoint', 'alert').order_by('-created_at')[:12]
+    pulse_context = build_pulse_context(endpoint_rows, list(open_alerts.select_related('endpoint')), events)
 
     context = {
         'total_endpoints': AgentMachine.objects.count(),
@@ -647,12 +1423,79 @@ def index(request):
         'open_alerts_count': open_alerts.count(),
         'critical_alerts_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_CRITICAL).count(),
         'recent_alerts': recent_alerts,
+        **pulse_context,
     }
     return render(request, 'dashboard/index.html', context)
 
 
 def alerts_list(request):
     now = timezone.now()
+    if request.GET.get('mock') == '1' or not EndpointAlert.objects.exists():
+        endpoints = mock_rmm_endpoints()
+        all_alerts = mock_rmm_alerts(endpoints)
+        if len(all_alerts) > 5:
+            all_alerts[5].muted_until = now + timedelta(hours=4)
+        status_filter = request.GET.get('status', EndpointAlert.STATUS_OPEN).strip() or EndpointAlert.STATUS_OPEN
+        severity_filter = request.GET.get('severity', 'all').strip() or 'all'
+        type_filter = request.GET.get('type', 'all').strip() or 'all'
+        period_filter = request.GET.get('period', 'all').strip() or 'all'
+        query = request.GET.get('q', '').strip().casefold()
+        alerts = all_alerts
+        if status_filter == 'muted':
+            alerts = [alert for alert in alerts if alert.is_muted]
+        elif status_filter != 'all':
+            alerts = [alert for alert in alerts if alert.status == status_filter]
+        if severity_filter != 'all':
+            alerts = [alert for alert in alerts if alert.severity == severity_filter]
+        if type_filter != 'all':
+            alerts = [alert for alert in alerts if alert.alert_type == type_filter]
+        if period_filter == 'today':
+            alerts = [alert for alert in alerts if timezone.localtime(alert.last_seen_at).date() == timezone.localdate()]
+        elif period_filter == '24h':
+            alerts = [alert for alert in alerts if alert.last_seen_at >= now - timedelta(hours=24)]
+        elif period_filter == '7d':
+            alerts = [alert for alert in alerts if alert.last_seen_at >= now - timedelta(days=7)]
+        if query:
+            alerts = [
+                alert for alert in alerts
+                if query in ' '.join([
+                    alert.title,
+                    alert.description,
+                    alert.endpoint.hostname,
+                    alert.endpoint.last_logged_user,
+                    alert.endpoint.last_ip,
+                ]).casefold()
+            ]
+        unmuted_open = [alert for alert in alerts if alert.status == EndpointAlert.STATUS_OPEN and not alert.is_muted]
+        top_map = {}
+        for alert in unmuted_open:
+            row = top_map.setdefault(alert.endpoint.id, {'endpoint': alert.endpoint, 'count': 0, 'max_severity': alert.severity})
+            row['count'] += 1
+            if alert.severity == EndpointAlert.SEVERITY_CRITICAL:
+                row['max_severity'] = alert.severity
+        context = {
+            'active_nav': 'alerts',
+            'alerts': alerts,
+            'filters': {'status': status_filter, 'severity': severity_filter, 'type': type_filter, 'period': period_filter, 'q': request.GET.get('q', '').strip()},
+            'alert_type_options': ALERT_TYPE_OPTIONS,
+            'period_options': PERIOD_OPTIONS,
+            'mute_durations': [(key, label) for key, (label, _delta) in MUTE_DURATIONS.items()],
+            'severity_options': EndpointAlert.SEVERITY_CHOICES,
+            'status_options': EndpointAlert.STATUS_CHOICES,
+            'open_count': len(unmuted_open),
+            'critical_count': sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in unmuted_open),
+            'warning_count': sum(alert.severity == EndpointAlert.SEVERITY_WARNING for alert in unmuted_open),
+            'security_count': sum(alert.severity == EndpointAlert.SEVERITY_SECURITY for alert in unmuted_open),
+            'affected_endpoint_count': len({alert.endpoint.id for alert in unmuted_open}),
+            'recent_activity': sorted(all_alerts, key=lambda item: item.updated_at, reverse=True)[:8],
+            'resolved_recent': [alert for alert in all_alerts if alert.status == EndpointAlert.STATUS_RESOLVED][:6],
+            'toast_resolved_alerts': [alert for alert in all_alerts if alert.status == EndpointAlert.STATUS_RESOLVED][:2],
+            'top_endpoints': sorted(top_map.values(), key=lambda item: -item['count'])[:6],
+            'last_updated_at': now,
+            'using_mock_rmm_data': True,
+        }
+        return render(request, 'dashboard/alerts.html', context)
+
     queryset = EndpointAlert.objects.select_related('endpoint').prefetch_related('events')
 
     status_filter = request.GET.get('status', EndpointAlert.STATUS_OPEN).strip() or EndpointAlert.STATUS_OPEN
@@ -661,7 +1504,9 @@ def alerts_list(request):
     period_filter = request.GET.get('period', 'all').strip() or 'all'
     query = request.GET.get('q', '').strip()
 
-    if status_filter != 'all':
+    if status_filter == 'muted':
+        queryset = queryset.filter(muted_until__gt=now)
+    elif status_filter != 'all':
         queryset = queryset.filter(status=status_filter)
 
     if severity_filter != 'all':
@@ -769,6 +1614,35 @@ def alerts_list(request):
 
 def noc_view(request):
     now = timezone.now()
+    if request.GET.get('mock') == '1' or not AgentMachine.objects.exists():
+        endpoints = mock_rmm_endpoints()
+        alerts = mock_rmm_alerts(endpoints)
+        open_alerts = [alert for alert in alerts if alert.status == EndpointAlert.STATUS_OPEN]
+        online_count = sum(endpoint.status == AgentMachine.STATUS_ONLINE for endpoint in endpoints)
+        critical_count = sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in open_alerts)
+        health_score = max(0, min(100, round((online_count / max(len(endpoints), 1)) * 100) - (critical_count * 8)))
+        context = {
+            'active_nav': 'noc',
+            'last_updated_at': now,
+            'last_alert_evaluation': now - timedelta(minutes=3),
+            'total_endpoints': len(endpoints),
+            'noc_health_score': health_score,
+            'online_count': online_count,
+            'offline_count': sum(endpoint.status == AgentMachine.STATUS_OFFLINE for endpoint in endpoints),
+            'unknown_count': sum(endpoint.status == AgentMachine.STATUS_UNKNOWN for endpoint in endpoints),
+            'open_critical_count': critical_count,
+            'open_warning_count': sum(alert.severity == EndpointAlert.SEVERITY_WARNING for alert in open_alerts),
+            'open_security_count': sum(alert.severity == EndpointAlert.SEVERITY_SECURITY for alert in open_alerts),
+            'affected_endpoints_count': len({alert.endpoint.id for alert in open_alerts}),
+            'critical_alerts': [alert for alert in open_alerts if alert.severity == EndpointAlert.SEVERITY_CRITICAL][:8],
+            'offline_endpoints': [endpoint for endpoint in endpoints if endpoint.status == AgentMachine.STATUS_OFFLINE][:8],
+            'security_alerts': [alert for alert in open_alerts if alert.severity == EndpointAlert.SEVERITY_SECURITY][:8],
+            'disk_alerts': [alert for alert in open_alerts if alert.alert_type == 'disk_low'][:8],
+            'recent_activity': mock_rmm_events(endpoints, alerts)[:10],
+            'using_mock_rmm_data': True,
+        }
+        return render(request, 'dashboard/noc.html', context)
+
     status_counts = {
         item['status']: item['count']
         for item in AgentMachine.objects.values('status').annotate(count=Count('id'))
@@ -809,15 +1683,21 @@ def noc_view(request):
     ).select_related('endpoint', 'alert').order_by('-created_at')[:10]
     last_alert_evaluation = EndpointAlert.objects.order_by('-updated_at').values_list('updated_at', flat=True).first()
 
+    total_endpoints = AgentMachine.objects.count()
+    online_count = status_counts.get(AgentMachine.STATUS_ONLINE, 0)
+    critical_count = open_alerts.filter(severity=EndpointAlert.SEVERITY_CRITICAL).count()
+    health_score = max(0, min(100, round((online_count / max(total_endpoints, 1)) * 100) - (critical_count * 8)))
+
     context = {
         'active_nav': 'noc',
         'last_updated_at': now,
         'last_alert_evaluation': last_alert_evaluation,
-        'total_endpoints': AgentMachine.objects.count(),
-        'online_count': status_counts.get(AgentMachine.STATUS_ONLINE, 0),
+        'total_endpoints': total_endpoints,
+        'noc_health_score': health_score,
+        'online_count': online_count,
         'offline_count': status_counts.get(AgentMachine.STATUS_OFFLINE, 0),
         'unknown_count': status_counts.get(AgentMachine.STATUS_UNKNOWN, 0),
-        'open_critical_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_CRITICAL).count(),
+        'open_critical_count': critical_count,
         'open_warning_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_WARNING).count(),
         'open_security_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_SECURITY).count(),
         'affected_endpoints_count': open_alerts.values('endpoint_id').distinct().count(),
@@ -836,6 +1716,67 @@ def noc_view(request):
 
 def events_list(request):
     now = timezone.now()
+    if request.GET.get('mock') == '1' or not AuditEvent.objects.exists():
+        endpoints = mock_rmm_endpoints()
+        alerts = mock_rmm_alerts(endpoints)
+        events = mock_rmm_events(endpoints, alerts)
+        query = request.GET.get('q', '').strip().casefold()
+        severity_filter = request.GET.get('severity', 'all').strip() or 'all'
+        event_type_filter = request.GET.get('event_type', 'all').strip() or 'all'
+        actor_type_filter = request.GET.get('actor_type', 'all').strip() or 'all'
+        endpoint_filter = request.GET.get('endpoint', '').strip()
+        period_filter = request.GET.get('period', '7d').strip() or '7d'
+        category_filter = request.GET.get('category', 'all').strip() or 'all'
+        filtered = events
+        if period_filter == '24h':
+            filtered = [event for event in filtered if event.created_at >= now - timedelta(hours=24)]
+        elif period_filter == '7d':
+            filtered = [event for event in filtered if event.created_at >= now - timedelta(days=7)]
+        elif period_filter == '30d':
+            filtered = [event for event in filtered if event.created_at >= now - timedelta(days=30)]
+        if severity_filter != 'all':
+            filtered = [event for event in filtered if event.severity == severity_filter]
+        if event_type_filter != 'all':
+            filtered = [event for event in filtered if event.event_type == event_type_filter]
+        if category_filter != 'all':
+            prefixes = EVENT_CATEGORY_PREFIXES.get(category_filter, [])
+            filtered = [event for event in filtered if any(event.event_type.startswith(prefix) for prefix in prefixes)]
+        if actor_type_filter != 'all':
+            filtered = [event for event in filtered if event.actor_type == actor_type_filter]
+        if endpoint_filter:
+            filtered = [event for event in filtered if str(event.endpoint.id) == endpoint_filter]
+        if query:
+            filtered = [
+                event for event in filtered
+                if query in ' '.join([event.title, event.description, event.event_type, event.endpoint.hostname, event.actor_name]).casefold()
+            ]
+        context = {
+            'active_nav': 'events',
+            'events': sorted(filtered, key=lambda item: item.created_at, reverse=True)[:250],
+            'filters': {
+                'q': request.GET.get('q', '').strip(),
+                'severity': severity_filter,
+                'event_type': event_type_filter,
+                'actor_type': actor_type_filter,
+                'endpoint': endpoint_filter,
+                'period': period_filter,
+                'category': category_filter,
+            },
+            'severity_options': AuditEvent.SEVERITY_CHOICES,
+            'actor_type_options': AuditEvent.ACTOR_CHOICES,
+            'event_type_options': sorted({event.event_type for event in events}),
+            'period_options': EVENT_PERIOD_OPTIONS,
+            'category_options': EVENT_CATEGORY_OPTIONS,
+            'endpoint_options': [{'id': endpoint.id, 'hostname': endpoint.hostname} for endpoint in endpoints],
+            'events_24h_count': sum(event.created_at >= now - timedelta(hours=24) for event in events),
+            'critical_count': sum(event.severity == AuditEvent.SEVERITY_CRITICAL for event in filtered),
+            'security_count': sum(event.severity == AuditEvent.SEVERITY_SECURITY for event in filtered),
+            'system_count': sum(event.actor_type in [AuditEvent.ACTOR_SYSTEM, AuditEvent.ACTOR_SCHEDULER] for event in filtered),
+            'user_count': sum(event.actor_type == AuditEvent.ACTOR_USER for event in filtered),
+            'using_mock_rmm_data': True,
+        }
+        return render(request, 'dashboard/events.html', context)
+
     queryset = AuditEvent.objects.select_related('endpoint', 'alert')
 
     query = request.GET.get('q', '').strip()
@@ -844,6 +1785,7 @@ def events_list(request):
     actor_type_filter = request.GET.get('actor_type', 'all').strip() or 'all'
     endpoint_filter = request.GET.get('endpoint', '').strip()
     period_filter = request.GET.get('period', '7d').strip() or '7d'
+    category_filter = request.GET.get('category', 'all').strip() or 'all'
 
     if period_filter == '24h':
         queryset = queryset.filter(created_at__gte=now - timedelta(hours=24))
@@ -856,6 +1798,12 @@ def events_list(request):
         queryset = queryset.filter(severity=severity_filter)
     if event_type_filter != 'all':
         queryset = queryset.filter(event_type=event_type_filter)
+    if category_filter != 'all':
+        category_query = Q()
+        for prefix in EVENT_CATEGORY_PREFIXES.get(category_filter, []):
+            category_query |= Q(event_type__startswith=prefix)
+        if category_query:
+            queryset = queryset.filter(category_query)
     if actor_type_filter != 'all':
         queryset = queryset.filter(actor_type=actor_type_filter)
     if endpoint_filter:
@@ -881,11 +1829,13 @@ def events_list(request):
             'actor_type': actor_type_filter,
             'endpoint': endpoint_filter,
             'period': period_filter,
+            'category': category_filter,
         },
         'severity_options': AuditEvent.SEVERITY_CHOICES,
         'actor_type_options': AuditEvent.ACTOR_CHOICES,
         'event_type_options': AuditEvent.objects.values_list('event_type', flat=True).distinct().order_by('event_type'),
         'period_options': EVENT_PERIOD_OPTIONS,
+        'category_options': EVENT_CATEGORY_OPTIONS,
         'endpoint_options': AgentMachine.objects.order_by('hostname').values('id', 'hostname')[:500],
         'events_24h_count': AuditEvent.objects.filter(created_at__gte=last_24h).count(),
         'critical_count': filtered_queryset.filter(severity=AuditEvent.SEVERITY_CRITICAL).count(),
@@ -894,6 +1844,14 @@ def events_list(request):
         'user_count': filtered_queryset.filter(actor_type=AuditEvent.ACTOR_USER).count(),
     }
     return render(request, 'dashboard/events.html', context)
+
+
+def jobs_list(request):
+    context = {
+        'active_nav': 'jobs',
+        'using_mock_rmm_data': True,
+    }
+    return render(request, 'dashboard/jobs.html', context)
 
 
 def maintenance_list(request):
@@ -1167,64 +2125,184 @@ def alert_comment(request, pk):
 
 
 def endpoint_list(request):
+    if request.GET.get('mock') == '1' or not AgentMachine.objects.exists():
+        rows = mock_endpoint_rows()
+        filters = endpoint_filters_from_request(request)
+        filtered_rows = filter_endpoint_rows(rows, filters)
+        context = {
+            'active_nav': 'endpoints',
+            'rows': filtered_rows,
+            'filters': filters,
+            **endpoint_summary_counts(filtered_rows),
+            **endpoint_filter_options(rows),
+            'using_mock_rmm_data': True,
+        }
+        return render(request, 'dashboard/endpoint_list.html', context)
+
     rows = [build_endpoint_row(endpoint) for endpoint in AgentMachine.objects.order_by('hostname', 'domain')]
-
-    q = request.GET.get('q', '').strip()
-    status = request.GET.get('status', '').strip()
-    os_filter = request.GET.get('os', '').strip()
-    domain_filter = request.GET.get('domain', '').strip()
-    defender_filter = request.GET.get('defender', '').strip()
-    disk_filter = request.GET.get('disk', '').strip()
-
-    filtered_rows = []
-    for row in rows:
-        if not row_matches_query(row, q):
-            continue
-        if status and row['endpoint'].status != status:
-            continue
-        if os_filter and row['os_name'] != os_filter:
-            continue
-        if domain_filter and row['domain'] != domain_filter:
-            continue
-        if defender_filter and row['defender_key'] != defender_filter:
-            continue
-        if disk_filter and row['primary_disk']['level'] != disk_filter:
-            continue
-        filtered_rows.append(row)
-
-    status_counts = {
-        AgentMachine.STATUS_ONLINE: 0,
-        AgentMachine.STATUS_OFFLINE: 0,
-        AgentMachine.STATUS_UNKNOWN: 0,
-    }
-    for row in filtered_rows:
-        status_counts[row['endpoint'].status] = status_counts.get(row['endpoint'].status, 0) + 1
+    filters = endpoint_filters_from_request(request)
+    filtered_rows = filter_endpoint_rows(rows, filters)
 
     context = {
         'active_nav': 'endpoints',
         'rows': filtered_rows,
-        'total_endpoints': len(filtered_rows),
-        'online_count': status_counts.get(AgentMachine.STATUS_ONLINE, 0),
-        'offline_count': status_counts.get(AgentMachine.STATUS_OFFLINE, 0),
-        'unknown_count': status_counts.get(AgentMachine.STATUS_UNKNOWN, 0),
-        'attention_count': sum(1 for row in filtered_rows if row['has_attention']),
-        'filters': {
-            'q': q,
-            'status': status,
-            'os': os_filter,
-            'domain': domain_filter,
-            'defender': defender_filter,
-            'disk': disk_filter,
-        },
-        'os_options': sorted({row['os_name'] for row in rows if row['os_name']}),
-        'domain_options': sorted({row['domain'] for row in rows if row['domain']}),
-        'status_options': AgentMachine.STATUS_CHOICES,
+        'filters': filters,
+        **endpoint_summary_counts(filtered_rows),
+        **endpoint_filter_options(rows),
     }
     return render(request, 'dashboard/endpoint_list.html', context)
 
 
+def build_mock_endpoint_snapshot(endpoint):
+    hostname = (endpoint.hostname or '').upper()
+    disk_used = 93 if hostname in {'SRV-ERP-01', 'FIN-DC-02'} else 82 if hostname in {'REC-004', 'COM-017'} else 56
+    disk_size = 512 * 1024 ** 3
+    disk_free = round(disk_size * ((100 - disk_used) / 100))
+    has_bitdefender = hostname not in {'FIN-012', 'FIN-DC-02'}
+    installed_software = [
+        {
+            'name': 'Microsoft 365 Apps',
+            'publisher': 'Microsoft Corporation',
+            'version': '2407',
+        },
+        {
+            'name': 'Google Chrome',
+            'publisher': 'Google LLC',
+            'version': '126.0.6478',
+        },
+        {
+            'name': 'Bitdefender Endpoint Security Tools' if has_bitdefender else 'Windows Defender',
+            'publisher': 'Bitdefender' if has_bitdefender else 'Microsoft Corporation',
+            'version': '7.9.12' if has_bitdefender else '4.18.24060',
+        },
+    ]
+    if hostname == 'DIR-NB-03':
+        installed_software.append({
+            'name': 'AnyDesk',
+            'publisher': 'AnyDesk Software GmbH',
+            'version': '8.0.9',
+        })
+    if hostname == 'TI-NOC-01':
+        installed_software.append({
+            'name': 'Advanced IP Scanner',
+            'publisher': 'Famatech',
+            'version': '2.5.4594',
+        })
+
+    return SimpleNamespace(
+        received_at=endpoint.last_seen_at,
+        hostname=endpoint.hostname,
+        domain=endpoint.domain,
+        logged_user=endpoint.last_logged_user,
+        os_name=endpoint.os_name,
+        os_version='23H2' if '11' in (endpoint.os_name or '') else '22H2',
+        windows_build='22631.3880' if '11' in (endpoint.os_name or '') else '19045.4651',
+        ips=[endpoint.last_ip] if endpoint.last_ip else [],
+        serial_number=f'NO-MOCK-{str(endpoint.id)[-6:]}',
+        manufacturer='NightOwl Preview',
+        model='Endpoint mockado',
+        cpu='Intel Core i5-1240P',
+        memory_total_bytes=16 * 1024 ** 3,
+        uptime_seconds=420000 if endpoint.status == AgentMachine.STATUS_ONLINE else None,
+        disks=[
+            {
+                'name': 'C:',
+                'size_bytes': disk_size,
+                'free_bytes': disk_free,
+            },
+            {
+                'name': 'D:',
+                'size_bytes': 1024 * 1024 ** 3,
+                'free_bytes': 640 * 1024 ** 3,
+            },
+        ],
+        installed_software=installed_software,
+        defender_status={
+            'enabled': has_bitdefender,
+            'real_time_protection_enabled': has_bitdefender,
+            'engine_version': '1.1.24060.5' if has_bitdefender else '',
+            'antivirus_signature_last_updated': timezone.now().strftime('%d/%m/%Y %H:%M'),
+        },
+    )
+
+
+def build_mock_endpoint_detail_context(pk):
+    endpoints = mock_rmm_endpoints()
+    endpoint = next((item for item in endpoints if item.id == pk), None)
+    if endpoint is None:
+        raise Http404('Endpoint nao encontrado.')
+
+    endpoint.agent_mode = 'Preview'
+    endpoint.agent_install_path = r'C:\RMM'
+    endpoint.agent_task_name = 'NightOwl Agent Heartbeat'
+    endpoint.agent_runtime = 'PowerShell'
+    endpoint.agent_update_source = r'\\192.168.104.120\controlsul\Comum\_Agents'
+    endpoint.agent_runtime_version = '5.1'
+    endpoint.agent_reported_at = endpoint.last_seen_at
+
+    snapshot = build_mock_endpoint_snapshot(endpoint)
+    installed_software = snapshot.installed_software
+    disks = build_disk_rows(snapshot.disks)
+    software_rows = build_software_rows(installed_software)
+    defender = detail_defender_state(snapshot.defender_status, installed_software)
+    primary_disk = get_primary_disk(snapshot.disks)
+    health = calculate_health(endpoint, primary_disk, defender)
+    smart_badges = build_smart_badges(endpoint, primary_disk, defender, installed_software)
+
+    alerts = mock_rmm_alerts(endpoints)
+    events = mock_rmm_events(endpoints, alerts)
+    endpoint_alerts = MockList([
+        alert for alert in alerts
+        if alert.endpoint_id == endpoint.id
+        and alert.status in [EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED]
+    ][:8])
+    audit_events = MockList([
+        event for event in events
+        if getattr(getattr(event, 'endpoint', None), 'id', None) == endpoint.id
+    ][:8])
+    endpoint_sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+    endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status), health, snapshot)
+
+    return {
+        'active_nav': 'endpoints',
+        'endpoint': endpoint,
+        'snapshot': snapshot,
+        'using_mock_rmm_data': True,
+        'memory_total_gb': format_bytes_gb(snapshot.memory_total_bytes),
+        'uptime_display': format_uptime(snapshot.uptime_seconds),
+        'disks': disks,
+        'installed_software': software_rows,
+        'defender': defender,
+        'primary_disk': primary_disk,
+        'health': health,
+        'health_breakdown': build_endpoint_health_breakdown(endpoint, primary_disk, defender, endpoint_alerts, snapshot),
+        'endpoint_attention': endpoint_attention,
+        'endpoint_sector': endpoint_sector,
+        'endpoint_type': endpoint_type,
+        'endpoint_type_label': endpoint_type_label(endpoint_type),
+        'smart_badges': smart_badges,
+        'primary_ip': endpoint.last_ip or (snapshot.ips[0] if snapshot.ips else ''),
+        'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
+        'agent_version_state': agent_version_state(
+            endpoint.agent_version,
+            getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
+        ),
+        'endpoint_alerts': endpoint_alerts,
+        'audit_events': audit_events,
+        'related_tickets': [],
+        'patch_rows': build_endpoint_patch_rows(endpoint),
+        'task_rows': build_endpoint_task_rows(endpoint),
+    }
+
+
 def endpoint_detail(request, pk):
-    endpoint = get_object_or_404(AgentMachine, pk=pk)
+    try:
+        endpoint = AgentMachine.objects.get(pk=pk)
+    except AgentMachine.DoesNotExist:
+        context = build_mock_endpoint_detail_context(pk)
+        return render(request, 'dashboard/endpoint_detail.html', context)
+
     snapshot = endpoint.inventory_snapshots.order_by('-received_at').first()
 
     disks = build_disk_rows(snapshot.disks if snapshot else [])
@@ -1238,6 +2316,12 @@ def endpoint_detail(request, pk):
 
     if not primary_ip and snapshot and snapshot.ips:
         primary_ip = snapshot.ips[0]
+    endpoint_alerts = endpoint.alerts.filter(
+        status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
+    ).order_by('-last_seen_at')[:8]
+    endpoint_sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+    endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status if snapshot else {}), health, snapshot)
 
     context = {
         'active_nav': 'endpoints',
@@ -1250,6 +2334,11 @@ def endpoint_detail(request, pk):
         'defender': defender,
         'primary_disk': primary_disk,
         'health': health,
+        'health_breakdown': build_endpoint_health_breakdown(endpoint, primary_disk, defender, endpoint_alerts, snapshot),
+        'endpoint_attention': endpoint_attention,
+        'endpoint_sector': endpoint_sector,
+        'endpoint_type': endpoint_type,
+        'endpoint_type_label': endpoint_type_label(endpoint_type),
         'smart_badges': smart_badges,
         'primary_ip': primary_ip,
         'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
@@ -1257,13 +2346,13 @@ def endpoint_detail(request, pk):
             endpoint.agent_version,
             getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
         ),
-        'endpoint_alerts': endpoint.alerts.filter(
-            status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
-        ).order_by('-last_seen_at')[:8],
+        'endpoint_alerts': endpoint_alerts,
         'audit_events': endpoint.audit_events.select_related('alert').order_by('-created_at')[:8],
         'related_tickets': endpoint.tickets.exclude(
             status__in=['closed', 'canceled'],
         ).order_by('-updated_at')[:5],
+        'patch_rows': build_endpoint_patch_rows(endpoint),
+        'task_rows': build_endpoint_task_rows(endpoint),
     }
     return render(request, 'dashboard/endpoint_detail.html', context)
 
@@ -1375,6 +2464,8 @@ def agent_enrollment_revoke(request, pk):
 
 def software_inventory(request):
     rows, summary = build_software_inventory()
+    if request.GET.get('mock') == '1' or not rows:
+        rows, summary = mock_software_inventory_rows()
     filters = {
         'q': request.GET.get('q', '').strip(),
         'category': request.GET.get('category', 'all').strip() or 'all',
@@ -1540,6 +2631,41 @@ def policy_audit_logs(policy):
 
 
 def software_policies(request):
+    if request.GET.get('mock') == '1' or not SoftwarePolicy.objects.exists():
+        endpoints = mock_rmm_endpoints()
+        policies, violations, exceptions, logs_by_policy = mock_policy_context(endpoints)
+        endpoint_options_data = [
+            {
+                'id': str(endpoint.id),
+                'label': f'{endpoint.hostname} - {endpoint.domain or "sem dominio"} - {endpoint.status}',
+            }
+            for endpoint in endpoints
+        ]
+        summary = {
+            'active': sum(policy['is_active'] and not policy['monitor_only'] for policy in policies),
+            'inactive': sum(not policy['is_active'] for policy in policies),
+            'monitoring': sum(policy['monitor_only'] for policy in policies),
+            'exceptions': len(exceptions),
+            'expired_exceptions': sum(exception['status'] == 'expired' for exception in exceptions),
+            'total': len(policies),
+        }
+        context = {
+            'active_nav': 'software_policies',
+            'policies': policies,
+            'violations': violations,
+            'exceptions': exceptions,
+            'logs_by_policy': logs_by_policy,
+            'summary': summary,
+            'endpoint_options': endpoints,
+            'endpoint_options_data': endpoint_options_data,
+            'policy_type_options': SoftwarePolicy.TYPE_CHOICES,
+            'match_type_options': SoftwarePolicy.MATCH_CHOICES,
+            'scope_type_options': SoftwarePolicy.SCOPE_CHOICES,
+            'severity_options': SoftwarePolicy.SEVERITY_CHOICES,
+            'using_mock_rmm_data': True,
+        }
+        return render(request, 'dashboard/software_policies.html', context)
+
     policy_queryset = SoftwarePolicy.objects.prefetch_related(
         'exceptions__endpoint',
         'violations__endpoint',

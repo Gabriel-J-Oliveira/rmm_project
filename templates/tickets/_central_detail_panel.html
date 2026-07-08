@@ -9,6 +9,8 @@
         <div class="desk-preview-header-actions">
             <button class="desk-icon-action" type="button" aria-label="Copiar link"><i data-lucide="link"></i></button>
             <a class="desk-btn" href="{% url 'tickets:detail' selected_ticket.number %}"><i data-lucide="maximize-2"></i>Tela cheia</a>
+            <button class="desk-icon-action" type="button" data-preview-hide aria-label="Ocultar preview"><i data-lucide="panel-right-close"></i></button>
+            <button class="desk-icon-action" type="button" data-preview-clear aria-label="Limpar selecao"><i data-lucide="x"></i></button>
         </div>
     </header>
 
@@ -116,14 +118,17 @@
         </article>
 
         <div class="desk-quick-actions">
-            <button class="desk-btn desk-btn-primary" type="button" data-toast-action>Atribuir a mim</button>
-            <button class="desk-btn" type="button">Mudar status</button>
-            <button class="desk-btn" type="button">Mudar prioridade</button>
+            {% if selected_ticket.status != 'resolved' and selected_ticket.status != 'closed' and selected_ticket.status != 'canceled' %}
+            <button class="desk-btn desk-btn-primary" type="button" data-preview-action="assign">Atribuir a mim</button>
+            {% endif %}
+            <button class="desk-btn" type="button" data-preview-action="status">Mudar status</button>
+            <button class="desk-btn" type="button" data-preview-action="priority">Mudar prioridade</button>
             <a class="desk-btn" href="{% url 'tickets:detail' selected_ticket.number %}">Abrir tela cheia</a>
         </div>
     </section>
 
-    <form class="desk-comment-dock" method="post" action="{% url 'tickets:fake-action' selected_ticket.number 'comentario-adicionado' %}">
+    {% if selected_ticket.status != 'closed' and selected_ticket.status != 'canceled' %}
+    <form class="desk-comment-dock" data-comment-form>
         {% csrf_token %}
         <textarea name="body" rows="3" placeholder="Comentario rapido..."></textarea>
         <div>
@@ -132,7 +137,11 @@
         </div>
     </form>
     {% else %}
+    <div class="desk-comment-dock desk-readonly-note"><span>Chamado em modo somente leitura.</span></div>
+    {% endif %}
+    {% else %}
     <div class="desk-preview-empty" data-preview-empty>
+        <button class="desk-icon-action desk-preview-empty-close" type="button" data-preview-hide aria-label="Ocultar preview"><i data-lucide="panel-right-close"></i></button>
         <i data-lucide="radar"></i>
         <strong>Selecione um chamado para ver mais detalhes</strong>
         <span>Escolha um item da fila para visualizar SLA, comentarios, endpoint, acoes rapidas e contexto RMM.</span>

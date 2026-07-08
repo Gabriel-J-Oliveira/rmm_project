@@ -239,6 +239,7 @@ def send_email_outbox_item(email_id, actor='Night Owl'):
             to=[item.recipient_email],
             cc=item.cc,
             bcc=item.bcc,
+            headers=(item.metadata or {}).get('headers') if isinstance(item.metadata, dict) else None,
         )
         if item.body_html:
             message.attach_alternative(item.body_html, 'text/html')

@@ -2,7 +2,7 @@
     <div class="desk-panel-title-row">
         <div>
             <h2><i data-lucide="list"></i>Fila de trabalho</h2>
-            <p>Lista densa para triagem, atribuicao e acompanhamento dos chamados.</p>
+            <p>Lista compacta para triagem rapida. Os detalhes ficam no preview lateral.</p>
         </div>
         <span class="desk-badge neutral">{{ tickets|length }} chamados</span>
     </div>
@@ -13,13 +13,12 @@
                 <div role="columnheader"><input class="desk-row-check-all" type="checkbox" aria-label="Selecionar todos"></div>
                 <div role="columnheader" aria-label="Origem"></div>
                 <div role="columnheader">Chamado</div>
-                <div role="columnheader">Origem</div>
-                <div role="columnheader">SLA</div>
+                <div role="columnheader">Solicitante</div>
                 <div role="columnheader">Status</div>
                 <div role="columnheader">Responsavel</div>
-                <div role="columnheader">Endpoint</div>
-                <div role="columnheader">Categoria</div>
-                <div role="columnheader">Acoes</div>
+                <div role="columnheader">Prioridade / SLA</div>
+                <div role="columnheader">Ultima atualizacao</div>
+                <div role="columnheader" aria-label="Acoes"></div>
             </div>
             <div class="desk-ticket-grid-body" role="rowgroup">
             {% for ticket in tickets %}

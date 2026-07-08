@@ -11,42 +11,59 @@
 {% endblock %}
 
 {% block content %}
-<section class="hero endpoints-hero page-header">
+<section class="hero endpoints-hero endpoint-ops-hero page-header">
     <div>
-        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor"></i></span>Endpoints</h1>
-        <p class="page-subtitle">Invent&aacute;rio vivo das m&aacute;quinas monitoradas pelo Night Owl.</p>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor-dot"></i></span>Endpoints</h1>
+        <p class="page-subtitle">Fila operacional do parque monitorado, focada em sa&uacute;de, aten&ccedil;&atilde;o e a&ccedil;&otilde;es r&aacute;pidas.</p>
     </div>
-    <div class="hero-chip module-badge">Parque monitorado</div>
+    <div class="endpoint-ops-hero-actions">
+        {% if using_mock_rmm_data %}
+        <span class="hero-chip module-badge">Preview mockado</span>
+        {% endif %}
+        <button class="ghost-button compact" type="button" data-endpoint-action="force_inventory" data-endpoint="Todos"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
+        <button class="ghost-button compact" type="button" data-endpoint-action="export_events" data-endpoint="Endpoints"><i data-lucide="download"></i>Exportar</button>
+    </div>
 </section>
 
-<section class="metric-grid endpoint-metrics" aria-label="Resumo dos endpoints filtrados">
-    <article class="metric-card">
-        <span class="metric-label">Total de endpoints</span>
+<section class="metric-grid endpoint-metrics endpoint-ops-metrics" aria-label="Resumo operacional dos endpoints">
+    <a class="metric-card endpoint-metric-card {% if filters.quick == 'all' %}is-active{% endif %}" href="{% url 'endpoint-list' %}">
+        <span class="metric-label"><i data-lucide="server"></i>Total de endpoints</span>
         <strong class="metric-value">{{ total_endpoints }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Online</span>
+        <small>Invent&aacute;rio filtrado</small>
+    </a>
+    <a class="metric-card endpoint-metric-card {% if filters.status == 'online' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?status=online">
+        <span class="metric-label"><i data-lucide="wifi"></i>Online</span>
         <strong class="metric-value status-text-online">{{ online_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Offline</span>
-        <strong class="metric-value status-text-offline">{{ offline_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Unknown</span>
-        <strong class="metric-value {% if unknown_count > 0 %}status-text-unknown{% else %}status-text-muted{% endif %}">{{ unknown_count }}</strong>
-    </article>
-    <article class="metric-card">
-        <span class="metric-label">Com aten&ccedil;&atilde;o</span>
-        <strong class="metric-value {% if attention_count > 0 %}status-text-critical{% else %}status-text-muted{% endif %}">{{ attention_count }}</strong>
-    </article>
+        <small>Com heartbeat recente</small>
+    </a>
+    <a class="metric-card endpoint-metric-card {% if filters.quick == 'offline' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=offline">
+        <span class="metric-label"><i data-lucide="wifi-off"></i>Offline cr&iacute;ticos</span>
+        <strong class="metric-value status-text-critical">{{ offline_critical_count }}</strong>
+        <small>Sem comunica&ccedil;&atilde;o</small>
+    </a>
+    <a class="metric-card endpoint-metric-card {% if filters.quick == 'agent_outdated' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=agent_outdated">
+        <span class="metric-label"><i data-lucide="bot"></i>Agente desatualizado</span>
+        <strong class="metric-value {% if agent_outdated_count > 0 %}status-text-unknown{% else %}status-text-muted{% endif %}">{{ agent_outdated_count }}</strong>
+        <small>Precisa update</small>
+    </a>
+    <a class="metric-card endpoint-metric-card {% if filters.quick == 'security' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=security">
+        <span class="metric-label"><i data-lucide="shield-alert"></i>Seguran&ccedil;a em aten&ccedil;&atilde;o</span>
+        <strong class="metric-value {% if security_attention_count > 0 %}status-text-critical{% else %}status-text-muted{% endif %}">{{ security_attention_count }}</strong>
+        <small>Defender/AV</small>
+    </a>
+    <a class="metric-card endpoint-metric-card {% if filters.quick == 'disk_full' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=disk_full">
+        <span class="metric-label"><i data-lucide="hard-drive"></i>Disco cr&iacute;tico</span>
+        <strong class="metric-value {% if disk_critical_count > 0 %}status-text-critical{% else %}status-text-muted{% endif %}">{{ disk_critical_count }}</strong>
+        <small>Capacidade em risco</small>
+    </a>
 </section>
 
-<section class="panel filter-panel">
-    <form class="endpoint-filters" method="get">
-        <label class="filter-field filter-search">
-            <span>Busca</span>
-            <input type="search" name="q" value="{{ filters.q }}" placeholder="Hostname, usu&aacute;rio, IP, dom&iacute;nio ou sistema">
+<section class="panel endpoint-ops-filter-panel">
+    <form class="endpoint-filters endpoint-ops-filters" method="get">
+        <input type="hidden" name="quick" value="{{ filters.quick }}">
+        <label class="filter-field filter-search endpoint-search-field">
+            <span>Busca operacional</span>
+            <input type="search" name="q" value="{{ filters.q }}" placeholder="Hostname, usu&aacute;rio, IP, dom&iacute;nio, sistema, setor ou tag">
         </label>
 
         <label class="filter-field">
@@ -55,6 +72,26 @@
                 <option value="">Todos</option>
                 {% for value, label in status_options %}
                 <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Tipo</span>
+            <select name="type">
+                <option value="">Todos</option>
+                {% for value, label in type_options %}
+                <option value="{{ value }}" {% if filters.type == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Setor/tag</span>
+            <select name="sector">
+                <option value="">Todos</option>
+                {% for sector in sector_options %}
+                <option value="{{ sector }}" {% if filters.sector == sector %}selected{% endif %}>{{ sector }}</option>
                 {% endfor %}
             </select>
         </label>
@@ -80,7 +117,17 @@
         </label>
 
         <label class="filter-field">
-            <span>Defender</span>
+            <span>Agente</span>
+            <select name="agent">
+                <option value="">Todos</option>
+                <option value="current" {% if filters.agent == "current" %}selected{% endif %}>Atual</option>
+                <option value="outdated" {% if filters.agent == "outdated" %}selected{% endif %}>Desatualizado</option>
+                <option value="unknown" {% if filters.agent == "unknown" %}selected{% endif %}>Sem vers&atilde;o</option>
+            </select>
+        </label>
+
+        <label class="filter-field">
+            <span>Defender/AV</span>
             <select name="defender">
                 <option value="">Todos</option>
                 <option value="ok" {% if filters.defender == "ok" %}selected{% endif %}>OK</option>
@@ -99,90 +146,189 @@
             </select>
         </label>
 
-        <div class="filter-actions">
-            <button type="submit">Filtrar</button>
+        <label class="filter-field endpoint-attention-check">
+            <span>Aten&ccedil;&atilde;o</span>
+            <label><input type="checkbox" name="attention" value="1" {% if filters.attention == "1" %}checked{% endif %}> Somente com aten&ccedil;&atilde;o</label>
+        </label>
+
+        <div class="filter-actions endpoint-filter-actions">
+            <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
             <a href="{% url 'endpoint-list' %}">Limpar</a>
         </div>
     </form>
+
+    <nav class="endpoint-quick-filters" aria-label="Filtros r&aacute;pidos">
+        <a class="{% if filters.quick == 'all' %}is-active{% endif %}" href="{% url 'endpoint-list' %}">Todos</a>
+        <a class="{% if filters.quick == 'critical' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=critical">Cr&iacute;ticos</a>
+        <a class="{% if filters.quick == 'offline' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=offline">Offline</a>
+        <a class="{% if filters.quick == 'servers' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=servers">Servidores</a>
+        <a class="{% if filters.quick == 'workstations' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=workstations">Workstations</a>
+        <a class="{% if filters.quick == 'agent_outdated' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=agent_outdated">Agente desatualizado</a>
+        <a class="{% if filters.quick == 'security' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=security">Seguran&ccedil;a</a>
+        <a class="{% if filters.quick == 'disk_full' %}is-active{% endif %}" href="{% url 'endpoint-list' %}?quick=disk_full">Disco cheio</a>
+    </nav>
 </section>
 
-<section class="panel endpoints-list-panel">
-    <div class="panel-header">
+<section class="panel endpoints-list-panel endpoint-ops-panel" data-endpoint-ops>
+    <div class="panel-header endpoint-ops-list-header">
         <div>
-            <h2>Endpoints</h2>
-            <p>Lista operacional com status, sa&uacute;de b&aacute;sica e &uacute;ltima comunica&ccedil;&atilde;o.</p>
+            <h2><i data-lucide="list-checks"></i>Parque operacional</h2>
+            <p><span data-endpoint-visible-count>{{ rows|length }}</span> endpoint{{ rows|length|pluralize }} encontrado{{ rows|length|pluralize }} com os filtros atuais.</p>
+        </div>
+        <div class="endpoint-view-toggle" role="group" aria-label="Modo de visualiza&ccedil;&atilde;o">
+            <button type="button" class="is-active" data-endpoint-view="table"><i data-lucide="table-2"></i>Tabela</button>
+            <button type="button" data-endpoint-view="cards"><i data-lucide="layout-grid"></i>Cards</button>
+            <button type="button" data-endpoint-view="health"><i data-lucide="radar"></i>Mapa de sa&uacute;de</button>
         </div>
     </div>
 
-    <div class="table-wrap">
-        <table class="endpoint-table endpoint-list-table">
-            <thead>
-                <tr>
-                    <th>Status</th>
-                    <th>Endpoint</th>
-                    <th>Usu&aacute;rio</th>
-                    <th>Rede</th>
-                    <th>Sistema</th>
-                    <th>Agente</th>
-                    <th>&Uacute;ltima comunica&ccedil;&atilde;o</th>
-                    <th>Disco</th>
-                    <th>Defender</th>
-                    <th>Softwares</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in rows %}
-                <tr>
-                    <td>
-                        <span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span>
-                    </td>
-                    <td>
-                        <a class="endpoint-name table-link mono" href="{% url 'endpoint-detail' row.endpoint.id %}">
-                            {% if row.hostname %}{{ row.hostname }}{% else %}&mdash;{% endif %}
-                        </a>
-                        <span class="endpoint-subtext">{% if row.domain %}{{ row.domain }}{% else %}&mdash;{% endif %}</span>
-                    </td>
-                    <td>{% if row.logged_user %}{{ row.logged_user }}{% else %}&mdash;{% endif %}</td>
-                    <td class="mono">{% if row.primary_ip %}{{ row.primary_ip }}{% else %}&mdash;{% endif %}</td>
-                    <td>{% if row.os_name %}{{ row.os_name }}{% else %}&mdash;{% endif %}</td>
-                    <td>
-                        <span class="agent-version-pill agent-{{ row.agent_version_state }}">
-                            {% if row.agent_version %}
-                            {{ row.agent_version }} &middot; {% if row.agent_version_state == "current" %}Atual{% elif row.agent_version_state == "outdated" %}Desatualizado{% else %}Sem vers&atilde;o{% endif %}
+    <div class="endpoint-bulk-bar" data-endpoint-bulk-bar hidden>
+        <strong><span data-endpoint-selected-count>0</span> selecionado(s)</strong>
+        <button type="button" data-bulk-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
+        <button type="button" data-bulk-endpoint-action="check_defender"><i data-lucide="shield-check"></i>Verificar Defender</button>
+        <button type="button" data-bulk-endpoint-action="create_ticket"><i data-lucide="ticket"></i>Criar chamado</button>
+        <button type="button" data-bulk-endpoint-action="execute_check"><i data-lucide="scan-line"></i>Executar a&ccedil;&atilde;o</button>
+        <button type="button" data-bulk-endpoint-action="export_events"><i data-lucide="download"></i>Exportar selecionados</button>
+    </div>
+
+    <div class="endpoint-view endpoint-view-table is-active" data-endpoint-view-panel="table">
+        <div class="table-wrap endpoint-ops-table-wrap">
+            <table class="endpoint-table endpoint-list-table endpoint-ops-table">
+                <thead>
+                    <tr>
+                        <th class="select-col"><input type="checkbox" data-endpoint-select-all aria-label="Selecionar todos"></th>
+                        <th>Status</th>
+                        <th>Endpoint</th>
+                        <th>Tipo</th>
+                        <th>Usu&aacute;rio/Setor</th>
+                        <th>Rede/IP</th>
+                        <th>Sistema</th>
+                        <th>Sa&uacute;de</th>
+                        <th>Aten&ccedil;&atilde;o</th>
+                        <th>Agente</th>
+                        <th>&Uacute;ltima comunica&ccedil;&atilde;o</th>
+                        <th>A&ccedil;&otilde;es</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr data-endpoint-row
+                        data-endpoint="{{ row.hostname|default:'Endpoint'|escape }}"
+                        data-ip="{{ row.primary_ip|default:''|escape }}"
+                        data-detail-url="{% url 'endpoint-detail' row.endpoint.id %}"
+                        data-alerts-url="{% url 'alerts-list' %}?q={{ row.hostname|urlencode }}"
+                        data-events-url="{% url 'events-list' %}?endpoint={{ row.endpoint.id }}"
+                        data-ticket-url="{% url 'tickets:create' %}?endpoint={{ row.endpoint.id }}">
+                        <td class="select-col"><input type="checkbox" data-endpoint-select aria-label="Selecionar {{ row.hostname|default:'endpoint' }}"></td>
+                        <td><span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span></td>
+                        <td>
+                            <a class="endpoint-name table-link mono" href="{% url 'endpoint-detail' row.endpoint.id %}">{{ row.hostname|default:"&mdash;" }}</a>
+                            <span class="endpoint-subtext">{{ row.domain|default:"sem dominio" }}</span>
+                        </td>
+                        <td><span class="endpoint-type-chip endpoint-type-{{ row.endpoint_type }}">{{ row.endpoint_type_label }}</span></td>
+                        <td>
+                            <strong class="endpoint-main-value">{{ row.logged_user|default:"&mdash;" }}</strong>
+                            <span class="endpoint-subtext">{{ row.sector|default:"Sem setor" }}</span>
+                        </td>
+                        <td>
+                            <strong class="mono endpoint-main-value">{{ row.primary_ip|default:"&mdash;" }}</strong>
+                            <span class="endpoint-subtext">{{ row.domain|default:"CONTROL" }}</span>
+                        </td>
+                        <td>{{ row.os_name|default:"&mdash;" }}</td>
+                        <td>
+                            <span class="endpoint-health-pill {{ row.health.class }}">
+                                {% if row.health.score != None %}{{ row.health.score }}{% else %}--{% endif %}
+                            </span>
+                        </td>
+                        <td><span class="endpoint-attention-pill attention-{{ row.attention.level }}">{{ row.attention.label }}</span></td>
+                        <td>
+                            <span class="agent-version-pill agent-{{ row.agent_version_state }}">
+                                {% if row.agent_version %}{{ row.agent_version }}{% else %}Sem vers&atilde;o{% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            {% if row.last_seen_at %}
+                            <span title="{{ row.last_seen_at|date:'d/m/Y H:i:s' }}">{{ row.last_seen_at|date:"d/m/Y H:i" }}</span>
+                            <span class="endpoint-subtext">{{ row.last_seen_at|relative_time }}</span>
                             {% else %}
-                            Sem vers&atilde;o
+                            &mdash;
                             {% endif %}
-                        </span>
-                    </td>
-                    <td>
-                        {% if row.last_seen_at %}
-                        <span title="{{ row.last_seen_at|date:'d/m/Y H:i:s' }}">{{ row.last_seen_at|date:"d/m/Y H:i" }}</span>
-                        <span class="endpoint-subtext">{{ row.last_seen_at|relative_time }}</span>
-                        {% else %}
-                        &mdash;
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if row.primary_disk.has_data %}
-                        <span class="disk-pill disk-pill-{{ row.primary_disk.level }}">{{ row.primary_disk.summary }}</span>
-                        {% else %}
-                        &mdash;
-                        {% endif %}
-                    </td>
-                    <td>
-                        <span class="defender-pill defender-{{ row.defender_key }}">
-                            {% if row.defender_key == "ok" %}OK{% elif row.defender_key == "attention" %}Cr&iacute;tico{% else %}Desconhecido{% endif %}
-                        </span>
-                    </td>
-                    <td>{% if row.software_count != None %}{{ row.software_count }}{% else %}&mdash;{% endif %}</td>
-                </tr>
-                {% empty %}
-                <tr>
-                    <td colspan="10" class="empty-state endpoint-empty">Nenhum endpoint encontrado com os filtros atuais.</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                        </td>
+                        <td>
+                            <div class="endpoint-row-actions">
+                                <a href="{% url 'endpoint-detail' row.endpoint.id %}" title="Abrir endpoint"><i data-lucide="external-link"></i></a>
+                                <button type="button" data-endpoint-copy="hostname" title="Copiar hostname"><i data-lucide="copy"></i></button>
+                                <button type="button" data-endpoint-copy="ip" title="Copiar IP"><i data-lucide="clipboard"></i></button>
+                                <div class="endpoint-action-menu">
+                                    <button type="button" data-endpoint-menu-toggle aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button>
+                                    <div class="endpoint-action-popover" hidden>
+                                        <a href="{% url 'alerts-list' %}?q={{ row.hostname|urlencode }}"><i data-lucide="bell"></i>Ver alertas</a>
+                                        <a href="{% url 'events-list' %}?endpoint={{ row.endpoint.id }}"><i data-lucide="history"></i>Ver eventos</a>
+                                        <a href="{% url 'tickets:create' %}?endpoint={{ row.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                                        <button type="button" data-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
+                                        <button type="button" data-endpoint-action="execute_check"><i data-lucide="scan-line"></i>Executar verifica&ccedil;&atilde;o</button>
+                                        <button type="button" data-endpoint-action="ping"><i data-lucide="terminal"></i>Ping</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="12" class="empty-state endpoint-empty">
+                            <i data-lucide="search-x"></i>
+                            <strong>Nenhum endpoint encontrado</strong>
+                            <span>Ajuste busca, chips ou filtros avan&ccedil;ados para ampliar o resultado.</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="endpoint-view endpoint-card-grid" data-endpoint-view-panel="cards" hidden>
+        {% for row in rows %}
+        <article class="endpoint-card-item attention-{{ row.attention.level }}" data-endpoint-row data-endpoint="{{ row.hostname|default:'Endpoint'|escape }}" data-ip="{{ row.primary_ip|default:''|escape }}" data-detail-url="{% url 'endpoint-detail' row.endpoint.id %}">
+            <header>
+                <span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span>
+                <span class="endpoint-health-pill {{ row.health.class }}">{% if row.health.score != None %}{{ row.health.score }}{% else %}--{% endif %}</span>
+            </header>
+            <h3 class="mono">{{ row.hostname|default:"Endpoint" }}</h3>
+            <p>{{ row.logged_user|default:"Sem usuario" }} &middot; {{ row.sector|default:"Sem setor" }}</p>
+            <div class="endpoint-card-tags">
+                <span>{{ row.endpoint_type_label }}</span>
+                <span>{{ row.os_name|default:"Sistema desconhecido" }}</span>
+                <span>{{ row.primary_ip|default:"Sem IP" }}</span>
+            </div>
+            <footer>
+                <span class="endpoint-attention-pill attention-{{ row.attention.level }}">{{ row.attention.label }}</span>
+                <a href="{% url 'endpoint-detail' row.endpoint.id %}">Abrir</a>
+            </footer>
+        </article>
+        {% empty %}
+        <div class="empty-state endpoint-empty">Nenhum endpoint para exibir em cards.</div>
+        {% endfor %}
+    </div>
+
+    <div class="endpoint-view endpoint-health-map" data-endpoint-view-panel="health" hidden>
+        {% for row in rows %}
+        <a class="endpoint-health-tile {{ row.health.class }} attention-{{ row.attention.level }}" href="{% url 'endpoint-detail' row.endpoint.id %}" title="{{ row.hostname }} - {{ row.attention.label }}">
+            <strong class="mono">{{ row.hostname|default:"Endpoint" }}</strong>
+            <span>{% if row.health.score != None %}{{ row.health.score }}{% else %}--{% endif %}</span>
+            <small>{{ row.attention.label }}</small>
+        </a>
+        {% empty %}
+        <div class="empty-state endpoint-empty">Nenhum endpoint para o mapa de sa&uacute;de.</div>
+        {% endfor %}
     </div>
 </section>
+
+<div class="alert-action-toast endpoint-action-toast" data-endpoint-toast hidden></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/mock_nightowl_api.js"></script>
+<script src="/static/js/nightowl_operational.js"></script>
+<script src="/static/js/endpoint_list.js"></script>
 {% endblock %}

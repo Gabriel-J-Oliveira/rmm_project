@@ -11,442 +11,346 @@
 {% endblock %}
 
 {% block content %}
-<section class="endpoint-hero-card page-header">
-    <div class="endpoint-hero-main">
-        <a class="back-link" href="{% url 'endpoint-list' %}">&larr; Voltar para endpoints</a>
-        <div class="detail-title-row">
-            <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor-cog"></i></span>{% if endpoint.hostname %}{{ endpoint.hostname }}{% else %}&mdash;{% endif %}</h1>
-            <span class="status-badge status-{{ endpoint.status }}">{{ endpoint.get_status_display|default:"Unknown" }}</span>
+<section class="endpoint-detail-shell" data-endpoint-detail data-endpoint-id="{{ endpoint.id }}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}" data-ip="{{ primary_ip|default:''|escape }}">
+    <header class="endpoint-ops-header">
+        <div class="endpoint-ops-title">
+            <a class="back-link" href="{% url 'endpoint-list' %}">&larr; Voltar para endpoints</a>
+            <div class="endpoint-title-line">
+                <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor-cog"></i></span>{{ endpoint.hostname|default:"Endpoint" }}</h1>
+                <span class="status-badge status-{{ endpoint.status }}">{{ endpoint.get_status_display|default:"Unknown" }}</span>
+                {% if using_mock_rmm_data %}<span class="smart-badge badge-admin">Preview mockado</span>{% endif %}
+            </div>
+            <div class="endpoint-critical-strip">
+                <span class="endpoint-health-pill {{ health.class }}">{% if health.score != None %}Sa&uacute;de {{ health.score }}/100{% else %}Sa&uacute;de indispon&iacute;vel{% endif %}</span>
+                <span class="endpoint-attention-pill attention-{{ endpoint_attention.level }}">{{ endpoint_attention.label }}</span>
+                <span><i data-lucide="user"></i>{{ endpoint.last_logged_user|default:"sem usuario" }}</span>
+                <span><i data-lucide="building-2"></i>{{ endpoint_sector|default:"sem setor" }}</span>
+                <span class="mono"><i data-lucide="network"></i>{{ primary_ip|default:"sem IP" }}</span>
+            </div>
         </div>
-        <div class="endpoint-hero-meta">
-            <span>{% if endpoint.domain %}{{ endpoint.domain }}{% else %}&mdash;{% endif %}</span>
-            <span>{% if endpoint.last_logged_user %}{{ endpoint.last_logged_user }}{% else %}&mdash;{% endif %}</span>
-            <span>{% if endpoint.os_name %}{{ endpoint.os_name }}{% else %}&mdash;{% endif %}</span>
-            <span>
-                {% if endpoint.last_seen_at %}
-                <span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>
+
+        <div class="endpoint-ops-actions">
+            <button class="copy-btn" type="button" data-copy="{{ endpoint.hostname }}"><i data-lucide="copy"></i>Hostname</button>
+            <button class="copy-btn" type="button" data-copy="{{ primary_ip|default:'' }}"><i data-lucide="clipboard"></i>IP</button>
+            <button class="copy-btn" type="button" data-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>Invent&aacute;rio</button>
+            <button class="copy-btn" type="button" data-endpoint-action="check_defender"><i data-lucide="shield-check"></i>Defender</button>
+            <button class="copy-btn" type="button" data-endpoint-action="check_disk"><i data-lucide="hard-drive"></i>Disco</button>
+            <button class="copy-btn" type="button" data-endpoint-action="collect_logs"><i data-lucide="file-search"></i>Logs</button>
+            <button class="copy-btn" type="button" data-endpoint-action="ping"><i data-lucide="activity"></i>Ping</button>
+            <button class="copy-btn" type="button" data-endpoint-action="execute_check"><i data-lucide="code-2"></i>Script</button>
+            <a class="copy-btn link-btn" href="{% url 'tickets:create' %}?endpoint={{ endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+            <div class="endpoint-remote-menu">
+                <button class="copy-btn" type="button" data-remote-menu-toggle><i data-lucide="terminal"></i>A&ccedil;&otilde;es remotas</button>
+                <div class="endpoint-remote-popover" hidden>
+                    <button type="button" data-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
+                    <button type="button" data-endpoint-action="check_defender"><i data-lucide="shield-check"></i>Verificar Defender</button>
+                    <button type="button" data-endpoint-action="check_disk"><i data-lucide="hard-drive"></i>Verificar disco</button>
+                    <button type="button" data-endpoint-action="run_cleanup"><i data-lucide="sparkles"></i>Executar limpeza</button>
+                    <button type="button" data-endpoint-action="collect_logs"><i data-lucide="file-search"></i>Coletar logs</button>
+                    <button type="button" data-endpoint-action="execute_check"><i data-lucide="rotate-cw"></i>Reiniciar servi&ccedil;o</button>
+                    <button type="button" data-endpoint-action="ping"><i data-lucide="activity"></i>Ping</button>
+                    <button type="button" data-endpoint-action="execute_check"><i data-lucide="code-2"></i>Executar script</button>
+                </div>
+            </div>
+        </div>
+
+        <dl class="endpoint-header-facts">
+            <div><dt>Sistema</dt><dd>{{ endpoint.os_name|default:snapshot.os_name|default:"-" }}</dd></div>
+            <div><dt>Dom&iacute;nio</dt><dd>{{ endpoint.domain|default:"-" }}</dd></div>
+            <div><dt>Tipo</dt><dd>{{ endpoint_type_label }}</dd></div>
+            <div><dt>&Uacute;ltima comunica&ccedil;&atilde;o</dt><dd>{% if endpoint.last_seen_at %}<span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>{% else %}-{% endif %}</dd></div>
+            <div><dt>Agente</dt><dd><span class="agent-version-pill agent-{{ agent_version_state }}">{{ endpoint.agent_version|default:"sem versao" }}</span></dd></div>
+        </dl>
+    </header>
+
+    <nav class="endpoint-tabs" aria-label="Se&ccedil;&otilde;es do endpoint">
+        <button class="is-active" type="button" data-endpoint-tab="overview"><i data-lucide="layout-dashboard"></i>Vis&atilde;o geral</button>
+        <button type="button" data-endpoint-tab="inventory"><i data-lucide="cpu"></i>Invent&aacute;rio</button>
+        <button type="button" data-endpoint-tab="software"><i data-lucide="package"></i>Softwares</button>
+        <button type="button" data-endpoint-tab="security"><i data-lucide="shield"></i>Seguran&ccedil;a</button>
+        <button type="button" data-endpoint-tab="patches"><i data-lucide="badge-check"></i>Patches</button>
+        <button type="button" data-endpoint-tab="activity"><i data-lucide="history"></i>Atividade</button>
+        <button type="button" data-endpoint-tab="tasks"><i data-lucide="list-checks"></i>Tarefas</button>
+    </nav>
+
+    <section class="endpoint-tab-panel is-active" data-endpoint-tab-panel="overview" data-dynamic-endpoint-panel>
+        <div class="endpoint-compact-grid">
+            <article class="panel endpoint-dense-card endpoint-health-dense">
+                <header><h2><i data-lucide="activity"></i>Sa&uacute;de do endpoint</h2><span class="{{ health.class }}">{{ health.label|safe }}</span></header>
+                {% if health.score != None %}
+                <div class="endpoint-score-block"><strong>{{ health.score }}</strong><span>/100</span></div>
+                <div class="health-bar"><span class="health-fill {{ health.class }}" style="width: {{ health.score }}%"></span></div>
                 {% else %}
-                &mdash;
+                <div class="health-insufficient">{{ health.label }}</div>
                 {% endif %}
-            </span>
-        </div>
-        <div class="smart-badges">
-            {% for badge in smart_badges %}
-            <span class="smart-badge {{ badge.class }}">{{ badge.label|safe }}</span>
-            {% endfor %}
-        </div>
-    </div>
-
-    <div class="endpoint-hero-actions">
-        <button class="copy-btn" type="button" data-copy="{{ endpoint.hostname }}">Copiar hostname</button>
-        <button class="copy-btn" type="button" data-copy="{{ primary_ip|default:'' }}">Copiar IP</button>
-        <a class="copy-btn link-btn" href="{% url 'endpoint-list' %}">Endpoints</a>
-    </div>
-</section>
-
-<section class="detail-summary-grid endpoint-summary-grid" aria-label="Resumo do endpoint">
-    <article class="summary-card">
-        <span>Dom&iacute;nio</span>
-        <strong>{% if endpoint.domain %}{{ endpoint.domain }}{% else %}&mdash;{% endif %}</strong>
-    </article>
-    <article class="summary-card">
-        <span>Usu&aacute;rio logado</span>
-        <strong>{% if endpoint.last_logged_user %}{{ endpoint.last_logged_user }}{% else %}&mdash;{% endif %}</strong>
-    </article>
-    <article class="summary-card">
-        <span>IP principal</span>
-        <strong class="mono">{% if primary_ip %}{{ primary_ip }}{% else %}&mdash;{% endif %}</strong>
-    </article>
-    <article class="summary-card">
-        <span>Sistema operacional</span>
-        <strong>{% if endpoint.os_name %}{{ endpoint.os_name }}{% else %}&mdash;{% endif %}</strong>
-    </article>
-    <article class="summary-card">
-        <span>&Uacute;ltima comunica&ccedil;&atilde;o</span>
-        <strong>
-            {% if endpoint.last_seen_at %}
-            <span title="{{ endpoint.last_seen_at|date:'d/m/Y H:i:s' }}">{{ endpoint.last_seen_at|relative_time }}</span>
-            {% else %}
-            &mdash;
-            {% endif %}
-        </strong>
-    </article>
-</section>
-
-<section class="endpoint-overview-grid">
-    <article class="panel endpoint-health-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="activity"></i></span>Sa&uacute;de do endpoint</h2>
-                <p>Score simples calculado por status, disco e seguran&ccedil;a.</p>
-            </div>
-        </div>
-        {% if health.score != None %}
-        <div class="health-score-row">
-            <strong>{{ health.score }}</strong>
-            <span>/100</span>
-            <em class="{{ health.class }}">{{ health.label|safe }}</em>
-        </div>
-        <div class="health-bar">
-            <span class="health-fill {{ health.class }}" style="width: {{ health.score }}%"></span>
-        </div>
-        {% else %}
-        <div class="health-insufficient">{{ health.label }}</div>
-        {% endif %}
-    </article>
-
-    <article class="panel technical-summary-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="monitor"></i></span>Resumo t&eacute;cnico</h2>
-                <p>Campos de identifica&ccedil;&atilde;o para suporte e triagem.</p>
-            </div>
-        </div>
-        <dl class="technical-list">
-            <div>
-                <dt>Hostname</dt>
-                <dd><span class="mono">{% if endpoint.hostname %}{{ endpoint.hostname }}{% else %}&mdash;{% endif %}</span><button class="mini-copy" type="button" data-copy="{{ endpoint.hostname }}">Copiar</button></dd>
-            </div>
-            <div>
-                <dt>IP principal</dt>
-                <dd><span class="mono">{% if primary_ip %}{{ primary_ip }}{% else %}&mdash;{% endif %}</span><button class="mini-copy" type="button" data-copy="{{ primary_ip|default:'' }}">Copiar</button></dd>
-            </div>
-            <div>
-                <dt>Serial</dt>
-                <dd><span class="mono">{% if snapshot.serial_number %}{{ snapshot.serial_number }}{% else %}&mdash;{% endif %}</span><button class="mini-copy" type="button" data-copy="{{ snapshot.serial_number|default:'' }}">Copiar</button></dd>
-            </div>
-            <div><dt>Fabricante/modelo</dt><dd>{% if snapshot.manufacturer or snapshot.model %}{{ snapshot.manufacturer }} {{ snapshot.model }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>Sistema</dt><dd>{% if snapshot.os_name %}{{ snapshot.os_name }}{% else %}&mdash;{% endif %}</dd></div>
-        </dl>
-    </article>
-
-    <article class="panel activity-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="activity"></i></span>Atividade recente</h2>
-                <p>Linha do tempo baseada nos dados atuais.</p>
-            </div>
-        </div>
-        {% if endpoint.last_seen_at or snapshot %}
-        <ol class="timeline">
-            <li>
-                <span></span>
-                <div>
-                    <strong>&Uacute;ltimo heartbeat recebido</strong>
-                    <p>{% if endpoint.last_seen_at %}{{ endpoint.last_seen_at|relative_time }} · {{ endpoint.last_seen_at|date:"d/m/Y H:i:s" }}{% else %}&mdash;{% endif %}</p>
+                <div class="health-breakdown">
+                    {% for item in health_breakdown %}
+                    <div>
+                        <span>{{ item.label }}</span>
+                        <strong class="health-part-{{ item.level }}">{{ item.score }}</strong>
+                        <em><i style="width: {{ item.score }}%"></i></em>
+                    </div>
+                    {% endfor %}
                 </div>
-            </li>
-            <li>
-                <span></span>
-                <div>
-                    <strong>&Uacute;ltimo snapshot criado</strong>
-                    <p>{% if snapshot.received_at %}{{ snapshot.received_at|relative_time }} · {{ snapshot.received_at|date:"d/m/Y H:i:s" }}{% else %}&mdash;{% endif %}</p>
+            </article>
+
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="id-card"></i>Identifica&ccedil;&atilde;o</h2></header>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Hostname</dt><dd class="mono">{{ endpoint.hostname|default:"-" }}</dd></div>
+                    <div><dt>IP principal</dt><dd class="mono">{{ primary_ip|default:"-" }}</dd></div>
+                    <div><dt>Usu&aacute;rio</dt><dd>{{ endpoint.last_logged_user|default:"-" }}</dd></div>
+                    <div><dt>Setor/tag</dt><dd>{{ endpoint_sector|default:"-" }}</dd></div>
+                    <div><dt>Serial</dt><dd class="mono">{{ snapshot.serial_number|default:"-" }}</dd></div>
+                    <div><dt>Fabricante/modelo</dt><dd>{{ snapshot.manufacturer|default:"-" }} {{ snapshot.model|default:"" }}</dd></div>
+                </dl>
+            </article>
+
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="bot"></i>Agente NightOwl</h2><span class="agent-version-pill agent-{{ agent_version_state }}">{% if agent_version_state == "current" %}Atual{% elif agent_version_state == "outdated" %}Desatualizado{% else %}Sem informa&ccedil;&atilde;o{% endif %}</span></header>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Instalada</dt><dd class="mono">{{ endpoint.agent_version|default:"-" }}</dd></div>
+                    <div><dt>Recomendada</dt><dd class="mono">{{ recommended_agent_version|default:"-" }}</dd></div>
+                    <div><dt>Modo</dt><dd>{{ endpoint.agent_mode|default:"PowerShell agendado" }}</dd></div>
+                    <div><dt>Caminho</dt><dd class="mono">{{ endpoint.agent_install_path|default:"C:\\RMM" }}</dd></div>
+                    <div><dt>Fonte</dt><dd class="mono">{{ endpoint.agent_update_source|default:"-" }}</dd></div>
+                    <div><dt>&Uacute;ltima execu&ccedil;&atilde;o</dt><dd>{% if endpoint.agent_reported_at %}{{ endpoint.agent_reported_at|relative_time }}{% elif endpoint.last_seen_at %}{{ endpoint.last_seen_at|relative_time }}{% else %}-{% endif %}</dd></div>
+                    <div><dt>Pr&oacute;ximo heartbeat</dt><dd>~5 min</dd></div>
+                    <div><dt>&Uacute;ltimo erro</dt><dd>Nenhum erro reportado</dd></div>
+                </dl>
+            </article>
+
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span class="{{ defender.class }}">{{ defender.label|safe }}</span></header>
+                <div class="security-state {{ defender.class }}"><span>{{ defender.label|safe }}</span><p>{{ defender.detail|safe }}</p></div>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Assinatura</dt><dd class="mono">{{ snapshot.defender_status.antivirus_signature_last_updated|default:"-" }}</dd></div>
+                    <div><dt>Firewall</dt><dd>Ativo <span class="muted-inline">mock</span></dd></div>
+                    <div><dt>BitLocker</dt><dd>Coleta pendente <span class="muted-inline">mock</span></dd></div>
+                    <div><dt>Acesso remoto</dt><dd>{% if installed_software %}Ver aba Seguran&ccedil;a{% else %}-{% endif %}</dd></div>
+                </dl>
+            </article>
+
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="monitor"></i>Sistema / Uptime</h2></header>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Sistema</dt><dd>{{ snapshot.os_name|default:endpoint.os_name|default:"-" }}</dd></div>
+                    <div><dt>Vers&atilde;o</dt><dd class="mono">{{ snapshot.os_version|default:"-" }}</dd></div>
+                    <div><dt>Build</dt><dd class="mono">{{ snapshot.windows_build|default:"-" }}</dd></div>
+                    <div><dt>Uptime</dt><dd>{{ uptime_display|default:"-" }}</dd></div>
+                    <div><dt>Mem&oacute;ria</dt><dd>{% if memory_total_gb %}{{ memory_total_gb }} GB{% else %}-{% endif %}</dd></div>
+                    <div><dt>CPU</dt><dd>{{ snapshot.cpu|default:"-" }}</dd></div>
+                </dl>
+            </article>
+
+            <article class="panel endpoint-dense-card endpoint-disk-summary">
+                <header><h2><i data-lucide="hard-drive"></i>Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver invent&aacute;rio</button></header>
+                <div class="endpoint-mini-disk-list">
+                    {% for disk in disks %}
+                    <div>
+                        <strong class="mono">{{ disk.name }}</strong>
+                        <span>{{ disk.used_percent }}%</span>
+                        <em><i class="disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></i></em>
+                        <small>{{ disk.free_gb|default:"-" }} GB livre</small>
+                    </div>
+                    {% empty %}
+                    <div class="empty-state padded">Nenhum disco informado.</div>
+                    {% endfor %}
                 </div>
-            </li>
-            <li>
-                <span></span>
-                <div>
-                    <strong>Status atual</strong>
-                    <p>{{ endpoint.get_status_display|default:"Unknown" }}</p>
+            </article>
+
+            <article class="panel endpoint-dense-card endpoint-span-2">
+                <header><h2><i data-lucide="history"></i>Atividade recente</h2><a href="{% url 'events-list' %}?endpoint={{ endpoint.id }}">Ver todos</a></header>
+                {% include "dashboard/partials/endpoint_activity_list.html" with audit_events=audit_events %}
+            </article>
+
+            <article class="panel endpoint-dense-card endpoint-span-2">
+                <header><h2><i data-lucide="alert-triangle"></i>Alertas e chamados</h2><a href="{% url 'alerts-list' %}?q={{ endpoint.hostname }}">Central de Alertas</a></header>
+                <div class="endpoint-two-lists">
+                    <div>
+                        <h3>Alertas ativos</h3>
+                        {% include "dashboard/partials/endpoint_alert_list.html" with endpoint_alerts=endpoint_alerts %}
+                    </div>
+                    <div>
+                        <h3>Chamados relacionados</h3>
+                        {% include "dashboard/partials/endpoint_ticket_list.html" with related_tickets=related_tickets %}
+                    </div>
                 </div>
-            </li>
-        </ol>
-        {% else %}
-        <div class="empty-state padded">Hist&oacute;rico insuficiente para montar a atividade recente.</div>
-        {% endif %}
-    </article>
-</section>
+            </article>
+        </div>
+    </section>
 
-<section class="panel agent-card">
-    <div class="panel-header">
-        <div>
-            <h2><span class="section-icon"><i data-lucide="bot"></i></span>Agente Night Owl</h2>
-            <p>Vers&atilde;o e metadados reportados pelo agente no heartbeat.</p>
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="inventory" data-dynamic-endpoint-panel hidden>
+        <div class="endpoint-inventory-grid">
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="monitor"></i>Sistema</h2></header>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Nome</dt><dd>{{ snapshot.os_name|default:endpoint.os_name|default:"-" }}</dd></div>
+                    <div><dt>Vers&atilde;o</dt><dd class="mono">{{ snapshot.os_version|default:"-" }}</dd></div>
+                    <div><dt>Build</dt><dd class="mono">{{ snapshot.windows_build|default:"-" }}</dd></div>
+                    <div><dt>IPs</dt><dd class="mono">{% if snapshot.ips %}{{ snapshot.ips|join:", " }}{% else %}-{% endif %}</dd></div>
+                </dl>
+            </article>
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="cpu"></i>Hardware</h2></header>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Fabricante</dt><dd>{{ snapshot.manufacturer|default:"-" }}</dd></div>
+                    <div><dt>Modelo</dt><dd>{{ snapshot.model|default:"-" }}</dd></div>
+                    <div><dt>Serial</dt><dd class="mono">{{ snapshot.serial_number|default:"-" }}</dd></div>
+                    <div><dt>CPU</dt><dd>{{ snapshot.cpu|default:"-" }}</dd></div>
+                    <div><dt>Mem&oacute;ria</dt><dd>{% if memory_total_gb %}{{ memory_total_gb }} GB{% else %}-{% endif %}</dd></div>
+                </dl>
+            </article>
         </div>
-        <span class="agent-version-pill agent-{{ agent_version_state }}">
-            {% if agent_version_state == "current" %}Atual{% elif agent_version_state == "outdated" %}Desatualizado{% else %}Sem informa&ccedil;&atilde;o{% endif %}
-        </span>
-    </div>
-    <dl class="agent-detail-grid">
-        <div>
-            <dt>Vers&atilde;o instalada</dt>
-            <dd class="mono">{% if endpoint.agent_version %}{{ endpoint.agent_version }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Vers&atilde;o recomendada</dt>
-            <dd class="mono">{% if recommended_agent_version %}{{ recommended_agent_version }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Modo</dt>
-            <dd>{% if endpoint.agent_mode %}{{ endpoint.agent_mode }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Caminho</dt>
-            <dd class="mono">{% if endpoint.agent_install_path %}{{ endpoint.agent_install_path }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Tarefa agendada</dt>
-            <dd>{% if endpoint.agent_task_name %}{{ endpoint.agent_task_name }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Runtime</dt>
-            <dd>{% if endpoint.agent_runtime %}{{ endpoint.agent_runtime }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Update source</dt>
-            <dd class="mono">{% if endpoint.agent_update_source %}{{ endpoint.agent_update_source }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>Vers&atilde;o do runtime</dt>
-            <dd class="mono">{% if endpoint.agent_runtime_version %}{{ endpoint.agent_runtime_version }}{% else %}&mdash;{% endif %}</dd>
-        </div>
-        <div>
-            <dt>&Uacute;ltimo reporte</dt>
-            <dd>
-                {% if endpoint.agent_reported_at %}
-                <span title="{{ endpoint.agent_reported_at|date:'d/m/Y H:i:s' }}">{{ endpoint.agent_reported_at|relative_time }}</span>
-                {% else %}
-                &mdash;
-                {% endif %}
-            </dd>
-        </div>
-    </dl>
-</section>
 
-<section class="detail-grid">
-    <article class="panel detail-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="monitor"></i></span>Sistema</h2>
-                <p>Vers&atilde;o e build do Windows.</p>
-            </div>
-        </div>
-        <dl class="detail-list">
-            <div><dt>Nome</dt><dd>{% if snapshot.os_name %}{{ snapshot.os_name }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>Vers&atilde;o</dt><dd class="mono">{% if snapshot.os_version %}{{ snapshot.os_version }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>Build</dt><dd class="mono">{% if snapshot.windows_build %}{{ snapshot.windows_build }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>IPs</dt><dd class="mono">{% if snapshot.ips %}{{ snapshot.ips|join:", " }}{% else %}&mdash;{% endif %}</dd></div>
-        </dl>
-    </article>
-
-    <article class="panel detail-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="cpu"></i></span>Hardware</h2>
-                <p>Identifica&ccedil;&atilde;o e recursos principais.</p>
-            </div>
-        </div>
-        <dl class="detail-list">
-            <div><dt>Fabricante</dt><dd>{% if snapshot.manufacturer %}{{ snapshot.manufacturer }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>Modelo</dt><dd>{% if snapshot.model %}{{ snapshot.model }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>Serial</dt><dd class="mono">{% if snapshot.serial_number %}{{ snapshot.serial_number }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>CPU</dt><dd>{% if snapshot.cpu %}{{ snapshot.cpu }}{% else %}&mdash;{% endif %}</dd></div>
-            <div><dt>Mem&oacute;ria</dt><dd>{% if memory_total_gb %}{{ memory_total_gb }} GB{% else %}&mdash;{% endif %}</dd></div>
-        </dl>
-    </article>
-
-    <article class="panel detail-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="shield"></i></span>Seguran&ccedil;a</h2>
-                <p>Interpreta&ccedil;&atilde;o b&aacute;sica de prote&ccedil;&atilde;o local.</p>
-            </div>
-        </div>
-        <div class="security-state {{ defender.class }}">
-            <span>{{ defender.label|safe }}</span>
-            <p>{{ defender.detail|safe }}</p>
-        </div>
-        <dl class="detail-list compact security-facts">
-            {% if snapshot.defender_status.engine_version %}
-            <div><dt>Engine</dt><dd class="mono">{{ snapshot.defender_status.engine_version }}</dd></div>
-            {% endif %}
-            {% if snapshot.defender_status.antivirus_signature_last_updated %}
-            <div><dt>Assinatura</dt><dd class="mono">{{ snapshot.defender_status.antivirus_signature_last_updated }}</dd></div>
-            {% endif %}
-        </dl>
-    </article>
-
-    <article class="panel detail-card">
-        <div class="panel-header">
-            <div>
-                <h2><span class="section-icon"><i data-lucide="clock"></i></span>Uptime</h2>
-                <p>Tempo aproximado desde o &uacute;ltimo boot.</p>
-            </div>
-        </div>
-        <div class="uptime-value">{% if uptime_display %}{{ uptime_display }}{% else %}&mdash;{% endif %}</div>
-    </article>
-</section>
-
-<section class="panel disks-panel">
-    <div class="panel-header">
-        <div>
-            <h2><span class="section-icon"><i data-lucide="hard-drive"></i></span>Disco</h2>
-            <p>Uso dos discos locais informados pelo agente.</p>
-        </div>
-    </div>
-    <div class="disk-list">
-        {% for disk in disks %}
-        <div class="disk-row">
-            <div class="disk-row-header">
-                <strong class="mono">{{ disk.name }}</strong>
-                <span class="disk-pill disk-pill-{{ disk.level }}">{{ disk.used_percent }}% usado</span>
-            </div>
-            <div class="disk-meta">
-                <span>Total: {% if disk.size_gb %}{{ disk.size_gb }} GB{% else %}&mdash;{% endif %}</span>
-                <span>Livre: {% if disk.free_gb %}{{ disk.free_gb }} GB{% else %}&mdash;{% endif %}</span>
-            </div>
-            <div class="disk-bar" aria-hidden="true">
-                <span class="disk-fill disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></span>
-            </div>
-        </div>
-        {% empty %}
-        <div class="empty-state padded">Nenhum disco informado.</div>
-        {% endfor %}
-    </div>
-</section>
-
-<section class="panel software-panel">
-    <div class="panel-header software-header">
-        <div>
-            <h2><span class="section-icon"><i data-lucide="package"></i></span>Softwares</h2>
-            <p>Programas instalados no &uacute;ltimo invent&aacute;rio.</p>
-        </div>
-        <label class="software-search">
-            <span>Buscar</span>
-            <input id="softwareSearch" type="search" placeholder="Nome, vers&atilde;o ou fabricante">
-        </label>
-    </div>
-    <div class="software-chip-row" role="group" aria-label="Filtros de software">
-        <button class="software-chip active" type="button" data-category="all">Todos</button>
-        <button class="software-chip" type="button" data-category="microsoft">Microsoft</button>
-        <button class="software-chip" type="button" data-category="remote">Acesso remoto</button>
-        <button class="software-chip" type="button" data-category="security">Seguran&ccedil;a</button>
-        <button class="software-chip" type="button" data-category="admin">Admin/Rede</button>
-    </div>
-    <div class="table-wrap software-table-wrap">
-        <table class="endpoint-table software-table" id="softwareTable">
-            <thead>
-                <tr>
-                    <th>Nome</th>
-                    <th>Categoria</th>
-                    <th>Risco</th>
-                    <th>Vers&atilde;o</th>
-                    <th>Fabricante</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for software in installed_software %}
-                <tr data-category="{{ software.category }}">
-                    <td>{% if software.name %}{{ software.name }}{% else %}&mdash;{% endif %}</td>
-                    <td><span class="software-badge category-{{ software.category }}">{{ software.category_label }}</span></td>
-                    <td><span class="software-badge risk-{{ software.risk_level }}">{{ software.risk_label }}</span></td>
-                    <td class="mono">{% if software.version %}{{ software.version }}{% else %}&mdash;{% endif %}</td>
-                    <td>{% if software.publisher %}{{ software.publisher }}{% else %}&mdash;{% endif %}</td>
-                </tr>
+        <section class="panel endpoint-dense-card endpoint-disk-panel">
+            <header><h2><i data-lucide="hard-drive"></i>Discos</h2></header>
+            <div class="endpoint-disk-table">
+                {% for disk in disks %}
+                <article class="disk-row">
+                    <div class="disk-row-header"><strong class="mono">{{ disk.name }}</strong><span class="disk-pill disk-pill-{{ disk.level }}">{{ disk.used_percent }}% usado</span></div>
+                    <div class="disk-meta"><span>Total: {{ disk.size_gb|default:"-" }} GB</span><span>Livre: {{ disk.free_gb|default:"-" }} GB</span></div>
+                    <div class="disk-bar"><span class="disk-fill disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></span></div>
+                    <footer>
+                        <button type="button" data-endpoint-action="check_disk">Ver detalhes</button>
+                        <button type="button" data-endpoint-action="run_cleanup">Executar limpeza</button>
+                        <a href="{% url 'tickets:create' %}?endpoint={{ endpoint.id }}">Criar chamado</a>
+                    </footer>
+                </article>
                 {% empty %}
-                <tr>
-                    <td colspan="5" class="empty-state">Nenhum software informado.</td>
-                </tr>
+                <div class="empty-state padded">Nenhum disco informado.</div>
                 {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</section>
-
-<section class="panel endpoint-timeline-panel">
-    <div class="panel-header">
-        <div>
-            <h2><span class="section-icon"><i data-lucide="history"></i></span>Linha do tempo</h2>
-            <p>Eventos operacionais recentes deste endpoint.</p>
-        </div>
-        <a class="panel-link inline" href="{% url 'events-list' %}?endpoint={{ endpoint.id }}">Ver eventos</a>
-    </div>
-    <ol class="noc-timeline endpoint-audit-timeline">
-        {% for event in audit_events %}
-        <li>
-            <span class="severity-dot severity-dot-{{ event.severity }}"></span>
-            <div>
-                <strong>{{ event.title }}</strong>
-                <p>
-                    {% if event.event_type == "software.installed" %}Software instalado
-                    {% elif event.event_type == "software.removed" %}Software removido
-                    {% elif event.event_type == "software.updated" %}Software atualizado
-                    {% elif event.event_type == "network.ip_changed" %}IP alterado
-                    {% elif event.event_type == "user.logged_user_changed" %}Usu&aacute;rio alterado
-                    {% elif event.event_type == "security.defender_changed" %}Seguran&ccedil;a alterada
-                    {% elif event.event_type == "disk.state_changed" %}Disco alterado
-                    {% elif event.event_type == "os.build_changed" %}Windows atualizado
-                    {% else %}{{ event.event_type }}{% endif %}
-                    &middot; {{ event.created_at|relative_time }}
-                </p>
             </div>
-        </li>
-        {% empty %}
-        <li>
-            <span class="severity-dot"></span>
-            <div>
-                <strong>Nenhum evento recente para este endpoint.</strong>
-                <p>A linha do tempo aparecer&aacute; quando houver mudan&ccedil;as ou a&ccedil;&otilde;es relevantes.</p>
-            </div>
-        </li>
-        {% endfor %}
-    </ol>
-</section>
+        </section>
+    </section>
 
-<section class="panel endpoint-tickets-panel">
-    <div class="panel-header">
-        <div>
-            <h2><span class="section-icon"><i data-lucide="inbox"></i></span>Chamados relacionados</h2>
-            <p>Atendimentos do Night Owl Desk vinculados a este endpoint.</p>
-        </div>
-        <a class="panel-link inline" href="{% url 'tickets:central' %}?q={{ endpoint.hostname }}">Ver Central</a>
-    </div>
-    <div class="endpoint-alert-list">
-        {% for ticket in related_tickets %}
-        <article class="endpoint-alert-item">
-            <span class="severity-badge severity-{{ ticket.priority }}">{{ ticket.get_priority_display }}</span>
-            <div>
-                <strong><a class="panel-link inline" href="{% url 'tickets:detail' ticket.number %}">#{{ ticket.number }} - {{ ticket.title }}</a></strong>
-                <p>{{ ticket.requester_name|default:"Solicitante nao informado" }} &middot; {{ ticket.get_status_display }}</p>
-                <small>Atualizado {{ ticket.updated_at|relative_time }}</small>
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="software" data-dynamic-endpoint-panel hidden>
+        <section class="panel endpoint-dense-card software-panel">
+            <div class="panel-header software-header">
+                <div><h2><span class="section-icon"><i data-lucide="package"></i></span>Softwares</h2><p>Programas instalados no &uacute;ltimo invent&aacute;rio.</p></div>
+                <label class="software-search"><span>Buscar</span><input id="softwareSearch" type="search" placeholder="Nome, vers&atilde;o ou fabricante"></label>
             </div>
-        </article>
-        {% empty %}
-        <div class="positive-empty">Nenhum chamado aberto para este endpoint.</div>
-        {% endfor %}
-    </div>
-</section>
+            <div class="software-chip-row" role="group" aria-label="Filtros de software">
+                <button class="software-chip active" type="button" data-category="all">Todos</button>
+                <button class="software-chip" type="button" data-category="microsoft">Microsoft</button>
+                <button class="software-chip" type="button" data-category="remote">Acesso remoto</button>
+                <button class="software-chip" type="button" data-category="security">Seguran&ccedil;a</button>
+                <button class="software-chip" type="button" data-category="admin">Admin/Rede</button>
+            </div>
+            <div class="table-wrap software-table-wrap">
+                <table class="endpoint-table software-table" id="softwareTable">
+                    <thead><tr><th>Nome</th><th>Categoria</th><th>Risco</th><th>Vers&atilde;o</th><th>Fabricante</th><th>Instalado em</th><th>A&ccedil;&otilde;es futuras</th></tr></thead>
+                    <tbody>
+                        {% for software in installed_software %}
+                        <tr data-category="{{ software.category }}">
+                            <td>{{ software.name|default:"-" }}</td>
+                            <td><span class="software-badge category-{{ software.category }}">{{ software.category_label }}</span></td>
+                            <td><span class="software-badge risk-{{ software.risk_level }}">{{ software.risk_label }}</span></td>
+                            <td class="mono">{{ software.version|default:"-" }}</td>
+                            <td>{{ software.publisher|default:"-" }}</td>
+                            <td>{% if snapshot.received_at %}{{ snapshot.received_at|date:"d/m/Y H:i" }}{% else %}-{% endif %}</td>
+                            <td class="software-actions"><button type="button" data-endpoint-action="copy_summary">Permitir</button><button type="button" data-endpoint-action="copy_summary">Proibir</button><button type="button" data-endpoint-action="create_ticket">Remover</button></td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="7" class="empty-state">Nenhum software informado.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </section>
 
-<section class="panel endpoint-alerts-panel">
-    <div class="panel-header">
-        <div>
-            <h2><span class="section-icon"><i data-lucide="alert-triangle"></i></span>Alertas deste endpoint</h2>
-            <p>Sinais abertos ou reconhecidos para esta m&aacute;quina.</p>
-        </div>
-        <a class="panel-link inline" href="{% url 'alerts-list' %}?q={{ endpoint.hostname }}">Ver em alertas</a>
-    </div>
-    <div class="endpoint-alert-list">
-        {% for alert in endpoint_alerts %}
-        <article class="endpoint-alert-item">
-            <span class="severity-badge severity-{{ alert.severity }}">{{ alert.get_severity_display }}</span>
-            <div>
-                <strong>{{ alert.title }}</strong>
-                <p>{{ alert.description|truncatechars:150 }}</p>
-                <small>
-                    {{ alert.get_status_display }} · {{ alert.last_seen_at|relative_time }}
-                    {% if alert.is_muted %}
-                    · Silenciado at&eacute; {{ alert.muted_until|date:"d/m H:i" }}
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="security" data-dynamic-endpoint-panel hidden>
+        <div class="endpoint-compact-grid security-grid">
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="shield"></i>Prote&ccedil;&atilde;o local</h2><span class="{{ defender.class }}">{{ defender.label|safe }}</span></header>
+                <div class="security-state {{ defender.class }}"><span>{{ defender.label|safe }}</span><p>{{ defender.detail|safe }}</p></div>
+                <dl class="endpoint-fact-list">
+                    <div><dt>Engine</dt><dd class="mono">{{ snapshot.defender_status.engine_version|default:"-" }}</dd></div>
+                    <div><dt>Assinatura</dt><dd class="mono">{{ snapshot.defender_status.antivirus_signature_last_updated|default:"-" }}</dd></div>
+                    <div><dt>Firewall</dt><dd>Ativo <span class="muted-inline">mock</span></dd></div>
+                    <div><dt>BitLocker</dt><dd>Coleta pendente <span class="muted-inline">mock</span></dd></div>
+                </dl>
+            </article>
+            <article class="panel endpoint-dense-card">
+                <header><h2><i data-lucide="radio-tower"></i>Acesso remoto / risco</h2></header>
+                <div class="endpoint-alert-list">
+                    {% for software in installed_software %}
+                    {% if software.category == "remote" or software.category == "admin" %}
+                    <article class="endpoint-alert-item"><span class="severity-badge severity-security">{{ software.risk_label }}</span><div><strong>{{ software.name }}</strong><p>{{ software.publisher }} &middot; {{ software.category_label }}</p></div></article>
                     {% endif %}
-                </small>
+                    {% empty %}
+                    <div class="positive-empty">Nenhum software de risco listado.</div>
+                    {% endfor %}
+                </div>
+            </article>
+            <article class="panel endpoint-dense-card endpoint-span-2">
+                <header><h2><i data-lucide="shield-alert"></i>Alertas de seguran&ccedil;a</h2><a href="{% url 'alerts-list' %}?q={{ endpoint.hostname }}">Ver alertas</a></header>
+                {% include "dashboard/partials/endpoint_alert_list.html" with endpoint_alerts=endpoint_alerts %}
+            </article>
+        </div>
+    </section>
+
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="patches" data-dynamic-endpoint-panel hidden>
+        <section class="panel endpoint-dense-card">
+            <header><h2><i data-lucide="badge-check"></i>Patches e conformidade</h2><span class="muted-inline">Preview</span></header>
+            <div class="endpoint-task-list">
+                {% for patch in patch_rows %}
+                <article><span class="severity-badge severity-{{ patch.severity }}">{{ patch.status }}</span><div><strong>{{ patch.name }}</strong><p>{% if patch.installed_at %}Refer&ecirc;ncia {{ patch.installed_at|relative_time }}{% else %}Sem data coletada{% endif %}</p></div></article>
+                {% endfor %}
             </div>
-        </article>
-        {% empty %}
-        <div class="positive-empty">Nenhum alerta aberto para este endpoint.</div>
-        {% endfor %}
-    </div>
+        </section>
+    </section>
+
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="activity" data-dynamic-endpoint-panel hidden>
+        <section class="panel endpoint-dense-card">
+            <header><h2><i data-lucide="history"></i>Timeline do endpoint</h2><a href="{% url 'events-list' %}?endpoint={{ endpoint.id }}">Ver todos os eventos deste endpoint</a></header>
+            {% include "dashboard/partials/endpoint_activity_list.html" with audit_events=audit_events %}
+        </section>
+        <section class="panel endpoint-dense-card">
+            <header><h2><i data-lucide="inbox"></i>Chamados relacionados</h2><a href="{% url 'tickets:central' %}?q={{ endpoint.hostname }}">Ver Central de Chamados</a></header>
+            {% include "dashboard/partials/endpoint_ticket_list.html" with related_tickets=related_tickets %}
+        </section>
+    </section>
+
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="tasks" data-dynamic-endpoint-panel hidden>
+        <section class="panel endpoint-dense-card">
+            <header><h2><i data-lucide="list-checks"></i>Tarefas e a&ccedil;&otilde;es remotas</h2><button type="button" data-endpoint-action="execute_check">Executar a&ccedil;&atilde;o</button></header>
+            <div class="endpoint-task-list">
+                {% for task in task_rows %}
+                <article><span class="agent-version-pill agent-{{ task.status }}">{{ task.status }}</span><div><strong>{{ task.name }}</strong><p>{{ task.source }}{% if task.started_at %} &middot; {{ task.started_at|relative_time }}{% endif %}</p></div></article>
+                {% endfor %}
+            </div>
+            <div class="endpoint-remote-actions-grid">
+                <button type="button" data-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
+                <button type="button" data-endpoint-action="check_defender"><i data-lucide="shield-check"></i>Verificar Defender</button>
+                <button type="button" data-endpoint-action="check_disk"><i data-lucide="hard-drive"></i>Verificar disco</button>
+                <button type="button" data-endpoint-action="collect_logs"><i data-lucide="file-search"></i>Coletar logs</button>
+                <button type="button" data-endpoint-action="execute_check"><i data-lucide="rotate-cw"></i>Reiniciar servi&ccedil;o</button>
+                <button type="button" data-endpoint-action="ping"><i data-lucide="activity"></i>Ping</button>
+                <button type="button" data-endpoint-action="execute_check"><i data-lucide="code-2"></i>Executar script</button>
+            </div>
+        </section>
+    </section>
 </section>
+
+<div class="alert-action-toast endpoint-detail-toast" data-endpoint-toast hidden></div>
+<div class="event-drawer-backdrop endpoint-drawer-backdrop" data-endpoint-drawer-backdrop hidden></div>
+<aside class="event-drawer endpoint-mini-drawer" data-endpoint-drawer aria-hidden="true">
+    <header>
+        <div>
+            <span data-endpoint-drawer-kicker>Detalhe</span>
+            <h2 data-endpoint-drawer-title>Selecione um item</h2>
+            <p data-endpoint-drawer-subtitle>Contexto operacional</p>
+        </div>
+        <button type="button" data-endpoint-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
+    </header>
+    <div class="event-drawer-body" data-endpoint-drawer-body></div>
+</aside>
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/mock_nightowl_api.js"></script>
+<script src="/static/js/nightowl_operational.js"></script>
 <script src="/static/js/endpoint_detail.js"></script>
 {% endblock %}

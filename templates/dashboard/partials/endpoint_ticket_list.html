@@ -1,0 +1,15 @@
+{% load nightowl_time %}
+<div class="endpoint-alert-list endpoint-compact-list">
+    {% for ticket in related_tickets %}
+    <article class="endpoint-alert-item">
+        <span class="severity-badge severity-{{ ticket.priority }}">{{ ticket.get_priority_display }}</span>
+        <div>
+            <strong><a class="panel-link inline" href="{% url 'tickets:detail' ticket.number %}">#{{ ticket.number }} - {{ ticket.title }}</a></strong>
+            <p>{{ ticket.requester_name|default:"Solicitante nao informado" }} &middot; {{ ticket.get_status_display }}</p>
+            <small>Atualizado {{ ticket.updated_at|relative_time }}</small>
+        </div>
+    </article>
+    {% empty %}
+    <div class="positive-empty">Nenhum chamado aberto para este endpoint.</div>
+    {% endfor %}
+</div>

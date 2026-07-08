@@ -18,12 +18,14 @@
 
     {% include "tickets/_central_bulk_actions.html" %}
 
-    <section class="desk-central-workspace view-{{ view_mode }}">
+    <section class="desk-central-workspace view-{{ view_mode }}" data-central-workspace>
+        <button class="desk-preview-reopen" type="button" data-preview-open hidden>
+            <i data-lucide="panel-right-open"></i>
+            Mostrar preview
+        </button>
         <div class="desk-central-list-pane">
             {% if view_mode == "kanban" %}
                 {% include "tickets/_central_kanban.html" %}
-            {% elif view_mode == "grouped" %}
-                {% include "tickets/_central_grouped.html" %}
             {% else %}
                 {% include "tickets/_central_ticket_table.html" %}
             {% endif %}
