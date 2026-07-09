@@ -2,10 +2,12 @@
 param(
     [string]$SourcePath = "\\192.168.104.120\controlsul\Comum\_Agents",
     [string]$InstallPath = "C:\RMM",
+    [string]$ProgramDataPath = "C:\ProgramData\NightOwl",
     [switch]$RunAgentTest
 )
 
 $TaskName = "RMM-Agent-Heartbeat"
+$ServiceName = "NightOwlAgent"
 $warnings = 0
 $errors = 0
 
@@ -35,6 +37,15 @@ $manualValidationUiPath = Join-Path $InstallPath "NightOwlManualValidation.ps1"
 $logoPath = Join-Path $InstallPath "assets\nightowl-logo.png"
 $statePath = Join-Path $InstallPath "agent.state.json"
 $logsPath = Join-Path $InstallPath "logs"
+$serviceAgentPath = Join-Path $ProgramDataPath "Agent"
+$serviceConfigPath = Join-Path $serviceAgentPath "RmmAgent.config.json"
+$serviceScriptPath = Join-Path $serviceAgentPath "RmmAgentService.ps1"
+$serviceStatePath = Join-Path $serviceAgentPath "agent.state.json"
+$serviceLogsPath = Join-Path $ProgramDataPath "Logs"
+$serviceJsonLogPath = Join-Path $serviceLogsPath "agent-service.jsonl"
+$serviceInstallLogPath = Join-Path $serviceLogsPath "service-install.log"
+$serviceStdoutLogPath = Join-Path $serviceLogsPath "service-stdout.log"
+$serviceStderrLogPath = Join-Path $serviceLogsPath "service-stderr.log"
 
 if (Test-Path $InstallPath) { Write-Check "OK" "Install path found: $InstallPath" } else { Write-Check "ERROR" "Install path missing: $InstallPath" }
 if (Test-Path $agentPath) { Write-Check "OK" "Local agent found" } else { Write-Check "ERROR" "RmmAgent.ps1 missing" }
@@ -80,6 +91,80 @@ if ($task) {
 }
 else {
     Write-Check "ERROR" "Scheduled task missing"
+}
+
+$service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($service) {
+    Write-Check "OK" "Service installed: $ServiceName"
+    Write-Check "OK" "Service status: $($service.Status)"
+    try {
+        $serviceCim = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction Stop
+        Write-Check "OK" "Service startup type: $($serviceCim.StartMode)"
+        Write-Check "OK" "Service account: $($serviceCim.StartName)"
+        Write-Check "OK" "Service executable/arguments: $($serviceCim.PathName)"
+    }
+    catch {
+        Write-Check "WARN" "Could not read service executable/startup details: $($_.Exception.Message)"
+    }
+    try {
+        $delayedAutoStartPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+        $delayedAutoStart = (Get-ItemProperty -Path $delayedAutoStartPath -Name DelayedAutoStart -ErrorAction SilentlyContinue).DelayedAutoStart
+        if ($null -ne $delayedAutoStart) {
+            Write-Check "OK" "Service delayed auto start: $delayedAutoStart"
+        }
+    }
+    catch {
+        Write-Check "WARN" "Could not read delayed auto start flag: $($_.Exception.Message)"
+    }
+    if (Test-Path $serviceScriptPath) { Write-Check "OK" "Service script found" } else { Write-Check "ERROR" "Service script missing: $serviceScriptPath" }
+    if (Test-Path $serviceConfigPath) {
+        Write-Check "OK" "Service JSON config found"
+        try {
+            $serviceConfig = Get-Content -Path $serviceConfigPath -Raw | ConvertFrom-Json
+            if ($serviceConfig.heartbeatUrl) { Write-Check "OK" "Service heartbeat configured: $($serviceConfig.heartbeatUrl)" } else { Write-Check "WARN" "Service heartbeat URL empty" }
+            if ($serviceConfig.jobsPullUrl) { Write-Check "OK" "Jobs pull configured: $($serviceConfig.jobsPullUrl)" } else { Write-Check "WARN" "Jobs pull URL empty" }
+            if ($serviceConfig.jobsResultUrl) { Write-Check "OK" "Jobs result configured: $($serviceConfig.jobsResultUrl)" } else { Write-Check "WARN" "Jobs result URL empty" }
+            if ($serviceConfig.collectionEndpoints) {
+                foreach ($property in $serviceConfig.collectionEndpoints.PSObject.Properties) {
+                    if ($property.Value) {
+                        Write-Check "OK" "Collection endpoint configured: $($property.Name)"
+                    }
+                    else {
+                        Write-Check "WARN" "Collection endpoint empty: $($property.Name)"
+                    }
+                }
+            }
+            else {
+                Write-Check "WARN" "Collection endpoints block missing"
+            }
+        }
+        catch {
+            Write-Check "WARN" "Could not read service JSON config details: $($_.Exception.Message)"
+        }
+    } else { Write-Check "WARN" "Service JSON config missing" }
+    if (Test-Path $serviceLogsPath) { Write-Check "OK" "Service logs directory found" } else { Write-Check "WARN" "Service logs directory missing" }
+    if (Test-Path $serviceJsonLogPath) { Write-Check "OK" "Service JSONL log found: $serviceJsonLogPath" } else { Write-Check "WARN" "Service JSONL log missing: $serviceJsonLogPath" }
+    if (Test-Path $serviceInstallLogPath) { Write-Check "OK" "Service install log found" } else { Write-Check "WARN" "Service install log missing" }
+    if (Test-Path $serviceStdoutLogPath) { Write-Check "OK" "Service stdout log found" } else { Write-Check "WARN" "Service stdout log missing" }
+    if (Test-Path $serviceStderrLogPath) { Write-Check "OK" "Service stderr log found" } else { Write-Check "WARN" "Service stderr log missing" }
+    if (Test-Path $serviceStatePath) {
+        try {
+            $serviceState = Get-Content -Path $serviceStatePath -Raw | ConvertFrom-Json
+            Write-Check "OK" "Service last status: $($serviceState.lastStatus)"
+            if ($serviceState.backoffUntil) {
+                Write-Check "WARN" "Service backend backoff until: $($serviceState.backoffUntil)"
+            }
+        }
+        catch {
+            Write-Check "WARN" "Could not read service state file"
+        }
+    }
+    else {
+        Write-Check "WARN" "Service state file missing"
+    }
+}
+else {
+    Write-Check "WARN" "Service not installed: $ServiceName"
 }
 
 if ($serverUrl) {

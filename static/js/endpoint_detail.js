@@ -15,13 +15,18 @@
     const drawerSubtitle = document.querySelector("[data-endpoint-drawer-subtitle]");
     const drawerKicker = document.querySelector("[data-endpoint-drawer-kicker]");
     const drawerBody = document.querySelector("[data-endpoint-drawer-body]");
+    const sourceBadge = document.querySelector("[data-endpoint-source-badge]");
+    const realPayloadScript = document.getElementById("endpoint-detail-real-payload");
 
     let endpointDetail = null;
+    let realEndpointPayload = null;
     let activeTab = "overview";
     let softwareSearch = "";
     let softwareCategory = "all";
     let softwareRisk = "all";
     let activityCategory = "all";
+    let reloadTimer = null;
+    let pollingUntil = 0;
 
     const labels = {
         online: "Online",
@@ -38,6 +43,8 @@
         resolved: "Resolvido",
         queued: "Em fila",
         sent: "Enviado",
+        dispatched: "Enviado",
+        waiting_agent: "Aguardando agente",
         running: "Em execucao",
         completed: "Concluido",
         failed: "Falha",
@@ -46,6 +53,9 @@
         force_inventory: "Forcar inventario",
         defender_check: "Verificar Defender",
         disk_check: "Verificar disco",
+        collect_disks: "Coletar discos",
+        collect_security: "Verificar seguranca",
+        collect_software: "Coletar software",
         collect_logs: "Coletar logs",
         ping: "Ping",
         cleanup_temp: "Limpeza temporaria",
@@ -53,6 +63,14 @@
         windows_update_scan: "Windows Update Scan",
         install_software: "Instalar software"
     };
+
+    if (realPayloadScript && realPayloadScript.textContent) {
+        try {
+            realEndpointPayload = JSON.parse(realPayloadScript.textContent);
+        } catch (error) {
+            realEndpointPayload = null;
+        }
+    }
 
     function escapeHtml(value) {
         return String(value == null ? "" : value)
@@ -81,6 +99,17 @@
             toast.classList.remove("is-visible");
             toast.hidden = true;
         }, 2800);
+    }
+
+    function getCookie(name) {
+        const parts = document.cookie ? document.cookie.split(";") : [];
+        for (let i = 0; i < parts.length; i += 1) {
+            const part = parts[i].trim();
+            if (part.substring(0, name.length + 1) === name + "=") {
+                return decodeURIComponent(part.substring(name.length + 1));
+            }
+        }
+        return "";
     }
 
     function formatDate(value) {
@@ -113,6 +142,24 @@
         return '<span class="job-status-badge job-status-' + escapeHtml(value || "queued") + '">' + escapeHtml(labels[value] || value || "Em fila") + "</span>";
     }
 
+    function jobProgress(job) {
+        const statusProgress = {
+            queued: 10,
+            sent: 25,
+            dispatched: 25,
+            waiting_agent: 25,
+            running: 60,
+            completed: 100,
+            failed: 100,
+            expired: 100,
+            cancelled: 100
+        };
+        if (job && Object.prototype.hasOwnProperty.call(statusProgress, job.status)) {
+            return statusProgress[job.status];
+        }
+        return job && job.progress != null ? job.progress : 0;
+    }
+
     function jobType(value) {
         return '<span class="job-type-chip">' + icon(jobTypeIcon(value)) + escapeHtml(labels[value] || value || "Tarefa") + "</span>";
     }
@@ -121,7 +168,10 @@
         return {
             force_inventory: "package-search",
             defender_check: "shield-check",
+            collect_security: "shield-check",
             disk_check: "hard-drive",
+            collect_disks: "hard-drive",
+            collect_software: "package-search",
             collect_logs: "file-search",
             ping: "activity",
             cleanup_temp: "sparkles",
@@ -145,6 +195,169 @@
 
     function emptyState(title, text, iconName) {
         return '<div class="endpoint-empty-state">' + icon(iconName || "inbox") + '<strong>' + escapeHtml(title) + '</strong><p>' + escapeHtml(text || "") + "</p></div>";
+    }
+
+    function setSourceBadge(label) {
+        if (!sourceBadge || !label) return;
+        sourceBadge.textContent = label;
+    }
+
+    function asObject(value) {
+        return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function asArray(value) {
+        if (Array.isArray(value)) return value;
+        if (value == null) return [];
+        return [value];
+    }
+
+    function maybeObject(value) {
+        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    }
+
+    function normalizeRealEndpointPayload(payload) {
+        if (!payload || !payload.endpoint) return null;
+        const endpoint = asObject(payload.endpoint);
+        const agentHealth = asObject(payload.agent_health);
+        const inventory = maybeObject(payload.inventory);
+        const health = asObject(payload.health);
+        const attention = asObject(payload.attention);
+        const collectionState = asObject(payload.collection_state);
+        const patches = maybeObject(payload.patches);
+        const patchPending = patches && Array.isArray(patches.pending_updates_sample) ? patches.pending_updates_sample.map(function (item) {
+            item = asObject(item);
+            return { title: item.title || "Atualizacao pendente", severity: item.reboot_required ? "warning" : "info", kb: item.kb || "WU" };
+        }) : [];
+        const hotfixHistory = patches && Array.isArray(patches.installed_hotfixes) ? patches.installed_hotfixes.slice(0, 8).map(function (item) {
+            item = asObject(item);
+            return {
+                title: item.hotfix_id || item.description || "Hotfix",
+                status: "instalado",
+                when: item.installed_on || "-"
+            };
+        }) : [];
+        const security = maybeObject(payload.security);
+
+        return {
+            id: endpoint.id,
+            hostname: endpoint.hostname || root.dataset.endpoint || "Endpoint",
+            status: endpoint.status || "unknown",
+            ip: endpoint.ip || root.dataset.ip || "",
+            user: endpoint.user || "-",
+            sector: endpoint.sector || "-",
+            os: endpoint.os || "-",
+            domain: endpoint.domain || "-",
+            type: endpoint.type || "-",
+            healthScore: health.score == null ? 0 : health.score,
+            attention: attention.label || "Dados parciais",
+            source: "real",
+            dataSource: payload.data_source || "real",
+            collectionState: collectionState,
+            agent: {
+                machineId: endpoint.machine_id || endpoint.id || "",
+                version: endpoint.agent_version || "-",
+                recommendedVersion: "-",
+                state: endpoint.agent_version ? "current" : "unknown",
+                mode: agentHealth.agent_mode || agentHealth.install_mode || "-",
+                installMode: agentHealth.install_mode || "-",
+                runtime: agentHealth.service_name ? "Servico Windows" : "-",
+                lastRun: agentHealth.last_heartbeat_at ? formatDate(agentHealth.last_heartbeat_at) : "-",
+                nextHeartbeat: "~5 min",
+                serviceName: agentHealth.service_name || "NightOwlAgent",
+                serviceStatus: agentHealth.service_status || "-",
+                serviceStartType: agentHealth.service_start_type || "-",
+                serviceAccount: agentHealth.service_account || "-",
+                installPath: agentHealth.install_path || "-",
+                legacyInstallPath: agentHealth.legacy_install_path || "-",
+                configPath: agentHealth.config_path || "-",
+                logPath: agentHealth.log_path || "-",
+                logFile: agentHealth.log_file || "C:\\ProgramData\\NightOwl\\Logs\\agent-service.jsonl",
+                heartbeatUrl: agentHealth.heartbeat_url || "-",
+                jobsPullUrl: agentHealth.jobs_pull_url || "-",
+                jobsResultUrl: agentHealth.jobs_result_url || "-",
+                collectionEndpoints: agentHealth.collection_endpoints || {},
+                lastHeartbeatAt: agentHealth.last_heartbeat_at || "",
+                lastInventoryAt: agentHealth.last_inventory_at || "",
+                lastSoftwareInventoryAt: agentHealth.last_software_inventory_at || "",
+                lastSecurityInventoryAt: agentHealth.last_security_inventory_at || "",
+                lastDiskInventoryAt: agentHealth.last_disk_inventory_at || "",
+                lastPatchScanAt: agentHealth.last_patch_scan_at || "",
+                lastJobResultAt: collectionState.last_job_result_at || "",
+                lastError: agentHealth.last_error || "-"
+            },
+            inventory: inventory,
+            hardware: maybeObject(payload.hardware),
+            network: maybeObject(payload.network) || { interfaces: [] },
+            disks: asArray(payload.disks).filter(function (item) { return item && typeof item === "object"; }),
+            software: asArray(payload.software).filter(function (item) { return item && typeof item === "object"; }),
+            security: security,
+            patches: patches ? {
+                compliance: patches.pending_updates_count ? 70 : 100,
+                lastScan: patches.last_windows_update_check || patches.collected_at || "-",
+                criticalPending: patches.pending_updates_count || 0,
+                importantPending: patches.pending_updates_count || 0,
+                rebootPending: !!patches.reboot_pending,
+                rebootReasons: asArray(patches.reboot_pending_reasons),
+                installedHotfixCount: patches.installed_hotfix_count || 0,
+                lastInstall: patches.last_windows_update_install || "-",
+                windowsBuild: patches.windows_build || "",
+                pending: patchPending,
+                history: hotfixHistory,
+                raw: patches
+            } : null,
+            events: asArray(payload.events).filter(function (item) { return item && typeof item === "object"; }),
+            jobs: asArray(payload.jobs).filter(function (item) { return item && typeof item === "object"; }).map(function (event) {
+                if (event.type || event.status || event.createdAt) {
+                    event.progress = jobProgress(event);
+                    return event;
+                }
+                return {
+                    id: event.id,
+                    name: event.title,
+                    type: event.metadata && event.metadata.job_type || "collect_logs",
+                    command: event.eventType,
+                    status: event.metadata && event.metadata.status || "completed",
+                    createdBy: event.actor || "NightOwlAgent",
+                    createdAt: event.timestamp,
+                    startedAt: event.timestamp,
+                    finishedAt: event.timestamp,
+                    durationMs: event.metadata && event.metadata.duration_seconds ? event.metadata.duration_seconds * 1000 : 0,
+                    result: event.description,
+                    stdout: JSON.stringify(event.metadata || {}, null, 2),
+                    stderr: event.metadata && event.metadata.error_message || "",
+                    exitCode: event.metadata && event.metadata.exit_code,
+                    payload: event.metadata || {},
+                    resultJson: event.metadata || {},
+                    progress: 100,
+                    timeline: [event.eventType]
+                };
+            }),
+            alerts: asArray(payload.alerts).filter(function (item) { return item && typeof item === "object"; }),
+            tickets: asArray(payload.tickets).filter(function (item) { return item && typeof item === "object"; }),
+            localAdmins: security && Array.isArray(security.localAdmins) ? security.localAdmins :
+                security && security.raw && Array.isArray(security.raw.local_admins) ? security.raw.local_admins.map(function (item) { return typeof item === "string" ? item : asObject(item).name; }).filter(Boolean) :
+                    security && security.raw && Array.isArray(security.raw.local_administrators) ? security.raw.local_administrators.map(function (item) { return asObject(item).name; }).filter(Boolean) : [],
+            policyViolations: []
+        };
+    }
+
+    function mergeEndpointDetails(realDetail, mockDetail) {
+        if (!realDetail) return mockDetail || null;
+        if (!mockDetail) return realDetail;
+        const merged = Object.assign({}, mockDetail, realDetail);
+        merged.source = "mixed";
+        merged.inventory = realDetail.inventory || null;
+        merged.disks = realDetail.disks && realDetail.disks.length ? realDetail.disks : [];
+        merged.software = realDetail.software && realDetail.software.length ? realDetail.software : [];
+        merged.security = realDetail.security || null;
+        merged.patches = realDetail.patches || null;
+        merged.events = realDetail.events && realDetail.events.length ? realDetail.events : [];
+        merged.jobs = realDetail.jobs && realDetail.jobs.length ? realDetail.jobs : [];
+        merged.alerts = realDetail.alerts && realDetail.alerts.length ? realDetail.alerts : mockDetail.alerts || [];
+        merged.tickets = realDetail.tickets && realDetail.tickets.length ? realDetail.tickets : mockDetail.tickets || [];
+        merged.collectionState = realDetail.collectionState || {};
+        return merged;
     }
 
     function factList(items) {
@@ -194,12 +407,12 @@
         if (!disks || !disks.length) return emptyState("Nenhum disco coletado", "O proximo inventario deve preencher esta secao.", "hard-drive");
         if (compact) {
             return '<div class="endpoint-mini-disk-list">' + disks.map(function (disk) {
-                return '<div><strong class="mono">' + escapeHtml(disk.name) + '</strong><span>' + escapeHtml(disk.usedPercent) + '%</span><em><i class="disk-' + escapeHtml(disk.severity) + '" style="width:' + escapeHtml(disk.usedPercent) + '%"></i></em><small>' + escapeHtml(disk.freeGb) + ' GB livres de ' + escapeHtml(disk.totalGb) + " GB</small></div>";
+                return '<div><strong class="mono">' + escapeHtml(disk.name) + '</strong><span>' + escapeHtml(disk.usedPercent) + '%</span><em><i class="disk-' + escapeHtml(disk.severity) + '" style="width:' + escapeHtml(disk.usedPercent) + '%"></i></em><small>' + escapeHtml(disk.freeGb) + ' GB livres de ' + escapeHtml(disk.totalGb) + ' GB · ' + escapeHtml(disk.filesystem || "-") + "</small></div>";
             }).join("") + "</div>";
         }
         return '<div class="endpoint-disk-table">' + disks.map(function (disk) {
             return '<article class="disk-row"><div class="disk-row-header"><strong class="mono">' + escapeHtml(disk.name) + '</strong><span class="disk-pill disk-pill-' + escapeHtml(disk.severity) + '">' + escapeHtml(disk.usedPercent) + '% usado</span></div>' +
-                '<div class="disk-meta"><span>Total: ' + escapeHtml(disk.totalGb) + ' GB</span><span>Livre: ' + escapeHtml(disk.freeGb) + ' GB</span></div>' +
+                '<div class="disk-meta"><span>Total: ' + escapeHtml(disk.totalGb) + ' GB</span><span>Livre: ' + escapeHtml(disk.freeGb) + ' GB</span><span>FS: ' + escapeHtml(disk.filesystem || "-") + '</span><span>BitLocker: ' + escapeHtml(disk.bitlockerStatus || "-") + '</span><span>Saude: ' + escapeHtml(disk.healthStatus || "-") + '</span></div>' +
                 '<div class="disk-bar"><span class="disk-fill disk-' + escapeHtml(disk.severity) + '" style="width:' + escapeHtml(disk.usedPercent) + '%"></span></div>' +
                 '<footer>' + actionButton("check_disk", "Verificar disco", "hard-drive") + actionButton("run_cleanup", "Executar limpeza", "sparkles") + actionButton("create_ticket", "Criar chamado", "ticket") + "</footer></article>";
         }).join("") + "</div>";
@@ -236,15 +449,14 @@
 
     function renderJobs(jobs, limit) {
         const rows = (jobs || []).slice(0, limit || jobs.length);
-        if (!rows.length) return emptyState("Nenhuma tarefa registrada", "Use as acoes rapidas para simular jobs do agente.", "list-checks");
-        return '<div class="table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Tipo</th><th>Criado por</th><th>Criado em</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
+        if (!rows.length) return emptyState("Nenhuma tarefa tecnica executada neste endpoint", "Use as acoes rapidas para enfileirar jobs reais para o agente.", "list-checks");
+        return '<div class="table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Tipo</th><th>Progresso</th><th>Criado por</th><th>Criado em</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
             rows.map(function (job) {
-                const canCancel = ["queued", "sent", "running"].indexOf(job.status) >= 0;
-                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '</td><td>' + escapeHtml(job.createdBy || "-") + '</td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(job.result || "-") + '</td><td class="software-actions">' +
+                const progress = jobProgress(job);
+                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '</td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "queued") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td>' + escapeHtml(job.createdBy || "-") + '</td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(job.result || job.errorMessage || "-") + '</td><td class="software-actions">' +
                     '<button type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
                     '<button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
-                    '<button type="button" data-rerun-job="' + escapeHtml(job.id) + '">Reexecutar</button>' +
-                    (canCancel ? '<button type="button" data-cancel-job="' + escapeHtml(job.id) + '">Cancelar</button>' : "") +
+                    (job.status === "completed" ? '<button type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
                     "</td></tr>";
             }).join("") + "</tbody></table></div>";
     }
@@ -265,10 +477,18 @@
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("bot") + 'Agente NightOwl</h2>' + badge("agent-version-pill agent", agent.state, agent.state === "current" ? "Atual" : labels[agent.state] || agent.state) + '</header>' + factList([
                 { label: "Instalada", value: agent.version, mono: true },
+                { label: "Machine ID", value: agent.machineId, mono: true },
                 { label: "Recomendada", value: agent.recommendedVersion, mono: true },
                 { label: "Modo", value: agent.mode },
                 { label: "Runtime", value: agent.runtime },
-                { label: "Ultima execucao", value: agent.lastRun },
+                { label: "Ultima comunicacao", value: agent.lastRun },
+                { label: "Ultima coleta geral", value: formatDate(agent.lastInventoryAt) },
+                { label: "Ultimo job finalizado", value: formatDate(agent.lastJobResultAt) },
+                { label: "Servico", value: agent.serviceName },
+                { label: "Status servico", value: agent.serviceStatus },
+                { label: "Log atual", value: agent.logFile, mono: true },
+                { label: "Jobs pull", value: agent.jobsPullUrl, mono: true },
+                { label: "Jobs result", value: agent.jobsResultUrl, mono: true },
                 { label: "Proximo heartbeat", value: agent.nextHeartbeat }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield") + 'Seguranca</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
@@ -283,23 +503,30 @@
                 { label: "Serial", value: inv.serial, mono: true },
                 { label: "CPU", value: inv.cpu },
                 { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
+                { label: "Disponivel", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
                 { label: "Ultimo inventario", value: inv.lastFullInventory }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-disk-summary"><header><h2>' + icon("hard-drive") + 'Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver inventario</button></header>' + renderDiskList(detail.disks, true) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("alert-triangle") + 'Alertas ativos</h2><a href="/alerts/?q=' + encodeURIComponent(detail.hostname) + '">Central de Alertas</a></header>' + renderAlerts(detail.alerts, 4) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("ticket") + 'Chamados relacionados</h2>' + actionButton("create_ticket", "Criar chamado", "ticket") + '</header>' + renderTickets(detail.tickets) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("history") + 'Ultimos eventos</h2><a href="/events/?q=' + encodeURIComponent(detail.hostname) + '">Ver todos</a></header>' + renderEvents(detail.events, 5, false) + '</article>' +
+            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("list-checks") + 'Fila de acoes</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar dados</button></header>' + renderJobs(detail.jobs, 6) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("zap") + 'Acoes rapidas</h2></header><div class="endpoint-remote-actions-grid">' +
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
             actionButton("check_defender", "Verificar Defender", "shield-check") +
-            actionButton("check_disk", "Verificar disco", "hard-drive") +
+            actionButton("check_disk", "Coletar discos", "hard-drive") +
+            actionButton("collect_software", "Coletar software", "package-search") +
             actionButton("collect_logs", "Coletar logs", "file-search") +
             actionButton("ping", "Ping", "activity") +
-            actionButton("execute_check", "Executar script", "code-2") +
+            actionButton("windows_update_scan", "Windows Update scan", "badge-check") +
+            '<button type="button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + 'Script futuro</button>' +
             "</div></article></div>";
     }
 
     function renderInventory(detail) {
+        if (detail.collectionState && !detail.collectionState.inventory) {
+            return '<section class="panel endpoint-dense-card">' + emptyState("Inventario ainda nao coletado", "O agente ja comunicou heartbeat, mas a coleta completa de sistema/hardware/rede ainda nao chegou.", "cpu") + "</section>";
+        }
         const inv = detail.inventory || {};
         return '<div class="endpoint-inventory-grid">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("monitor") + 'Sistema operacional</h2></header>' + factList([
@@ -308,6 +535,11 @@
                 { label: "Build", value: inv.build, mono: true },
                 { label: "Arquitetura", value: inv.architecture },
                 { label: "Dominio", value: detail.domain },
+                { label: "Tipo", value: inv.machineType },
+                { label: "Instalacao", value: formatDate(inv.installDate) },
+                { label: "Ultimo boot", value: formatDate(inv.lastBootTime) },
+                { label: "Timezone", value: inv.timezone },
+                { label: "Locale", value: inv.locale },
                 { label: "Uptime", value: inv.uptime }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("cpu") + 'Hardware</h2></header>' + factList([
@@ -315,15 +547,26 @@
                 { label: "Modelo", value: inv.model },
                 { label: "Serial", value: inv.serial, mono: true },
                 { label: "CPU", value: inv.cpu },
+                { label: "Fabricante CPU", value: inv.cpuManufacturer },
+                { label: "Cores fisicos", value: inv.physicalCores },
+                { label: "Processadores logicos", value: inv.logicalProcessors },
                 { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
-                { label: "BIOS/UEFI", value: inv.bios }
+                { label: "Memoria disponivel", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
+                { label: "BIOS/UEFI", value: inv.bios },
+                { label: "BIOS data", value: formatDate(inv.biosReleaseDate) },
+                { label: "Placa-mae", value: inv.motherboard },
+                { label: "TPM", value: inv.tpmPresent == null ? "-" : inv.tpmPresent ? (inv.tpmEnabled ? "Presente/ativo" : "Presente/inativo") : "Ausente" },
+                { label: "Bateria", value: inv.batteryPresent ? ("Presente · " + (inv.batteryStatus || "-")) : "Nao detectada" }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
-                { label: "IP principal", value: detail.ip, mono: true },
+                { label: "IP principal", value: inv.primaryIp || detail.ip, mono: true },
+                { label: "MAC principal", value: inv.primaryMac, mono: true },
+                { label: "Gateway", value: inv.defaultGateway, mono: true },
+                { label: "DNS", value: (inv.dnsServers || []).join(", "), mono: true },
                 { label: "MACs", value: (inv.macs || []).join(", "), mono: true },
                 { label: "Ultimo inventario completo", value: inv.lastFullInventory },
                 { label: "Agente", value: detail.agent && detail.agent.version, mono: true }
-            ]) + '</article></div>' +
+            ]) + ((inv.adapters || []).length ? '<div class="endpoint-task-list">' + inv.adapters.map(function (adapter) { adapter = asObject(adapter); return '<article><span class="severity-badge severity-info">' + escapeHtml(adapter.adapter_type || adapter.type || "NIC") + '</span><div><strong>' + escapeHtml(adapter.name || adapter.description || "Adaptador") + '</strong><p class="mono">' + escapeHtml((adapter.ipv4_addresses || adapter.ips || []).join(", ") || "-") + ' · ' + escapeHtml(adapter.mac_address || adapter.mac || "-") + '</p></div></article>'; }).join("") + '</div>' : '') + '</article></div>' +
             '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section>";
     }
 
@@ -338,10 +581,13 @@
     }
 
     function renderSoftware(detail) {
+        if (detail.collectionState && !detail.collectionState.software) {
+            return '<section class="panel endpoint-dense-card software-panel">' + emptyState("Inventario de software ainda nao coletado", "Assim que a rotina de software enviar dados, esta aba sera preenchida.", "package") + "</section>";
+        }
         const items = detail.software || [];
         const term = softwareSearch.toLowerCase();
         const filtered = items.filter(function (item) {
-            const text = [item.name, item.category, item.risk, item.version, item.publisher].join(" ").toLowerCase();
+            const text = [item.name, item.category, item.risk, item.version, item.publisher, item.architecture, item.source].join(" ").toLowerCase();
             if (term && text.indexOf(term) < 0) return false;
             if (softwareCategory !== "all" && item.category !== softwareCategory) return false;
             if (softwareRisk !== "all" && item.risk !== softwareRisk) return false;
@@ -349,7 +595,7 @@
         });
         const counters = softwareCounters(items);
         return '<section class="panel endpoint-dense-card software-panel">' +
-            '<div class="panel-header software-header"><div><h2><span class="section-icon">' + icon("package") + '</span>Softwares</h2><p>Programas do inventario mockado centralizado deste endpoint.</p></div>' +
+            '<div class="panel-header software-header"><div><h2><span class="section-icon">' + icon("package") + '</span>Softwares</h2><p>Programas detectados pelo inventario real deste endpoint.</p></div>' +
             '<label class="software-search"><span>Buscar</span><input data-software-search type="search" value="' + escapeHtml(softwareSearch) + '" placeholder="Nome, versao ou fabricante"></label></div>' +
             '<div class="endpoint-inline-metrics">' + counters.map(function (counter) { return '<div><span>' + escapeHtml(counter.label) + '</span><strong>' + counter.value + '</strong></div>'; }).join("") + '</div>' +
             '<div class="software-chip-row" role="group" aria-label="Categorias">' + ["all", "microsoft", "security", "remote", "admin", "other"].map(function (cat) {
@@ -358,12 +604,15 @@
             '<div class="software-chip-row" role="group" aria-label="Risco">' + ["all", "low", "medium", "high"].map(function (risk) {
                 return '<button class="software-chip ' + (softwareRisk === risk ? "active" : "") + '" type="button" data-software-risk="' + risk + '">' + escapeHtml(risk === "all" ? "Todos os riscos" : risk) + "</button>";
             }).join("") + '</div>' +
-            (filtered.length ? '<div class="table-wrap software-table-wrap"><table class="endpoint-table software-table"><thead><tr><th>Nome</th><th>Categoria</th><th>Risco</th><th>Versao</th><th>Fabricante</th><th>Instalado em</th><th>Acoes futuras</th></tr></thead><tbody>' + filtered.map(function (software) {
-                return '<tr><td><strong>' + escapeHtml(software.name) + '</strong></td><td><span class="software-badge category-' + escapeHtml(software.category) + '">' + escapeHtml(software.category) + '</span></td><td><span class="software-badge risk-' + escapeHtml(software.risk) + '">' + escapeHtml(software.risk) + '</span></td><td class="mono">' + escapeHtml(software.version || "-") + '</td><td>' + escapeHtml(software.publisher || "-") + '</td><td>' + escapeHtml(formatDate(software.installedAt)) + '</td><td class="software-actions"><button type="button" data-endpoint-action="copy_summary">Permitir</button><button type="button" data-endpoint-action="copy_summary">Proibir</button><button type="button" data-endpoint-action="create_ticket">Solicitar remocao</button></td></tr>';
+            (filtered.length ? '<div class="table-wrap software-table-wrap"><table class="endpoint-table software-table"><thead><tr><th>Nome</th><th>Categoria</th><th>Risco</th><th>Versao</th><th>Fabricante</th><th>Arquitetura</th><th>Origem</th><th>Instalado em</th><th>Acoes futuras</th></tr></thead><tbody>' + filtered.map(function (software) {
+                return '<tr><td><strong>' + escapeHtml(software.name) + '</strong></td><td><span class="software-badge category-' + escapeHtml(software.category) + '">' + escapeHtml(software.category) + '</span></td><td><span class="software-badge risk-' + escapeHtml(software.risk) + '">' + escapeHtml(software.risk) + '</span></td><td class="mono">' + escapeHtml(software.version || "-") + '</td><td>' + escapeHtml(software.publisher || "-") + '</td><td>' + escapeHtml(software.architecture || "-") + '</td><td class="mono">' + escapeHtml(software.source || "-") + '</td><td>' + escapeHtml(formatDate(software.installedAt)) + '</td><td class="software-actions"><button type="button" data-endpoint-action="copy_summary">Permitir</button><button type="button" data-endpoint-action="copy_summary">Proibir</button><button type="button" data-endpoint-action="create_ticket">Solicitar remocao</button></td></tr>';
             }).join("") + "</tbody></table></div>" : emptyState("Nenhum software no filtro", "Ajuste busca, categoria ou risco.", "package")) + "</section>";
     }
 
     function renderSecurity(detail) {
+        if (detail.collectionState && !detail.collectionState.security) {
+            return '<section class="panel endpoint-dense-card">' + emptyState("Seguranca ainda nao coletada", "Defender, firewall, BitLocker e administradores locais aparecerao apos a coleta de seguranca.", "shield") + "</section>";
+        }
         const security = detail.security || {};
         const admins = detail.localAdmins || [];
         const violations = detail.policyViolations || [];
@@ -371,26 +620,37 @@
         return '<div class="endpoint-compact-grid security-grid">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield") + 'Protecao local</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
                 { label: "Antivirus", value: security.antivirus },
+                { label: "Defender ativo", value: security.defenderEnabled == null ? "-" : security.defenderEnabled ? "Sim" : "Nao" },
+                { label: "Tempo real", value: security.realtimeEnabled == null ? "-" : security.realtimeEnabled ? "Sim" : "Nao" },
                 { label: "Assinatura", value: security.signature, mono: true },
+                { label: "Assinatura atualizada", value: formatDate(security.signatureUpdatedAt) },
+                { label: "Ultimo quick scan", value: formatDate(security.lastQuickScan) },
+                { label: "Ultimo full scan", value: formatDate(security.lastFullScan) },
                 { label: "Firewall", value: security.firewall },
-                { label: "BitLocker", value: security.bitlocker }
+                { label: "BitLocker", value: security.bitlocker },
+                { label: "RDP", value: security.rdpEnabled == null ? "-" : security.rdpEnabled ? "Habilitado" : "Desabilitado" },
+                { label: "UAC", value: security.uacEnabled == null ? "-" : security.uacEnabled ? "Habilitado" : "Desabilitado" }
             ]) + '<div class="endpoint-remote-actions-grid">' + actionButton("check_defender", "Verificar Defender", "shield-check") + actionButton("execute_check", "Verificar seguranca", "shield-alert") + actionButton("create_ticket", "Criar chamado", "ticket") + actionButton("copy_summary", "Criar regra", "file-plus-2") + '</div></article>' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield-check") + 'Produtos AV detectados</h2></header>' + ((security.antivirusProducts || []).length ? '<div class="endpoint-task-list">' + security.antivirusProducts.map(function (item) { item = asObject(item); return '<article><span class="severity-badge severity-info">AV</span><div><strong>' + escapeHtml(item.name || "Antivirus") + '</strong><p class="mono">' + escapeHtml(item.product_state || item.instance_guid || "-") + '</p></div></article>'; }).join("") + '</div>' : emptyState("Nenhum AV via SecurityCenter2", "Servidores podem nao expor essa classe WMI.", "shield")) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("radio-tower") + 'Acesso remoto</h2></header>' + ((security.remoteTools || []).length ? '<div class="endpoint-task-list">' + security.remoteTools.map(function (tool) { return '<article><span class="severity-badge severity-security">Risco</span><div><strong>' + escapeHtml(tool) + '</strong><p>Ferramenta de acesso remoto detectada.</p></div></article>'; }).join("") + '</div>' : emptyState("Sem acesso remoto de risco", "Nenhuma ferramenta sensivel listada.", "check-circle")) + '</article>' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("users") + 'Administradores locais</h2></header>' + (admins.length ? '<div class="endpoint-task-list">' + admins.map(function (admin) { return '<article><span class="severity-badge severity-info">Admin</span><div><strong class="mono">' + escapeHtml(admin) + '</strong><p>Coleta mockada de grupo local.</p></div></article>'; }).join("") + '</div>' : emptyState("Sem administradores coletados", "A coleta ainda nao retornou membros locais.", "users")) + '</article>' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("users") + 'Administradores locais</h2></header>' + (admins.length ? '<div class="endpoint-task-list">' + admins.map(function (admin) { return '<article><span class="severity-badge severity-info">Admin</span><div><strong class="mono">' + escapeHtml(admin) + '</strong><p>Membro local detectado pelo agente.</p></div></article>'; }).join("") + '</div>' : emptyState("Sem administradores coletados", "A coleta ainda nao retornou membros locais.", "users")) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield-alert") + 'Politicas violadas</h2></header>' + (violations.length ? '<div class="endpoint-task-list">' + violations.map(function (item) { return '<article><span class="severity-badge severity-' + escapeHtml(item.severity) + '">' + escapeHtml(item.severity) + '</span><div><strong>' + escapeHtml(item.policy) + '</strong><p>' + escapeHtml(item.item) + '</p></div></article>'; }).join("") + '</div>' : emptyState("Sem violacoes de politica", "Nada pendente para este endpoint.", "check-circle")) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("history") + 'Ultimos eventos de seguranca</h2></header>' + renderEvents(securityEvents, 5, false) + '</article></div>';
     }
 
     function renderPatches(detail) {
+        if (detail.collectionState && !detail.collectionState.patches) {
+            return '<section class="panel endpoint-dense-card">' + emptyState("Patches ainda nao coletados", "A rotina de Windows Update ainda nao enviou status para este endpoint.", "badge-check") + "</section>";
+        }
         const patches = detail.patches || {};
         const pending = patches.pending || [];
         const history = patches.history || [];
         return '<div class="endpoint-compact-grid security-grid">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("badge-check") + 'Compliance</h2><span class="endpoint-health-pill ' + healthClass(patches.compliance) + '">' + escapeHtml(patches.compliance || 0) + '%</span></header>' +
             '<div class="endpoint-score-block"><strong>' + escapeHtml(patches.compliance || 0) + '</strong><span>%</span></div><div class="health-bar"><span class="health-fill ' + healthClass(patches.compliance) + '" style="width:' + escapeHtml(patches.compliance || 0) + '%"></span></div>' +
-            factList([{ label: "Ultima verificacao", value: patches.lastScan }, { label: "Criticos pendentes", value: patches.criticalPending }, { label: "Importantes pendentes", value: patches.importantPending }, { label: "Reboot pendente", value: patches.rebootPending ? "Sim" : "Nao" }]) +
-            '<div class="endpoint-remote-actions-grid">' + actionButton("execute_check", "Verificar atualizacoes", "search-check") + actionButton("execute_check", "Instalar patches", "download-cloud") + actionButton("copy_summary", "Agendar manutencao", "calendar-clock") + actionButton("execute_check", "Criar tarefa", "list-plus") + '</div></article>' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("download") + 'Patches pendentes</h2></header>' + (pending.length ? '<div class="endpoint-task-list">' + pending.map(function (patch) { return '<article><span class="severity-badge severity-' + escapeHtml(patch.severity || "info") + '">' + escapeHtml(patch.kb || "KB") + '</span><div><strong>' + escapeHtml(patch.title) + '</strong><p>' + escapeHtml(labels[patch.severity] || patch.severity || "Info") + '</p></div></article>'; }).join("") + '</div>' : emptyState("Sem patches pendentes", "Endpoint em conformidade no mock atual.", "check-circle")) + '</article>' +
+            factList([{ label: "Ultima verificacao", value: formatDate(patches.lastScan) }, { label: "Ultima instalacao", value: formatDate(patches.lastInstall) }, { label: "Pendentes", value: patches.criticalPending }, { label: "Hotfixes instalados", value: patches.installedHotfixCount }, { label: "Build Windows", value: patches.windowsBuild, mono: true }, { label: "Reboot pendente", value: patches.rebootPending ? "Sim" : "Nao" }, { label: "Motivos reboot", value: (patches.rebootReasons || []).join(", ") || "-" }]) +
+            '<div class="endpoint-remote-actions-grid">' + actionButton("windows_update_scan", "Verificar atualizacoes", "search-check") + '<button type="button" disabled title="Instalacao de patches ainda nao foi liberada">' + icon("download-cloud") + 'Instalar patches futuro</button>' + actionButton("copy_summary", "Agendar manutencao", "calendar-clock") + actionButton("copy_summary", "Criar tarefa", "list-plus") + '</div></article>' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("download") + 'Patches pendentes</h2></header>' + (pending.length ? '<div class="endpoint-task-list">' + pending.map(function (patch) { return '<article><span class="severity-badge severity-' + escapeHtml(patch.severity || "info") + '">' + escapeHtml(patch.kb || "KB") + '</span><div><strong>' + escapeHtml(patch.title) + '</strong><p>' + escapeHtml(labels[patch.severity] || patch.severity || "Info") + '</p></div></article>'; }).join("") + '</div>' : emptyState("Sem patches pendentes", "A coleta read-only nao retornou atualizacoes pendentes.", "check-circle")) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("history") + 'Historico recente</h2></header>' + (history.length ? '<div class="endpoint-task-list">' + history.map(function (item) { return '<article><span class="agent-version-pill agent-current">' + escapeHtml(item.status || "ok") + '</span><div><strong>' + escapeHtml(item.title) + '</strong><p>' + escapeHtml(item.when || "-") + '</p></div></article>'; }).join("") + '</div>' : emptyState("Sem historico de patches", "Nenhuma execucao registrada.", "history")) + '</article></div>';
     }
 
@@ -408,10 +668,10 @@
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
             actionButton("check_defender", "Verificar Defender", "shield-check") +
             actionButton("check_disk", "Verificar disco", "hard-drive") +
+            actionButton("collect_software", "Coletar software", "package-search") +
             actionButton("collect_logs", "Coletar logs", "file-search") +
-            actionButton("run_cleanup", "Executar limpeza", "sparkles") +
             actionButton("ping", "Ping", "activity") +
-            actionButton("execute_check", "Executar script", "code-2") +
+            actionButton("windows_update_scan", "Windows Update scan", "badge-check") +
             "</div></section>";
     }
 
@@ -459,28 +719,142 @@
         }
     }
 
-    function reloadEndpoint() {
+    function fetchRealEndpointPayload() {
+        const id = root.dataset.endpointId || "";
+        if (!id) return Promise.resolve(realEndpointPayload);
+        return fetch("/api/endpoints/" + encodeURIComponent(id) + "/?_=" + encodeURIComponent(Date.now()), {
+            headers: {
+                "Accept": "application/json",
+                "Cache-Control": "no-cache"
+            },
+            cache: "no-store",
+            credentials: "same-origin"
+        }).then(function (response) {
+            if (!response.ok) throw new Error("endpoint_fetch_failed");
+            return response.json();
+        }).then(function (payload) {
+            realEndpointPayload = payload;
+            return payload;
+        });
+    }
+
+    function reloadEndpoint(skipFetch) {
+        const fetchPromise = skipFetch ? Promise.resolve(realEndpointPayload) : fetchRealEndpointPayload().catch(function () {
+            return realEndpointPayload;
+        });
+        return fetchPromise.then(function () {
+        const realDetail = normalizeRealEndpointPayload(realEndpointPayload);
+        if (realDetail) {
+            endpointDetail = realDetail;
+            setSourceBadge("Dados reais");
+            renderActivePanel();
+            activateTab(activeTab);
+            return Promise.resolve(realDetail);
+        }
+        const id = root.dataset.endpointId || root.dataset.endpoint;
         if (!api || typeof api.getEndpointById !== "function") {
+            if (endpointDetail) return Promise.resolve(endpointDetail);
             showToast("Camada mockNightowlApi indisponivel.");
             return Promise.resolve(null);
         }
-        const id = root.dataset.endpointId || root.dataset.endpoint;
-        return api.getEndpointById(id).then(function (detail) {
+        return api.getEndpointById(id).then(function (mockDetail) {
+            if (mockDetail || !realDetail) return mockDetail;
+            return api.getEndpointById(root.dataset.endpoint || "").then(function (byHostname) {
+                return byHostname || mockDetail;
+            });
+        }).then(function (mockDetail) {
+            const detail = mergeEndpointDetails(realDetail, mockDetail);
             if (!detail) {
                 root.querySelectorAll("[data-dynamic-endpoint-panel]").forEach(function (target) {
-                    target.innerHTML = emptyState("Endpoint nao encontrado", "A camada mockada nao retornou dados para este identificador.", "monitor-x");
+                    target.innerHTML = emptyState("Endpoint nao encontrado", "A API real e a camada mockada nao retornaram dados para este identificador.", "monitor-x");
                 });
                 return null;
             }
             endpointDetail = detail;
+            setSourceBadge(detail.source === "mixed" ? "Misto" : detail.source === "real" ? "Dados reais" : "Preview mockado");
             renderActivePanel();
             activateTab(activeTab);
             return detail;
+        }).catch(function () {
+            if (realDetail) {
+                endpointDetail = realDetail;
+                setSourceBadge("Dados reais");
+                renderActivePanel();
+                activateTab(activeTab);
+                return realDetail;
+            }
+            return null;
+        });
+        });
+    }
+
+    function schedulePolling() {
+        pollingUntil = Date.now() + 90000;
+        if (reloadTimer) return;
+        reloadTimer = window.setInterval(function () {
+            if (Date.now() > pollingUntil) {
+                window.clearInterval(reloadTimer);
+                reloadTimer = null;
+                return;
+            }
+            reloadEndpoint(false).then(function (detail) {
+                const running = detail && (detail.jobs || []).some(function (job) {
+                    return ["queued", "sent", "dispatched", "waiting_agent", "running"].indexOf(job.status) >= 0;
+                });
+                if (!running && reloadTimer) {
+                    showToast("Dados do endpoint atualizados.");
+                    window.clearInterval(reloadTimer);
+                    reloadTimer = null;
+                }
+            });
+        }, 5000);
+    }
+
+    function createRealJob(action) {
+        const id = root.dataset.endpointId || "";
+        const body = new URLSearchParams();
+        body.set("action", action || "");
+        if (action === "ping" && endpointDetail && endpointDetail.ip) {
+            body.set("target", endpointDetail.ip);
+        }
+        return fetch("/api/endpoints/" + encodeURIComponent(id) + "/jobs/", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                "X-CSRFToken": getCookie("csrftoken"),
+                "Accept": "application/json"
+            },
+            body: body.toString()
+        }).then(function (response) {
+            return response.json().then(function (payload) {
+                if (!response.ok) throw new Error(payload.detail || payload.error || "job_create_failed");
+                return payload;
+            });
         });
     }
 
     function runEndpointAction(action) {
         if (!endpointDetail) return;
+        if (action === "execute_check" || action === "run_cleanup") {
+            showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
+            return;
+        }
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_logs", "ping", "collect_software", "windows_update_scan"];
+        if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
+            createRealJob(action).then(function (payload) {
+                showToast("Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
+                if (!endpointDetail.jobs) endpointDetail.jobs = [];
+                endpointDetail.jobs.unshift(payload.job);
+                renderActivePanel();
+                activateTab(activeTab);
+                schedulePolling();
+                return reloadEndpoint(false);
+            }).catch(function (error) {
+                showToast(error.message || "Nao foi possivel criar o job tecnico.");
+            });
+            return;
+        }
         const endpoint = endpointDetail.hostname || endpointDetail.id;
         if (operational && typeof operational.runAction === "function") {
             const result = operational.runAction(action, {
@@ -559,13 +933,15 @@
         openDrawer("Tarefa", job.name, job.command, '<section><h3>Execucao</h3>' + factList([
             { label: "Status", value: labels[job.status] || job.status },
             { label: "Tipo", value: labels[job.type] || job.type },
+            { label: "Endpoint", value: job.endpoint || (endpointDetail && endpointDetail.hostname) || "-" },
             { label: "Criado por", value: job.createdBy },
             { label: "Criado em", value: formatDate(job.createdAt) },
+            { label: "Despachado em", value: formatDate(job.dispatchedAt) },
             { label: "Iniciado em", value: formatDate(job.startedAt) },
             { label: "Finalizado em", value: formatDate(job.finishedAt) },
             { label: "Duracao", value: formatDuration(job.durationMs) },
             { label: "Exit code", value: job.exitCode == null ? "-" : job.exitCode }
-        ]) + '</section><section><h3>Payload</h3><pre>' + escapeHtml(JSON.stringify(job.payload || {}, null, 2)) + '</pre></section><section><h3>Stdout</h3><pre>' + escapeHtml(job.stdout || "Sem saida.") + '</pre></section><section><h3>Stderr</h3><pre>' + escapeHtml(job.stderr || "Sem erro.") + '</pre></section><section><h3>Timeline</h3><p>' + escapeHtml((job.timeline || []).join(" -> ") || "-") + '</p></section><div class="event-drawer-actions"><button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button><button type="button" data-rerun-job="' + escapeHtml(job.id) + '">Reexecutar</button></div>');
+        ]) + '</section><section><h3>Payload</h3><pre>' + escapeHtml(JSON.stringify(job.payload || {}, null, 2)) + '</pre></section><section><h3>Resultado JSON</h3><pre>' + escapeHtml(JSON.stringify(job.resultJson || {}, null, 2)) + '</pre></section><section><h3>Stdout</h3><pre>' + escapeHtml(job.stdout || "Sem saida.") + '</pre></section><section><h3>Stderr</h3><pre>' + escapeHtml(job.stderr || job.errorMessage || "Sem erro.") + '</pre></section><section><h3>Timeline</h3><p>' + escapeHtml((job.timeline || []).join(" -> ") || "-") + '</p></section><div class="event-drawer-actions"><button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button><button type="button" data-refresh-endpoint>Atualizar dados</button></div>');
     }
 
     function copyText(value) {
@@ -630,6 +1006,14 @@
             event.preventDefault();
             runEndpointAction(action.dataset.endpointAction || "execute_check");
             root.querySelectorAll(".endpoint-remote-popover").forEach(function (item) { item.hidden = true; });
+            return;
+        }
+
+        const refresh = event.target.closest("[data-refresh-endpoint]");
+        if (refresh) {
+            reloadEndpoint(false).then(function () {
+                showToast("Dados atualizados.");
+            });
             return;
         }
 
@@ -745,6 +1129,14 @@
     });
 
     document.addEventListener("click", function (event) {
+        const refresh = event.target.closest("[data-refresh-endpoint]");
+        if (!refresh || root.contains(refresh)) return;
+        reloadEndpoint(false).then(function () {
+            showToast("Dados atualizados.");
+        });
+    });
+
+    document.addEventListener("click", function (event) {
         if (root.contains(event.target)) return;
         const jobCopy = event.target.closest("[data-copy-job]");
         if (jobCopy) {
@@ -775,5 +1167,5 @@
         });
     });
 
-    reloadEndpoint();
+    reloadEndpoint(false);
 }());

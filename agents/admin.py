@@ -22,6 +22,7 @@ from .models import (
 class AgentMachineAdmin(admin.ModelAdmin):
     list_display = (
         'hostname',
+        'machine_id',
         'domain',
         'status',
         'agent_version',
@@ -32,7 +33,7 @@ class AgentMachineAdmin(admin.ModelAdmin):
         'is_active',
     )
     list_filter = ('domain', 'status', 'is_active', 'os_name', 'agent_version')
-    search_fields = ('hostname', 'serial_number', 'last_logged_user', 'agent_version')
+    search_fields = ('hostname', 'machine_id', 'serial_number', 'last_logged_user', 'agent_version')
     readonly_fields = (
         'id',
         'agent_token_hash',
@@ -45,6 +46,7 @@ class AgentMachineAdmin(admin.ModelAdmin):
         (None, {
             'fields': (
                 'id',
+                'machine_id',
                 'hostname',
                 'domain',
                 'fqdn',

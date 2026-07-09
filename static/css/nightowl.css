@@ -3967,8 +3967,18 @@ body.page-tickets .desk-category-drawer.is-open {
 }
 
 .agent-install-metrics {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     margin-bottom: 18px;
+}
+
+.agent-hero-badges,
+.agent-mode-badges,
+.agent-created-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .agent-install-grid {
@@ -3988,9 +3998,19 @@ body.page-tickets .desk-category-drawer.is-open {
     margin-top: 10px;
 }
 
+.agent-command-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+    gap: 18px;
+    align-items: start;
+    margin-bottom: 18px;
+}
+
 .agent-form-panel,
 .how-to-panel,
 .enrollment-created-panel,
+.agent-command-panel,
+.agent-package-panel,
 .agent-token-list-panel {
     padding: 0;
     overflow: hidden;
@@ -3999,6 +4019,8 @@ body.page-tickets .desk-category-drawer.is-open {
 .agent-form-panel .panel-heading,
 .how-to-panel .panel-heading,
 .enrollment-created-panel .panel-heading,
+.agent-command-panel .panel-heading,
+.agent-package-panel .panel-heading,
 .agent-token-list-panel .panel-heading {
     display: flex;
     align-items: flex-start;
@@ -4010,6 +4032,8 @@ body.page-tickets .desk-category-drawer.is-open {
 .agent-form-panel .panel-heading h2,
 .how-to-panel .panel-heading h2,
 .enrollment-created-panel .panel-heading h2,
+.agent-command-panel .panel-heading h2,
+.agent-package-panel .panel-heading h2,
 .agent-token-list-panel .panel-heading h2 {
     margin: 2px 0 6px;
     color: var(--text-primary);
@@ -4019,6 +4043,8 @@ body.page-tickets .desk-category-drawer.is-open {
 
 .agent-form-panel .panel-heading p,
 .enrollment-created-panel .panel-heading p,
+.agent-command-panel .panel-heading p,
+.agent-package-panel .panel-heading p,
 .agent-token-list-panel .panel-heading p {
     margin: 0;
     color: var(--text-muted);
@@ -4028,6 +4054,82 @@ body.page-tickets .desk-category-drawer.is-open {
     display: grid;
     gap: 16px;
     padding: 16px 18px 18px;
+}
+
+.agent-command-config {
+    display: grid;
+    gap: 14px;
+    padding: 16px 18px 0;
+}
+
+.agent-command-config .filter-field input,
+.agent-command-config .filter-field select {
+    width: 100%;
+    min-height: 42px;
+    border-radius: 8px;
+}
+
+.agent-options-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.agent-options-grid label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 10px;
+    border: 1px solid rgba(38, 42, 61, 0.84);
+    border-radius: 8px;
+    background: rgba(6, 7, 13, 0.28);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.agent-options-grid input {
+    accent-color: var(--soft-purple);
+}
+
+.agent-context-alerts {
+    display: grid;
+    gap: 10px;
+    padding: 14px 18px 0;
+}
+
+.agent-context-alerts .note-box {
+    margin: 0;
+}
+
+.agent-package-checklist {
+    display: grid;
+    gap: 8px;
+    margin: 14px 18px 0;
+    padding: 0;
+    list-style: none;
+}
+
+.agent-package-checklist li {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 1px solid rgba(38, 42, 61, 0.82);
+    border-radius: 8px;
+    background: rgba(6, 7, 13, 0.24);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.agent-package-checklist svg {
+    width: 14px;
+    height: 14px;
+    color: var(--online);
+    flex: 0 0 14px;
 }
 
 .agent-form-row {
@@ -4115,6 +4217,12 @@ body.page-tickets .desk-category-drawer.is-open {
     border: 1px solid var(--border);
     border-radius: 8px;
     background: rgba(6, 7, 13, 0.54);
+}
+
+.generated-command-block code,
+.created-command-block code {
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .terminal-block {
@@ -4407,8 +4515,13 @@ body.page-tickets .desk-category-drawer.is-open {
 
 @media (max-width: 1060px) {
     .agent-install-grid,
+    .agent-command-layout,
     .agent-install-metrics {
         grid-template-columns: 1fr;
+    }
+
+    .agent-options-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .created-token-box,
@@ -4419,6 +4532,13 @@ body.page-tickets .desk-category-drawer.is-open {
     .created-token-box .copy-button,
     .terminal-block .copy-button {
         justify-self: flex-start;
+    }
+}
+
+@media (max-width: 640px) {
+    .agent-options-grid,
+    .agent-form-row {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -12644,6 +12764,35 @@ body.page-endpoint-detail .endpoint-job-table {
 body.page-endpoint-detail .endpoint-job-table td strong,
 body.page-endpoint-detail .software-table td strong {
     color: #f8fafc;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 86px;
+    height: 7px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.14);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+body.page-endpoint-detail .endpoint-job-progress span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #38bdf8;
+}
+
+body.page-endpoint-detail .endpoint-job-progress-completed span {
+    background: #22c55e;
+}
+
+body.page-endpoint-detail .endpoint-job-progress-failed span,
+body.page-endpoint-detail .endpoint-job-progress-expired span {
+    background: #ef4444;
+}
+
+body.page-endpoint-detail .endpoint-job-progress-cancelled span {
+    background: #94a3b8;
 }
 
 body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list {

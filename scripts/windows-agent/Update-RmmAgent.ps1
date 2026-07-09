@@ -2,6 +2,7 @@
 param(
     [string]$SourcePath = "\\192.168.104.120\controlsul\Comum\_Agents",
     [string]$InstallPath = "C:\RMM",
+    [string]$ProgramDataPath = "C:\ProgramData\NightOwl",
     [switch]$RunCheck,
     [switch]$RunAfterUpdate,
     [switch]$Force
@@ -146,6 +147,10 @@ try {
         "Check-RmmAgent.ps1",
         "NightOwlManualValidation.ps1",
         "assets\nightowl-logo.png",
+        "RmmAgent.config.json.example",
+        "RmmAgentService.ps1",
+        "Install-RmmAgentService.ps1",
+        "Uninstall-RmmAgentService.ps1",
         "VERSION",
         "manifest.json",
         "README.md"
@@ -188,6 +193,19 @@ try {
         $state = Set-StateValue -State $state -Status "success"
         Write-State -State $state
         Write-UpdateLog "Update complete. Files copied: $copied"
+    }
+
+    $programDataAgentPath = Join-Path $ProgramDataPath "Agent"
+    if (Test-Path $programDataAgentPath) {
+        foreach ($serviceFile in @("RmmAgentService.ps1", "Install-RmmAgentService.ps1", "Uninstall-RmmAgentService.ps1", "RmmAgent.config.json.example", "VERSION", "manifest.json", "README.md")) {
+            $sourceServiceFile = Join-Path $SourcePath $serviceFile
+            $destinationServiceFile = Join-Path $programDataAgentPath $serviceFile
+            if (Test-Path $sourceServiceFile) {
+                Copy-Item -Path $sourceServiceFile -Destination $destinationServiceFile -Force
+                Write-UpdateLog "Updated service file in ProgramData: $serviceFile"
+            }
+        }
+        Write-UpdateLog "Service ProgramData update completed while preserving config, logs and state."
     }
 
     if ($RunAfterUpdate) {

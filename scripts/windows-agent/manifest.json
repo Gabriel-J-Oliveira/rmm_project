@@ -1,6 +1,6 @@
 {
   "name": "Night Owl Agent",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "channel": "stable",
   "files": [
     "RmmAgent.ps1",
@@ -12,12 +12,19 @@
     "NightOwlManualValidation.ps1",
     "assets/nightowl-logo.png",
     "RmmAgent.config.example.ps1",
+    "RmmAgent.config.json.example",
+    "RmmAgentService.ps1",
+    "Install-RmmAgentService.ps1",
+    "Uninstall-RmmAgentService.ps1",
     "VERSION",
     "manifest.json",
     "README.md"
   ],
   "default_install_path": "C:\\RMM",
+  "default_service_base_path": "C:\\ProgramData\\NightOwl",
   "task_name": "RMM-Agent-Heartbeat",
-  "updated_at": "2026-06-01T00:00:00Z",
+  "service_name": "NightOwlAgent",
+  "service_display_name": "NightOwl RMM Agent",
+  "updated_at": "2026-07-09T00:00:00Z",
   "hashes": {}
 }

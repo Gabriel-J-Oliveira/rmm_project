@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Instalação de Agentes | Night Owl{% endblock %}
+{% block title %}Instala&ccedil;&atilde;o do Agente | Night Owl{% endblock %}
 {% block body_class %}page-agent-install{% endblock %}
 
 {% block breadcrumbs %}
@@ -12,10 +12,13 @@
 {% block content %}
 <section class="hero agent-install-hero page-header">
     <div>
-        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="key-round"></i></span>Instalação de Agentes</h1>
-        <p class="page-subtitle">Gere tokens de instalação e comandos PowerShell para cadastrar endpoints no Night Owl.</p>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="hard-drive-download"></i></span>Instala&ccedil;&atilde;o do Agente</h1>
+        <p class="page-subtitle">Gere tokens de enrollment e comandos PowerShell para instalar o agente NightOwl nos endpoints.</p>
     </div>
-    <span class="badge badge-security module-badge">Enrollment seguro</span>
+    <div class="agent-hero-badges">
+        <span class="badge badge-security module-badge">Servi&ccedil;o Windows</span>
+        <span class="badge badge-muted module-badge">v{{ recommended_agent_version }}</span>
+    </div>
 </section>
 
 <section class="metric-grid agent-install-metrics">
@@ -26,18 +29,23 @@
     </article>
     <article class="metric-card command-metric">
         <span class="metric-icon warning"><i data-lucide="clock"></i></span>
-        <span class="metric-label">Expirados</span>
+        <span class="metric-label">Tokens expirados</span>
         <strong class="metric-value">{{ expired_count }}</strong>
     </article>
     <article class="metric-card command-metric">
         <span class="metric-icon"><i data-lucide="activity"></i></span>
-        <span class="metric-label">Usos nas últimas 24h</span>
+        <span class="metric-label">Usos nas &uacute;ltimas 24h</span>
         <strong class="metric-value">{{ uses_24h_count }}</strong>
     </article>
     <article class="metric-card command-metric">
         <span class="metric-icon success"><i data-lucide="check-circle"></i></span>
-        <span class="metric-label">Instalações com sucesso</span>
+        <span class="metric-label">Instala&ccedil;&otilde;es com sucesso</span>
         <strong class="metric-value">{{ success_24h_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon critical"><i data-lucide="triangle-alert"></i></span>
+        <span class="metric-label">Instala&ccedil;&otilde;es com falha</span>
+        <strong class="metric-value">{{ failure_24h_count }}</strong>
     </article>
 </section>
 
@@ -47,8 +55,17 @@
         <div>
             <span class="section-kicker">Token criado</span>
             <h2>Copie este token agora</h2>
-            <p>Ele não será exibido novamente.</p>
+            <p>O token completo aparece apenas uma vez. Depois, somente o prefixo fica vis&iacute;vel.</p>
         </div>
+        {% if created_enrollment %}
+        <form method="post" action="{% url 'agent-enrollment-revoke' created_enrollment.id %}">
+            {% csrf_token %}
+            <div class="agent-created-actions">
+                <a class="copy-button" href="#agent-command-generator"><i data-lucide="terminal"></i>Gerar novo comando</a>
+                <button class="danger-subtle" type="submit"><i data-lucide="ban"></i>Revogar token</button>
+            </div>
+        </form>
+        {% endif %}
     </div>
     <div class="created-token-box" data-copy-value="{{ created_token }}">
         <div class="copy-value-content">
@@ -57,12 +74,12 @@
         </div>
         <button class="copy-button" type="button" data-copy-target=".created-token-box"><i data-lucide="copy"></i>Copiar token</button>
     </div>
-    <div class="terminal-block" data-copy-value="{{ created_command }}">
+    <div class="terminal-block created-command-block" data-copy-value="{{ created_command }}">
         <div class="copy-value-content">
-            <span>Comando PowerShell</span>
+            <span>Comando PowerShell recomendado</span>
             <code>{{ created_command }}</code>
         </div>
-        <button class="copy-button" type="button" data-copy-target=".terminal-block"><i data-lucide="copy"></i>Copiar comando</button>
+        <button class="copy-button" type="button" data-copy-target=".created-command-block"><i data-lucide="copy"></i>Copiar comando</button>
     </div>
 </section>
 {% endif %}
@@ -72,7 +89,7 @@
         <div class="panel-heading">
             <div>
                 <span class="section-kicker">Novo token</span>
-                <h2>Gerar Enrollment Token</h2>
+                <h2>Gerar enrollment token</h2>
                 <p>Use validade curta e limite de uso para pilotos controlados.</p>
             </div>
         </div>
@@ -83,7 +100,7 @@
                 <input name="name" required placeholder="Piloto TI">
             </label>
             <label class="filter-field">
-                <span>Domínio permitido</span>
+                <span>Dom&iacute;nio permitido</span>
                 <input name="allowed_domain" value="{{ default_allowed_domain }}" placeholder="control.local">
             </label>
             <div class="agent-form-row">
@@ -98,7 +115,7 @@
             </div>
             <label class="filter-field">
                 <span>Notas</span>
-                <textarea name="notes" rows="4" placeholder="Uso interno, lote piloto, responsável..."></textarea>
+                <textarea name="notes" rows="4" placeholder="Uso interno, lote piloto, respons&aacute;vel..."></textarea>
             </label>
             <div class="agent-form-actions">
                 <button type="submit"><i data-lucide="plus"></i>Gerar token</button>
@@ -110,30 +127,146 @@
         <div class="panel-heading">
             <div>
                 <span class="section-kicker">Como usar</span>
-                <h2>Instalação rápida</h2>
+                <h2>Instala&ccedil;&atilde;o guiada</h2>
             </div>
         </div>
 
-        <div class="how-to-steps" aria-label="Passos de instalação">
-            <div class="how-to-step"><span>1</span><p>Gere um token de instalação.</p></div>
-            <div class="how-to-step"><span>2</span><p>Copie o comando PowerShell.</p></div>
-            <div class="how-to-step"><span>3</span><p>Execute em uma máquina do domínio permitido.</p></div>
-            <div class="how-to-step"><span>4</span><p>O servidor gera automaticamente um <code>agent_token</code> único.</p></div>
-            <div class="how-to-step"><span>5</span><p>O agente cria <code>C:\RMM\RmmAgent.config.ps1</code> e inicia o heartbeat.</p></div>
+        <div class="how-to-steps" aria-label="Passos de instala&ccedil;&atilde;o">
+            <div class="how-to-step"><span>1</span><p>Gere um token de enrollment.</p></div>
+            <div class="how-to-step"><span>2</span><p>Escolha a URL do servidor NightOwl.</p></div>
+            <div class="how-to-step"><span>3</span><p>Escolha a origem do pacote do agente.</p></div>
+            <div class="how-to-step"><span>4</span><p>Escolha o modo de instala&ccedil;&atilde;o.</p></div>
+            <div class="how-to-step"><span>5</span><p>Copie o comando PowerShell.</p></div>
+            <div class="how-to-step"><span>6</span><p>Execute como administrador no endpoint.</p></div>
+            <div class="how-to-step"><span>7</span><p>Valide em <code>Endpoints &gt; Detalhe &gt; Agente</code>.</p></div>
+        </div>
+    </aside>
+</section>
+
+<section class="agent-command-layout" id="agent-command-generator">
+    <article class="panel agent-command-panel">
+        <div class="panel-heading">
+            <div>
+                <span class="section-kicker">Configura&ccedil;&atilde;o do comando</span>
+                <h2>Gerador PowerShell</h2>
+                <p>Configure o modo de instala&ccedil;&atilde;o conforme o endpoint e copie o comando final.</p>
+            </div>
+            <div class="agent-mode-badges">
+                <span class="badge badge-security" data-mode-badge>Servi&ccedil;o Windows</span>
+                <span class="badge badge-muted" data-origin-badge>Share</span>
+            </div>
         </div>
 
-        <div class="note-box">
-            Máquinas fora do domínio podem exigir validação manual. O refinamento para download HTTPS/443 será uma etapa futura.
+        <div class="agent-command-config"
+             data-default-token="{% if created_token %}{{ created_token }}{% else %}TOKEN_AQUI{% endif %}"
+             data-default-server-url="{{ server_url }}"
+             data-default-share-path="{{ source_path }}"
+             data-default-local-path="{{ local_package_path }}">
+            <label class="filter-field">
+                <span>Server URL / URL do NightOwl</span>
+                <input id="agent-server-url" value="{{ server_url }}" placeholder="http://nightowl.control.local">
+            </label>
+            <label class="filter-field">
+                <span>Endpoint mode / formato de URL</span>
+                <select id="agent-endpoint-mode">
+                    <option value="heartbeat" selected>Heartbeat endpoint atual: /api/agent/heartbeat/</option>
+                    <option value="base">Server base URL futuro</option>
+                </select>
+            </label>
+
+            <div class="agent-form-row">
+                <label class="filter-field">
+                    <span>Origem do pacote</span>
+                    <select id="agent-package-origin">
+                        <option value="share" selected>Compartilhamento de rede</option>
+                        <option value="local">Caminho local de teste</option>
+                        <option value="https">HTTPS futuro</option>
+                    </select>
+                </label>
+                <label class="filter-field">
+                    <span>Modo de instala&ccedil;&atilde;o</span>
+                    <select id="agent-install-mode">
+                        <option value="service" selected>Servi&ccedil;o Windows recomendado</option>
+                        <option value="scheduled">Tarefa agendada legada</option>
+                        <option value="runonce">Apenas RunOnce teste</option>
+                    </select>
+                </label>
+            </div>
+
+            <label class="filter-field">
+                <span>Caminho do pacote</span>
+                <input id="agent-package-path" value="{{ source_path }}" placeholder="\\192.168.104.120\controlsul\Comum\_Agents">
+            </label>
+
+            <div class="agent-options-grid">
+                <label><input id="agent-run-once" type="checkbox" checked> RunOnce</label>
+                <label><input id="agent-run-check" type="checkbox" checked> RunCheck</label>
+                <label><input id="agent-keep-fallback" type="checkbox"> KeepScheduledTaskFallback</label>
+                <label><input id="agent-force-config" type="checkbox"> Force reinstall/update</label>
+                <label><input id="agent-debug-logs" type="checkbox"> Debug logs</label>
+            </div>
         </div>
 
+        <div class="agent-context-alerts">
+            <div class="note-box" data-warning-localhost>
+                <strong>Ambiente:</strong> <code>127.0.0.1</code> s&oacute; deve ser usado quando o backend estiver na pr&oacute;pria m&aacute;quina.
+            </div>
+            <div class="note-box">
+                Para instalar em outros endpoints, use DNS/IP acess&iacute;vel do servidor NightOwl. Caminho local s&oacute; funciona na pr&oacute;pria m&aacute;quina; para rede, use UNC ou HTTPS quando dispon&iacute;vel.
+            </div>
+            <div class="note-box">
+                O modo servi&ccedil;o exige PowerShell como administrador e pacote com <code>RmmAgentService.ps1</code>. O HTTPS/443 para download direto fica preparado como etapa futura.
+            </div>
+        </div>
+
+        <div class="terminal-block generated-command-block" data-copy-value="">
+            <div class="copy-value-content">
+                <span>Comando PowerShell gerado</span>
+                <code id="generated-install-command"></code>
+            </div>
+            <button class="copy-button" type="button" data-copy-target=".generated-command-block"><i data-lucide="copy"></i>Copiar comando</button>
+        </div>
+    </article>
+
+    <aside class="panel agent-package-panel">
+        <div class="panel-heading">
+            <div>
+                <span class="section-kicker">Pacote</span>
+                <h2>Arquivos esperados</h2>
+                <p>Checklist informativo do pacote do agente.</p>
+            </div>
+        </div>
+        <ul class="agent-package-checklist">
+            <li><i data-lucide="check"></i><span>Install-RmmAgent.ps1</span></li>
+            <li><i data-lucide="check"></i><span>RmmAgent.ps1</span></li>
+            <li><i data-lucide="check"></i><span>RmmAgentService.ps1</span></li>
+            <li><i data-lucide="check"></i><span>Install-RmmAgentService.ps1</span></li>
+            <li><i data-lucide="check"></i><span>Uninstall-RmmAgentService.ps1</span></li>
+            <li><i data-lucide="check"></i><span>Update-RmmAgent.ps1</span></li>
+            <li><i data-lucide="check"></i><span>Check-RmmAgent.ps1</span></li>
+            <li><i data-lucide="check"></i><span>Uninstall-RmmAgent.ps1</span></li>
+            <li><i data-lucide="check"></i><span>NightOwlManualValidation.ps1</span></li>
+            <li><i data-lucide="check"></i><span>VERSION</span></li>
+            <li><i data-lucide="check"></i><span>manifest.json</span></li>
+            <li><i data-lucide="check"></i><span>assets\nightowl-logo.png</span></li>
+            <li><i data-lucide="check"></i><span>nssm.exe ou tools\nssm.exe</span></li>
+        </ul>
         <dl class="agent-settings-list">
             <div>
-                <dt>Server URL</dt>
-                <dd>{{ heartbeat_url }}</dd>
+                <dt>Estrutura servi&ccedil;o</dt>
+                <dd>C:\ProgramData\NightOwl\</dd>
             </div>
             <div>
-                <dt>Pacote</dt>
-                <dd>{{ source_path }}</dd>
+                <dt>Logs servi&ccedil;o</dt>
+                <dd>C:\ProgramData\NightOwl\Logs</dd>
+            </div>
+            <div>
+                <dt>Packages/jobs</dt>
+                <dd>C:\ProgramData\NightOwl\Packages / Jobs</dd>
+            </div>
+            <div>
+                <dt>Fallback legado</dt>
+                <dd>C:\RMM / RMM-Agent-Heartbeat</dd>
             </div>
         </dl>
     </aside>
@@ -144,7 +277,7 @@
         <div>
             <span class="section-kicker">Tokens</span>
             <h2>Enrollment Tokens</h2>
-            <p>O token completo só aparece no momento da criação.</p>
+            <p>O token completo s&oacute; aparece no momento da cria&ccedil;&atilde;o.</p>
         </div>
     </div>
     <div class="table-wrap">
@@ -153,13 +286,13 @@
                 <tr>
                     <th>Nome</th>
                     <th>Prefixo</th>
-                    <th>Domínio</th>
+                    <th>Dom&iacute;nio</th>
                     <th>Status</th>
                     <th>Expira em</th>
                     <th>Usos</th>
-                    <th>Último uso</th>
+                    <th>&Uacute;ltimo uso</th>
                     <th>Criado em</th>
-                    <th>Ações</th>
+                    <th>A&ccedil;&otilde;es</th>
                 </tr>
             </thead>
             <tbody>
@@ -169,23 +302,23 @@
                         <strong>{{ row.token.name }}</strong>
                         {% if row.token.notes %}<small>{{ row.token.notes|truncatechars:60 }}</small>{% endif %}
                     </td>
-                    <td><code>{{ row.token.prefix|default:"—" }}</code></td>
-                    <td>{{ row.token.allowed_domain|default:"—" }}</td>
+                    <td><code>{{ row.token.prefix|default:"-" }}</code></td>
+                    <td>{{ row.token.allowed_domain|default:"-" }}</td>
                     <td><span class="status-badge status-{{ row.state.key }}">{{ row.state.label }}</span></td>
-                    <td>{{ row.token.expires_at|date:"d/m/Y H:i"|default:"—" }}</td>
-                    <td>{{ row.token.used_count }}{% if row.token.max_uses %}/{{ row.token.max_uses }}{% else %}/∞{% endif %}</td>
-                    <td>{{ row.token.last_used_at|date:"d/m/Y H:i"|default:"—" }}</td>
+                    <td>{{ row.token.expires_at|date:"d/m/Y H:i"|default:"-" }}</td>
+                    <td>{{ row.token.used_count }}{% if row.token.max_uses %}/{{ row.token.max_uses }}{% else %}/&infin;{% endif %}</td>
+                    <td>{{ row.token.last_used_at|date:"d/m/Y H:i"|default:"-" }}</td>
                     <td>{{ row.token.created_at|date:"d/m/Y H:i" }}</td>
                     <td>
                         <div class="agent-row-actions">
-                            <button class="copy-button subtle" type="button" data-copy-value="{{ row.command_without_token }}"><i data-lucide="copy"></i>Copiar comando</button>
+                            <button class="copy-button subtle" type="button" data-token-placeholder="TOKEN_AQUI"><i data-lucide="copy"></i>Copiar comando</button>
                             <details class="logs-details">
                                 <summary><i data-lucide="history"></i>Ver usos</summary>
                                 <div class="logs-popover">
                                     {% for log in row.logs %}
                                     <div class="log-mini-row">
                                         <span>{{ log.created_at|date:"d/m H:i" }}</span>
-                                        <strong>{{ log.hostname|default:"—" }}</strong>
+                                        <strong>{{ log.hostname|default:"-" }}</strong>
                                         <em>{{ log.status }}</em>
                                         <small>{{ log.message|truncatechars:90 }}</small>
                                     </div>
@@ -224,6 +357,23 @@
         }
 
         const feedback = document.getElementById("copy-feedback");
+        const config = document.querySelector(".agent-command-config");
+        const commandOutput = document.getElementById("generated-install-command");
+        const commandBlock = document.querySelector(".generated-command-block");
+        const serverInput = document.getElementById("agent-server-url");
+        const endpointMode = document.getElementById("agent-endpoint-mode");
+        const originSelect = document.getElementById("agent-package-origin");
+        const packageInput = document.getElementById("agent-package-path");
+        const installMode = document.getElementById("agent-install-mode");
+        const runOnce = document.getElementById("agent-run-once");
+        const runCheck = document.getElementById("agent-run-check");
+        const keepFallback = document.getElementById("agent-keep-fallback");
+        const forceConfig = document.getElementById("agent-force-config");
+        const debugLogs = document.getElementById("agent-debug-logs");
+        const modeBadge = document.querySelector("[data-mode-badge]");
+        const originBadge = document.querySelector("[data-origin-badge]");
+        const localhostWarning = document.querySelector("[data-warning-localhost]");
+
         function showFeedback(text) {
             feedback.textContent = text || "Copiado";
             feedback.hidden = false;
@@ -234,9 +384,124 @@
             }, 1800);
         }
 
+        function normalizeServerUrl(value) {
+            let url = (value || "").trim().replace(/\/+$/, "");
+            url = url.replace(/\/api\/agent\/heartbeat\/?$/, "");
+            return url;
+        }
+
+        function normalizePowerShellPath(value) {
+            let path = (value || "").trim().replace(/^"|"$/g, "");
+            while (path.startsWith("\\\\\\\\")) {
+                path = "\\\\" + path.slice(4);
+            }
+            if (path.startsWith("\\\\")) {
+                return "\\\\" + path.slice(2).replace(/\\\\/g, "\\");
+            }
+            return path.replace(/\\\\/g, "\\");
+        }
+
+        function heartbeatUrl() {
+            const base = normalizeServerUrl(serverInput.value);
+            if (endpointMode.value === "base") {
+                return base;
+            }
+            return base ? `${base}/api/agent/heartbeat/` : "";
+        }
+
+        function packagePath() {
+            const raw = normalizePowerShellPath(packageInput.value || "");
+            if (originSelect.value === "https") {
+                return raw || "https://nightowl.control.local/agent/download/Install-RmmAgent.ps1";
+            }
+            return `${raw.replace(/[\\\\/]+$/, "")}\\Install-RmmAgent.ps1`;
+        }
+
+        function buildCommand(tokenValue) {
+            const token = tokenValue || config.dataset.defaultToken || "TOKEN_AQUI";
+            if (originSelect.value === "https") {
+                return "# HTTPS futuro: download direto do agente ainda nao esta implementado. Use Compartilhamento de rede ou Caminho local nesta fase.";
+            }
+            const flags = [];
+            if (installMode.value === "service") {
+                flags.push("-InstallAsService");
+            }
+            if (runOnce.checked || installMode.value === "runonce") {
+                flags.push("-RunOnce");
+            }
+            if (runCheck.checked) {
+                flags.push("-RunCheck");
+            }
+            if (keepFallback.checked && installMode.value === "service") {
+                flags.push("-KeepScheduledTaskFallback");
+            }
+            if (forceConfig.checked) {
+                flags.push("-ForceConfig");
+            }
+            if (debugLogs.checked) {
+                flags.push("-DebugMode");
+            }
+            return `powershell.exe -ExecutionPolicy Bypass -File "${packagePath()}" -ServerUrl "${heartbeatUrl()}" -EnrollmentToken "${token}" ${flags.join(" ")}`.trim();
+        }
+
+        function updateBadges() {
+            const modeLabels = {
+                service: "Servi\u00e7o Windows",
+                scheduled: "Tarefa agendada",
+                runonce: "RunOnce teste"
+            };
+            const originLabels = {
+                share: "Share",
+                local: "Local teste",
+                https: "HTTPS futuro"
+            };
+            modeBadge.textContent = modeLabels[installMode.value] || "Servi\u00e7o Windows";
+            originBadge.textContent = originLabels[originSelect.value] || "Share";
+            localhostWarning.style.display = /127\.0\.0\.1|localhost/i.test(serverInput.value || "") ? "" : "none";
+        }
+
+        function updateCommand() {
+            const command = buildCommand();
+            commandOutput.textContent = command;
+            commandBlock.dataset.copyValue = command;
+            updateBadges();
+        }
+
+        originSelect.addEventListener("change", function () {
+            if (originSelect.value === "share") {
+                packageInput.value = normalizePowerShellPath(config.dataset.defaultSharePath || "");
+            } else if (originSelect.value === "local") {
+                packageInput.value = normalizePowerShellPath(config.dataset.defaultLocalPath || "C:\\NightOwlAgents");
+            } else {
+                packageInput.value = "https://nightowl.control.local/agent/download/Install-RmmAgent.ps1";
+            }
+            updateCommand();
+        });
+
+        installMode.addEventListener("change", function () {
+            if (installMode.value === "scheduled") {
+                keepFallback.checked = false;
+                runOnce.checked = true;
+                runCheck.checked = true;
+            }
+            if (installMode.value === "runonce") {
+                keepFallback.checked = false;
+                runOnce.checked = true;
+            }
+            updateCommand();
+        });
+
+        [serverInput, endpointMode, packageInput, runOnce, runCheck, keepFallback, forceConfig, debugLogs].forEach(function (input) {
+            input.addEventListener("input", updateCommand);
+            input.addEventListener("change", updateCommand);
+        });
+
         document.querySelectorAll(".copy-button").forEach(function (button) {
             button.addEventListener("click", async function () {
                 let value = button.dataset.copyValue || "";
+                if (button.dataset.tokenPlaceholder) {
+                    value = buildCommand(button.dataset.tokenPlaceholder);
+                }
                 if (!value && button.dataset.copyTarget) {
                     const target = document.querySelector(button.dataset.copyTarget);
                     value = target ? (target.dataset.copyValue || target.textContent || "") : "";
@@ -247,7 +512,7 @@
                 }
                 try {
                     await navigator.clipboard.writeText(value);
-                    showFeedback("Comando copiado");
+                    showFeedback("Copiado");
                 } catch (error) {
                     const textarea = document.createElement("textarea");
                     textarea.value = value;
@@ -255,10 +520,12 @@
                     textarea.select();
                     document.execCommand("copy");
                     textarea.remove();
-                    showFeedback("Comando copiado");
+                    showFeedback("Copiado");
                 }
             });
         });
+
+        updateCommand();
     });
 </script>
 {% endblock %}

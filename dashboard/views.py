@@ -18,6 +18,7 @@ from django.views.decorators.http import require_POST
 from agents.models import (
     AgentEnrollmentLog,
     AgentEnrollmentToken,
+    AgentJob,
     AgentMachine,
     AgentManualValidationToken,
     AlertEvent,
@@ -478,16 +479,55 @@ def audit_alert_action(request, alert, event_type, title, description='', severi
     )
 
 
-def build_agent_install_command(enrollment_token):
-    source_path = getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', r'\\192.168.104.120\controlsul\Comum\_Agents')
-    heartbeat_url = getattr(settings, 'NIGHTOWL_AGENT_HEARTBEAT_URL', 'http://192.168.101.242:8000/api/agent/heartbeat/')
-    installer_path = f'{source_path}\\Install-RmmAgent.ps1'
+def normalize_agent_server_base(url):
+    value = (url or '').strip().rstrip('/')
+    if value.endswith('/api/agent/heartbeat'):
+        value = value[:-len('/api/agent/heartbeat')]
+    elif value.endswith('/api/agent/heartbeat/'):
+        value = value[:-len('/api/agent/heartbeat/')]
+    return value.rstrip('/')
+
+
+def agent_heartbeat_url_from_base(server_base):
+    value = (server_base or '').strip().rstrip('/')
+    if not value:
+        return ''
+    if value.endswith('/api/agent/heartbeat'):
+        return value + '/'
+    return f'{value}/api/agent/heartbeat/'
+
+
+def normalize_powershell_path(path):
+    value = str(path or '').strip().strip('"')
+    if not value:
+        return value
+    while value.startswith('\\\\\\\\'):
+        value = '\\\\' + value[4:]
+    if value.startswith('\\\\'):
+        return '\\\\' + value[2:].replace('\\\\', '\\')
+    return value.replace('\\\\', '\\')
+
+
+def build_agent_install_command(enrollment_token, *, server_url=None, source_path=None, install_as_service=True, run_once=True, run_check=True, keep_scheduled_task_fallback=False):
+    source_path = normalize_powershell_path(source_path or getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', r'\\192.168.104.120\controlsul\Comum\_Agents'))
+    heartbeat_url = server_url or getattr(settings, 'NIGHTOWL_AGENT_HEARTBEAT_URL', 'http://192.168.101.242:8000/api/agent/heartbeat/')
+    clean_source_path = str(source_path).rstrip('\\/')
+    installer_path = f'{clean_source_path}\\Install-RmmAgent.ps1'
+    flags = []
+    if install_as_service:
+        flags.append('-InstallAsService')
+    if run_once:
+        flags.append('-RunOnce')
+    if run_check:
+        flags.append('-RunCheck')
+    if keep_scheduled_task_fallback:
+        flags.append('-KeepScheduledTaskFallback')
     return (
         'powershell.exe -ExecutionPolicy Bypass '
         f'-File "{installer_path}" '
         f'-ServerUrl "{heartbeat_url}" '
         f'-EnrollmentToken "{enrollment_token}" '
-        '-RunOnce -RunCheck'
+        f'{" ".join(flags)}'
     )
 
 
@@ -656,10 +696,31 @@ def format_uptime(seconds):
     return f'{minutes}min'
 
 
+def ensure_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def ensure_list(value):
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    return [value]
+
+
+def safe_get(value, key, default=None):
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return default
+
+
 def build_disk_rows(disks):
     rows = []
     for disk in disks or []:
-        size = disk.get('size_bytes') or 0
+        disk = ensure_dict(disk)
+        if not disk:
+            continue
+        size = disk.get('size_bytes') or disk.get('total_bytes') or 0
         free = disk.get('free_bytes') or 0
         try:
             size = int(size)
@@ -680,11 +741,17 @@ def build_disk_rows(disks):
             level = 'normal'
 
         rows.append({
-            'name': disk.get('name') or '-',
+            'name': disk.get('name') or disk.get('letter') or disk.get('device_id') or '-',
+            'label': disk.get('label') or disk.get('volume_name') or '',
+            'filesystem': disk.get('filesystem') or '',
+            'drive_type': disk.get('drive_type') or '',
             'size_gb': format_bytes_gb(size),
             'free_gb': format_bytes_gb(free),
             'used_percent': used_percent,
             'level': level,
+            'is_system_drive': disk.get('is_system_drive'),
+            'bitlocker_status': disk.get('bitlocker_status') or '',
+            'health_status': disk.get('health_status') or '',
         })
     return rows
 
@@ -711,7 +778,7 @@ def get_primary_disk(disks):
 
 
 def defender_state(defender_status):
-    status = defender_status or {}
+    status = ensure_dict(defender_status)
     enabled = status.get('enabled') is True
     realtime = status.get('real_time_protection_enabled') is True
 
@@ -735,14 +802,15 @@ def defender_state(defender_status):
 
 
 def software_name(software):
-    return str((software or {}).get('name') or '')
+    return str(safe_get(software, 'name', '') or '')
 
 
 def software_text(software):
-    item = software or {}
+    item = ensure_dict(software)
     return ' '.join([
-        str(item.get('name') or ''),
+        str(item.get('display_name') or item.get('name') or ''),
         str(item.get('publisher') or ''),
+        str(item.get('display_version') or item.get('version') or ''),
     ]).lower()
 
 
@@ -770,6 +838,9 @@ def classify_software(software):
 def build_software_rows(installed_software):
     rows = []
     for software in installed_software or []:
+        software = ensure_dict(software)
+        if not software:
+            continue
         classification = classify_software_catalog(software)
         chip_category = classification['category']
         if chip_category == 'remote_access':
@@ -779,13 +850,18 @@ def build_software_rows(installed_software):
         elif 'microsoft' in software_text(software):
             chip_category = 'microsoft'
         rows.append({
-            'name': software.get('name') or '',
-            'version': software.get('version') or '',
+            'name': software.get('display_name') or software.get('name') or '',
+            'version': software.get('display_version') or software.get('version') or '',
             'publisher': software.get('publisher') or '',
             'category': chip_category,
             'category_label': classification['category_label'],
             'risk_level': classification['risk_level'],
             'risk_label': classification['risk_label'],
+            'installed_at': software.get('install_date') or software.get('installed_at') or '',
+            'architecture': software.get('architecture') or '',
+            'source': software.get('source') or software.get('registry_hive') or '',
+            'install_location': software.get('install_location') or '',
+            'uninstall_string': software.get('uninstall_string') or '',
         })
     return rows
 
@@ -795,7 +871,7 @@ def detail_defender_state(defender_status, installed_software):
     has_security = has_software_match(installed_software, SECURITY_TERMS)
     has_bitdefender = has_software_match(installed_software, ['bitdefender'])
 
-    status = defender_status or {}
+    status = ensure_dict(defender_status)
     defender_ok = status.get('enabled') is True and status.get('real_time_protection_enabled') is True
 
     if defender_ok:
@@ -915,7 +991,7 @@ def build_smart_badges(endpoint, primary_disk, defender, installed_software):
 
 
 def defender_filter_state(defender_status):
-    status = defender_status or {}
+    status = ensure_dict(defender_status)
     if not status:
         return 'unknown'
     if status.get('enabled') is True and status.get('real_time_protection_enabled') is True:
@@ -924,10 +1000,10 @@ def defender_filter_state(defender_status):
 
 
 def build_endpoint_row(endpoint):
-    snapshot = endpoint.inventory_snapshots.order_by('-received_at').first()
+    snapshot = get_endpoint_detail_snapshot(endpoint)
     primary_disk = get_primary_disk(snapshot.disks if snapshot else [])
     defender_key = defender_filter_state(snapshot.defender_status if snapshot else {})
-    software_count = len(snapshot.installed_software or []) if snapshot else None
+    software_count = len(ensure_list(snapshot.installed_software if snapshot else [])) if snapshot else None
     os_name = endpoint.os_name or (snapshot.os_name if snapshot else '')
     domain = endpoint.domain or (snapshot.domain if snapshot else '')
     logged_user = endpoint.last_logged_user or (snapshot.logged_user if snapshot else '')
@@ -2296,14 +2372,403 @@ def build_mock_endpoint_detail_context(pk):
     }
 
 
-def endpoint_detail(request, pk):
+def _iso_or_none(value):
+    if not value:
+        return None
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    return str(value)
+
+
+def _job_progress(status):
+    return {
+        AgentJob.STATUS_QUEUED: 10,
+        AgentJob.STATUS_SENT: 25,
+        AgentJob.STATUS_RUNNING: 60,
+        AgentJob.STATUS_COMPLETED: 100,
+        AgentJob.STATUS_FAILED: 100,
+        AgentJob.STATUS_EXPIRED: 100,
+        AgentJob.STATUS_CANCELLED: 100,
+    }.get(status, 0)
+
+
+def serialize_agent_job(job):
+    return {
+        'id': str(job.id),
+        'name': dict(AgentJob.TYPE_CHOICES).get(job.job_type, job.job_type),
+        'type': job.job_type,
+        'command': job.job_type,
+        'status': job.status,
+        'endpoint': job.endpoint.hostname if job.endpoint_id else '',
+        'createdBy': job.created_by or 'Sistema',
+        'createdAt': _iso_or_none(job.created_at),
+        'queuedAt': _iso_or_none(job.queued_at),
+        'dispatchedAt': _iso_or_none(job.dispatched_at),
+        'startedAt': _iso_or_none(job.started_at),
+        'finishedAt': _iso_or_none(job.finished_at),
+        'durationMs': int((job.duration_seconds or 0) * 1000) if job.duration_seconds is not None else 0,
+        'durationSeconds': job.duration_seconds,
+        'result': job.error_message or (job.stdout[:140] if job.stdout else ''),
+        'stdout': job.stdout,
+        'stderr': job.stderr,
+        'exitCode': job.exit_code,
+        'payload': job.payload,
+        'resultJson': job.result,
+        'errorMessage': job.error_message,
+        'progress': _job_progress(job.status),
+        'timeline': [
+            item for item in [
+                'queued' if job.queued_at else '',
+                'sent' if job.dispatched_at else '',
+                'started' if job.started_at else '',
+                job.status if job.finished_at else '',
+            ]
+            if item
+        ],
+    }
+
+
+def _raw_collection(snapshot, name):
+    if not snapshot or not snapshot.raw_payload:
+        return None
+    raw = ensure_dict(snapshot.raw_payload)
+    collections = ensure_dict(raw.get('collections'))
+    if name in collections:
+        return collections[name]
+    full = ensure_dict(collections.get('full_inventory'))
+    aliases = {
+        'disk': ['disk', 'disks'],
+        'disks': ['disks', 'disk'],
+        'software': ['software', 'installed_software'],
+        'patches': ['patches', 'patch'],
+    }.get(name, [name])
+    for alias in aliases:
+        if alias in full:
+            return full.get(alias)
+    return None
+
+
+def snapshot_has_detail_data(snapshot):
+    if not snapshot:
+        return False
+    raw = ensure_dict(snapshot.raw_payload)
+    collections = ensure_dict(raw.get('collections'))
+    return bool(collections or snapshot.disks or snapshot.installed_software or snapshot.defender_status)
+
+
+def get_endpoint_detail_snapshot(endpoint):
+    snapshots = list(endpoint.inventory_snapshots.order_by('-received_at')[:30])
+    for snapshot in snapshots:
+        if snapshot_has_detail_data(snapshot):
+            return snapshot
+    return snapshots[0] if snapshots else None
+
+
+def resolve_agent_endpoint(identifier):
+    value = str(identifier or '').strip()
+    if not value:
+        raise AgentMachine.DoesNotExist
     try:
-        endpoint = AgentMachine.objects.get(pk=pk)
-    except AgentMachine.DoesNotExist:
+        return AgentMachine.objects.get(pk=uuid.UUID(value))
+    except (ValueError, AgentMachine.DoesNotExist):
+        pass
+    return AgentMachine.objects.filter(
+        Q(machine_id__iexact=value) | Q(hostname__iexact=value) | Q(fqdn__iexact=value),
+    ).order_by('-last_seen_at', 'hostname').first()
+
+
+def _normalize_collection_dict(value, list_key=None):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list) and list_key:
+        return {list_key: value}
+    return {}
+
+
+def _normalize_network_collection(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return {'interfaces': value}
+    return {}
+
+
+def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets):
+    raw_payload = ensure_dict(snapshot.raw_payload if snapshot else {})
+    raw_agent = ensure_dict(raw_payload.get('agent'))
+    system = _normalize_collection_dict(_raw_collection(snapshot, 'system'))
+    hardware = _normalize_collection_dict(_raw_collection(snapshot, 'hardware'))
+    network = _normalize_network_collection(_raw_collection(snapshot, 'network'))
+    disk_collection = _normalize_collection_dict(_raw_collection(snapshot, 'disk'), list_key='disks')
+    software_collection = _normalize_collection_dict(_raw_collection(snapshot, 'software'), list_key='installed_software')
+    security_collection = _normalize_collection_dict(_raw_collection(snapshot, 'security'))
+    patches_collection = _normalize_collection_dict(_raw_collection(snapshot, 'patches'))
+    full_inventory = _normalize_collection_dict(_raw_collection(snapshot, 'full_inventory'))
+
+    has_inventory = bool(system or hardware or network)
+    disk_items = ensure_list(disk_collection.get('disks') or (snapshot.disks if snapshot else []))
+    software_items = ensure_list(software_collection.get('installed_software') or (snapshot.installed_software if snapshot else []))
+    has_disks = bool(disk_items)
+    has_software = bool(software_items)
+    has_security = bool(security_collection)
+    has_patches = bool(patches_collection)
+
+    agent_health = {
+        'agent_mode': endpoint.agent_mode or raw_agent.get('mode') or '',
+        'install_mode': raw_agent.get('install_mode') or ('service' if (endpoint.agent_mode or '').lower() == 'service' else ''),
+        'service_name': raw_agent.get('service_name') or endpoint.agent_task_name or 'NightOwlAgent',
+        'service_status': raw_agent.get('service_status') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE and (endpoint.agent_mode or '').lower() == 'service' else ''),
+        'service_start_type': raw_agent.get('service_start_type') or '',
+        'service_account': raw_agent.get('service_account') or '',
+        'install_path': endpoint.agent_install_path or raw_agent.get('install_path') or r'C:\ProgramData\NightOwl\Agent',
+        'legacy_install_path': raw_agent.get('legacy_install_path') or r'C:\RMM',
+        'config_path': raw_agent.get('config_path') or r'C:\ProgramData\NightOwl\Agent\RmmAgent.config.json',
+        'log_path': raw_agent.get('log_path') or r'C:\ProgramData\NightOwl\Logs',
+        'log_file': raw_agent.get('log_file') or r'C:\ProgramData\NightOwl\Logs\agent-service.jsonl',
+        'heartbeat_url': raw_agent.get('heartbeat_url') or '',
+        'jobs_pull_url': raw_agent.get('jobs_pull_url') or '',
+        'jobs_result_url': raw_agent.get('jobs_result_url') or '',
+        'collection_endpoints': raw_agent.get('collection_endpoints') or {},
+        'last_heartbeat_at': _iso_or_none(endpoint.last_seen_at),
+        'last_inventory_at': full_inventory.get('collected_at') or system.get('collected_at') or hardware.get('collected_at') or network.get('collected_at'),
+        'last_software_inventory_at': software_collection.get('collected_at') or full_inventory.get('collected_at'),
+        'last_security_inventory_at': security_collection.get('collected_at') or full_inventory.get('collected_at'),
+        'last_disk_inventory_at': disk_collection.get('collected_at') or full_inventory.get('collected_at'),
+        'last_patch_scan_at': patches_collection.get('collected_at') or full_inventory.get('collected_at'),
+        'last_job_pull_at': None,
+        'last_error': raw_agent.get('last_error') or raw_agent.get('last_status') or '',
+    }
+
+    inventory = None
+    if has_inventory:
+        cpu = hardware.get('cpu') or {}
+        cpu_name = cpu.get('name') if isinstance(cpu, dict) else str(cpu or '')
+        bios = ensure_dict(hardware.get('bios'))
+        os_data = ensure_dict(system.get('os'))
+        network_adapters = ensure_list(network.get('adapters') or network.get('interfaces'))
+        macs = network.get('mac_addresses') or [
+            ensure_dict(adapter).get('mac_address')
+            for adapter in network_adapters
+            if ensure_dict(adapter).get('mac_address')
+        ]
+        inventory = {
+            'manufacturer': system.get('manufacturer') or endpoint.manufacturer,
+            'model': system.get('model') or endpoint.model,
+            'serial': system.get('serial_number') or bios.get('serial_number') or endpoint.serial_number,
+            'cpu': cpu_name or (snapshot.cpu if snapshot else ''),
+            'memoryGb': format_bytes_gb(hardware.get('memory_total_bytes') or (snapshot.memory_total_bytes if snapshot else None)),
+            'availableMemoryGb': format_bytes_gb(hardware.get('available_memory_bytes')),
+            'osVersion': os_data.get('version') or endpoint.os_version,
+            'build': os_data.get('build') or system.get('os_build') or endpoint.windows_build,
+            'architecture': os_data.get('architecture') or '',
+            'installDate': system.get('install_date') or '',
+            'lastBootTime': system.get('last_boot_time') or '',
+            'timezone': system.get('timezone') or '',
+            'locale': system.get('locale') or system.get('language') or '',
+            'machineType': system.get('machine_type') or endpoint_type,
+            'bios': bios.get('version') or '',
+            'biosReleaseDate': bios.get('release_date') or hardware.get('bios_release_date') or '',
+            'motherboard': hardware.get('motherboard') or '',
+            'cpuManufacturer': hardware.get('cpu_manufacturer') or '',
+            'physicalCores': hardware.get('physical_cores') or '',
+            'logicalProcessors': hardware.get('logical_processors') or '',
+            'tpmPresent': hardware.get('tpm_present'),
+            'tpmEnabled': hardware.get('tpm_enabled'),
+            'batteryPresent': hardware.get('battery_present'),
+            'batteryStatus': hardware.get('battery_status') or '',
+            'primaryIp': network.get('primary_ip') or '',
+            'primaryMac': network.get('primary_mac') or '',
+            'defaultGateway': network.get('default_gateway') or '',
+            'dnsServers': network.get('dns_servers') or [],
+            'adapters': network_adapters,
+            'macs': macs,
+            'uptime': format_uptime(system.get('uptime_seconds') or (snapshot.uptime_seconds if snapshot else None)),
+            'lastFullInventory': full_inventory.get('collected_at') or system.get('collected_at') or hardware.get('collected_at'),
+            'raw': {
+                'system': system,
+                'hardware': hardware,
+                'network': network,
+            },
+        }
+
+    disk_source = disk_items if has_disks else []
+    disk_rows = []
+    for disk in build_disk_rows(disk_source):
+        disk_rows.append({
+            'name': disk['name'],
+            'label': disk.get('label') or '',
+            'filesystem': disk.get('filesystem') or '',
+            'driveType': disk.get('drive_type') or '',
+            'totalGb': disk['size_gb'],
+            'freeGb': disk['free_gb'],
+            'usedPercent': disk['used_percent'],
+            'severity': disk['level'],
+            'isSystemDrive': disk.get('is_system_drive'),
+            'bitlockerStatus': disk.get('bitlocker_status') or '',
+            'healthStatus': disk.get('health_status') or '',
+        })
+
+    software_rows = []
+    if has_software:
+        for row in build_software_rows(software_items):
+            software_rows.append({
+                'name': row['name'],
+                'version': row['version'],
+                'publisher': row['publisher'],
+                'category': row['category'],
+                'risk': row['risk_level'],
+                'installedAt': row.get('installed_at') or '',
+                'installedAtRaw': row.get('installed_at') or '',
+                'architecture': row.get('architecture') or '',
+                'source': row.get('source') or '',
+                'installLocation': row.get('install_location') or '',
+            })
+
+    security = None
+    if has_security:
+        defender = ensure_dict(security_collection.get('defender'))
+        firewall = ensure_dict(security_collection.get('firewall'))
+        bitlocker = ensure_dict(security_collection.get('bitlocker') or security_collection.get('bitlocker_summary'))
+        av_products = [
+            ensure_dict(item)
+            for item in ensure_list(security_collection.get('detected_antivirus_products') or security_collection.get('antivirus_products'))
+        ]
+        remote_tools = []
+        for item in ensure_list(security_collection.get('remote_access_tools')):
+            if isinstance(item, dict):
+                name = item.get('name')
+            else:
+                name = str(item or '')
+            if name:
+                remote_tools.append(name)
+        local_admins = []
+        for item in ensure_list(security_collection.get('local_admins') or security_collection.get('local_administrators')):
+            if isinstance(item, dict):
+                name = item.get('name')
+            else:
+                name = str(item or '')
+            if name:
+                local_admins.append(name)
+        security = {
+            'status': 'critical' if security_collection.get('overall_status') == 'critical' else 'attention' if security_collection.get('overall_status') == 'warning' else security_collection.get('overall_status') or 'unknown',
+            'antivirus': ', '.join([item.get('name', '') for item in av_products if item.get('name')]) or ('Microsoft Defender' if defender else '-'),
+            'signature': defender.get('antivirus_signature_version') or defender.get('engine_version') or '',
+            'signatureUpdatedAt': defender.get('antivirus_signature_last_updated') or '',
+            'lastQuickScan': defender.get('last_quick_scan') or '',
+            'lastFullScan': defender.get('last_full_scan') or '',
+            'defenderEnabled': defender.get('defender_enabled') if defender.get('defender_enabled') is not None else defender.get('antivirus_enabled'),
+            'realtimeEnabled': defender.get('realtime_protection_enabled') if defender.get('realtime_protection_enabled') is not None else defender.get('real_time_protection_enabled'),
+            'firewall': 'Dominio: {0} · Privada: {1} · Publica: {2}'.format(
+                'on' if firewall.get('domain_enabled') else 'off' if firewall.get('domain_enabled') is False else '?',
+                'on' if firewall.get('private_enabled') else 'off' if firewall.get('private_enabled') is False else '?',
+                'on' if firewall.get('public_enabled') else 'off' if firewall.get('public_enabled') is False else '?',
+            ),
+            'bitlocker': bitlocker.get('status') or ('Coletado' if bitlocker else 'Nao coletado'),
+            'rdpEnabled': security_collection.get('rdp_enabled'),
+            'uacEnabled': security_collection.get('uac_enabled'),
+            'remoteTools': remote_tools,
+            'localAdmins': local_admins,
+            'antivirusProducts': av_products,
+            'raw': security_collection,
+        }
+
+    events = []
+    for event in audit_events:
+        events.append({
+            'id': str(event.id),
+            'eventType': event.event_type,
+            'category': 'jobs' if event.event_type.startswith('job.') else 'inventory' if 'inventory' in event.event_type else 'agent',
+            'severity': event.severity,
+            'title': event.title,
+            'description': event.description,
+            'timestamp': _iso_or_none(event.created_at),
+            'source': event.get_actor_type_display() if hasattr(event, 'get_actor_type_display') else event.actor_type,
+            'actor': event.actor_name or '-',
+            'endpoint': endpoint.hostname,
+            'metadata': event.metadata,
+        })
+
+    alerts = []
+    for alert in endpoint_alerts:
+        alerts.append({
+            'id': str(alert.id),
+            'title': alert.title,
+            'description': alert.description,
+            'severity': alert.severity,
+            'status': alert.status,
+            'endpoint': endpoint.hostname,
+            'createdAt': _iso_or_none(alert.first_seen_at),
+        })
+
+    tickets = []
+    for ticket in related_tickets:
+        tickets.append({
+            'number': f'#{ticket.number}',
+            'title': ticket.title,
+            'status': ticket.get_status_display() if hasattr(ticket, 'get_status_display') else ticket.status,
+            'priority': getattr(ticket, 'priority', ''),
+        })
+
+    jobs = [serialize_agent_job(job) for job in endpoint.jobs.order_by('-created_at')[:20]]
+    last_job = endpoint.jobs.filter(finished_at__isnull=False).order_by('-finished_at', '-updated_at').first()
+
+    return {
+        'data_source': 'real',
+        'endpoint': {
+            'id': str(endpoint.id),
+            'machine_id': endpoint.machine_id or str(endpoint.id),
+            'fqdn': endpoint.fqdn or '',
+            'hostname': endpoint.hostname,
+            'status': endpoint.status,
+            'ip': str(endpoint.last_ip or ''),
+            'user': endpoint.last_logged_user or '',
+            'sector': endpoint_sector,
+            'os': endpoint.os_name or '',
+            'domain': endpoint.domain or '',
+            'type': endpoint_type,
+            'last_seen_at': _iso_or_none(endpoint.last_seen_at),
+            'agent_mode': endpoint.agent_mode or '',
+            'agent_version': endpoint.agent_version or '',
+            'identity_source': 'machine_id' if endpoint.machine_id else 'internal_id',
+        },
+        'agent_health': agent_health,
+        'inventory': inventory,
+        'hardware': hardware or None,
+        'network': network or {'interfaces': []},
+        'disks': disk_rows,
+        'software': software_rows,
+        'security': security,
+        'patches': patches_collection or None,
+        'events': events,
+        'jobs': jobs,
+        'alerts': alerts,
+        'tickets': tickets,
+        'health': {
+            'score': health.get('score'),
+            'class': health.get('class'),
+            'label': health.get('label'),
+        },
+        'attention': endpoint_attention,
+        'collection_state': {
+            'inventory': has_inventory,
+            'disks': has_disks,
+            'software': has_software,
+            'security': has_security,
+            'patches': has_patches,
+            'events': bool(events),
+            'jobs': bool(jobs),
+            'last_job_result_at': _iso_or_none(last_job.finished_at if last_job else None),
+        },
+    }
+
+
+def endpoint_detail(request, pk):
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
         context = build_mock_endpoint_detail_context(pk)
         return render(request, 'dashboard/endpoint_detail.html', context)
 
-    snapshot = endpoint.inventory_snapshots.order_by('-received_at').first()
+    snapshot = get_endpoint_detail_snapshot(endpoint)
 
     disks = build_disk_rows(snapshot.disks if snapshot else [])
     installed_software = snapshot.installed_software if snapshot else []
@@ -2323,10 +2788,16 @@ def endpoint_detail(request, pk):
     endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
     endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status if snapshot else {}), health, snapshot)
 
+    audit_events = endpoint.audit_events.select_related('alert').order_by('-created_at')[:8]
+    related_tickets = endpoint.tickets.exclude(
+        status__in=['closed', 'canceled'],
+    ).order_by('-updated_at')[:5]
+
     context = {
         'active_nav': 'endpoints',
         'endpoint': endpoint,
         'snapshot': snapshot,
+        'endpoint_data_badge': 'Dados reais',
         'memory_total_gb': format_bytes_gb(snapshot.memory_total_bytes) if snapshot else None,
         'uptime_display': format_uptime(snapshot.uptime_seconds) if snapshot else None,
         'disks': disks,
@@ -2347,18 +2818,130 @@ def endpoint_detail(request, pk):
             getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
         ),
         'endpoint_alerts': endpoint_alerts,
-        'audit_events': endpoint.audit_events.select_related('alert').order_by('-created_at')[:8],
-        'related_tickets': endpoint.tickets.exclude(
-            status__in=['closed', 'canceled'],
-        ).order_by('-updated_at')[:5],
+        'audit_events': audit_events,
+        'related_tickets': related_tickets,
         'patch_rows': build_endpoint_patch_rows(endpoint),
         'task_rows': build_endpoint_task_rows(endpoint),
     }
+    context['endpoint_detail_payload'] = build_endpoint_detail_payload(
+        endpoint,
+        snapshot,
+        health,
+        endpoint_attention,
+        endpoint_sector,
+        endpoint_type,
+        endpoint_alerts,
+        audit_events,
+        related_tickets,
+    )
     return render(request, 'dashboard/endpoint_detail.html', context)
+
+
+def endpoint_detail_data(request, pk):
+    if not (request.user.is_staff or request.user.is_superuser):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
+        raise Http404
+    snapshot = get_endpoint_detail_snapshot(endpoint)
+    installed_software = snapshot.installed_software if snapshot else []
+    defender = detail_defender_state(snapshot.defender_status if snapshot else {}, installed_software)
+    primary_disk = get_primary_disk(snapshot.disks if snapshot else [])
+    health = calculate_health(endpoint, primary_disk, defender)
+    endpoint_alerts = endpoint.alerts.filter(
+        status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
+    ).order_by('-last_seen_at')[:8]
+    endpoint_sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+    endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status if snapshot else {}), health, snapshot)
+    audit_events = endpoint.audit_events.select_related('alert').order_by('-created_at')[:8]
+    related_tickets = endpoint.tickets.exclude(
+        status__in=['closed', 'canceled'],
+    ).order_by('-updated_at')[:5]
+    response = JsonResponse(
+        build_endpoint_detail_payload(
+            endpoint,
+            snapshot,
+            health,
+            endpoint_attention,
+            endpoint_sector,
+            endpoint_type,
+            endpoint_alerts,
+            audit_events,
+            related_tickets,
+        ),
+    )
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    return response
+
+
+@require_POST
+def endpoint_job_create(request, pk):
+    if not (request.user.is_staff or request.user.is_superuser):
+        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para criar jobs tecnicos.'}, status=403)
+
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
+        raise Http404
+    action = (request.POST.get('action') or '').strip()
+    job_type = (request.POST.get('job_type') or '').strip()
+    action_map = {
+        'force_inventory': AgentJob.TYPE_FORCE_INVENTORY,
+        'collect_inventory': AgentJob.TYPE_FORCE_INVENTORY,
+        'check_defender': AgentJob.TYPE_COLLECT_SECURITY,
+        'defender_check': AgentJob.TYPE_COLLECT_SECURITY,
+        'collect_security': AgentJob.TYPE_COLLECT_SECURITY,
+        'check_disk': AgentJob.TYPE_COLLECT_DISKS,
+        'collect_disks': AgentJob.TYPE_COLLECT_DISKS,
+        'collect_logs': AgentJob.TYPE_COLLECT_LOGS,
+        'ping': AgentJob.TYPE_PING,
+        'collect_software': AgentJob.TYPE_COLLECT_SOFTWARE,
+        'windows_update_scan': AgentJob.TYPE_WINDOWS_UPDATE_SCAN,
+    }
+    selected_type = action_map.get(action) or action_map.get(job_type) or job_type
+    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES}
+    if selected_type not in allowed_types:
+        return JsonResponse(
+            {
+                'error': 'unsupported_job_type',
+                'detail': 'Esta acao ainda nao esta habilitada para execucao remota real.',
+            },
+            status=400,
+        )
+
+    payload = {}
+    if selected_type == AgentJob.TYPE_PING:
+        payload['target'] = request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname)
+        payload['count'] = 2
+    elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
+        payload['lines'] = 120
+
+    job = AgentJob.objects.create(
+        endpoint=endpoint,
+        job_type=selected_type,
+        created_by=request.user.get_username(),
+        payload=payload,
+        expires_at=timezone.now() + timedelta(minutes=30),
+    )
+    create_audit_event(
+        event_type='job.created',
+        title='Job tecnico criado',
+        description=f'Job {selected_type} criado para {endpoint.hostname}.',
+        severity=AuditEvent.SEVERITY_INFO,
+        actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(),
+        endpoint=endpoint,
+        metadata={'job_id': str(job.id), 'job_type': selected_type, 'payload': payload},
+        request=request,
+    )
+    return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job)}, status=201)
 
 
 def agent_install(request):
     created_token = None
+    created_enrollment = None
     created_command = ''
     now = timezone.now()
 
@@ -2392,6 +2975,7 @@ def agent_install(request):
                 allowed_domain=allowed_domain,
                 notes=notes,
             )
+            created_enrollment = enrollment
             created_command = build_agent_install_command(created_token)
             create_audit_event(
                 event_type='agent.enrollment_token_created',
@@ -2419,19 +3003,45 @@ def agent_install(request):
         })
 
     last_24h = now - timedelta(hours=24)
+    configured_heartbeat_url = getattr(settings, 'NIGHTOWL_AGENT_HEARTBEAT_URL', '').strip()
+    public_url = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/')
+    request_base_url = request.build_absolute_uri('/').rstrip('/')
+    default_server_url = public_url or normalize_agent_server_base(configured_heartbeat_url) or request_base_url
+    default_heartbeat_url = agent_heartbeat_url_from_base(default_server_url)
+    package_source_path = normalize_powershell_path(getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', r'\\192.168.104.120\controlsul\Comum\_Agents'))
+    failure_statuses = [
+        AgentEnrollmentLog.STATUS_DENIED,
+        AgentEnrollmentLog.STATUS_EXPIRED,
+        AgentEnrollmentLog.STATUS_INACTIVE,
+        AgentEnrollmentLog.STATUS_USAGE_LIMIT_REACHED,
+        AgentEnrollmentLog.STATUS_INVALID_TOKEN,
+        AgentEnrollmentLog.STATUS_DOMAIN_DENIED,
+        AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+        AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_TOKEN_EXPIRED,
+        AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_TOKEN_USED,
+        AgentEnrollmentLog.STATUS_ERROR,
+    ]
     context = {
         'active_nav': 'agents',
         'rows': token_rows,
         'created_token': created_token,
+        'created_enrollment': created_enrollment,
         'created_command': created_command,
-        'heartbeat_url': getattr(settings, 'NIGHTOWL_AGENT_HEARTBEAT_URL', ''),
-        'source_path': getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', ''),
+        'heartbeat_url': default_heartbeat_url,
+        'server_url': default_server_url,
+        'source_path': package_source_path,
+        'local_package_path': getattr(settings, 'NIGHTOWL_AGENT_LOCAL_PACKAGE_PATH', r'C:\NightOwlAgents'),
+        'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', '0.4.0'),
         'active_count': sum(1 for row in token_rows if row['state']['key'] == 'online'),
         'expired_count': sum(1 for row in token_rows if row['state']['key'] == 'unknown'),
         'uses_24h_count': AgentEnrollmentLog.objects.filter(created_at__gte=last_24h).count(),
         'success_24h_count': AgentEnrollmentLog.objects.filter(
             created_at__gte=last_24h,
             status=AgentEnrollmentLog.STATUS_SUCCESS,
+        ).count(),
+        'failure_24h_count': AgentEnrollmentLog.objects.filter(
+            created_at__gte=last_24h,
+            status__in=failure_statuses,
         ).count(),
         'default_allowed_domain': 'control.local',
     }

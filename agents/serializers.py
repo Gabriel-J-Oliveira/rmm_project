@@ -9,7 +9,7 @@ class OperatingSystemSerializer(serializers.Serializer):
 
 class HardwareSerializer(serializers.Serializer):
     cpu = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    memory_total_bytes = serializers.IntegerField(min_value=0, required=False)
+    memory_total_bytes = serializers.IntegerField(min_value=0, required=False, allow_null=True)
     manufacturer = serializers.CharField(max_length=255, allow_blank=True, required=False)
     model = serializers.CharField(max_length=255, allow_blank=True, required=False)
     serial_number = serializers.CharField(max_length=255, allow_blank=True, required=False)
@@ -30,7 +30,20 @@ class InstalledSoftwareSerializer(serializers.Serializer):
 class AgentMetadataSerializer(serializers.Serializer):
     version = serializers.CharField(max_length=50, allow_blank=True, required=False)
     mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    install_mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
     install_path = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    legacy_install_path = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    config_path = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    log_path = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    log_file = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    service_name = serializers.CharField(max_length=120, allow_blank=True, required=False)
+    service_status = serializers.CharField(max_length=80, allow_blank=True, required=False)
+    service_start_type = serializers.CharField(max_length=80, allow_blank=True, required=False)
+    service_account = serializers.CharField(max_length=120, allow_blank=True, required=False)
+    heartbeat_url = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    jobs_pull_url = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    jobs_result_url = serializers.CharField(max_length=500, allow_blank=True, required=False)
+    collection_endpoints = serializers.DictField(required=False)
     task_name = serializers.CharField(max_length=120, allow_blank=True, required=False)
     runtime = serializers.CharField(max_length=80, allow_blank=True, required=False)
     runtime_version = serializers.CharField(max_length=80, allow_blank=True, required=False)
@@ -41,9 +54,19 @@ class AgentMetadataSerializer(serializers.Serializer):
 class HeartbeatSerializer(serializers.Serializer):
     schema_version = serializers.IntegerField(min_value=1, required=False)
     agent_id = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    machine_id = serializers.CharField(max_length=255, allow_blank=True, required=False)
     hostname = serializers.CharField(max_length=255)
+    fqdn = serializers.CharField(max_length=512, allow_blank=True, required=False)
     domain = serializers.CharField(max_length=255, allow_blank=True, required=False)
     logged_user = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    username = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    ip_address = serializers.CharField(max_length=64, allow_blank=True, required=False)
+    os_name = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    os_version = serializers.CharField(max_length=128, allow_blank=True, required=False)
+    windows_build = serializers.CharField(max_length=128, allow_blank=True, required=False)
+    agent_version = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    agent_mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    install_mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
     ips = serializers.ListField(
         child=serializers.IPAddressField(protocol='both'),
         allow_empty=True,
@@ -56,12 +79,14 @@ class HeartbeatSerializer(serializers.Serializer):
     installed_software = InstalledSoftwareSerializer(many=True, required=False)
     defender_status = serializers.DictField(required=False)
     agent = AgentMetadataSerializer(required=False)
-    heartbeat_at = serializers.DateTimeField()
+    heartbeat_at = serializers.DateTimeField(required=False)
+    timestamp = serializers.DateTimeField(required=False)
 
 
 class AgentEnrollmentSerializer(serializers.Serializer):
     enrollment_token = serializers.CharField(max_length=255)
     manual_validation_token = serializers.CharField(max_length=80, allow_blank=True, required=False)
+    machine_id = serializers.CharField(max_length=255, allow_blank=True, required=False)
     hostname = serializers.CharField(max_length=150)
     domain = serializers.CharField(max_length=150, allow_blank=True, required=False)
     serial_number = serializers.CharField(max_length=150, allow_blank=True, required=False)

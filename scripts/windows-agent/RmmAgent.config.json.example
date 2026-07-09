@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "serverUrl": "http://127.0.0.1:8000",
+  "heartbeatUrl": "http://127.0.0.1:8000/api/agent/heartbeat/",
+  "jobsPullUrl": "http://127.0.0.1:8000/api/agent/jobs/pull/",
+  "jobsResultUrl": "http://127.0.0.1:8000/api/agent/jobs/result/",
+  "agentToken": "COLE_SEU_TOKEN_AQUI",
+  "installMode": "service",
+  "agentMode": "service",
+  "serviceName": "NightOwlAgent",
+  "installPath": "C:\\ProgramData\\NightOwl\\Agent",
+  "logPath": "C:\\ProgramData\\NightOwl\\Logs",
+  "packagesPath": "C:\\ProgramData\\NightOwl\\Packages",
+  "cachePath": "C:\\ProgramData\\NightOwl\\Cache",
+  "agentVersion": "0.4.0-service",
+  "intervals": {
+    "heartbeatSeconds": 300,
+    "jobsSeconds": 45,
+    "systemInventorySeconds": 21600,
+    "networkInventorySeconds": 1800,
+    "hardwareInventorySeconds": 21600,
+    "diskSeconds": 900,
+    "securitySeconds": 1800,
+    "softwareSeconds": 3600,
+    "fullInventorySeconds": 21600,
+    "patchesSeconds": 43200
+  },
+  "collectionEndpoints": {
+    "systemInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/system/",
+    "networkInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/network/",
+    "hardwareInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/hardware/",
+    "diskInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/disks/",
+    "securityInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/security/",
+    "softwareInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/software/",
+    "fullInventoryUrl": "http://127.0.0.1:8000/api/agent/inventory/",
+    "patchStatusUrl": "http://127.0.0.1:8000/api/agent/inventory/patches/"
+  },
+  "jobs": {
+    "enabled": true,
+    "timeoutSeconds": 300,
+    "maxStdoutChars": 6000,
+    "maxStderrChars": 4000,
+    "executedJobHistoryLimit": 200,
+    "resultRetryLimit": 200,
+    "allowedTypes": [
+      "force_inventory",
+      "collect_disks",
+      "collect_security",
+      "collect_software",
+      "ping",
+      "collect_logs",
+      "windows_update_scan"
+    ]
+  },
+  "network": {
+    "timeoutSeconds": 30,
+    "minBackoffSeconds": 30,
+    "maxBackoffSeconds": 300
+  }
+}

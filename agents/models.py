@@ -51,6 +51,7 @@ class AgentMachine(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    machine_id = models.CharField(max_length=255, blank=True, db_index=True)
     hostname = models.CharField(max_length=255)
     domain = models.CharField(max_length=255, blank=True)
     fqdn = models.CharField(max_length=512, blank=True)
@@ -772,6 +773,83 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f'{self.event_type} - {self.title}'
+
+
+class AgentJob(models.Model):
+    TYPE_FORCE_INVENTORY = 'force_inventory'
+    TYPE_COLLECT_DISKS = 'collect_disks'
+    TYPE_COLLECT_SECURITY = 'collect_security'
+    TYPE_COLLECT_SOFTWARE = 'collect_software'
+    TYPE_PING = 'ping'
+    TYPE_COLLECT_LOGS = 'collect_logs'
+    TYPE_WINDOWS_UPDATE_SCAN = 'windows_update_scan'
+    TYPE_CHOICES = [
+        (TYPE_FORCE_INVENTORY, 'Force inventory'),
+        (TYPE_COLLECT_DISKS, 'Collect disks'),
+        (TYPE_COLLECT_SECURITY, 'Collect security'),
+        (TYPE_COLLECT_SOFTWARE, 'Collect software'),
+        (TYPE_PING, 'Ping'),
+        (TYPE_COLLECT_LOGS, 'Collect logs'),
+        (TYPE_WINDOWS_UPDATE_SCAN, 'Windows Update scan'),
+    ]
+
+    STATUS_QUEUED = 'queued'
+    STATUS_SENT = 'sent'
+    STATUS_RUNNING = 'running'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_EXPIRED = 'expired'
+    STATUS_CANCELLED = 'cancelled'
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, 'Queued'),
+        (STATUS_SENT, 'Sent'),
+        (STATUS_RUNNING, 'Running'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_CANCELLED, 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    endpoint = models.ForeignKey(
+        AgentMachine,
+        on_delete=models.CASCADE,
+        related_name='jobs',
+    )
+    job_type = models.CharField(max_length=80, choices=TYPE_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+    created_by = models.CharField(max_length=150, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    stdout = models.TextField(blank=True)
+    stderr = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)
+    exit_code = models.IntegerField(null=True, blank=True)
+    duration_seconds = models.FloatField(null=True, blank=True)
+    queued_at = models.DateTimeField(default=timezone.now)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['endpoint', 'status', '-created_at']),
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['job_type', '-created_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.job_type} - {self.endpoint} - {self.status}'
+
+    @property
+    def is_pending_for_agent(self) -> bool:
+        if self.status != self.STATUS_QUEUED:
+            return False
+        return not self.expires_at or self.expires_at > timezone.now()
 
 
 class MaintenanceRun(models.Model):

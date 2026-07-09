@@ -12,7 +12,13 @@ param(
     [int]$IntervalMinutes = 15,
     [switch]$RunOnce,
     [switch]$RunCheck,
-    [switch]$ForceConfig
+    [switch]$ForceConfig,
+    [switch]$InstallAsService,
+    [switch]$KeepScheduledTaskFallback,
+    [string]$ProgramDataPath = "C:\ProgramData\NightOwl",
+    [string]$NssmPath = "",
+    [string]$WinswPath = "",
+    [switch]$DebugMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +28,10 @@ $InstallLog = Join-Path $LogDirectory "install.log"
 $ConfigPath = Join-Path $InstallPath "RmmAgent.config.ps1"
 $StatePath = Join-Path $InstallPath "agent.state.json"
 $script:EnrollmentState = @{}
+$script:InstallAgentMode = "scheduled_task"
+if ($InstallAsService) {
+    $script:InstallAgentMode = "service"
+}
 
 function Write-InstallLog {
     param([string]$Message, [string]$Level = "INFO")
@@ -108,7 +118,7 @@ function Invoke-AgentEnrollment {
         domain = Get-LocalComputerDomain
         serial_number = Get-LocalSerialNumber
         agent_version = $agentVersion
-        agent_mode = "scheduled_task"
+        agent_mode = $script:InstallAgentMode
         install_path = $InstallPath
         task_name = $TaskName
     }
@@ -342,6 +352,10 @@ try {
         "NightOwlManualValidation.ps1",
         "assets\nightowl-logo.png",
         "RmmAgent.config.example.ps1",
+        "RmmAgent.config.json.example",
+        "RmmAgentService.ps1",
+        "Install-RmmAgentService.ps1",
+        "Uninstall-RmmAgentService.ps1",
         "VERSION",
         "manifest.json",
         "README.md"
@@ -442,14 +456,68 @@ try {
     Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
     Write-InstallLog "Scheduled task created/updated: $TaskName -> $agentScript"
 
-    if ($RunOnce) {
+    if ($RunOnce -and -not $InstallAsService) {
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agentScript
         Write-InstallLog "RunOnce completed with exit code $LASTEXITCODE"
     }
 
-    if ($RunCheck) {
+    if ($RunCheck -and -not $InstallAsService) {
         $checkScript = Join-Path $InstallPath "Check-RmmAgent.ps1"
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checkScript -SourcePath $SourcePath -InstallPath $InstallPath
+        Write-InstallLog "RunCheck completed with exit code $LASTEXITCODE"
+    }
+
+    if ($InstallAsService) {
+        $serviceInstallScript = Join-Path $InstallPath "Install-RmmAgentService.ps1"
+        if (-not (Test-Path $serviceInstallScript)) {
+            throw "InstallAsService requested but Install-RmmAgentService.ps1 is missing."
+        }
+        $serviceArgs = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $serviceInstallScript,
+            "-SourcePath", $InstallPath,
+            "-BasePath", $ProgramDataPath,
+            "-LegacyInstallPath", $InstallPath
+        )
+        if (-not [string]::IsNullOrWhiteSpace($ServerUrl)) {
+            $serviceArgs += @("-ServerUrl", $ServerUrl)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($NssmPath)) {
+            $serviceArgs += @("-NssmPath", $NssmPath)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WinswPath)) {
+            $serviceArgs += @("-WinswPath", $WinswPath)
+        }
+        if ($RunOnce) {
+            $serviceArgs += "-RunOnce"
+        }
+        if ($DebugMode) {
+            $serviceArgs += "-DebugMode"
+        }
+        if ($KeepScheduledTaskFallback) {
+            $serviceArgs += "-KeepScheduledTaskFallback"
+        }
+        & powershell.exe @serviceArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Service installation failed with exit code $LASTEXITCODE."
+        }
+        Write-InstallLog "Service mode installed: NightOwlAgent"
+
+        if (-not $KeepScheduledTaskFallback) {
+            try {
+                Disable-ScheduledTask -TaskName $TaskName | Out-Null
+                Write-InstallLog "Scheduled task disabled because service mode is active. Re-enable it or install with -KeepScheduledTaskFallback if needed."
+            }
+            catch {
+                Write-InstallLog "Could not disable scheduled task fallback: $($_.Exception.Message)" "WARN"
+            }
+        }
+    }
+
+    if ($RunCheck -and $InstallAsService) {
+        $checkScript = Join-Path $InstallPath "Check-RmmAgent.ps1"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checkScript -SourcePath $SourcePath -InstallPath $InstallPath -ProgramDataPath $ProgramDataPath
         Write-InstallLog "RunCheck completed with exit code $LASTEXITCODE"
     }
 

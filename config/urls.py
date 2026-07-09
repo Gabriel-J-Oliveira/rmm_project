@@ -30,6 +30,8 @@ urlpatterns = [
     path('accounts/logout/', config_views.nightowl_logout, name='logout'),
     path('accounts/', include('django.contrib.auth.urls')),
     path('api/agent/', include('agents.urls')),
+    path('api/endpoints/<str:pk>/', dashboard_views.endpoint_detail_data, name='api-endpoint-detail'),
+    path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
     path('api/access-inventory/', include('access_inventory.api_urls')),
     path('access-inventory/', include('access_inventory.urls')),
     path('dashboard/', include('dashboard.urls')),
@@ -71,7 +73,7 @@ urlpatterns = [
     path('alerts/<uuid:pk>/mute/', dashboard_views.alert_mute, name='alert-mute'),
     path('alerts/<uuid:pk>/comment/', dashboard_views.alert_comment, name='alert-comment'),
     path('endpoints/', dashboard_views.endpoint_list, name='endpoint-list'),
-    path('endpoints/<uuid:pk>/', dashboard_views.endpoint_detail, name='endpoint-detail'),
+    path('endpoints/<str:pk>/', dashboard_views.endpoint_detail, name='endpoint-detail'),
 ]
 
 if settings.DEBUG:
