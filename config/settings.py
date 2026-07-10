@@ -28,6 +28,20 @@ if env_file.exists():
     environ.Env.read_env(env_file)
 
 
+PUBLIC_NIGHTOWL_URL = 'https://nightowl.controlsul.com.br'
+PUBLIC_NIGHTOWL_HOST = 'nightowl.controlsul.com.br'
+
+
+def clean_env_list(name, default=None):
+    values = env.list(name, default=default or [])
+    cleaned = []
+    for value in values:
+        item = str(value or '').strip()
+        if item and item not in cleaned:
+            cleaned.append(item)
+    return cleaned
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -40,8 +54,16 @@ SECRET_KEY = env(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DJANGO_DEBUG')
 
-ALLOWED_HOSTS = env('DJANGO_ALLOWED_HOSTS')
-CSRF_TRUSTED_ORIGINS = env('DJANGO_CSRF_TRUSTED_ORIGINS')
+ALLOWED_HOSTS = clean_env_list('DJANGO_ALLOWED_HOSTS', default=['*'] if DEBUG else [PUBLIC_NIGHTOWL_HOST])
+if '*' not in ALLOWED_HOSTS and PUBLIC_NIGHTOWL_HOST not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(PUBLIC_NIGHTOWL_HOST)
+
+CSRF_TRUSTED_ORIGINS = clean_env_list('DJANGO_CSRF_TRUSTED_ORIGINS', default=[])
+if PUBLIC_NIGHTOWL_URL not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(PUBLIC_NIGHTOWL_URL)
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
 
 
 # Application definition
@@ -174,6 +196,54 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+LOG_DIR = BASE_DIR / 'logs'
+LOG_DIR.mkdir(exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] {levelname} {name} {module}:{lineno} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+        'django_errors_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'django-errors.log',
+            'maxBytes': 5 * 1024 * 1024,
+            'backupCount': 5,
+            'formatter': 'verbose',
+            'level': 'ERROR',
+        },
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console', 'django_errors_file'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        'django.security': {
+            'handlers': ['console', 'django_errors_file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
+
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
@@ -207,7 +277,7 @@ EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)
 EMAIL_TIMEOUT = env.int('EMAIL_TIMEOUT', default=20)
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 SERVER_EMAIL = env('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
-NIGHTOWL_PUBLIC_URL = env('NIGHTOWL_PUBLIC_URL', default='').strip().rstrip('/')
+NIGHTOWL_PUBLIC_URL = env('NIGHTOWL_PUBLIC_URL', default=PUBLIC_NIGHTOWL_URL).strip().rstrip('/')
 TASK_REMINDER_RECIPIENTS = env.list(
     'TASK_REMINDER_RECIPIENTS',
     default=['gabriel.oliveira@controlsul.com.br'],
@@ -227,8 +297,16 @@ INBOUND_EMAIL_TIMEOUT = env.int('INBOUND_EMAIL_TIMEOUT', default=30)
 NIGHTOWL_RECOMMENDED_AGENT_VERSION = '0.4.0'
 NIGHTOWL_AGENT_HEARTBEAT_URL = env(
     'NIGHTOWL_AGENT_HEARTBEAT_URL',
-    default='http://192.168.101.242:8000/api/agent/heartbeat/',
+    default=f'{NIGHTOWL_PUBLIC_URL}/api/agent/heartbeat/',
 )
+NIGHTOWL_AGENT_PUBLIC_SERVER_URL = env(
+    'NIGHTOWL_AGENT_PUBLIC_SERVER_URL',
+    default=NIGHTOWL_PUBLIC_URL,
+).strip().rstrip('/')
+NIGHTOWL_AGENT_INSTALLER_URL = env(
+    'NIGHTOWL_AGENT_INSTALLER_URL',
+    default=f'{NIGHTOWL_PUBLIC_URL}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
+).strip()
 NIGHTOWL_AGENT_SOURCE_PATH = env(
     'NIGHTOWL_AGENT_SOURCE_PATH',
     default=r'\\192.168.104.120\controlsul\Comum\_Agents',
