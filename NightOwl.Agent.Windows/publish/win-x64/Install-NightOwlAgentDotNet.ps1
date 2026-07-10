@@ -4,6 +4,7 @@ param(
 
     [string]$EnrollmentToken = "",
     [string]$AgentToken = "",
+    [string]$PackageUrl = "",
     [string]$InstallPath = "C:\ProgramData\NightOwl\AgentDotNet",
     [string]$ServiceName = "NightOwlAgentDotNet",
     [string]$DisplayName = "NightOwl RMM Agent .NET",
@@ -13,7 +14,8 @@ param(
     [switch]$RunCheck,
     [bool]$KeepPowerShellAgent = $true,
     [switch]$DisablePowerShellAgent,
-    [switch]$Debug
+    [switch]$AllowInsecureTls,
+    [switch]$DebugLog
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +57,87 @@ function Normalize-ServerUrl([string]$Url) {
 
 function Join-AgentUrl([string]$Base, [string]$Path) {
     return ("{0}/{1}" -f $Base.TrimEnd("/"), $Path.TrimStart("/"))
+}
+
+function Get-PackageUrl([string]$Base, [string]$ExplicitPackageUrl) {
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPackageUrl)) {
+        return $ExplicitPackageUrl.Trim()
+    }
+    return Join-AgentUrl $Base "/downloads/nightowl-agent/NightOwl.Agent.Windows.zip"
+}
+
+function Get-UrlDirectory([string]$Url) {
+    $idx = $Url.LastIndexOf("/")
+    if ($idx -lt 0) { return $Url }
+    return $Url.Substring(0, $idx)
+}
+
+function Enable-InsecureTlsForLab {
+    if (-not $AllowInsecureTls) { return }
+    Write-Step "WARN" "AllowInsecureTls ativo. Use apenas em laboratorio; producao deve usar certificado publico confiavel."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+}
+
+function Get-FileSha256([string]$Path) {
+    return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+}
+
+function Get-ChecksumFromManifest($Manifest, [string]$FileName) {
+    if ($null -eq $Manifest) { return "" }
+    if ($Manifest.PSObject.Properties.Name -contains $FileName) {
+        return [string]$Manifest.$FileName
+    }
+    if ($Manifest.PSObject.Properties.Name -contains "files") {
+        foreach ($item in @($Manifest.files)) {
+            if ($item.name -eq $FileName -or $item.file -eq $FileName) {
+                return [string]($item.sha256)
+            }
+        }
+    }
+    return ""
+}
+
+function Download-AgentPackage([string]$Url, [string]$WorkDir) {
+    Enable-InsecureTlsForLab
+    New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+    $zipPath = Join-Path $WorkDir "NightOwl.Agent.Windows.zip"
+    Write-Step "OK" ("Baixando pacote: {0}" -f $Url)
+    Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+    if (-not (Test-Path $zipPath) -or (Get-Item $zipPath).Length -le 0) {
+        throw "Download do pacote falhou ou retornou arquivo vazio."
+    }
+
+    $checksumsUrl = (Get-UrlDirectory $Url) + "/checksums.json"
+    try {
+        $checksumsPath = Join-Path $WorkDir "checksums.json"
+        Invoke-WebRequest -Uri $checksumsUrl -OutFile $checksumsPath -UseBasicParsing -TimeoutSec 30
+        $manifest = Read-JsonFile $checksumsPath
+        $expected = Get-ChecksumFromManifest $manifest "NightOwl.Agent.Windows.zip"
+        if (-not [string]::IsNullOrWhiteSpace($expected)) {
+            $actual = Get-FileSha256 $zipPath
+            if ($actual -ne $expected.ToLowerInvariant()) {
+                throw "Checksum invalido para NightOwl.Agent.Windows.zip. Esperado $expected, obtido $actual."
+            }
+            Write-Step "OK" "Checksum do pacote validado"
+        }
+        else {
+            Write-Step "WARN" "checksums.json encontrado, mas sem SHA256 do ZIP"
+        }
+    }
+    catch {
+        if ($_.Exception.Message -like "Checksum invalido*") { throw }
+        Write-Step "WARN" "Checksum nao validado; checksums.json indisponivel ou incompleto"
+    }
+
+    $extractPath = Join-Path $WorkDir "extracted"
+    if (Test-Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
+    Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+    $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
+    if (-not $exe) {
+        throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
+    }
+    return $exe.DirectoryName
 }
 
 function Read-JsonFile([string]$Path) {
@@ -136,6 +219,8 @@ function Invoke-Enrollment($BaseUrl, $Token, $MachineId, $InstallPath) {
         hostname = $info.Hostname
         domain = $info.Domain
         serial_number = $info.SerialNumber
+        fqdn = if ($info.Domain) { "$($info.Hostname).$($info.Domain)" } else { $info.Hostname }
+        os_name = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
         agent_version = "0.1.0"
         agent_mode = "dotnet-service"
         install_path = $InstallPath
@@ -235,6 +320,7 @@ $sourcePath = $scriptRoot
 $configPath = Join-Path $InstallPath "agent.config.json"
 $statePath = "C:\ProgramData\NightOwl\AgentDotNet\agent-dotnet.state.json"
 $logPath = "C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl"
+$enrollResponse = $null
 
 $directories = @(
     "C:\ProgramData\NightOwl",
@@ -248,11 +334,28 @@ foreach ($dir in $directories) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
 
+$localExe = Join-Path $sourcePath "NightOwl.Agent.Windows.exe"
+$tempPackageDir = $null
+if (-not (Test-Path $localExe) -or -not [string]::IsNullOrWhiteSpace($PackageUrl)) {
+    $resolvedPackageUrl = Get-PackageUrl -Base $serverBase -ExplicitPackageUrl $PackageUrl
+    $tempPackageDir = Join-Path $env:TEMP ("NightOwlAgentPackage-" + [guid]::NewGuid().ToString("N"))
+    $sourcePath = Download-AgentPackage -Url $resolvedPackageUrl -WorkDir $tempPackageDir
+    Write-Step "OK" "Modo download HTTPS ativo"
+}
+else {
+    Write-Step "OK" "Modo local/offline ativo"
+}
+
 $identity = Resolve-MachineId -ConfigPath $configPath -StatePath $statePath
 $machineId = $identity.Value
 $identitySource = $identity.Source
+$preservedConfig = Read-JsonFile $configPath
 
-if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken)) {
+if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken) -and $EnrollmentToken.StartsWith("rmm_live_")) {
+    Write-Step "WARN" "EnrollmentToken parece ser agent token legado/dev; usando como AgentToken."
+    $AgentToken = $EnrollmentToken
+}
+elseif (-not [string]::IsNullOrWhiteSpace($EnrollmentToken)) {
     Write-Step "OK" "Executando enrollment no servidor NightOwl"
     $enrollResponse = Invoke-Enrollment -BaseUrl $serverBase -Token $EnrollmentToken -MachineId $machineId -InstallPath $InstallPath
     if ($enrollResponse.agent_token) {
@@ -262,9 +365,20 @@ if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken)) {
         $machineId = [string]$enrollResponse.machine_id
         $identitySource = "enrollment"
     }
+    if ($enrollResponse.config) {
+        Write-Step "OK" "Config de intervalos recebida do servidor"
+    }
 }
 
-$exclude = @("*.pdb")
+if ([string]::IsNullOrWhiteSpace($AgentToken)) {
+    throw "AgentToken nao configurado. Verifique o enrollment token ou informe -AgentToken em modo legado/dev."
+}
+
+if ($InstallAsService) {
+    Stop-ServiceIfExists $ServiceName
+}
+
+$exclude = @("*.pdb", "agent.config.json")
 Copy-Item -Path (Join-Path $sourcePath "*") -Destination $InstallPath -Recurse -Force -Exclude $exclude
 $exePath = Join-Path $InstallPath "NightOwl.Agent.Windows.exe"
 if (-not (Test-Path $exePath)) {
@@ -272,7 +386,7 @@ if (-not (Test-Path $exePath)) {
 }
 Write-Step "OK" "Arquivos copiados"
 
-$existingConfig = Read-JsonFile $configPath
+$existingConfig = $preservedConfig
 if ($null -eq $existingConfig) {
     $existingConfig = [pscustomobject]@{}
 }
@@ -287,9 +401,9 @@ $config = [ordered]@{
     jobsPullUrl = Join-AgentUrl $serverBase "/api/agent/jobs/pull/"
     jobsResultUrl = Join-AgentUrl $serverBase "/api/agent/jobs/result/"
     intervals = [ordered]@{
-        heartbeatSeconds = 300
-        collectSeconds = 3600
-        jobsSeconds = 10
+        heartbeatSeconds = if ($enrollResponse.config.heartbeat_seconds) { [int]$enrollResponse.config.heartbeat_seconds } else { 300 }
+        collectSeconds = if ($enrollResponse.config.collect_seconds) { [int]$enrollResponse.config.collect_seconds } else { 3600 }
+        jobsSeconds = if ($enrollResponse.config.jobs_seconds) { [int]$enrollResponse.config.jobs_seconds } else { 10 }
     }
     logPath = $logPath
     statePath = $statePath
@@ -355,6 +469,10 @@ if ($RunCheck) {
     else {
         Write-Step "WARN" "Heartbeat recente ainda nao encontrado; aguarde o ciclo do servico"
     }
+}
+
+if ($tempPackageDir -and (Test-Path $tempPackageDir)) {
+    Remove-Item -Path $tempPackageDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Step "OK" "Instalacao concluida"

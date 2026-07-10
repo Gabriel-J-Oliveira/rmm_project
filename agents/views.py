@@ -574,9 +574,11 @@ class AgentEnrollView(APIView):
 
             machine.hostname = hostname
             machine.domain = domain
-            machine.fqdn = build_fqdn(hostname, domain)
+            machine.fqdn = payload.get('fqdn', '').strip() or build_fqdn(hostname, domain)
             if serial_number:
                 machine.serial_number = serial_number
+            if payload.get('os_name'):
+                machine.os_name = payload.get('os_name', '')
             machine.agent_version = payload.get('agent_version', '')
             machine.agent_mode = payload.get('agent_mode', '')
             machine.agent_install_path = payload.get('install_path', '')
@@ -640,12 +642,20 @@ class AgentEnrollView(APIView):
             )
 
         heartbeat_url = request.build_absolute_uri(reverse('agent-heartbeat'))
+        server_time = timezone.now()
         return Response(
             {
                 'status': 'ok',
+                'endpoint_id': str(machine.id),
                 'machine_id': machine.machine_id or str(machine.id),
                 'agent_token': agent_token,
                 'heartbeat_url': heartbeat_url,
+                'server_time': server_time.isoformat(),
+                'config': {
+                    'heartbeat_seconds': 300,
+                    'jobs_seconds': 10,
+                    'collect_seconds': 3600,
+                },
                 'recommended_interval_minutes': 15,
             },
             status=status.HTTP_200_OK,

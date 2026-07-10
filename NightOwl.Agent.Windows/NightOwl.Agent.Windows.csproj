@@ -16,5 +16,6 @@
     <None Include="agent.config.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <None Include="scripts\Install-NightOwlAgentDotNet.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" TargetPath="Install-NightOwlAgentDotNet.ps1" />
     <None Include="scripts\Uninstall-NightOwlAgentDotNet.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" TargetPath="Uninstall-NightOwlAgentDotNet.ps1" />
+    <None Include="scripts\Publish-NightOwlAgentDownload.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" TargetPath="Publish-NightOwlAgentDownload.ps1" />
   </ItemGroup>
 </Project>

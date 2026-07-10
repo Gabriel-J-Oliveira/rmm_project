@@ -68,7 +68,7 @@ Se o token estiver ausente ou for placeholder, o agente registra `config.invalid
 
 ## Instalacao oficial
 
-Publique o agente e copie o conteudo publicado para o share, HTTPS futuro ou caminho local de instalacao.
+O metodo principal passa a ser download HTTPS 443 pelo proprio servidor NightOwl. SMB fica apenas como compatibilidade/uso local.
 
 Exemplo de publish:
 
@@ -83,10 +83,27 @@ O publish inclui:
 - `Install-NightOwlAgentDotNet.ps1`
 - `Uninstall-NightOwlAgentDotNet.ps1`
 
+Para gerar o pacote HTTPS com ZIP e manifests:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\NightOwl.Agent.Windows\scripts\Publish-NightOwlAgentDownload.ps1
+```
+
+Saida local:
+
+`NightOwl.Agent.Windows\publish\downloads\agent\windows\`
+
+Copie o conteudo para:
+
+`/opt/nightowl/downloads/agent/windows/`
+
 Exemplo com enrollment token:
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File "\\192.168.104.120\controlsul\Comum\_Agents\Install-NightOwlAgentDotNet.ps1" -ServerUrl "http://nightowl.control.local" -EnrollmentToken "enroll_xxx" -InstallAsService -RunCheck
+$dir = "$env:TEMP\NightOwlAgent"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Invoke-WebRequest "https://rmm.controlsul.com/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1" -OutFile "$dir\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing
+powershell.exe -ExecutionPolicy Bypass -File "$dir\Install-NightOwlAgentDotNet.ps1" -ServerUrl "https://rmm.controlsul.com" -EnrollmentToken "enroll_xxx" -InstallAsService -RunCheck
 ```
 
 Exemplo com agent token direto:
@@ -100,7 +117,7 @@ Notas:
 - Execute como Administrador.
 - `127.0.0.1` deve ser usado apenas quando o backend esta na mesma maquina.
 - Caminho local funciona apenas na propria maquina.
-- Para endpoints de rede, use UNC ou HTTPS futuro.
+- Para endpoints de rede, prefira HTTPS com certificado publico confiavel.
 - O instalador nao imprime token no resumo.
 
 ## Parametros do instalador
@@ -108,14 +125,16 @@ Notas:
 - `-ServerUrl`: obrigatorio, aceita base URL ou `/api/agent/heartbeat/`
 - `-EnrollmentToken`: token de enrollment, trocado por agent token no backend
 - `-AgentToken`: token bearer direto do endpoint
+- `-PackageUrl`: URL opcional do `NightOwl.Agent.Windows.zip`; se vazio, deriva de `<ServerUrl>/downloads/nightowl-agent/NightOwl.Agent.Windows.zip`
 - `-InstallPath`: padrao `C:\ProgramData\NightOwl\AgentDotNet`
 - `-InstallAsService`: instala/atualiza o servico
 - `-StartService`: padrao `true`
 - `-RunCheck`: imprime diagnostico final
 - `-KeepPowerShellAgent`: padrao `true`
 - `-DisablePowerShellAgent`: desabilita a tarefa legada `RMM-Agent-Heartbeat`
+- `-AllowInsecureTls`: laboratorio apenas; nao usar em producao
 - `-Force`: reservado para reinstalacao/update
-- `-Debug`: reservado para logs verbosos
+- `-DebugLog`: reservado para logs verbosos do instalador
 
 ## Desinstalacao
 

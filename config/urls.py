@@ -57,6 +57,7 @@ urlpatterns = [
     path('maintenance/email-outbox/<uuid:pk>/cancel/', dashboard_views.email_outbox_cancel, name='email-outbox-cancel'),
     path('maintenance/email-outbox/<uuid:pk>/pending/', dashboard_views.email_outbox_pending, name='email-outbox-pending'),
     path('agent-install/', dashboard_views.agent_install, name='agent-install'),
+    path('agents/download/', dashboard_views.agent_install, name='agent-download'),
     path('agent-install/enrollment/<uuid:pk>/revoke/', dashboard_views.agent_enrollment_revoke, name='agent-enrollment-revoke'),
     path('software/', dashboard_views.software_inventory, name='software-inventory'),
     path('software-policies/', dashboard_views.software_policies, name='software-policies'),

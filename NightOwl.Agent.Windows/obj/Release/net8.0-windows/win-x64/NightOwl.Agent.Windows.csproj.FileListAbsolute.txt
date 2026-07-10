@@ -235,3 +235,10 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Relea
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\agent.config.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\NightOwl.Agent.Windows.deps.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\publish\win-x64\agent.config.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.deps.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\publish\win-x64\publish\win-x64\agent.config.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.deps.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\Publish-NightOwlAgentDownload.ps1

@@ -509,25 +509,45 @@ def normalize_powershell_path(path):
 
 
 def build_agent_install_command(enrollment_token, *, server_url=None, source_path=None, install_as_service=True, run_once=True, run_check=True, keep_scheduled_task_fallback=False):
-    source_path = normalize_powershell_path(source_path or getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', r'\\192.168.104.120\controlsul\Comum\_Agents'))
-    heartbeat_url = server_url or getattr(settings, 'NIGHTOWL_AGENT_HEARTBEAT_URL', 'http://192.168.101.242:8000/api/agent/heartbeat/')
+    server_base = normalize_agent_server_base(
+        server_url
+        or getattr(settings, 'NIGHTOWL_AGENT_PUBLIC_SERVER_URL', '')
+        or getattr(settings, 'NIGHTOWL_PUBLIC_URL', '')
+        or getattr(settings, 'NIGHTOWL_AGENT_HEARTBEAT_URL', 'http://192.168.101.242:8000/api/agent/heartbeat/')
+    )
+    source_path = source_path or getattr(settings, 'NIGHTOWL_AGENT_INSTALLER_URL', '')
+    if not source_path:
+        source_path = f'{server_base}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1'
+    source_path = normalize_powershell_path(source_path)
     clean_source_path = str(source_path).rstrip('\\/')
-    installer_path = f'{clean_source_path}\\Install-RmmAgent.ps1'
+    if clean_source_path.lower().endswith('.ps1') or clean_source_path.lower().startswith(('http://', 'https://')):
+        installer_path = clean_source_path
+    else:
+        installer_path = f'{clean_source_path}\\Install-NightOwlAgentDotNet.ps1'
     flags = []
     if install_as_service:
         flags.append('-InstallAsService')
-    if run_once:
-        flags.append('-RunOnce')
     if run_check:
         flags.append('-RunCheck')
     if keep_scheduled_task_fallback:
-        flags.append('-KeepScheduledTaskFallback')
+        flags.append('-KeepPowerShellAgent:$true')
+    flag_text = ' '.join(flags)
+    if installer_path.lower().startswith(('http://', 'https://')):
+        return (
+            '$dir = "$env:TEMP\\NightOwlAgent"; '
+            'New-Item -ItemType Directory -Force -Path $dir | Out-Null; '
+            f'Invoke-WebRequest "{installer_path}" -OutFile "$dir\\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing; '
+            'powershell.exe -ExecutionPolicy Bypass -File "$dir\\Install-NightOwlAgentDotNet.ps1" '
+            f'-ServerUrl "{server_base}" '
+            f'-EnrollmentToken "{enrollment_token}" '
+            f'{flag_text}'
+        )
     return (
         'powershell.exe -ExecutionPolicy Bypass '
         f'-File "{installer_path}" '
-        f'-ServerUrl "{heartbeat_url}" '
+        f'-ServerUrl "{server_base}" '
         f'-EnrollmentToken "{enrollment_token}" '
-        f'{" ".join(flags)}'
+        f'{flag_text}'
     )
 
 
@@ -3008,7 +3028,13 @@ def agent_install(request):
     request_base_url = request.build_absolute_uri('/').rstrip('/')
     default_server_url = public_url or normalize_agent_server_base(configured_heartbeat_url) or request_base_url
     default_heartbeat_url = agent_heartbeat_url_from_base(default_server_url)
-    package_source_path = normalize_powershell_path(getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', r'\\192.168.104.120\controlsul\Comum\_Agents'))
+    package_source_path = normalize_powershell_path(
+        getattr(settings, 'NIGHTOWL_AGENT_INSTALLER_URL', '').strip()
+        or f'{default_server_url}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1'
+    )
+    legacy_share_path = normalize_powershell_path(
+        getattr(settings, 'NIGHTOWL_AGENT_SOURCE_PATH', r'\\192.168.104.120\controlsul\Comum\_Agents')
+    )
     failure_statuses = [
         AgentEnrollmentLog.STATUS_DENIED,
         AgentEnrollmentLog.STATUS_EXPIRED,
@@ -3030,6 +3056,9 @@ def agent_install(request):
         'heartbeat_url': default_heartbeat_url,
         'server_url': default_server_url,
         'source_path': package_source_path,
+        'legacy_share_path': legacy_share_path,
+        'package_url': f'{default_server_url}/downloads/nightowl-agent/NightOwl.Agent.Windows.zip',
+        'download_page_url': f'{default_server_url}/agents/download/',
         'local_package_path': getattr(settings, 'NIGHTOWL_AGENT_LOCAL_PACKAGE_PATH', r'C:\NightOwlAgents'),
         'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', '0.4.0'),
         'active_count': sum(1 for row in token_rows if row['state']['key'] == 'online'),

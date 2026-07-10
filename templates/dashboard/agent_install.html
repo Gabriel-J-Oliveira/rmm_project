@@ -153,14 +153,15 @@
             </div>
             <div class="agent-mode-badges">
                 <span class="badge badge-security" data-mode-badge>Servi&ccedil;o Windows</span>
-                <span class="badge badge-muted" data-origin-badge>Share</span>
+                <span class="badge badge-muted" data-origin-badge>HTTPS</span>
             </div>
         </div>
 
         <div class="agent-command-config"
              data-default-token="{% if created_token %}{{ created_token }}{% else %}TOKEN_AQUI{% endif %}"
              data-default-server-url="{{ server_url }}"
-             data-default-share-path="{{ source_path }}"
+             data-default-installer-url="{{ source_path }}"
+             data-default-share-path="{{ legacy_share_path }}"
              data-default-local-path="{{ local_package_path }}">
             <label class="filter-field">
                 <span>Server URL / URL do NightOwl</span>
@@ -169,8 +170,8 @@
             <label class="filter-field">
                 <span>Endpoint mode / formato de URL</span>
                 <select id="agent-endpoint-mode">
-                    <option value="heartbeat" selected>Heartbeat endpoint atual: /api/agent/heartbeat/</option>
-                    <option value="base">Server base URL futuro</option>
+                    <option value="base" selected>Server base URL recomendado</option>
+                    <option value="heartbeat">Heartbeat endpoint legado: /api/agent/heartbeat/</option>
                 </select>
             </label>
 
@@ -178,32 +179,30 @@
                 <label class="filter-field">
                     <span>Origem do pacote</span>
                     <select id="agent-package-origin">
-                        <option value="share" selected>Compartilhamento de rede</option>
+                        <option value="https" selected>HTTPS 443 recomendado</option>
+                        <option value="share">Compartilhamento de rede legado</option>
                         <option value="local">Caminho local de teste</option>
-                        <option value="https">HTTPS futuro</option>
                     </select>
                 </label>
                 <label class="filter-field">
                     <span>Modo de instala&ccedil;&atilde;o</span>
                     <select id="agent-install-mode">
                         <option value="service" selected>Servi&ccedil;o Windows recomendado</option>
-                        <option value="scheduled">Tarefa agendada legada</option>
-                        <option value="runonce">Apenas RunOnce teste</option>
+                        <option value="noservice">Apenas preparar arquivos/config</option>
                     </select>
                 </label>
             </div>
 
             <label class="filter-field">
                 <span>Caminho do pacote</span>
-                <input id="agent-package-path" value="{{ source_path }}" placeholder="\\192.168.104.120\controlsul\Comum\_Agents">
+                <input id="agent-package-path" value="{{ source_path }}" placeholder="https://rmm.controlsul.com/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1">
             </label>
 
             <div class="agent-options-grid">
-                <label><input id="agent-run-once" type="checkbox" checked> RunOnce</label>
                 <label><input id="agent-run-check" type="checkbox" checked> RunCheck</label>
-                <label><input id="agent-keep-fallback" type="checkbox"> KeepScheduledTaskFallback</label>
+                <label><input id="agent-keep-fallback" type="checkbox" checked> Preservar agente PowerShell legado</label>
                 <label><input id="agent-force-config" type="checkbox"> Force reinstall/update</label>
-                <label><input id="agent-debug-logs" type="checkbox"> Debug logs</label>
+                <label><input id="agent-debug-logs" type="checkbox"> DebugLog</label>
             </div>
         </div>
 
@@ -215,7 +214,7 @@
                 Para instalar em outros endpoints, use DNS/IP acess&iacute;vel do servidor NightOwl. Caminho local s&oacute; funciona na pr&oacute;pria m&aacute;quina; para rede, use UNC ou HTTPS quando dispon&iacute;vel.
             </div>
             <div class="note-box">
-                O modo servi&ccedil;o exige PowerShell como administrador e pacote com <code>RmmAgentService.ps1</code>. O HTTPS/443 para download direto fica preparado como etapa futura.
+                O modo servi&ccedil;o exige PowerShell como administrador. Para m&aacute;quinas fora do dom&iacute;nio, use HTTPS com certificado p&uacute;blico confi&aacute;vel.
             </div>
         </div>
 
@@ -237,24 +236,20 @@
             </div>
         </div>
         <ul class="agent-package-checklist">
-            <li><i data-lucide="check"></i><span>Install-RmmAgent.ps1</span></li>
-            <li><i data-lucide="check"></i><span>RmmAgent.ps1</span></li>
-            <li><i data-lucide="check"></i><span>RmmAgentService.ps1</span></li>
-            <li><i data-lucide="check"></i><span>Install-RmmAgentService.ps1</span></li>
-            <li><i data-lucide="check"></i><span>Uninstall-RmmAgentService.ps1</span></li>
-            <li><i data-lucide="check"></i><span>Update-RmmAgent.ps1</span></li>
-            <li><i data-lucide="check"></i><span>Check-RmmAgent.ps1</span></li>
-            <li><i data-lucide="check"></i><span>Uninstall-RmmAgent.ps1</span></li>
-            <li><i data-lucide="check"></i><span>NightOwlManualValidation.ps1</span></li>
-            <li><i data-lucide="check"></i><span>VERSION</span></li>
-            <li><i data-lucide="check"></i><span>manifest.json</span></li>
-            <li><i data-lucide="check"></i><span>assets\nightowl-logo.png</span></li>
-            <li><i data-lucide="check"></i><span>nssm.exe ou tools\nssm.exe</span></li>
+            <li><i data-lucide="check"></i><span>NightOwl.Agent.Windows.zip</span></li>
+            <li><i data-lucide="check"></i><span>Install-NightOwlAgentDotNet.ps1</span></li>
+            <li><i data-lucide="check"></i><span>Uninstall-NightOwlAgentDotNet.ps1</span></li>
+            <li><i data-lucide="check"></i><span>checksums.json</span></li>
+            <li><i data-lucide="check"></i><span>version.json</span></li>
         </ul>
         <dl class="agent-settings-list">
             <div>
+                <dt>URL do pacote</dt>
+                <dd>{{ package_url }}</dd>
+            </div>
+            <div>
                 <dt>Estrutura servi&ccedil;o</dt>
-                <dd>C:\ProgramData\NightOwl\</dd>
+                <dd>C:\ProgramData\NightOwl\AgentDotNet</dd>
             </div>
             <div>
                 <dt>Logs servi&ccedil;o</dt>
@@ -365,7 +360,6 @@
         const originSelect = document.getElementById("agent-package-origin");
         const packageInput = document.getElementById("agent-package-path");
         const installMode = document.getElementById("agent-install-mode");
-        const runOnce = document.getElementById("agent-run-once");
         const runCheck = document.getElementById("agent-run-check");
         const keepFallback = document.getElementById("agent-keep-fallback");
         const forceConfig = document.getElementById("agent-force-config");
@@ -412,34 +406,34 @@
         function packagePath() {
             const raw = normalizePowerShellPath(packageInput.value || "");
             if (originSelect.value === "https") {
-                return raw || "https://nightowl.control.local/agent/download/Install-RmmAgent.ps1";
+                return raw || `${normalizeServerUrl(serverInput.value)}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1`;
             }
-            return `${raw.replace(/[\\\\/]+$/, "")}\\Install-RmmAgent.ps1`;
+            if (/\.ps1$/i.test(raw)) {
+                return raw;
+            }
+            return `${raw.replace(/[\\\\/]+$/, "")}\\Install-NightOwlAgentDotNet.ps1`;
         }
 
         function buildCommand(tokenValue) {
             const token = tokenValue || config.dataset.defaultToken || "TOKEN_AQUI";
-            if (originSelect.value === "https") {
-                return "# HTTPS futuro: download direto do agente ainda nao esta implementado. Use Compartilhamento de rede ou Caminho local nesta fase.";
-            }
             const flags = [];
             if (installMode.value === "service") {
                 flags.push("-InstallAsService");
             }
-            if (runOnce.checked || installMode.value === "runonce") {
-                flags.push("-RunOnce");
-            }
             if (runCheck.checked) {
                 flags.push("-RunCheck");
             }
-            if (keepFallback.checked && installMode.value === "service") {
-                flags.push("-KeepScheduledTaskFallback");
+            if (!keepFallback.checked && installMode.value === "service") {
+                flags.push("-KeepPowerShellAgent:$false");
             }
             if (forceConfig.checked) {
-                flags.push("-ForceConfig");
+                flags.push("-Force");
             }
             if (debugLogs.checked) {
-                flags.push("-DebugMode");
+                flags.push("-DebugLog");
+            }
+            if (originSelect.value === "https") {
+                return `$dir = "$env:TEMP\\NightOwlAgent"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest "${packagePath()}" -OutFile "$dir\\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing; powershell.exe -ExecutionPolicy Bypass -File "$dir\\Install-NightOwlAgentDotNet.ps1" -ServerUrl "${heartbeatUrl()}" -EnrollmentToken "${token}" ${flags.join(" ")}`.trim();
             }
             return `powershell.exe -ExecutionPolicy Bypass -File "${packagePath()}" -ServerUrl "${heartbeatUrl()}" -EnrollmentToken "${token}" ${flags.join(" ")}`.trim();
         }
@@ -447,13 +441,12 @@
         function updateBadges() {
             const modeLabels = {
                 service: "Servi\u00e7o Windows",
-                scheduled: "Tarefa agendada",
-                runonce: "RunOnce teste"
+                noservice: "Sem servi\u00e7o"
             };
             const originLabels = {
                 share: "Share",
                 local: "Local teste",
-                https: "HTTPS futuro"
+                https: "HTTPS"
             };
             modeBadge.textContent = modeLabels[installMode.value] || "Servi\u00e7o Windows";
             originBadge.textContent = originLabels[originSelect.value] || "Share";
@@ -473,25 +466,19 @@
             } else if (originSelect.value === "local") {
                 packageInput.value = normalizePowerShellPath(config.dataset.defaultLocalPath || "C:\\NightOwlAgents");
             } else {
-                packageInput.value = "https://nightowl.control.local/agent/download/Install-RmmAgent.ps1";
+                packageInput.value = `${normalizeServerUrl(serverInput.value)}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1`;
             }
             updateCommand();
         });
 
         installMode.addEventListener("change", function () {
-            if (installMode.value === "scheduled") {
+            if (installMode.value === "noservice") {
                 keepFallback.checked = false;
-                runOnce.checked = true;
-                runCheck.checked = true;
-            }
-            if (installMode.value === "runonce") {
-                keepFallback.checked = false;
-                runOnce.checked = true;
             }
             updateCommand();
         });
 
-        [serverInput, endpointMode, packageInput, runOnce, runCheck, keepFallback, forceConfig, debugLogs].forEach(function (input) {
+        [serverInput, endpointMode, packageInput, runCheck, keepFallback, forceConfig, debugLogs].forEach(function (input) {
             input.addEventListener("input", updateCommand);
             input.addEventListener("change", updateCommand);
         });

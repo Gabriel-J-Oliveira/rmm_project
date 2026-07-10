@@ -1,10 +1,17 @@
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\agent.config.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\Install-NightOwlAgentDotNet.ps1
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\Uninstall-NightOwlAgentDotNet.ps1
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\Publish-NightOwlAgentDownload.ps1
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Windows.exe
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\agent.config.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.deps.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\publish\win-x64\agent.config.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.deps.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\publish\win-x64\publish\win-x64\agent.config.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.deps.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\publish\win-x64\publish\win-x64\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Windows.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Windows.deps.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Windows.runtimeconfig.json
