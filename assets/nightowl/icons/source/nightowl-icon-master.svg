@@ -1,0 +1,19 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="NightOwl Agent icon">
+  <defs>
+    <linearGradient id="bg" x1="24" y1="24" x2="232" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#070A14"/>
+      <stop offset="1" stop-color="#251252"/>
+    </linearGradient>
+    <linearGradient id="owl" x1="128" y1="46" x2="128" y2="228" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#27CD87"/>
+    </linearGradient>
+  </defs>
+  <rect x="9" y="9" width="238" height="238" rx="51" fill="url(#bg)" stroke="#8B5CF6" stroke-width="7"/>
+  <path d="M49 161L62 92C62 92 75 61 97 46L110 79C120 67 136 67 146 79L159 46C181 61 194 92 207 161C190 209 156 228 128 228C100 228 66 209 49 161Z" fill="url(#owl)" stroke="#C8B6FF" stroke-width="5" stroke-linejoin="round"/>
+  <circle cx="96" cy="125" r="33" fill="#F0FDF4" stroke="#22C55E" stroke-width="5"/>
+  <circle cx="160" cy="125" r="33" fill="#F0FDF4" stroke="#22C55E" stroke-width="5"/>
+  <circle cx="96" cy="125" r="15" fill="#0B1220"/>
+  <circle cx="160" cy="125" r="15" fill="#0B1220"/>
+  <path d="M128 146L110 171H146L128 146Z" fill="#FACC15"/>
+</svg>

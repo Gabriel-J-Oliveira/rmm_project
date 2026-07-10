@@ -540,6 +540,8 @@ function Start-TrayIfInteractive([string]$TrayExePath, [switch]$ForceStart) {
         return
     }
     if (-not $ForceStart -and [Environment]::UserInteractive -ne $true) {
+        Write-Step "OK" "NightOwl Agent instalado. O icone sera exibido no proximo logon do usuario."
+        Write-InstallLog "tray.start.deferred" "Tray app sera iniciado no proximo logon do usuario." @{ tray_exe = $TrayExePath }
         return
     }
     try {
@@ -594,7 +596,11 @@ $directories = @(
     "C:\ProgramData\NightOwl\Logs",
     "C:\ProgramData\NightOwl\Jobs",
     "C:\ProgramData\NightOwl\Packages",
-    "C:\ProgramData\NightOwl\Cache"
+    "C:\ProgramData\NightOwl\Cache",
+    "C:\ProgramData\NightOwl\Updates",
+    "C:\ProgramData\NightOwl\Updates\Downloads",
+    "C:\ProgramData\NightOwl\Updates\Staging",
+    "C:\ProgramData\NightOwl\Backups"
 )
 foreach ($dir in $directories) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -651,13 +657,20 @@ if (-not (Test-Path $exePath)) {
     throw "Executavel do agente nao encontrado apos copia: $exePath"
 }
 $trayExePath = Join-Path $InstallPath "NightOwl.Agent.Tray.exe"
-$iconPath = Join-Path $InstallPath "NightOwl.ico"
+$iconPath = Join-Path $InstallPath "assets\icons\NightOwl.ico"
 Write-Step "OK" "Arquivos copiados"
 if (-not (Test-Path $trayExePath)) {
     Write-Step "WARN" "NightOwl.Agent.Tray.exe nao encontrado no pacote"
 }
 if (-not (Test-Path $iconPath)) {
-    Write-Step "WARN" "NightOwl.ico nao encontrado no pacote"
+    Write-Step "WARN" "NightOwl.ico nao encontrado no pacote em assets\\icons"
+    Write-InstallLog "tray.icon.missing" "Icone NightOwl nao encontrado no caminho esperado." @{ icon_path = $iconPath }
+}
+
+$packageVersionFile = Read-JsonFile (Join-Path $sourcePath "agent.version.json")
+$packageVersion = Get-JsonProperty $packageVersionFile @("version")
+if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+    $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0" }
 }
 
 $existingConfig = $preservedConfig
@@ -668,7 +681,7 @@ if ($null -eq $existingConfig) {
 $config = [ordered]@{
     agentToken = $AgentToken
     machineId = $machineId
-    agentVersion = if ($existingConfig.agentVersion) { $existingConfig.agentVersion } else { "0.1.0" }
+    agentVersion = $packageVersion
     serverBaseUrl = $serverBase
     heartbeatUrl = Join-AgentUrl $serverBase "/api/agent/heartbeat/"
     collectUrl = Join-AgentUrl $serverBase "/api/agent/collect/"
@@ -685,10 +698,18 @@ $config = [ordered]@{
     packagesPath = "C:\ProgramData\NightOwl\Packages"
     cachePath = "C:\ProgramData\NightOwl\Cache"
     jobsPath = "C:\ProgramData\NightOwl\Jobs"
-    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory")
+    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent")
 }
 Save-AgentConfig -Path $configPath -Config $config
 Write-StateMachineId -Path $statePath -MachineId $machineId
+$versionInfo = [ordered]@{
+    version = $packageVersion
+    installedAt = (Get-Date).ToUniversalTime().ToString("o")
+    channel = "stable"
+    packageSha256 = ""
+    updatedBy = "installer"
+}
+$versionInfo | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $InstallPath "agent.version.json") -Encoding UTF8
 Write-Step "OK" "Configuracao atualizada"
 Write-Step "OK" ("Machine ID: {0} ({1})" -f $machineId, $identitySource)
 
@@ -738,7 +759,7 @@ if ($RunCheck) {
     if (Test-Path $configPath) { Write-Step "OK" "Config existe" } else { Write-Step "FAIL" "Config ausente" }
     if (-not $NoTray) {
         if (Test-Path $trayExePath) { Write-Step "OK" "Tray app existe" } else { Write-Step "WARN" "Tray app ausente" }
-        if (Test-Path $iconPath) { Write-Step "OK" "NightOwl.ico existe" } else { Write-Step "WARN" "NightOwl.ico ausente" }
+        if (Test-Path $iconPath) { Write-Step "OK" "NightOwl.ico existe em assets\\icons" } else { Write-Step "WARN" "NightOwl.ico ausente em assets\\icons" }
         $trayTask = Get-ScheduledTask -TaskName "NightOwl Agent Tray" -ErrorAction SilentlyContinue
         if ($trayTask) { Write-Step "OK" "Tray task instalada: NightOwl Agent Tray" } else { Write-Step "WARN" "Tray task nao encontrada" }
     }

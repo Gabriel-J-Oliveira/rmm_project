@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.NetworkInformation;
+using System.Text.Json;
 using NightOwl.Agent.Windows.Collectors;
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
@@ -39,6 +40,7 @@ public sealed class JobExecutor
                 "windows_update_scan" => await RunCollectionAsync("patches", _collector.GetPatchStatus, ct),
                 "collect_logs" => CollectLogs(config),
                 "ping" => await RunPingAsync(config, job, ct),
+                "update_agent" => await RunUpdateAgentAsync(config, job, ct),
                 _ => throw new NotSupportedException("unsupported_job_type")
             };
 
@@ -124,6 +126,109 @@ public sealed class JobExecutor
             address = reply.Address?.ToString() ?? "",
             success = reply.Status == IPStatus.Success
         };
+    }
+
+    private async Task<object> RunUpdateAgentAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
+    {
+        await _logger.LogAsync("job.update_agent.received", "Update agent job received.", new { job.Id }, ct);
+        string updater = Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe");
+        if (!File.Exists(updater))
+        {
+            throw new FileNotFoundException("Updater nao encontrado no endpoint.", updater);
+        }
+
+        string channel = GetPayloadString(job, "channel", "stable");
+        string targetVersion = GetPayloadString(job, "target_version", "latest");
+        string arguments = $"update --source job --job-id \"{job.Id}\" --channel \"{channel}\" --target-version \"{targetVersion}\" --quiet --json-output";
+
+        using Process process = new()
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = updater,
+                Arguments = arguments,
+                WorkingDirectory = config.InstallPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+
+        DateTimeOffset started = DateTimeOffset.UtcNow;
+        process.Start();
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+        string stdout = Trim(await stdoutTask, 8000);
+        string stderr = Trim(await stderrTask, 8000);
+        int exitCode = process.ExitCode;
+        DateTimeOffset finished = DateTimeOffset.UtcNow;
+        bool alreadyCurrent = exitCode == 10 || stdout.Contains("already_current", StringComparison.OrdinalIgnoreCase);
+        bool success = exitCode == 0 || alreadyCurrent;
+
+        await _logger.LogAsync(
+            success ? "job.update_agent.completed" : "job.update_agent.failed",
+            "Update agent process finished.",
+            new { job.Id, exitCode, alreadyCurrent },
+            ct,
+            success ? "info" : "error");
+
+        if (!success)
+        {
+            throw new InvalidOperationException($"Updater failed with exit code {exitCode}. {Trim(stderr, 500)}");
+        }
+
+        Dictionary<string, object?> parsed = TryParseJson(stdout);
+        parsed["exit_code"] = exitCode;
+        parsed["already_up_to_date"] = alreadyCurrent;
+        parsed["started_at"] = started;
+        parsed["finished_at"] = finished;
+        ClearPendingUpdateResultIfCurrentJob(config, job.Id);
+        return parsed;
+    }
+
+    private static void ClearPendingUpdateResultIfCurrentJob(AgentConfig config, string jobId)
+    {
+        try
+        {
+            string path = Path.Combine(config.JobsPath, "pending-update-result.json");
+            if (!File.Exists(path))
+            {
+                return;
+            }
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.TryGetProperty("job_id", out JsonElement value)
+                && value.ValueKind == JsonValueKind.String
+                && value.GetString() == jobId)
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // A stale pending result is retried by the service loop.
+        }
+    }
+
+    private static string GetPayloadString(AgentJobRequest job, string key, string fallback)
+    {
+        return job.Payload.TryGetValue(key, out object? value) && value is not null && !string.IsNullOrWhiteSpace(value.ToString())
+            ? value.ToString()!
+            : fallback;
+    }
+
+    private static Dictionary<string, object?> TryParseJson(string value)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(value);
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(document.RootElement.GetRawText()) ?? new Dictionary<string, object?>();
+        }
+        catch
+        {
+            return new Dictionary<string, object?> { ["output"] = Trim(value, 2000) };
+        }
     }
 
     private static string Trim(string value, int max)

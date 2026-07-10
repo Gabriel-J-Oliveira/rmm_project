@@ -61,7 +61,8 @@
         cleanup_temp: "Limpeza temporaria",
         run_script: "Executar script",
         windows_update_scan: "Windows Update Scan",
-        install_software: "Instalar software"
+        install_software: "Instalar software",
+        update_agent: "Atualizar agente"
     };
 
     if (realPayloadScript && realPayloadScript.textContent) {
@@ -453,12 +454,42 @@
         return '<div class="table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Tipo</th><th>Progresso</th><th>Criado por</th><th>Criado em</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
             rows.map(function (job) {
                 const progress = jobProgress(job);
-                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '</td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "queued") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td>' + escapeHtml(job.createdBy || "-") + '</td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(job.result || job.errorMessage || "-") + '</td><td class="software-actions">' +
+                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '</td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "queued") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td>' + escapeHtml(job.createdBy || "-") + '</td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(jobResultLabel(job)) + '</td><td class="software-actions">' +
                     '<button type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
                     '<button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
                     (job.status === "completed" ? '<button type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
                     "</td></tr>";
             }).join("") + "</tbody></table></div>";
+    }
+
+    function jobResultLabel(job) {
+        const result = job.resultJson || {};
+        if (job.type === "update_agent") {
+            const updateStatus = result.update_status || (result.details && result.details.reason);
+            if (updateStatus === "no_update_available" || result.already_up_to_date) return "Ja estava na versao mais recente";
+            if (updateStatus === "success" || job.status === "completed") {
+                const version = result.installed_version || result.version || "";
+                return version ? "Atualizado para " + version : "Atualizado com sucesso";
+            }
+            if (job.status === "failed") return job.errorMessage || result.message || "Falha na atualizacao";
+        }
+        return job.result || job.errorMessage || "-";
+    }
+
+    function lastUpdateJob(detail) {
+        return (detail.jobs || []).find(function (job) { return job.type === "update_agent"; }) || null;
+    }
+
+    function lastAgentUpdate(detail) {
+        const job = lastUpdateJob(detail);
+        if (!job || job.status !== "completed") return "-";
+        return formatDate(job.finishedAt);
+    }
+
+    function lastUpdateJobLabel(detail) {
+        const job = lastUpdateJob(detail);
+        if (!job) return "Nenhum";
+        return (labels[job.status] || job.status) + " - " + jobResultLabel(job);
     }
 
     function renderOverview(detail) {
@@ -484,13 +515,15 @@
                 { label: "Ultima comunicacao", value: agent.lastRun },
                 { label: "Ultima coleta geral", value: formatDate(agent.lastInventoryAt) },
                 { label: "Ultimo job finalizado", value: formatDate(agent.lastJobResultAt) },
+                { label: "Ultima atualizacao", value: lastAgentUpdate(detail) },
+                { label: "Ultimo job de update", value: lastUpdateJobLabel(detail) },
                 { label: "Servico", value: agent.serviceName },
                 { label: "Status servico", value: agent.serviceStatus },
                 { label: "Log atual", value: agent.logFile, mono: true },
                 { label: "Jobs pull", value: agent.jobsPullUrl, mono: true },
                 { label: "Jobs result", value: agent.jobsResultUrl, mono: true },
                 { label: "Proximo heartbeat", value: agent.nextHeartbeat }
-            ]) + '</article>' +
+            ]) + '<div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent">' + icon("download-cloud") + 'Atualizar agente</button></div></article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield") + 'Seguranca</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
                 { label: "Antivirus", value: security.antivirus },
                 { label: "Assinatura", value: security.signature, mono: true },
@@ -840,10 +873,14 @@
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
         }
-        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_logs", "ping", "collect_software", "windows_update_scan"];
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
+            if (action === "update_agent") {
+                const confirmed = window.confirm("Deseja enviar um comando de atualizacao do agente para este endpoint? O servico pode ser reiniciado durante o processo.");
+                if (!confirmed) return;
+            }
             createRealJob(action).then(function (payload) {
-                showToast("Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
+                showToast(action === "update_agent" ? "Job de atualizacao enviado." : "Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
                 if (!endpointDetail.jobs) endpointDetail.jobs = [];
                 endpointDetail.jobs.unshift(payload.job);
                 renderActivePanel();

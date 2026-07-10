@@ -39,6 +39,32 @@ require_command rsync
 require_command curl
 require_command sha256sum
 
+zip_list() {
+  local zip_path="$1"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -l "$zip_path" | awk '{print $4}' | sed '/^$/d'
+    return 0
+  fi
+  if command -v zipinfo >/dev/null 2>&1; then
+    zipinfo -1 "$zip_path"
+    return 0
+  fi
+  fail "unzip ou zipinfo e obrigatorio para validar o conteudo do ZIP."
+}
+
+validate_zip_entry() {
+  local zip_path="$1"
+  local entry="$2"
+  local windows_entry="${entry//\//\\}"
+  if zip_list "$zip_path" | grep -Fx "$entry" >/dev/null 2>&1; then
+    return 0
+  fi
+  if zip_list "$zip_path" | grep -Fx "$windows_entry" >/dev/null 2>&1; then
+    return 0
+  fi
+  fail "Entrada obrigatoria ausente no ZIP: $entry"
+}
+
 validate_safe_path "$SOURCE_DIR" "/opt/nightowl/NightOwl.Agent.Windows/publish/downloads/agent/windows"
 validate_safe_path "$DEST_DIR" "/opt/nightowl/downloads/agent/windows"
 
@@ -47,6 +73,11 @@ validate_safe_path "$DEST_DIR" "/opt/nightowl/downloads/agent/windows"
 for file in "${REQUIRED_FILES[@]}"; do
   [[ -f "$SOURCE_DIR/$file" ]] || fail "Arquivo obrigatorio ausente na origem: $SOURCE_DIR/$file"
 done
+
+log "Validando conteudo do ZIP do agente"
+validate_zip_entry "$SOURCE_DIR/NightOwl.Agent.Windows.zip" "assets/icons/NightOwl.ico"
+validate_zip_entry "$SOURCE_DIR/NightOwl.Agent.Windows.zip" "NightOwl.Agent.Tray.exe"
+validate_zip_entry "$SOURCE_DIR/NightOwl.Agent.Windows.zip" "NightOwl.Agent.Updater.exe"
 
 log "Criando destino se necessario: $DEST_DIR"
 install -d -m 755 "$DEST_DIR"

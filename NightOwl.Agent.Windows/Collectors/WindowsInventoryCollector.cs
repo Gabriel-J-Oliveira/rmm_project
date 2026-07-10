@@ -45,6 +45,8 @@ public sealed class WindowsInventoryCollector
             OsVersion = os.GetValueOrDefault("version")?.ToString() ?? Environment.OSVersion.VersionString,
             WindowsBuild = os.GetValueOrDefault("build")?.ToString() ?? Environment.OSVersion.Version.Build.ToString(CultureInfo.InvariantCulture),
             AgentVersion = config.AgentVersion,
+            TrayVersion = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Tray.exe")),
+            UpdaterVersion = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe")),
             AgentMode = "dotnet-service",
             InstallMode = "dotnet-service",
             Ips = ips,
@@ -487,6 +489,8 @@ public sealed class WindowsInventoryCollector
         return new Dictionary<string, object?>
         {
             ["version"] = config.AgentVersion,
+            ["tray_version"] = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Tray.exe")),
+            ["updater_version"] = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe")),
             ["mode"] = "dotnet-service",
             ["install_mode"] = "dotnet-service",
             ["install_path"] = AppContext.BaseDirectory,
@@ -507,6 +511,23 @@ public sealed class WindowsInventoryCollector
             ["runtime"] = ".NET",
             ["runtime_version"] = Environment.Version.ToString()
         };
+    }
+
+    private static string GetFileVersion(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return "";
+            }
+            FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
+            return info.ProductVersion ?? info.FileVersion ?? "";
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private static void ReadUninstallKey(List<Dictionary<string, object?>> rows, RegistryView view, string architecture, string source)

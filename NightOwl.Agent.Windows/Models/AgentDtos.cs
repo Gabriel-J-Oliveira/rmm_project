@@ -43,6 +43,12 @@ public sealed class AgentHeartbeatPayload
     [JsonPropertyName("agent_version")]
     public string AgentVersion { get; set; } = "";
 
+    [JsonPropertyName("tray_version")]
+    public string TrayVersion { get; set; } = "";
+
+    [JsonPropertyName("updater_version")]
+    public string UpdaterVersion { get; set; } = "";
+
     [JsonPropertyName("agent_mode")]
     public string AgentMode { get; set; } = "dotnet-service";
 

@@ -12414,6 +12414,38 @@ body.page-endpoint-detail .endpoint-dense-card header button:hover {
     color: var(--text-primary);
 }
 
+body.page-endpoint-detail .endpoint-card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-card-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid rgba(167, 139, 250, 0.22);
+    border-radius: 8px;
+    background: rgba(124, 58, 237, 0.1);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    padding: 7px 10px;
+}
+
+body.page-endpoint-detail .endpoint-card-actions button:hover {
+    border-color: rgba(192, 132, 252, 0.42);
+    background: rgba(124, 58, 237, 0.18);
+}
+
+body.page-endpoint-detail .endpoint-card-actions svg {
+    width: 15px;
+    height: 15px;
+    color: var(--soft-purple);
+}
+
 body.page-endpoint-detail .endpoint-span-2 {
     grid-column: span 2;
 }

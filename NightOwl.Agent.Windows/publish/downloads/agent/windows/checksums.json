@@ -1,24 +1,28 @@
 ﻿{
-    "NightOwl.Agent.Windows.zip":  "b0bba8d30fe05a28b67914184c2de85fe9a9c35751caa0534f17276d85d7b3fe",
-    "Install-NightOwlAgentDotNet.ps1":  "602a26e0ce49ae7561d1ad9950fb5346db9a99502ad38549d59a8446551c5628",
+    "NightOwl.Agent.Windows.zip":  "90d3f4401cc061323879d6823a0d6f8e7fde5793890dd98b08e72bfd3523fe37",
+    "Install-NightOwlAgentDotNet.ps1":  "42af967d43bef28f3794f8ee67f683693a655a56b8e24f6e50cc6c8f792bf5e7",
     "Uninstall-NightOwlAgentDotNet.ps1":  "4e010a9c8ec1d202312589783c01232552c29d41fe3c8bc4d62a05800de0fc2f",
-    "NightOwl.ico":  "3f8fd1e8800ad7cffc18488aa0cc6c56be01940f5180583e2cd996217a235d3a",
+    "NightOwl.ico":  "21e8eb50d44c82fb625d04ffa2ca884646e4837958c84c4745ad180259d70524",
     "files":  [
                   {
                       "name":  "NightOwl.Agent.Windows.zip",
-                      "sha256":  "b0bba8d30fe05a28b67914184c2de85fe9a9c35751caa0534f17276d85d7b3fe"
+                      "sha256":  "90d3f4401cc061323879d6823a0d6f8e7fde5793890dd98b08e72bfd3523fe37",
+                      "size":  71106085
                   },
                   {
                       "name":  "Install-NightOwlAgentDotNet.ps1",
-                      "sha256":  "602a26e0ce49ae7561d1ad9950fb5346db9a99502ad38549d59a8446551c5628"
+                      "sha256":  "42af967d43bef28f3794f8ee67f683693a655a56b8e24f6e50cc6c8f792bf5e7",
+                      "size":  31917
                   },
                   {
                       "name":  "Uninstall-NightOwlAgentDotNet.ps1",
-                      "sha256":  "4e010a9c8ec1d202312589783c01232552c29d41fe3c8bc4d62a05800de0fc2f"
+                      "sha256":  "4e010a9c8ec1d202312589783c01232552c29d41fe3c8bc4d62a05800de0fc2f",
+                      "size":  2892
                   },
                   {
                       "name":  "NightOwl.ico",
-                      "sha256":  "3f8fd1e8800ad7cffc18488aa0cc6c56be01940f5180583e2cd996217a235d3a"
+                      "sha256":  "21e8eb50d44c82fb625d04ffa2ca884646e4837958c84c4745ad180259d70524",
+                      "size":  38564
                   }
               ]
 }

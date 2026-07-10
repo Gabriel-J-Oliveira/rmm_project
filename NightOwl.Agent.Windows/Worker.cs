@@ -2,6 +2,7 @@ using NightOwl.Agent.Windows.Collectors;
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
 using NightOwl.Agent.Windows.Jobs;
+using System.Text.Json;
 
 namespace NightOwl.Agent.Windows;
 
@@ -68,6 +69,8 @@ public sealed class Worker : BackgroundService
 
                 DateTimeOffset now = DateTimeOffset.UtcNow;
 
+                await SendPendingUpdateResultAsync(config, stoppingToken);
+
                 if (IsDue(state.LastHeartbeatAt, config.Intervals.HeartbeatSeconds, now))
                 {
                     await SendHeartbeatAsync(config, state, now, stoppingToken);
@@ -93,6 +96,33 @@ public sealed class Worker : BackgroundService
         }
 
         await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None);
+    }
+
+    private async Task SendPendingUpdateResultAsync(AgentConfig config, CancellationToken ct)
+    {
+        string pendingPath = Path.Combine(config.JobsPath, "pending-update-result.json");
+        if (!File.Exists(pendingPath))
+        {
+            return;
+        }
+
+        await _logger.LogAsync("update.result.pending_found", "Pending update result found.", new { pendingPath }, ct);
+        try
+        {
+            string json = await File.ReadAllTextAsync(pendingPath, ct);
+            JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                ?? throw new InvalidOperationException("Pending update result is invalid.");
+            await _api.SendJobResultAsync(config, result, ct);
+            string completedDir = Path.Combine(config.JobsPath, "completed");
+            Directory.CreateDirectory(completedDir);
+            string completedPath = Path.Combine(completedDir, $"pending-update-result-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+            File.Move(pendingPath, completedPath, overwrite: true);
+            await _logger.LogAsync("update.result.sent", "Pending update result sent.", new { result.JobId, completedPath }, ct);
+        }
+        catch (Exception ex)
+        {
+            await _logger.LogAsync("update.result.send_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
+        }
     }
 
     private static bool IsDue(DateTimeOffset? previous, int intervalSeconds, DateTimeOffset now)

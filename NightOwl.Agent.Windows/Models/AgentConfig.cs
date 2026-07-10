@@ -58,7 +58,8 @@ public sealed class AgentConfig
         "collect_software",
         "collect_security",
         "windows_update_scan",
-        "force_inventory"
+        "force_inventory",
+        "update_agent"
     };
 
     [JsonIgnore]

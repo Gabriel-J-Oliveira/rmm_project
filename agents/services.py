@@ -38,10 +38,18 @@ def _heartbeat_os(payload: dict) -> dict:
 
 def _heartbeat_agent(payload: dict) -> dict:
     agent_data = payload.get('agent') or {}
-    if not any((payload.get('agent_version'), payload.get('agent_mode'), payload.get('install_mode'))):
+    if not any((
+        payload.get('agent_version'),
+        payload.get('tray_version'),
+        payload.get('updater_version'),
+        payload.get('agent_mode'),
+        payload.get('install_mode'),
+    )):
         return agent_data
     merged = dict(agent_data)
     merged.setdefault('version', payload.get('agent_version') or '')
+    merged.setdefault('tray_version', payload.get('tray_version') or '')
+    merged.setdefault('updater_version', payload.get('updater_version') or '')
     merged.setdefault('mode', payload.get('agent_mode') or '')
     merged.setdefault('install_mode', payload.get('install_mode') or '')
     return merged

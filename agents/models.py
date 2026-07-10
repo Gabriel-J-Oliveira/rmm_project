@@ -783,6 +783,7 @@ class AgentJob(models.Model):
     TYPE_PING = 'ping'
     TYPE_COLLECT_LOGS = 'collect_logs'
     TYPE_WINDOWS_UPDATE_SCAN = 'windows_update_scan'
+    TYPE_UPDATE_AGENT = 'update_agent'
     TYPE_CHOICES = [
         (TYPE_FORCE_INVENTORY, 'Force inventory'),
         (TYPE_COLLECT_DISKS, 'Collect disks'),
@@ -791,6 +792,7 @@ class AgentJob(models.Model):
         (TYPE_PING, 'Ping'),
         (TYPE_COLLECT_LOGS, 'Collect logs'),
         (TYPE_WINDOWS_UPDATE_SCAN, 'Windows Update scan'),
+        (TYPE_UPDATE_AGENT, 'Update agent'),
     ]
 
     STATUS_QUEUED = 'queued'

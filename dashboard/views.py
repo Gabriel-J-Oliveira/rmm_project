@@ -2538,6 +2538,9 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
 
     agent_health = {
         'agent_mode': endpoint.agent_mode or raw_agent.get('mode') or '',
+        'agent_version': endpoint.agent_version or raw_agent.get('version') or raw_payload.get('agent_version') or '',
+        'tray_version': raw_agent.get('tray_version') or raw_payload.get('tray_version') or '',
+        'updater_version': raw_agent.get('updater_version') or raw_payload.get('updater_version') or '',
         'install_mode': raw_agent.get('install_mode') or ('service' if (endpoint.agent_mode or '').lower() == 'service' else ''),
         'service_name': raw_agent.get('service_name') or endpoint.agent_task_name or 'NightOwlAgent',
         'service_status': raw_agent.get('service_status') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE and (endpoint.agent_mode or '').lower() == 'service' else ''),
@@ -2922,6 +2925,7 @@ def endpoint_job_create(request, pk):
         'ping': AgentJob.TYPE_PING,
         'collect_software': AgentJob.TYPE_COLLECT_SOFTWARE,
         'windows_update_scan': AgentJob.TYPE_WINDOWS_UPDATE_SCAN,
+        'update_agent': AgentJob.TYPE_UPDATE_AGENT,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
     allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES}
@@ -2940,6 +2944,26 @@ def endpoint_job_create(request, pk):
         payload['count'] = 2
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
         payload['lines'] = 120
+    elif selected_type == AgentJob.TYPE_UPDATE_AGENT:
+        pending_update = endpoint.jobs.filter(
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+        ).order_by('-created_at').first()
+        if pending_update:
+            return JsonResponse(
+                {
+                    'error': 'update_job_already_pending',
+                    'detail': 'Ja existe um job de atualizacao do agente pendente ou em execucao para este endpoint.',
+                    'job': serialize_agent_job(pending_update),
+                },
+                status=409,
+            )
+        payload.update({
+            'target_version': 'latest',
+            'channel': 'stable',
+            'force': False,
+            'source': 'manual_panel',
+        })
 
     job = AgentJob.objects.create(
         endpoint=endpoint,

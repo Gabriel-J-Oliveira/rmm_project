@@ -29,6 +29,8 @@ class InstalledSoftwareSerializer(serializers.Serializer):
 
 class AgentMetadataSerializer(serializers.Serializer):
     version = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    tray_version = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    updater_version = serializers.CharField(max_length=50, allow_blank=True, required=False)
     mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
     install_mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
     install_path = serializers.CharField(max_length=255, allow_blank=True, required=False)
@@ -65,6 +67,8 @@ class HeartbeatSerializer(serializers.Serializer):
     os_version = serializers.CharField(max_length=128, allow_blank=True, required=False)
     windows_build = serializers.CharField(max_length=128, allow_blank=True, required=False)
     agent_version = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    tray_version = serializers.CharField(max_length=50, allow_blank=True, required=False)
+    updater_version = serializers.CharField(max_length=50, allow_blank=True, required=False)
     agent_mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
     install_mode = serializers.CharField(max_length=50, allow_blank=True, required=False)
     ips = serializers.ListField(

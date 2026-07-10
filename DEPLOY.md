@@ -137,3 +137,174 @@ Ainda ficam para uma próxima etapa:
 - PostgreSQL real no servidor
 - backup do banco e da pasta `media`
 - timer de manutenção em produção
+
+## 10. NightOwl Agent Windows - Icon and Tray Asset
+
+O agente Windows usa um unico icone visual principal:
+
+```text
+assets/nightowl/icons/ico/NightOwl.ico
+```
+
+Este arquivo tambem e copiado para os projetos durante a geracao:
+
+```text
+NightOwl.Agent.Windows/assets/icons/NightOwl.ico
+NightOwl.Agent.Tray/assets/icons/NightOwl.ico
+NightOwl.Agent.Updater/assets/icons/NightOwl.ico
+```
+
+O `.ico` contem as resolucoes `16x16`, `20x20`, `24x24`, `32x32`, `40x40`, `48x48`, `64x64`, `128x128` e `256x256`. Nao ha variantes de status, overlays ou icones coloridos por estado. O Tray deve usar sempre `NightOwl.ico`.
+
+Para regenerar os assets:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\generate-nightowl-icon.ps1
+```
+
+O ZIP publicado precisa conter:
+
+```text
+assets/icons/NightOwl.ico
+NightOwl.Agent.Windows.exe
+NightOwl.Agent.Tray.exe
+NightOwl.Agent.Updater.exe
+```
+
+Para gerar o pacote de download no workspace:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File NightOwl.Agent.Windows\scripts\Publish-NightOwlAgentDownload.ps1
+```
+
+Depois, no servidor Linux:
+
+```bash
+sudo /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
+```
+
+Validacoes no servidor:
+
+```bash
+curl -kI https://nightowl.controlsul.com.br/downloads/nightowl-agent/NightOwl.Agent.Windows.zip
+curl -kI https://nightowl.controlsul.com.br/downloads/nightowl-agent/version.json
+curl -kI https://nightowl.controlsul.com.br/downloads/nightowl-agent/checksums.json
+unzip -l /opt/nightowl/downloads/agent/windows/NightOwl.Agent.Windows.zip | grep -E "assets/icons/NightOwl.ico|NightOwl.Agent.Tray.exe|NightOwl.Agent.Updater.exe"
+```
+
+Validacoes no endpoint Windows:
+
+```powershell
+Get-Service NightOwlAgentDotNet
+Get-ScheduledTask -TaskName "NightOwl Agent Tray"
+Get-ChildItem "C:\ProgramData\NightOwl\AgentDotNet\assets\icons"
+Test-Path "C:\ProgramData\NightOwl\AgentDotNet\assets\icons\NightOwl.ico"
+Get-Process | Where-Object { $_.ProcessName -like "*NightOwl*" }
+Get-Content "C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl" -Tail 80
+Get-Content "C:\ProgramData\NightOwl\Logs\agent-tray.jsonl" -Tail 80
+```
+
+Checklist visual:
+
+- validar bandeja expandida e recolhida;
+- validar barra de tarefas;
+- validar Windows Explorer;
+- validar Gerenciador de Tarefas;
+- validar tema claro e escuro;
+- validar escala 100%, 125% e 150%;
+- em `16x16`, o icone deve parecer uma cabeca/olhos de coruja forte, nao uma borboleta;
+- em `24x24`, a leitura da coruja deve estar clara;
+- em `32x32+`, o icone deve manter aparencia profissional.
+
+## 11. NightOwl Agent Windows - Update Flow
+
+O atualizador oficial fica no pacote como:
+
+```text
+NightOwl.Agent.Updater.exe
+```
+
+Comandos suportados no endpoint Windows:
+
+```powershell
+& "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Updater.exe" status
+& "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Updater.exe" check
+& "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Updater.exe" update
+& "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Updater.exe" rollback
+```
+
+O comando `check` baixa:
+
+```text
+{ServerUrl}/downloads/nightowl-agent/version.json
+```
+
+O comando `update` baixa o ZIP, valida `checksums.json`, extrai em staging, cria backup da instalacao atual, para o servico, fecha o Tray, copia os novos arquivos, preserva `agent.config.json` e `agent-dotnet.state.json`, reinicia o servico e tenta reiniciar o Tray.
+
+Diretorios usados:
+
+```text
+C:\ProgramData\NightOwl\Updates\Downloads
+C:\ProgramData\NightOwl\Updates\Staging
+C:\ProgramData\NightOwl\Backups
+C:\ProgramData\NightOwl\Logs\agent-updater.jsonl
+```
+
+Arquivos preservados em update/reinstalacao:
+
+```text
+agent.config.json
+agent-dotnet.state.json
+agent_token
+machine_id
+endpoint_id
+logs
+packages/jobs locais
+```
+
+O Tray nao expõe atualização para o usuário final. O menu visual fica restrito a:
+
+- Abrir NightOwl
+- Status do agente
+- Reiniciar agente
+- Sobre
+
+A atualização manual deve ser enviada pelo painel web do NightOwl, na tela de detalhe do endpoint, pelo botão **Atualizar agente**. Esse botão cria um job tecnico `update_agent` com payload controlado:
+
+```json
+{
+  "target_version": "latest",
+  "channel": "stable",
+  "force": false,
+  "source": "manual_panel"
+}
+```
+
+Quando o agente recebe `update_agent`, ele executa:
+
+```powershell
+& "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Updater.exe" update --source job --job-id "<job_id>" --channel stable --target-version latest --quiet --json-output
+```
+
+Se a atualizacao reiniciar o servico antes do resultado ser enviado, o updater grava o resultado pendente em:
+
+```text
+C:\ProgramData\NightOwl\Jobs\pending-update-result.json
+```
+
+Ao iniciar, o servico `NightOwlAgentDotNet` tenta enviar esse resultado para `/api/agent/jobs/result/`. Em sucesso, o arquivo e movido para `C:\ProgramData\NightOwl\Jobs\completed\`.
+
+O `version.json` publico deve conter `packageUrl`, `checksumUrl`, `installerUrl`, `minimumSupportedVersion`, `requiresRestart`, `force` e notas da versao. O `checksums.json` deve conter `sha256` e `size` para os arquivos publicados.
+
+Checklist de validacao do update pelo painel:
+
+1. Instalar uma versao atual do agente.
+2. Publicar uma versao nova em `/downloads/nightowl-agent/`.
+3. Abrir o endpoint no painel.
+4. Clicar em **Atualizar agente**.
+5. Confirmar que o job `update_agent` aparece na fila.
+6. Confirmar nos logs `job.update_agent.received`.
+7. Confirmar execucao do updater e checksum valido.
+8. Confirmar restart do servico.
+9. Confirmar que o resultado voltou ao painel como concluido, ja atualizado ou falha amigavel.
+10. Confirmar preservacao de `agent.config.json`, `agent-dotnet.state.json`, `machine_id` e token.

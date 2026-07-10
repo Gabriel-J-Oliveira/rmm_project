@@ -59,6 +59,14 @@ internal sealed class AgentLocalState
 
         DateTimeOffset? logHeartbeat = ReadLastHeartbeatFromLog(logPath);
         DateTimeOffset? lastHeartbeat = Max(stateHeartbeat, logHeartbeat);
+        JsonDocument? versionDocument = ReadJson(Path.Combine(installPath, "agent.version.json"));
+        if (versionDocument is not null)
+        {
+            using (versionDocument)
+            {
+                version = GetString(versionDocument.RootElement, "version", version);
+            }
+        }
 
         return new AgentLocalState
         {

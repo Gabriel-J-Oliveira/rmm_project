@@ -1,33 +1,27 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
+using System.Reflection;
 using System.ServiceProcess;
 
 namespace NightOwl.Agent.Tray;
-
-internal enum AgentTrayStatus
-{
-    Online,
-    Warning,
-    Offline
-}
 
 internal sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly Icon _icon;
     private AgentLocalState _state = AgentLocalState.Load();
-    private AgentTrayStatus _status = AgentTrayStatus.Offline;
-    private Icon? _currentIcon;
+    private string _serviceStatus = "Running";
 
     public TrayApplicationContext()
     {
-        ContextMenuStrip menu = BuildMenu();
+        _icon = LoadNightOwlIcon();
         _notifyIcon = new NotifyIcon
         {
-            ContextMenuStrip = menu,
-            Text = "NightOwl Agent",
+            ContextMenuStrip = BuildMenu(),
+            Icon = _icon,
+            Text = BuildTooltip("Running"),
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => ShowStatusWindow();
@@ -41,6 +35,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _timer.Start();
     }
 
+    public static bool IsServiceRunning()
+    {
+        try
+        {
+            using ServiceController service = new("NightOwlAgentDotNet");
+            return service.Status == ServiceControllerStatus.Running;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -49,7 +56,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _timer.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
-            _currentIcon?.Dispose();
+            _icon.Dispose();
         }
 
         base.Dispose(disposing);
@@ -60,82 +67,105 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ContextMenuStrip menu = new();
         menu.Items.Add("Abrir NightOwl", null, (_, _) => OpenNightOwl());
         menu.Items.Add("Status do agente", null, (_, _) => ShowStatusWindow());
-        menu.Items.Add("Forçar inventário", null, (_, _) => ForceInventory());
         menu.Items.Add("Reiniciar agente", null, (_, _) => RestartAgentService());
-        menu.Items.Add("Ver logs", null, (_, _) => OpenLogs());
-        menu.Items.Add("Copiar ID da máquina", null, (_, _) => CopyMachineId());
         menu.Items.Add("Sobre", null, (_, _) => ShowAbout());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Sair da bandeja", null, (_, _) => ExitTray());
         return menu;
     }
 
     private void RefreshStatus()
     {
         _state = AgentLocalState.Load();
-        bool serviceInstalled = TryGetService(out ServiceController? service);
-        bool serviceRunning = serviceInstalled && service?.Status == ServiceControllerStatus.Running;
-        DateTimeOffset? heartbeat = _state.LastHeartbeatAt;
-        bool heartbeatRecent = heartbeat is not null && DateTimeOffset.UtcNow - heartbeat.Value.ToUniversalTime() <= TimeSpan.FromMinutes(10);
-
-        AgentTrayStatus next = serviceRunning && heartbeatRecent
-            ? AgentTrayStatus.Online
-            : serviceRunning
-                ? AgentTrayStatus.Warning
-                : AgentTrayStatus.Offline;
-
-        _status = next;
-        _notifyIcon.Text = TrimTooltip($"NightOwl Agent | Status: {StatusLabel(next)} | Heartbeat: {FormatDate(heartbeat)}");
-        SetIcon(next);
-
-        service?.Dispose();
-    }
-
-    private void SetIcon(AgentTrayStatus status)
-    {
-        Icon icon = BuildStatusIcon(status);
-        Icon? old = _currentIcon;
-        _currentIcon = icon;
-        _notifyIcon.Icon = icon;
-        old?.Dispose();
-    }
-
-    private static Icon BuildStatusIcon(AgentTrayStatus status)
-    {
-        string iconPath = Path.Combine(AppContext.BaseDirectory, "NightOwl.ico");
-        if (!File.Exists(iconPath))
+        if (!TryGetService(out ServiceController? service))
         {
-            iconPath = Path.Combine(AppContext.BaseDirectory, "assets", "NightOwl.ico");
+            TrayLog.Write("tray.exit.service_not_running", "Servico NightOwlAgentDotNet nao encontrado durante refresh.");
+            ExitTray();
+            return;
         }
 
+        using (ServiceController currentService = service!)
+        {
+            _serviceStatus = currentService.Status.ToString();
+            if (currentService.Status != ServiceControllerStatus.Running)
+            {
+                TrayLog.Write("tray.service.stopped", "Servico NightOwlAgentDotNet nao esta em execucao.", new { status = _serviceStatus });
+                ExitTray();
+                return;
+            }
+        }
+
+        TrayLog.Write("tray.service.running", "Servico NightOwlAgentDotNet em execucao.");
+        _notifyIcon.Text = BuildTooltip(_serviceStatus);
+    }
+
+    private string BuildTooltip(string serviceStatus)
+    {
+        string server = FormatServer(_state.ServerBaseUrl);
+        string version = string.IsNullOrWhiteSpace(_state.AgentVersion) ? "-" : _state.AgentVersion;
+        return TrimTooltip($"NightOwl Agent | Servico: {serviceStatus} | Servidor: {server} | Versao: {version}");
+    }
+
+    private Icon LoadNightOwlIcon()
+    {
+        string installIcon = Path.Combine(@"C:\ProgramData\NightOwl\AgentDotNet", "assets", "icons", "NightOwl.ico");
+        string appIcon = Path.Combine(AppContext.BaseDirectory, "assets", "icons", "NightOwl.ico");
+
+        foreach (string path in new[] { installIcon, appIcon })
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    TrayLog.Write("tray.icon.loaded", "Icone NightOwl carregado do arquivo.", new { path });
+                    return new Icon(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                TrayLog.Write("tray.error", "Falha ao carregar icone do arquivo.", new { path, error = ex.Message });
+            }
+        }
+
+        try
+        {
+            Stream? stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("NightOwl.ico");
+            if (stream is not null)
+            {
+                TrayLog.Write("tray.icon.loaded", "Icone NightOwl carregado do recurso embutido.");
+                return new Icon(stream);
+            }
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Write("tray.error", "Falha ao carregar icone embutido.", new { error = ex.Message });
+        }
+
+        TrayLog.Write("tray.icon.fallback", "Usando icone fallback gerado em runtime.");
+        return BuildFallbackIcon();
+    }
+
+    private static Icon BuildFallbackIcon()
+    {
         using Bitmap bitmap = new(32, 32);
         using Graphics graphics = Graphics.FromImage(bitmap);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.Clear(Color.Transparent);
 
-        if (File.Exists(iconPath))
-        {
-            using Icon baseIcon = new(iconPath, 32, 32);
-            graphics.DrawIcon(baseIcon, new Rectangle(0, 0, 32, 32));
-        }
-        else
-        {
-            using LinearGradientBrush brush = new(new Rectangle(0, 0, 32, 32), Color.FromArgb(124, 58, 237), Color.FromArgb(38, 214, 126), 45);
-            graphics.FillEllipse(brush, 2, 2, 28, 28);
-            using Font font = new("Segoe UI", 13, FontStyle.Bold);
-            TextRenderer.DrawText(graphics, "N", font, new Rectangle(0, 3, 32, 26), Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-        }
+        using GraphicsPath bg = RoundedRect(new RectangleF(1, 1, 30, 30), 7);
+        using LinearGradientBrush bgBrush = new(new RectangleF(1, 1, 30, 30), Color.FromArgb(7, 10, 20), Color.FromArgb(37, 18, 82), 45);
+        using Pen border = new(Color.FromArgb(139, 92, 246), 2);
+        graphics.FillPath(bgBrush, bg);
+        graphics.DrawPath(border, bg);
 
-        Color dot = status switch
-        {
-            AgentTrayStatus.Online => Color.FromArgb(38, 214, 126),
-            AgentTrayStatus.Warning => Color.FromArgb(245, 158, 11),
-            _ => Color.FromArgb(239, 68, 68)
-        };
-        using SolidBrush dotBrush = new(dot);
-        using Pen border = new(Color.FromArgb(8, 12, 18), 2);
-        graphics.FillEllipse(dotBrush, 20, 20, 10, 10);
-        graphics.DrawEllipse(border, 20, 20, 10, 10);
+        using SolidBrush face = new(Color.FromArgb(124, 58, 237));
+        graphics.FillEllipse(face, 6, 6, 20, 21);
+        using SolidBrush eye = new(Color.FromArgb(240, 253, 244));
+        using SolidBrush pupil = new(Color.FromArgb(11, 18, 32));
+        graphics.FillEllipse(eye, 7, 11, 8, 8);
+        graphics.FillEllipse(eye, 17, 11, 8, 8);
+        graphics.FillEllipse(pupil, 10, 14, 3, 3);
+        graphics.FillEllipse(pupil, 20, 14, 3, 3);
+        using SolidBrush beak = new(Color.FromArgb(250, 204, 21));
+        graphics.FillPolygon(beak, new[] { new Point(16, 18), new Point(12, 23), new Point(20, 23) });
 
         IntPtr handle = bitmap.GetHicon();
         try
@@ -145,8 +175,20 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         finally
         {
-            DestroyIcon(handle);
+            _ = DestroyIcon(handle);
         }
+    }
+
+    private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
+    {
+        float diameter = radius * 2;
+        GraphicsPath path = new();
+        path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     private bool TryGetService(out ServiceController? service)
@@ -166,6 +208,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenNightOwl()
     {
+        TrayLog.Write("tray.menu.open_nightowl", "Abrindo NightOwl pelo menu da bandeja.");
         string url = string.IsNullOrWhiteSpace(_state.ServerBaseUrl)
             ? "https://nightowl.controlsul.com.br"
             : _state.ServerBaseUrl;
@@ -175,8 +218,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void ShowStatusWindow()
     {
         bool installed = TryGetService(out ServiceController? service);
-        bool running = installed && service?.Status == ServiceControllerStatus.Running;
-        string status = StatusLabel(_status);
+        string status = installed ? service!.Status.ToString() : "Nao instalado";
         string heartbeat = FormatDate(_state.LastHeartbeatAt);
         service?.Dispose();
 
@@ -188,7 +230,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             StartPosition = FormStartPosition.CenterScreen,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
-            MinimizeBox = false
+            MinimizeBox = false,
+            Icon = _icon
         };
 
         TableLayoutPanel table = new()
@@ -202,15 +245,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        AddRow(table, "Status", status);
-        AddRow(table, "Serviço instalado", installed ? "Sim" : "Não");
-        AddRow(table, "Serviço em execução", running ? "Sim" : "Não");
-        AddRow(table, "Servidor", _state.ServerBaseUrl);
+        AddRow(table, "Servico instalado", installed ? "Sim" : "Nao");
+        AddRow(table, "Servico em execucao", status == "Running" ? "Sim" : "Nao");
+        AddRow(table, "Status do servico", status);
+        AddRow(table, "Servidor", Safe(_state.ServerBaseUrl));
         AddRow(table, "Machine ID", Safe(_state.MachineId));
         AddRow(table, "Endpoint ID", Safe(_state.EndpointId));
-        AddRow(table, "Último heartbeat", heartbeat);
-        AddRow(table, "Versão do agente", Safe(_state.AgentVersion));
-        AddRow(table, "Instalação", _state.InstallPath);
+        AddRow(table, "Ultimo heartbeat", heartbeat);
+        AddRow(table, "Versao do agente", Safe(_state.AgentVersion));
+        AddRow(table, "Instalacao", _state.InstallPath);
         AddRow(table, "Log", _state.LogPath);
 
         Button close = new()
@@ -246,17 +289,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         table.Controls.Add(valueControl);
     }
 
-    private static void ForceInventory()
-    {
-        MessageBox.Show(
-            "A ação local de forçar inventário será implementada quando o agente expuser um canal local seguro. Por enquanto, use o Endpoint Detail no NightOwl para criar o job force_inventory.",
-            "NightOwl Agent",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
-    }
-
     private void RestartAgentService()
     {
+        TrayLog.Write("tray.menu.restart_agent", "Usuario acionou reinicio do servico.");
         try
         {
             using ServiceController service = new(_state.ServiceName);
@@ -269,53 +304,27 @@ internal sealed class TrayApplicationContext : ApplicationContext
             service.Start();
             service.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
             RefreshStatus();
-            MessageBox.Show("Serviço NightOwl reiniciado.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Servico NightOwl reiniciado.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Win32Exception)
         {
-            MessageBox.Show("Não foi possível reiniciar o serviço. Execute a bandeja ou a ação como administrador.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("Nao foi possivel reiniciar o servico. Execute a bandeja ou a acao como administrador.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         catch (UnauthorizedAccessException)
         {
-            MessageBox.Show("Permissão insuficiente para reiniciar o serviço. Execute como administrador.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("Permissao insuficiente para reiniciar o servico. Execute como administrador.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         catch (Exception ex)
         {
-            MessageBox.Show("Falha ao reiniciar o serviço: " + ex.Message, "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            TrayLog.Write("tray.error", "Falha ao reiniciar o servico.", new { error = ex.Message });
+            MessageBox.Show("Falha ao reiniciar o servico: " + ex.Message, "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-    }
-
-    private void OpenLogs()
-    {
-        if (!File.Exists(_state.LogPath))
-        {
-            MessageBox.Show("Arquivo de log ainda não existe: " + _state.LogPath, "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = "notepad.exe",
-            Arguments = "\"" + _state.LogPath + "\"",
-            UseShellExecute = true
-        });
-    }
-
-    private void CopyMachineId()
-    {
-        if (string.IsNullOrWhiteSpace(_state.MachineId))
-        {
-            MessageBox.Show("Machine ID ainda não disponível.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        Clipboard.SetText(_state.MachineId);
     }
 
     private void ShowAbout()
     {
         MessageBox.Show(
-            $"NightOwl Agent Tray\n\nVersão do agente: {Safe(_state.AgentVersion)}\nInstalação: {_state.InstallPath}\nServidor: {_state.ServerBaseUrl}",
+            $"NightOwl Agent Tray\n\nVersao do agente: {Safe(_state.AgentVersion)}\nInstalacao: {_state.InstallPath}\nServidor: {_state.ServerBaseUrl}",
             "Sobre o NightOwl Agent",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
@@ -336,21 +345,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
         });
     }
 
-    private static string StatusLabel(AgentTrayStatus status) => status switch
-    {
-        AgentTrayStatus.Online => "Online",
-        AgentTrayStatus.Warning => "Atenção",
-        _ => "Offline"
-    };
-
     private static string FormatDate(DateTimeOffset? value)
     {
         if (value is null)
         {
-            return "não encontrado";
+            return "nao encontrado";
         }
 
         return value.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss");
+    }
+
+    private static string FormatServer(string value)
+    {
+        if (Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+        {
+            return uri.Host;
+        }
+
+        return string.IsNullOrWhiteSpace(value) ? "-" : value;
     }
 
     private static string Safe(string value) => string.IsNullOrWhiteSpace(value) ? "-" : value;
@@ -360,6 +372,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return value.Length <= 63 ? value : value[..60] + "...";
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr hIcon);
 }
