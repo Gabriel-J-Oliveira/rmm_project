@@ -508,7 +508,7 @@ def normalize_powershell_path(path):
     return value.replace('\\\\', '\\')
 
 
-def build_agent_install_command(enrollment_token, *, server_url=None, source_path=None, install_as_service=True, run_once=True, run_check=True, keep_scheduled_task_fallback=False):
+def build_agent_install_command(enrollment_token='', *, server_url=None, source_path=None, install_as_service=True, run_once=True, run_check=True, keep_scheduled_task_fallback=False, no_gui=False):
     server_base = normalize_agent_server_base(
         server_url
         or getattr(settings, 'NIGHTOWL_AGENT_PUBLIC_SERVER_URL', '')
@@ -531,6 +531,11 @@ def build_agent_install_command(enrollment_token, *, server_url=None, source_pat
         flags.append('-RunCheck')
     if keep_scheduled_task_fallback:
         flags.append('-KeepPowerShellAgent:$true')
+    if no_gui:
+        flags.append('-NoGui')
+    token_value = str(enrollment_token or '').strip()
+    if token_value and token_value != 'TOKEN_AQUI':
+        flags.append(f'-EnrollmentToken "{token_value}"')
     flag_text = ' '.join(flags)
     if installer_path.lower().startswith(('http://', 'https://')):
         return (
@@ -539,14 +544,12 @@ def build_agent_install_command(enrollment_token, *, server_url=None, source_pat
             f'Invoke-WebRequest "{installer_path}" -OutFile "$dir\\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing; '
             'powershell.exe -ExecutionPolicy Bypass -File "$dir\\Install-NightOwlAgentDotNet.ps1" '
             f'-ServerUrl "{server_base}" '
-            f'-EnrollmentToken "{enrollment_token}" '
             f'{flag_text}'
         )
     return (
         'powershell.exe -ExecutionPolicy Bypass '
         f'-File "{installer_path}" '
         f'-ServerUrl "{server_base}" '
-        f'-EnrollmentToken "{enrollment_token}" '
         f'{flag_text}'
     )
 
@@ -2962,10 +2965,13 @@ def endpoint_job_create(request, pk):
 def agent_install(request):
     created_token = None
     created_enrollment = None
+    created_manual_token = None
+    created_manual_validation = None
     created_command = ''
     now = timezone.now()
 
     if request.method == 'POST':
+        action = request.POST.get('action', 'enrollment').strip()
         name = request.POST.get('name', '').strip()
         allowed_domain = request.POST.get('allowed_domain', '').strip().lower()
         notes = request.POST.get('notes', '').strip()
@@ -2981,7 +2987,33 @@ def agent_install(request):
             except ValueError:
                 max_uses = None
 
-        if not name:
+        if action == 'manual_validation':
+            manual_name = name or 'Validacao manual fora do dominio'
+            try:
+                expires_minutes = int(request.POST.get('expires_minutes') or 30)
+            except ValueError:
+                expires_minutes = 30
+            if expires_minutes <= 0:
+                messages.warning(request, 'A validade do token manual deve ser maior que zero.')
+            else:
+                created_manual_validation, created_manual_token = AgentManualValidationToken.create_with_token(
+                    name=manual_name,
+                    expires_at=now + timedelta(minutes=expires_minutes),
+                    notes=notes or 'Token manual gerado pelo painel de instalacao do agente.',
+                )
+                create_audit_event(
+                    event_type='agent.manual_validation_token_created',
+                    title='Token de validacao manual criado',
+                    description=f'Token manual criado: {created_manual_validation.name}.',
+                    severity=AuditEvent.SEVERITY_INFO,
+                    metadata={
+                        'manual_validation_token_id': str(created_manual_validation.id),
+                        'prefix': created_manual_validation.prefix,
+                    },
+                    request=request,
+                )
+                messages.success(request, 'Token de validacao manual criado. Copie agora; ele nao sera exibido novamente.')
+        elif not name:
             messages.warning(request, 'Informe um nome para o token.')
         elif expires_hours <= 0:
             messages.warning(request, 'A validade deve ser maior que zero.')
@@ -2996,7 +3028,7 @@ def agent_install(request):
                 notes=notes,
             )
             created_enrollment = enrollment
-            created_command = build_agent_install_command(created_token)
+            created_command = build_agent_install_command()
             create_audit_event(
                 event_type='agent.enrollment_token_created',
                 title='Enrollment token criado',
@@ -3019,7 +3051,7 @@ def agent_install(request):
             'token': token,
             'state': enrollment_token_state(token),
             'logs': token.logs.select_related('endpoint').order_by('-created_at')[:5],
-            'command_without_token': build_agent_install_command('TOKEN_AQUI'),
+            'command_without_token': build_agent_install_command(),
         })
 
     last_24h = now - timedelta(hours=24)
@@ -3052,6 +3084,8 @@ def agent_install(request):
         'rows': token_rows,
         'created_token': created_token,
         'created_enrollment': created_enrollment,
+        'created_manual_token': created_manual_token,
+        'created_manual_validation': created_manual_validation,
         'created_command': created_command,
         'heartbeat_url': default_heartbeat_url,
         'server_url': default_server_url,

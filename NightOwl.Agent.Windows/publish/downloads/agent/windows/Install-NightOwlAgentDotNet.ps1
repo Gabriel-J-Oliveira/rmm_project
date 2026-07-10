@@ -3,6 +3,7 @@ param(
     [string]$ServerUrl,
 
     [string]$EnrollmentToken = "",
+    [string]$ManualValidationToken = "",
     [string]$AgentToken = "",
     [string]$PackageUrl = "",
     [string]$InstallPath = "C:\ProgramData\NightOwl\AgentDotNet",
@@ -15,6 +16,7 @@ param(
     [bool]$KeepPowerShellAgent = $true,
     [switch]$DisablePowerShellAgent,
     [switch]$AllowInsecureTls,
+    [switch]$NoGui,
     [switch]$DebugLog
 )
 
@@ -204,30 +206,237 @@ function Resolve-MachineId([string]$ConfigPath, [string]$StatePath) {
 function Get-ComputerInfoLite {
     $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
     $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
     return @{
         Hostname = $env:COMPUTERNAME.ToUpperInvariant()
         Domain = if ($cs.PartOfDomain) { ([string]$cs.Domain).ToLowerInvariant() } else { "" }
         SerialNumber = if ($bios.SerialNumber) { [string]$bios.SerialNumber } else { "" }
+        OsName = if ($os.Caption) { [string]$os.Caption } else { "" }
     }
 }
 
-function Invoke-Enrollment($BaseUrl, $Token, $MachineId, $InstallPath) {
+function Get-WebErrorPayload($ErrorRecord) {
+    $responseText = ""
+    try {
+        $response = $ErrorRecord.Exception.Response
+        if ($response) {
+            $stream = $response.GetResponseStream()
+            if ($stream) {
+                $reader = New-Object System.IO.StreamReader($stream)
+                $responseText = $reader.ReadToEnd()
+                $reader.Dispose()
+            }
+        }
+    }
+    catch {}
+    if ([string]::IsNullOrWhiteSpace($responseText) -and $ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $responseText = [string]$ErrorRecord.ErrorDetails.Message
+    }
+    if ([string]::IsNullOrWhiteSpace($responseText)) {
+        return [pscustomobject]@{
+            error = "request_failed"
+            detail = $ErrorRecord.Exception.Message
+            reason = ""
+            raw = ""
+        }
+    }
+    try {
+        $parsed = $responseText | ConvertFrom-Json
+        if ($parsed) {
+            if ($parsed.PSObject.Properties.Name -notcontains "raw") {
+                $parsed | Add-Member -NotePropertyName "raw" -NotePropertyValue $responseText
+            }
+            return $parsed
+        }
+    }
+    catch {}
+    return [pscustomobject]@{
+        error = "request_failed"
+        detail = $responseText
+        reason = ""
+        raw = $responseText
+    }
+}
+
+function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath) {
     $info = Get-ComputerInfoLite
     $body = @{
-        enrollment_token = $Token
         machine_id = $MachineId
         hostname = $info.Hostname
         domain = $info.Domain
         serial_number = $info.SerialNumber
         fqdn = if ($info.Domain) { "$($info.Hostname).$($info.Domain)" } else { $info.Hostname }
-        os_name = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).Caption
+        os_name = $info.OsName
         agent_version = "0.1.0"
         agent_mode = "dotnet-service"
         install_path = $InstallPath
         task_name = "NightOwlAgentDotNet"
-    } | ConvertTo-Json -Depth 5
+    }
+    if (-not [string]::IsNullOrWhiteSpace($EnrollmentTokenValue)) {
+        $body["enrollment_token"] = $EnrollmentTokenValue
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ManualTokenValue)) {
+        $body["manual_validation_token"] = $ManualTokenValue
+    }
     $url = Join-AgentUrl $BaseUrl "/api/agent/enroll/"
-    return Invoke-RestMethod -Method Post -Uri $url -Body $body -ContentType "application/json" -TimeoutSec 30
+    $json = $body | ConvertTo-Json -Depth 5
+    try {
+        return Invoke-RestMethod -Method Post -Uri $url -Body $json -ContentType "application/json" -TimeoutSec 30
+    }
+    catch {
+        $payload = Get-WebErrorPayload $_
+        $message = if ($payload.detail) { [string]$payload.detail } else { $_.Exception.Message }
+        $exception = New-Object System.Exception($message, $_.Exception)
+        $exception.Data["nightowl_error"] = if ($payload.error) { [string]$payload.error } else { "request_failed" }
+        $exception.Data["nightowl_reason"] = if ($payload.reason) { [string]$payload.reason } else { "" }
+        $exception.Data["nightowl_detail"] = $message
+        $exception.Data["nightowl_raw"] = if ($payload.raw) { [string]$payload.raw } else { "" }
+        throw $exception
+    }
+}
+
+function Show-ManualValidationDialog($ServerBase, $Hostname, $Domain) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "NightOwl Agent - Validacao manual"
+    $form.Width = 560
+    $form.Height = 320
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.BackColor = [System.Drawing.Color]::FromArgb(11, 15, 24)
+    $form.ForeColor = [System.Drawing.Color]::White
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = "NightOwl Agent - Validacao manual"
+    $title.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $title.Left = 24
+    $title.Top = 20
+    $title.Width = 490
+    $title.Height = 28
+    $form.Controls.Add($title)
+
+    $message = New-Object System.Windows.Forms.Label
+    $message.Text = "Esta maquina nao pertence ao dominio autorizado. Informe o token de validacao manual gerado no painel NightOwl."
+    $message.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $message.Left = 24
+    $message.Top = 58
+    $message.Width = 490
+    $message.Height = 42
+    $form.Controls.Add($message)
+
+    $meta = New-Object System.Windows.Forms.Label
+    $meta.Text = "Hostname: $Hostname`r`nDominio detectado: $Domain`r`nServidor: $ServerBase"
+    $meta.Font = New-Object System.Drawing.Font("Consolas", 8)
+    $meta.Left = 24
+    $meta.Top = 104
+    $meta.Width = 490
+    $meta.Height = 58
+    $meta.ForeColor = [System.Drawing.Color]::FromArgb(178, 190, 214)
+    $form.Controls.Add($meta)
+
+    $tokenLabel = New-Object System.Windows.Forms.Label
+    $tokenLabel.Text = "Token de validacao manual"
+    $tokenLabel.Left = 24
+    $tokenLabel.Top = 170
+    $tokenLabel.Width = 220
+    $tokenLabel.Height = 20
+    $form.Controls.Add($tokenLabel)
+
+    $tokenBox = New-Object System.Windows.Forms.TextBox
+    $tokenBox.Left = 24
+    $tokenBox.Top = 194
+    $tokenBox.Width = 490
+    $tokenBox.Height = 28
+    $tokenBox.Font = New-Object System.Drawing.Font("Consolas", 10)
+    $form.Controls.Add($tokenBox)
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = "Validar e instalar"
+    $okButton.Left = 340
+    $okButton.Top = 238
+    $okButton.Width = 174
+    $okButton.Height = 34
+    $okButton.BackColor = [System.Drawing.Color]::FromArgb(38, 214, 126)
+    $okButton.ForeColor = [System.Drawing.Color]::Black
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($okButton)
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = "Cancelar"
+    $cancelButton.Left = 226
+    $cancelButton.Top = 238
+    $cancelButton.Width = 104
+    $cancelButton.Height = 34
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($cancelButton)
+
+    $form.AcceptButton = $okButton
+    $form.CancelButton = $cancelButton
+    $result = $form.ShowDialog()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        return ""
+    }
+    return $tokenBox.Text.Trim()
+}
+
+function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [switch]$NoGuiMode) {
+    $info = Get-ComputerInfoLite
+    Write-InstallLog "enrollment.auto.start" "Iniciando enrollment do agente." @{
+        hostname = $info.Hostname
+        domain = $info.Domain
+        has_enrollment_token = -not [string]::IsNullOrWhiteSpace($EnrollmentTokenValue)
+        has_manual_validation_token = -not [string]::IsNullOrWhiteSpace($ManualTokenValue)
+    }
+    try {
+        $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $ManualTokenValue -MachineId $MachineId -InstallPath $InstallPath
+        Write-InstallLog "enrollment.success" "Enrollment aprovado." @{ hostname = $info.Hostname; domain = $info.Domain }
+        return $response
+    }
+    catch {
+        $errorCode = [string]$_.Exception.Data["nightowl_error"]
+        $reason = [string]$_.Exception.Data["nightowl_reason"]
+        if ($errorCode -ne "manual_validation_required") {
+            Write-InstallLog "enrollment.failed" "Enrollment falhou." @{ error = $errorCode; reason = $reason; detail = $_.Exception.Message }
+            throw
+        }
+
+        Write-InstallLog "enrollment.manual.required" "Backend solicitou validacao manual." @{
+            reason = $reason
+            hostname = $info.Hostname
+            domain = $info.Domain
+        }
+
+        $tokenToUse = $ManualTokenValue
+        if ([string]::IsNullOrWhiteSpace($tokenToUse)) {
+            if ($NoGuiMode) {
+                $tokenToUse = Read-Host "Informe o token de validacao manual NightOwl"
+            }
+            else {
+                $tokenToUse = Show-ManualValidationDialog -ServerBase $BaseUrl -Hostname $info.Hostname -Domain $info.Domain
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($tokenToUse)) {
+            throw "Validacao manual cancelada."
+        }
+        Write-InstallLog "enrollment.manual.retry" "Tentando enrollment com token manual." @{ hostname = $info.Hostname; domain = $info.Domain }
+        try {
+            $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $tokenToUse -MachineId $MachineId -InstallPath $InstallPath
+            Write-InstallLog "enrollment.success" "Enrollment aprovado com validacao manual." @{ hostname = $info.Hostname; domain = $info.Domain; manual_validation_used = $true }
+            return $response
+        }
+        catch {
+            Write-InstallLog "enrollment.failed" "Enrollment manual falhou." @{
+                error = [string]$_.Exception.Data["nightowl_error"]
+                reason = [string]$_.Exception.Data["nightowl_reason"]
+                detail = $_.Exception.Message
+            }
+            throw
+        }
+    }
 }
 
 function Save-AgentConfig($Path, $Config) {
@@ -311,9 +520,6 @@ $serverBase = Normalize-ServerUrl $ServerUrl
 if ([string]::IsNullOrWhiteSpace($serverBase)) {
     throw "ServerUrl e obrigatorio."
 }
-if ([string]::IsNullOrWhiteSpace($EnrollmentToken) -and [string]::IsNullOrWhiteSpace($AgentToken)) {
-    throw "Informe -EnrollmentToken ou -AgentToken."
-}
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourcePath = $scriptRoot
@@ -355,9 +561,9 @@ if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken) -and $EnrollmentToken.St
     Write-Step "WARN" "EnrollmentToken parece ser agent token legado/dev; usando como AgentToken."
     $AgentToken = $EnrollmentToken
 }
-elseif (-not [string]::IsNullOrWhiteSpace($EnrollmentToken)) {
+elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
     Write-Step "OK" "Executando enrollment no servidor NightOwl"
-    $enrollResponse = Invoke-Enrollment -BaseUrl $serverBase -Token $EnrollmentToken -MachineId $machineId -InstallPath $InstallPath
+    $enrollResponse = Invoke-NightOwlEnrollment -BaseUrl $serverBase -EnrollmentTokenValue $EnrollmentToken -ManualTokenValue $ManualValidationToken -MachineId $machineId -InstallPath $InstallPath -NoGuiMode:$NoGui
     if ($enrollResponse.agent_token) {
         $AgentToken = [string]$enrollResponse.agent_token
     }

@@ -84,7 +84,7 @@ class HeartbeatSerializer(serializers.Serializer):
 
 
 class AgentEnrollmentSerializer(serializers.Serializer):
-    enrollment_token = serializers.CharField(max_length=255)
+    enrollment_token = serializers.CharField(max_length=255, allow_blank=True, required=False)
     manual_validation_token = serializers.CharField(max_length=80, allow_blank=True, required=False)
     machine_id = serializers.CharField(max_length=255, allow_blank=True, required=False)
     hostname = serializers.CharField(max_length=150)

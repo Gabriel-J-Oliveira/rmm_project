@@ -1,6 +1,7 @@
 import logging
 
-from django.db import transaction
+from django.db import models, transaction
+from django.db.models import Q
 from django.urls import reverse
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
@@ -354,33 +355,23 @@ class AgentEnrollView(APIView):
 
         return None, True, 'new'
 
-    @transaction.atomic
-    def post(self, request):
-        serializer = AgentEnrollmentSerializer(data=request.data)
-        if not serializer.is_valid():
-            logger.warning('Invalid enrollment payload: %s', serializer.errors)
-            payload = request.data if isinstance(request.data, dict) else {}
-            return self._error(
-                request,
-                payload,
-                AgentEnrollmentLog.STATUS_DENIED,
-                'invalid_payload',
-                serializer.errors,
-                status.HTTP_400_BAD_REQUEST,
-            )
+    def _active_enrollment_tokens(self):
+        now = timezone.now()
+        return AgentEnrollmentToken.objects.select_for_update().filter(is_active=True).filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
+        ).filter(
+            Q(max_uses__isnull=True) | Q(used_count__lt=models.F('max_uses')),
+        )
 
-        payload = serializer.validated_data
-        hostname = payload['hostname'].strip().upper()
-        domain = payload.get('domain', '').strip().lower()
-        serial_number = payload.get('serial_number', '').strip()
-        machine_id = payload.get('machine_id', '').strip()
-        token_value = payload['enrollment_token'].strip()
-        manual_token_value = payload.get('manual_validation_token', '').strip()
-        manual_validation_token = None
-        domain_validation = 'not_required'
+    def _auto_enrollment_token_for_domain(self, domain):
+        normalized_domain = (domain or '').strip().lower()
+        if not normalized_domain:
+            return None
+        return self._active_enrollment_tokens().filter(allowed_domain__iexact=normalized_domain).order_by('-created_at').first()
 
+    def _validate_enrollment_token(self, request, payload, token_value):
         if not token_value.startswith('enroll_'):
-            return self._error(
+            return None, self._error(
                 request,
                 payload,
                 AgentEnrollmentLog.STATUS_INVALID_TOKEN,
@@ -390,9 +381,9 @@ class AgentEnrollView(APIView):
             )
 
         token_hash = hash_enrollment_token(token_value)
-        enrollment_token = AgentEnrollmentToken.objects.filter(token_hash=token_hash).first()
+        enrollment_token = AgentEnrollmentToken.objects.select_for_update().filter(token_hash=token_hash).first()
         if enrollment_token is None:
-            return self._error(
+            return None, self._error(
                 request,
                 payload,
                 AgentEnrollmentLog.STATUS_INVALID_TOKEN,
@@ -401,6 +392,12 @@ class AgentEnrollView(APIView):
                 status.HTTP_401_UNAUTHORIZED,
             )
 
+        token_error = self._validate_enrollment_token_state(request, payload, enrollment_token)
+        if token_error:
+            return None, token_error
+        return enrollment_token, None
+
+    def _validate_enrollment_token_state(self, request, payload, enrollment_token):
         if not enrollment_token.is_active:
             return self._error(
                 request,
@@ -433,8 +430,151 @@ class AgentEnrollView(APIView):
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
             )
+        return None
 
-        if enrollment_token.allowed_domain:
+    def _validate_manual_token(self, request, payload, manual_token_value, enrollment_token=None, domain_reason='domain_not_allowed'):
+        if not manual_token_value.startswith('manual_'):
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                'invalid_manual_validation_token',
+                'Token de validacao manual invalido.',
+                status.HTTP_403_FORBIDDEN,
+                enrollment_token=enrollment_token,
+                metadata={'reason': domain_reason},
+            )
+
+        manual_validation_token = AgentManualValidationToken.objects.select_for_update().filter(
+            token_hash=hash_manual_validation_token(manual_token_value),
+        ).first()
+        if manual_validation_token is None:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                'invalid_manual_validation_token',
+                'Token de validacao manual invalido.',
+                status.HTTP_403_FORBIDDEN,
+                enrollment_token=enrollment_token,
+                metadata={'reason': domain_reason},
+            )
+
+        if enrollment_token and manual_validation_token.enrollment_token_id and manual_validation_token.enrollment_token_id != enrollment_token.id:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                'invalid_manual_validation_token',
+                'Token de validacao manual nao pertence a este enrollment token.',
+                status.HTTP_403_FORBIDDEN,
+                enrollment_token=enrollment_token,
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+            )
+
+        if not enrollment_token and manual_validation_token.enrollment_token_id:
+            enrollment_token = manual_validation_token.enrollment_token
+            token_error = self._validate_enrollment_token_state(request, payload, enrollment_token)
+            if token_error:
+                return None, token_error
+
+        if not manual_validation_token.is_active:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                'invalid_manual_validation_token',
+                'Token de validacao manual inativo.',
+                status.HTTP_403_FORBIDDEN,
+                enrollment_token=enrollment_token,
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+            )
+
+        if manual_validation_token.is_expired:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_TOKEN_EXPIRED,
+                'manual_validation_token_expired',
+                'Token de validacao manual expirado.',
+                status.HTTP_403_FORBIDDEN,
+                enrollment_token=enrollment_token,
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+            )
+
+        if manual_validation_token.is_used:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_TOKEN_USED,
+                'manual_validation_token_used',
+                'Token de validacao manual ja utilizado.',
+                status.HTTP_403_FORBIDDEN,
+                enrollment_token=enrollment_token,
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+            )
+        return (manual_validation_token, enrollment_token), None
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = AgentEnrollmentSerializer(data=request.data)
+        if not serializer.is_valid():
+            logger.warning('Invalid enrollment payload: %s', serializer.errors)
+            payload = request.data if isinstance(request.data, dict) else {}
+            return self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_DENIED,
+                'invalid_payload',
+                serializer.errors,
+                status.HTTP_400_BAD_REQUEST,
+            )
+
+        payload = serializer.validated_data
+        hostname = payload['hostname'].strip().upper()
+        domain = payload.get('domain', '').strip().lower()
+        serial_number = payload.get('serial_number', '').strip()
+        machine_id = payload.get('machine_id', '').strip()
+        token_value = payload.get('enrollment_token', '').strip()
+        manual_token_value = payload.get('manual_validation_token', '').strip()
+        manual_validation_token = None
+        domain_validation = 'not_required'
+        enrollment_token = None
+
+        if token_value:
+            enrollment_token, token_error = self._validate_enrollment_token(request, payload, token_value)
+            if token_error:
+                return token_error
+        elif manual_token_value:
+            manual_result, manual_error = self._validate_manual_token(
+                request,
+                payload,
+                manual_token_value,
+                enrollment_token=None,
+                domain_reason='manual_validation',
+            )
+            if manual_error:
+                return manual_error
+            manual_validation_token, enrollment_token = manual_result
+            domain_validation = 'manual'
+        else:
+            enrollment_token = self._auto_enrollment_token_for_domain(domain)
+            if enrollment_token is None:
+                return self._error(
+                    request,
+                    payload,
+                    AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
+                    'manual_validation_required',
+                    'Esta maquina nao esta no dominio autorizado. Informe um token de validacao manual.',
+                    status.HTTP_403_FORBIDDEN,
+                    metadata={
+                        'reason': 'domain_not_allowed',
+                        'reported_domain': domain,
+                    },
+                )
+            domain_validation = 'domain'
+
+        if enrollment_token and enrollment_token.allowed_domain:
             allowed_domain = enrollment_token.allowed_domain.lower()
             domain_reason = 'domain_allowed'
             if domain == allowed_domain:
@@ -457,80 +597,16 @@ class AgentEnrollView(APIView):
                         },
                     )
 
-                if not manual_token_value.startswith('manual_'):
-                    return self._error(
-                        request,
-                        payload,
-                        AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
-                        'invalid_manual_validation_token',
-                        'Token de validacao manual invalido.',
-                        status.HTTP_403_FORBIDDEN,
-                        enrollment_token=enrollment_token,
-                        metadata={'reason': domain_reason},
-                    )
-
-                manual_validation_token = AgentManualValidationToken.objects.filter(
-                    token_hash=hash_manual_validation_token(manual_token_value),
-                ).select_for_update().first()
-                if manual_validation_token is None:
-                    return self._error(
-                        request,
-                        payload,
-                        AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
-                        'invalid_manual_validation_token',
-                        'Token de validacao manual invalido.',
-                        status.HTTP_403_FORBIDDEN,
-                        enrollment_token=enrollment_token,
-                        metadata={'reason': domain_reason},
-                    )
-
-                if manual_validation_token.enrollment_token_id and manual_validation_token.enrollment_token_id != enrollment_token.id:
-                    return self._error(
-                        request,
-                        payload,
-                        AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
-                        'invalid_manual_validation_token',
-                        'Token de validacao manual nao pertence a este enrollment token.',
-                        status.HTTP_403_FORBIDDEN,
-                        enrollment_token=enrollment_token,
-                        metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
-                    )
-
-                if not manual_validation_token.is_active:
-                    return self._error(
-                        request,
-                        payload,
-                        AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
-                        'invalid_manual_validation_token',
-                        'Token de validacao manual inativo.',
-                        status.HTTP_403_FORBIDDEN,
-                        enrollment_token=enrollment_token,
-                        metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
-                    )
-
-                if manual_validation_token.is_expired:
-                    return self._error(
-                        request,
-                        payload,
-                        AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_TOKEN_EXPIRED,
-                        'manual_validation_token_expired',
-                        'Token de validacao manual expirado.',
-                        status.HTTP_403_FORBIDDEN,
-                        enrollment_token=enrollment_token,
-                        metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
-                    )
-
-                if manual_validation_token.is_used:
-                    return self._error(
-                        request,
-                        payload,
-                        AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_TOKEN_USED,
-                        'manual_validation_token_used',
-                        'Token de validacao manual ja utilizado.',
-                        status.HTTP_403_FORBIDDEN,
-                        enrollment_token=enrollment_token,
-                        metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
-                    )
+                manual_result, manual_error = self._validate_manual_token(
+                    request,
+                    payload,
+                    manual_token_value,
+                    enrollment_token=enrollment_token,
+                    domain_reason=domain_reason,
+                )
+                if manual_error:
+                    return manual_error
+                manual_validation_token, enrollment_token = manual_result
 
                 domain_validation = 'manual'
 
@@ -588,7 +664,8 @@ class AgentEnrollView(APIView):
                 machine.first_seen_at = now
             machine.save()
 
-            enrollment_token.mark_used()
+            if enrollment_token is not None:
+                enrollment_token.mark_used()
             if manual_validation_token is not None:
                 manual_validation_token.mark_used(hostname, domain)
             self._log_enrollment(
@@ -611,7 +688,7 @@ class AgentEnrollView(APIView):
             create_audit_event(
                 event_type='agent.enrolled',
                 title='Agente cadastrado via enrollment',
-                description=f'{hostname} foi cadastrado usando enrollment token.',
+                description=f'{hostname} foi cadastrado pelo fluxo de enrollment.',
                 severity=AuditEvent.SEVERITY_INFO,
                 actor_type=AuditEvent.ACTOR_AGENT,
                 actor_name='RmmAgent installer',
@@ -622,7 +699,7 @@ class AgentEnrollView(APIView):
                     'created_or_existing': created_or_existing,
                     'identity_source': identity_source,
                     'machine_id': machine.machine_id,
-                    'enrollment_token_prefix': enrollment_token.prefix,
+                    'enrollment_token_prefix': enrollment_token.prefix if enrollment_token else '',
                     'domain_validation': domain_validation,
                     'manual_validation_used': manual_validation_token is not None,
                     'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',

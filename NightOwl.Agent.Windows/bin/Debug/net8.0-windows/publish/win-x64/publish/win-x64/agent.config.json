@@ -1,0 +1,30 @@
+{
+  "agentToken": "",
+  "machineId": "",
+  "agentVersion": "0.1.0",
+  "serverBaseUrl": "",
+  "heartbeatUrl": "",
+  "collectUrl": "",
+  "jobsPullUrl": "",
+  "jobsResultUrl": "",
+  "intervals": {
+    "heartbeatSeconds": 300,
+    "collectSeconds": 3600,
+    "jobsSeconds": 10
+  },
+  "logPath": "C:\\ProgramData\\NightOwl\\Logs\\agent-dotnet.jsonl",
+  "statePath": "C:\\ProgramData\\NightOwl\\AgentDotNet\\agent-dotnet.state.json",
+  "installPath": "C:\\ProgramData\\NightOwl\\AgentDotNet",
+  "packagesPath": "C:\\ProgramData\\NightOwl\\Packages",
+  "cachePath": "C:\\ProgramData\\NightOwl\\Cache",
+  "jobsPath": "C:\\ProgramData\\NightOwl\\Jobs",
+  "allowedJobTypes": [
+    "ping",
+    "collect_logs",
+    "collect_disks",
+    "collect_software",
+    "collect_security",
+    "windows_update_scan",
+    "force_inventory"
+  ]
+}

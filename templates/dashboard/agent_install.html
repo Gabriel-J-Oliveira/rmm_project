@@ -13,7 +13,7 @@
 <section class="hero agent-install-hero page-header">
     <div>
         <h1 class="page-title"><span class="page-header-icon"><i data-lucide="hard-drive-download"></i></span>Instala&ccedil;&atilde;o do Agente</h1>
-        <p class="page-subtitle">Gere tokens de enrollment e comandos PowerShell para instalar o agente NightOwl nos endpoints.</p>
+        <p class="page-subtitle">Instale automaticamente em maquinas do dominio ou valide manualmente endpoints externos com um token visual.</p>
     </div>
     <div class="agent-hero-badges">
         <span class="badge badge-security module-badge">Servi&ccedil;o Windows</span>
@@ -84,17 +84,37 @@
 </section>
 {% endif %}
 
+{% if created_manual_token %}
+<section class="panel enrollment-created-panel">
+    <div class="panel-heading">
+        <div>
+            <span class="section-kicker">Token manual criado</span>
+            <h2>Copie o token de valida&ccedil;&atilde;o manual</h2>
+            <p>Use este token apenas em m&aacute;quinas confi&aacute;veis. Ele expira e possui uso &uacute;nico.</p>
+        </div>
+    </div>
+    <div class="created-token-box" data-copy-value="{{ created_manual_token }}">
+        <div class="copy-value-content">
+            <span>Manual validation token</span>
+            <code>{{ created_manual_token }}</code>
+        </div>
+        <button class="copy-button" type="button" data-copy-target=".created-token-box"><i data-lucide="copy"></i>Copiar token manual</button>
+    </div>
+</section>
+{% endif %}
+
 <section class="agent-install-grid">
     <article class="panel agent-form-panel">
         <div class="panel-heading">
             <div>
                 <span class="section-kicker">Novo token</span>
                 <h2>Gerar enrollment token</h2>
-                <p>Use validade curta e limite de uso para pilotos controlados.</p>
+                <p>Opcional para legado ou lotes controlados. O comando padr&atilde;o j&aacute; tenta auto-enrollment sem token em linha de comando.</p>
             </div>
         </div>
         <form method="post" class="agent-token-form">
             {% csrf_token %}
+            <input type="hidden" name="action" value="enrollment">
             <label class="filter-field">
                 <span>Nome</span>
                 <input name="name" required placeholder="Piloto TI">
@@ -123,6 +143,35 @@
         </form>
     </article>
 
+    <article class="panel agent-form-panel">
+        <div class="panel-heading">
+            <div>
+                <span class="section-kicker">Valida&ccedil;&atilde;o manual</span>
+                <h2>Gerar token para m&aacute;quina externa</h2>
+                <p>Use quando o instalador avisar que a m&aacute;quina n&atilde;o pertence ao dom&iacute;nio autorizado.</p>
+            </div>
+        </div>
+        <form method="post" class="agent-token-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="manual_validation">
+            <label class="filter-field">
+                <span>Nome</span>
+                <input name="name" placeholder="Notebook externo - tecnico">
+            </label>
+            <label class="filter-field">
+                <span>Validade em minutos</span>
+                <input name="expires_minutes" type="number" min="1" value="30">
+            </label>
+            <label class="filter-field">
+                <span>Notas</span>
+                <textarea name="notes" rows="3" placeholder="Quem solicitou, m&aacute;quina, contexto..."></textarea>
+            </label>
+            <div class="agent-form-actions">
+                <button type="submit"><i data-lucide="shield-check"></i>Gerar token de valida&ccedil;&atilde;o manual</button>
+            </div>
+        </form>
+    </article>
+
     <aside class="panel how-to-panel">
         <div class="panel-heading">
             <div>
@@ -132,13 +181,12 @@
         </div>
 
         <div class="how-to-steps" aria-label="Passos de instala&ccedil;&atilde;o">
-            <div class="how-to-step"><span>1</span><p>Gere um token de enrollment.</p></div>
-            <div class="how-to-step"><span>2</span><p>Escolha a URL do servidor NightOwl.</p></div>
-            <div class="how-to-step"><span>3</span><p>Escolha a origem do pacote do agente.</p></div>
-            <div class="how-to-step"><span>4</span><p>Escolha o modo de instala&ccedil;&atilde;o.</p></div>
-            <div class="how-to-step"><span>5</span><p>Copie o comando PowerShell.</p></div>
-            <div class="how-to-step"><span>6</span><p>Execute como administrador no endpoint.</p></div>
-            <div class="how-to-step"><span>7</span><p>Valide em <code>Endpoints &gt; Detalhe &gt; Agente</code>.</p></div>
+            <div class="how-to-step"><span>1</span><p>Escolha a URL p&uacute;blica do servidor NightOwl.</p></div>
+            <div class="how-to-step"><span>2</span><p>Copie o comando PowerShell sem token sens&iacute;vel.</p></div>
+            <div class="how-to-step"><span>3</span><p>Execute como administrador no endpoint.</p></div>
+            <div class="how-to-step"><span>4</span><p>Se a m&aacute;quina estiver no dom&iacute;nio autorizado, a ativa&ccedil;&atilde;o &eacute; autom&aacute;tica.</p></div>
+            <div class="how-to-step"><span>5</span><p>Fora do dom&iacute;nio, gere um token manual e cole na janela NightOwl do instalador.</p></div>
+            <div class="how-to-step"><span>6</span><p>Valide em <code>Endpoints &gt; Detalhe &gt; Agente</code>.</p></div>
         </div>
     </aside>
 </section>
@@ -158,7 +206,6 @@
         </div>
 
         <div class="agent-command-config"
-             data-default-token="{% if created_token %}{{ created_token }}{% else %}TOKEN_AQUI{% endif %}"
              data-default-server-url="{{ server_url }}"
              data-default-installer-url="{{ source_path }}"
              data-default-share-path="{{ legacy_share_path }}"
@@ -215,6 +262,9 @@
             </div>
             <div class="note-box">
                 O modo servi&ccedil;o exige PowerShell como administrador. Para m&aacute;quinas fora do dom&iacute;nio, use HTTPS com certificado p&uacute;blico confi&aacute;vel.
+            </div>
+            <div class="note-box">
+                O comando padr&atilde;o n&atilde;o inclui token. Se o backend exigir valida&ccedil;&atilde;o manual, o instalador abre uma janela local para colar o token gerado nesta tela.
             </div>
         </div>
 
@@ -306,7 +356,7 @@
                     <td>{{ row.token.created_at|date:"d/m/Y H:i" }}</td>
                     <td>
                         <div class="agent-row-actions">
-                            <button class="copy-button subtle" type="button" data-token-placeholder="TOKEN_AQUI"><i data-lucide="copy"></i>Copiar comando</button>
+                            <button class="copy-button subtle" type="button" data-copy-row-command><i data-lucide="copy"></i>Copiar comando</button>
                             <details class="logs-details">
                                 <summary><i data-lucide="history"></i>Ver usos</summary>
                                 <div class="logs-popover">
@@ -414,8 +464,7 @@
             return `${raw.replace(/[\\\\/]+$/, "")}\\Install-NightOwlAgentDotNet.ps1`;
         }
 
-        function buildCommand(tokenValue) {
-            const token = tokenValue || config.dataset.defaultToken || "TOKEN_AQUI";
+        function buildCommand() {
             const flags = [];
             if (installMode.value === "service") {
                 flags.push("-InstallAsService");
@@ -433,9 +482,9 @@
                 flags.push("-DebugLog");
             }
             if (originSelect.value === "https") {
-                return `$dir = "$env:TEMP\\NightOwlAgent"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest "${packagePath()}" -OutFile "$dir\\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing; powershell.exe -ExecutionPolicy Bypass -File "$dir\\Install-NightOwlAgentDotNet.ps1" -ServerUrl "${heartbeatUrl()}" -EnrollmentToken "${token}" ${flags.join(" ")}`.trim();
+                return `$dir = "$env:TEMP\\NightOwlAgent"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest "${packagePath()}" -OutFile "$dir\\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing; powershell.exe -ExecutionPolicy Bypass -File "$dir\\Install-NightOwlAgentDotNet.ps1" -ServerUrl "${heartbeatUrl()}" ${flags.join(" ")}`.trim();
             }
-            return `powershell.exe -ExecutionPolicy Bypass -File "${packagePath()}" -ServerUrl "${heartbeatUrl()}" -EnrollmentToken "${token}" ${flags.join(" ")}`.trim();
+            return `powershell.exe -ExecutionPolicy Bypass -File "${packagePath()}" -ServerUrl "${heartbeatUrl()}" ${flags.join(" ")}`.trim();
         }
 
         function updateBadges() {
@@ -486,8 +535,8 @@
         document.querySelectorAll(".copy-button").forEach(function (button) {
             button.addEventListener("click", async function () {
                 let value = button.dataset.copyValue || "";
-                if (button.dataset.tokenPlaceholder) {
-                    value = buildCommand(button.dataset.tokenPlaceholder);
+                if (button.dataset.copyRowCommand !== undefined) {
+                    value = buildCommand();
                 }
                 if (!value && button.dataset.copyTarget) {
                     const target = document.querySelector(button.dataset.copyTarget);
