@@ -366,17 +366,10 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{% static 'js/mock_nightowl_api.js' %}"></script>
 <script>
 (() => {
     const root = document.querySelector("[data-pulse-root]");
     if (!root) return;
-    const mockApi = window.MockNightowlApi;
-    if (mockApi && typeof mockApi.getDashboardSummary === "function") {
-        mockApi.getDashboardSummary().then((summary) => {
-            root.__nightowlDashboardMock = summary;
-        });
-    }
 
     const rowsBody = root.querySelector("[data-pulse-rows]");
     const rows = Array.from(root.querySelectorAll("[data-endpoint-row]"));
