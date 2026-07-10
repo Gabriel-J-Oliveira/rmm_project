@@ -102,7 +102,31 @@ Windows Task Scheduler:
 python manage.py run_maintenance_tasks
 ```
 
-## 8. Próximos passos de infraestrutura
+## 8. Publicar downloads do agente Windows
+
+Depois de alterar o agente .NET, o instalador ou gerar um novo pacote em:
+
+```bash
+/opt/nightowl/NightOwl.Agent.Windows/publish/downloads/agent/windows/
+```
+
+publique os arquivos estáticos servidos pelo Nginx com:
+
+```bash
+sudo /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
+```
+
+Na primeira instalação do script no servidor:
+
+```bash
+sudo mkdir -p /opt/nightowl/scripts
+sudo cp scripts/publish-nightowl-agent-downloads.sh /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
+sudo chmod +x /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
+```
+
+O script copia para `/opt/nightowl/downloads/agent/windows/`, valida os arquivos obrigatórios, ajusta `www-data:www-data`, permissões, checksum do ZIP e testa as URLs locais. Ele não reinicia `nightowl.service` nem altera Nginx.
+
+## 9. Próximos passos de infraestrutura
 
 Ainda ficam para uma próxima etapa:
 

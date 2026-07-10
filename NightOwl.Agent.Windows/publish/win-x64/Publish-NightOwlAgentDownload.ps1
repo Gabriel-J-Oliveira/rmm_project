@@ -1,5 +1,6 @@
 param(
     [string]$ProjectPath = ".\NightOwl.Agent.Windows\NightOwl.Agent.Windows.csproj",
+    [string]$TrayProjectPath = ".\NightOwl.Agent.Tray\NightOwl.Agent.Tray.csproj",
     [string]$PublishDir = ".\NightOwl.Agent.Windows\publish\win-x64",
     [string]$OutputDir = ".\NightOwl.Agent.Windows\publish\downloads\agent\windows",
     [string]$Version = "0.1.0",
@@ -21,12 +22,22 @@ $publishPath = Resolve-FullPath $PublishDir
 $outputPath = Resolve-FullPath $OutputDir
 
 if (-not $SkipPublish) {
+    if (Test-Path $publishPath) {
+        Remove-Item -Path $publishPath -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $publishPath | Out-Null
     dotnet publish $ProjectPath -c Release -r $Runtime --self-contained true -o $publishPath
+    dotnet publish $TrayProjectPath -c Release -r $Runtime --self-contained true -o $publishPath
 }
 
 if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Windows.exe"))) {
     throw "Publish invalido: NightOwl.Agent.Windows.exe nao encontrado em $publishPath"
 }
+if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Tray.exe"))) {
+    throw "Publish invalido: NightOwl.Agent.Tray.exe nao encontrado em $publishPath"
+}
+$iconSource = Resolve-FullPath ".\NightOwl.Agent.Tray\assets\NightOwl.ico"
+Copy-Item -Path $iconSource -Destination (Join-Path $publishPath "NightOwl.ico") -Force
 
 New-Item -ItemType Directory -Force -Path $outputPath | Out-Null
 
@@ -62,10 +73,12 @@ if (-not (Test-Path $uninstallScript)) {
 
 Copy-Item -Path $installScript -Destination (Join-Path $outputPath "Install-NightOwlAgentDotNet.ps1") -Force
 Copy-Item -Path $uninstallScript -Destination (Join-Path $outputPath "Uninstall-NightOwlAgentDotNet.ps1") -Force
+Copy-Item -Path (Join-Path $publishPath "NightOwl.ico") -Destination (Join-Path $outputPath "NightOwl.ico") -Force
 
 $zipSha = Get-FileSha256 $zipPath
 $installSha = Get-FileSha256 (Join-Path $outputPath "Install-NightOwlAgentDotNet.ps1")
 $uninstallSha = Get-FileSha256 (Join-Path $outputPath "Uninstall-NightOwlAgentDotNet.ps1")
+$iconSha = Get-FileSha256 (Join-Path $outputPath "NightOwl.ico")
 $publishedAt = (Get-Date).ToUniversalTime().ToString("o")
 
 $versionManifest = [ordered]@{
@@ -82,10 +95,12 @@ $checksumManifest = [ordered]@{
     "NightOwl.Agent.Windows.zip" = $zipSha
     "Install-NightOwlAgentDotNet.ps1" = $installSha
     "Uninstall-NightOwlAgentDotNet.ps1" = $uninstallSha
+    "NightOwl.ico" = $iconSha
     files = @(
         [ordered]@{ name = "NightOwl.Agent.Windows.zip"; sha256 = $zipSha },
         [ordered]@{ name = "Install-NightOwlAgentDotNet.ps1"; sha256 = $installSha },
-        [ordered]@{ name = "Uninstall-NightOwlAgentDotNet.ps1"; sha256 = $uninstallSha }
+        [ordered]@{ name = "Uninstall-NightOwlAgentDotNet.ps1"; sha256 = $uninstallSha },
+        [ordered]@{ name = "NightOwl.ico"; sha256 = $iconSha }
     )
 }
 $checksumManifest | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $outputPath "checksums.json") -Encoding UTF8

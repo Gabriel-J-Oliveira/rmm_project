@@ -8,7 +8,7 @@ param(
     [string]$PackageUrl = "",
     [string]$InstallPath = "C:\ProgramData\NightOwl\AgentDotNet",
     [string]$ServiceName = "NightOwlAgentDotNet",
-    [string]$DisplayName = "NightOwl RMM Agent .NET",
+    [string]$DisplayName = "NightOwl RMM Agent",
     [switch]$InstallAsService,
     [switch]$Force,
     [bool]$StartService = $true,
@@ -17,6 +17,8 @@ param(
     [switch]$DisablePowerShellAgent,
     [switch]$AllowInsecureTls,
     [switch]$NoGui,
+    [switch]$NoTray,
+    [switch]$StartTray,
     [switch]$DebugLog
 )
 
@@ -475,10 +477,10 @@ function Install-OrUpdateService([string]$Name, [string]$Display, [string]$ExePa
         if ($existing) {
             Stop-ServiceIfExists $Name
             sc.exe config $Name binPath= "`"$ExePath`"" start= delayed-auto obj= LocalSystem | Out-Null
-            sc.exe description $Name "NightOwl RMM Windows agent implemented as a .NET Worker Service." | Out-Null
+            sc.exe description $Name "NightOwl RMM monitoring and management agent." | Out-Null
         }
         else {
-            New-Service -Name $Name -DisplayName $Display -BinaryPathName "`"$ExePath`"" -StartupType Automatic -Description "NightOwl RMM Windows agent implemented as a .NET Worker Service." | Out-Null
+            New-Service -Name $Name -DisplayName $Display -BinaryPathName "`"$ExePath`"" -StartupType Automatic -Description "NightOwl RMM monitoring and management agent." | Out-Null
             sc.exe config $Name start= delayed-auto | Out-Null
         }
         sc.exe failure $Name reset= 86400 actions= restart/60000/restart/120000/restart/300000 | Out-Null
@@ -495,6 +497,64 @@ function Install-OrUpdateService([string]$Name, [string]$Display, [string]$ExePa
             error = $_.Exception.Message
         }
         throw
+    }
+}
+
+function Install-OrUpdateTrayTask([string]$TrayExePath) {
+    if (-not (Test-Path $TrayExePath)) {
+        Write-Step "WARN" "Tray app nao encontrado; tarefa de bandeja nao criada: $TrayExePath"
+        Write-InstallLog "tray.install.skipped" "Tray app nao encontrado." @{ tray_exe = $TrayExePath }
+        return
+    }
+
+    $taskName = "NightOwl Agent Tray"
+    Write-InstallLog "tray.install.started" "Configurando tarefa agendada da bandeja." @{
+        task_name = $taskName
+        tray_exe = $TrayExePath
+    }
+    try {
+        $taskCommand = "`"$TrayExePath`""
+        $result = schtasks.exe /Create /TN $taskName /SC ONLOGON /TR $taskCommand /RU INTERACTIVE /RL LIMITED /F 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "schtasks.exe falhou: $result"
+        }
+        Write-Step "OK" "Tarefa de bandeja criada: $taskName"
+        Write-InstallLog "tray.install.completed" "Tarefa agendada da bandeja criada." @{
+            task_name = $taskName
+            tray_exe = $TrayExePath
+            trigger = "ONLOGON"
+        }
+    }
+    catch {
+        Write-InstallLog "tray.install.failed" "Falha ao criar tarefa da bandeja." @{
+            task_name = $taskName
+            tray_exe = $TrayExePath
+            error = $_.Exception.Message
+        }
+        Write-Step "WARN" ("Nao foi possivel criar a tarefa de bandeja: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Start-TrayIfInteractive([string]$TrayExePath, [switch]$ForceStart) {
+    if (-not (Test-Path $TrayExePath)) {
+        return
+    }
+    if (-not $ForceStart -and [Environment]::UserInteractive -ne $true) {
+        return
+    }
+    try {
+        $existing = Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue
+        if ($existing) {
+            Write-Step "OK" "Tray app ja esta em execucao"
+            return
+        }
+        Start-Process -FilePath $TrayExePath -WorkingDirectory (Split-Path -Parent $TrayExePath) | Out-Null
+        Write-Step "OK" "Tray app iniciado"
+        Write-InstallLog "tray.started" "Tray app iniciado pelo instalador." @{ tray_exe = $TrayExePath }
+    }
+    catch {
+        Write-Step "WARN" ("Nao foi possivel iniciar o tray app: {0}" -f $_.Exception.Message)
+        Write-InstallLog "tray.start.failed" "Falha ao iniciar tray app." @{ tray_exe = $TrayExePath; error = $_.Exception.Message }
     }
 }
 
@@ -590,7 +650,15 @@ $exePath = Join-Path $InstallPath "NightOwl.Agent.Windows.exe"
 if (-not (Test-Path $exePath)) {
     throw "Executavel do agente nao encontrado apos copia: $exePath"
 }
+$trayExePath = Join-Path $InstallPath "NightOwl.Agent.Tray.exe"
+$iconPath = Join-Path $InstallPath "NightOwl.ico"
 Write-Step "OK" "Arquivos copiados"
+if (-not (Test-Path $trayExePath)) {
+    Write-Step "WARN" "NightOwl.Agent.Tray.exe nao encontrado no pacote"
+}
+if (-not (Test-Path $iconPath)) {
+    Write-Step "WARN" "NightOwl.ico nao encontrado no pacote"
+}
 
 $existingConfig = $preservedConfig
 if ($null -eq $existingConfig) {
@@ -645,6 +713,14 @@ if ($InstallAsService) {
     }
 }
 
+if (-not $NoTray) {
+    Install-OrUpdateTrayTask -TrayExePath $trayExePath
+    Start-TrayIfInteractive -TrayExePath $trayExePath -ForceStart:$StartTray
+}
+else {
+    Write-Step "OK" "Tray app nao configurado por opcao -NoTray"
+}
+
 if ($RunCheck) {
     $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($service) {
@@ -660,6 +736,12 @@ if ($RunCheck) {
         Write-Step "WARN" "Servico nao encontrado"
     }
     if (Test-Path $configPath) { Write-Step "OK" "Config existe" } else { Write-Step "FAIL" "Config ausente" }
+    if (-not $NoTray) {
+        if (Test-Path $trayExePath) { Write-Step "OK" "Tray app existe" } else { Write-Step "WARN" "Tray app ausente" }
+        if (Test-Path $iconPath) { Write-Step "OK" "NightOwl.ico existe" } else { Write-Step "WARN" "NightOwl.ico ausente" }
+        $trayTask = Get-ScheduledTask -TaskName "NightOwl Agent Tray" -ErrorAction SilentlyContinue
+        if ($trayTask) { Write-Step "OK" "Tray task instalada: NightOwl Agent Tray" } else { Write-Step "WARN" "Tray task nao encontrada" }
+    }
     if ([string]::IsNullOrWhiteSpace($AgentToken) -or $AgentToken -eq "TOKEN") { Write-Step "FAIL" "Token invalido/placeholder" } else { Write-Step "OK" "Token configurado" }
     if (Test-Path $logPath) { Write-Step "OK" "Log existe" } else { New-Item -ItemType File -Force -Path $logPath | Out-Null; Write-Step "OK" "Log criado" }
     try {

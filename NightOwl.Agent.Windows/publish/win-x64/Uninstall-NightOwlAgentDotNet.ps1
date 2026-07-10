@@ -40,6 +40,17 @@ Write-UninstallLog "service.uninstall.started" "Removendo servico .NET." @{
     remove_data = [bool]$RemoveData
 }
 
+$trayTaskName = "NightOwl Agent Tray"
+try {
+    schtasks.exe /Delete /TN $trayTaskName /F | Out-Null
+    Write-Step "OK" "Tarefa de bandeja removida: $trayTaskName"
+}
+catch {
+    Write-Step "OK" "Tarefa de bandeja nao encontrada ou ja removida"
+}
+
+Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
     if ($existing.Status -ne "Stopped") {
