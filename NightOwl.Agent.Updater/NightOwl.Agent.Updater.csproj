@@ -7,7 +7,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>NightOwl.Agent.Updater</AssemblyName>
     <RootNamespace>NightOwl.Agent.Updater</RootNamespace>
-    <ApplicationIcon>assets\icons\NightOwl.ico</ApplicationIcon>
+    <ApplicationIcon>..\assets\icons\NightOwl.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +15,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="assets\icons\NightOwl.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+    <Content Include="..\assets\icons\NightOwl.ico" Link="assets\icons\NightOwl.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
   </ItemGroup>
 </Project>

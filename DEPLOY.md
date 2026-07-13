@@ -143,23 +143,27 @@ Ainda ficam para uma próxima etapa:
 O agente Windows usa um unico icone visual principal:
 
 ```text
-assets/nightowl/icons/ico/NightOwl.ico
+assets/icons/NightOwl.ico
 ```
 
-Este arquivo tambem e copiado para os projetos durante a geracao:
+O arquivo aprovado de origem fica arquivado em:
 
 ```text
-NightOwl.Agent.Windows/assets/icons/NightOwl.ico
-NightOwl.Agent.Tray/assets/icons/NightOwl.ico
-NightOwl.Agent.Updater/assets/icons/NightOwl.ico
+assets/nightowl/icon - novo/
 ```
 
-O `.ico` contem as resolucoes `16x16`, `20x20`, `24x24`, `32x32`, `40x40`, `48x48`, `64x64`, `128x128` e `256x256`. Nao ha variantes de status, overlays ou icones coloridos por estado. O Tray deve usar sempre `NightOwl.ico`.
+Os projetos `NightOwl.Agent.Windows`, `NightOwl.Agent.Tray` e `NightOwl.Agent.Updater` referenciam esse caminho canonico por `..\assets\icons\NightOwl.ico` e publicam o arquivo como:
 
-Para regenerar os assets:
+```text
+assets/icons/NightOwl.ico
+```
+
+O `.ico` contem as resolucoes aprovadas para tray/taskbar. Nao ha variantes de status, overlays ou icones coloridos por estado. O Tray deve usar sempre `NightOwl.ico`.
+
+Para substituir o icone no futuro, copie o novo arquivo aprovado para:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\generate-nightowl-icon.ps1
+Copy-Item "assets\nightowl\icon - novo\NightOwl.ico" "assets\icons\NightOwl.ico" -Force
 ```
 
 O ZIP publicado precisa conter:

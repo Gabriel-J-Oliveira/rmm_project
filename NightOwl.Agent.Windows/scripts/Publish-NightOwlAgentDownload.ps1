@@ -42,7 +42,7 @@ if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Tray.exe"))) {
 if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Updater.exe"))) {
     throw "Publish invalido: NightOwl.Agent.Updater.exe nao encontrado em $publishPath"
 }
-$iconSource = Resolve-FullPath ".\assets\nightowl\icons\ico\NightOwl.ico"
+$iconSource = Resolve-FullPath ".\assets\icons\NightOwl.ico"
 $publishIconDir = Join-Path $publishPath "assets\icons"
 New-Item -ItemType Directory -Force -Path $publishIconDir | Out-Null
 Copy-Item -Path $iconSource -Destination (Join-Path $publishIconDir "NightOwl.ico") -Force
