@@ -190,6 +190,13 @@ class AgentJobsPullView(APIView):
                 endpoint=machine,
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
+            if job.job_type == AgentJob.TYPE_UPDATE_AGENT:
+                logger.info(
+                    'update_agent job dispatched endpoint_id=%s job_id=%s hostname=%s',
+                    machine.id,
+                    job.id,
+                    machine.hostname,
+                )
 
         create_audit_event(
             event_type='job.pull_requested',
@@ -273,6 +280,14 @@ class AgentJobsResultView(APIView):
                         record_collection(machine=machine, collection_type=collection_type, payload=job.result)
                     except Exception:
                         logger.exception('Failed to persist job result collection for job_id=%s', job.id)
+            if job.job_type == AgentJob.TYPE_UPDATE_AGENT:
+                logger.info(
+                    'update_agent job result endpoint_id=%s job_id=%s status=%s exit_code=%s',
+                    machine.id,
+                    job.id,
+                    job.status,
+                    job.exit_code,
+                )
         event_type = 'job.completed' if job_status == 'completed' else 'job.failed' if job_status == 'failed' else 'job.result_received'
         severity = AuditEvent.SEVERITY_SUCCESS if job_status == 'completed' else AuditEvent.SEVERITY_WARNING if job_status in {'failed', 'expired'} else AuditEvent.SEVERITY_INFO
         create_audit_event(

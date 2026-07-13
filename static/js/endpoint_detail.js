@@ -860,8 +860,20 @@
             },
             body: body.toString()
         }).then(function (response) {
-            return response.json().then(function (payload) {
-                if (!response.ok) throw new Error(payload.detail || payload.error || "job_create_failed");
+            return response.text().then(function (text) {
+                let payload = {};
+                try {
+                    payload = text ? JSON.parse(text) : {};
+                } catch (error) {
+                    payload = { detail: text || response.statusText || "job_create_failed" };
+                }
+                if (!response.ok) {
+                    if (payload && payload.error === "update_job_already_pending" && payload.job) {
+                        payload.status = "already_pending";
+                        return payload;
+                    }
+                    throw new Error(payload.detail || payload.error || response.statusText || "job_create_failed");
+                }
                 return payload;
             });
         });
@@ -878,13 +890,19 @@
             if (action === "update_agent") {
                 const confirmed = window.confirm("Deseja enviar um comando de atualizacao do agente para este endpoint? O servico pode ser reiniciado durante o processo.");
                 if (!confirmed) return;
+                showToast("Enviando job de atualizacao para o agente...");
             }
             createRealJob(action).then(function (payload) {
-                showToast(action === "update_agent" ? "Job de atualizacao enviado." : "Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
+                const isPendingUpdate = payload.status === "already_pending";
+                showToast(action === "update_agent"
+                    ? (isPendingUpdate ? "Ja existe um job de atualizacao pendente para este endpoint." : "Job de atualizacao enviado.")
+                    : "Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
                 if (!endpointDetail.jobs) endpointDetail.jobs = [];
-                endpointDetail.jobs.unshift(payload.job);
+                if (payload.job && !endpointDetail.jobs.some(function (job) { return job.id === payload.job.id; })) {
+                    endpointDetail.jobs.unshift(payload.job);
+                }
                 renderActivePanel();
-                activateTab(activeTab);
+                activateTab(action === "update_agent" ? "tasks" : activeTab);
                 schedulePolling();
                 return reloadEndpoint(false);
             }).catch(function (error) {

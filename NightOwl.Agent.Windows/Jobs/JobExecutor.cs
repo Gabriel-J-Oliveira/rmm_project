@@ -28,7 +28,9 @@ public sealed class JobExecutor
         {
             if (!config.AllowedJobTypes.Contains(job.Type))
             {
-                throw new NotSupportedException("unsupported_job_type");
+                throw new NotSupportedException(job.Type == "update_agent"
+                    ? "unsupported_job_type: este agente/config ainda nao permite update_agent; reinstale ou atualize o bootstrap do agente."
+                    : "unsupported_job_type");
             }
 
             object result = job.Type switch
@@ -134,12 +136,15 @@ public sealed class JobExecutor
         string updater = Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe");
         if (!File.Exists(updater))
         {
+            await _logger.LogAsync("job.update_agent.failed", "Updater executable was not found.", new { job.Id, updater }, ct, "error");
             throw new FileNotFoundException("Updater nao encontrado no endpoint.", updater);
         }
+        await _logger.LogAsync("job.update_agent.updater_found", "Updater executable found.", new { job.Id, updater }, ct);
 
         string channel = GetPayloadString(job, "channel", "stable");
         string targetVersion = GetPayloadString(job, "target_version", "latest");
         string arguments = $"update --source job --job-id \"{job.Id}\" --channel \"{channel}\" --target-version \"{targetVersion}\" --quiet --json-output";
+        await _logger.LogAsync("job.update_agent.started", "Starting updater for update_agent job.", new { job.Id, channel, targetVersion }, ct);
 
         using Process process = new()
         {

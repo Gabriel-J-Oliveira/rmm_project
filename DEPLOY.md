@@ -266,14 +266,15 @@ logs
 packages/jobs locais
 ```
 
-O Tray nao expõe atualização para o usuário final. O menu visual fica restrito a:
+O Tray expoe uma atualização local/manual simples, mas as ações tecnicas continuam no painel. O menu visual fica restrito a:
 
 - Abrir NightOwl
 - Status do agente
+- Atualizar agente
 - Reiniciar agente
 - Sobre
 
-A atualização manual deve ser enviada pelo painel web do NightOwl, na tela de detalhe do endpoint, pelo botão **Atualizar agente**. Esse botão cria um job tecnico `update_agent` com payload controlado:
+A atualização remota/manual deve ser enviada pelo painel web do NightOwl, na tela de detalhe do endpoint, pelo botão **Atualizar agente**. Esse botão cria um job tecnico `update_agent` com payload controlado:
 
 ```json
 {
@@ -297,6 +298,19 @@ C:\ProgramData\NightOwl\Jobs\pending-update-result.json
 ```
 
 Ao iniciar, o servico `NightOwlAgentDotNet` tenta enviar esse resultado para `/api/agent/jobs/result/`. Em sucesso, o arquivo e movido para `C:\ProgramData\NightOwl\Jobs\completed\`.
+
+No Tray, o item **Atualizar agente** executa localmente:
+
+```powershell
+& "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Updater.exe" update --source tray --interactive
+```
+
+O Windows pode solicitar UAC. O progresso detalhado fica em:
+
+```text
+C:\ProgramData\NightOwl\Logs\agent-tray.jsonl
+C:\ProgramData\NightOwl\Logs\agent-updater.jsonl
+```
 
 O `version.json` publico deve conter `packageUrl`, `checksumUrl`, `installerUrl`, `minimumSupportedVersion`, `requiresRestart`, `force` e notas da versao. O `checksums.json` deve conter `sha256` e `size` para os arquivos publicados.
 

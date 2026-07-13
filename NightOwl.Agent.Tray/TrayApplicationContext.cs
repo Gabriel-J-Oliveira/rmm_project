@@ -67,6 +67,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ContextMenuStrip menu = new();
         menu.Items.Add("Abrir NightOwl", null, (_, _) => OpenNightOwl());
         menu.Items.Add("Status do agente", null, (_, _) => ShowStatusWindow());
+        menu.Items.Add("Atualizar agente", null, (_, _) => UpdateAgent());
         menu.Items.Add("Reiniciar agente", null, (_, _) => RestartAgentService());
         menu.Items.Add("Sobre", null, (_, _) => ShowAbout());
         return menu;
@@ -287,6 +288,57 @@ internal sealed class TrayApplicationContext : ApplicationContext
         };
         table.Controls.Add(labelControl);
         table.Controls.Add(valueControl);
+    }
+
+    private void UpdateAgent()
+    {
+        TrayLog.Write("tray.menu.update_agent", "Usuario acionou atualizacao local pelo Tray.");
+        DialogResult answer = MessageBox.Show(
+            "O NightOwl Agent vai verificar atualizacoes e pode reiniciar o servico durante o processo.\n\nDeseja continuar?",
+            "NightOwl Agent - Atualizar agente",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Information);
+        if (answer != DialogResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            string updater = Path.Combine(AppContext.BaseDirectory, "NightOwl.Agent.Updater.exe");
+            if (!File.Exists(updater))
+            {
+                TrayLog.Write("tray.error", "Updater nao encontrado para atualizacao local.", new { updater });
+                MessageBox.Show("NightOwl.Agent.Updater.exe nao foi encontrado neste endpoint.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            MessageBox.Show(
+                "Verificando atualizacao...\n\nA janela do Windows pode solicitar permissao de administrador. O progresso detalhado sera registrado em agent-updater.jsonl.",
+                "NightOwl Agent",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = updater,
+                Arguments = "update --source tray --interactive",
+                WorkingDirectory = AppContext.BaseDirectory,
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+            TrayLog.Write("tray.menu.update_agent.started", "Updater iniciado pelo Tray com UAC.", new { updater });
+        }
+        catch (Win32Exception ex)
+        {
+            TrayLog.Write("tray.menu.update_agent.cancelled", "Atualizacao local cancelada ou sem permissao.", new { error = ex.Message });
+            MessageBox.Show("Atualizacao cancelada ou sem permissao administrativa.", "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Write("tray.error", "Falha ao iniciar atualizacao local.", new { error = ex.Message });
+            MessageBox.Show("Nao foi possivel iniciar a atualizacao: " + ex.Message, "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void RestartAgentService()

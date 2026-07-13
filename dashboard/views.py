@@ -1,6 +1,7 @@
 from datetime import datetime, time, timedelta
 
 import csv
+import logging
 import uuid
 from types import SimpleNamespace
 
@@ -52,6 +53,8 @@ from tickets.services.email_outbox import (
     smtp_configuration_status,
 )
 
+
+logger = logging.getLogger(__name__)
 
 REMOTE_ACCESS_TERMS = REMOTE_ACCESS_SOFTWARE
 ADMIN_TOOL_TERMS = ADMIN_NETWORK_SOFTWARE
@@ -2950,6 +2953,12 @@ def endpoint_job_create(request, pk):
             status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
         ).order_by('-created_at').first()
         if pending_update:
+            logger.info(
+                'update_agent job already pending endpoint_id=%s job_id=%s status=%s',
+                endpoint.id,
+                pending_update.id,
+                pending_update.status,
+            )
             return JsonResponse(
                 {
                     'error': 'update_job_already_pending',
@@ -2983,6 +2992,13 @@ def endpoint_job_create(request, pk):
         metadata={'job_id': str(job.id), 'job_type': selected_type, 'payload': payload},
         request=request,
     )
+    if selected_type == AgentJob.TYPE_UPDATE_AGENT:
+        logger.info(
+            'update_agent job created endpoint_id=%s job_id=%s created_by=%s',
+            endpoint.id,
+            job.id,
+            request.user.get_username(),
+        )
     return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job)}, status=201)
 
 
