@@ -235,3 +235,4 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Relea
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\Publish-NightOwlAgentDownload.ps1
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\downloads\agent\windows\checksums.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\publish\downloads\agent\windows\version.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\win-x64\assets\icons\NightOwl.ico

@@ -872,7 +872,7 @@ internal static class Program
     private sealed class AgentConfig
     {
         [JsonPropertyName("agentVersion")]
-        public string AgentVersion { get; set; } = "0.1.0";
+        public string AgentVersion { get; set; } = "0.1.0.4";
 
         [JsonPropertyName("serverBaseUrl")]
         public string ServerBaseUrl { get; set; } = "";

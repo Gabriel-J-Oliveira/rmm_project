@@ -83,7 +83,7 @@ public sealed class AgentCollectPayload
     public string MachineId { get; set; } = "";
 
     [JsonPropertyName("agent_version")]
-    public string AgentVersion { get; set; } = "0.1.0";
+    public string AgentVersion { get; set; } = "0.1.0.4";
 
     [JsonPropertyName("agent_mode")]
     public string AgentMode { get; set; } = "dotnet-service";

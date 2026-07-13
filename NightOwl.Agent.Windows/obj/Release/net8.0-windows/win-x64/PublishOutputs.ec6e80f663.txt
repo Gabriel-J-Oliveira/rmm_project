@@ -1,3 +1,4 @@
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\assets\icons\NightOwl.ico
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\agent.config.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\Install-NightOwlAgentDotNet.ps1
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\Uninstall-NightOwlAgentDotNet.ps1

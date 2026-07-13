@@ -1,4 +1,4 @@
-C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\assets\NightOwl.ico
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\assets\icons\NightOwl.ico
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Tray.exe
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Tray.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Tray.deps.json

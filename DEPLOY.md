@@ -126,6 +126,43 @@ sudo chmod +x /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
 
 O script copia para `/opt/nightowl/downloads/agent/windows/`, valida os arquivos obrigatórios, ajusta `www-data:www-data`, permissões, checksum do ZIP e testa as URLs locais. Ele não reinicia `nightowl.service` nem altera Nginx.
 
+### Politica de versao do agente Windows
+
+O updater aplica uma atualizacao somente quando a versao publicada em `version.json`
+for maior que a versao instalada em `agent.version.json`/`agent.config.json`, ou quando
+o manifesto vier com `force=true`.
+
+Use o formato de quatro partes:
+
+```text
+0.1.0.x
+```
+
+Para qualquer novo pacote, mesmo uma correcao pequena de icone, script ou Tray,
+incremente a ultima parte. Exemplo:
+
+```text
+0.1.0.4
+0.1.0.5
+0.1.0.6
+```
+
+O script `NightOwl.Agent.Windows/scripts/Publish-NightOwlAgentDownload.ps1`
+define a versao padrao publicada. Se necessario, tambem e possivel sobrescrever
+no comando:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File NightOwl.Agent.Windows\scripts\Publish-NightOwlAgentDownload.ps1 -Version "0.1.0.5"
+```
+
+Depois de publicar no servidor, valide no endpoint:
+
+```powershell
+Get-Content "C:\ProgramData\NightOwl\AgentDotNet\agent.version.json"
+Invoke-RestMethod "https://nightowl.controlsul.com.br/downloads/nightowl-agent/version.json"
+Get-Content "C:\ProgramData\NightOwl\Logs\agent-updater.jsonl" -Tail 80
+```
+
 ## 9. Próximos passos de infraestrutura
 
 Ainda ficam para uma próxima etapa:
@@ -193,7 +230,7 @@ Validacoes no servidor:
 curl -kI https://nightowl.controlsul.com.br/downloads/nightowl-agent/NightOwl.Agent.Windows.zip
 curl -kI https://nightowl.controlsul.com.br/downloads/nightowl-agent/version.json
 curl -kI https://nightowl.controlsul.com.br/downloads/nightowl-agent/checksums.json
-unzip -l /opt/nightowl/downloads/agent/windows/NightOwl.Agent.Windows.zip | grep -E "assets/icons/NightOwl.ico|NightOwl.Agent.Tray.exe|NightOwl.Agent.Updater.exe"
+unzip -l /opt/nightowl/downloads/agent/windows/NightOwl.Agent.Windows.zip | grep -E "assets[\\/]icons[\\/]NightOwl.ico|NightOwl.Agent.Tray.exe|NightOwl.Agent.Updater.exe"
 ```
 
 Validacoes no endpoint Windows:
