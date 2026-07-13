@@ -33,6 +33,109 @@ function Save-TransparentPng([System.Drawing.Image]$Source, [int]$Size, [string]
     }
 }
 
+function Get-AlphaBounds([System.Drawing.Bitmap]$Source, [int]$Threshold = 12, [int]$Margin = 4) {
+    $minX = $Source.Width
+    $minY = $Source.Height
+    $maxX = -1
+    $maxY = -1
+    for ($y = 0; $y -lt $Source.Height; $y++) {
+        for ($x = 0; $x -lt $Source.Width; $x++) {
+            if ($Source.GetPixel($x, $y).A -gt $Threshold) {
+                if ($x -lt $minX) { $minX = $x }
+                if ($y -lt $minY) { $minY = $y }
+                if ($x -gt $maxX) { $maxX = $x }
+                if ($y -gt $maxY) { $maxY = $y }
+            }
+        }
+    }
+
+    if ($maxX -lt 0 -or $maxY -lt 0) {
+        throw "PNG fonte nao contem pixels visiveis."
+    }
+
+    $minX = [Math]::Max(0, $minX - $Margin)
+    $minY = [Math]::Max(0, $minY - $Margin)
+    $maxX = [Math]::Min($Source.Width - 1, $maxX + $Margin)
+    $maxY = [Math]::Min($Source.Height - 1, $maxY + $Margin)
+    return [System.Drawing.Rectangle]::FromLTRB($minX, $minY, $maxX + 1, $maxY + 1)
+}
+
+function New-ScaledForeground([System.Drawing.Image]$Source, [System.Drawing.Rectangle]$Crop, [int]$Size, [int]$Padding) {
+    $foreground = [System.Drawing.Bitmap]::new($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($foreground)
+    try {
+        $graphics.Clear([System.Drawing.Color]::Transparent)
+        $graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceOver
+        $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+        $maxSide = [Math]::Max(1, $Size - ($Padding * 2))
+        $scale = [Math]::Min($maxSide / $Crop.Width, $maxSide / $Crop.Height)
+        $drawWidth = [Math]::Max(1, [int][Math]::Round($Crop.Width * $scale))
+        $drawHeight = [Math]::Max(1, [int][Math]::Round($Crop.Height * $scale))
+        $drawX = [int][Math]::Floor(($Size - $drawWidth) / 2)
+        $drawY = [int][Math]::Floor(($Size - $drawHeight) / 2)
+        $dest = [System.Drawing.Rectangle]::new($drawX, $drawY, $drawWidth, $drawHeight)
+        $graphics.DrawImage($Source, $dest, $Crop, [System.Drawing.GraphicsUnit]::Pixel)
+        return $foreground
+    }
+    finally {
+        $graphics.Dispose()
+    }
+}
+
+function Save-MicroOptimizedPng([System.Drawing.Bitmap]$Source, [System.Drawing.Rectangle]$Crop, [int]$Size, [string]$Path) {
+    $padding = switch ($Size) {
+        16 { 0 }
+        20 { 1 }
+        24 { 1 }
+        32 { 2 }
+        default { 1 }
+    }
+    $foreground = New-ScaledForeground -Source $Source -Crop $Crop -Size $Size -Padding $padding
+    $result = [System.Drawing.Bitmap]::new($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $outlineColor = [System.Drawing.Color]::FromArgb(220, 4, 7, 16)
+        for ($y = 0; $y -lt $Size; $y++) {
+            for ($x = 0; $x -lt $Size; $x++) {
+                $pixel = $foreground.GetPixel($x, $y)
+                if ($pixel.A -gt 24) {
+                    for ($oy = -1; $oy -le 1; $oy++) {
+                        for ($ox = -1; $ox -le 1; $ox++) {
+                            if ($ox -eq 0 -and $oy -eq 0) { continue }
+                            $tx = $x + $ox
+                            $ty = $y + $oy
+                            if ($tx -ge 0 -and $tx -lt $Size -and $ty -ge 0 -and $ty -lt $Size) {
+                                $existing = $result.GetPixel($tx, $ty)
+                                if ($existing.A -lt $outlineColor.A) {
+                                    $result.SetPixel($tx, $ty, $outlineColor)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for ($y = 0; $y -lt $Size; $y++) {
+            for ($x = 0; $x -lt $Size; $x++) {
+                $pixel = $foreground.GetPixel($x, $y)
+                if ($pixel.A -gt 0) {
+                    $result.SetPixel($x, $y, $pixel)
+                }
+            }
+        }
+
+        $result.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    finally {
+        $foreground.Dispose()
+        $result.Dispose()
+    }
+}
+
 function Write-IcoFromPngs([string[]]$PngPaths, [string]$IcoPath) {
     $orderedPaths = $PngPaths | Sort-Object {
         $file = [System.IO.Path]::GetFileNameWithoutExtension($_)
@@ -107,8 +210,15 @@ try {
         throw "PNG fonte nao possui canal alpha. Use um arquivo com fundo transparente."
     }
 
+    $contentBounds = Get-AlphaBounds -Source $sourceImage
     foreach ($size in $Sizes) {
-        Save-TransparentPng -Source $sourceImage -Size $size -Path (Join-Path $outputRootPath ("png\nightowl-{0}.png" -f $size))
+        $targetPath = Join-Path $outputRootPath ("png\nightowl-{0}.png" -f $size)
+        if ($size -in @(16, 20, 24, 32)) {
+            Save-MicroOptimizedPng -Source $sourceImage -Crop $contentBounds -Size $size -Path $targetPath
+        }
+        else {
+            Save-TransparentPng -Source $sourceImage -Size $size -Path $targetPath
+        }
     }
 
     Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $outputRootPath "source\NightOwl-icon-source-1024.png") -Force
