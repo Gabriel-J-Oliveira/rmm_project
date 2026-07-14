@@ -33,6 +33,15 @@ public sealed class JobExecutor
                     : "unsupported_job_type");
             }
 
+            if (job.Type == "update_agent")
+            {
+                return await StartUpdateAgentAsync(config, job, started, stopwatch, ct);
+            }
+            if (job.Type == "restart_agent")
+            {
+                return await StartRestartAgentAsync(config, job, started, stopwatch, ct);
+            }
+
             object result = job.Type switch
             {
                 "force_inventory" => _collector.BuildCollectPayload(config),
@@ -42,7 +51,6 @@ public sealed class JobExecutor
                 "windows_update_scan" => await RunCollectionAsync("patches", _collector.GetPatchStatus, ct),
                 "collect_logs" => CollectLogs(config),
                 "ping" => await RunPingAsync(config, job, ct),
-                "update_agent" => await RunUpdateAgentAsync(config, job, ct),
                 _ => throw new NotSupportedException("unsupported_job_type")
             };
 
@@ -130,7 +138,65 @@ public sealed class JobExecutor
         };
     }
 
-    private async Task<object> RunUpdateAgentAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
+    private async Task<JobExecutionResult> StartRestartAgentAsync(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, CancellationToken ct)
+    {
+        await _logger.LogAsync("job.restart_agent.received", "Restart agent job received.", new { job.Id }, ct);
+        WritePendingJobResult(
+            config,
+            new JobExecutionResult
+            {
+                JobId = job.Id,
+                Status = "completed",
+                StartedAt = started,
+                FinishedAt = DateTimeOffset.UtcNow,
+                DurationSeconds = 0,
+                ExitCode = 0,
+                Stdout = "restart requested",
+                Result = new
+                {
+                    type = "restart_agent",
+                    restart_status = "requested",
+                    message = "NightOwlAgentDotNet restart requested successfully.",
+                    completed_at = DateTimeOffset.UtcNow
+                }
+            });
+
+        string script = "Start-Sleep -Seconds 2; Restart-Service -Name 'NightOwlAgentDotNet' -Force";
+        using Process process = new()
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -Command " + QuotePowerShell(script),
+                WorkingDirectory = config.InstallPath,
+                UseShellExecute = true,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            }
+        };
+        process.Start();
+        stopwatch.Stop();
+
+        await _logger.LogAsync("job.restart_agent.started", "Restart helper process started.", new { job.Id, process_id = process.Id }, ct);
+        return new JobExecutionResult
+        {
+            JobId = job.Id,
+            Status = "running",
+            StartedAt = started,
+            FinishedAt = DateTimeOffset.MinValue,
+            DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
+            ExitCode = 0,
+            Stdout = "restart helper started",
+            Result = new
+            {
+                type = "restart_agent",
+                restart_status = "helper_started",
+                message = "Restart helper started. Final result will be sent after service restart."
+            }
+        };
+    }
+
+    private async Task<JobExecutionResult> StartUpdateAgentAsync(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, CancellationToken ct)
     {
         await _logger.LogAsync("job.update_agent.received", "Update agent job received.", new { job.Id }, ct);
         string updater = Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe");
@@ -153,67 +219,34 @@ public sealed class JobExecutor
                 FileName = updater,
                 Arguments = arguments,
                 WorkingDirectory = config.InstallPath,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                UseShellExecute = true,
                 CreateNoWindow = true
             }
         };
 
-        DateTimeOffset started = DateTimeOffset.UtcNow;
         process.Start();
-        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
-        string stdout = Trim(await stdoutTask, 8000);
-        string stderr = Trim(await stderrTask, 8000);
-        int exitCode = process.ExitCode;
-        DateTimeOffset finished = DateTimeOffset.UtcNow;
-        bool alreadyCurrent = exitCode == 10 || stdout.Contains("already_current", StringComparison.OrdinalIgnoreCase);
-        bool success = exitCode == 0 || alreadyCurrent;
+        stopwatch.Stop();
 
-        await _logger.LogAsync(
-            success ? "job.update_agent.completed" : "job.update_agent.failed",
-            "Update agent process finished.",
-            new { job.Id, exitCode, alreadyCurrent },
-            ct,
-            success ? "info" : "error");
+        await _logger.LogAsync("job.update_agent.runner_started", "Updater bootstrap started; final result will be sent after service restart.", new { job.Id, process_id = process.Id }, ct);
 
-        if (!success)
+        return new JobExecutionResult
         {
-            throw new InvalidOperationException($"Updater failed with exit code {exitCode}. {Trim(stderr, 500)}");
-        }
-
-        Dictionary<string, object?> parsed = TryParseJson(stdout);
-        parsed["exit_code"] = exitCode;
-        parsed["already_up_to_date"] = alreadyCurrent;
-        parsed["started_at"] = started;
-        parsed["finished_at"] = finished;
-        ClearPendingUpdateResultIfCurrentJob(config, job.Id);
-        return parsed;
-    }
-
-    private static void ClearPendingUpdateResultIfCurrentJob(AgentConfig config, string jobId)
-    {
-        try
-        {
-            string path = Path.Combine(config.JobsPath, "pending-update-result.json");
-            if (!File.Exists(path))
+            JobId = job.Id,
+            Status = "running",
+            StartedAt = started,
+            FinishedAt = DateTimeOffset.MinValue,
+            DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
+            ExitCode = 0,
+            Stdout = "update runner started",
+            Result = new
             {
-                return;
+                type = "update_agent",
+                update_status = "runner_started",
+                message = "Updater runner started. Final result will be sent by the restarted service.",
+                channel,
+                target_version = targetVersion
             }
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
-            if (document.RootElement.TryGetProperty("job_id", out JsonElement value)
-                && value.ValueKind == JsonValueKind.String
-                && value.GetString() == jobId)
-            {
-                File.Delete(path);
-            }
-        }
-        catch
-        {
-            // A stale pending result is retried by the service loop.
-        }
+        };
     }
 
     private static string GetPayloadString(AgentJobRequest job, string key, string fallback)
@@ -223,17 +256,18 @@ public sealed class JobExecutor
             : fallback;
     }
 
-    private static Dictionary<string, object?> TryParseJson(string value)
+    private static void WritePendingJobResult(AgentConfig config, JobExecutionResult result)
     {
-        try
-        {
-            using JsonDocument document = JsonDocument.Parse(value);
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(document.RootElement.GetRawText()) ?? new Dictionary<string, object?>();
-        }
-        catch
-        {
-            return new Dictionary<string, object?> { ["output"] = Trim(value, 2000) };
-        }
+        string pendingDir = Path.Combine(config.JobsPath, "Pending");
+        Directory.CreateDirectory(pendingDir);
+        string jobId = string.IsNullOrWhiteSpace(result.JobId) ? Guid.NewGuid().ToString("N") : result.JobId;
+        string path = Path.Combine(pendingDir, $"job-result-{jobId}.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+    }
+
+    private static string QuotePowerShell(string value)
+    {
+        return "\"" + value.Replace("\"", "`\"") + "\"";
     }
 
     private static string Trim(string value, int max)

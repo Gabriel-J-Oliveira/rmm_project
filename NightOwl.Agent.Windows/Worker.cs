@@ -100,28 +100,46 @@ public sealed class Worker : BackgroundService
 
     private async Task SendPendingUpdateResultAsync(AgentConfig config, CancellationToken ct)
     {
-        string pendingPath = Path.Combine(config.JobsPath, "pending-update-result.json");
-        if (!File.Exists(pendingPath))
+        List<string> pendingFiles = new();
+        string pendingDir = Path.Combine(config.JobsPath, "Pending");
+        if (Directory.Exists(pendingDir))
         {
-            return;
+            pendingFiles.AddRange(Directory.GetFiles(pendingDir, "*.json", SearchOption.TopDirectoryOnly));
         }
 
-        await _logger.LogAsync("update.result.pending_found", "Pending update result found.", new { pendingPath }, ct);
-        try
+        string legacyPendingPath = Path.Combine(config.JobsPath, "pending-update-result.json");
+        if (File.Exists(legacyPendingPath))
         {
-            string json = await File.ReadAllTextAsync(pendingPath, ct);
-            JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
-                ?? throw new InvalidOperationException("Pending update result is invalid.");
-            await _api.SendJobResultAsync(config, result, ct);
-            string completedDir = Path.Combine(config.JobsPath, "completed");
-            Directory.CreateDirectory(completedDir);
-            string completedPath = Path.Combine(completedDir, $"pending-update-result-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-            File.Move(pendingPath, completedPath, overwrite: true);
-            await _logger.LogAsync("update.result.sent", "Pending update result sent.", new { result.JobId, completedPath }, ct);
+            pendingFiles.Add(legacyPendingPath);
         }
-        catch (Exception ex)
+
+        foreach (string pendingPath in pendingFiles.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path))
         {
-            await _logger.LogAsync("update.result.send_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
+            await _logger.LogAsync("job.result.pending_found", "Pending job result found.", new { pendingPath }, ct);
+            try
+            {
+                string json = await File.ReadAllTextAsync(pendingPath, ct);
+                JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                    ?? throw new InvalidOperationException("Pending job result is invalid.");
+                await _api.SendJobResultAsync(config, result, ct);
+                string completedDir = Path.Combine(config.JobsPath, "completed");
+                Directory.CreateDirectory(completedDir);
+                string completedPath = Path.Combine(completedDir, $"{Path.GetFileNameWithoutExtension(pendingPath)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+                File.Move(pendingPath, completedPath, overwrite: true);
+                await _logger.LogAsync("job.result.pending_sent", "Pending job result sent.", new { result.JobId, completedPath }, ct);
+                if (Path.GetFileName(pendingPath).Equals("pending-update-result.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _logger.LogAsync("update.result.sent", "Legacy pending update result sent.", new { result.JobId, completedPath }, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                await _logger.LogAsync("job.result.pending_send_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
+                if (Path.GetFileName(pendingPath).Equals("pending-update-result.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _logger.LogAsync("update.result.send_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
+                }
+            }
         }
     }
 

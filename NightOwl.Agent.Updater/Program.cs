@@ -19,9 +19,11 @@ internal static class Program
     private static readonly string UpdatesRoot = @"C:\ProgramData\NightOwl\Updates";
     private static readonly string DownloadsRoot = Path.Combine(UpdatesRoot, "Downloads");
     private static readonly string StagingRoot = Path.Combine(UpdatesRoot, "Staging");
+    private static readonly string RunnerRoot = Path.Combine(UpdatesRoot, "Runner");
     private static readonly string BackupsRoot = @"C:\ProgramData\NightOwl\Backups";
     private static readonly string JobsRoot = @"C:\ProgramData\NightOwl\Jobs";
-    private static readonly string PendingUpdateResultPath = Path.Combine(JobsRoot, "pending-update-result.json");
+    private static readonly string PendingJobsRoot = Path.Combine(JobsRoot, "Pending");
+    private static readonly string PendingUpdateResultPath = Path.Combine(PendingJobsRoot, "pending-update-result.json");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -38,8 +40,10 @@ internal static class Program
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
             Directory.CreateDirectory(DownloadsRoot);
             Directory.CreateDirectory(StagingRoot);
+            Directory.CreateDirectory(RunnerRoot);
             Directory.CreateDirectory(BackupsRoot);
             Directory.CreateDirectory(JobsRoot);
+            Directory.CreateDirectory(PendingJobsRoot);
 
             WriteLog("updater.start", "NightOwl Agent Updater iniciado.", new { command, interactive });
 
@@ -100,12 +104,19 @@ internal static class Program
 
     private static async Task<int> RunUpdateAsync(string[] args, bool interactive)
     {
+        WriteLog("update.start", "Update requested.", new { runner = HasFlag(args, "--runner"), source = GetOption(args, "--source") ?? "" });
+
         string? stagedPath = GetOption(args, "--apply-staged");
         if (!string.IsNullOrWhiteSpace(stagedPath))
         {
             string stagedManifestPath = GetOption(args, "--manifest") ?? throw new InvalidOperationException("Manifesto ausente para aplicacao staged.");
             string packageSha256 = GetOption(args, "--package-sha256") ?? "";
             return ApplyStagedUpdate(stagedPath, stagedManifestPath, packageSha256, interactive);
+        }
+
+        if (!HasFlag(args, "--runner"))
+        {
+            return LaunchIndependentRunner(args, interactive);
         }
 
         AgentConfig config = LoadConfig();
@@ -131,7 +142,7 @@ internal static class Program
         if (!IsAdministrator())
         {
             WriteLog("updater.update.elevation_required", "Atualizacao requer elevacao administrativa.");
-            RelaunchElevated("update --interactive");
+            RelaunchElevated(BuildRunnerArguments(args));
             WriteJson(new { ok = true, elevated = true, message = "Updater relancado como administrador." });
             return 0;
         }
@@ -141,9 +152,11 @@ internal static class Program
         EnsurePackageUrlAllowed(config, packageUrl);
 
         string downloadPath = Path.Combine(DownloadsRoot, "NightOwl.Agent.Windows.zip");
+        WriteLog("package.download", "Downloading update package.", new { url = SanitizeUrl(packageUrl), downloadPath });
         await DownloadFileAsync(packageUrl, downloadPath);
         FileChecksum packageChecksum = checksums.GetRequired("NightOwl.Agent.Windows.zip");
         ValidateFile(downloadPath, packageChecksum);
+        WriteLog("checksum.ok", "Package checksum validated.", new { packageChecksum.Sha256, packageChecksum.Size });
 
         string stagingPath = Path.Combine(StagingRoot, SanitizePathSegment(manifest.Version));
         if (Directory.Exists(stagingPath))
@@ -152,6 +165,7 @@ internal static class Program
         }
         Directory.CreateDirectory(stagingPath);
         ExtractZipSafe(downloadPath, stagingPath);
+        WriteLog("staging.ready", "Staging directory ready.", new { stagingPath, version = manifest.Version });
 
         string manifestPath = Path.Combine(stagingPath, "version.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions));
@@ -163,7 +177,93 @@ internal static class Program
         }
 
         WriteLog("updater.update.staged", "Pacote baixado, validado e extraido.", new { stagingPath, version = manifest.Version });
-        return LaunchStagedUpdater(stagedUpdater, stagingPath, manifestPath, packageChecksum.Sha256, interactive, jobContext);
+        return ApplyStagedUpdate(stagingPath, manifestPath, packageChecksum.Sha256, interactive);
+    }
+
+    private static int LaunchIndependentRunner(string[] args, bool interactive)
+    {
+        string runnerExe = CopyRunnerFiles();
+        string arguments = BuildRunnerArguments(args);
+        WriteLog("runner.start", "Starting independent updater runner.", new { runnerExe, arguments = SanitizeCommandLine(arguments) });
+
+        ProcessStartInfo psi = new()
+        {
+            FileName = runnerExe,
+            Arguments = arguments,
+            WorkingDirectory = RunnerRoot,
+            UseShellExecute = true
+        };
+
+        if (!IsAdministrator())
+        {
+            psi.Verb = "runas";
+        }
+
+        Process.Start(psi);
+        WriteJson(new { ok = true, runnerStarted = true, runner = runnerExe });
+        if (interactive)
+        {
+            ShowMessage("Atualizacao iniciada. O servico NightOwl pode reiniciar durante o processo.", MessageBoxIcon.Information);
+        }
+        return 0;
+    }
+
+    private static string CopyRunnerFiles()
+    {
+        Directory.CreateDirectory(RunnerRoot);
+        foreach (string path in Directory.EnumerateFileSystemEntries(RunnerRoot))
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                {
+                    Directory.Delete(path, recursive: true);
+                }
+                else
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteLog("runner.cleanup_failed", "Failed to clean previous runner file.", new { path, error = ex.Message });
+            }
+        }
+
+        CopyDirectory(AppContext.BaseDirectory, RunnerRoot, overwrite: true, excludeNames: ProtectedInstallFileNames);
+        string runnerExe = Path.Combine(RunnerRoot, "NightOwl.Agent.Updater.exe");
+        if (!File.Exists(runnerExe))
+        {
+            throw new FileNotFoundException("NightOwl.Agent.Updater.exe nao foi copiado para o runner.", runnerExe);
+        }
+        WriteLog("runner.copy", "Independent runner copied.", new { source = AppContext.BaseDirectory, runner = RunnerRoot });
+        return runnerExe;
+    }
+
+    private static string BuildRunnerArguments(string[] args)
+    {
+        List<string> filtered = new();
+        bool commandAdded = false;
+        foreach (string arg in args)
+        {
+            if (!commandAdded && !arg.StartsWith("--", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered.Add(arg);
+                commandAdded = true;
+                continue;
+            }
+            if (arg.Equals("--runner", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            filtered.Add(arg);
+        }
+        if (!commandAdded)
+        {
+            filtered.Insert(0, "update");
+        }
+        filtered.Add("--runner");
+        return string.Join(" ", filtered.Select(QuoteArg));
     }
 
     private static int ApplyStagedUpdate(string stagedPath, string manifestPath, string packageSha256, bool interactive)
@@ -186,16 +286,23 @@ internal static class Program
         try
         {
             BackupInstall(installPath, backupPath);
+            WriteLog("backup.created", "Install backup created.", new { backupPath });
             StopTray();
+            WriteLog("tray.stop.done", "Tray process stopped.");
+            WriteLog("service.stop.start", "Stopping service for update.");
             StopService();
-            StopOtherUpdaterProcesses();
+            WriteLog("service.stop.done", "Service stopped for update.");
+            WriteLog("files.copy.start", "Copying staged files to install path.", new { stagedPath, installPath });
             CopyStagedFiles(stagedPath, installPath);
+            WriteLog("files.copy.done", "Staged files copied to install path.", new { stagedPath, installPath });
             WriteLocalVersion(installPath, manifest, packageSha256, "updater");
             StartService();
+            WriteLog("service.start.done", "Service started after update.");
             StartTrayIfPossible(installPath);
             ValidatePostUpdate(installPath, manifest.Version);
 
             WriteLog("updater.apply.completed", "Atualizacao concluida.", new { version = manifest.Version });
+            WriteLog("update.completed", "Update completed.", new { version = manifest.Version, previous_version = installed.Version });
             if (jobContext.IsJob)
             {
                 WritePendingUpdateResult(jobContext, "completed", 0, manifest.Version, installed.Version, "Agent updated successfully.", new { updated = true, version = manifest.Version, previous_version = installed.Version }, "");
@@ -210,6 +317,7 @@ internal static class Program
         catch (Exception ex)
         {
             WriteLog("updater.apply.failed", "Falha ao aplicar atualizacao; tentando rollback.", new { error = ex.Message, backupPath });
+            WriteLog("update.failed", "Update failed; attempting rollback.", new { error = ex.Message, backupPath });
             TryRollbackFromBackup(backupPath, installPath);
             if (jobContext.IsJob)
             {
@@ -469,15 +577,16 @@ internal static class Program
         WriteLog("updater.backup.completed", "Backup da instalacao atual criado.", new { backupPath });
     }
 
+    private static readonly string[] ProtectedInstallFileNames =
+    {
+        "agent.config.json",
+        "agent-dotnet.state.json"
+    };
+
     private static void CopyStagedFiles(string stagedPath, string installPath)
     {
         Directory.CreateDirectory(installPath);
-        string[] protectedNames =
-        {
-            "agent.config.json",
-            "agent-dotnet.state.json"
-        };
-        CopyDirectory(stagedPath, installPath, overwrite: true, excludeNames: protectedNames);
+        CopyDirectory(stagedPath, installPath, overwrite: true, excludeNames: ProtectedInstallFileNames);
         WriteLog("updater.files.copied", "Arquivos atualizados copiados para instalacao.", new { stagedPath, installPath });
     }
 
@@ -677,7 +786,7 @@ internal static class Program
         {
             return;
         }
-        Directory.CreateDirectory(JobsRoot);
+        Directory.CreateDirectory(PendingJobsRoot);
         var payload = new
         {
             job_id = jobContext.JobId,
@@ -702,6 +811,7 @@ internal static class Program
         };
         File.WriteAllText(PendingUpdateResultPath, JsonSerializer.Serialize(payload, JsonOptions));
         WriteLog("updater.pending_result.written", "Resultado de update gravado para envio pelo agente.", new { jobContext.JobId, status, exitCode });
+        WriteLog("pending_result.written", "Pending update result written.", new { jobContext.JobId, status, exitCode });
     }
 
     private static string GetServiceStatus()
@@ -817,6 +927,35 @@ internal static class Program
         return value[..max];
     }
 
+    private static string QuoteArg(string arg)
+    {
+        if (string.IsNullOrEmpty(arg))
+        {
+            return "\"\"";
+        }
+        if (!arg.Any(char.IsWhiteSpace) && !arg.Contains('"'))
+        {
+            return arg;
+        }
+        return "\"" + arg.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
+    private static string SanitizeCommandLine(string arguments)
+    {
+        string sanitized = arguments;
+        string? jobId = GetOption(SplitCommandLineLight(arguments), "--job-id");
+        if (!string.IsNullOrWhiteSpace(jobId))
+        {
+            sanitized = sanitized.Replace(jobId, "<job-id>", StringComparison.OrdinalIgnoreCase);
+        }
+        return sanitized;
+    }
+
+    private static string[] SplitCommandLineLight(string arguments)
+    {
+        return arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
     private static bool HasFlag(string[] args, string flag)
     {
         return args.Any(arg => arg.Equals(flag, StringComparison.OrdinalIgnoreCase));
@@ -872,7 +1011,7 @@ internal static class Program
     private sealed class AgentConfig
     {
         [JsonPropertyName("agentVersion")]
-        public string AgentVersion { get; set; } = "0.1.0.4";
+        public string AgentVersion { get; set; } = "0.1.0.6";
 
         [JsonPropertyName("serverBaseUrl")]
         public string ServerBaseUrl { get; set; } = "";

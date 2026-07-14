@@ -11,7 +11,7 @@ public sealed class AgentConfig
     public string MachineId { get; set; } = "";
 
     [JsonPropertyName("agentVersion")]
-    public string AgentVersion { get; set; } = "0.1.0.4";
+    public string AgentVersion { get; set; } = "0.1.0.6";
 
     [JsonPropertyName("serverBaseUrl")]
     public string ServerBaseUrl { get; set; } = "";
@@ -59,7 +59,8 @@ public sealed class AgentConfig
         "collect_security",
         "windows_update_scan",
         "force_inventory",
-        "update_agent"
+        "update_agent",
+        "restart_agent"
     };
 
     [JsonIgnore]

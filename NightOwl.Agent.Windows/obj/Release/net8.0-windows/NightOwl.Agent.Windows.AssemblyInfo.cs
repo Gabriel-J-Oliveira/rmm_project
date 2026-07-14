@@ -12,11 +12,11 @@ using System.Reflection;
 
 [assembly: System.Reflection.AssemblyCompanyAttribute("NightOwl.Agent.Windows")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
-[assembly: System.Reflection.AssemblyFileVersionAttribute("0.1.0.4")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("0.1.0.4+57aafdc601d4c3e9d871cce297740540fa70cd4a")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("0.1.0.6")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("0.1.0.6+b2bfa3d2126a399a19644cf8850df6a6c7ca4b22")]
 [assembly: System.Reflection.AssemblyProductAttribute("NightOwl.Agent.Windows")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NightOwl.Agent.Windows")]
-[assembly: System.Reflection.AssemblyVersionAttribute("0.1.0.4")]
+[assembly: System.Reflection.AssemblyVersionAttribute("0.1.0.6")]
 [assembly: System.Runtime.Versioning.TargetPlatformAttribute("Windows7.0")]
 [assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("Windows7.0")]
 

@@ -269,7 +269,7 @@ function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenV
         serial_number = $info.SerialNumber
         fqdn = if ($info.Domain) { "$($info.Hostname).$($info.Domain)" } else { $info.Hostname }
         os_name = $info.OsName
-        agent_version = "0.1.0.4"
+        agent_version = "0.1.0.6"
         agent_mode = "dotnet-service"
         install_path = $InstallPath
         task_name = "NightOwlAgentDotNet"
@@ -670,7 +670,7 @@ if (-not (Test-Path $iconPath)) {
 $packageVersionFile = Read-JsonFile (Join-Path $sourcePath "agent.version.json")
 $packageVersion = Get-JsonProperty $packageVersionFile @("version")
 if ([string]::IsNullOrWhiteSpace($packageVersion)) {
-    $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0.4" }
+    $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0.6" }
 }
 
 $existingConfig = $preservedConfig
@@ -698,7 +698,7 @@ $config = [ordered]@{
     packagesPath = "C:\ProgramData\NightOwl\Packages"
     cachePath = "C:\ProgramData\NightOwl\Cache"
     jobsPath = "C:\ProgramData\NightOwl\Jobs"
-    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent")
+    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "restart_agent")
 }
 Save-AgentConfig -Path $configPath -Config $config
 Write-StateMachineId -Path $statePath -MachineId $machineId

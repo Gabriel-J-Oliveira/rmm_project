@@ -2418,13 +2418,23 @@ def _job_progress(status):
     }.get(status, 0)
 
 
+def _job_public_status(status):
+    return {
+        AgentJob.STATUS_QUEUED: 'pending',
+        AgentJob.STATUS_SENT: 'dispatched',
+        AgentJob.STATUS_CANCELLED: 'canceled',
+    }.get(status, status)
+
+
 def serialize_agent_job(job):
+    public_status = _job_public_status(job.status)
     return {
         'id': str(job.id),
         'name': dict(AgentJob.TYPE_CHOICES).get(job.job_type, job.job_type),
         'type': job.job_type,
         'command': job.job_type,
-        'status': job.status,
+        'status': public_status,
+        'rawStatus': job.status,
         'endpoint': job.endpoint.hostname if job.endpoint_id else '',
         'createdBy': job.created_by or 'Sistema',
         'createdAt': _iso_or_none(job.created_at),
@@ -2444,10 +2454,10 @@ def serialize_agent_job(job):
         'progress': _job_progress(job.status),
         'timeline': [
             item for item in [
-                'queued' if job.queued_at else '',
-                'sent' if job.dispatched_at else '',
+                'pending' if job.queued_at else '',
+                'dispatched' if job.dispatched_at else '',
                 'started' if job.started_at else '',
-                job.status if job.finished_at else '',
+                public_status if job.finished_at else '',
             ]
             if item
         ],
@@ -2929,6 +2939,7 @@ def endpoint_job_create(request, pk):
         'collect_software': AgentJob.TYPE_COLLECT_SOFTWARE,
         'windows_update_scan': AgentJob.TYPE_WINDOWS_UPDATE_SCAN,
         'update_agent': AgentJob.TYPE_UPDATE_AGENT,
+        'restart_agent': AgentJob.TYPE_RESTART_AGENT,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
     allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES}
@@ -2973,6 +2984,11 @@ def endpoint_job_create(request, pk):
             'force': False,
             'source': 'manual_panel',
         })
+    elif selected_type == AgentJob.TYPE_RESTART_AGENT:
+        payload.update({
+            'source': 'manual_panel',
+            'reason': 'manual_endpoint_action',
+        })
 
     job = AgentJob.objects.create(
         endpoint=endpoint,
@@ -2991,6 +3007,13 @@ def endpoint_job_create(request, pk):
         endpoint=endpoint,
         metadata={'job_id': str(job.id), 'job_type': selected_type, 'payload': payload},
         request=request,
+    )
+    logger.info(
+        'job.created endpoint_id=%s job_id=%s job_type=%s created_by=%s',
+        endpoint.id,
+        job.id,
+        selected_type,
+        request.user.get_username(),
     )
     if selected_type == AgentJob.TYPE_UPDATE_AGENT:
         logger.info(

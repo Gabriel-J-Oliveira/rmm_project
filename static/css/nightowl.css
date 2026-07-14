@@ -12790,7 +12790,7 @@ body.page-endpoint-detail .endpoint-event-row strong {
 }
 
 body.page-endpoint-detail .endpoint-job-table {
-    min-width: 980px;
+    min-width: 1220px;
 }
 
 body.page-endpoint-detail .endpoint-job-table td strong,
@@ -12818,12 +12818,27 @@ body.page-endpoint-detail .endpoint-job-progress-completed span {
     background: #22c55e;
 }
 
+body.page-endpoint-detail .endpoint-job-progress-pending span,
+body.page-endpoint-detail .endpoint-job-progress-queued span {
+    background: #94a3b8;
+}
+
+body.page-endpoint-detail .endpoint-job-progress-dispatched span,
+body.page-endpoint-detail .endpoint-job-progress-sent span {
+    background: #38bdf8;
+}
+
+body.page-endpoint-detail .endpoint-job-progress-running span {
+    background: #a78bfa;
+}
+
 body.page-endpoint-detail .endpoint-job-progress-failed span,
 body.page-endpoint-detail .endpoint-job-progress-expired span {
     background: #ef4444;
 }
 
-body.page-endpoint-detail .endpoint-job-progress-cancelled span {
+body.page-endpoint-detail .endpoint-job-progress-cancelled span,
+body.page-endpoint-detail .endpoint-job-progress-canceled span {
     background: #94a3b8;
 }
 

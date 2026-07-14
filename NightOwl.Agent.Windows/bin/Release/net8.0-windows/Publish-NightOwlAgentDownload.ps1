@@ -4,7 +4,7 @@ param(
     [string]$UpdaterProjectPath = ".\NightOwl.Agent.Updater\NightOwl.Agent.Updater.csproj",
     [string]$PublishDir = ".\NightOwl.Agent.Windows\publish\win-x64",
     [string]$OutputDir = ".\NightOwl.Agent.Windows\publish\downloads\agent\windows",
-    [string]$Version = "0.1.0.4",
+    [string]$Version = "0.1.0.6",
     [string]$PublicBaseUrl = "https://nightowl.controlsul.com.br/downloads/nightowl-agent",
     [string]$Runtime = "win-x64",
     [switch]$SkipPublish

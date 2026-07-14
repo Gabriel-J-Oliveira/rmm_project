@@ -41,15 +41,17 @@
         acknowledged: "Reconhecido",
         muted: "Silenciado",
         resolved: "Resolvido",
-        queued: "Em fila",
-        sent: "Enviado",
-        dispatched: "Enviado",
+        queued: "Pendente",
+        pending: "Pendente",
+        sent: "Despachado",
+        dispatched: "Despachado",
         waiting_agent: "Aguardando agente",
         running: "Em execucao",
         completed: "Concluido",
         failed: "Falha",
         expired: "Expirado",
         cancelled: "Cancelado",
+        canceled: "Cancelado",
         force_inventory: "Forcar inventario",
         defender_check: "Verificar Defender",
         disk_check: "Verificar disco",
@@ -62,7 +64,8 @@
         run_script: "Executar script",
         windows_update_scan: "Windows Update Scan",
         install_software: "Instalar software",
-        update_agent: "Atualizar agente"
+        update_agent: "Atualizar agente",
+        restart_agent: "Reiniciar agente"
     };
 
     if (realPayloadScript && realPayloadScript.textContent) {
@@ -146,6 +149,7 @@
     function jobProgress(job) {
         const statusProgress = {
             queued: 10,
+            pending: 10,
             sent: 25,
             dispatched: 25,
             waiting_agent: 25,
@@ -153,7 +157,8 @@
             completed: 100,
             failed: 100,
             expired: 100,
-            cancelled: 100
+            cancelled: 100,
+            canceled: 100
         };
         if (job && Object.prototype.hasOwnProperty.call(statusProgress, job.status)) {
             return statusProgress[job.status];
@@ -178,7 +183,9 @@
             cleanup_temp: "sparkles",
             run_script: "code-2",
             install_software: "package-plus",
-            windows_update_scan: "badge-check"
+            windows_update_scan: "badge-check",
+            update_agent: "download-cloud",
+            restart_agent: "rotate-ccw"
         }[value] || "terminal";
     }
 
@@ -451,10 +458,10 @@
     function renderJobs(jobs, limit) {
         const rows = (jobs || []).slice(0, limit || jobs.length);
         if (!rows.length) return emptyState("Nenhuma tarefa tecnica executada neste endpoint", "Use as acoes rapidas para enfileirar jobs reais para o agente.", "list-checks");
-        return '<div class="table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Tipo</th><th>Progresso</th><th>Criado por</th><th>Criado em</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
+        return '<div class="table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Tipo</th><th>Progresso</th><th>Criado em</th><th>Enviado em</th><th>Iniciado em</th><th>Finalizado em</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
             rows.map(function (job) {
                 const progress = jobProgress(job);
-                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '</td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "queued") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td>' + escapeHtml(job.createdBy || "-") + '</td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(jobResultLabel(job)) + '</td><td class="software-actions">' +
+                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '<small class="muted-inline">por ' + escapeHtml(job.createdBy || "-") + '</small></td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDate(job.dispatchedAt)) + '</td><td>' + escapeHtml(formatDate(job.startedAt)) + '</td><td>' + escapeHtml(formatDate(job.finishedAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(jobResultLabel(job)) + '</td><td class="software-actions">' +
                     '<button type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
                     '<button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
                     (job.status === "completed" ? '<button type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
@@ -695,17 +702,17 @@
     }
 
     function renderTasks(detail) {
-        return '<section class="panel endpoint-dense-card"><header><h2>' + icon("list-checks") + 'Tarefas e jobs</h2><button type="button" data-endpoint-action="execute_check">' + icon("plus") + 'Nova tarefa mockada</button></header>' +
-            renderJobs(detail.jobs, 50) +
+        return '<section class="panel endpoint-dense-card"><header><h2>' + icon("list-checks") + 'Acoes e Jobs</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar lista</button></header>' +
             '<div class="endpoint-remote-actions-grid">' +
-            actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
-            actionButton("check_defender", "Verificar Defender", "shield-check") +
-            actionButton("check_disk", "Verificar disco", "hard-drive") +
-            actionButton("collect_software", "Coletar software", "package-search") +
-            actionButton("collect_logs", "Coletar logs", "file-search") +
             actionButton("ping", "Ping", "activity") +
-            actionButton("windows_update_scan", "Windows Update scan", "badge-check") +
-            "</div></section>";
+            actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
+            actionButton("collect_disks", "Coletar discos", "hard-drive") +
+            actionButton("collect_software", "Coletar software", "package-search") +
+            actionButton("restart_agent", "Reiniciar agente", "rotate-ccw") +
+            actionButton("update_agent", "Atualizar agente", "download-cloud") +
+            "</div>" +
+            renderJobs(detail.jobs, 80) +
+            "</section>";
     }
 
     function panel(name) {
@@ -832,7 +839,7 @@
             }
             reloadEndpoint(false).then(function (detail) {
                 const running = detail && (detail.jobs || []).some(function (job) {
-                    return ["queued", "sent", "dispatched", "waiting_agent", "running"].indexOf(job.status) >= 0;
+                    return ["queued", "pending", "sent", "dispatched", "waiting_agent", "running"].indexOf(job.status) >= 0;
                 });
                 if (!running && reloadTimer) {
                     showToast("Dados do endpoint atualizados.");
@@ -885,24 +892,30 @@
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
         }
-        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent"];
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "restart_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
             if (action === "update_agent") {
                 const confirmed = window.confirm("Deseja enviar um comando de atualizacao do agente para este endpoint? O servico pode ser reiniciado durante o processo.");
                 if (!confirmed) return;
                 showToast("Enviando job de atualizacao para o agente...");
+            } else if (action === "restart_agent") {
+                const confirmed = window.confirm("Deseja enviar um comando para reiniciar o agente neste endpoint?");
+                if (!confirmed) return;
+                showToast("Enviando job de reinicio para o agente...");
             }
             createRealJob(action).then(function (payload) {
                 const isPendingUpdate = payload.status === "already_pending";
                 showToast(action === "update_agent"
-                    ? (isPendingUpdate ? "Ja existe um job de atualizacao pendente para este endpoint." : "Job de atualizacao enviado.")
+                    ? (isPendingUpdate ? "Ja existe um job de atualizacao pendente para este endpoint." : "Job enviado com sucesso.")
+                    : action === "restart_agent"
+                        ? "Job enviado com sucesso."
                     : "Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
                 if (!endpointDetail.jobs) endpointDetail.jobs = [];
                 if (payload.job && !endpointDetail.jobs.some(function (job) { return job.id === payload.job.id; })) {
                     endpointDetail.jobs.unshift(payload.job);
                 }
                 renderActivePanel();
-                activateTab(action === "update_agent" ? "tasks" : activeTab);
+                activateTab(action === "update_agent" || action === "restart_agent" ? "tasks" : activeTab);
                 schedulePolling();
                 return reloadEndpoint(false);
             }).catch(function (error) {

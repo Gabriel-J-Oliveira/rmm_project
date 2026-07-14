@@ -181,6 +181,16 @@ class AgentJobsPullView(APIView):
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
             create_audit_event(
+                event_type='job.dispatched',
+                title='Job despachado',
+                description=f'Job {job.job_type} despachado para {machine.hostname}.',
+                severity=AuditEvent.SEVERITY_INFO,
+                actor_type=AuditEvent.ACTOR_AGENT,
+                actor_name='NightOwlAgent',
+                endpoint=machine,
+                metadata={'job_id': str(job.id), 'job_type': job.job_type},
+            )
+            create_audit_event(
                 event_type='job.started',
                 title='Job iniciado pelo agente',
                 description=f'Job {job.job_type} iniciou execucao em {machine.hostname}.',
@@ -190,13 +200,13 @@ class AgentJobsPullView(APIView):
                 endpoint=machine,
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
-            if job.job_type == AgentJob.TYPE_UPDATE_AGENT:
-                logger.info(
-                    'update_agent job dispatched endpoint_id=%s job_id=%s hostname=%s',
-                    machine.id,
-                    job.id,
-                    machine.hostname,
-                )
+            logger.info(
+                'job.dispatched endpoint_id=%s job_id=%s job_type=%s hostname=%s',
+                machine.id,
+                job.id,
+                job.job_type,
+                machine.hostname,
+            )
 
         create_audit_event(
             event_type='job.pull_requested',
@@ -220,8 +230,12 @@ class AgentJobsResultView(APIView):
         payload = request.data if isinstance(request.data, dict) else {}
         job_id = payload.get('job_id') or payload.get('id') or ''
         job_status = str(payload.get('status') or 'unknown').strip().lower()
-        if job_status == 'dispatched':
+        if job_status == 'pending':
+            job_status = AgentJob.STATUS_QUEUED
+        elif job_status == 'dispatched':
             job_status = AgentJob.STATUS_SENT
+        elif job_status == 'canceled':
+            job_status = AgentJob.STATUS_CANCELLED
         job = None
         if job_id:
             job = AgentJob.objects.filter(pk=job_id, endpoint=machine).first()
@@ -248,7 +262,8 @@ class AgentJobsResultView(APIView):
         if job:
             job.status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             job.started_at = _parse_agent_datetime(payload.get('started_at'), job.started_at)
-            job.finished_at = _parse_agent_datetime(payload.get('finished_at'), timezone.now())
+            if job.status in {AgentJob.STATUS_COMPLETED, AgentJob.STATUS_FAILED, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_CANCELLED}:
+                job.finished_at = _parse_agent_datetime(payload.get('finished_at'), timezone.now())
             job.duration_seconds = payload.get('duration_seconds')
             job.exit_code = payload.get('exit_code')
             job.stdout = payload.get('stdout') or ''
@@ -287,6 +302,22 @@ class AgentJobsResultView(APIView):
                     job.id,
                     job.status,
                     job.exit_code,
+                )
+            logger.info(
+                'job.result.received endpoint_id=%s job_id=%s job_type=%s status=%s exit_code=%s',
+                machine.id,
+                job.id,
+                job.job_type,
+                job.status,
+                job.exit_code,
+            )
+            if job.status == AgentJob.STATUS_FAILED:
+                logger.warning(
+                    'job.failed endpoint_id=%s job_id=%s job_type=%s error=%s',
+                    machine.id,
+                    job.id,
+                    job.job_type,
+                    job.error_message,
                 )
         event_type = 'job.completed' if job_status == 'completed' else 'job.failed' if job_status == 'failed' else 'job.result_received'
         severity = AuditEvent.SEVERITY_SUCCESS if job_status == 'completed' else AuditEvent.SEVERITY_WARNING if job_status in {'failed', 'expired'} else AuditEvent.SEVERITY_INFO

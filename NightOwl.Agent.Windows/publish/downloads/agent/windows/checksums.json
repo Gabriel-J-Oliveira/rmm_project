@@ -1,18 +1,18 @@
 ﻿{
-    "NightOwl.Agent.Windows.zip":  "2b8a2f622922e2191684d2da120decc7a216f7f7f0158bcacbdad80f0421c968",
-    "Install-NightOwlAgentDotNet.ps1":  "ad826de98210a3d64580870aa9e553ed1d10d090badbc9e9dcaab133f9fa24fe",
+    "NightOwl.Agent.Windows.zip":  "d381bce28555d5fdf17a73e0270eea66ee052e7c066441f09b2e87297c2044ab",
+    "Install-NightOwlAgentDotNet.ps1":  "51851d38a439579e29c2e2ef6b04a09add5ca2291fbdeb7770b99b962e2c3e21",
     "Uninstall-NightOwlAgentDotNet.ps1":  "4e010a9c8ec1d202312589783c01232552c29d41fe3c8bc4d62a05800de0fc2f",
     "NightOwl.ico":  "af0b28fd42b1bf58b10f6d629ceb3a9030f0ec9d348a1054db5d63ace0870ada",
     "files":  [
                   {
                       "name":  "NightOwl.Agent.Windows.zip",
-                      "sha256":  "2b8a2f622922e2191684d2da120decc7a216f7f7f0158bcacbdad80f0421c968",
-                      "size":  71403643
+                      "sha256":  "d381bce28555d5fdf17a73e0270eea66ee052e7c066441f09b2e87297c2044ab",
+                      "size":  71409130
                   },
                   {
                       "name":  "Install-NightOwlAgentDotNet.ps1",
-                      "sha256":  "ad826de98210a3d64580870aa9e553ed1d10d090badbc9e9dcaab133f9fa24fe",
-                      "size":  31921
+                      "sha256":  "51851d38a439579e29c2e2ef6b04a09add5ca2291fbdeb7770b99b962e2c3e21",
+                      "size":  31938
                   },
                   {
                       "name":  "Uninstall-NightOwlAgentDotNet.ps1",

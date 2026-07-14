@@ -179,7 +179,7 @@
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\": {}
   },
   "project": {
-    "version": "0.1.0.4",
+    "version": "0.1.0.6",
     "restore": {
       "projectUniqueName": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj",
       "projectName": "NightOwl.Agent.Tray",
