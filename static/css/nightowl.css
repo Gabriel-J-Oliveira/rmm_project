@@ -28585,7 +28585,8 @@ body.page-pulse .is-noc-mode .pulse-action-item.severity-critical {
     }
 }
 
-/* Endpoint detail operational refinement */
+/* Endpoint detail operational refinement (legacy disabled; final block owns overview layout) */
+@media (max-width: 0px) {
 body.page-endpoint-detail .endpoint-overview-grid {
     grid-template-columns: repeat(6, minmax(0, 1fr));
     align-items: start;
@@ -28838,7 +28839,10 @@ body.page-endpoint-detail .endpoint-task-list p {
     }
 }
 
-/* Endpoint detail final layout pass */
+}
+
+/* Endpoint detail final layout pass (legacy disabled; final block owns overview layout) */
+@media (max-width: 0px) {
 body.page-endpoint-detail .endpoint-detail-shell {
     gap: 14px;
 }
@@ -29178,7 +29182,9 @@ body.page-endpoint-detail .job-result-text {
     }
 }
 
-/* Endpoint detail official overview layout */
+}
+
+/* Endpoint detail layout - final */
 body.page-endpoint-detail .endpoint-ops-header {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
@@ -29212,6 +29218,8 @@ body.page-endpoint-detail .endpoint-primary-row,
 body.page-endpoint-detail .endpoint-summary-row,
 body.page-endpoint-detail .endpoint-operational-row,
 body.page-endpoint-detail .endpoint-secondary-row {
+    display: grid;
+    gap: 14px;
     align-items: start;
 }
 
@@ -29565,6 +29573,347 @@ body.page-endpoint-detail .endpoint-skeleton-list article {
     100% {
         background-position: -100% 0;
     }
+}
+
+/* Endpoint detail visual scale final */
+body.page-endpoint-detail {
+    font-size: 14px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell {
+    width: min(100%, 1480px);
+    max-width: 1480px;
+    margin-inline: auto;
+    padding: 0 20px 34px;
+    gap: 16px;
+}
+
+body.page-endpoint-detail .endpoint-ops-header {
+    padding: 14px 16px;
+}
+
+body.page-endpoint-detail .endpoint-title-line h1 {
+    font-size: 28px;
+    line-height: 1.08;
+}
+
+body.page-endpoint-detail .endpoint-critical-strip {
+    gap: 8px;
+    margin-top: 10px;
+}
+
+body.page-endpoint-detail .endpoint-critical-strip > span {
+    min-height: 28px;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-tabs {
+    min-height: 38px;
+    padding: 4px;
+}
+
+body.page-endpoint-detail .endpoint-tabs button {
+    min-height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-overview-layout {
+    gap: 16px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row {
+    gap: 16px;
+}
+
+body.page-endpoint-detail .endpoint-dense-card {
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-health-dense,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-agent-card,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-security-summary,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-summary-card,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-inventory-summary,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-disk-summary,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-jobs-card,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-actions-card {
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header {
+    min-height: 46px;
+    padding: 11px 14px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header h2,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header h2,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header h2 {
+    font-size: 15px;
+    line-height: 1.2;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header h2 svg,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header a svg,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header button svg,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header h2 svg,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header a svg,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header button svg,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header h2 svg,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header a svg,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header button svg,
+body.page-endpoint-detail .endpoint-tabs button svg {
+    width: 15px;
+    height: 15px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-health-pill,
+body.page-endpoint-detail .endpoint-primary-row .agent-version-pill,
+body.page-endpoint-detail .endpoint-primary-row .severity-badge,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-health-pill,
+body.page-endpoint-detail .endpoint-operational-row .agent-version-pill,
+body.page-endpoint-detail .endpoint-critical-strip .endpoint-health-pill,
+body.page-endpoint-detail .endpoint-title-line .status-badge,
+body.page-endpoint-detail .endpoint-title-line .smart-badge {
+    font-size: 11.5px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list {
+    gap: 9px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list div,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list div {
+    min-width: 0;
+    padding: 9px 10px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list dt,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list dt {
+    font-size: 11.5px;
+    line-height: 1.15;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list dd,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list dd {
+    min-width: 0;
+    color: #f8fafc;
+    font-size: 14px;
+    font-weight: 850;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    gap: 12px;
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
+    align-items: baseline;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
+    font-size: 48px;
+    line-height: 0.95;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block span {
+    font-size: 14px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown div {
+    grid-template-columns: minmax(94px, 0.9fr) 38px minmax(120px, 1.45fr);
+    gap: 9px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown span,
+body.page-endpoint-detail .endpoint-health-body .health-breakdown strong {
+    font-size: 12.5px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown em,
+body.page-endpoint-detail .endpoint-health-body .health-bar {
+    height: 8px;
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    gap: 12px;
+    padding: 14px 16px 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel {
+    min-height: 46px;
+    padding: 11px 13px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-compare strong {
+    font-size: 17px;
+    line-height: 1.15;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel small {
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    justify-content: flex-end;
+    padding: 11px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions button {
+    min-height: 36px;
+    padding-inline: 13px;
+    font-size: 12.5px;
+}
+
+body.page-endpoint-detail .endpoint-security-body {
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-wide {
+    grid-column: 1 / -1;
+}
+
+body.page-endpoint-detail .endpoint-overview-facts {
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-overview-facts .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-wide {
+    grid-column: 1 / -1;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    gap: 10px;
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list div {
+    grid-template-columns: 64px 54px minmax(0, 1fr);
+    gap: 10px;
+    min-height: 42px;
+    align-items: center;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list strong,
+body.page-endpoint-detail .endpoint-mini-disk-list span {
+    font-size: 14px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list em {
+    height: 9px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list small {
+    grid-column: 3;
+    margin-top: -4px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-list {
+    gap: 8px;
+    padding: 12px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-job-item {
+    grid-template-columns: minmax(360px, 1fr) minmax(140px, 0.34fr) minmax(112px, 0.2fr);
+    gap: 10px;
+    min-height: 68px;
+    padding: 9px 10px;
+}
+
+body.page-endpoint-detail .endpoint-job-title {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-job-title small {
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-result-line {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 8px;
+    margin-top: 7px;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 76px;
+    height: 6px;
+}
+
+body.page-endpoint-detail .job-result-text {
+    font-size: 12.5px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta {
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta span {
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions button {
+    min-height: 31px;
+    padding: 0 9px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-action-groups {
+    gap: 12px;
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-action-group {
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-action-group h3 {
+    font-size: 11.5px;
+}
+
+body.page-endpoint-detail .endpoint-action-group div {
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-action-group button {
+    min-height: 36px;
+    padding: 0 10px;
+    font-size: 12.5px;
+}
+
+body.page-endpoint-detail .endpoint-action-group svg {
+    width: 15px;
+    height: 15px;
 }
 
 @media (max-width: 1180px) {
