@@ -410,7 +410,7 @@
     }
 
     function actionButton(action, label, iconName) {
-        return '<button type="button" data-endpoint-action="' + escapeHtml(action) + '">' + icon(iconName || "play") + escapeHtml(label) + "</button>";
+        return '<button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '">' + icon(iconName || "play") + '<span>' + escapeHtml(label) + "</span></button>";
     }
 
     function healthClass(score) {
@@ -529,18 +529,19 @@
             const result = jobResultLabel(job);
             const primaryTime = job.finishedAt || job.startedAt || job.dispatchedAt || job.createdAt;
             return '<article class="endpoint-job-item endpoint-job-item-' + escapeHtml(job.status || "pending") + '">' +
-                '<div class="endpoint-job-main">' +
-                    '<div class="endpoint-job-title">' + jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small></div>' +
-                    '<div class="endpoint-job-result-line"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><span class="job-result-text" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</span></div>' +
+                '<div class="endpoint-job-left">' +
+                    '<div class="endpoint-job-titleline">' + jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small></div>' +
+                    '<div class="endpoint-job-progressline"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' +
+                    '<div class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</div>' +
                 '</div>' +
-                '<div class="endpoint-job-meta">' +
+                '<div class="endpoint-job-time">' +
                     '<span><b>Horario</b>' + escapeHtml(formatDate(primaryTime)) + '</span>' +
                     '<span><b>Duracao</b>' + escapeHtml(formatDuration(job.durationMs)) + '</span>' +
                 '</div>' +
                 '<div class="endpoint-job-actions">' +
-                    '<button type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
-                    '<button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
-                    (job.status === "completed" ? '<button type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
+                    '<button class="endpoint-job-action-button" type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
+                    '<button class="endpoint-job-action-button" type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
+                    (job.status === "completed" ? '<button class="endpoint-job-action-button" type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
                 '</div>' +
             '</article>';
         }).join("") + "</div>";
@@ -570,7 +571,7 @@
                 actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
             ]) +
             actionGroup("Avancado", [
-                '<button type="button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + 'Script futuro</button>'
+                '<button type="button" class="endpoint-quick-action-button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + '<span>Script futuro</span></button>'
             ]) +
         '</div>';
     }

@@ -30406,3 +30406,254 @@ body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group button {
         grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
     }
 }
+
+/* Endpoint detail jobs and quick actions structure final */
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
+    display: grid;
+    max-height: 430px;
+    gap: 8px;
+    overflow-y: auto;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 160px 132px;
+    gap: 12px;
+    align-items: center;
+    min-height: 68px;
+    padding: 9px 10px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 10px;
+    background:
+        linear-gradient(135deg, rgba(17, 19, 34, 0.82), rgba(8, 10, 18, 0.78)),
+        rgba(7, 9, 16, 0.58);
+}
+
+body.page-endpoint-detail .endpoint-job-left {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-titleline {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-job-titleline small {
+    min-width: 0;
+    color: #9fb0c8;
+    font-size: 12px;
+    font-weight: 750;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-progressline {
+    display: grid;
+    grid-template-columns: 74px 38px;
+    align-items: center;
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-job-progressline strong {
+    color: #cbd5e1;
+    font-size: 11.5px;
+    font-weight: 850;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 74px;
+    height: 5px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.18);
+}
+
+body.page-endpoint-detail .endpoint-job-progress span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--soft-purple), var(--online));
+}
+
+body.page-endpoint-detail .endpoint-job-result {
+    min-width: 0;
+    color: #f8fafc;
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-time {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-job-time span {
+    min-width: 0;
+    color: #dbe4f0;
+    font-size: 12px;
+    font-weight: 750;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-time b {
+    display: block;
+    margin-bottom: 2px;
+    color: #7dd3fc;
+    font-size: 10.5px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-job-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 30px;
+    min-height: 30px;
+    padding: 0 8px;
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    border-radius: 8px;
+    background: rgba(11, 13, 22, 0.88);
+    color: #e9d5ff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 850;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-job-action-button:hover {
+    border-color: rgba(192, 132, 252, 0.58);
+    background: rgba(124, 58, 237, 0.18);
+    color: #f8fafc;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    padding: 12px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group {
+    display: grid;
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group h3 {
+    margin: 0;
+    color: #a8b3c7;
+    font-size: 11.5px;
+    font-weight: 900;
+    line-height: 1.1;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 7px;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 10px;
+    border: 1px solid rgba(125, 211, 252, 0.18);
+    border-radius: 8px;
+    background:
+        linear-gradient(135deg, rgba(124, 58, 237, 0.12), rgba(14, 165, 233, 0.06)),
+        rgba(11, 13, 22, 0.86);
+    color: #dbeafe;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 850;
+    line-height: 1;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button svg {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    color: #a78bfa;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:hover {
+    border-color: rgba(192, 132, 252, 0.46);
+    background:
+        linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(14, 165, 233, 0.1)),
+        rgba(15, 18, 31, 0.95);
+    color: #f8fafc;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.56;
+}
+
+@media (max-width: 1320px) {
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr) 150px 132px;
+    }
+}
+
+@media (max-width: 860px) {
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
+        max-height: none;
+        overflow: visible;
+    }
+
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-job-actions {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    body.page-endpoint-detail .endpoint-job-action-button {
+        width: auto;
+        min-width: 126px;
+        flex: 1 1 126px;
+    }
+}
