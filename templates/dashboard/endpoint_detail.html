@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load nightowl_time %}
+{% load static nightowl_time %}
 
 {% block title %}Night Owl | {{ endpoint.hostname }}{% endblock %}
 {% block body_class %}page-endpoint-detail{% endblock %}
@@ -356,6 +356,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/nightowl_operational.js"></script>
-<script src="/static/js/endpoint_detail.js"></script>
+<script src="{% static 'js/nightowl_operational.js' %}"></script>
+<script src="{% static 'js/endpoint_detail.js' %}"></script>
 {% endblock %}
