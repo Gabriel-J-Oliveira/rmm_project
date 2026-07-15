@@ -454,15 +454,19 @@
     }
 
     function renderHealth(detail) {
-        const parts = healthParts(detail);
         return '<article class="panel endpoint-dense-card endpoint-health-dense">' +
             '<header><h2>' + icon("activity") + 'Saude do endpoint</h2><span class="endpoint-health-pill ' + healthClass(detail.healthScore) + '">' + escapeHtml(detail.healthScore || 0) + "/100</span></header>" +
-            '<div class="endpoint-score-block"><strong>' + escapeHtml(detail.healthScore || 0) + '</strong><span>/100</span></div>' +
+            renderHealthBody(detail) + "</article>";
+    }
+
+    function renderHealthBody(detail) {
+        const parts = healthParts(detail);
+        return '<div class="endpoint-score-block"><strong>' + escapeHtml(detail.healthScore || 0) + '</strong><span>/100</span></div>' +
             '<div class="health-bar"><span class="health-fill ' + healthClass(detail.healthScore) + '" style="width:' + escapeHtml(detail.healthScore || 0) + '%"></span></div>' +
             '<div class="health-breakdown">' + parts.map(function (part) {
                 const cls = part.score < 50 ? "critical" : part.score < 75 ? "warning" : "good";
                 return '<div><span>' + escapeHtml(part.label) + '</span><strong class="health-part-' + cls + '">' + part.score + '</strong><em><i style="width:' + part.score + '%"></i></em></div>';
-            }).join("") + "</div></article>";
+            }).join("") + "</div>";
     }
 
     function renderDiskList(disks, compact) {
@@ -523,6 +527,7 @@
         return '<div class="endpoint-job-list">' + rows.map(function (job) {
             const progress = jobProgress(job);
             const result = jobResultLabel(job);
+            const primaryTime = job.finishedAt || job.startedAt || job.dispatchedAt || job.createdAt;
             return '<article class="endpoint-job-item endpoint-job-item-' + escapeHtml(job.status || "pending") + '">' +
                 '<div class="endpoint-job-main">' +
                     '<div class="endpoint-job-title">' + jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small></div>' +
@@ -530,10 +535,7 @@
                     '<span class="job-result-text" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</span>' +
                 '</div>' +
                 '<div class="endpoint-job-meta">' +
-                    '<span><b>Criado</b>' + escapeHtml(formatDate(job.createdAt)) + '</span>' +
-                    '<span><b>Enviado</b>' + escapeHtml(formatDate(job.dispatchedAt)) + '</span>' +
-                    '<span><b>Inicio</b>' + escapeHtml(formatDate(job.startedAt)) + '</span>' +
-                    '<span><b>Fim</b>' + escapeHtml(formatDate(job.finishedAt)) + '</span>' +
+                    '<span><b>Horario</b>' + escapeHtml(formatDate(primaryTime)) + '</span>' +
                     '<span><b>Duracao</b>' + escapeHtml(formatDuration(job.durationMs)) + '</span>' +
                 '</div>' +
                 '<div class="endpoint-job-actions">' +
@@ -605,63 +607,78 @@
         return (labels[job.status] || job.status) + " - " + jobResultLabel(job);
     }
 
-    function renderOverview(detail) {
+    function overviewSlot(name) {
+        return root.querySelector('[data-overview-slot="' + name + '"]');
+    }
+
+    function setSlot(name, html) {
+        const target = overviewSlot(name);
+        if (target) target.innerHTML = html;
+    }
+
+    function setSlotBadge(name, className, html) {
+        const target = overviewSlot(name);
+        if (!target) return;
+        target.className = className;
+        target.innerHTML = html;
+    }
+
+    function renderOverviewSlots(detail) {
         const inv = detail.inventory || {};
         const security = detail.security || {};
         const agent = detail.agent || {};
-        return '<div class="endpoint-overview-layout">' +
-            '<section class="endpoint-primary-row">' +
-            renderHealth(detail) +
-            '<article class="panel endpoint-dense-card endpoint-agent-card"><header><h2>' + icon("bot") + 'Agente NightOwl</h2>' + badge("agent-version-pill agent", agent.state, agent.state === "current" ? "Atual" : labels[agent.state] || agent.state) + '</header>' +
+        const healthScore = detail.healthScore || 0;
+
+        setSlotBadge("health-badge", "endpoint-health-pill " + healthClass(healthScore), escapeHtml(healthScore) + "/100");
+        setSlot("health-body", renderHealthBody(detail));
+
+        setSlotBadge("agent-badge", "agent-version-pill agent-" + escapeHtml(agent.state || "unknown"), escapeHtml(agent.state === "current" ? "Atual" : labels[agent.state] || agent.state || "Sem informacao"));
+        setSlot("agent-body",
             '<div class="agent-version-panel">' + agentVersionDisplay(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual</small>') + '</div>' +
             factList([
-                { label: "Instalada", value: agentVersionDisplay(agent), html: true, className: "endpoint-fact-wide" },
-                { label: "Recomendada", value: agent.recommendedVersion, mono: true },
-                { label: "Modo", value: agent.mode },
-                { label: "Runtime", value: agent.runtime },
+                { label: "Servico/status", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "-") },
+                { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
                 { label: "Ultima comunicacao", value: agent.lastRun },
-                { label: "Ultima atualizacao", value: lastAgentUpdate(detail) },
                 { label: "Ultimo job update", value: lastUpdateJobLabel(detail), className: "endpoint-fact-wide" },
-                { label: "Servico", value: agent.serviceName },
-                { label: "Status servico", value: agent.serviceStatus },
+                { label: "Proximo heartbeat", value: agent.nextHeartbeat },
                 { label: "Log atual", value: agent.logFile, mono: true, className: "endpoint-fact-wide" }
-            ]) + '<div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent">' + icon("download-cloud") + 'Atualizar agente</button></div></article>' +
-            '<article class="panel endpoint-dense-card endpoint-security-summary"><header><h2>' + icon("shield") + 'Seguranca</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
-                { label: "Antivirus", value: security.antivirus },
-                { label: "Assinatura", value: security.signature, mono: true },
-                { label: "Firewall", value: security.firewall },
-                { label: "BitLocker", value: security.bitlocker },
-                { label: "Ultima seguranca", value: formatDate(agent.lastSecurityInventoryAt), className: "endpoint-fact-wide" }
-            ]) + '</article>' +
-            '</section>' +
-            '<section class="endpoint-summary-row">' +
-            '<article class="panel endpoint-dense-card endpoint-summary-card"><header><h2>' + icon("id-card") + 'Resumo tecnico</h2></header>' + factList([
-                { label: "Hostname", value: detail.hostname, mono: true },
-                { label: "IP principal", value: detail.ip, mono: true },
-                { label: "Usuario", value: detail.user },
-                { label: "Setor/tag", value: detail.sector },
-                { label: "Sistema", value: detail.os },
-                { label: "Dominio", value: detail.domain }
-            ]) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-inventory-summary"><header><h2>' + icon("cpu") + 'Inventario rapido</h2></header>' + factList([
-                { label: "Fabricante", value: inv.manufacturer },
-                { label: "Modelo", value: inv.model },
-                { label: "Serial", value: inv.serial, mono: true },
-                { label: "CPU", value: inv.cpu },
-                { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
-                { label: "Disponivel", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
-                { label: "Ultimo inventario", value: inv.lastFullInventory }
-            ]) + '</article>' +
-            '</section>' +
-            '<section class="endpoint-operational-row">' +
-            '<article class="panel endpoint-dense-card endpoint-jobs-card"><header><h2>' + icon("list-checks") + 'Fila de acoes</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar dados</button></header>' + renderJobs(detail.jobs, 6) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-actions-card"><header><h2>' + icon("zap") + 'Acoes rapidas</h2></header>' + renderQuickActions() + '</article>' +
-            '</section>' +
-            '<section class="endpoint-secondary-row">' +
-            '<article class="panel endpoint-dense-card endpoint-alerts-card"><header><h2>' + icon("alert-triangle") + 'Alertas ativos</h2><a href="/alerts/?q=' + encodeURIComponent(detail.hostname) + '">Central de Alertas</a></header>' + renderAlerts(detail.alerts, 4) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-events-card"><header><h2>' + icon("history") + 'Ultimos eventos</h2><a href="/events/?q=' + encodeURIComponent(detail.hostname) + '">Ver todos</a></header>' + renderEvents(detail.events, 6, false) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-tickets-card"><header><h2>' + icon("ticket") + 'Chamados relacionados</h2>' + actionButton("create_ticket", "Criar chamado", "ticket") + '</header>' + renderTickets(detail.tickets) + '</article>' +
-            '</section></div>';
+            ])
+        );
+
+        setSlotBadge("security-badge", "severity-badge severity-" + escapeHtml(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info"), escapeHtml(security.status || "unknown"));
+        setSlot("security-body", factList([
+            { label: "Defender/AV", value: security.antivirus },
+            { label: "Assinatura", value: security.signature, mono: true },
+            { label: "Firewall", value: security.firewall },
+            { label: "BitLocker", value: security.bitlocker },
+            { label: "Ultima seguranca", value: formatDate(agent.lastSecurityInventoryAt), className: "endpoint-fact-wide" }
+        ]));
+
+        setSlot("summary-body", factList([
+            { label: "Hostname", value: detail.hostname, mono: true },
+            { label: "IP principal", value: detail.ip, mono: true },
+            { label: "Usuario", value: detail.user },
+            { label: "Setor/tag", value: detail.sector },
+            { label: "Sistema", value: detail.os },
+            { label: "Dominio", value: detail.domain }
+        ]));
+
+        setSlot("inventory-body", factList([
+            { label: "Fabricante", value: inv.manufacturer },
+            { label: "Modelo", value: inv.model },
+            { label: "Serial", value: inv.serial, mono: true },
+            { label: "CPU", value: inv.cpu },
+            { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
+            { label: "Disponivel", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
+            { label: "Ultimo inventario", value: inv.lastFullInventory, className: "endpoint-fact-wide" }
+        ]));
+
+        setSlot("disks-body", renderDiskList(detail.disks, true));
+        setSlot("jobs-body", renderJobs(detail.jobs, 6));
+        setSlot("actions-body", renderQuickActions());
+        setSlot("alerts-body", renderAlerts(detail.alerts, 4));
+        setSlot("events-body", renderEvents(detail.events, 6, false));
+        setSlot("tickets-body", renderTickets(detail.tickets));
     }
 
     function renderInventory(detail) {
@@ -822,8 +839,8 @@
 
     function renderActivePanel() {
         if (!endpointDetail) return;
+        renderOverviewSlots(endpointDetail);
         const renderers = {
-            overview: renderOverview,
             inventory: renderInventory,
             software: renderSoftware,
             security: renderSecurity,

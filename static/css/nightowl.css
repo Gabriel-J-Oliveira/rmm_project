@@ -29177,3 +29177,241 @@ body.page-endpoint-detail .job-result-text {
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
     }
 }
+
+/* Endpoint detail official overview layout */
+body.page-endpoint-detail .endpoint-ops-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+    padding: 12px 16px;
+}
+
+body.page-endpoint-detail .endpoint-ops-actions {
+    max-width: 340px;
+}
+
+body.page-endpoint-detail .endpoint-ops-actions .copy-btn {
+    min-height: 32px;
+}
+
+body.page-endpoint-detail .endpoint-header-facts {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-header-facts div {
+    min-width: 112px;
+    padding: 7px 9px;
+}
+
+body.page-endpoint-detail .endpoint-overview-layout {
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row,
+body.page-endpoint-detail .endpoint-secondary-row {
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-primary-row {
+    grid-template-columns: minmax(240px, 3fr) minmax(340px, 4.5fr) minmax(240px, 2.5fr);
+}
+
+body.page-endpoint-detail .endpoint-summary-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(260px, 1.03fr);
+}
+
+body.page-endpoint-detail .endpoint-operational-row {
+    grid-template-columns: minmax(0, 7fr) minmax(290px, 3fr);
+}
+
+body.page-endpoint-detail .endpoint-secondary-row {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 3fr) minmax(0, 3fr);
+}
+
+body.page-endpoint-detail .endpoint-dense-card {
+    align-self: start;
+}
+
+body.page-endpoint-detail .endpoint-dense-card header {
+    min-height: 46px;
+    padding: 10px 13px;
+}
+
+body.page-endpoint-detail .endpoint-dense-card header h2 {
+    font-size: 15px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list {
+    gap: 7px;
+    padding: 11px 12px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list div {
+    padding: 7px 8px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list dt {
+    font-size: 11px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list dd {
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+body.page-endpoint-detail .endpoint-score-block {
+    padding: 10px 12px 0;
+}
+
+body.page-endpoint-detail .endpoint-score-block strong {
+    font-size: 42px;
+    letter-spacing: 0;
+}
+
+body.page-endpoint-detail .health-breakdown {
+    gap: 7px;
+    padding: 0 12px 12px;
+}
+
+body.page-endpoint-detail .health-breakdown div {
+    grid-template-columns: 102px 34px 1fr;
+}
+
+body.page-endpoint-detail .agent-version-panel {
+    margin: 10px 12px 0;
+    padding: 9px 11px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    padding-top: 0;
+}
+
+body.page-endpoint-detail .endpoint-job-list {
+    gap: 8px;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-item {
+    grid-template-columns: minmax(300px, 1fr) minmax(190px, 0.55fr) 112px;
+    gap: 10px;
+    padding: 9px;
+}
+
+body.page-endpoint-detail .endpoint-job-title {
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-job-progressline {
+    grid-template-columns: 76px 34px;
+    gap: 7px;
+    margin-top: 6px;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 76px;
+    height: 6px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta span {
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta b {
+    font-size: 11px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions button {
+    min-height: 32px;
+}
+
+body.page-endpoint-detail .endpoint-action-groups {
+    gap: 9px;
+    padding: 11px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-action-group h3 {
+    font-size: 11px;
+}
+
+body.page-endpoint-detail .endpoint-action-group div {
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-action-group button {
+    min-height: 32px;
+    padding: 0 9px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-alert-list,
+body.page-endpoint-detail .endpoint-event-timeline,
+body.page-endpoint-detail .endpoint-task-list,
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    gap: 8px;
+    padding: 11px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-alert-item,
+body.page-endpoint-detail .endpoint-event-row,
+body.page-endpoint-detail .endpoint-task-list article {
+    padding: 8px;
+}
+
+body.page-endpoint-detail .endpoint-empty-state {
+    min-height: 92px;
+    padding: 12px;
+}
+
+@media (max-width: 1360px) {
+    body.page-endpoint-detail .endpoint-primary-row {
+        grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.25fr);
+    }
+
+    body.page-endpoint-detail .endpoint-security-summary {
+        grid-column: 1 / -1;
+    }
+
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-secondary-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 1040px) {
+    body.page-endpoint-detail .endpoint-ops-header,
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-operational-row,
+    body.page-endpoint-detail .endpoint-secondary-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-ops-actions,
+    body.page-endpoint-detail .endpoint-header-facts {
+        grid-column: auto;
+    }
+
+    body.page-endpoint-detail .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-job-actions {
+        grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    }
+}
