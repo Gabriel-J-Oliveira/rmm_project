@@ -30184,3 +30184,225 @@ body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group button {
         grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
     }
 }
+
+/* Endpoint detail vertical compact final */
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row {
+    align-items: start;
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > *,
+body.page-endpoint-detail .endpoint-summary-row > *,
+body.page-endpoint-detail .endpoint-operational-row > * {
+    align-self: start;
+    height: auto;
+    min-height: 0;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card {
+    height: auto;
+    min-height: 0;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header {
+    min-height: 40px;
+    padding: 9px 12px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header h2,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header h2,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header h2 {
+    font-size: 14.5px;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    gap: 9px;
+    padding: 12px 14px 13px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
+    font-size: 44px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown div {
+    grid-template-columns: minmax(96px, 0.85fr) 38px minmax(130px, 1.45fr);
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-agent-body,
+body.page-endpoint-detail .endpoint-security-body,
+body.page-endpoint-detail .endpoint-overview-facts,
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    padding: 11px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    gap: 9px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel {
+    min-height: 40px;
+    padding: 9px 11px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list div,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list div {
+    padding: 7px 8px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    padding: 8px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions button {
+    min-height: 32px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list div {
+    min-height: 34px;
+    grid-template-columns: 58px 48px minmax(0, 1fr);
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list em {
+    height: 8px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list small {
+    margin-top: -6px;
+}
+
+body.page-endpoint-detail .endpoint-operational-row {
+    grid-template-columns: minmax(0, 2.1fr) minmax(360px, 0.95fr);
+}
+
+body.page-endpoint-detail .endpoint-jobs-card,
+body.page-endpoint-detail .endpoint-actions-card {
+    align-self: start;
+    height: auto;
+    min-height: 0;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
+    max-height: 380px;
+    gap: 6px;
+    overflow-y: auto;
+    padding: 9px 10px 10px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+    grid-template-columns: minmax(320px, 1fr) minmax(118px, 0.25fr) minmax(248px, 0.32fr);
+    gap: 8px;
+    min-height: 56px;
+    padding: 7px 9px;
+}
+
+body.page-endpoint-detail .endpoint-job-title {
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-job-result-line {
+    grid-template-columns: 62px minmax(0, 1fr);
+    gap: 7px;
+    margin-top: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 62px;
+    height: 4px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta {
+    gap: 3px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta span,
+body.page-endpoint-detail .job-result-text,
+body.page-endpoint-detail .endpoint-job-title small {
+    font-size: 11.5px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+    align-items: center;
+}
+
+body.page-endpoint-detail .endpoint-job-actions button {
+    min-height: 28px;
+    padding: 0 7px;
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-actions-card {
+    min-width: 360px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 9px;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group {
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group h3 {
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group div {
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group button {
+    min-height: 34px;
+    padding: 0 9px;
+    font-size: 12px;
+}
+
+@media (max-width: 1320px) {
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr) minmax(118px, 0.28fr) minmax(248px, 0.36fr);
+    }
+}
+
+@media (max-width: 860px) {
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
+        max-height: none;
+        overflow: visible;
+    }
+
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-job-actions {
+        grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+    }
+}
