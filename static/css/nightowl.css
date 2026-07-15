@@ -29959,3 +29959,228 @@ body.page-endpoint-detail .endpoint-action-group svg {
         grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
     }
 }
+
+/* Endpoint detail layout final - full width */
+body.page-endpoint-detail .content {
+    padding: 20px 24px 32px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell,
+body.page-endpoint-detail [data-endpoint-detail] {
+    width: 100%;
+    max-width: none;
+    margin-inline: 0;
+    padding: 0;
+}
+
+body.page-endpoint-detail .endpoint-overview-layout {
+    width: 100%;
+    gap: 16px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row {
+    display: grid;
+    gap: 16px;
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-primary-row {
+    grid-template-columns: minmax(320px, 4fr) minmax(440px, 5fr) minmax(300px, 3fr);
+}
+
+body.page-endpoint-detail .endpoint-summary-row {
+    grid-template-columns: repeat(3, minmax(300px, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-operational-row {
+    grid-template-columns: minmax(0, 2.15fr) minmax(360px, 0.95fr);
+}
+
+body.page-endpoint-detail .endpoint-primary-row > *,
+body.page-endpoint-detail .endpoint-summary-row > *,
+body.page-endpoint-detail .endpoint-operational-row > * {
+    grid-column: auto;
+    align-self: start;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-health-dense,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-agent-card,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-security-summary,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-summary-card,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-inventory-summary,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-disk-summary,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-jobs-card,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-actions-card {
+    grid-column: auto;
+}
+
+body.page-endpoint-detail .endpoint-dense-card {
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header {
+    min-height: 46px;
+    padding: 11px 14px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card header h2,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card header h2,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-dense-card header h2 {
+    font-size: 15.5px;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    gap: 12px;
+    padding: 15px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
+    font-size: 48px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown div {
+    grid-template-columns: minmax(104px, 0.9fr) 40px minmax(150px, 1.6fr);
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown span,
+body.page-endpoint-detail .endpoint-health-body .health-breakdown strong {
+    font-size: 12.5px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel {
+    min-height: 48px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-compare strong {
+    font-size: 18px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list dd,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list dd {
+    font-size: 14px;
+}
+
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-overview-facts .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list div {
+    grid-template-columns: 64px 56px minmax(0, 1fr);
+    min-height: 40px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list em {
+    height: 10px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
+    gap: 7px;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+    grid-template-columns: minmax(360px, 1fr) minmax(132px, 0.28fr) minmax(108px, 0.18fr);
+    gap: 9px;
+    min-height: 62px;
+    padding: 8px 10px;
+}
+
+body.page-endpoint-detail .endpoint-job-result-line {
+    grid-template-columns: 70px minmax(0, 1fr);
+    margin-top: 6px;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 70px;
+    height: 5px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta span,
+body.page-endpoint-detail .job-result-text,
+body.page-endpoint-detail .endpoint-job-title small {
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions button {
+    min-height: 30px;
+    padding: 0 8px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card {
+    min-width: 360px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    gap: 12px;
+    padding: 14px 15px 15px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group div {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group button {
+    min-height: 36px;
+    padding: 0 10px;
+    font-size: 12.5px;
+}
+
+@media (max-width: 1320px) {
+    body.page-endpoint-detail .endpoint-primary-row {
+        grid-template-columns: minmax(300px, 1fr) minmax(380px, 1.35fr);
+    }
+
+    body.page-endpoint-detail .endpoint-primary-row .endpoint-security-summary {
+        grid-column: 1 / -1;
+    }
+
+    body.page-endpoint-detail .endpoint-summary-row {
+        grid-template-columns: repeat(2, minmax(300px, 1fr));
+    }
+
+    body.page-endpoint-detail .endpoint-summary-row .endpoint-disk-summary {
+        grid-column: 1 / -1;
+    }
+
+    body.page-endpoint-detail .endpoint-operational-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-actions-card {
+        min-width: 0;
+    }
+}
+
+@media (max-width: 860px) {
+    body.page-endpoint-detail .content {
+        padding: 16px;
+    }
+
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-operational-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-primary-row .endpoint-security-summary,
+    body.page-endpoint-detail .endpoint-summary-row .endpoint-disk-summary {
+        grid-column: auto;
+    }
+
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-job-actions {
+        grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+    }
+}

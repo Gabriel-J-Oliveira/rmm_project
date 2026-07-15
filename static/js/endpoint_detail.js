@@ -673,7 +673,7 @@
         ]) + '</div>');
 
         setSlot("disks-body", renderDiskList(detail.disks, true));
-        setSlot("jobs-body", renderJobs(detail.jobs, 6));
+        setSlot("jobs-body", renderJobs(detail.jobs, 5));
         setSlot("actions-body", renderQuickActions());
         setSlot("alerts-body", renderAlerts(detail.alerts, 4));
         setSlot("events-body", renderEvents(detail.events, 6, false));
