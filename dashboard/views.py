@@ -302,7 +302,10 @@ def mock_endpoint_rows(endpoints=None):
             'health': health,
             'attention': endpoint_attention_summary(endpoint, primary_disk, defender_key, health),
             'agent_version': endpoint.agent_version,
-            'agent_version_state': 'current' if endpoint.agent_version == '1.4.2' else 'outdated' if endpoint.agent_version else 'unknown',
+            'agent_version_state': agent_version_state(
+                endpoint.agent_version,
+                getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
+            ),
         })
     return rows
 

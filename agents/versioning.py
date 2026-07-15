@@ -3,9 +3,9 @@ def parse_semver(value):
     if not parts or any(not part.isdigit() for part in parts):
         return None
     numbers = [int(part) for part in parts]
-    while len(numbers) < 3:
+    while len(numbers) < 4:
         numbers.append(0)
-    return tuple(numbers[:3])
+    return tuple(numbers[:4])
 
 
 def compare_versions(current, recommended):

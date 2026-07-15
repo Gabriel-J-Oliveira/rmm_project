@@ -269,7 +269,7 @@ function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenV
         serial_number = $info.SerialNumber
         fqdn = if ($info.Domain) { "$($info.Hostname).$($info.Domain)" } else { $info.Hostname }
         os_name = $info.OsName
-        agent_version = "0.1.0.6"
+        agent_version = "0.1.0.7"
         agent_mode = "dotnet-service"
         install_path = $InstallPath
         task_name = "NightOwlAgentDotNet"
@@ -670,7 +670,7 @@ if (-not (Test-Path $iconPath)) {
 $packageVersionFile = Read-JsonFile (Join-Path $sourcePath "agent.version.json")
 $packageVersion = Get-JsonProperty $packageVersionFile @("version")
 if ([string]::IsNullOrWhiteSpace($packageVersion)) {
-    $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0.6" }
+    $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0.7" }
 }
 
 $existingConfig = $preservedConfig

@@ -473,7 +473,7 @@
         const result = job.resultJson || {};
         if (job.type === "update_agent") {
             const updateStatus = result.update_status || (result.details && result.details.reason);
-            if (updateStatus === "no_update_available" || result.already_up_to_date) return "Ja estava na versao mais recente";
+            if (updateStatus === "no_update_available" || result.already_up_to_date || (result.details && result.details.reason === "already_current")) return "Agente ja atualizado";
             if (updateStatus === "success" || job.status === "completed") {
                 const version = result.installed_version || result.version || "";
                 return version ? "Atualizado para " + version : "Atualizado com sucesso";

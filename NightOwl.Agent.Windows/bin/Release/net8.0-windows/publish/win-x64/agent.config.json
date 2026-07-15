@@ -1,7 +1,7 @@
 {
   "agentToken": "",
   "machineId": "",
-  "agentVersion": "0.1.0.5",
+  "agentVersion": "0.1.0.6",
   "serverBaseUrl": "",
   "heartbeatUrl": "",
   "collectUrl": "",
@@ -26,6 +26,7 @@
     "collect_security",
     "windows_update_scan",
     "force_inventory",
-    "update_agent"
+    "update_agent",
+    "restart_agent"
   ]
 }

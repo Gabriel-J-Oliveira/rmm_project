@@ -2374,7 +2374,7 @@
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\": {}
   },
   "project": {
-    "version": "0.1.0.6",
+    "version": "0.1.0.7",
     "restore": {
       "projectUniqueName": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
       "projectName": "NightOwl.Agent.Windows",

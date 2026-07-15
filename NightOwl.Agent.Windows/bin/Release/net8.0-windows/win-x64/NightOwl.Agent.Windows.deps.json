@@ -7,7 +7,7 @@
   "targets": {
     ".NETCoreApp,Version=v8.0": {},
     ".NETCoreApp,Version=v8.0/win-x64": {
-      "NightOwl.Agent.Windows/0.1.0.6": {
+      "NightOwl.Agent.Windows/0.1.0.7": {
         "dependencies": {
           "Microsoft.Extensions.Hosting.WindowsServices": "8.0.1",
           "Microsoft.Extensions.Http": "8.0.1",
@@ -1151,7 +1151,7 @@
     }
   },
   "libraries": {
-    "NightOwl.Agent.Windows/0.1.0.6": {
+    "NightOwl.Agent.Windows/0.1.0.7": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

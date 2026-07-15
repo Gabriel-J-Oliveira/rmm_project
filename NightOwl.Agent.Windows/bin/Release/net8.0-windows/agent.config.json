@@ -1,7 +1,7 @@
 {
   "agentToken": "",
   "machineId": "",
-  "agentVersion": "0.1.0.6",
+  "agentVersion": "0.1.0.7",
   "serverBaseUrl": "",
   "heartbeatUrl": "",
   "collectUrl": "",

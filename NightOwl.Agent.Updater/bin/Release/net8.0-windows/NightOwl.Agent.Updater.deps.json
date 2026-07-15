@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "NightOwl.Agent.Updater/0.1.0.6": {
+      "NightOwl.Agent.Updater/0.1.0.7": {
         "dependencies": {
           "System.ServiceProcess.ServiceController": "8.0.1"
         },
@@ -52,7 +52,7 @@
     }
   },
   "libraries": {
-    "NightOwl.Agent.Updater/0.1.0.6": {
+    "NightOwl.Agent.Updater/0.1.0.7": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
