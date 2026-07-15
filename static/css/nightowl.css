@@ -28584,3 +28584,256 @@ body.page-pulse .is-noc-mode .pulse-action-item.severity-critical {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* Endpoint detail operational refinement */
+body.page-endpoint-detail .endpoint-overview-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-health-dense,
+body.page-endpoint-detail .endpoint-summary-card,
+body.page-endpoint-detail .endpoint-security-summary,
+body.page-endpoint-detail .endpoint-inventory-summary,
+body.page-endpoint-detail .endpoint-disk-summary,
+body.page-endpoint-detail .endpoint-actions-card {
+    grid-column: span 2;
+}
+
+body.page-endpoint-detail .endpoint-agent-card,
+body.page-endpoint-detail .endpoint-events-card,
+body.page-endpoint-detail .endpoint-alerts-card,
+body.page-endpoint-detail .endpoint-tickets-card {
+    grid-column: span 3;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card {
+    grid-column: span 4;
+}
+
+body.page-endpoint-detail .endpoint-dense-card {
+    overflow: hidden;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-summary-card .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-inventory-summary .endpoint-fact-list {
+    gap: 8px;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list div,
+body.page-endpoint-detail .endpoint-summary-card .endpoint-fact-list div,
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-list div,
+body.page-endpoint-detail .endpoint-inventory-summary .endpoint-fact-list div {
+    padding: 8px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list .endpoint-fact-wide {
+    grid-column: 1 / -1;
+}
+
+body.page-endpoint-detail .agent-version-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 10px 12px 0;
+    padding: 10px 12px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 10px;
+    background: rgba(7, 9, 16, 0.38);
+}
+
+body.page-endpoint-detail .agent-version-panel small {
+    color: #9fb0c8;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+body.page-endpoint-detail .agent-version-compare {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-weight: 900;
+}
+
+body.page-endpoint-detail .agent-version-compare i {
+    color: #a78bfa;
+    font-style: normal;
+}
+
+body.page-endpoint-detail .agent-installed-outdated {
+    color: #f59e0b;
+}
+
+body.page-endpoint-detail .agent-latest-version,
+body.page-endpoint-detail .agent-installed-current {
+    color: #22c55e;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-remote-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    align-items: stretch;
+    padding: 12px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-remote-actions-grid button {
+    min-height: 38px;
+    justify-content: flex-start;
+    padding: 0 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-empty-state,
+body.page-endpoint-detail .endpoint-events-card .endpoint-empty-state {
+    min-height: 110px;
+}
+
+body.page-endpoint-detail .endpoint-job-table {
+    min-width: 0;
+    width: 100%;
+    table-layout: fixed;
+}
+
+body.page-endpoint-detail .endpoint-job-table th,
+body.page-endpoint-detail .endpoint-job-table td {
+    vertical-align: top;
+}
+
+body.page-endpoint-detail .endpoint-job-table th:nth-child(1),
+body.page-endpoint-detail .endpoint-job-table td:nth-child(1) {
+    width: 104px;
+}
+
+body.page-endpoint-detail .endpoint-job-table th:nth-child(2),
+body.page-endpoint-detail .endpoint-job-table td:nth-child(2) {
+    width: 150px;
+}
+
+body.page-endpoint-detail .endpoint-job-table th:nth-child(3),
+body.page-endpoint-detail .endpoint-job-table td:nth-child(3) {
+    width: 98px;
+}
+
+body.page-endpoint-detail .endpoint-job-table th:nth-child(5),
+body.page-endpoint-detail .endpoint-job-table td:nth-child(5) {
+    width: 72px;
+}
+
+body.page-endpoint-detail .endpoint-job-table th:nth-child(7),
+body.page-endpoint-detail .endpoint-job-table td:nth-child(7) {
+    width: 156px;
+}
+
+body.page-endpoint-detail .job-timeline-cell {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 8px;
+}
+
+body.page-endpoint-detail .job-timeline-cell span {
+    min-width: 0;
+    color: #cbd5e1;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .job-timeline-cell b {
+    display: block;
+    color: #7dd3fc;
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .job-result-text {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: #f8fafc;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+}
+
+body.page-endpoint-detail .endpoint-job-actions button {
+    width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-event-row p,
+body.page-endpoint-detail .endpoint-event-row small,
+body.page-endpoint-detail .endpoint-task-list p {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@media (max-width: 1320px) {
+    body.page-endpoint-detail .endpoint-overview-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    body.page-endpoint-detail .endpoint-agent-card,
+    body.page-endpoint-detail .endpoint-jobs-card,
+    body.page-endpoint-detail .endpoint-events-card,
+    body.page-endpoint-detail .endpoint-alerts-card,
+    body.page-endpoint-detail .endpoint-tickets-card {
+        grid-column: span 2;
+    }
+}
+
+@media (max-width: 940px) {
+    body.page-endpoint-detail .endpoint-overview-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    body.page-endpoint-detail .endpoint-health-dense,
+    body.page-endpoint-detail .endpoint-summary-card,
+    body.page-endpoint-detail .endpoint-security-summary,
+    body.page-endpoint-detail .endpoint-inventory-summary,
+    body.page-endpoint-detail .endpoint-disk-summary,
+    body.page-endpoint-detail .endpoint-actions-card,
+    body.page-endpoint-detail .endpoint-agent-card,
+    body.page-endpoint-detail .endpoint-jobs-card,
+    body.page-endpoint-detail .endpoint-events-card,
+    body.page-endpoint-detail .endpoint-alerts-card,
+    body.page-endpoint-detail .endpoint-tickets-card {
+        grid-column: span 2;
+    }
+}
+
+@media (max-width: 620px) {
+    body.page-endpoint-detail .endpoint-overview-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-health-dense,
+    body.page-endpoint-detail .endpoint-summary-card,
+    body.page-endpoint-detail .endpoint-security-summary,
+    body.page-endpoint-detail .endpoint-inventory-summary,
+    body.page-endpoint-detail .endpoint-disk-summary,
+    body.page-endpoint-detail .endpoint-actions-card,
+    body.page-endpoint-detail .endpoint-agent-card,
+    body.page-endpoint-detail .endpoint-jobs-card,
+    body.page-endpoint-detail .endpoint-events-card,
+    body.page-endpoint-detail .endpoint-alerts-card,
+    body.page-endpoint-detail .endpoint-tickets-card {
+        grid-column: 1 / -1;
+    }
+
+    body.page-endpoint-detail .endpoint-job-table {
+        min-width: 720px;
+    }
+}

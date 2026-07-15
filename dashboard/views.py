@@ -1,6 +1,7 @@
 from datetime import datetime, time, timedelta
 
 import csv
+import json
 import logging
 import uuid
 from types import SimpleNamespace
@@ -108,6 +109,25 @@ EVENT_CATEGORY_PREFIXES = {
     'inventory': ['inventory.', 'software.', 'network.', 'disk.', 'os.', 'user.'],
     'maintenance': ['maintenance.'],
 }
+
+
+def latest_agent_version():
+    candidates = [
+        getattr(settings, 'NIGHTOWL_AGENT_VERSION_MANIFEST', ''),
+        settings.BASE_DIR / 'downloads' / 'agent' / 'windows' / 'version.json',
+        settings.BASE_DIR / 'NightOwl.Agent.Windows' / 'publish' / 'downloads' / 'agent' / 'windows' / 'version.json',
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            with open(candidate, encoding='utf-8') as handle:
+                version = (json.load(handle).get('version') or '').strip()
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if version:
+            return version
+    return getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', '').strip()
 
 SOFTWARE_CATEGORY_OPTIONS = [('all', 'Todas'), *CATEGORY_LABELS.items()]
 SOFTWARE_RISK_OPTIONS = [('all', 'Todos'), *RISK_LABELS.items()]
@@ -302,10 +322,7 @@ def mock_endpoint_rows(endpoints=None):
             'health': health,
             'attention': endpoint_attention_summary(endpoint, primary_disk, defender_key, health),
             'agent_version': endpoint.agent_version,
-            'agent_version_state': agent_version_state(
-                endpoint.agent_version,
-                getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
-            ),
+            'agent_version_state': agent_version_state(endpoint.agent_version, latest_agent_version()),
         })
     return rows
 
@@ -1068,10 +1085,7 @@ def build_endpoint_row(endpoint):
         'health': health,
         'attention': attention,
         'agent_version': endpoint.agent_version,
-        'agent_version_state': agent_version_state(
-            endpoint.agent_version,
-            getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
-        ),
+        'agent_version_state': agent_version_state(endpoint.agent_version, latest_agent_version()),
     }
 
 
@@ -1145,7 +1159,7 @@ def endpoint_attention_summary(endpoint, primary_disk, defender_key, health, sna
         return {'label': f"Disco {primary_disk.get('used_percent', 0)}%", 'level': 'critical', 'key': 'disk'}
     if primary_disk.get('level') == 'warning':
         return {'label': f"Disco {primary_disk.get('used_percent', 0)}%", 'level': 'warning', 'key': 'disk'}
-    if endpoint.agent_version and agent_version_state(endpoint.agent_version, getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', '')) == 'outdated':
+    if endpoint.agent_version and agent_version_state(endpoint.agent_version, latest_agent_version()) == 'outdated':
         return {'label': 'Agente desatualizado', 'level': 'warning', 'key': 'agent'}
     if defender_key == 'unknown':
         return {'label': 'Inventario vencido', 'level': 'muted', 'key': 'inventory'}
@@ -1251,7 +1265,7 @@ def endpoint_filter_options(rows):
 def build_endpoint_health_breakdown(endpoint, primary_disk, defender, endpoint_alerts=None, snapshot=None):
     alerts_count = len(endpoint_alerts or [])
     connectivity_score = 100 if endpoint.status == AgentMachine.STATUS_ONLINE else 55 if endpoint.status == AgentMachine.STATUS_UNKNOWN else 10
-    agent_state = agent_version_state(endpoint.agent_version, getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''))
+    agent_state = agent_version_state(endpoint.agent_version, latest_agent_version())
     agent_score = 100 if agent_state == 'current' else 55 if agent_state == 'outdated' else 25
     security_score = 100 if defender.get('key') == 'ok' else 45 if defender.get('key') == 'attention' else 30
     disk_level = primary_disk.get('level')
@@ -2388,11 +2402,8 @@ def build_mock_endpoint_detail_context(pk):
         'endpoint_type_label': endpoint_type_label(endpoint_type),
         'smart_badges': smart_badges,
         'primary_ip': endpoint.last_ip or (snapshot.ips[0] if snapshot.ips else ''),
-        'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
-        'agent_version_state': agent_version_state(
-            endpoint.agent_version,
-            getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
-        ),
+        'recommended_agent_version': latest_agent_version(),
+        'agent_version_state': agent_version_state(endpoint.agent_version, latest_agent_version()),
         'endpoint_alerts': endpoint_alerts,
         'audit_events': audit_events,
         'related_tickets': [],
@@ -2533,6 +2544,7 @@ def _normalize_network_collection(value):
 
 
 def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets):
+    recommended_version = latest_agent_version()
     raw_payload = ensure_dict(snapshot.raw_payload if snapshot else {})
     raw_agent = ensure_dict(raw_payload.get('agent'))
     system = _normalize_collection_dict(_raw_collection(snapshot, 'system'))
@@ -2732,6 +2744,11 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
 
     alerts = []
     for alert in endpoint_alerts:
+        if (
+            alert.alert_type == 'agent_outdated'
+            and agent_version_state(endpoint.agent_version, recommended_version) == 'current'
+        ):
+            continue
         alerts.append({
             'id': str(alert.id),
             'title': alert.title,
@@ -2771,8 +2788,12 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'last_seen_at': _iso_or_none(endpoint.last_seen_at),
             'agent_mode': endpoint.agent_mode or '',
             'agent_version': endpoint.agent_version or '',
+            'agent_version_state': agent_version_state(endpoint.agent_version, recommended_version),
+            'latest_agent_version': recommended_version,
             'identity_source': 'machine_id' if endpoint.machine_id else 'internal_id',
         },
+        'latest_agent_version': recommended_version,
+        'recommended_agent_version': recommended_version,
         'agent_health': agent_health,
         'inventory': inventory,
         'hardware': hardware or None,
@@ -2854,11 +2875,8 @@ def endpoint_detail(request, pk):
         'endpoint_type_label': endpoint_type_label(endpoint_type),
         'smart_badges': smart_badges,
         'primary_ip': primary_ip,
-        'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
-        'agent_version_state': agent_version_state(
-            endpoint.agent_version,
-            getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', ''),
-        ),
+        'recommended_agent_version': latest_agent_version(),
+        'agent_version_state': agent_version_state(endpoint.agent_version, latest_agent_version()),
         'endpoint_alerts': endpoint_alerts,
         'audit_events': audit_events,
         'related_tickets': related_tickets,
@@ -3160,7 +3178,7 @@ def agent_install(request):
         'package_url': f'{default_server_url}/downloads/nightowl-agent/NightOwl.Agent.Windows.zip',
         'download_page_url': f'{default_server_url}/agents/download/',
         'local_package_path': getattr(settings, 'NIGHTOWL_AGENT_LOCAL_PACKAGE_PATH', r'C:\NightOwlAgents'),
-        'recommended_agent_version': getattr(settings, 'NIGHTOWL_RECOMMENDED_AGENT_VERSION', '0.4.0'),
+        'recommended_agent_version': latest_agent_version(),
         'active_count': sum(1 for row in token_rows if row['state']['key'] == 'online'),
         'expired_count': sum(1 for row in token_rows if row['state']['key'] == 'unknown'),
         'uses_24h_count': AgentEnrollmentLog.objects.filter(created_at__gte=last_24h).count(),

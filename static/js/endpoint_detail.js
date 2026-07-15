@@ -129,6 +129,31 @@
         return Math.round(ms / 60000) + "min";
     }
 
+    function parseVersion(value) {
+        const parts = String(value || "").trim().split(".");
+        if (!parts.length || parts.some(function (part) { return !/^\d+$/.test(part); })) return null;
+        while (parts.length < 4) parts.push("0");
+        return parts.slice(0, 4).map(function (part) { return Number(part); });
+    }
+
+    function compareVersions(left, right) {
+        const a = parseVersion(left);
+        const b = parseVersion(right);
+        if (!a || !b) return null;
+        for (let index = 0; index < 4; index += 1) {
+            if (a[index] < b[index]) return -1;
+            if (a[index] > b[index]) return 1;
+        }
+        return 0;
+    }
+
+    function agentState(installed, latest, fallback) {
+        if (!installed || installed === "-") return "unknown";
+        const comparison = latest && latest !== "-" ? compareVersions(installed, latest) : null;
+        if (comparison == null) return fallback || "current";
+        return comparison < 0 ? "outdated" : "current";
+    }
+
     function badge(kind, value, customLabel) {
         const label = customLabel || labels[value] || value || "-";
         return '<span class="' + escapeHtml(kind) + ' ' + escapeHtml(kind + "-" + (value || "info")) + '">' + escapeHtml(label) + "</span>";
@@ -228,6 +253,8 @@
         if (!payload || !payload.endpoint) return null;
         const endpoint = asObject(payload.endpoint);
         const agentHealth = asObject(payload.agent_health);
+        const latestAgentVersion = payload.latest_agent_version || payload.recommended_agent_version || endpoint.latest_agent_version || agentHealth.latest_agent_version || "-";
+        const currentAgentState = agentState(endpoint.agent_version, latestAgentVersion, endpoint.agent_version_state || "current");
         const inventory = maybeObject(payload.inventory);
         const health = asObject(payload.health);
         const attention = asObject(payload.attention);
@@ -265,8 +292,8 @@
             agent: {
                 machineId: endpoint.machine_id || endpoint.id || "",
                 version: endpoint.agent_version || "-",
-                recommendedVersion: "-",
-                state: endpoint.agent_version ? "current" : "unknown",
+                recommendedVersion: latestAgentVersion || "-",
+                state: currentAgentState,
                 mode: agentHealth.agent_mode || agentHealth.install_mode || "-",
                 installMode: agentHealth.install_mode || "-",
                 runtime: agentHealth.service_name ? "Servico Windows" : "-",
@@ -341,7 +368,12 @@
                     timeline: [event.eventType]
                 };
             }),
-            alerts: asArray(payload.alerts).filter(function (item) { return item && typeof item === "object"; }),
+            alerts: asArray(payload.alerts).filter(function (item) {
+                if (!item || typeof item !== "object") return false;
+                const title = String(item.title || "").toLowerCase();
+                const type = String(item.alertType || item.alert_type || item.type || "").toLowerCase();
+                return !(currentAgentState === "current" && (type === "agent_outdated" || title.indexOf("agente desatualizado") >= 0));
+            }),
             tickets: asArray(payload.tickets).filter(function (item) { return item && typeof item === "object"; }),
             localAdmins: security && Array.isArray(security.localAdmins) ? security.localAdmins :
                 security && security.raw && Array.isArray(security.raw.local_admins) ? security.raw.local_admins.map(function (item) { return typeof item === "string" ? item : asObject(item).name; }).filter(Boolean) :
@@ -370,7 +402,10 @@
 
     function factList(items) {
         return '<dl class="endpoint-fact-list">' + items.map(function (item) {
-            return '<div><dt>' + escapeHtml(item.label) + '</dt><dd class="' + (item.mono ? "mono" : "") + '">' + escapeHtml(item.value || "-") + "</dd></div>";
+            const rawValue = item.value == null || item.value === "" ? "-" : item.value;
+            const renderedValue = item.html ? rawValue : escapeHtml(rawValue);
+            const title = item.html ? "" : ' title="' + escapeHtml(rawValue) + '"';
+            return '<div class="' + escapeHtml(item.className || "") + '"><dt>' + escapeHtml(item.label) + '</dt><dd class="' + (item.mono ? "mono" : "") + '"' + title + '>' + renderedValue + "</dd></div>";
         }).join("") + "</dl>";
     }
 
@@ -383,6 +418,15 @@
         if (score < 50) return "health-critical";
         if (score < 75) return "health-warning";
         return "health-good";
+    }
+
+    function agentVersionMarkup(agent) {
+        const installed = agent.version || "-";
+        const latest = agent.recommendedVersion || "-";
+        if (agent.state === "outdated" && latest && latest !== "-") {
+            return '<span class="agent-version-compare"><strong class="agent-installed-outdated">' + escapeHtml(installed) + '</strong><i>→</i><strong class="agent-latest-version">' + escapeHtml(latest) + '</strong></span>';
+        }
+        return '<span class="agent-version-compare"><strong class="agent-installed-current">' + escapeHtml(installed) + '</strong></span>';
     }
 
     function healthParts(detail) {
@@ -458,10 +502,16 @@
     function renderJobs(jobs, limit) {
         const rows = (jobs || []).slice(0, limit || jobs.length);
         if (!rows.length) return emptyState("Nenhuma tarefa tecnica executada neste endpoint", "Use as acoes rapidas para enfileirar jobs reais para o agente.", "list-checks");
-        return '<div class="table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Tipo</th><th>Progresso</th><th>Criado em</th><th>Enviado em</th><th>Iniciado em</th><th>Finalizado em</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
+        return '<div class="table-wrap endpoint-job-table-wrap"><table class="endpoint-table endpoint-job-table"><thead><tr><th>Status</th><th>Acao</th><th>Progresso</th><th>Linha do tempo</th><th>Duracao</th><th>Resultado</th><th>Acoes</th></tr></thead><tbody>' +
             rows.map(function (job) {
                 const progress = jobProgress(job);
-                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '<small class="muted-inline">por ' + escapeHtml(job.createdBy || "-") + '</small></td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td>' + escapeHtml(formatDate(job.createdAt)) + '</td><td>' + escapeHtml(formatDate(job.dispatchedAt)) + '</td><td>' + escapeHtml(formatDate(job.startedAt)) + '</td><td>' + escapeHtml(formatDate(job.finishedAt)) + '</td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td>' + escapeHtml(jobResultLabel(job)) + '</td><td class="software-actions">' +
+                const result = jobResultLabel(job);
+                return '<tr><td>' + jobBadge(job.status) + '</td><td>' + jobType(job.type) + '<small class="muted-inline">por ' + escapeHtml(job.createdBy || "-") + '</small></td><td><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><small>' + escapeHtml(progress) + '%</small></td><td><div class="job-timeline-cell">' +
+                    '<span><b>Criado</b>' + escapeHtml(formatDate(job.createdAt)) + '</span>' +
+                    '<span><b>Enviado</b>' + escapeHtml(formatDate(job.dispatchedAt)) + '</span>' +
+                    '<span><b>Inicio</b>' + escapeHtml(formatDate(job.startedAt)) + '</span>' +
+                    '<span><b>Fim</b>' + escapeHtml(formatDate(job.finishedAt)) + '</span>' +
+                    '</div></td><td>' + escapeHtml(formatDuration(job.durationMs)) + '</td><td><span class="job-result-text" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</span></td><td class="software-actions endpoint-job-actions">' +
                     '<button type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
                     '<button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
                     (job.status === "completed" ? '<button type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
@@ -475,7 +525,8 @@
             const updateStatus = result.update_status || (result.details && result.details.reason);
             if (updateStatus === "no_update_available" || result.already_up_to_date || (result.details && result.details.reason === "already_current")) return "Agente ja atualizado";
             if (updateStatus === "success" || job.status === "completed") {
-                const version = result.installed_version || result.version || "";
+                const details = result.details || {};
+                const version = result.installed_version || result.installedVersion || details.installed_version || details.installedVersion || result.version || "";
                 return version ? "Atualizado para " + version : "Atualizado com sucesso";
             }
             if (job.status === "failed") return job.errorMessage || result.message || "Falha na atualizacao";
@@ -503,9 +554,9 @@
         const inv = detail.inventory || {};
         const security = detail.security || {};
         const agent = detail.agent || {};
-        return '<div class="endpoint-compact-grid">' +
+        return '<div class="endpoint-compact-grid endpoint-overview-grid">' +
             renderHealth(detail) +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("id-card") + 'Resumo tecnico</h2></header>' + factList([
+            '<article class="panel endpoint-dense-card endpoint-summary-card"><header><h2>' + icon("id-card") + 'Resumo tecnico</h2></header>' + factList([
                 { label: "Hostname", value: detail.hostname, mono: true },
                 { label: "IP principal", value: detail.ip, mono: true },
                 { label: "Usuario", value: detail.user },
@@ -513,8 +564,10 @@
                 { label: "Sistema", value: detail.os },
                 { label: "Dominio", value: detail.domain }
             ]) + '</article>' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("bot") + 'Agente NightOwl</h2>' + badge("agent-version-pill agent", agent.state, agent.state === "current" ? "Atual" : labels[agent.state] || agent.state) + '</header>' + factList([
-                { label: "Instalada", value: agent.version, mono: true },
+            '<article class="panel endpoint-dense-card endpoint-agent-card"><header><h2>' + icon("bot") + 'Agente NightOwl</h2>' + badge("agent-version-pill agent", agent.state, agent.state === "current" ? "Atual" : labels[agent.state] || agent.state) + '</header>' +
+            '<div class="agent-version-panel">' + agentVersionMarkup(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual do pacote publicado</small>') + '</div>' +
+            factList([
+                { label: "Instalada", value: agentVersionMarkup(agent), html: true, className: "endpoint-fact-wide" },
                 { label: "Machine ID", value: agent.machineId, mono: true },
                 { label: "Recomendada", value: agent.recommendedVersion, mono: true },
                 { label: "Modo", value: agent.mode },
@@ -526,18 +579,16 @@
                 { label: "Ultimo job de update", value: lastUpdateJobLabel(detail) },
                 { label: "Servico", value: agent.serviceName },
                 { label: "Status servico", value: agent.serviceStatus },
-                { label: "Log atual", value: agent.logFile, mono: true },
-                { label: "Jobs pull", value: agent.jobsPullUrl, mono: true },
-                { label: "Jobs result", value: agent.jobsResultUrl, mono: true },
+                { label: "Log atual", value: agent.logFile, mono: true, className: "endpoint-fact-wide" },
                 { label: "Proximo heartbeat", value: agent.nextHeartbeat }
             ]) + '<div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent">' + icon("download-cloud") + 'Atualizar agente</button></div></article>' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield") + 'Seguranca</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
+            '<article class="panel endpoint-dense-card endpoint-security-summary"><header><h2>' + icon("shield") + 'Seguranca</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
                 { label: "Antivirus", value: security.antivirus },
                 { label: "Assinatura", value: security.signature, mono: true },
                 { label: "Firewall", value: security.firewall },
                 { label: "BitLocker", value: security.bitlocker }
             ]) + '</article>' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("cpu") + 'Inventario rapido</h2></header>' + factList([
+            '<article class="panel endpoint-dense-card endpoint-inventory-summary"><header><h2>' + icon("cpu") + 'Inventario rapido</h2></header>' + factList([
                 { label: "Fabricante", value: inv.manufacturer },
                 { label: "Modelo", value: inv.model },
                 { label: "Serial", value: inv.serial, mono: true },
@@ -547,11 +598,8 @@
                 { label: "Ultimo inventario", value: inv.lastFullInventory }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card endpoint-disk-summary"><header><h2>' + icon("hard-drive") + 'Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver inventario</button></header>' + renderDiskList(detail.disks, true) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("alert-triangle") + 'Alertas ativos</h2><a href="/alerts/?q=' + encodeURIComponent(detail.hostname) + '">Central de Alertas</a></header>' + renderAlerts(detail.alerts, 4) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("ticket") + 'Chamados relacionados</h2>' + actionButton("create_ticket", "Criar chamado", "ticket") + '</header>' + renderTickets(detail.tickets) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("history") + 'Ultimos eventos</h2><a href="/events/?q=' + encodeURIComponent(detail.hostname) + '">Ver todos</a></header>' + renderEvents(detail.events, 5, false) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("list-checks") + 'Fila de acoes</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar dados</button></header>' + renderJobs(detail.jobs, 6) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("zap") + 'Acoes rapidas</h2></header><div class="endpoint-remote-actions-grid">' +
+            '<article class="panel endpoint-dense-card endpoint-jobs-card"><header><h2>' + icon("list-checks") + 'Fila de acoes</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar dados</button></header>' + renderJobs(detail.jobs, 6) + '</article>' +
+            '<article class="panel endpoint-dense-card endpoint-actions-card"><header><h2>' + icon("zap") + 'Acoes rapidas</h2></header><div class="endpoint-remote-actions-grid">' +
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
             actionButton("check_defender", "Verificar Defender", "shield-check") +
             actionButton("check_disk", "Coletar discos", "hard-drive") +
@@ -560,7 +608,10 @@
             actionButton("ping", "Ping", "activity") +
             actionButton("windows_update_scan", "Windows Update scan", "badge-check") +
             '<button type="button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + 'Script futuro</button>' +
-            "</div></article></div>";
+            "</div></article>" +
+            '<article class="panel endpoint-dense-card endpoint-events-card"><header><h2>' + icon("history") + 'Ultimos eventos</h2><a href="/events/?q=' + encodeURIComponent(detail.hostname) + '">Ver todos</a></header>' + renderEvents(detail.events, 6, false) + '</article>' +
+            '<article class="panel endpoint-dense-card endpoint-alerts-card"><header><h2>' + icon("alert-triangle") + 'Alertas ativos</h2><a href="/alerts/?q=' + encodeURIComponent(detail.hostname) + '">Central de Alertas</a></header>' + renderAlerts(detail.alerts, 4) + '</article>' +
+            '<article class="panel endpoint-dense-card endpoint-tickets-card"><header><h2>' + icon("ticket") + 'Chamados relacionados</h2>' + actionButton("create_ticket", "Criar chamado", "ticket") + '</header>' + renderTickets(detail.tickets) + '</article></div>';
     }
 
     function renderInventory(detail) {
@@ -998,10 +1049,14 @@
     function openJobDrawer(id) {
         const job = findJob(id);
         if (!job) return;
+        const result = job.resultJson || {};
         openDrawer("Tarefa", job.name, job.command, '<section><h3>Execucao</h3>' + factList([
             { label: "Status", value: labels[job.status] || job.status },
             { label: "Tipo", value: labels[job.type] || job.type },
             { label: "Endpoint", value: job.endpoint || (endpointDetail && endpointDetail.hostname) || "-" },
+            { label: "Versao anterior", value: result.previous_version || result.previousVersion || (result.details && (result.details.previous_version || result.details.previousVersion)) || "-" },
+            { label: "Versao nova", value: result.installed_version || result.installedVersion || (result.details && (result.details.installed_version || result.details.installedVersion)) || result.version || "-" },
+            { label: "Resultado", value: jobResultLabel(job) },
             { label: "Criado por", value: job.createdBy },
             { label: "Criado em", value: formatDate(job.createdAt) },
             { label: "Despachado em", value: formatDate(job.dispatchedAt) },
