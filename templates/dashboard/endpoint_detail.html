@@ -59,48 +59,42 @@
         <div class="endpoint-overview-layout" data-overview-layout>
             <section class="endpoint-primary-row">
                 <article class="panel endpoint-dense-card endpoint-health-dense" data-overview-card="health">
-                    <header><h2><i data-lucide="activity"></i>Sa&uacute;de do endpoint</h2><span data-overview-slot="health-badge" class="{{ health.class }}">{{ health.label|safe }}</span></header>
+                    <header><h2><i data-lucide="activity"></i>Sa&uacute;de do endpoint</h2><span data-overview-slot="health-badge" class="endpoint-skeleton-pill">Carregando</span></header>
                     <div data-overview-slot="health-body">
-                        {% if health.score != None %}
-                        <div class="endpoint-score-block"><strong>{{ health.score }}</strong><span>/100</span></div>
-                        <div class="health-bar"><span class="health-fill {{ health.class }}" style="width: {{ health.score }}%"></span></div>
-                        {% else %}
-                        <div class="health-insufficient">{{ health.label }}</div>
-                        {% endif %}
-                        <div class="health-breakdown">
-                            {% for item in health_breakdown %}
-                            <div>
-                                <span>{{ item.label }}</span>
-                                <strong class="health-part-{{ item.level }}">{{ item.score }}</strong>
-                                <em><i style="width: {{ item.score }}%"></i></em>
-                            </div>
-                            {% endfor %}
+                        <div class="endpoint-score-block endpoint-skeleton-score"><strong>--</strong><span>/100</span></div>
+                        <div class="endpoint-skeleton-line endpoint-skeleton-line-wide"></div>
+                        <div class="health-breakdown endpoint-skeleton-breakdown">
+                            <div><span></span><strong></strong><em><i></i></em></div>
+                            <div><span></span><strong></strong><em><i></i></em></div>
+                            <div><span></span><strong></strong><em><i></i></em></div>
+                            <div><span></span><strong></strong><em><i></i></em></div>
                         </div>
                     </div>
                 </article>
 
                 <article class="panel endpoint-dense-card endpoint-agent-card" data-overview-card="agent">
-                    <header><h2><i data-lucide="bot"></i>Agente NightOwl</h2><span data-overview-slot="agent-badge" class="agent-version-pill agent-{{ agent_version_state }}">{% if agent_version_state == "current" %}Atual{% elif agent_version_state == "outdated" %}Desatualizado{% else %}Sem informa&ccedil;&atilde;o{% endif %}</span></header>
+                    <header><h2><i data-lucide="bot"></i>Agente NightOwl</h2><span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span></header>
                     <div data-overview-slot="agent-body">
-                        <div class="agent-version-panel"><span class="agent-version-compare"><strong class="agent-installed-current">{{ endpoint.agent_version|default:"-" }}</strong></span><small>Carregando dados do agente</small></div>
-                        <dl class="endpoint-fact-list">
-                            <div><dt>Servi&ccedil;o</dt><dd>-</dd></div>
-                            <div><dt>Status</dt><dd>-</dd></div>
-                            <div><dt>Modo/runtime</dt><dd>-</dd></div>
-                            <div><dt>&Uacute;ltima comunica&ccedil;&atilde;o</dt><dd>{% if endpoint.last_seen_at %}{{ endpoint.last_seen_at|relative_time }}{% else %}-{% endif %}</dd></div>
+                        <div class="agent-version-panel endpoint-skeleton-panel"><span class="endpoint-skeleton-line endpoint-skeleton-version"></span><small>Carregando dados do agente</small></div>
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div class="endpoint-fact-wide"><dt></dt><dd></dd></div>
                         </dl>
                     </div>
                     <div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent"><i data-lucide="download-cloud"></i>Atualizar agente</button></div>
                 </article>
 
                 <article class="panel endpoint-dense-card endpoint-security-summary" data-overview-card="security">
-                    <header><h2><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="{{ defender.class }}">{{ defender.label|safe }}</span></header>
+                    <header><h2><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
                     <div data-overview-slot="security-body">
-                        <dl class="endpoint-fact-list">
-                            <div><dt>Defender/AV</dt><dd>{{ defender.label|safe }}</dd></div>
-                            <div><dt>Assinatura</dt><dd class="mono">{{ snapshot.defender_status.antivirus_signature_last_updated|default:"-" }}</dd></div>
-                            <div><dt>Firewall</dt><dd>-</dd></div>
-                            <div><dt>BitLocker</dt><dd>-</dd></div>
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
                         </dl>
                     </div>
                 </article>
@@ -110,13 +104,13 @@
                 <article class="panel endpoint-dense-card endpoint-summary-card" data-overview-card="summary">
                     <header><h2><i data-lucide="id-card"></i>Resumo t&eacute;cnico</h2></header>
                     <div data-overview-slot="summary-body">
-                        <dl class="endpoint-fact-list">
-                            <div><dt>Hostname</dt><dd class="mono">{{ endpoint.hostname|default:"-" }}</dd></div>
-                            <div><dt>IP principal</dt><dd class="mono">{{ primary_ip|default:"-" }}</dd></div>
-                            <div><dt>Usu&aacute;rio</dt><dd>{{ endpoint.last_logged_user|default:"-" }}</dd></div>
-                            <div><dt>Setor/tag</dt><dd>{{ endpoint_sector|default:"-" }}</dd></div>
-                            <div><dt>Sistema</dt><dd>{{ endpoint.os_name|default:snapshot.os_name|default:"-" }}</dd></div>
-                            <div><dt>Dom&iacute;nio</dt><dd>{{ endpoint.domain|default:"-" }}</dd></div>
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
                         </dl>
                     </div>
                 </article>
@@ -124,11 +118,13 @@
                 <article class="panel endpoint-dense-card endpoint-inventory-summary" data-overview-card="inventory">
                     <header><h2><i data-lucide="cpu"></i>Invent&aacute;rio r&aacute;pido</h2></header>
                     <div data-overview-slot="inventory-body">
-                        <dl class="endpoint-fact-list">
-                            <div><dt>Fabricante</dt><dd>{{ snapshot.manufacturer|default:"-" }}</dd></div>
-                            <div><dt>Modelo</dt><dd>{{ snapshot.model|default:"-" }}</dd></div>
-                            <div><dt>Serial</dt><dd class="mono">{{ snapshot.serial_number|default:"-" }}</dd></div>
-                            <div><dt>CPU</dt><dd>{{ snapshot.cpu|default:"-" }}</dd></div>
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
                         </dl>
                     </div>
                 </article>
@@ -136,17 +132,9 @@
                 <article class="panel endpoint-dense-card endpoint-disk-summary" data-overview-card="disks">
                     <header><h2><i data-lucide="hard-drive"></i>Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver invent&aacute;rio</button></header>
                     <div data-overview-slot="disks-body">
-                        <div class="endpoint-mini-disk-list">
-                            {% for disk in disks %}
-                            <div>
-                                <strong class="mono">{{ disk.name }}</strong>
-                                <span>{{ disk.used_percent }}%</span>
-                                <em><i class="disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></i></em>
-                                <small>{{ disk.free_gb|default:"-" }} GB livre</small>
-                            </div>
-                            {% empty %}
-                            <div class="empty-state padded">Nenhum disco informado.</div>
-                            {% endfor %}
+                        <div class="endpoint-mini-disk-list endpoint-skeleton-disks">
+                            <div><strong></strong><span></span><em><i></i></em><small></small></div>
+                            <div><strong></strong><span></span><em><i></i></em><small></small></div>
                         </div>
                     </div>
                 </article>
@@ -155,29 +143,29 @@
             <section class="endpoint-operational-row">
                 <article class="panel endpoint-dense-card endpoint-jobs-card" data-overview-card="jobs">
                     <header><h2><i data-lucide="list-checks"></i>Fila de a&ccedil;&otilde;es</h2><button type="button" data-refresh-endpoint><i data-lucide="refresh-ccw"></i>Atualizar dados</button></header>
-                    <div data-overview-slot="jobs-body"><div class="endpoint-empty-state"><i data-lucide="loader-circle"></i><strong>Carregando jobs</strong><p>Buscando a fila mais recente deste endpoint.</p></div></div>
+                    <div data-overview-slot="jobs-body"><div class="endpoint-job-list endpoint-skeleton-jobs"><article></article><article></article><article></article></div></div>
                 </article>
 
                 <article class="panel endpoint-dense-card endpoint-actions-card" data-overview-card="actions">
                     <header><h2><i data-lucide="zap"></i>A&ccedil;&otilde;es r&aacute;pidas</h2></header>
-                    <div data-overview-slot="actions-body"></div>
+                    <div data-overview-slot="actions-body"><div class="endpoint-action-groups endpoint-skeleton-actions"><section></section><section></section><section></section></div></div>
                 </article>
             </section>
 
             <section class="endpoint-secondary-row">
                 <article class="panel endpoint-dense-card endpoint-alerts-card" data-overview-card="alerts">
                     <header><h2><i data-lucide="alert-triangle"></i>Alertas ativos</h2><a href="{% url 'alerts-list' %}?q={{ endpoint.hostname }}">Central de Alertas</a></header>
-                    <div data-overview-slot="alerts-body">{% include "dashboard/partials/endpoint_alert_list.html" with endpoint_alerts=endpoint_alerts %}</div>
+                    <div data-overview-slot="alerts-body"><div class="endpoint-alert-list endpoint-skeleton-list"><article></article><article></article></div></div>
                 </article>
 
                 <article class="panel endpoint-dense-card endpoint-events-card" data-overview-card="events">
                     <header><h2><i data-lucide="history"></i>&Uacute;ltimos eventos</h2><a href="{% url 'events-list' %}?endpoint={{ endpoint.id }}">Ver todos</a></header>
-                    <div data-overview-slot="events-body">{% include "dashboard/partials/endpoint_activity_list.html" with audit_events=audit_events %}</div>
+                    <div data-overview-slot="events-body"><div class="endpoint-event-timeline endpoint-skeleton-list"><article></article><article></article></div></div>
                 </article>
 
                 <article class="panel endpoint-dense-card endpoint-tickets-card" data-overview-card="tickets">
                     <header><h2><i data-lucide="ticket"></i>Chamados relacionados</h2><button type="button" data-endpoint-action="create_ticket"><i data-lucide="ticket"></i>Criar chamado</button></header>
-                    <div data-overview-slot="tickets-body">{% include "dashboard/partials/endpoint_ticket_list.html" with related_tickets=related_tickets %}</div>
+                    <div data-overview-slot="tickets-body"><div class="endpoint-task-list endpoint-skeleton-list"><article></article></div></div>
                 </article>
             </section>
         </div>

@@ -29378,6 +29378,112 @@ body.page-endpoint-detail .endpoint-empty-state {
     padding: 12px;
 }
 
+body.page-endpoint-detail .endpoint-skeleton-pill,
+body.page-endpoint-detail .endpoint-skeleton-line,
+body.page-endpoint-detail .endpoint-skeleton-facts dt,
+body.page-endpoint-detail .endpoint-skeleton-facts dd,
+body.page-endpoint-detail .endpoint-skeleton-disks strong,
+body.page-endpoint-detail .endpoint-skeleton-disks span,
+body.page-endpoint-detail .endpoint-skeleton-disks small,
+body.page-endpoint-detail .endpoint-skeleton-jobs article,
+body.page-endpoint-detail .endpoint-skeleton-actions section,
+body.page-endpoint-detail .endpoint-skeleton-list article {
+    position: relative;
+    overflow: hidden;
+    border-radius: 999px;
+    color: transparent;
+    background: linear-gradient(90deg, rgba(148, 163, 184, 0.08), rgba(167, 139, 250, 0.16), rgba(148, 163, 184, 0.08));
+    background-size: 220% 100%;
+    animation: endpoint-skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-pill {
+    width: 92px;
+    min-height: 26px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+body.page-endpoint-detail .endpoint-skeleton-panel .endpoint-skeleton-version {
+    display: block;
+    width: 170px;
+    height: 22px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-panel small {
+    color: #9fb0c8;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-line-wide {
+    height: 8px;
+    margin: 10px 12px 12px;
+    border-radius: 999px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-score strong {
+    color: rgba(248, 250, 252, 0.42);
+}
+
+body.page-endpoint-detail .endpoint-skeleton-breakdown span {
+    width: 84px;
+    height: 12px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-breakdown strong {
+    width: 28px;
+    height: 12px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-breakdown em i {
+    width: 62%;
+    background: rgba(167, 139, 250, 0.26);
+}
+
+body.page-endpoint-detail .endpoint-skeleton-facts dt {
+    width: 70px;
+    height: 10px;
+    margin-bottom: 7px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-facts dd {
+    width: 82%;
+    height: 13px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-disks strong,
+body.page-endpoint-detail .endpoint-skeleton-disks span {
+    height: 14px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-disks small {
+    width: 64%;
+    height: 11px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-jobs article {
+    height: 58px;
+    border-radius: 10px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-actions section {
+    height: 66px;
+    border-radius: 10px;
+}
+
+body.page-endpoint-detail .endpoint-skeleton-list article {
+    height: 54px;
+    border-radius: 10px;
+}
+
+@keyframes endpoint-skeleton-pulse {
+    0% {
+        background-position: 100% 0;
+    }
+
+    100% {
+        background-position: -100% 0;
+    }
+}
+
 @media (max-width: 1360px) {
     body.page-endpoint-detail .endpoint-primary-row {
         grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.25fr);
