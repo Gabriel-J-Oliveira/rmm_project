@@ -28750,7 +28750,7 @@ body.page-endpoint-detail .job-timeline-cell span {
 body.page-endpoint-detail .job-timeline-cell b {
     display: block;
     color: #7dd3fc;
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
 }
 
@@ -28835,5 +28835,345 @@ body.page-endpoint-detail .endpoint-task-list p {
 
     body.page-endpoint-detail .endpoint-job-table {
         min-width: 720px;
+    }
+}
+
+/* Endpoint detail final layout pass */
+body.page-endpoint-detail .endpoint-detail-shell {
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-ops-header {
+    align-items: start;
+    gap: 12px;
+    min-height: 0;
+    padding: 12px 16px;
+}
+
+body.page-endpoint-detail .endpoint-title-line h1 {
+    font-size: 26px;
+}
+
+body.page-endpoint-detail .endpoint-critical-strip {
+    margin-top: 8px;
+}
+
+body.page-endpoint-detail .endpoint-critical-strip > span {
+    min-height: 26px;
+    padding: 4px 9px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-ops-actions {
+    max-width: 520px;
+}
+
+body.page-endpoint-detail .endpoint-ops-actions .copy-btn {
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-header-facts div {
+    min-width: 118px;
+    padding: 7px 9px;
+}
+
+body.page-endpoint-detail .endpoint-overview-layout {
+    display: grid;
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row,
+body.page-endpoint-detail .endpoint-secondary-row {
+    display: grid;
+    gap: 14px;
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-primary-row {
+    grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.35fr) minmax(280px, 0.9fr);
+}
+
+body.page-endpoint-detail .endpoint-summary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-operational-row {
+    grid-template-columns: minmax(0, 7fr) minmax(300px, 3fr);
+}
+
+body.page-endpoint-detail .endpoint-secondary-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-primary-row > *,
+body.page-endpoint-detail .endpoint-summary-row > *,
+body.page-endpoint-detail .endpoint-operational-row > *,
+body.page-endpoint-detail .endpoint-secondary-row > * {
+    grid-column: auto;
+}
+
+body.page-endpoint-detail .endpoint-dense-card header {
+    padding: 11px 13px;
+}
+
+body.page-endpoint-detail .endpoint-dense-card header h2 {
+    font-size: 15px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list {
+    gap: 8px;
+    padding: 12px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list div {
+    padding: 8px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list dt {
+    font-size: 11px;
+}
+
+body.page-endpoint-detail .endpoint-fact-list dd {
+    font-size: 13px;
+    line-height: 1.28;
+}
+
+body.page-endpoint-detail .endpoint-score-block {
+    padding: 10px 13px 0;
+}
+
+body.page-endpoint-detail .endpoint-score-block strong {
+    font-size: 42px;
+    letter-spacing: 0;
+}
+
+body.page-endpoint-detail .health-breakdown {
+    gap: 7px;
+    padding: 0 13px 13px;
+}
+
+body.page-endpoint-detail .health-breakdown div {
+    grid-template-columns: 108px 34px 1fr;
+}
+
+body.page-endpoint-detail .health-breakdown span,
+body.page-endpoint-detail .health-breakdown strong {
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .agent-version-panel {
+    margin: 10px 12px 0;
+    padding: 10px 12px;
+}
+
+body.page-endpoint-detail .agent-version-compare strong {
+    font-size: 17px;
+}
+
+body.page-endpoint-detail .endpoint-card-actions {
+    padding: 0 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-card-actions button,
+body.page-endpoint-detail .endpoint-action-group button,
+body.page-endpoint-detail .endpoint-job-actions button {
+    min-height: 34px;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-action-groups {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+}
+
+body.page-endpoint-detail .endpoint-action-group {
+    display: grid;
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-action-group h3 {
+    margin: 0;
+    color: #9fb0c8;
+    font-size: 12px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .endpoint-action-group div {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-action-group button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 7px;
+    padding: 0 10px;
+    border: 1px solid rgba(167, 139, 250, 0.18);
+    border-radius: 8px;
+    background: rgba(11, 13, 22, 0.7);
+    color: var(--text-secondary);
+    font: inherit;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-action-group button:hover {
+    border-color: rgba(192, 132, 252, 0.38);
+    color: var(--text-primary);
+}
+
+body.page-endpoint-detail .endpoint-action-group svg {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    color: var(--soft-purple);
+}
+
+body.page-endpoint-detail .endpoint-job-list {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-item {
+    display: grid;
+    grid-template-columns: minmax(230px, 1.2fr) minmax(260px, 1fr) 126px;
+    gap: 12px;
+    align-items: center;
+    padding: 11px;
+    border: 1px solid rgba(148, 163, 184, 0.13);
+    border-radius: 10px;
+    background: rgba(7, 9, 16, 0.34);
+}
+
+body.page-endpoint-detail .endpoint-job-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-job-title small {
+    color: #9fb0c8;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+body.page-endpoint-detail .endpoint-job-progressline {
+    display: grid;
+    grid-template-columns: minmax(80px, 1fr) 38px;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+body.page-endpoint-detail .endpoint-job-progressline strong {
+    color: #f8fafc;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-job-progress {
+    width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-job-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 9px;
+}
+
+body.page-endpoint-detail .endpoint-job-meta span {
+    min-width: 0;
+    color: #cbd5e1;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-meta b {
+    display: block;
+    color: #7dd3fc;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    display: grid;
+    gap: 6px;
+}
+
+body.page-endpoint-detail .endpoint-job-actions button {
+    width: 100%;
+    border: 1px solid rgba(167, 139, 250, 0.18);
+    border-radius: 8px;
+    background: rgba(11, 13, 22, 0.72);
+    color: var(--text-secondary);
+    font-weight: 800;
+}
+
+body.page-endpoint-detail .endpoint-empty-state {
+    min-height: 112px;
+    padding: 14px;
+}
+
+body.page-endpoint-detail .endpoint-alert-list,
+body.page-endpoint-detail .endpoint-event-timeline,
+body.page-endpoint-detail .endpoint-task-list {
+    padding: 12px;
+}
+
+body.page-endpoint-detail .endpoint-alert-item,
+body.page-endpoint-detail .endpoint-event-row,
+body.page-endpoint-detail .endpoint-task-list article {
+    padding: 9px;
+}
+
+body.page-endpoint-detail .endpoint-event-row strong,
+body.page-endpoint-detail .endpoint-task-list strong {
+    font-size: 13px;
+}
+
+body.page-endpoint-detail .endpoint-event-row p,
+body.page-endpoint-detail .endpoint-event-row small,
+body.page-endpoint-detail .endpoint-task-list p,
+body.page-endpoint-detail .job-result-text {
+    font-size: 12px;
+}
+
+@media (max-width: 1280px) {
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-secondary-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    body.page-endpoint-detail .endpoint-operational-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 860px) {
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-secondary-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-job-item {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-job-actions {
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
     }
 }
