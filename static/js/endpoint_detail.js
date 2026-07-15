@@ -461,12 +461,12 @@
 
     function renderHealthBody(detail) {
         const parts = healthParts(detail);
-        return '<div class="endpoint-score-block"><strong>' + escapeHtml(detail.healthScore || 0) + '</strong><span>/100</span></div>' +
+        return '<div class="endpoint-health-body"><div class="endpoint-score-block"><strong>' + escapeHtml(detail.healthScore || 0) + '</strong><span>/100</span></div>' +
             '<div class="health-bar"><span class="health-fill ' + healthClass(detail.healthScore) + '" style="width:' + escapeHtml(detail.healthScore || 0) + '%"></span></div>' +
             '<div class="health-breakdown">' + parts.map(function (part) {
                 const cls = part.score < 50 ? "critical" : part.score < 75 ? "warning" : "good";
                 return '<div><span>' + escapeHtml(part.label) + '</span><strong class="health-part-' + cls + '">' + part.score + '</strong><em><i style="width:' + part.score + '%"></i></em></div>';
-            }).join("") + "</div>";
+            }).join("") + "</div></div>";
     }
 
     function renderDiskList(disks, compact) {
@@ -531,8 +531,7 @@
             return '<article class="endpoint-job-item endpoint-job-item-' + escapeHtml(job.status || "pending") + '">' +
                 '<div class="endpoint-job-main">' +
                     '<div class="endpoint-job-title">' + jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small></div>' +
-                    '<div class="endpoint-job-progressline"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' +
-                    '<span class="job-result-text" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</span>' +
+                    '<div class="endpoint-job-result-line"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><span class="job-result-text" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</span></div>' +
                 '</div>' +
                 '<div class="endpoint-job-meta">' +
                     '<span><b>Horario</b>' + escapeHtml(formatDate(primaryTime)) + '</span>' +
@@ -634,36 +633,36 @@
 
         setSlotBadge("agent-badge", "agent-version-pill agent-" + escapeHtml(agent.state || "unknown"), escapeHtml(agent.state === "current" ? "Atual" : labels[agent.state] || agent.state || "Sem informacao"));
         setSlot("agent-body",
-            '<div class="agent-version-panel">' + agentVersionDisplay(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual</small>') + '</div>' +
-            factList([
+            '<div class="endpoint-agent-body"><div class="agent-version-panel">' + agentVersionDisplay(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual</small>') + '</div>' +
+            '<div class="endpoint-agent-facts">' + factList([
                 { label: "Servico/status", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "-") },
                 { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
                 { label: "Ultima comunicacao", value: agent.lastRun },
                 { label: "Ultimo job update", value: lastUpdateJobLabel(detail), className: "endpoint-fact-wide" },
                 { label: "Proximo heartbeat", value: agent.nextHeartbeat },
                 { label: "Log atual", value: agent.logFile, mono: true, className: "endpoint-fact-wide" }
-            ])
+            ]) + '</div></div>'
         );
 
         setSlotBadge("security-badge", "severity-badge severity-" + escapeHtml(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info"), escapeHtml(security.status || "unknown"));
-        setSlot("security-body", factList([
+        setSlot("security-body", '<div class="endpoint-security-body">' + factList([
             { label: "Defender/AV", value: security.antivirus },
             { label: "Assinatura", value: security.signature, mono: true },
             { label: "Firewall", value: security.firewall },
             { label: "BitLocker", value: security.bitlocker },
             { label: "Ultima seguranca", value: formatDate(agent.lastSecurityInventoryAt), className: "endpoint-fact-wide" }
-        ]));
+        ]) + '</div>');
 
-        setSlot("summary-body", factList([
+        setSlot("summary-body", '<div class="endpoint-overview-facts">' + factList([
             { label: "Hostname", value: detail.hostname, mono: true },
             { label: "IP principal", value: detail.ip, mono: true },
             { label: "Usuario", value: detail.user },
             { label: "Setor/tag", value: detail.sector },
             { label: "Sistema", value: detail.os },
             { label: "Dominio", value: detail.domain }
-        ]));
+        ]) + '</div>');
 
-        setSlot("inventory-body", factList([
+        setSlot("inventory-body", '<div class="endpoint-overview-facts">' + factList([
             { label: "Fabricante", value: inv.manufacturer },
             { label: "Modelo", value: inv.model },
             { label: "Serial", value: inv.serial, mono: true },
@@ -671,7 +670,7 @@
             { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
             { label: "Disponivel", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
             { label: "Ultimo inventario", value: inv.lastFullInventory, className: "endpoint-fact-wide" }
-        ]));
+        ]) + '</div>');
 
         setSlot("disks-body", renderDiskList(detail.disks, true));
         setSlot("jobs-body", renderJobs(detail.jobs, 6));

@@ -29204,6 +29204,7 @@ body.page-endpoint-detail .endpoint-header-facts div {
 }
 
 body.page-endpoint-detail .endpoint-overview-layout {
+    display: grid;
     gap: 14px;
 }
 
@@ -29215,15 +29216,15 @@ body.page-endpoint-detail .endpoint-secondary-row {
 }
 
 body.page-endpoint-detail .endpoint-primary-row {
-    grid-template-columns: minmax(240px, 3fr) minmax(340px, 4.5fr) minmax(240px, 2.5fr);
+    grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
 body.page-endpoint-detail .endpoint-summary-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(260px, 1.03fr);
+    grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
 body.page-endpoint-detail .endpoint-operational-row {
-    grid-template-columns: minmax(0, 7fr) minmax(290px, 3fr);
+    grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
 body.page-endpoint-detail .endpoint-secondary-row {
@@ -29234,9 +29235,35 @@ body.page-endpoint-detail .endpoint-dense-card {
     align-self: start;
 }
 
+body.page-endpoint-detail .endpoint-primary-row .endpoint-health-dense {
+    grid-column: span 4;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-agent-card {
+    grid-column: span 5;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-security-summary {
+    grid-column: span 3;
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-summary-card,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-inventory-summary,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-disk-summary {
+    grid-column: span 4;
+}
+
+body.page-endpoint-detail .endpoint-operational-row .endpoint-jobs-card {
+    grid-column: span 8;
+}
+
+body.page-endpoint-detail .endpoint-operational-row .endpoint-actions-card {
+    grid-column: span 4;
+}
+
 body.page-endpoint-detail .endpoint-dense-card header {
-    min-height: 46px;
-    padding: 10px 13px;
+    min-height: 44px;
+    padding: 10px 14px;
 }
 
 body.page-endpoint-detail .endpoint-dense-card header h2 {
@@ -29244,12 +29271,12 @@ body.page-endpoint-detail .endpoint-dense-card header h2 {
 }
 
 body.page-endpoint-detail .endpoint-fact-list {
-    gap: 7px;
-    padding: 11px 12px;
+    gap: 8px;
+    padding: 12px;
 }
 
 body.page-endpoint-detail .endpoint-fact-list div {
-    padding: 7px 8px;
+    padding: 8px 9px;
 }
 
 body.page-endpoint-detail .endpoint-fact-list dt {
@@ -29257,31 +29284,54 @@ body.page-endpoint-detail .endpoint-fact-list dt {
 }
 
 body.page-endpoint-detail .endpoint-fact-list dd {
-    font-size: 13px;
+    font-size: 13.5px;
     line-height: 1.25;
 }
 
-body.page-endpoint-detail .endpoint-score-block {
-    padding: 10px 12px 0;
+body.page-endpoint-detail .endpoint-health-body {
+    display: grid;
+    gap: 9px;
+    padding: 12px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
+    padding: 0;
 }
 
 body.page-endpoint-detail .endpoint-score-block strong {
-    font-size: 42px;
+    font-size: 40px;
     letter-spacing: 0;
 }
 
-body.page-endpoint-detail .health-breakdown {
+body.page-endpoint-detail .endpoint-health-body .health-bar {
+    height: 8px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
     gap: 7px;
-    padding: 0 12px 12px;
+    padding: 0;
 }
 
 body.page-endpoint-detail .health-breakdown div {
-    grid-template-columns: 102px 34px 1fr;
+    grid-template-columns: minmax(86px, 1fr) 34px minmax(70px, 1.1fr);
+    gap: 7px;
 }
 
 body.page-endpoint-detail .agent-version-panel {
-    margin: 10px 12px 0;
-    padding: 9px 11px;
+    margin: 0;
+    padding: 10px 12px;
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-body .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-overview-facts .endpoint-fact-list {
+    padding: 0;
 }
 
 body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list {
@@ -29289,38 +29339,70 @@ body.page-endpoint-detail .endpoint-agent-card .endpoint-fact-list {
 }
 
 body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
-    padding-top: 0;
+    padding: 10px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-security-body {
+    padding: 12px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-overview-facts {
+    padding: 12px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-overview-facts .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    padding: 12px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list div {
+    grid-template-columns: 54px 48px minmax(0, 1fr);
+    gap: 8px;
+    min-height: 30px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list small {
+    margin-top: -2px;
 }
 
 body.page-endpoint-detail .endpoint-job-list {
-    gap: 8px;
+    gap: 7px;
     padding: 10px 12px 12px;
 }
 
 body.page-endpoint-detail .endpoint-job-item {
-    grid-template-columns: minmax(300px, 1fr) minmax(190px, 0.55fr) 112px;
-    gap: 10px;
-    padding: 9px;
+    grid-template-columns: minmax(300px, 1fr) minmax(160px, 0.45fr) 114px;
+    gap: 9px;
+    padding: 8px 9px;
 }
 
 body.page-endpoint-detail .endpoint-job-title {
     gap: 6px;
 }
 
-body.page-endpoint-detail .endpoint-job-progressline {
-    grid-template-columns: 76px 34px;
+body.page-endpoint-detail .endpoint-job-result-line {
+    display: grid;
+    grid-template-columns: 70px minmax(0, 1fr);
+    align-items: center;
     gap: 7px;
     margin-top: 6px;
 }
 
 body.page-endpoint-detail .endpoint-job-progress {
-    width: 76px;
+    width: 70px;
     height: 6px;
 }
 
 body.page-endpoint-detail .endpoint-job-meta {
     grid-template-columns: minmax(0, 1fr);
-    gap: 5px;
+    gap: 4px;
 }
 
 body.page-endpoint-detail .endpoint-job-meta span {
@@ -29336,12 +29418,13 @@ body.page-endpoint-detail .endpoint-job-actions {
 }
 
 body.page-endpoint-detail .endpoint-job-actions button {
-    min-height: 32px;
+    min-height: 30px;
+    padding: 0 8px;
 }
 
 body.page-endpoint-detail .endpoint-action-groups {
-    gap: 9px;
-    padding: 11px 12px 12px;
+    gap: 10px;
+    padding: 12px 14px 14px;
 }
 
 body.page-endpoint-detail .endpoint-action-group h3 {
@@ -29349,7 +29432,7 @@ body.page-endpoint-detail .endpoint-action-group h3 {
 }
 
 body.page-endpoint-detail .endpoint-action-group div {
-    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
 }
 
@@ -29484,9 +29567,15 @@ body.page-endpoint-detail .endpoint-skeleton-list article {
     }
 }
 
-@media (max-width: 1360px) {
+@media (max-width: 1180px) {
     body.page-endpoint-detail .endpoint-primary-row {
         grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.25fr);
+    }
+
+    body.page-endpoint-detail .endpoint-primary-row > *,
+    body.page-endpoint-detail .endpoint-summary-row > *,
+    body.page-endpoint-detail .endpoint-operational-row > * {
+        grid-column: auto;
     }
 
     body.page-endpoint-detail .endpoint-security-summary {
