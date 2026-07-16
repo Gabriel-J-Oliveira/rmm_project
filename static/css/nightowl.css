@@ -30763,3 +30763,107 @@ body.page-endpoint-detail .endpoint-actions-card .endpoint-quick-action-button {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* Endpoint detail card headers final */
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-actions-card > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 38px;
+    padding: 8px 12px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card > header h2,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card > header h2,
+body.page-endpoint-detail .endpoint-actions-card > header h2 {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    gap: 7px;
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.15;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card > header h2 svg,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card > header h2 svg,
+body.page-endpoint-detail .endpoint-actions-card > header h2 svg {
+    width: 15px;
+    height: 15px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card > header > span,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-dense-card > header > button,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-dense-card > header > button,
+body.page-endpoint-detail .endpoint-actions-card > header > span,
+body.page-endpoint-detail .endpoint-actions-card > header > button {
+    flex: 0 0 auto;
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    gap: 8px;
+    padding-top: 10px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
+    padding: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    gap: 8px;
+    padding-top: 10px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel {
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    padding-top: 6px;
+}
+
+body.page-endpoint-detail .endpoint-security-body {
+    padding-top: 10px;
+}
+
+body.page-endpoint-detail .endpoint-overview-facts,
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    padding-top: 10px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card {
+    min-width: 390px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    gap: 12px;
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group {
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group h3 {
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group > div {
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-quick-action-button {
+    min-height: 39px;
+    padding: 0 12px;
+    font-size: 12.5px;
+}
+
+@media (max-width: 1320px) {
+    body.page-endpoint-detail .endpoint-actions-card {
+        min-width: 0;
+    }
+}
