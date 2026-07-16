@@ -30867,3 +30867,103 @@ body.page-endpoint-detail .endpoint-actions-card .endpoint-quick-action-button {
         min-width: 0;
     }
 }
+
+/* Endpoint detail top cards natural height final */
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row {
+    align-items: start !important;
+    grid-auto-rows: auto !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card {
+    align-self: start !important;
+    height: auto !important;
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 34px !important;
+    margin: 0;
+    padding: 8px 12px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card > header h2,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card > header h2 {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.15;
+}
+
+body.page-endpoint-detail .endpoint-primary-row [data-overview-slot$="-body"],
+body.page-endpoint-detail .endpoint-summary-row [data-overview-slot$="-body"] {
+    min-height: 0 !important;
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-health-body,
+body.page-endpoint-detail .endpoint-agent-body,
+body.page-endpoint-detail .endpoint-security-body,
+body.page-endpoint-detail .endpoint-overview-facts,
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    gap: 7px;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
+    padding: 0;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+    gap: 6px;
+    padding: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    gap: 8px;
+    padding: 10px 12px 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-agent-facts .endpoint-fact-list {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    margin-top: 8px;
+    padding: 0 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-security-body {
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-overview-facts .endpoint-fact-list {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list div,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list div {
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-overview-facts {
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-mini-disk-list div {
+    min-height: 0 !important;
+}
