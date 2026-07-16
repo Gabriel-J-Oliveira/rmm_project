@@ -30967,3 +30967,170 @@ body.page-endpoint-detail .endpoint-mini-disk-list {
 body.page-endpoint-detail .endpoint-mini-disk-list div {
     min-height: 0 !important;
 }
+
+/* Endpoint detail balanced top cards final */
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row {
+    align-items: stretch !important;
+    grid-auto-rows: 1fr !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card {
+    display: flex;
+    flex-direction: column;
+    align-self: stretch !important;
+    height: 100% !important;
+    overflow: hidden;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card {
+    min-height: 238px !important;
+}
+
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card {
+    min-height: 188px !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card > header {
+    flex: 0 0 auto;
+    min-height: 36px !important;
+    padding: 8px 12px;
+}
+
+body.page-endpoint-detail .endpoint-primary-row [data-overview-slot$="-body"],
+body.page-endpoint-detail .endpoint-summary-row [data-overview-slot$="-body"] {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body,
+body.page-endpoint-detail .endpoint-agent-body,
+body.page-endpoint-detail .endpoint-security-body,
+body.page-endpoint-detail .endpoint-overview-facts,
+body.page-endpoint-detail .endpoint-mini-disk-list {
+    flex: 1 1 auto;
+    width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    justify-content: center;
+    gap: 9px;
+    padding: 10px 14px 14px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
+    font-size: 46px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown div {
+    grid-template-columns: minmax(100px, 0.8fr) 40px minmax(150px, 1.5fr);
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    justify-content: start;
+    gap: 9px;
+    padding: 10px 12px 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card [data-overview-slot="agent-body"] {
+    flex: 1 1 auto;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    flex: 0 0 auto;
+    margin-top: auto;
+    padding: 8px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-security-body {
+    align-items: stretch;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-security-body .endpoint-fact-list {
+    width: 100%;
+    align-content: start;
+}
+
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-list div {
+    min-height: 42px !important;
+}
+
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-wide {
+    min-height: 44px !important;
+}
+
+body.page-endpoint-detail .endpoint-overview-facts {
+    align-items: stretch;
+    padding: 10px 12px 12px;
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list {
+    width: 100%;
+    align-content: start;
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list div {
+    min-height: 42px !important;
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-wide {
+    min-height: 44px !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary [data-overview-slot="disks-body"] {
+    align-items: center;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list {
+    display: grid;
+    align-content: center;
+    gap: 12px;
+    min-height: 100%;
+    padding: 14px 16px 16px;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list div {
+    grid-template-columns: 70px 62px minmax(0, 1fr);
+    gap: 12px;
+    min-height: 62px !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list strong {
+    font-size: 15px;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list span {
+    font-size: 15px;
+    font-weight: 900;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list em {
+    height: 11px;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list small {
+    grid-column: 3;
+    margin-top: -8px;
+    font-size: 12px;
+}
+
+@media (max-width: 1320px) {
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row {
+        grid-auto-rows: auto !important;
+    }
+
+    body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card,
+    body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card {
+        height: auto !important;
+        min-height: 0 !important;
+    }
+}
