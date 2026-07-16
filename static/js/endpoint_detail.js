@@ -440,7 +440,8 @@
     }
 
     function healthParts(detail) {
-        const diskScore = (detail.disks || []).some(function (disk) { return disk.usedPercent >= 90; }) ? 35 : (detail.disks || []).some(function (disk) { return disk.usedPercent >= 80; }) ? 70 : 95;
+        const diskRows = diskDisplayRows(detail.disks || []);
+        const diskScore = diskRows.some(function (disk) { return diskUsedPercent(disk) >= 90; }) ? 35 : diskRows.some(function (disk) { return diskUsedPercent(disk) >= 80; }) ? 70 : 95;
         const securityScore = detail.security && detail.security.status === "critical" ? 25 : detail.security && detail.security.status === "attention" ? 70 : detail.security && detail.security.status === "unknown" ? 55 : 95;
         const alertScore = (detail.alerts || []).some(function (alert) { return alert.severity === "critical" && alert.status !== "resolved"; }) ? 35 : (detail.alerts || []).length ? 70 : 95;
         return [
@@ -469,18 +470,92 @@
             }).join("") + "</div></div>";
     }
 
-    function renderDiskList(disks, compact) {
-        if (!disks || !disks.length) return emptyState("Nenhum disco coletado", "O proximo inventario deve preencher esta secao.", "hard-drive");
+    function firstDiskValue(disk, keys, fallback) {
+        disk = asObject(disk);
+        for (let index = 0; index < keys.length; index += 1) {
+            const value = disk[keys[index]];
+            if (value !== undefined && value !== null && value !== "") return value;
+        }
+        return fallback;
+    }
+
+    function diskGbValue(disk, gbKeys, byteKeys) {
+        const gbValue = firstDiskValue(disk, gbKeys, null);
+        if (gbValue !== null) return gbValue;
+        const byteValue = Number(firstDiskValue(disk, byteKeys, NaN));
+        if (!Number.isNaN(byteValue)) return (byteValue / 1073741824).toFixed(1);
+        return "-";
+    }
+
+    function diskUsedPercent(disk) {
+        const raw = Number(firstDiskValue(disk, ["usedPercent", "used_percent", "usedPercentage", "used_percentage"], 0));
+        return Math.max(0, Math.min(100, Number.isNaN(raw) ? 0 : Math.round(raw)));
+    }
+
+    function diskSeverity(disk, usedPercent) {
+        const severity = firstDiskValue(disk, ["severity", "status"], "");
+        if (severity) return severity;
+        if (usedPercent >= 90) return "critical";
+        if (usedPercent >= 80) return "warning";
+        return "good";
+    }
+
+    function diskDisplayName(disk, fallback) {
+        return firstDiskValue(disk, ["name", "letter", "drive_letter", "mount_point", "device_id", "volume", "path"], fallback || "-");
+    }
+
+    function diskDisplayRows(disks) {
+        const rows = [];
+        asArray(disks).forEach(function (item) {
+            const disk = asObject(item);
+            if (!Object.keys(disk).length) return;
+            const nested = asArray(disk.partitions || disk.volumes || disk.logical_drives || disk.logicalDrives || disk.children);
+            if (!nested.length) {
+                rows.push(disk);
+                return;
+            }
+            nested.forEach(function (partition) {
+                partition = asObject(partition);
+                if (!Object.keys(partition).length) return;
+                rows.push(Object.assign({}, disk, partition, {
+                    name: diskDisplayName(partition, diskDisplayName(disk)),
+                    filesystem: firstDiskValue(partition, ["filesystem", "file_system"], firstDiskValue(disk, ["filesystem", "file_system"], "-")),
+                    severity: firstDiskValue(partition, ["severity", "status"], firstDiskValue(disk, ["severity", "status"], ""))
+                }));
+            });
+        });
+        return rows;
+    }
+
+    function renderDiskUsageRow(disk, compact) {
+        const usedPercent = diskUsedPercent(disk);
+        const severity = diskSeverity(disk, usedPercent);
+        const name = diskDisplayName(disk);
+        const freeGb = diskGbValue(disk, ["freeGb", "free_gb"], ["freeBytes", "free_bytes"]);
+        const totalGb = diskGbValue(disk, ["totalGb", "total_gb"], ["totalBytes", "total_bytes"]);
+        const filesystem = firstDiskValue(disk, ["filesystem", "file_system"], "-");
+        const bitlockerStatus = firstDiskValue(disk, ["bitlockerStatus", "bitlocker_status"], "-");
+        const healthStatus = firstDiskValue(disk, ["healthStatus", "health_status"], "-");
         if (compact) {
-            return '<div class="endpoint-mini-disk-list">' + disks.map(function (disk) {
-                return '<div><strong class="mono">' + escapeHtml(disk.name) + '</strong><span>' + escapeHtml(disk.usedPercent) + '%</span><em><i class="disk-' + escapeHtml(disk.severity) + '" style="width:' + escapeHtml(disk.usedPercent) + '%"></i></em><small>' + escapeHtml(disk.freeGb) + ' GB livres de ' + escapeHtml(disk.totalGb) + ' GB · ' + escapeHtml(disk.filesystem || "-") + "</small></div>";
+            const diskTitle = freeGb + " GB livres de " + totalGb + " GB - " + filesystem;
+            return '<div><strong class="mono" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</strong><span>' + escapeHtml(usedPercent) + '%</span><em><i class="disk-' + escapeHtml(severity) + '" style="width:' + escapeHtml(usedPercent) + '%"></i></em><small title="' + escapeHtml(diskTitle) + '">' + escapeHtml(freeGb) + ' GB livres de ' + escapeHtml(totalGb) + ' GB - ' + escapeHtml(filesystem) + "</small></div>";
+        }
+        return '<article class="disk-row"><div class="disk-row-header"><strong class="mono">' + escapeHtml(name) + '</strong><span class="disk-pill disk-pill-' + escapeHtml(severity) + '">' + escapeHtml(usedPercent) + '% usado</span></div>' +
+            '<div class="disk-meta"><span>Total: ' + escapeHtml(totalGb) + ' GB</span><span>Livre: ' + escapeHtml(freeGb) + ' GB</span><span>FS: ' + escapeHtml(filesystem) + '</span><span>BitLocker: ' + escapeHtml(bitlockerStatus) + '</span><span>Saude: ' + escapeHtml(healthStatus) + '</span></div>' +
+            '<div class="disk-bar"><span class="disk-fill disk-' + escapeHtml(severity) + '" style="width:' + escapeHtml(usedPercent) + '%"></span></div>' +
+            '<footer>' + actionButton("check_disk", "Verificar disco", "hard-drive") + actionButton("run_cleanup", "Executar limpeza", "sparkles") + actionButton("create_ticket", "Criar chamado", "ticket") + "</footer></article>";
+    }
+
+    function renderDiskList(disks, compact) {
+        const rows = diskDisplayRows(disks);
+        if (!rows.length) return emptyState("Nenhum disco coletado", "O proximo inventario deve preencher esta secao.", "hard-drive");
+        if (compact) {
+            return '<div class="endpoint-mini-disk-list">' + rows.map(function (disk) {
+                return renderDiskUsageRow(disk, true);
             }).join("") + "</div>";
         }
-        return '<div class="endpoint-disk-table">' + disks.map(function (disk) {
-            return '<article class="disk-row"><div class="disk-row-header"><strong class="mono">' + escapeHtml(disk.name) + '</strong><span class="disk-pill disk-pill-' + escapeHtml(disk.severity) + '">' + escapeHtml(disk.usedPercent) + '% usado</span></div>' +
-                '<div class="disk-meta"><span>Total: ' + escapeHtml(disk.totalGb) + ' GB</span><span>Livre: ' + escapeHtml(disk.freeGb) + ' GB</span><span>FS: ' + escapeHtml(disk.filesystem || "-") + '</span><span>BitLocker: ' + escapeHtml(disk.bitlockerStatus || "-") + '</span><span>Saude: ' + escapeHtml(disk.healthStatus || "-") + '</span></div>' +
-                '<div class="disk-bar"><span class="disk-fill disk-' + escapeHtml(disk.severity) + '" style="width:' + escapeHtml(disk.usedPercent) + '%"></span></div>' +
-                '<footer>' + actionButton("check_disk", "Verificar disco", "hard-drive") + actionButton("run_cleanup", "Executar limpeza", "sparkles") + actionButton("create_ticket", "Criar chamado", "ticket") + "</footer></article>";
+        return '<div class="endpoint-disk-table">' + rows.map(function (disk) {
+            return renderDiskUsageRow(disk, false);
         }).join("") + "</div>";
     }
 
