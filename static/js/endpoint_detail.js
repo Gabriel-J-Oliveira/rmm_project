@@ -529,8 +529,10 @@
             const result = jobResultLabel(job);
             const primaryTime = job.finishedAt || job.startedAt || job.dispatchedAt || job.createdAt;
             return '<article class="endpoint-job-item endpoint-job-item-' + escapeHtml(job.status || "pending") + '">' +
-                '<div class="endpoint-job-left">' +
-                    '<div class="endpoint-job-titleline">' + jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small></div>' +
+                '<div class="endpoint-job-identity">' +
+                    jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' +
+                '</div>' +
+                '<div class="endpoint-job-output">' +
                     '<div class="endpoint-job-progressline"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' +
                     '<div class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</div>' +
                 '</div>' +
