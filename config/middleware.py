@@ -2,7 +2,7 @@ from django.conf import settings
 from django.contrib.auth.views import redirect_to_login
 from django.shortcuts import redirect
 
-from .authz import is_nightowl_technical_user
+from .authz import is_access_inventory_user, is_nightowl_technical_user
 
 
 class LoginRequiredMiddleware:
@@ -33,6 +33,14 @@ class LoginRequiredMiddleware:
         '/portal/chamados',
         '/accounts/logout/',
     }
+    ACCESS_INVENTORY_EXACT_PATHS = {
+        '/access-inventory',
+        '/api/access-inventory',
+    }
+    ACCESS_INVENTORY_PREFIXES = (
+        '/access-inventory/',
+        '/api/access-inventory/',
+    )
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -43,6 +51,8 @@ class LoginRequiredMiddleware:
         if self._is_public(path):
             return self.get_response(request)
         if user and user.is_authenticated:
+            if self._is_access_inventory_allowed(path, user, request):
+                return self.get_response(request)
             if self._is_requester_allowed(path) or is_nightowl_technical_user(user):
                 return self.get_response(request)
             return redirect('requester-ticket-list')
@@ -57,3 +67,9 @@ class LoginRequiredMiddleware:
         if path in self.REQUESTER_EXACT_PATHS:
             return True
         return any(path.startswith(prefix) for prefix in self.REQUESTER_PREFIXES)
+
+    def _is_access_inventory_allowed(self, path, user, request):
+        in_access_inventory = path in self.ACCESS_INVENTORY_EXACT_PATHS or any(
+            path.startswith(prefix) for prefix in self.ACCESS_INVENTORY_PREFIXES
+        )
+        return in_access_inventory and is_access_inventory_user(user, request)

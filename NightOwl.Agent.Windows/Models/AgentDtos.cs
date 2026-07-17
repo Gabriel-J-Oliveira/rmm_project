@@ -124,17 +124,56 @@ public sealed class AgentJobRequest
     [JsonPropertyName("id")]
     public string Id { get; set; } = "";
 
+    [JsonPropertyName("job_id")]
+    public string JobId
+    {
+        get => Id;
+        set => Id = value;
+    }
+
     [JsonPropertyName("type")]
     public string Type { get; set; } = "";
+
+    [JsonPropertyName("job_type")]
+    public string JobType
+    {
+        get => Type;
+        set => Type = value;
+    }
 
     [JsonPropertyName("payload")]
     public Dictionary<string, object?> Payload { get; set; } = new();
 
+    [JsonPropertyName("parameters")]
+    public Dictionary<string, object?> Parameters
+    {
+        get => Payload;
+        set => Payload = value ?? new();
+    }
+
     [JsonPropertyName("created_at")]
     public DateTimeOffset? CreatedAt { get; set; }
 
+    [JsonPropertyName("not_before")]
+    public DateTimeOffset? NotBefore { get; set; }
+
+    [JsonPropertyName("expires_at")]
+    public DateTimeOffset? ExpiresAt { get; set; }
+
     [JsonPropertyName("timeout_seconds")]
     public int TimeoutSeconds { get; set; } = 300;
+
+    [JsonPropertyName("attempt")]
+    public int Attempt { get; set; } = 1;
+
+    [JsonPropertyName("max_attempts")]
+    public int MaxAttempts { get; set; } = 1;
+
+    [JsonPropertyName("priority")]
+    public int Priority { get; set; }
+
+    [JsonPropertyName("correlation_id")]
+    public string CorrelationId { get; set; } = "";
 }
 
 public sealed class JobExecutionResult

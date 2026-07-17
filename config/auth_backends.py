@@ -23,6 +23,9 @@ class ActiveDirectoryBackend(BaseBackend):
             return None
         if not user_info:
             return None
+        if request is not None:
+            request.session['ad_distinguished_name'] = user_info.distinguished_name
+            request.session['ad_groups'] = user_info.groups
 
         UserModel = get_user_model()
         normalized_username = user_info.username.strip()

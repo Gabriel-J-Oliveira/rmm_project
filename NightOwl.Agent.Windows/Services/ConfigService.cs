@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 using Microsoft.Win32;
 using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Models;
@@ -33,6 +34,7 @@ public sealed class ConfigService
         }
 
         Normalize(config);
+        config.AgentVersion = GetRunningAgentVersion(config.AgentVersion);
         MachineIdentity identity = ResolveMachineIdentity(config, configPath);
         config.MachineId = identity.MachineId;
         config.MachineIdSource = identity.Source;
@@ -47,6 +49,22 @@ public sealed class ConfigService
         EnsureStateMachineId(config, identity.MachineId);
         Current = config;
         return config;
+    }
+
+    private static string GetRunningAgentVersion(string fallback)
+    {
+        try
+        {
+            string? informational = typeof(ConfigService).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+            string version = (informational ?? typeof(ConfigService).Assembly.GetName().Version?.ToString() ?? "").Split('+')[0];
+            return string.IsNullOrWhiteSpace(version) ? fallback : version;
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 
     private static string ResolveConfigPath()

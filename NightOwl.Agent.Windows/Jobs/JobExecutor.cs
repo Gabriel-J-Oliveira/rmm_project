@@ -12,52 +12,74 @@ public sealed class JobExecutor
 {
     private readonly WindowsInventoryCollector _collector;
     private readonly JsonlLogger _logger;
+    private readonly JobExecutionPolicy _policy;
 
-    public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger)
+    public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger, JobExecutionPolicy policy)
     {
         _collector = collector;
         _logger = logger;
+        _policy = policy;
     }
 
     public async Task<JobExecutionResult> ExecuteAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
     {
         DateTimeOffset started = DateTimeOffset.UtcNow;
         Stopwatch stopwatch = Stopwatch.StartNew();
-        await _logger.LogAsync("job.started", "Job started.", new { job.Id, job.Type }, ct);
+        JobDecision decision;
+        try
+        {
+            decision = _policy.Prepare(config, job);
+        }
+        catch (Exception ex)
+        {
+            await _logger.LogAsync("job.state.invalid", ex.Message, new { job.Id, job.Type, error_code = JobErrorCodes.JobStateInvalid }, ct, "error");
+            return BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobStateInvalid, ex.Message, ex.ToString());
+        }
+
+        if (!decision.ShouldExecute)
+        {
+            JobExecutionResult final = decision.FinalResult!;
+            _policy.MarkFinal(config, job, final, ExtractErrorCode(final));
+            await _logger.LogAsync("job.rejected", "Job rejected before execution.", BuildJobLog(job, final.Status, ExtractErrorCode(final), final.DurationSeconds, decision.TimeoutSeconds), ct, "warning");
+            return final;
+        }
+
+        _policy.MarkRunning(job);
+        await _logger.LogAsync("job.started", "Job started.", BuildJobLog(job, "running", "", 0, decision.TimeoutSeconds), ct);
+
+        using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(decision.TimeoutSeconds));
+        CancellationToken jobToken = timeoutCts.Token;
 
         try
         {
-            if (!config.AllowedJobTypes.Contains(job.Type))
-            {
-                throw new NotSupportedException(job.Type == "update_agent"
-                    ? "unsupported_job_type: este agente/config ainda nao permite update_agent; reinstale ou atualize o bootstrap do agente."
-                    : "unsupported_job_type");
-            }
-
             if (job.Type == "update_agent")
             {
-                return await StartUpdateAgentAsync(config, job, started, stopwatch, ct);
+                JobExecutionResult updateResult = await StartUpdateAgentAsync(config, job, started, stopwatch, jobToken);
+                _policy.MarkFinal(config, job, updateResult);
+                return updateResult;
             }
             if (job.Type == "restart_agent")
             {
-                return await StartRestartAgentAsync(config, job, started, stopwatch, ct);
+                JobExecutionResult restartResult = await StartRestartAgentAsync(config, job, started, stopwatch, jobToken);
+                _policy.MarkFinal(config, job, restartResult);
+                return restartResult;
             }
 
             object result = job.Type switch
             {
                 "force_inventory" => _collector.BuildCollectPayload(config),
-                "collect_disks" => new { disks = await RunCollectionAsync("disks", _collector.GetDisks, ct), collected_at = DateTimeOffset.UtcNow },
-                "collect_software" => new { installed_software = await RunCollectionAsync("software", _collector.GetSoftware, ct), collected_at = DateTimeOffset.UtcNow },
-                "collect_security" => await RunCollectionAsync("security", _collector.GetSecurity, ct),
-                "windows_update_scan" => await RunCollectionAsync("patches", _collector.GetPatchStatus, ct),
-                "collect_logs" => CollectLogs(config),
-                "ping" => await RunPingAsync(config, job, ct),
+                "collect_disks" => new { disks = await RunCollectionAsync("disks", _collector.GetDisks, jobToken), collected_at = DateTimeOffset.UtcNow },
+                "collect_software" => new { installed_software = await RunCollectionAsync("software", _collector.GetSoftware, jobToken), collected_at = DateTimeOffset.UtcNow },
+                "collect_security" => await RunCollectionAsync("security", _collector.GetSecurity, jobToken),
+                "windows_update_scan" => await RunCollectionAsync("patches", _collector.GetPatchStatus, jobToken),
+                "collect_logs" => CollectLogs(config, job),
+                "ping" => await RunPingAsync(config, job, jobToken),
                 _ => throw new NotSupportedException("unsupported_job_type")
             };
 
             stopwatch.Stop();
-            await _logger.LogAsync("job.completed", "Job completed.", new { job.Id, job.Type, duration = stopwatch.Elapsed.TotalSeconds }, ct);
-            return new JobExecutionResult
+            JobExecutionResult completed = new()
             {
                 JobId = job.Id,
                 Status = "completed",
@@ -68,44 +90,73 @@ public sealed class JobExecutor
                 Stdout = "ok",
                 Result = result
             };
+            completed = LimitResult(config, job, completed);
+            _policy.MarkFinal(config, job, completed);
+            await _logger.LogAsync("job.completed", "Job completed.", BuildJobLog(job, completed.Status, "", completed.DurationSeconds, decision.TimeoutSeconds), ct);
+            return completed;
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+            JobExecutionResult timedOut = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.TimedOut, JobErrorCodes.JobTimeout, "Job timed out.", ex.ToString());
+            _policy.MarkFinal(config, job, timedOut, JobErrorCodes.JobTimeout);
+            await _logger.LogAsync("job.timed_out", "Job timed out.", BuildJobLog(job, timedOut.Status, JobErrorCodes.JobTimeout, timedOut.DurationSeconds, decision.TimeoutSeconds), CancellationToken.None, "error");
+            return timedOut;
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            await _logger.LogAsync("job.failed", ex.Message, new { job.Id, job.Type, exception = ex.ToString() }, ct, "error");
-            return new JobExecutionResult
-            {
-                JobId = job.Id,
-                Status = "failed",
-                StartedAt = started,
-                FinishedAt = DateTimeOffset.UtcNow,
-                DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
-                ExitCode = 1,
-                Stderr = Trim(ex.ToString(), 8000),
-                ErrorMessage = ex.Message
-            };
+            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobExecutionFailed, ex.Message, ex.ToString());
+            _policy.MarkFinal(config, job, failed, JobErrorCodes.JobExecutionFailed);
+            await _logger.LogAsync("job.failed", ex.Message, BuildJobLog(job, failed.Status, JobErrorCodes.JobExecutionFailed, failed.DurationSeconds, decision.TimeoutSeconds), ct, "error");
+            return failed;
         }
     }
 
-    private static object CollectLogs(AgentConfig config)
+    private static object CollectLogs(AgentConfig config, AgentJobRequest job)
     {
-        if (!File.Exists(config.LogPath))
+        string source = GetPayloadString(job, "source", "agent");
+        string logPath = source.ToLowerInvariant() switch
         {
-            return new { lines = Array.Empty<string>(), log_path = config.LogPath };
+            "updater" => NightOwlPaths.Current.UpdaterLogPath,
+            "tray" => NightOwlPaths.Current.TrayLogPath,
+            _ => config.LogPath
+        };
+        int maxLines = GetPayloadInt(job, "max_lines", 200);
+        int maxBytes = GetPayloadInt(job, "max_bytes", 64 * 1024);
+        maxLines = Math.Clamp(maxLines, 1, 1000);
+        maxBytes = Math.Clamp(maxBytes, 1024, JobExecutionPolicy.MaxOutputBytes);
+
+        if (!File.Exists(logPath))
+        {
+            return new { source, lines = Array.Empty<string>(), log_path = Path.GetFileName(logPath), output_truncated = false };
         }
 
-        string[] lines = File.ReadLines(config.LogPath).TakeLast(200).ToArray();
-        return new { lines, log_path = config.LogPath };
+        string[] lines = File.ReadLines(logPath).TakeLast(maxLines).Select(Sanitize).ToArray();
+        bool truncated = false;
+        while (System.Text.Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(lines)) > maxBytes && lines.Length > 0)
+        {
+            truncated = true;
+            lines = lines.Skip(Math.Max(1, lines.Length / 10)).ToArray();
+        }
+        return new { source, lines, log_path = Path.GetFileName(logPath), output_truncated = truncated };
     }
 
     private async Task<T> RunCollectionAsync<T>(string section, Func<T> collect, CancellationToken ct)
     {
         await _logger.LogAsync($"collection.{section}.started", $"{section} collection started by job.", null, ct);
+        Task<T>? task = null;
         try
         {
-            T result = collect();
+            task = Task.Run(collect, ct);
+            T result = await task.WaitAsync(ct);
             await _logger.LogAsync($"collection.{section}.completed", $"{section} collection completed by job.", null, ct);
             return result;
+        }
+        catch (OperationCanceledException) when (task is not null && !task.IsCompleted)
+        {
+            await _logger.LogAsync($"collection.{section}.cancel_pending", $"{section} collection did not respond immediately to cancellation.", null, CancellationToken.None, "warning");
+            throw;
         }
         catch (Exception ex)
         {
@@ -257,6 +308,19 @@ public sealed class JobExecutor
             : fallback;
     }
 
+    private static int GetPayloadInt(AgentJobRequest job, string key, int fallback)
+    {
+        if (!job.Payload.TryGetValue(key, out object? value) || value is null)
+        {
+            return fallback;
+        }
+        if (value is JsonElement element && element.TryGetInt32(out int parsedElement))
+        {
+            return parsedElement;
+        }
+        return int.TryParse(value.ToString(), out int parsed) ? parsed : fallback;
+    }
+
     private static void WritePendingJobResult(AgentConfig config, JobExecutionResult result)
     {
         string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
@@ -266,6 +330,128 @@ public sealed class JobExecutor
         string jobId = string.IsNullOrWhiteSpace(result.JobId) ? Guid.NewGuid().ToString("N") : result.JobId;
         string path = Path.Combine(pendingDir, $"job-result-{jobId}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+    }
+
+    private static JobExecutionResult BuildFailure(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, string status, string errorCode, string message, string stderr)
+    {
+        DateTimeOffset finished = DateTimeOffset.UtcNow;
+        return new JobExecutionResult
+        {
+            JobId = job.Id,
+            Status = status,
+            StartedAt = started,
+            FinishedAt = finished,
+            DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
+            ExitCode = 1,
+            Stderr = Trim(Sanitize(stderr), 8000),
+            ErrorMessage = Sanitize(message),
+            Result = new
+            {
+                type = job.Type,
+                error_code = errorCode,
+                error_message = Sanitize(message),
+                agent_version = config.AgentVersion,
+                machine_id = config.MachineId
+            }
+        };
+    }
+
+    private static JobExecutionResult LimitResult(AgentConfig config, AgentJobRequest job, JobExecutionResult result)
+    {
+        string json = JsonSerializer.Serialize(result.Result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        bool truncated = false;
+        object? output = result.Result;
+        if (System.Text.Encoding.UTF8.GetByteCount(json) > JobExecutionPolicy.MaxOutputBytes)
+        {
+            truncated = true;
+            output = new
+            {
+                type = job.Type,
+                output_truncated = true,
+                error_code = JobErrorCodes.JobResultTooLarge,
+                message = "Job result exceeded maximum size and was truncated.",
+                preview = Trim(Sanitize(json), 12000)
+            };
+        }
+
+        result.Stdout = Trim(Sanitize(result.Stdout), 8000);
+        result.Stderr = Trim(Sanitize(result.Stderr), 8000);
+        result.Result = new
+        {
+            output,
+            output_truncated = truncated,
+            agent_version = config.AgentVersion,
+            machine_id = config.MachineId
+        };
+        return result;
+    }
+
+    private static object BuildJobLog(AgentJobRequest job, string status, string errorCode, double durationSeconds, int timeoutSeconds)
+    {
+        return new
+        {
+            job_id = job.Id,
+            job_type = job.Type,
+            correlation_id = job.CorrelationId,
+            attempt = Math.Max(job.Attempt, 1),
+            status,
+            error_code = errorCode,
+            duration_ms = (long)Math.Round(Math.Max(0, durationSeconds) * 1000),
+            timeout_seconds = timeoutSeconds
+        };
+    }
+
+    private static string ExtractErrorCode(JobExecutionResult result)
+    {
+        try
+        {
+            string json = JsonSerializer.Serialize(result.Result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            using JsonDocument document = JsonDocument.Parse(json);
+            if (TryFindProperty(document.RootElement, "error_code", out string value))
+            {
+                return value;
+            }
+        }
+        catch
+        {
+            // Best effort.
+        }
+        return "";
+    }
+
+    private static bool TryFindProperty(JsonElement element, string name, out string value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                if (property.NameEquals(name) && property.Value.ValueKind == JsonValueKind.String)
+                {
+                    value = property.Value.GetString() ?? "";
+                    return true;
+                }
+                if (TryFindProperty(property.Value, name, out value))
+                {
+                    return true;
+                }
+            }
+        }
+        value = "";
+        return false;
+    }
+
+    private static string Sanitize(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "";
+        }
+        string sanitized = value;
+        foreach (string marker in new[] { "agentToken", "agent_token", "EnrollmentToken", "Bearer " })
+        {
+            sanitized = sanitized.Replace(marker, "[redacted]", StringComparison.OrdinalIgnoreCase);
+        }
+        return sanitized;
     }
 
     private static string QuotePowerShell(string value)

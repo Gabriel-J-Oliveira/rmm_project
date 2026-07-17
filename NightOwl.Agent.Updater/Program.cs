@@ -24,6 +24,8 @@ internal static class Program
     private static readonly string BackupsRoot = Paths.UpdatesBackupDir;
     private static readonly string PendingJobsRoot = Paths.PendingResultsDir;
     private static readonly string PendingUpdateResultPath = Path.Combine(PendingJobsRoot, "pending-update-result.json");
+    private static readonly UpdateStateStore UpdateStateStore = new(Paths.UpdateStatePath);
+    private const int DefaultHealthCheckTimeoutSeconds = 180;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -98,7 +100,10 @@ internal static class Program
 
     private static async Task<int> RunUpdateAsync(string[] args, bool interactive)
     {
-        WriteLog("update.start", "Update requested.", new { runner = HasFlag(args, "--runner"), source = GetOption(args, "--source") ?? "" });
+        JobContext jobContext = JobContext.FromArgs(args);
+        string updateId = GetOption(args, "--update-id") ?? Guid.NewGuid().ToString();
+        string source = GetOption(args, "--source") ?? "";
+        WriteLog("update.start", "Update requested.", new { update_id = updateId, job_id = jobContext.JobId, runner = HasFlag(args, "--runner"), source });
 
         string? stagedPath = GetOption(args, "--apply-staged");
         if (!string.IsNullOrWhiteSpace(stagedPath))
@@ -110,20 +115,60 @@ internal static class Program
 
         if (!HasFlag(args, "--runner"))
         {
-            return LaunchIndependentRunner(args, interactive);
+            if (HasActiveUpdate(out UpdateState? active, out string invalidError) && active is not null)
+            {
+                WriteLog("update.already_running", "Active update state already exists.", new { active.UpdateId, active.JobId, active.CurrentStage, active.Status });
+                WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateAlreadyRunning, update_id = active.UpdateId, message = "Update already running." });
+                return 31;
+            }
+            if (!string.IsNullOrWhiteSpace(invalidError))
+            {
+                WriteLog("update.state.invalid", "Invalid update state detected before starting update.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error = invalidError });
+                WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateStateInvalid, message = invalidError });
+                return 32;
+            }
+
+            AgentConfig bootstrapConfig = LoadConfig();
+            AgentVersionInfo bootstrapInstalled = LoadInstalledVersion(bootstrapConfig);
+            string requestedTarget = GetOption(args, "--target-version") ?? "latest";
+            UpdateState bootstrapState = UpdateState.Create(updateId, jobContext.JobId, bootstrapInstalled.Version, requestedTarget);
+            UpdateStateStore.Save(bootstrapState);
+            WriteLog("update.state.created", "Update state created before runner launch.", new { update_id = bootstrapState.UpdateId, job_id = bootstrapState.JobId, stage = bootstrapState.CurrentStage, from_version = bootstrapState.FromVersion, target_version = bootstrapState.TargetVersion });
+            return LaunchIndependentRunner(args, interactive, updateId);
+        }
+
+        using UpdateStateLock updateLock = UpdateStateLock.TryAcquire();
+        if (!updateLock.Acquired)
+        {
+            UpdateState? active = UpdateStateStore.TryLoad(out UpdateState? loadedState, out _) ? loadedState : null;
+            WriteLog("update.lock.busy", "Another updater is already running.", new { error_code = UpdateErrorCodes.UpdateAlreadyRunning, active_update_id = active?.UpdateId ?? "" });
+            WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateAlreadyRunning, update_id = active?.UpdateId ?? "", message = "Update already running." });
+            return 31;
+        }
+
+        UpdateState state = LoadOrCreateRunnerState(updateId, jobContext);
+        if (!state.CurrentStage.Equals(UpdateStages.Received, StringComparison.OrdinalIgnoreCase)
+            && !state.CurrentStage.Equals(UpdateStages.CheckingVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            WriteLog("update.interrupted_detected", "Incomplete update state detected at runner start.", new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage, status = state.Status });
         }
 
         AgentConfig config = LoadConfig();
+        MarkStage(state, UpdateStages.CheckingVersion);
         UpdateManifest manifest = await DownloadManifestAsync(config);
         AgentVersionInfo installed = LoadInstalledVersion(config);
-        JobContext jobContext = JobContext.FromArgs(args);
+        state.FromVersion = installed.Version;
+        state.TargetVersion = manifest.Version;
+        UpdateStateStore.Save(state);
         if (CompareVersions(manifest.Version, installed.Version) <= 0 && !manifest.Force)
         {
             WriteLog("updater.update.skipped", "Nenhuma atualizacao disponivel.", new { installed = installed.Version, available = manifest.Version });
+            state.HealthCheckConfirmed = true;
+            MarkStage(state, UpdateStages.Completed, UpdateStatuses.Completed);
             var skipped = new { ok = true, updated = false, reason = "already_current", installedVersion = installed.Version, availableVersion = manifest.Version };
             if (jobContext.IsJob)
             {
-                WritePendingUpdateResult(jobContext, "completed", 10, installed.Version, installed.Version, "Agent already up to date.", skipped, "");
+                WritePendingUpdateResult(jobContext, state, "completed", 10, installed.Version, installed.Version, "Agent already up to date.", skipped, "");
             }
             WriteJson(skipped);
             if (interactive)
@@ -136,7 +181,7 @@ internal static class Program
         if (!IsAdministrator())
         {
             WriteLog("updater.update.elevation_required", "Atualizacao requer elevacao administrativa.");
-            RelaunchElevated(BuildRunnerArguments(args));
+            RelaunchElevated(BuildRunnerArguments(args, updateId));
             WriteJson(new { ok = true, elevated = true, message = "Updater relancado como administrador." });
             return 0;
         }
@@ -144,21 +189,54 @@ internal static class Program
         ChecksumsManifest checksums = await DownloadChecksumsAsync(config, manifest);
         string packageUrl = ResolvePackageUrl(config, manifest);
         EnsurePackageUrlAllowed(config, packageUrl);
+        state.PackageUrl = packageUrl;
 
         string downloadPath = Path.Combine(DownloadsRoot, "NightOwl.Agent.Windows.zip");
-        WriteLog("package.download", "Downloading update package.", new { url = SanitizeUrl(packageUrl), downloadPath });
-        await DownloadFileAsync(packageUrl, downloadPath);
+        MarkStage(state, UpdateStages.Downloading);
+        WriteLog("package.download", "Downloading update package.", new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage, url = SanitizeUrl(packageUrl), downloadPath });
+        try
+        {
+            await DownloadFileAsync(packageUrl, downloadPath);
+        }
+        catch (Exception ex)
+        {
+            MarkFailed(state, UpdateErrorCodes.UpdateDownloadFailed, ex.Message);
+            throw;
+        }
+        MarkStage(state, UpdateStages.Downloaded);
         FileChecksum packageChecksum = checksums.GetRequired("NightOwl.Agent.Windows.zip");
-        ValidateFile(downloadPath, packageChecksum);
+        state.ExpectedSha256 = packageChecksum.Sha256;
+        MarkStage(state, UpdateStages.Validating);
+        try
+        {
+            ValidateFile(downloadPath, packageChecksum);
+        }
+        catch (Exception ex)
+        {
+            MarkFailed(state, UpdateErrorCodes.UpdateHashMismatch, ex.Message);
+            throw;
+        }
+        MarkStage(state, UpdateStages.Validated);
         WriteLog("checksum.ok", "Package checksum validated.", new { packageChecksum.Sha256, packageChecksum.Size });
 
         string stagingPath = Path.Combine(StagingRoot, SanitizePathSegment(manifest.Version));
+        state.StagingPath = stagingPath;
+        MarkStage(state, UpdateStages.Staging);
         if (Directory.Exists(stagingPath))
         {
             Directory.Delete(stagingPath, recursive: true);
         }
         Directory.CreateDirectory(stagingPath);
-        ExtractZipSafe(downloadPath, stagingPath);
+        try
+        {
+            ExtractZipSafe(downloadPath, stagingPath);
+        }
+        catch (Exception ex)
+        {
+            MarkFailed(state, UpdateErrorCodes.UpdatePackageInvalid, ex.Message);
+            throw;
+        }
+        MarkStage(state, UpdateStages.Staged);
         WriteLog("staging.ready", "Staging directory ready.", new { stagingPath, version = manifest.Version });
 
         string manifestPath = Path.Combine(stagingPath, "version.json");
@@ -174,10 +252,10 @@ internal static class Program
         return ApplyStagedUpdate(stagingPath, manifestPath, packageChecksum.Sha256, interactive);
     }
 
-    private static int LaunchIndependentRunner(string[] args, bool interactive)
+    private static int LaunchIndependentRunner(string[] args, bool interactive, string updateId)
     {
         string runnerExe = CopyRunnerFiles();
-        string arguments = BuildRunnerArguments(args);
+        string arguments = BuildRunnerArguments(args, updateId);
         WriteLog("runner.start", "Starting independent updater runner.", new { runnerExe, arguments = SanitizeCommandLine(arguments) });
 
         ProcessStartInfo psi = new()
@@ -234,7 +312,7 @@ internal static class Program
         return runnerExe;
     }
 
-    private static string BuildRunnerArguments(string[] args)
+    private static string BuildRunnerArguments(string[] args, string updateId)
     {
         List<string> filtered = new();
         bool commandAdded = false;
@@ -257,7 +335,127 @@ internal static class Program
             filtered.Insert(0, "update");
         }
         filtered.Add("--runner");
+        if (!filtered.Any(arg => arg.Equals("--update-id", StringComparison.OrdinalIgnoreCase)))
+        {
+            filtered.Add("--update-id");
+            filtered.Add(updateId);
+        }
         return string.Join(" ", filtered.Select(QuoteArg));
+    }
+
+    private static bool HasActiveUpdate(out UpdateState? active, out string invalidError)
+    {
+        active = null;
+        invalidError = "";
+        if (!UpdateStateStore.TryLoad(out UpdateState? state, out string error))
+        {
+            invalidError = error;
+            return false;
+        }
+
+        if (state is not null && state.IsActive)
+        {
+            active = state;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static UpdateState LoadOrCreateRunnerState(string updateId, JobContext jobContext)
+    {
+        if (!UpdateStateStore.TryLoad(out UpdateState? loaded, out string error))
+        {
+            WriteLog("update.state.invalid", "Invalid update state detected.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error });
+            UpdateState invalid = UpdateState.Create(updateId, jobContext.JobId, "", "");
+            invalid.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, error);
+            UpdateStateStore.Save(invalid);
+            throw new InvalidOperationException(error);
+        }
+
+        if (loaded is null)
+        {
+            UpdateState created = UpdateState.Create(updateId, jobContext.JobId, "", "");
+            UpdateStateStore.Save(created);
+            return created;
+        }
+
+        if (loaded.IsActive && !string.IsNullOrWhiteSpace(updateId) && !loaded.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase))
+        {
+            WriteLog("update.already_running", "Different active update detected.", new { error_code = UpdateErrorCodes.UpdateAlreadyRunning, active_update_id = loaded.UpdateId, requested_update_id = updateId });
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateAlreadyRunning}: {loaded.UpdateId}");
+        }
+
+        if (loaded.IsActive)
+        {
+            return loaded;
+        }
+
+        int nextAttempt = loaded.Attempt + 1;
+        UpdateState replacement = UpdateState.Create(string.IsNullOrWhiteSpace(updateId) ? Guid.NewGuid().ToString() : updateId, jobContext.JobId, loaded.FromVersion, loaded.TargetVersion);
+        replacement.Attempt = nextAttempt;
+        UpdateStateStore.Save(replacement);
+        return replacement;
+    }
+
+    private static void MarkStage(UpdateState state, string stage, string status = UpdateStatuses.Running)
+    {
+        DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
+        state.MarkStage(stage, status);
+        UpdateStateStore.Save(state);
+        WriteLog("update.stage", "Update stage persisted.", new
+        {
+            update_id = state.UpdateId,
+            job_id = state.JobId,
+            stage,
+            status = state.Status,
+            from_version = state.FromVersion,
+            target_version = state.TargetVersion,
+            duration_seconds = Math.Round((state.UpdatedAt - previous).TotalSeconds, 3)
+        });
+    }
+
+    private static void MarkFailed(UpdateState state, string errorCode, string errorMessage, bool rollbackRequired = false)
+    {
+        DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
+        state.MarkFailed(errorCode, SanitizeMessage(errorMessage), rollbackRequired);
+        UpdateStateStore.Save(state);
+        WriteLog("update.stage", "Update failed state persisted.", new
+        {
+            update_id = state.UpdateId,
+            job_id = state.JobId,
+            stage = state.CurrentStage,
+            status = state.Status,
+            from_version = state.FromVersion,
+            target_version = state.TargetVersion,
+            error_code = state.ErrorCode,
+            duration_seconds = Math.Round((state.UpdatedAt - previous).TotalSeconds, 3)
+        });
+    }
+
+    private static void MarkRollbackRequired(UpdateState state, string failureStage, string errorCode, string errorMessage)
+    {
+        DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
+        state.MarkRollbackRequired(failureStage, errorCode, SanitizeMessage(errorMessage));
+        UpdateStateStore.Save(state);
+        WriteLog("rollback.required", "Rollback required.", new
+        {
+            update_id = state.UpdateId,
+            job_id = state.JobId,
+            stage = state.CurrentStage,
+            failure_stage = failureStage,
+            from_version = state.FromVersion,
+            target_version = state.TargetVersion,
+            error_code = state.ErrorCode,
+            duration_seconds = Math.Round((state.UpdatedAt - previous).TotalSeconds, 3)
+        });
+    }
+
+    private static UpdateState ReloadUpdateState(UpdateState fallback)
+    {
+        return UpdateStateStore.TryLoad(out UpdateState? current, out _) && current is not null
+            ? current
+            : fallback;
     }
 
     private static int ApplyStagedUpdate(string stagedPath, string manifestPath, string packageSha256, bool interactive)
@@ -273,54 +471,128 @@ internal static class Program
             ?? throw new InvalidOperationException("Manifesto staged invalido.");
         AgentVersionInfo installed = LoadInstalledVersion(config);
         string installPath = config.InstallPathOrDefault;
-        string backupPath = Path.Combine(BackupsRoot, $"{SanitizePathSegment(installed.Version)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+        UpdateState state = LoadOrCreateRunnerState(GetOption(Environment.GetCommandLineArgs(), "--update-id") ?? "", jobContext);
+        string backupPath = Path.Combine(BackupsRoot, state.UpdateId);
+        state.FromVersion = installed.Version;
+        state.TargetVersion = manifest.Version;
+        state.StagingPath = stagedPath;
+        state.BackupPath = backupPath;
+        state.ExpectedSha256 = packageSha256;
+        UpdateStateStore.Save(state);
 
-        WriteLog("updater.apply.started", "Aplicando atualizacao staged.", new { stagedPath, installPath, backupPath, from = installed.Version, to = manifest.Version });
+        WriteLog("updater.apply.started", "Aplicando atualizacao staged.", new { update_id = state.UpdateId, job_id = state.JobId, stagedPath, installPath, backupPath, from = installed.Version, to = manifest.Version });
 
         try
         {
-            BackupInstall(installPath, backupPath);
+            MarkStage(state, UpdateStages.CreatingBackup);
+            try
+            {
+                CreateBackup(installPath, backupPath, state.UpdateId, installed.Version);
+                ValidateBackup(backupPath, state.UpdateId, installed.Version);
+            }
+            catch (Exception ex)
+            {
+                MarkFailed(state, UpdateErrorCodes.UpdateBackupFailed, ex.Message);
+                throw;
+            }
+            MarkStage(state, UpdateStages.BackupCreated);
             WriteLog("backup.created", "Install backup created.", new { backupPath });
             StopTray();
             WriteLog("tray.stop.done", "Tray process stopped.");
             WriteLog("service.stop.start", "Stopping service for update.");
-            StopService();
+            MarkStage(state, UpdateStages.StoppingService);
+            try
+            {
+                StopService();
+            }
+            catch (Exception ex)
+            {
+                MarkFailed(state, UpdateErrorCodes.UpdateServiceStopTimeout, ex.Message);
+                throw;
+            }
+            MarkStage(state, UpdateStages.ServiceStopped);
             WriteLog("service.stop.done", "Service stopped for update.");
             WriteLog("files.copy.start", "Copying staged files to install path.", new { stagedPath, installPath });
-            CopyStagedFiles(stagedPath, installPath);
+            MarkStage(state, UpdateStages.ReplacingFiles);
+            try
+            {
+                CopyStagedFiles(stagedPath, installPath);
+            }
+            catch (Exception ex)
+            {
+                MarkRollbackRequired(state, state.CurrentStage, UpdateErrorCodes.UpdateFileReplaceFailed, ex.Message);
+                throw;
+            }
+            MarkStage(state, UpdateStages.FilesReplaced);
             WriteLog("files.copy.done", "Staged files copied to install path.", new { stagedPath, installPath });
             WriteLocalVersion(installPath, manifest, packageSha256, "updater");
-            StartService();
+            MarkStage(state, UpdateStages.StartingService);
+            try
+            {
+                StartService();
+            }
+            catch (Exception ex)
+            {
+                MarkRollbackRequired(state, state.CurrentStage, UpdateErrorCodes.UpdateServiceStartFailed, ex.Message);
+                throw;
+            }
+            MarkStage(state, UpdateStages.ServiceStarted);
             WriteLog("service.start.done", "Service started after update.");
             StartTrayIfPossible(installPath);
-            ValidatePostUpdate(installPath, manifest.Version);
+            try
+            {
+                ValidatePostUpdate(installPath, manifest.Version);
+            }
+            catch (Exception ex)
+            {
+                MarkRollbackRequired(state, state.CurrentStage, UpdateErrorCodes.UpdateHealthcheckVersionMismatch, ex.Message);
+                throw;
+            }
+            MarkStage(state, UpdateStages.WaitingHealthCheck);
 
-            WriteLog("updater.apply.completed", "Atualizacao concluida.", new { version = manifest.Version });
-            WriteLog("update.completed", "Update completed.", new { version = manifest.Version, previous_version = installed.Version });
-            if (jobContext.IsJob)
+            WriteLog("updater.apply.waiting_health_check", "Servico iniciado; aguardando confirmacao do agente.", new { update_id = state.UpdateId, job_id = state.JobId, version = manifest.Version, previous_version = installed.Version });
+            int healthTimeoutSeconds = GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds);
+            HealthCheckWaitResult health = WaitForHealthCheck(state, expectRollback: false, TimeSpan.FromSeconds(healthTimeoutSeconds));
+            if (health == HealthCheckWaitResult.Completed)
             {
-                WritePendingUpdateResult(jobContext, "completed", 0, manifest.Version, installed.Version, "Agent updated successfully.", new { updated = true, version = manifest.Version, previous_version = installed.Version }, "");
+                CleanupStaging(stagedPath);
+                WriteLog("update.completed", "Update completed after agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, version = manifest.Version, previous_version = installed.Version });
+                WriteJson(new { ok = true, updated = true, healthCheckConfirmed = true, update_id = state.UpdateId, version = manifest.Version, backupPath });
+                if (interactive)
+                {
+                    ShowMessage($"NightOwl Agent atualizado para {manifest.Version}.", MessageBoxIcon.Information);
+                }
+                return 0;
             }
-            WriteJson(new { ok = true, updated = true, version = manifest.Version, backupPath });
-            if (interactive)
-            {
-                ShowMessage($"NightOwl Agent atualizado para {manifest.Version}.", MessageBoxIcon.Information);
-            }
-            return 0;
+
+            string healthErrorCode = health == HealthCheckWaitResult.ServiceExitedEarly
+                ? UpdateErrorCodes.UpdateProcessExitedEarly
+                : health == HealthCheckWaitResult.FailedState && !string.IsNullOrWhiteSpace(ReloadUpdateState(state).ErrorCode)
+                    ? ReloadUpdateState(state).ErrorCode
+                    : UpdateErrorCodes.UpdateHealthcheckTimeout;
+            MarkRollbackRequired(state, UpdateStages.WaitingHealthCheck, healthErrorCode, $"Health check failed or timed out after {healthTimeoutSeconds}s.");
+            return ExecuteAutomaticRollback(state, installPath, interactive);
+        }
+        catch (Exception ex) when (state.RollbackRequired && state.RollbackAttempt < 1)
+        {
+            WriteLog("update.rollback.triggered", "Update failed after replacement point; starting automatic rollback.", new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage, error_code = state.ErrorCode, error = ex.Message });
+            return ExecuteAutomaticRollback(state, installPath, interactive);
         }
         catch (Exception ex)
         {
-            WriteLog("updater.apply.failed", "Falha ao aplicar atualizacao; tentando rollback.", new { error = ex.Message, backupPath });
-            WriteLog("update.failed", "Update failed; attempting rollback.", new { error = ex.Message, backupPath });
-            TryRollbackFromBackup(backupPath, installPath);
+            WriteLog("updater.apply.failed", "Falha ao aplicar atualizacao.", new { update_id = state.UpdateId, job_id = state.JobId, error = ex.Message, backupPath });
+            if (state.IsActive)
+            {
+                MarkFailed(state, string.IsNullOrWhiteSpace(state.ErrorCode) ? UpdateErrorCodes.UpdateUnexpectedError : state.ErrorCode, SanitizeMessage(ex.Message), rollbackRequired: false);
+            }
             if (jobContext.IsJob)
             {
-                WritePendingUpdateResult(jobContext, "failed", 20, installed.Version, installed.Version, SanitizeMessage(ex.Message), new { updated = false, rollback_attempted = true, backupPath }, SanitizeMessage(ex.ToString()));
+                WritePendingUpdateResult(jobContext, state, "failed", 20, installed.Version, installed.Version, SanitizeMessage(ex.Message), new { updated = false, backupPath, update_id = state.UpdateId, error_code = state.ErrorCode }, SanitizeMessage(ex.ToString()));
             }
-            WriteJson(new { ok = false, updated = false, rollbackAttempted = true, error = ex.Message, backupPath });
+            WriteJson(new { ok = false, updated = false, error = ex.Message, backupPath });
             if (interactive)
             {
-                ShowMessage("Falha ao atualizar. Rollback foi tentado. Detalhe: " + ex.Message, MessageBoxIcon.Error);
+                ShowMessage("Falha ao atualizar. Detalhe: " + ex.Message, MessageBoxIcon.Error);
             }
             return 1;
         }
@@ -519,6 +791,93 @@ internal static class Program
         WriteLog("updater.package.validated", "Checksum do pacote validado.", new { file = file.Name, file.Length, sha256 = actual });
     }
 
+    private static void CreateBackup(string installPath, string backupPath, string updateId, string previousVersion)
+    {
+        if (Directory.Exists(backupPath))
+        {
+            Directory.Delete(backupPath, recursive: true);
+        }
+        Directory.CreateDirectory(backupPath);
+
+        List<BackupFileEntry> files = new();
+        foreach (string sourceFile in EnumerateManagedFiles(installPath))
+        {
+            string relativePath = Path.GetRelativePath(installPath, sourceFile);
+            string destination = Path.Combine(backupPath, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(sourceFile, destination, overwrite: true);
+            FileInfo info = new(destination);
+            files.Add(new BackupFileEntry
+            {
+                Path = NormalizeRelativePath(relativePath),
+                Sha256 = Sha256(destination),
+                Size = info.Length
+            });
+        }
+
+        BackupManifest manifest = new()
+        {
+            Product = ProductName,
+            UpdateId = updateId,
+            PreviousVersion = previousVersion,
+            CreatedAt = DateTimeOffset.UtcNow,
+            Files = files.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToList()
+        };
+        File.WriteAllText(Path.Combine(backupPath, BackupManifestFileName), JsonSerializer.Serialize(manifest, JsonOptions));
+        WriteLog("backup.created", "Managed install backup created.", new { update_id = updateId, backupPath, previousVersion, file_count = manifest.Files.Count });
+    }
+
+    private static BackupManifest ValidateBackup(string backupPath, string updateId, string previousVersion)
+    {
+        string manifestPath = Path.Combine(backupPath, BackupManifestFileName);
+        if (!File.Exists(manifestPath))
+        {
+            throw new InvalidOperationException("Manifesto do backup ausente.");
+        }
+
+        BackupManifest manifest = JsonSerializer.Deserialize<BackupManifest>(File.ReadAllText(manifestPath), JsonOptions)
+            ?? throw new InvalidOperationException("Manifesto do backup invalido.");
+        if (!manifest.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Manifesto do backup pertence a outro update_id.");
+        }
+        if (!string.IsNullOrWhiteSpace(previousVersion) && !manifest.PreviousVersion.Equals(previousVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Manifesto do backup possui versao anterior inesperada.");
+        }
+        foreach (string required in new[] { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe", "NightOwl.Agent.Tray.exe", "agent.version.json" })
+        {
+            if (!manifest.Files.Any(file => file.Path.Equals(required, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException($"Backup sem arquivo obrigatorio: {required}");
+            }
+        }
+        foreach (BackupFileEntry entry in manifest.Files)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Path) || IsProtectedRelativePath(entry.Path))
+            {
+                throw new InvalidOperationException($"Backup contem caminho proibido: {entry.Path}");
+            }
+            string filePath = Path.Combine(backupPath, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(filePath))
+            {
+                throw new FileNotFoundException("Arquivo do backup ausente.", filePath);
+            }
+            FileInfo info = new(filePath);
+            if (entry.Size >= 0 && info.Length != entry.Size)
+            {
+                throw new InvalidOperationException($"Tamanho invalido no backup: {entry.Path}");
+            }
+            string actual = Sha256(filePath);
+            if (!actual.Equals(entry.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"SHA256 invalido no backup: {entry.Path}");
+            }
+        }
+        WriteLog("backup.validated", "Backup manifest validated.", new { update_id = updateId, backupPath, previousVersion, file_count = manifest.Files.Count });
+        return manifest;
+    }
+
     private static void ExtractZipSafe(string zipPath, string destination)
     {
         string destinationFull = Path.GetFullPath(destination);
@@ -564,14 +923,9 @@ internal static class Program
         return process.ExitCode;
     }
 
-    private static void BackupInstall(string installPath, string backupPath)
-    {
-        Directory.CreateDirectory(backupPath);
-        CopyDirectory(installPath, backupPath, overwrite: true, excludeNames: Array.Empty<string>());
-        WriteLog("updater.backup.completed", "Backup da instalacao atual criado.", new { backupPath });
-    }
-
-    private static readonly string[] ProtectedInstallFileNames = { "agent.config.json", "agent-dotnet.state.json", "agent.state.json" };
+    private static readonly string[] ProtectedInstallFileNames = { "agent.config.json", "agent-dotnet.state.json", "agent.state.json", "update-state.json" };
+    private static readonly string[] ProtectedInstallDirectoryNames = { "Config", "Identity", "State", "Logs", "Diagnostics", "Updates", "Packages", "Cache" };
+    private const string BackupManifestFileName = "backup-manifest.json";
 
     private static void CopyStagedFiles(string stagedPath, string installPath)
     {
@@ -580,19 +934,62 @@ internal static class Program
         WriteLog("updater.files.copied", "Arquivos atualizados copiados para instalacao.", new { stagedPath, installPath });
     }
 
+    private static IEnumerable<string> EnumerateManagedFiles(string root)
+    {
+        if (!Directory.Exists(root))
+        {
+            yield break;
+        }
+        foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(root, file);
+            if (IsProtectedRelativePath(relative))
+            {
+                continue;
+            }
+            yield return file;
+        }
+    }
+
+    private static bool IsProtectedRelativePath(string relativePath)
+    {
+        string normalized = NormalizeRelativePath(relativePath);
+        string fileName = Path.GetFileName(normalized);
+        if (ProtectedInstallFileNames.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (fileName.Contains("token", StringComparison.OrdinalIgnoreCase)
+            || fileName.Contains("machine_id", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        string[] segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(segment => ProtectedInstallDirectoryNames.Contains(segment, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeRelativePath(string path)
+    {
+        return path.Replace('\\', '/').TrimStart('/');
+    }
+
     private static void CopyDirectory(string source, string destination, bool overwrite, IReadOnlyCollection<string> excludeNames)
     {
         Directory.CreateDirectory(destination);
         foreach (string dir in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(source, dir);
+            if (IsProtectedRelativePath(relative))
+            {
+                continue;
+            }
             Directory.CreateDirectory(Path.Combine(destination, relative));
         }
         foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(source, file);
             string name = Path.GetFileName(file);
-            if (excludeNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            if (excludeNames.Contains(name, StringComparer.OrdinalIgnoreCase) || IsProtectedRelativePath(relative))
             {
                 continue;
             }
@@ -718,6 +1115,221 @@ internal static class Program
         }
     }
 
+    private static HealthCheckWaitResult WaitForHealthCheck(UpdateState state, bool expectRollback, TimeSpan timeout)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            UpdateState current = ReloadUpdateState(state);
+            if (!expectRollback && current.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
+            {
+                return HealthCheckWaitResult.Completed;
+            }
+            if (expectRollback && current.CurrentStage.Equals(UpdateStages.RolledBack, StringComparison.OrdinalIgnoreCase))
+            {
+                return HealthCheckWaitResult.RolledBack;
+            }
+            if (current.CurrentStage.Equals(UpdateStages.RollbackFailed, StringComparison.OrdinalIgnoreCase)
+                || current.CurrentStage.Equals(UpdateStages.Failed, StringComparison.OrdinalIgnoreCase)
+                || current.RollbackRequired && !expectRollback)
+            {
+                return HealthCheckWaitResult.FailedState;
+            }
+            string serviceStatus = GetServiceStatus();
+            if (serviceStatus.Equals("Stopped", StringComparison.OrdinalIgnoreCase)
+                || serviceStatus.Equals("StopPending", StringComparison.OrdinalIgnoreCase)
+                || serviceStatus.Equals("NotInstalled", StringComparison.OrdinalIgnoreCase))
+            {
+                return HealthCheckWaitResult.ServiceExitedEarly;
+            }
+            Thread.Sleep(TimeSpan.FromSeconds(3));
+        }
+
+        return HealthCheckWaitResult.Timeout;
+    }
+
+    private static int ExecuteAutomaticRollback(UpdateState state, string installPath, bool interactive)
+    {
+        state = ReloadUpdateState(state);
+        if (state.RollbackAttempt >= 1)
+        {
+            state.MarkRollbackFailed(UpdateErrorCodes.RollbackFailed, "Automatic rollback already attempted for this update_id.");
+            UpdateStateStore.Save(state);
+            WriteCriticalRollbackResult(state, installPath, "Rollback already attempted.");
+            return 1;
+        }
+
+        state.RollbackAttempt++;
+        MarkStage(state, UpdateStages.RollbackStarting);
+        WriteLog("rollback.start", "Automatic rollback started.", new { update_id = state.UpdateId, job_id = state.JobId, from_version = state.FromVersion, target_version = state.TargetVersion, reason = state.RollbackReason, original_error_code = state.ErrorCode });
+
+        try
+        {
+            MarkStage(state, UpdateStages.RollbackStoppingService);
+            try
+            {
+                StopService();
+            }
+            catch (Exception ex)
+            {
+                state.MarkRollbackFailed(UpdateErrorCodes.RollbackServiceStopFailed, SanitizeMessage(ex.Message));
+                UpdateStateStore.Save(state);
+                throw;
+            }
+
+            MarkStage(state, UpdateStages.RollbackRestoringFiles);
+            BackupManifest manifest;
+            try
+            {
+                manifest = ValidateBackup(state.BackupPath, state.UpdateId, state.FromVersion);
+            }
+            catch (Exception ex)
+            {
+                state.MarkRollbackFailed(UpdateErrorCodes.RollbackBackupInvalid, SanitizeMessage(ex.Message));
+                UpdateStateStore.Save(state);
+                throw;
+            }
+
+            try
+            {
+                state.RestoredFileCount = RestoreManagedFiles(installPath, state.BackupPath, manifest);
+                UpdateStateStore.Save(state);
+            }
+            catch (Exception ex)
+            {
+                state.MarkRollbackFailed(UpdateErrorCodes.RollbackFileRestoreFailed, SanitizeMessage(ex.Message));
+                UpdateStateStore.Save(state);
+                throw;
+            }
+
+            MarkStage(state, UpdateStages.RollbackStartingService);
+            try
+            {
+                StartService();
+            }
+            catch (Exception ex)
+            {
+                state.MarkRollbackFailed(UpdateErrorCodes.RollbackServiceStartFailed, SanitizeMessage(ex.Message));
+                UpdateStateStore.Save(state);
+                throw;
+            }
+
+            MarkStage(state, UpdateStages.RollbackWaitingHealthCheck);
+            int healthTimeoutSeconds = GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds);
+            HealthCheckWaitResult result = WaitForHealthCheck(state, expectRollback: true, TimeSpan.FromSeconds(healthTimeoutSeconds));
+            if (result == HealthCheckWaitResult.RolledBack)
+            {
+                WriteLog("rollback.completed", "Rollback confirmed by agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, restored_file_count = ReloadUpdateState(state).RestoredFileCount });
+                WriteJson(new { ok = false, rolled_back = true, update_id = state.UpdateId, active_version = state.FromVersion, attempted_version = state.TargetVersion });
+                if (interactive)
+                {
+                    ShowMessage($"Atualizacao falhou e rollback para {state.FromVersion} foi confirmado.", MessageBoxIcon.Warning);
+                }
+                return 0;
+            }
+
+            string errorCode = result == HealthCheckWaitResult.Timeout
+                ? UpdateErrorCodes.RollbackHealthcheckTimeout
+                : result == HealthCheckWaitResult.FailedState && !string.IsNullOrWhiteSpace(ReloadUpdateState(state).RollbackErrorCode)
+                    ? ReloadUpdateState(state).RollbackErrorCode
+                    : UpdateErrorCodes.RollbackFailed;
+            state = ReloadUpdateState(state);
+            state.MarkRollbackFailed(errorCode, $"Rollback health check did not confirm previous version. Result: {result}.");
+            UpdateStateStore.Save(state);
+            WriteCriticalRollbackResult(state, installPath, state.RollbackErrorMessage);
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            state = ReloadUpdateState(state);
+            if (!state.CurrentStage.Equals(UpdateStages.RollbackFailed, StringComparison.OrdinalIgnoreCase))
+            {
+                state.MarkRollbackFailed(string.IsNullOrWhiteSpace(state.RollbackErrorCode) ? UpdateErrorCodes.RollbackFailed : state.RollbackErrorCode, SanitizeMessage(ex.Message));
+                UpdateStateStore.Save(state);
+            }
+            WriteLog("rollback.failed", "Automatic rollback failed.", new { update_id = state.UpdateId, job_id = state.JobId, rollback_error_code = state.RollbackErrorCode, error = ex.Message });
+            WriteCriticalRollbackResult(state, installPath, SanitizeMessage(ex.Message));
+            WriteJson(new { ok = false, rollback_failed = true, update_id = state.UpdateId, error_code = state.RollbackErrorCode, error = ex.Message });
+            return 1;
+        }
+    }
+
+    private static int RestoreManagedFiles(string installPath, string backupPath, BackupManifest manifest)
+    {
+        foreach (string currentFile in EnumerateManagedFiles(installPath).ToList())
+        {
+            File.Delete(currentFile);
+        }
+
+        int count = 0;
+        foreach (BackupFileEntry entry in manifest.Files)
+        {
+            string source = Path.Combine(backupPath, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            string destination = Path.Combine(installPath, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(source, destination, overwrite: true);
+            count++;
+        }
+
+        ValidateBackup(backupPath, manifest.UpdateId, manifest.PreviousVersion);
+        WriteLog("rollback.files_restored", "Managed files restored from backup.", new { update_id = manifest.UpdateId, backupPath, restored_file_count = count });
+        return count;
+    }
+
+    private static void WriteCriticalRollbackResult(UpdateState state, string installPath, string message)
+    {
+        if (string.IsNullOrWhiteSpace(state.JobId))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(PendingJobsRoot);
+        var payload = new
+        {
+            job_id = state.JobId,
+            status = "failed",
+            started_at = state.StartedAt,
+            finished_at = DateTimeOffset.UtcNow,
+            duration_seconds = Math.Round((DateTimeOffset.UtcNow - state.StartedAt).TotalSeconds, 3),
+            exit_code = 24,
+            stdout = "",
+            stderr = message,
+            error_message = message,
+            result = new
+            {
+                type = "update_agent",
+                update_id = state.UpdateId,
+                update_status = "rollback_failed",
+                from_version = state.FromVersion,
+                attempted_version = state.TargetVersion,
+                active_version = LoadInstalledVersion(new AgentConfig { InstallPath = installPath }).Version,
+                failure_stage = state.RollbackReason,
+                original_error_code = state.ErrorCode,
+                rollback_error_code = state.RollbackErrorCode,
+                rollback_confirmed = false,
+                message
+            }
+        };
+        File.WriteAllText(PendingUpdateResultPath, JsonSerializer.Serialize(payload, JsonOptions));
+        WriteLog("rollback.pending_result.written", "Critical rollback result written.", new { update_id = state.UpdateId, job_id = state.JobId, rollback_error_code = state.RollbackErrorCode });
+    }
+
+    private static void CleanupStaging(string stagedPath)
+    {
+        try
+        {
+            if (Directory.Exists(stagedPath))
+            {
+                Directory.Delete(stagedPath, recursive: true);
+                WriteLog("staging.cleaned", "Staging directory removed after completed update.", new { stagedPath });
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteLog("staging.cleanup_failed", "Failed to remove staging directory.", new { stagedPath, error = ex.Message });
+        }
+    }
+
     private static void TryRollbackFromBackup(string backupPath, string installPath)
     {
         try
@@ -770,7 +1382,7 @@ internal static class Program
         File.WriteAllText(Path.Combine(installPath, "agent.version.json"), JsonSerializer.Serialize(version, JsonOptions));
     }
 
-    private static void WritePendingUpdateResult(JobContext jobContext, string status, int exitCode, string installedVersion, string previousVersion, string message, object result, string stderr)
+    private static void WritePendingUpdateResult(JobContext jobContext, UpdateState state, string status, int exitCode, string installedVersion, string previousVersion, string message, object result, string stderr)
     {
         if (!jobContext.IsJob)
         {
@@ -791,6 +1403,9 @@ internal static class Program
             result = new
             {
                 type = "update_agent",
+                update_id = state.UpdateId,
+                update_stage = state.CurrentStage,
+                error_code = state.ErrorCode,
                 update_status = exitCode == 10 ? "no_update_available" : status == "completed" ? "success" : "failed",
                 installed_version = installedVersion,
                 previous_version = previousVersion,
@@ -965,6 +1580,12 @@ internal static class Program
             }
         }
         return null;
+    }
+
+    private static int GetOptionInt(string[] args, string name, int fallback)
+    {
+        string? value = GetOption(args, name);
+        return int.TryParse(value, out int parsed) && parsed > 0 ? parsed : fallback;
     }
 
     private static void WriteJson(object value)
@@ -1151,6 +1772,45 @@ internal static class Program
     }
 
     private sealed record FileChecksum(string Name, string Sha256, long Size);
+
+    private enum HealthCheckWaitResult
+    {
+        Completed,
+        RolledBack,
+        Timeout,
+        FailedState,
+        ServiceExitedEarly
+    }
+
+    private sealed class BackupManifest
+    {
+        [JsonPropertyName("product")]
+        public string Product { get; set; } = "";
+
+        [JsonPropertyName("update_id")]
+        public string UpdateId { get; set; } = "";
+
+        [JsonPropertyName("previous_version")]
+        public string PreviousVersion { get; set; } = "";
+
+        [JsonPropertyName("created_at")]
+        public DateTimeOffset CreatedAt { get; set; }
+
+        [JsonPropertyName("files")]
+        public List<BackupFileEntry> Files { get; set; } = new();
+    }
+
+    private sealed class BackupFileEntry
+    {
+        [JsonPropertyName("path")]
+        public string Path { get; set; } = "";
+
+        [JsonPropertyName("sha256")]
+        public string Sha256 { get; set; } = "";
+
+        [JsonPropertyName("size")]
+        public long Size { get; set; }
+    }
 
     private sealed class JobContext
     {

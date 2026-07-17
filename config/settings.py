@@ -265,6 +265,11 @@ NIGHTOWL_TECHNICAL_USERNAMES = {
     for item in env.list('NIGHTOWL_TECHNICAL_USERNAMES', default=['gabriel.oliveira'])
     if item.strip()
 }
+ACCESS_INVENTORY_ALLOWED_OUS = {
+    item.strip().casefold()
+    for item in env.list('ACCESS_INVENTORY_ALLOWED_OUS', default=['OU=USUARIOS', 'OU=SOCIOS'])
+    if item.strip()
+}
 
 # Global e-mail outbox. Credentials are read only from the environment.
 EMAIL_BACKEND = env(

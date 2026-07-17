@@ -3,6 +3,8 @@ using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
 using NightOwl.Agent.Windows.Jobs;
 using System.Text.Json;
+using System.Reflection;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Windows;
 
@@ -50,6 +52,7 @@ public sealed class Worker : BackgroundService
             source = config.MachineIdSource
         }, stoppingToken);
         await _logger.LogAsync("service.starting", "NightOwl .NET agent starting.", new { config.AgentVersion }, stoppingToken);
+        await ConfirmPendingUpdateAsync(config, stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -96,6 +99,170 @@ public sealed class Worker : BackgroundService
         }
 
         await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None);
+    }
+
+    private async Task ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
+    {
+        UpdateStateStore store = new(NightOwlPaths.Current.UpdateStatePath);
+        if (!store.TryLoad(out UpdateState? state, out string error))
+        {
+            await _logger.LogAsync("update.state.invalid", "Update state file is invalid.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error }, ct, "error");
+            return;
+        }
+
+        if (state is null || !state.IsActive)
+        {
+            return;
+        }
+
+        bool isRollbackHealthCheck = state.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase);
+        if (!state.CurrentStage.Equals(UpdateStages.WaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
+            && !state.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase)
+            && !isRollbackHealthCheck)
+        {
+            return;
+        }
+
+        string runningVersion = GetRunningAgentVersion(config.AgentVersion);
+        string expectedVersion = isRollbackHealthCheck ? state.FromVersion : state.TargetVersion;
+        await _logger.LogAsync("update.healthcheck.started", "Checking pending update state after service start.", new
+        {
+            update_id = state.UpdateId,
+            job_id = state.JobId,
+            target_version = state.TargetVersion,
+            expected_version = expectedVersion,
+            rollback = isRollbackHealthCheck,
+            running_version = runningVersion,
+            machine_id = config.MachineId
+        }, ct);
+
+        if (!VersionsEqual(runningVersion, expectedVersion))
+        {
+            if (isRollbackHealthCheck)
+            {
+                state.MarkRollbackFailed(UpdateErrorCodes.RollbackVersionMismatch, $"Running version {runningVersion} does not match rollback target {state.FromVersion}.");
+            }
+            else
+            {
+                state.MarkRollbackRequired(UpdateStages.WaitingHealthCheck, UpdateErrorCodes.UpdateHealthcheckVersionMismatch, $"Running version {runningVersion} does not match target {state.TargetVersion}.");
+            }
+            store.Save(state);
+            await _logger.LogAsync("update.healthcheck.failed", "Update target version mismatch.", new
+            {
+                update_id = state.UpdateId,
+                job_id = state.JobId,
+                error_code = state.ErrorCode,
+                rollback_error_code = state.RollbackErrorCode,
+                target_version = state.TargetVersion,
+                expected_version = expectedVersion,
+                running_version = runningVersion
+            }, ct, "error");
+            if (isRollbackHealthCheck)
+            {
+                WritePendingUpdateResult(config, state, "failed", 24, runningVersion, state.FromVersion, state.RollbackErrorMessage);
+            }
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(config.MachineId))
+        {
+            state.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, "Machine ID is empty after update.");
+            store.Save(state);
+            await _logger.LogAsync("update.healthcheck.failed", "Machine ID was not available after update.", new { update_id = state.UpdateId, job_id = state.JobId, error_code = state.ErrorCode }, ct, "error");
+            WritePendingUpdateResult(config, state, "failed", 20, runningVersion, state.FromVersion, state.ErrorMessage);
+            return;
+        }
+
+        state.ServiceStarted = true;
+        if (isRollbackHealthCheck)
+        {
+            state.PreviousVersionConfirmed = true;
+            state.HealthCheckConfirmed = false;
+            state.MarkStage(UpdateStages.RolledBack, UpdateStatuses.Failed);
+        }
+        else
+        {
+            state.HealthCheckConfirmed = true;
+            state.MarkStage(UpdateStages.Completed, UpdateStatuses.Completed);
+        }
+        store.Save(state);
+        await _logger.LogAsync(isRollbackHealthCheck ? "rollback.healthcheck.confirmed" : "update.healthcheck.confirmed", isRollbackHealthCheck ? "Rollback completed after agent health check." : "Update completed after agent health check.", new
+        {
+            update_id = state.UpdateId,
+            job_id = state.JobId,
+            from_version = state.FromVersion,
+            target_version = state.TargetVersion,
+            running_version = runningVersion,
+            machine_id = config.MachineId
+        }, ct);
+        WritePendingUpdateResult(config, state, isRollbackHealthCheck ? "rolled_back" : "completed", isRollbackHealthCheck ? 23 : 0, runningVersion, state.FromVersion, isRollbackHealthCheck ? "Agent rollback confirmed." : "Agent updated successfully.");
+    }
+
+    private static void WritePendingUpdateResult(AgentConfig config, UpdateState state, string status, int exitCode, string installedVersion, string previousVersion, string message)
+    {
+        if (string.IsNullOrWhiteSpace(state.JobId))
+        {
+            return;
+        }
+
+        string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
+            ? NightOwlPaths.Current.PendingResultsDir
+            : config.PendingResultsPath;
+        Directory.CreateDirectory(pendingDir);
+        JobExecutionResult payload = new()
+        {
+            JobId = state.JobId,
+            Status = status,
+            StartedAt = state.StartedAt,
+            FinishedAt = DateTimeOffset.UtcNow,
+            DurationSeconds = Math.Round((DateTimeOffset.UtcNow - state.StartedAt).TotalSeconds, 3),
+            ExitCode = exitCode,
+            Stdout = message,
+            Stderr = "",
+            ErrorMessage = status == "failed" ? message : "",
+            Result = new
+            {
+                type = "update_agent",
+                update_id = state.UpdateId,
+                update_status = status == "rolled_back" ? "rolled_back" : status == "completed" ? "success" : "failed",
+                installed_version = installedVersion,
+                previous_version = previousVersion,
+                from_version = state.FromVersion,
+                attempted_version = state.TargetVersion,
+                active_version = installedVersion,
+                target_version = state.TargetVersion,
+                failure_stage = state.RollbackReason,
+                original_error_code = state.ErrorCode,
+                rollback_duration = state.RollbackStartedAt is null ? null : (double?)Math.Round((DateTimeOffset.UtcNow - state.RollbackStartedAt.Value).TotalSeconds, 3),
+                rollback_confirmed = status == "rolled_back",
+                error_code = state.ErrorCode,
+                message,
+                completed_at = DateTimeOffset.UtcNow
+            }
+        };
+        string path = Path.Combine(pendingDir, $"job-result-{state.JobId}.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+    }
+
+    private static string GetRunningAgentVersion(string fallback)
+    {
+        try
+        {
+            string? informational = typeof(Worker).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+            string version = (informational ?? typeof(Worker).Assembly.GetName().Version?.ToString() ?? "").Split('+')[0];
+            return string.IsNullOrWhiteSpace(version) ? fallback : version;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private static bool VersionsEqual(string left, string right)
+    {
+        return string.Equals((left ?? "").Trim(), (right ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task SendPendingUpdateResultAsync(AgentConfig config, CancellationToken ct)
@@ -210,12 +377,6 @@ public sealed class Worker : BackgroundService
 
         foreach (AgentJobRequest job in response.Jobs)
         {
-            if (state.RecentJobIds.Contains(job.Id))
-            {
-                await _logger.LogAsync("job.skipped_duplicate", "Job already executed locally.", new { job.Id, job.Type }, ct, "warning");
-                continue;
-            }
-
             await _logger.LogAsync("job.received", "Job received.", new { job.Id, job.Type }, ct);
             JobExecutionResult result = await _jobExecutor.ExecuteAsync(config, job, ct);
 
