@@ -1,16 +1,16 @@
 using System.Text.Json;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Tray;
 
 internal static class TrayLog
 {
-    private const string LogPath = @"C:\ProgramData\NightOwl\Logs\agent-tray.jsonl";
-
     public static void Write(string eventType, string message, object? metadata = null)
     {
         try
         {
-            string? dir = Path.GetDirectoryName(LogPath);
+            string logPath = NightOwlPaths.Current.TrayLogPath;
+            string? dir = Path.GetDirectoryName(logPath);
             if (!string.IsNullOrWhiteSpace(dir))
             {
                 Directory.CreateDirectory(dir);
@@ -23,7 +23,7 @@ internal static class TrayLog
                 message,
                 metadata = metadata ?? new { }
             };
-            File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            File.AppendAllText(logPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
         }
         catch
         {

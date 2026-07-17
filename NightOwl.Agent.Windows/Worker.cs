@@ -101,7 +101,9 @@ public sealed class Worker : BackgroundService
     private async Task SendPendingUpdateResultAsync(AgentConfig config, CancellationToken ct)
     {
         List<string> pendingFiles = new();
-        string pendingDir = Path.Combine(config.JobsPath, "Pending");
+        string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
+            ? Path.Combine(config.JobsPath, "Pending")
+            : config.PendingResultsPath;
         if (Directory.Exists(pendingDir))
         {
             pendingFiles.AddRange(Directory.GetFiles(pendingDir, "*.json", SearchOption.TopDirectoryOnly));
@@ -122,7 +124,7 @@ public sealed class Worker : BackgroundService
                 JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("Pending job result is invalid.");
                 await _api.SendJobResultAsync(config, result, ct);
-                string completedDir = Path.Combine(config.JobsPath, "completed");
+                string completedDir = Path.Combine(pendingDir, "completed");
                 Directory.CreateDirectory(completedDir);
                 string completedPath = Path.Combine(completedDir, $"{Path.GetFileNameWithoutExtension(pendingPath)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
                 File.Move(pendingPath, completedPath, overwrite: true);

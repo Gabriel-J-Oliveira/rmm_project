@@ -3,12 +3,13 @@ using NightOwl.Agent.Windows.Collectors;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Services;
 using Microsoft.Extensions.Hosting.WindowsServices;
+using NightOwl.Agent.Shared;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddWindowsService(options =>
 {
-    options.ServiceName = "NightOwlAgentDotNet";
+    options.ServiceName = NightOwlPaths.ServiceName;
 });
 
 builder.Services.AddSingleton<ConfigService>();

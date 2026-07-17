@@ -7,6 +7,7 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        NightOwl.Agent.Shared.NightOwlPaths.Current.Bootstrap("tray", applyAcl: false);
         using Mutex mutex = new(false, MutexName, out bool createdNew);
         if (!createdNew)
         {

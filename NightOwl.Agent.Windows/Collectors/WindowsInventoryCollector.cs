@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using NightOwl.Agent.Shared;
 using System.Globalization;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -493,11 +494,11 @@ public sealed class WindowsInventoryCollector
             ["updater_version"] = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe")),
             ["mode"] = "dotnet-service",
             ["install_mode"] = "dotnet-service",
-            ["install_path"] = AppContext.BaseDirectory,
-            ["config_path"] = Environment.GetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG") ?? Path.Combine(AppContext.BaseDirectory, "agent.config.json"),
+            ["install_path"] = config.InstallPath,
+            ["config_path"] = Environment.GetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG") ?? NightOwlPaths.Current.ConfigPath,
             ["log_path"] = Path.GetDirectoryName(config.LogPath),
             ["log_file"] = config.LogPath,
-            ["service_name"] = "NightOwlAgentDotNet",
+            ["service_name"] = NightOwlPaths.ServiceName,
             ["service_status"] = "Running",
             ["service_start_type"] = "Automatic",
             ["service_account"] = "LocalSystem",

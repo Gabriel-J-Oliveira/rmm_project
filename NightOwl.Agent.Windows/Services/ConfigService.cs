@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Win32;
+using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Models;
 
 namespace NightOwl.Agent.Windows.Services;
@@ -15,6 +16,8 @@ public sealed class ConfigService
 
     public AgentConfig Load()
     {
+        NightOwlPaths paths = NightOwlPaths.Current;
+        paths.Bootstrap("agent");
         string configPath = ResolveConfigPath();
         AgentConfig config;
         if (File.Exists(configPath))
@@ -33,12 +36,14 @@ public sealed class ConfigService
         MachineIdentity identity = ResolveMachineIdentity(config, configPath);
         config.MachineId = identity.MachineId;
         config.MachineIdSource = identity.Source;
+        PersistCanonicalConfig(configPath, config);
         Directory.CreateDirectory(Path.GetDirectoryName(config.LogPath) ?? ".");
         Directory.CreateDirectory(Path.GetDirectoryName(config.StatePath) ?? ".");
         Directory.CreateDirectory(config.InstallPath);
         Directory.CreateDirectory(config.PackagesPath);
         Directory.CreateDirectory(config.CachePath);
         Directory.CreateDirectory(config.JobsPath);
+        Directory.CreateDirectory(config.PendingResultsPath);
         EnsureStateMachineId(config, identity.MachineId);
         Current = config;
         return config;
@@ -46,24 +51,12 @@ public sealed class ConfigService
 
     private static string ResolveConfigPath()
     {
-        string? fromEnv = Environment.GetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG");
-        if (!string.IsNullOrWhiteSpace(fromEnv))
-        {
-            return fromEnv;
-        }
-
-        string basePath = AppContext.BaseDirectory;
-        string local = Path.Combine(basePath, "agent.config.json");
-        if (File.Exists(local))
-        {
-            return local;
-        }
-
-        return @"C:\ProgramData\NightOwl\AgentDotNet\agent.config.json";
+        return NightOwlPaths.Current.ResolveConfigPath();
     }
 
     private static void Normalize(AgentConfig config)
     {
+        NightOwlPaths paths = NightOwlPaths.Current;
         config.ServerBaseUrl = (config.ServerBaseUrl ?? "").TrimEnd('/');
         if (string.IsNullOrWhiteSpace(config.ServerBaseUrl) && !string.IsNullOrWhiteSpace(config.HeartbeatUrl))
         {
@@ -85,14 +78,61 @@ public sealed class ConfigService
         {
             config.JobsResultUrl = $"{config.ServerBaseUrl}/api/agent/jobs/result/";
         }
-        if (string.IsNullOrWhiteSpace(config.StatePath))
+        if (string.IsNullOrWhiteSpace(config.StatePath) || SamePath(config.StatePath, paths.LegacyStatePath))
         {
-            config.StatePath = @"C:\ProgramData\NightOwl\AgentDotNet\agent-dotnet.state.json";
+            config.StatePath = paths.StatePath;
         }
         if (string.IsNullOrWhiteSpace(config.InstallPath))
         {
-            config.InstallPath = @"C:\ProgramData\NightOwl\AgentDotNet";
+            config.InstallPath = paths.InstallDir;
         }
+        if (string.IsNullOrWhiteSpace(config.LogPath))
+        {
+            config.LogPath = paths.AgentLogPath;
+        }
+        if (string.IsNullOrWhiteSpace(config.PendingResultsPath))
+        {
+            config.PendingResultsPath = paths.PendingResultsDir;
+        }
+        if (string.IsNullOrWhiteSpace(config.JobsPath) || SamePath(config.JobsPath, Path.Combine(paths.Root, "Jobs")))
+        {
+            config.JobsPath = paths.StateDir;
+        }
+        if (string.IsNullOrWhiteSpace(config.PackagesPath))
+        {
+            config.PackagesPath = paths.PackagesDir;
+        }
+        if (string.IsNullOrWhiteSpace(config.CachePath))
+        {
+            config.CachePath = paths.CacheDir;
+        }
+    }
+
+    private static void PersistCanonicalConfig(string configPath, AgentConfig config)
+    {
+        try
+        {
+            if (SamePath(configPath, NightOwlPaths.Current.ConfigPath))
+            {
+                File.WriteAllText(configPath, JsonSerializer.Serialize(config, JsonOptions));
+            }
+        }
+        catch
+        {
+            // Config normalization is retried on next startup.
+        }
+    }
+
+    private static bool SamePath(string left, string right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return false;
+        }
+
+        return string.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string DeriveServerBaseUrl(string url)
@@ -117,7 +157,9 @@ public sealed class ConfigService
         foreach ((string Path, string Source) candidate in new[]
         {
             (config.StatePath, "dotnet_state"),
-            (@"C:\ProgramData\NightOwl\Agent\agent.state.json", "powershell_state"),
+            (NightOwlPaths.Current.IdentityPath, "identity"),
+            (NightOwlPaths.Current.LegacyStatePath, "legacy_dotnet_state"),
+            (Path.Combine(NightOwlPaths.Current.Root, "Agent", "agent.state.json"), "powershell_state"),
             (@"C:\RMM\agent.state.json", "legacy_rmm_state"),
         })
         {

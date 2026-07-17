@@ -4,6 +4,7 @@ using System.Text.Json;
 using NightOwl.Agent.Windows.Collectors;
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Windows.Jobs;
 
@@ -156,12 +157,12 @@ public sealed class JobExecutor
                 {
                     type = "restart_agent",
                     restart_status = "requested",
-                    message = "NightOwlAgentDotNet restart requested successfully.",
+                    message = $"{NightOwlPaths.ServiceName} restart requested successfully.",
                     completed_at = DateTimeOffset.UtcNow
                 }
             });
 
-        string script = "Start-Sleep -Seconds 2; Restart-Service -Name 'NightOwlAgentDotNet' -Force";
+        string script = $"Start-Sleep -Seconds 2; Restart-Service -Name '{NightOwlPaths.ServiceName}' -Force";
         using Process process = new()
         {
             StartInfo = new ProcessStartInfo
@@ -258,7 +259,9 @@ public sealed class JobExecutor
 
     private static void WritePendingJobResult(AgentConfig config, JobExecutionResult result)
     {
-        string pendingDir = Path.Combine(config.JobsPath, "Pending");
+        string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
+            ? Path.Combine(config.JobsPath, "Pending")
+            : config.PendingResultsPath;
         Directory.CreateDirectory(pendingDir);
         string jobId = string.IsNullOrWhiteSpace(result.JobId) ? Guid.NewGuid().ToString("N") : result.JobId;
         string path = Path.Combine(pendingDir, $"job-result-{jobId}.json");

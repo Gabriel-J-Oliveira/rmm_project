@@ -5,24 +5,24 @@ using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Updater;
 
 internal static class Program
 {
-    private const string ServiceName = "NightOwlAgentDotNet";
-    private const string TrayProcessName = "NightOwl.Agent.Tray";
+    private const string ServiceName = NightOwlPaths.ServiceName;
+    private const string TrayProcessName = NightOwlPaths.TrayProcessName;
     private const string ProductName = "NightOwl Agent Windows";
-    private const string DefaultInstallPath = @"C:\ProgramData\NightOwl\AgentDotNet";
-    private const string DefaultServerUrl = "https://nightowl.controlsul.com.br";
-    private const string LogPath = @"C:\ProgramData\NightOwl\Logs\agent-updater.jsonl";
-    private static readonly string UpdatesRoot = @"C:\ProgramData\NightOwl\Updates";
-    private static readonly string DownloadsRoot = Path.Combine(UpdatesRoot, "Downloads");
-    private static readonly string StagingRoot = Path.Combine(UpdatesRoot, "Staging");
-    private static readonly string RunnerRoot = Path.Combine(UpdatesRoot, "Runner");
-    private static readonly string BackupsRoot = @"C:\ProgramData\NightOwl\Backups";
-    private static readonly string JobsRoot = @"C:\ProgramData\NightOwl\Jobs";
-    private static readonly string PendingJobsRoot = Path.Combine(JobsRoot, "Pending");
+    private const string DefaultServerUrl = NightOwlPaths.DefaultServerUrl;
+    private static readonly NightOwlPaths Paths = NightOwlPaths.Current;
+    private static readonly string LogPath = Paths.UpdaterLogPath;
+    private static readonly string UpdatesRoot = Paths.UpdatesDir;
+    private static readonly string DownloadsRoot = Paths.UpdatesDownloadsDir;
+    private static readonly string StagingRoot = Paths.UpdatesStagingDir;
+    private static readonly string RunnerRoot = Paths.UpdatesRunnerDir;
+    private static readonly string BackupsRoot = Paths.UpdatesBackupDir;
+    private static readonly string PendingJobsRoot = Paths.PendingResultsDir;
     private static readonly string PendingUpdateResultPath = Path.Combine(PendingJobsRoot, "pending-update-result.json");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -37,13 +37,7 @@ internal static class Program
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-            Directory.CreateDirectory(DownloadsRoot);
-            Directory.CreateDirectory(StagingRoot);
-            Directory.CreateDirectory(RunnerRoot);
-            Directory.CreateDirectory(BackupsRoot);
-            Directory.CreateDirectory(JobsRoot);
-            Directory.CreateDirectory(PendingJobsRoot);
+            Paths.Bootstrap("updater");
 
             WriteLog("updater.start", "NightOwl Agent Updater iniciado.", new { command, interactive });
 
@@ -422,16 +416,16 @@ internal static class Program
 
     private static AgentConfig LoadConfig()
     {
-        string configPath = Path.Combine(DefaultInstallPath, "agent.config.json");
-        if (!File.Exists(configPath))
-        {
-            configPath = Path.Combine(AppContext.BaseDirectory, "agent.config.json");
-        }
+        string configPath = Paths.ResolveConfigPath();
 
         AgentConfig config = File.Exists(configPath)
             ? JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(configPath), JsonOptions) ?? new AgentConfig()
             : new AgentConfig();
         config.ConfigPath = configPath;
+        if (string.IsNullOrWhiteSpace(config.InstallPath))
+        {
+            config.InstallPath = Paths.InstallDir;
+        }
         return config;
     }
 
@@ -577,11 +571,7 @@ internal static class Program
         WriteLog("updater.backup.completed", "Backup da instalacao atual criado.", new { backupPath });
     }
 
-    private static readonly string[] ProtectedInstallFileNames =
-    {
-        "agent.config.json",
-        "agent-dotnet.state.json"
-    };
+    private static readonly string[] ProtectedInstallFileNames = { "agent.config.json", "agent-dotnet.state.json", "agent.state.json" };
 
     private static void CopyStagedFiles(string stagedPath, string installPath)
     {
@@ -708,7 +698,7 @@ internal static class Program
 
     private static void ValidatePostUpdate(string installPath, string expectedVersion)
     {
-        if (!File.Exists(Path.Combine(installPath, "agent.config.json")))
+        if (!File.Exists(Paths.ConfigPath))
         {
             throw new InvalidOperationException("agent.config.json ausente apos update.");
         }
@@ -1017,7 +1007,7 @@ internal static class Program
         public string ServerBaseUrl { get; set; } = "";
 
         [JsonPropertyName("installPath")]
-        public string InstallPath { get; set; } = DefaultInstallPath;
+        public string InstallPath { get; set; } = Paths.InstallDir;
 
         [JsonIgnore]
         public string ConfigPath { get; set; } = "";
@@ -1026,7 +1016,7 @@ internal static class Program
         public string ServerBaseUrlOrDefault => string.IsNullOrWhiteSpace(ServerBaseUrl) ? DefaultServerUrl : ServerBaseUrl.TrimEnd('/');
 
         [JsonIgnore]
-        public string InstallPathOrDefault => string.IsNullOrWhiteSpace(InstallPath) ? DefaultInstallPath : InstallPath;
+        public string InstallPathOrDefault => string.IsNullOrWhiteSpace(InstallPath) ? Paths.InstallDir : InstallPath;
     }
 
     private sealed class UpdateManifest

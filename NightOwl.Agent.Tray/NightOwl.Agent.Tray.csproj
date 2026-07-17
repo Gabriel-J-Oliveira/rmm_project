@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\assets\icons\NightOwl.ico" Link="assets\icons\NightOwl.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <EmbeddedResource Include="..\assets\icons\NightOwl.ico" LogicalName="NightOwl.ico" />
   </ItemGroup>

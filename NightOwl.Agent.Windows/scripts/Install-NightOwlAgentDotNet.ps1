@@ -6,7 +6,7 @@ param(
     [string]$ManualValidationToken = "",
     [string]$AgentToken = "",
     [string]$PackageUrl = "",
-    [string]$InstallPath = "C:\ProgramData\NightOwl\AgentDotNet",
+    [string]$InstallPath = "",
     [string]$ServiceName = "NightOwlAgentDotNet",
     [string]$DisplayName = "NightOwl RMM Agent",
     [switch]$InstallAsService,
@@ -24,13 +24,49 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function New-NightOwlPaths([string]$RequestedInstallPath) {
+    $root = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_HOME)) { "C:\ProgramData\NightOwl" } else { $env:NIGHTOWL_HOME }
+    $install = if ([string]::IsNullOrWhiteSpace($RequestedInstallPath)) { Join-Path $root "AgentDotNet" } else { $RequestedInstallPath }
+    $configDir = Join-Path $root "Config"
+    $stateDir = Join-Path $root "State"
+    $logsDir = Join-Path $root "Logs"
+    $updatesDir = Join-Path $root "Updates"
+    return [ordered]@{
+        Root = $root
+        Install = $install
+        ConfigDir = $configDir
+        ConfigPath = Join-Path $configDir "agent.config.json"
+        LegacyConfigPath = Join-Path $install "agent.config.json"
+        IdentityDir = Join-Path $root "Identity"
+        IdentityPath = Join-Path (Join-Path $root "Identity") "agent.identity.json"
+        StateDir = $stateDir
+        StatePath = Join-Path $stateDir "agent.state.json"
+        LegacyStatePath = Join-Path $install "agent-dotnet.state.json"
+        PendingResultsPath = Join-Path $stateDir "pending-results"
+        Logs = $logsDir
+        AgentLog = Join-Path $logsDir "agent-dotnet.jsonl"
+        InstallLog = Join-Path $logsDir "service-install.log"
+        Packages = Join-Path $root "Packages"
+        Cache = Join-Path $root "Cache"
+        Updates = $updatesDir
+        UpdatesDownloads = Join-Path $updatesDir "Downloads"
+        UpdatesStaging = Join-Path $updatesDir "Staging"
+        UpdatesBackup = Join-Path $updatesDir "Backup"
+        UpdatesPending = Join-Path $updatesDir "Pending"
+        Diagnostics = Join-Path $root "Diagnostics"
+    }
+}
+
+$script:NightOwlPaths = New-NightOwlPaths -RequestedInstallPath $InstallPath
+$InstallPath = [string]$script:NightOwlPaths.Install
+
 function Write-Step($Status, $Message) {
     Write-Host ("[{0}] {1}" -f $Status, $Message)
 }
 
 function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
     try {
-        $logDir = "C:\ProgramData\NightOwl\Logs"
+        $logDir = [string]$script:NightOwlPaths.Logs
         New-Item -ItemType Directory -Force -Path $logDir | Out-Null
         $entry = [ordered]@{
             timestamp = (Get-Date).ToUniversalTime().ToString("o")
@@ -38,7 +74,7 @@ function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
             message = $Message
             metadata = $Metadata
         }
-        $entry | ConvertTo-Json -Depth 6 -Compress | Add-Content -Path (Join-Path $logDir "service-install.log") -Encoding UTF8
+        $entry | ConvertTo-Json -Depth 6 -Compress | Add-Content -Path ([string]$script:NightOwlPaths.InstallLog) -Encoding UTF8
     }
     catch {}
 }
@@ -48,6 +84,25 @@ function Assert-Elevated {
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw "Execute este instalador em um PowerShell como Administrador."
+    }
+}
+
+function Set-NightOwlSecureAcl([string[]]$Paths, [switch]$AllowUsersRead) {
+    foreach ($path in $Paths) {
+        try {
+            if (-not (Test-Path $path)) { continue }
+            & icacls.exe $path /inheritance:r | Out-Null
+            if ($AllowUsersRead) {
+                & icacls.exe $path /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" "Users:(OI)(CI)(RX)" | Out-Null
+            }
+            else {
+                & icacls.exe $path /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" | Out-Null
+            }
+            Write-InstallLog "path.acl.applied" "ACL segura aplicada." @{ path = $path }
+        }
+        catch {
+            Write-InstallLog "path.acl.failed" "Falha ao aplicar ACL." @{ path = $path; error = $_.Exception.Message }
+        }
     }
 }
 
@@ -183,7 +238,7 @@ function Resolve-MachineId([string]$ConfigPath, [string]$StatePath) {
 
     $candidates = @(
         @{ Path = $StatePath; Source = "dotnet_state" },
-        @{ Path = "C:\ProgramData\NightOwl\Agent\agent.state.json"; Source = "powershell_state" },
+        @{ Path = (Join-Path ([string]$script:NightOwlPaths.Root) "Agent\agent.state.json"); Source = "powershell_state" },
         @{ Path = "C:\RMM\agent.state.json"; Source = "legacy_rmm_state" }
     )
     foreach ($candidate in $candidates) {
@@ -585,26 +640,46 @@ if ([string]::IsNullOrWhiteSpace($serverBase)) {
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourcePath = $scriptRoot
-$configPath = Join-Path $InstallPath "agent.config.json"
-$statePath = "C:\ProgramData\NightOwl\AgentDotNet\agent-dotnet.state.json"
-$logPath = "C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl"
+$configPath = [string]$script:NightOwlPaths.ConfigPath
+$legacyConfigPath = [string]$script:NightOwlPaths.LegacyConfigPath
+$statePath = [string]$script:NightOwlPaths.StatePath
+$legacyStatePath = [string]$script:NightOwlPaths.LegacyStatePath
+$logPath = [string]$script:NightOwlPaths.AgentLog
 $enrollResponse = $null
 
 $directories = @(
-    "C:\ProgramData\NightOwl",
+    [string]$script:NightOwlPaths.Root,
     $InstallPath,
-    "C:\ProgramData\NightOwl\Logs",
-    "C:\ProgramData\NightOwl\Jobs",
-    "C:\ProgramData\NightOwl\Packages",
-    "C:\ProgramData\NightOwl\Cache",
-    "C:\ProgramData\NightOwl\Updates",
-    "C:\ProgramData\NightOwl\Updates\Downloads",
-    "C:\ProgramData\NightOwl\Updates\Staging",
-    "C:\ProgramData\NightOwl\Backups"
+    [string]$script:NightOwlPaths.ConfigDir,
+    [string]$script:NightOwlPaths.IdentityDir,
+    [string]$script:NightOwlPaths.StateDir,
+    [string]$script:NightOwlPaths.PendingResultsPath,
+    [string]$script:NightOwlPaths.Logs,
+    [string]$script:NightOwlPaths.Packages,
+    [string]$script:NightOwlPaths.Cache,
+    [string]$script:NightOwlPaths.Updates,
+    [string]$script:NightOwlPaths.UpdatesDownloads,
+    [string]$script:NightOwlPaths.UpdatesStaging,
+    [string]$script:NightOwlPaths.UpdatesBackup,
+    [string]$script:NightOwlPaths.UpdatesPending,
+    [string]$script:NightOwlPaths.Diagnostics
 )
 foreach ($dir in $directories) {
+    $existed = Test-Path $dir
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    if (-not $existed) {
+        Write-InstallLog "path.directory.created" "Diretorio criado." @{ path = $dir }
+    }
 }
+Set-NightOwlSecureAcl -Paths @(
+    [string]$script:NightOwlPaths.ConfigDir,
+    [string]$script:NightOwlPaths.IdentityDir,
+    [string]$script:NightOwlPaths.StateDir
+) -AllowUsersRead
+Set-NightOwlSecureAcl -Paths @(
+    [string]$script:NightOwlPaths.Updates,
+    [string]$script:NightOwlPaths.Diagnostics
+)
 
 $localExe = Join-Path $sourcePath "NightOwl.Agent.Windows.exe"
 $tempPackageDir = $null
@@ -618,10 +693,24 @@ else {
     Write-Step "OK" "Modo local/offline ativo"
 }
 
+$preservedConfig = Read-JsonFile $configPath
+if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
+    Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
+    Write-InstallLog "path.file.migrated" "Config legado copiado para Config." @{ source = $legacyConfigPath; destination = $configPath }
+    $preservedConfig = Read-JsonFile $configPath
+}
+elseif (Test-Path $legacyConfigPath) {
+    Write-InstallLog "path.legacy.preserved" "Config legado preservado; Config ja existe." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
+}
+
+if ((-not (Test-Path $statePath)) -and (Test-Path $legacyStatePath)) {
+    Copy-Item -Path $legacyStatePath -Destination $statePath -Force
+    Write-InstallLog "path.file.migrated" "State legado copiado para State." @{ source = $legacyStatePath; destination = $statePath }
+}
+
 $identity = Resolve-MachineId -ConfigPath $configPath -StatePath $statePath
 $machineId = $identity.Value
 $identitySource = $identity.Source
-$preservedConfig = Read-JsonFile $configPath
 
 if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken) -and $EnrollmentToken.StartsWith("rmm_live_")) {
     Write-Step "WARN" "EnrollmentToken parece ser agent token legado/dev; usando como AgentToken."
@@ -694,14 +783,21 @@ $config = [ordered]@{
     }
     logPath = $logPath
     statePath = $statePath
+    pendingResultsPath = [string]$script:NightOwlPaths.PendingResultsPath
     installPath = $InstallPath
-    packagesPath = "C:\ProgramData\NightOwl\Packages"
-    cachePath = "C:\ProgramData\NightOwl\Cache"
-    jobsPath = "C:\ProgramData\NightOwl\Jobs"
+    packagesPath = [string]$script:NightOwlPaths.Packages
+    cachePath = [string]$script:NightOwlPaths.Cache
+    jobsPath = [string]$script:NightOwlPaths.StateDir
     allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "restart_agent")
 }
 Save-AgentConfig -Path $configPath -Config $config
 Write-StateMachineId -Path $statePath -MachineId $machineId
+$identityInfo = [ordered]@{
+    machine_id = $machineId
+    source = $identitySource
+    updated_at = (Get-Date).ToUniversalTime().ToString("o")
+}
+$identityInfo | ConvertTo-Json -Depth 5 | Set-Content -Path ([string]$script:NightOwlPaths.IdentityPath) -Encoding UTF8
 $versionInfo = [ordered]@{
     version = $packageVersion
     installedAt = (Get-Date).ToUniversalTime().ToString("o")

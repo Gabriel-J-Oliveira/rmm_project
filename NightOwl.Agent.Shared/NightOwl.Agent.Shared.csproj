@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>NightOwl.Agent.Shared</AssemblyName>
+    <RootNamespace>NightOwl.Agent.Shared</RootNamespace>
+  </PropertyGroup>
+</Project>

@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="agent.config.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <Content Include="..\assets\icons\NightOwl.ico" Link="assets\icons\NightOwl.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
     <None Include="scripts\Install-NightOwlAgentDotNet.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" TargetPath="Install-NightOwlAgentDotNet.ps1" />

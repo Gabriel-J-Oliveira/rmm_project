@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Reflection;
 using System.ServiceProcess;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Tray;
 
@@ -39,7 +40,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            using ServiceController service = new("NightOwlAgentDotNet");
+            using ServiceController service = new(NightOwlPaths.ServiceName);
             return service.Status == ServiceControllerStatus.Running;
         }
         catch
@@ -107,7 +108,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private Icon LoadNightOwlIcon()
     {
-        string installIcon = Path.Combine(@"C:\ProgramData\NightOwl\AgentDotNet", "assets", "icons", "NightOwl.ico");
+        string installIcon = Path.Combine(NightOwlPaths.Current.InstallDir, "assets", "icons", "NightOwl.ico");
         string appIcon = Path.Combine(AppContext.BaseDirectory, "assets", "icons", "NightOwl.ico");
 
         foreach (string path in new[] { installIcon, appIcon })

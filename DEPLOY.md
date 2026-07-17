@@ -1,8 +1,8 @@
-# Night Owl - Deploy Linux
+﻿# Night Owl - Deploy Linux
 
 Este guia prepara o Night Owl para rodar em um servidor Linux com Django, Gunicorn e Nginx. Ele ainda nao configura systemd, Nginx, HTTPS ou PostgreSQL em producao; esses passos ficam para a etapa de infraestrutura.
 
-## 1. Clonar o repositório
+## 1. Clonar o repositÃ³rio
 
 ```bash
 sudo mkdir -p /opt/nightowl
@@ -20,7 +20,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 3. Configurar variáveis de ambiente
+## 3. Configurar variÃ¡veis de ambiente
 
 ```bash
 cp .env.example .env
@@ -33,7 +33,7 @@ Edite pelo menos:
 - `DJANGO_DEBUG=False`
 - `DJANGO_ALLOWED_HOSTS`
 - `DJANGO_CSRF_TRUSTED_ORIGINS`
-- `DATABASE_URL` ou as variáveis `POSTGRES_*`, se optar por PostgreSQL
+- `DATABASE_URL` ou as variÃ¡veis `POSTGRES_*`, se optar por PostgreSQL
 
 O arquivo `.env` contem segredos e nao deve ser versionado.
 
@@ -60,15 +60,15 @@ curl http://127.0.0.1:8010/
 
 ## 6. Static e media
 
-O projeto está configurado com:
+O projeto estÃ¡ configurado com:
 
 - `STATIC_URL=/static/`
 - `STATIC_ROOT=BASE_DIR/staticfiles`
 - `MEDIA_URL=/media/`
 - `MEDIA_ROOT=BASE_DIR/media`
-- Whitenoise para servir static files de forma simples quando aplicável
+- Whitenoise para servir static files de forma simples quando aplicÃ¡vel
 
-Em produção com Nginx, o ideal é mapear:
+Em produÃ§Ã£o com Nginx, o ideal Ã© mapear:
 
 ```nginx
 location /static/ {
@@ -80,7 +80,7 @@ location /media/ {
 }
 ```
 
-## 7. Rotinas de manutenção
+## 7. Rotinas de manutenÃ§Ã£o
 
 O comando central de rotinas operacionais pode ser executado manualmente:
 
@@ -102,59 +102,53 @@ Windows Task Scheduler:
 python manage.py run_maintenance_tasks
 ```
 
-## 8. Publicar downloads do agente Windows
+## 8. Release e publicacao do agente Windows
 
-Depois de alterar o agente .NET, o instalador ou gerar um novo pacote em:
+Use um unico pipeline para gerar release, ZIP, `version.json`, `checksums.json` e `release-manifest.json`. Nao edite versao ou checksum manualmente.
 
-```bash
-/opt/nightowl/NightOwl.Agent.Windows/publish/downloads/agent/windows/
+```powershell
+.\scripts\Build-NightOwlAgentRelease.ps1 -Version 0.1.0.8
 ```
 
-publique os arquivos estáticos servidos pelo Nginx com:
+A saida fica em:
 
-```bash
-sudo /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
+```text
+artifacts\nightowl-agent\releases\0.1.0.8\
 ```
 
-Na primeira instalação do script no servidor:
+Para validar uma release ja gerada:
 
-```bash
-sudo mkdir -p /opt/nightowl/scripts
-sudo cp scripts/publish-nightowl-agent-downloads.sh /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
-sudo chmod +x /opt/nightowl/scripts/publish-nightowl-agent-downloads.sh
+```powershell
+.\scripts\Build-NightOwlAgentRelease.ps1 -Version 0.1.0.8 -ValidateOnly
 ```
 
-O script copia para `/opt/nightowl/downloads/agent/windows/`, valida os arquivos obrigatórios, ajusta `www-data:www-data`, permissões, checksum do ZIP e testa as URLs locais. Ele não reinicia `nightowl.service` nem altera Nginx.
+Para publicar localmente no diretorio servido pelo Nginx:
+
+```powershell
+.\scripts\Build-NightOwlAgentRelease.ps1 -Version 0.1.0.8 -Publish -PublishPath /opt/nightowl/downloads/agent/windows
+```
+
+Para publicar em um host Linux via SSH/SCP:
+
+```powershell
+.\scripts\Build-NightOwlAgentRelease.ps1 -Version 0.1.0.8 -Publish -PublishHost root@nightowl.controlsul.com.br -PublishPath /opt/nightowl/downloads/agent/windows
+```
+
+A publicacao copia primeiro para um diretorio temporario, valida o ZIP no destino, move para `releases/<versao>` e atualiza `version.json` por ultimo. Se falhar antes do `version.json`, a versao publica anterior continua ativa.
 
 ### Politica de versao do agente Windows
 
-O updater aplica uma atualizacao somente quando a versao publicada em `version.json`
-for maior que a versao instalada em `agent.version.json`/`agent.config.json`, ou quando
-o manifesto vier com `force=true`.
+O updater aplica uma atualizacao somente quando a versao publicada em `version.json` for maior que a versao instalada em `agent.version.json`/`agent.config.json`, ou quando o manifesto vier com `force=true`.
 
-Use o formato de quatro partes:
+Use o formato numerico de quatro partes:
 
 ```text
 0.1.0.x
 ```
 
-Para qualquer novo pacote, mesmo uma correcao pequena de icone, script ou Tray,
-incremente a ultima parte. Exemplo:
+Para qualquer novo pacote, mesmo uma correcao pequena de icone, script ou Tray, incremente a ultima parte. O pipeline bloqueia downgrade e reutilizacao de versao; `-Force` deve ficar restrito a desenvolvimento local.
 
-```text
-0.1.0.4
-0.1.0.5
-0.1.0.6
-```
-
-O script `NightOwl.Agent.Windows/scripts/Publish-NightOwlAgentDownload.ps1`
-define a versao padrao publicada. Se necessario, tambem e possivel sobrescrever
-no comando:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File NightOwl.Agent.Windows\scripts\Publish-NightOwlAgentDownload.ps1 -Version "0.1.0.5"
-```
-
+Depois de publicar no servidor, valide no endpoint:
 Depois de publicar no servidor, valide no endpoint:
 
 ```powershell
@@ -163,17 +157,17 @@ Invoke-RestMethod "https://nightowl.controlsul.com.br/downloads/nightowl-agent/v
 Get-Content "C:\ProgramData\NightOwl\Logs\agent-updater.jsonl" -Tail 80
 ```
 
-## 9. Próximos passos de infraestrutura
+## 9. PrÃ³ximos passos de infraestrutura
 
-Ainda ficam para uma próxima etapa:
+Ainda ficam para uma prÃ³xima etapa:
 
 - unit file do `systemd` para Gunicorn
 - socket ou service do Gunicorn
-- configuração real do Nginx
+- configuraÃ§Ã£o real do Nginx
 - HTTPS com certificado
 - PostgreSQL real no servidor
 - backup do banco e da pasta `media`
-- timer de manutenção em produção
+- timer de manutenÃ§Ã£o em produÃ§Ã£o
 
 ## 10. NightOwl Agent Windows - Icon and Tray Asset
 
@@ -303,7 +297,7 @@ logs
 packages/jobs locais
 ```
 
-O Tray expoe uma atualização local/manual simples, mas as ações tecnicas continuam no painel. O menu visual fica restrito a:
+O Tray expoe uma atualizaÃ§Ã£o local/manual simples, mas as aÃ§Ãµes tecnicas continuam no painel. O menu visual fica restrito a:
 
 - Abrir NightOwl
 - Status do agente
@@ -311,7 +305,7 @@ O Tray expoe uma atualização local/manual simples, mas as ações tecnicas con
 - Reiniciar agente
 - Sobre
 
-A atualização remota/manual deve ser enviada pelo painel web do NightOwl, na tela de detalhe do endpoint, pelo botão **Atualizar agente**. Esse botão cria um job tecnico `update_agent` com payload controlado:
+A atualizaÃ§Ã£o remota/manual deve ser enviada pelo painel web do NightOwl, na tela de detalhe do endpoint, pelo botÃ£o **Atualizar agente**. Esse botÃ£o cria um job tecnico `update_agent` com payload controlado:
 
 ```json
 {

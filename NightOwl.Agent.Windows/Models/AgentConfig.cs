@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Windows.Models;
 
@@ -32,22 +33,25 @@ public sealed class AgentConfig
     public AgentIntervals Intervals { get; set; } = new();
 
     [JsonPropertyName("logPath")]
-    public string LogPath { get; set; } = @"C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl";
+    public string LogPath { get; set; } = NightOwlPaths.Current.AgentLogPath;
 
     [JsonPropertyName("statePath")]
-    public string StatePath { get; set; } = @"C:\ProgramData\NightOwl\AgentDotNet\agent-dotnet.state.json";
+    public string StatePath { get; set; } = NightOwlPaths.Current.StatePath;
+
+    [JsonPropertyName("pendingResultsPath")]
+    public string PendingResultsPath { get; set; } = NightOwlPaths.Current.PendingResultsDir;
 
     [JsonPropertyName("packagesPath")]
-    public string PackagesPath { get; set; } = @"C:\ProgramData\NightOwl\Packages";
+    public string PackagesPath { get; set; } = NightOwlPaths.Current.PackagesDir;
 
     [JsonPropertyName("cachePath")]
-    public string CachePath { get; set; } = @"C:\ProgramData\NightOwl\Cache";
+    public string CachePath { get; set; } = NightOwlPaths.Current.CacheDir;
 
     [JsonPropertyName("jobsPath")]
-    public string JobsPath { get; set; } = @"C:\ProgramData\NightOwl\Jobs";
+    public string JobsPath { get; set; } = NightOwlPaths.Current.StateDir;
 
     [JsonPropertyName("installPath")]
-    public string InstallPath { get; set; } = @"C:\ProgramData\NightOwl\AgentDotNet";
+    public string InstallPath { get; set; } = NightOwlPaths.Current.InstallDir;
 
     [JsonPropertyName("allowedJobTypes")]
     public List<string> AllowedJobTypes { get; set; } = new()

@@ -1,15 +1,16 @@
 using System.Text.Json;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Tray;
 
 internal sealed class AgentLocalState
 {
-    public string InstallPath { get; init; } = @"C:\ProgramData\NightOwl\AgentDotNet";
-    public string ConfigPath { get; init; } = @"C:\ProgramData\NightOwl\AgentDotNet\agent.config.json";
-    public string StatePath { get; init; } = @"C:\ProgramData\NightOwl\AgentDotNet\agent-dotnet.state.json";
-    public string LogPath { get; init; } = @"C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl";
-    public string ServiceName { get; init; } = "NightOwlAgentDotNet";
-    public string ServerBaseUrl { get; init; } = "https://nightowl.controlsul.com.br";
+    public string InstallPath { get; init; } = NightOwlPaths.Current.InstallDir;
+    public string ConfigPath { get; init; } = NightOwlPaths.Current.ConfigPath;
+    public string StatePath { get; init; } = NightOwlPaths.Current.StatePath;
+    public string LogPath { get; init; } = NightOwlPaths.Current.AgentLogPath;
+    public string ServiceName { get; init; } = NightOwlPaths.ServiceName;
+    public string ServerBaseUrl { get; init; } = NightOwlPaths.DefaultServerUrl;
     public string MachineId { get; init; } = "";
     public string EndpointId { get; init; } = "";
     public string AgentVersion { get; init; } = "";
@@ -17,11 +18,13 @@ internal sealed class AgentLocalState
 
     public static AgentLocalState Load()
     {
-        string installPath = @"C:\ProgramData\NightOwl\AgentDotNet";
-        string configPath = Path.Combine(installPath, "agent.config.json");
-        string statePath = Path.Combine(installPath, "agent-dotnet.state.json");
-        string logPath = @"C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl";
-        string server = "https://nightowl.controlsul.com.br";
+        NightOwlPaths paths = NightOwlPaths.Current;
+        paths.Bootstrap("tray", applyAcl: false);
+        string installPath = paths.InstallDir;
+        string configPath = paths.ResolveConfigPath();
+        string statePath = paths.StatePath;
+        string logPath = paths.AgentLogPath;
+        string server = NightOwlPaths.DefaultServerUrl;
         string machineId = "";
         string endpointId = "";
         string version = "";
@@ -43,7 +46,7 @@ internal sealed class AgentLocalState
         }
 
         DateTimeOffset? stateHeartbeat = null;
-        JsonDocument? state = ReadJson(statePath);
+        JsonDocument? state = ReadJson(statePath) ?? ReadJson(paths.LegacyStatePath);
         if (state is not null)
         {
             using (state)
@@ -59,7 +62,7 @@ internal sealed class AgentLocalState
 
         DateTimeOffset? logHeartbeat = ReadLastHeartbeatFromLog(logPath);
         DateTimeOffset? lastHeartbeat = Max(stateHeartbeat, logHeartbeat);
-        JsonDocument? versionDocument = ReadJson(Path.Combine(installPath, "agent.version.json"));
+        JsonDocument? versionDocument = ReadJson(paths.VersionPath);
         if (versionDocument is not null)
         {
             using (versionDocument)
@@ -74,8 +77,8 @@ internal sealed class AgentLocalState
             ConfigPath = configPath,
             StatePath = statePath,
             LogPath = logPath,
-            ServiceName = "NightOwlAgentDotNet",
-            ServerBaseUrl = string.IsNullOrWhiteSpace(server) ? "https://nightowl.controlsul.com.br" : server,
+            ServiceName = NightOwlPaths.ServiceName,
+            ServerBaseUrl = string.IsNullOrWhiteSpace(server) ? NightOwlPaths.DefaultServerUrl : server,
             MachineId = machineId,
             EndpointId = endpointId,
             AgentVersion = version,

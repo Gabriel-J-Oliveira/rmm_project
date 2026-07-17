@@ -47,3 +47,4 @@ secrets.json
 node_modules/
 dist/
 build/
+artifacts/
