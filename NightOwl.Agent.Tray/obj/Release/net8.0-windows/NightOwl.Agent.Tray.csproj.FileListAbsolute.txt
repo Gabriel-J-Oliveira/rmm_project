@@ -8,6 +8,8 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\System.ServiceProcess.ServiceController.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\runtimes\win\lib\net8.0\System.Diagnostics.EventLog.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\runtimes\win\lib\net8.0\System.ServiceProcess.ServiceController.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\NightOwl.Agent.Shared.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\NightOwl.Agent.Shared.pdb
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\NightOwl.Agent.Tray.csproj.AssemblyReference.cache
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\NightOwl.Agent.Tray.GeneratedMSBuildEditorConfig.editorconfig
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\NightOwl.Agent.Tray.AssemblyInfoInputs.cache

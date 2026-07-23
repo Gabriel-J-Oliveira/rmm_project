@@ -673,6 +673,16 @@
             "rid": "win"
           }
         }
+      },
+      "NightOwl.Agent.Shared/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v8.0",
+        "compile": {
+          "bin/placeholder/NightOwl.Agent.Shared.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/NightOwl.Agent.Shared.dll": {}
+        }
       }
     },
     "net8.0-windows7.0/win-x64": {
@@ -1331,6 +1341,16 @@
         },
         "build": {
           "buildTransitive/net6.0/_._": {}
+        }
+      },
+      "NightOwl.Agent.Shared/1.0.0": {
+        "type": "project",
+        "framework": ".NETCoreApp,Version=v8.0",
+        "compile": {
+          "bin/placeholder/NightOwl.Agent.Shared.dll": {}
+        },
+        "runtime": {
+          "bin/placeholder/NightOwl.Agent.Shared.dll": {}
         }
       }
     }
@@ -2362,12 +2382,18 @@
         "system.serviceprocess.servicecontroller.nuspec",
         "useSharedDesignerContext.txt"
       ]
+    },
+    "NightOwl.Agent.Shared/1.0.0": {
+      "type": "project",
+      "path": "../NightOwl.Agent.Shared/NightOwl.Agent.Shared.csproj",
+      "msbuildProject": "../NightOwl.Agent.Shared/NightOwl.Agent.Shared.csproj"
     }
   },
   "projectFileDependencyGroups": {
     "net8.0-windows7.0": [
       "Microsoft.Extensions.Hosting.WindowsServices >= 8.0.1",
-      "Microsoft.Extensions.Http >= 8.0.1"
+      "Microsoft.Extensions.Http >= 8.0.1",
+      "NightOwl.Agent.Shared >= 1.0.0"
     ]
   },
   "packageFolders": {
@@ -2394,7 +2420,11 @@
       "frameworks": {
         "net8.0-windows7.0": {
           "targetAlias": "net8.0-windows",
-          "projectReferences": {}
+          "projectReferences": {
+            "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
+              "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj"
+            }
+          }
         }
       },
       "warningProperties": {

@@ -49,7 +49,14 @@
         running: "Em execucao",
         completed: "Concluido",
         failed: "Falha",
+        timed_out: "Timeout",
         expired: "Expirado",
+        duplicate: "Duplicado",
+        unsupported: "Nao suportado",
+        invalid_parameters: "Parametros invalidos",
+        interrupted: "Interrompido",
+        rolled_back: "Rollback aplicado",
+        rollback_failed: "Rollback falhou",
         cancelled: "Cancelado",
         canceled: "Cancelado",
         force_inventory: "Forcar inventario",
@@ -182,6 +189,13 @@
             completed: 100,
             failed: 100,
             expired: 100,
+            timed_out: 100,
+            duplicate: 100,
+            unsupported: 100,
+            invalid_parameters: 100,
+            interrupted: 100,
+            rolled_back: 100,
+            rollback_failed: 100,
             cancelled: 100,
             canceled: 100
         };
@@ -259,6 +273,8 @@
         const health = asObject(payload.health);
         const attention = asObject(payload.attention);
         const collectionState = asObject(payload.collection_state);
+        const agentDiagnostic = asObject(payload.agent_diagnostic);
+        const agentUpdatePolicy = asObject(payload.agent_update_policy);
         const patches = maybeObject(payload.patches);
         const patchPending = patches && Array.isArray(patches.pending_updates_sample) ? patches.pending_updates_sample.map(function (item) {
             item = asObject(item);
@@ -319,8 +335,16 @@
                 lastDiskInventoryAt: agentHealth.last_disk_inventory_at || "",
                 lastPatchScanAt: agentHealth.last_patch_scan_at || "",
                 lastJobResultAt: collectionState.last_job_result_at || "",
-                lastError: agentHealth.last_error || "-"
+                lastError: agentHealth.last_error || "-",
+                updateChannel: agentUpdatePolicy.channel || endpoint.update_channel || "stable",
+                updatePolicy: agentUpdatePolicy.update_policy || endpoint.update_policy || "manual",
+                updateReason: agentUpdatePolicy.reason_code || "",
+                rolloutPercentage: agentUpdatePolicy.rollout_percentage,
+                rolloutBucket: agentUpdatePolicy.rollout_bucket,
+                pinnedVersion: agentUpdatePolicy.pinned_version || endpoint.pinned_agent_version || "",
+                updatePaused: !!(agentUpdatePolicy.update_paused || endpoint.update_paused)
             },
+            agentDiagnostic: agentDiagnostic,
             inventory: inventory,
             hardware: maybeObject(payload.hardware),
             network: maybeObject(payload.network) || { interfaces: [] },
@@ -716,8 +740,10 @@
                 { label: "Servico/status", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "-") },
                 { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
                 { label: "Ultima comunicacao", value: agent.lastRun },
+                { label: "Canal/politica", value: (agent.updateChannel || "stable") + " / " + (agent.updatePolicy || "manual") },
                 { label: "Ultimo job update", value: lastUpdateJobLabel(detail), className: "endpoint-fact-wide" },
                 { label: "Proximo heartbeat", value: agent.nextHeartbeat },
+                { label: "Rollout/motivo", value: (agent.rolloutPercentage == null ? "-" : agent.rolloutPercentage + "%") + " / " + (agent.updateReason || "-") },
                 { label: "Log atual", value: agent.logFile, mono: true, className: "endpoint-fact-wide" }
             ]) + '</div></div>'
         );
@@ -910,6 +936,64 @@
             "</section>";
     }
 
+    function renderDiagnostics(detail) {
+        const diagnostic = asObject(detail.agentDiagnostic);
+        if (!diagnostic.visible) {
+            return '<section class="panel endpoint-dense-card">' + emptyState("Diagnostico restrito", "Somente tecnicos autorizados podem ver estado operacional detalhado do agente.", "lock") + "</section>";
+        }
+        const summary = asObject(diagnostic.summary);
+        const lastError = asObject(diagnostic.last_error);
+        const updater = asObject(diagnostic.updater);
+        const queue = asObject(diagnostic.queue);
+        const indicator = diagnostic.indicator || "healthy";
+        const uptime = summary.agent_uptime_seconds ? formatDuration(summary.agent_uptime_seconds * 1000) : "-";
+        return '<div class="endpoint-compact-grid security-grid endpoint-diagnostics-grid">' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("stethoscope") + 'Resumo operacional</h2>' + severityBadge(indicator === "critical" || indicator === "offline" ? "critical" : indicator === "attention" ? "warning" : "success", indicator) + '</header>' +
+            factList([
+                { label: "Versao instalada", value: summary.installed_version || "-" },
+                { label: "Versao disponivel", value: summary.available_version || "-" },
+                { label: "Ultimo heartbeat", value: formatDate(summary.last_heartbeat_at) },
+                { label: "Ultimo inventario", value: formatDate(summary.last_inventory_at) },
+                { label: "Servico", value: summary.service_status || "-" },
+                { label: "Uptime agente", value: uptime },
+                { label: "Jobs ativos", value: summary.running_job_count == null ? "-" : summary.running_job_count },
+                { label: "Resultados pendentes", value: summary.pending_result_count == null ? "-" : summary.pending_result_count },
+                { label: "Usuario atual", value: summary.current_user || "-" },
+                { label: "IP atual", value: summary.current_ip || "-", mono: true }
+            ]) + '</article>' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("alert-triangle") + 'Ultimo erro</h2></header>' +
+            factList([
+                { label: "Componente", value: lastError.component || "-" },
+                { label: "Codigo", value: lastError.code || "-", mono: true },
+                { label: "Data", value: formatDate(lastError.at) },
+                { label: "Mensagem", value: lastError.message || "-", className: "endpoint-fact-wide" }
+            ]) + '</article>' +
+            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("download-cloud") + 'Updater e rollback</h2></header>' +
+            factList([
+                { label: "Update ID", value: updater.update_id || "-", mono: true },
+                { label: "Job ID", value: updater.job_id || "-", mono: true },
+                { label: "Versao anterior", value: updater.from_version || "-" },
+                { label: "Versao alvo", value: updater.target_version || "-" },
+                { label: "Etapa", value: updater.current_stage || "-", mono: true },
+                { label: "Resultado", value: updater.status || "-" },
+                { label: "Health check", value: updater.health_check_confirmed ? "Confirmado" : "Pendente/nao informado" },
+                { label: "Rollback", value: (updater.rollback_status || "-") + " / tentativa " + (updater.rollback_attempt || 0) },
+                { label: "Erro original", value: [updater.error_code, updater.error_message].filter(Boolean).join(" - ") || "-", className: "endpoint-fact-wide" },
+                { label: "Erro rollback", value: [updater.rollback_error_code, updater.rollback_error_message].filter(Boolean).join(" - ") || "-", className: "endpoint-fact-wide" },
+                { label: "Package URL", value: updater.package_url || "-", mono: true, className: "endpoint-fact-wide" }
+            ]) + '</article>' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("database") + 'Fila de resultados</h2></header>' +
+            factList([
+                { label: "Pendentes", value: queue.pending_count == null ? "-" : queue.pending_count },
+                { label: "Mais antigo", value: formatDate(queue.oldest_pending_at) },
+                { label: "Em retry", value: queue.retrying_count == null ? "-" : queue.retrying_count },
+                { label: "Quarentena", value: queue.quarantined_count == null ? "-" : queue.quarantined_count },
+                { label: "Fila cheia", value: queue.queue_full ? "Sim" : "Nao" },
+                { label: "Ultimo erro envio", value: queue.last_send_error || "-", className: "endpoint-fact-wide" }
+            ]) + '</article>' +
+        '</div>';
+    }
+
     function panel(name) {
         return root.querySelector('[data-endpoint-tab-panel="' + name + '"]');
     }
@@ -923,7 +1007,8 @@
             security: renderSecurity,
             patches: renderPatches,
             activity: renderActivity,
-            tasks: renderTasks
+            tasks: renderTasks,
+            diagnostics: renderDiagnostics
         };
         Object.keys(renderers).forEach(function (name) {
             const target = panel(name);
@@ -1195,19 +1280,31 @@
         if (!job) return;
         const result = job.resultJson || {};
         openDrawer("Tarefa", job.name, job.command, '<section><h3>Execucao</h3>' + factList([
+            { label: "Job ID", value: job.jobId || job.id, mono: true },
+            { label: "Result ID", value: job.resultId || "-", mono: true },
+            { label: "Correlation ID", value: job.correlationId || "-", mono: true },
             { label: "Status", value: labels[job.status] || job.status },
             { label: "Tipo", value: labels[job.type] || job.type },
+            { label: "Tentativa", value: job.attempt || "-" },
+            { label: "Timeout", value: job.timeoutSeconds ? job.timeoutSeconds + "s" : "-" },
             { label: "Endpoint", value: job.endpoint || (endpointDetail && endpointDetail.hostname) || "-" },
             { label: "Versao anterior", value: result.previous_version || result.previousVersion || (result.details && (result.details.previous_version || result.details.previousVersion)) || "-" },
             { label: "Versao nova", value: result.installed_version || result.installedVersion || (result.details && (result.details.installed_version || result.details.installedVersion)) || result.version || "-" },
+            { label: "Update ID", value: result.update_id || result.updateId || "-", mono: true },
+            { label: "From/Target", value: [result.from_version, result.target_version].filter(Boolean).join(" -> ") || "-" },
+            { label: "Falha em", value: result.failure_stage || "-" },
+            { label: "Rollback", value: result.rollback_confirmed ? "Confirmado" : (result.update_status === "rolled_back" ? "Aplicado" : "-") },
+            { label: "Codigo", value: job.errorCode || result.error_code || result.original_error_code || "-", mono: true },
             { label: "Resultado", value: jobResultLabel(job) },
             { label: "Criado por", value: job.createdBy },
             { label: "Criado em", value: formatDate(job.createdAt) },
             { label: "Despachado em", value: formatDate(job.dispatchedAt) },
             { label: "Iniciado em", value: formatDate(job.startedAt) },
             { label: "Finalizado em", value: formatDate(job.finishedAt) },
+            { label: "Recebido backend", value: formatDate(job.receivedAt) },
             { label: "Duracao", value: formatDuration(job.durationMs) },
-            { label: "Exit code", value: job.exitCode == null ? "-" : job.exitCode }
+            { label: "Exit code", value: job.exitCode == null ? "-" : job.exitCode },
+            { label: "Output truncado", value: job.outputTruncated ? "Sim" : "Nao" }
         ]) + '</section><section><h3>Payload</h3><pre>' + escapeHtml(JSON.stringify(job.payload || {}, null, 2)) + '</pre></section><section><h3>Resultado JSON</h3><pre>' + escapeHtml(JSON.stringify(job.resultJson || {}, null, 2)) + '</pre></section><section><h3>Stdout</h3><pre>' + escapeHtml(job.stdout || "Sem saida.") + '</pre></section><section><h3>Stderr</h3><pre>' + escapeHtml(job.stderr || job.errorMessage || "Sem erro.") + '</pre></section><section><h3>Timeline</h3><p>' + escapeHtml((job.timeline || []).join(" -> ") || "-") + '</p></section><div class="event-drawer-actions"><button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button><button type="button" data-refresh-endpoint>Atualizar dados</button></div>');
     }
 

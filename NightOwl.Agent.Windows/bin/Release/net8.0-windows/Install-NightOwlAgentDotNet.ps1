@@ -1,12 +1,11 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$ServerUrl,
+    [string]$ServerUrl = "https://nightowl.controlsul.com.br",
 
     [string]$EnrollmentToken = "",
     [string]$ManualValidationToken = "",
     [string]$AgentToken = "",
     [string]$PackageUrl = "",
-    [string]$InstallPath = "C:\ProgramData\NightOwl\AgentDotNet",
+    [string]$InstallPath = "",
     [string]$ServiceName = "NightOwlAgentDotNet",
     [string]$DisplayName = "NightOwl RMM Agent",
     [switch]$InstallAsService,
@@ -19,10 +18,168 @@ param(
     [switch]$NoGui,
     [switch]$NoTray,
     [switch]$StartTray,
-    [switch]$DebugLog
+    [switch]$DebugLog,
+    [switch]$Install,
+    [switch]$Repair,
+    [switch]$Reinstall,
+    [switch]$ForceRecovery,
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = "Stop"
+
+function New-NightOwlPaths([string]$RequestedInstallPath) {
+    $root = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_HOME)) { "C:\ProgramData\NightOwl" } else { $env:NIGHTOWL_HOME }
+    $install = if ([string]::IsNullOrWhiteSpace($RequestedInstallPath)) { Join-Path $root "AgentDotNet" } else { $RequestedInstallPath }
+    $configDir = Join-Path $root "Config"
+    $stateDir = Join-Path $root "State"
+    $logsDir = Join-Path $root "Logs"
+    $updatesDir = Join-Path $root "Updates"
+    return [ordered]@{
+        Root = $root
+        Install = $install
+        ConfigDir = $configDir
+        ConfigPath = Join-Path $configDir "agent.config.json"
+        LegacyConfigPath = Join-Path $install "agent.config.json"
+        IdentityDir = Join-Path $root "Identity"
+        IdentityPath = Join-Path (Join-Path $root "Identity") "agent.identity.json"
+        StateDir = $stateDir
+        StatePath = Join-Path $stateDir "agent.state.json"
+        LegacyStatePath = Join-Path $install "agent-dotnet.state.json"
+        PendingResultsPath = Join-Path $stateDir "pending-results"
+        Logs = $logsDir
+        AgentLog = Join-Path $logsDir "agent-dotnet.jsonl"
+        InstallLog = Join-Path $logsDir "service-install.log"
+        Packages = Join-Path $root "Packages"
+        Cache = Join-Path $root "Cache"
+        Updates = $updatesDir
+        UpdatesDownloads = Join-Path $updatesDir "Downloads"
+        UpdatesStaging = Join-Path $updatesDir "Staging"
+        UpdatesBackup = Join-Path $updatesDir "Backup"
+        UpdatesPending = Join-Path $updatesDir "Pending"
+        Diagnostics = Join-Path $root "Diagnostics"
+    }
+}
+
+$script:NightOwlPaths = New-NightOwlPaths -RequestedInstallPath $InstallPath
+$InstallPath = [string]$script:NightOwlPaths.Install
+$script:UpdateMutex = $null
+$script:UpdateMutexAcquired = $false
+$script:Report = $null
+$script:Operation = "install"
+$script:LifecycleErrorCodes = @(
+    "INSTALL_ADMIN_REQUIRED",
+    "INSTALL_UPDATE_IN_PROGRESS",
+    "INSTALL_DOWNLOAD_FAILED",
+    "INSTALL_HASH_MISMATCH",
+    "INSTALL_PACKAGE_INVALID",
+    "INSTALL_SERVICE_CREATE_FAILED",
+    "INSTALL_ENROLLMENT_FAILED",
+    "INSTALL_HEALTHCHECK_FAILED",
+    "REPAIR_UPDATE_IN_PROGRESS",
+    "REPAIR_CONFIG_INVALID",
+    "REPAIR_IDENTITY_INVALID",
+    "REPAIR_IDENTITY_CONFLICT",
+    "REPAIR_BINARY_MISSING",
+    "REPAIR_BINARY_HASH_MISMATCH",
+    "REPAIR_SERVICE_INVALID",
+    "REPAIR_ACL_FAILED",
+    "REPAIR_HEALTHCHECK_FAILED",
+    "REPAIR_FORCE_RECOVERY_REQUIRED",
+    "REINSTALL_UPDATE_IN_PROGRESS",
+    "REINSTALL_IDENTITY_PRESERVED",
+    "REINSTALL_REENROLLMENT_REQUIRED"
+)
+
+function Get-OperationName {
+    $selected = @()
+    if ($Install) { $selected += "install" }
+    if ($Repair) { $selected += "repair" }
+    if ($Reinstall) { $selected += "reinstall" }
+    if ($selected.Count -gt 1) {
+        throw "Use apenas um modo por execucao: -Install, -Repair ou -Reinstall."
+    }
+    if ($selected.Count -eq 0) { return "install" }
+    return $selected[0]
+}
+
+function Get-OperationErrorCode([string]$Suffix) {
+    switch ($script:Operation) {
+        "repair" { return "REPAIR_$Suffix" }
+        "reinstall" { return "REINSTALL_$Suffix" }
+        default { return "INSTALL_$Suffix" }
+    }
+}
+
+function New-OperationReport([string]$Operation) {
+    return [ordered]@{
+        operation = $Operation
+        started_at = (Get-Date).ToUniversalTime().ToString("o")
+        completed_at = $null
+        status = "running"
+        installed_version = ""
+        previous_version = ""
+        machine_id = ""
+        identity_preserved = $false
+        enrollment_performed = $false
+        service_status = ""
+        actions = New-Object System.Collections.ArrayList
+        warnings = New-Object System.Collections.ArrayList
+        error_code = ""
+        error_message = ""
+    }
+}
+
+function Add-ReportAction([string]$Action, $Metadata = @{}) {
+    if ($null -eq $script:Report) { return }
+    [void]$script:Report.actions.Add([ordered]@{
+        timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        action = $Action
+        metadata = $Metadata
+    })
+}
+
+function Add-ReportWarning([string]$Code, [string]$Message, $Metadata = @{}) {
+    if ($null -eq $script:Report) { return }
+    [void]$script:Report.warnings.Add([ordered]@{
+        timestamp = (Get-Date).ToUniversalTime().ToString("o")
+        code = $Code
+        message = $Message
+        metadata = $Metadata
+    })
+}
+
+function Protect-SecretValue([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+    if ($Value.Length -le 8) { return "***" }
+    return ("{0}...{1}" -f $Value.Substring(0, 4), $Value.Substring($Value.Length - 4))
+}
+
+function Write-OperationReport([string]$Status, [string]$ErrorCode = "", [string]$ErrorMessage = "") {
+    if ($null -eq $script:Report) { return }
+    try {
+        $script:Report.completed_at = (Get-Date).ToUniversalTime().ToString("o")
+        $script:Report.status = $Status
+        $script:Report.error_code = $ErrorCode
+        $script:Report.error_message = $ErrorMessage
+        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if ($service) {
+            $script:Report.service_status = [string]$service.Status
+        }
+        $diagDir = [string]$script:NightOwlPaths.Diagnostics
+        New-Item -ItemType Directory -Force -Path $diagDir | Out-Null
+        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
+        $path = Join-Path $diagDir ("{0}-report-{1}.json" -f $script:Operation, $stamp)
+        $script:Report | ConvertTo-Json -Depth 8 | Set-Content -Path $path -Encoding UTF8
+        Write-InstallLog "operation.report.written" "Relatorio da operacao gravado." @{ operation = $script:Operation; path = $path; status = $Status; error_code = $ErrorCode }
+        if ($NonInteractive) {
+            $script:Report | ConvertTo-Json -Depth 8
+        }
+    }
+    catch {
+        Write-InstallLog "operation.report.failed" "Falha ao gravar relatorio." @{ operation = $script:Operation; error = $_.Exception.Message }
+    }
+}
 
 function Write-Step($Status, $Message) {
     Write-Host ("[{0}] {1}" -f $Status, $Message)
@@ -30,7 +187,7 @@ function Write-Step($Status, $Message) {
 
 function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
     try {
-        $logDir = "C:\ProgramData\NightOwl\Logs"
+        $logDir = [string]$script:NightOwlPaths.Logs
         New-Item -ItemType Directory -Force -Path $logDir | Out-Null
         $entry = [ordered]@{
             timestamp = (Get-Date).ToUniversalTime().ToString("o")
@@ -38,7 +195,7 @@ function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
             message = $Message
             metadata = $Metadata
         }
-        $entry | ConvertTo-Json -Depth 6 -Compress | Add-Content -Path (Join-Path $logDir "service-install.log") -Encoding UTF8
+        $entry | ConvertTo-Json -Depth 6 -Compress | Add-Content -Path ([string]$script:NightOwlPaths.InstallLog) -Encoding UTF8
     }
     catch {}
 }
@@ -47,7 +204,120 @@ function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "Execute este instalador em um PowerShell como Administrador."
+        throw "INSTALL_ADMIN_REQUIRED: Execute este instalador em um PowerShell como Administrador."
+    }
+}
+
+function Acquire-UpdaterLockOrThrow {
+    try {
+        try {
+            $script:UpdateMutex = New-Object System.Threading.Mutex($false, "Global\NightOwl.Agent.Update")
+        }
+        catch {
+            $script:UpdateMutex = New-Object System.Threading.Mutex($false, "NightOwl.Agent.Update")
+        }
+        $script:UpdateMutexAcquired = $script:UpdateMutex.WaitOne([TimeSpan]::Zero)
+        if (-not $script:UpdateMutexAcquired) {
+            throw (Get-OperationErrorCode "UPDATE_IN_PROGRESS")
+        }
+        Add-ReportAction "updater.lock.acquired"
+        Write-InstallLog "operation.update_lock.acquired" "Lock global do updater adquirido." @{ operation = $script:Operation }
+    }
+    catch {
+        if ($_.Exception.Message -like "*UPDATE_IN_PROGRESS*") { throw }
+        throw ("{0}: nao foi possivel adquirir lock global do updater. {1}" -f (Get-OperationErrorCode "UPDATE_IN_PROGRESS"), $_.Exception.Message)
+    }
+}
+
+function Release-UpdaterLock {
+    if ($script:UpdateMutexAcquired -and $script:UpdateMutex) {
+        try { $script:UpdateMutex.ReleaseMutex() | Out-Null } catch {}
+        $script:UpdateMutexAcquired = $false
+    }
+    if ($script:UpdateMutex) {
+        try { $script:UpdateMutex.Dispose() } catch {}
+        $script:UpdateMutex = $null
+    }
+}
+
+function Get-UpdateStateInfo {
+    $path = Join-Path ([string]$script:NightOwlPaths.StateDir) "update-state.json"
+    if (-not (Test-Path $path)) { return $null }
+    $state = Read-JsonFile $path
+    if ($null -eq $state) {
+        Add-ReportWarning "UPDATE_STATE_INVALID" "update-state.json existe, mas nao foi possivel ler JSON." @{ path = $path }
+        Write-InstallLog "operation.update_state.invalid" "update-state.json invalido preservado." @{ operation = $script:Operation; path = $path }
+        return [pscustomobject]@{ status = "invalid"; current_stage = "invalid"; update_id = ""; job_id = "" }
+    }
+    return $state
+}
+
+function Assert-NoActiveUpdate {
+    $runningUpdater = Get-Process -Name "NightOwl.Agent.Updater" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
+    if ($runningUpdater) {
+        $code = Get-OperationErrorCode "UPDATE_IN_PROGRESS"
+        Write-InstallLog "operation.blocked.update_process" "Updater em execucao; operacao bloqueada." @{ operation = $script:Operation; process_count = @($runningUpdater).Count; error_code = $code }
+        throw "${code}: NightOwl.Agent.Updater.exe esta em execucao."
+    }
+
+    $state = Get-UpdateStateInfo
+    if ($null -eq $state) { return }
+
+    $stage = [string]$state.current_stage
+    $status = [string]$state.status
+    $activeStages = @(
+        "downloading", "validating", "staging", "creating_backup", "stopping_service",
+        "replacing_files", "starting_service", "waiting_health_check",
+        "rollback_required", "rollback_starting", "rollback_restoring_files",
+        "rollback_stopping_service", "rollback_starting_service", "rollback_waiting_health_check"
+    )
+    if (($status -ieq "running") -or ($activeStages -contains $stage)) {
+        $code = Get-OperationErrorCode "UPDATE_IN_PROGRESS"
+        Write-InstallLog "operation.blocked.update_active" "Update ou rollback ativo; operacao bloqueada." @{ operation = $script:Operation; update_id = $state.update_id; job_id = $state.job_id; stage = $stage; status = $status; error_code = $code }
+        throw "${code}: update/rollback ativo ($stage). Nao modificando binarios."
+    }
+
+    $rollbackRequired = $false
+    try { $rollbackRequired = [bool]$state.rollback_required } catch {}
+    if (($stage -ieq "rollback_failed" -or $rollbackRequired) -and $script:Operation -in @("repair", "reinstall") -and -not $ForceRecovery) {
+        Write-InstallLog "operation.blocked.force_recovery_required" "Estado de rollback exige ForceRecovery." @{ operation = $script:Operation; update_id = $state.update_id; job_id = $state.job_id; stage = $stage; rollback_required = $rollbackRequired }
+        throw "REPAIR_FORCE_RECOVERY_REQUIRED: estado de rollback detectado. Use -ForceRecovery -Force somente em recuperacao manual."
+    }
+
+    Add-ReportAction "update-state.preserved" @{ stage = $stage; status = $status; update_id = [string]$state.update_id }
+}
+
+function Assert-ForceRecoveryAllowed {
+    if (-not $ForceRecovery) { return }
+    if (-not $Force -and -not $NonInteractive) {
+        $answer = Read-Host "ForceRecovery preserva evidencias do updater e corrige binarios sem alterar update-state. Digite NIGHTOWL para continuar"
+        if ($answer -ne "NIGHTOWL") {
+            throw "REPAIR_FORCE_RECOVERY_REQUIRED: confirmacao de ForceRecovery cancelada."
+        }
+    }
+    elseif ($NonInteractive -and -not $Force) {
+        throw "REPAIR_FORCE_RECOVERY_REQUIRED: use -Force junto com -NonInteractive para ForceRecovery."
+    }
+    Add-ReportWarning "FORCE_RECOVERY" "ForceRecovery habilitado para recuperacao manual." @{ operation = $script:Operation }
+    Write-InstallLog "operation.force_recovery.enabled" "ForceRecovery habilitado." @{ operation = $script:Operation }
+}
+
+function Set-NightOwlSecureAcl([string[]]$Paths, [switch]$AllowUsersRead) {
+    foreach ($path in $Paths) {
+        try {
+            if (-not (Test-Path $path)) { continue }
+            & icacls.exe $path /inheritance:r | Out-Null
+            if ($AllowUsersRead) {
+                & icacls.exe $path /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" "Users:(OI)(CI)(RX)" | Out-Null
+            }
+            else {
+                & icacls.exe $path /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" | Out-Null
+            }
+            Write-InstallLog "path.acl.applied" "ACL segura aplicada." @{ path = $path }
+        }
+        catch {
+            Write-InstallLog "path.acl.failed" "Falha ao aplicar ACL." @{ path = $path; error = $_.Exception.Message }
+        }
     }
 }
 
@@ -154,6 +424,36 @@ function Read-JsonFile([string]$Path) {
     }
 }
 
+function Test-JsonFile([string]$Path) {
+    if (-not (Test-Path $Path)) { return $true }
+    try {
+        Get-Content -Path $Path -Raw | ConvertFrom-Json | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Preserve-File([string]$Path, [string]$Reason) {
+    if (-not (Test-Path $Path)) { return "" }
+    $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
+    $destination = "$Path.preserved-$stamp"
+    Copy-Item -Path $Path -Destination $destination -Force
+    Write-InstallLog "file.preserved" "Arquivo preservado antes de correcao." @{ path = $Path; preserved = $destination; reason = $Reason }
+    Add-ReportWarning "FILE_PRESERVED" "Arquivo preservado antes de correcao." @{ path = $Path; preserved = $destination; reason = $Reason }
+    return $destination
+}
+
+function Repair-JsonFileIfInvalid([string]$Path, [string]$ErrorCode) {
+    if ((Test-Path $Path) -and -not (Test-JsonFile $Path)) {
+        Preserve-File -Path $Path -Reason $ErrorCode | Out-Null
+        Rename-Item -Path $Path -NewName ([System.IO.Path]::GetFileName($Path) + ".invalid") -Force
+        Write-InstallLog "json.invalid.preserved" "JSON invalido preservado e removido do caminho ativo." @{ path = $Path; error_code = $ErrorCode }
+        Add-ReportWarning $ErrorCode "JSON invalido preservado; sera recriado se houver fonte confiavel." @{ path = $Path }
+    }
+}
+
 function Get-JsonProperty($Object, [string[]]$Names) {
     if ($null -eq $Object) { return "" }
     foreach ($name in $Names) {
@@ -183,7 +483,7 @@ function Resolve-MachineId([string]$ConfigPath, [string]$StatePath) {
 
     $candidates = @(
         @{ Path = $StatePath; Source = "dotnet_state" },
-        @{ Path = "C:\ProgramData\NightOwl\Agent\agent.state.json"; Source = "powershell_state" },
+        @{ Path = (Join-Path ([string]$script:NightOwlPaths.Root) "Agent\agent.state.json"); Source = "powershell_state" },
         @{ Path = "C:\RMM\agent.state.json"; Source = "legacy_rmm_state" }
     )
     foreach ($candidate in $candidates) {
@@ -445,6 +745,87 @@ function Save-AgentConfig($Path, $Config) {
     $Config | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
 }
 
+function Get-ConfigAgentToken($Config) {
+    return Get-JsonProperty $Config @("agentToken", "agent_token", "AgentToken")
+}
+
+function Get-ConfigServerUrl($Config) {
+    return Get-JsonProperty $Config @("serverBaseUrl", "server_base_url", "ServerBaseUrl")
+}
+
+function Read-AgentVersion([string]$InstallDir, $Config) {
+    $versionFile = Read-JsonFile (Join-Path $InstallDir "agent.version.json")
+    $version = Get-JsonProperty $versionFile @("version")
+    if (-not [string]::IsNullOrWhiteSpace($version)) { return $version }
+    $configVersion = Get-JsonProperty $Config @("agentVersion", "agent_version")
+    if (-not [string]::IsNullOrWhiteSpace($configVersion)) { return $configVersion }
+    return ""
+}
+
+function Assert-RequiredPackageFiles([string]$SourceDir) {
+    $required = @(
+        "NightOwl.Agent.Windows.exe",
+        "NightOwl.Agent.Tray.exe",
+        "NightOwl.Agent.Updater.exe",
+        "NightOwl.Agent.Diagnostics.exe",
+        "agent.version.json",
+        "assets\icons\NightOwl.ico"
+    )
+    foreach ($relative in $required) {
+        $path = Join-Path $SourceDir $relative
+        if (-not (Test-Path $path)) {
+            throw "INSTALL_PACKAGE_INVALID: pacote sem arquivo obrigatorio $relative"
+        }
+    }
+}
+
+function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
+    Assert-RequiredPackageFiles -SourceDir $SourceDir
+    $protectedNames = @(
+        "agent.config.json",
+        "agent.identity.json",
+        "agent.state.json",
+        "agent-dotnet.state.json",
+        "update-state.json"
+    )
+    New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+    foreach ($item in Get-ChildItem -Path $SourceDir -Force) {
+        if ($protectedNames -contains $item.Name) {
+            Write-InstallLog "binary.copy.protected_skipped" "Arquivo persistente ignorado durante copia de binarios." @{ name = $item.Name }
+            continue
+        }
+        if ($item.Name -match "\.preserved-" -or $item.Name -in @("Config", "Identity", "State", "Logs", "Diagnostics", "Updates")) {
+            continue
+        }
+        Copy-Item -Path $item.FullName -Destination $DestinationDir -Recurse -Force -Exclude @("*.pdb")
+    }
+    Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir }
+}
+
+function Stop-TrayIfExists {
+    Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$IdentityPath, [string]$ExpectedMachineId, [string]$ExePath) {
+    $errors = @()
+    $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $service) {
+        $errors += "service_missing"
+    }
+    elseif ($service.Status -ne "Running") {
+        $errors += "service_not_running:$($service.Status)"
+    }
+    if (-not (Test-Path $ExePath)) { $errors += "agent_exe_missing" }
+    if (-not (Test-JsonFile $ConfigPath)) { $errors += "config_invalid" }
+    if (-not (Test-JsonFile $IdentityPath)) { $errors += "identity_invalid" }
+    $identity = Read-JsonFile $IdentityPath
+    $identityMachineId = Get-JsonProperty $identity @("machine_id", "machineId")
+    if ((Test-MachineId $ExpectedMachineId) -and (Test-MachineId $identityMachineId) -and $identityMachineId -ne $ExpectedMachineId) {
+        $errors += "machine_id_mismatch"
+    }
+    return $errors
+}
+
 function Write-StateMachineId($Path, $MachineId) {
     $state = Read-JsonFile $Path
     if ($null -eq $state) {
@@ -576,7 +957,17 @@ function Test-RecentHeartbeat([string]$LogPath) {
     return $false
 }
 
+$script:Operation = Get-OperationName
+$script:Report = New-OperationReport -Operation $script:Operation
+try {
 Assert-Elevated
+Acquire-UpdaterLockOrThrow
+Assert-ForceRecoveryAllowed
+Assert-NoActiveUpdate
+
+if ($NonInteractive) {
+    $NoGui = $true
+}
 
 $serverBase = Normalize-ServerUrl $ServerUrl
 if ([string]::IsNullOrWhiteSpace($serverBase)) {
@@ -585,26 +976,61 @@ if ([string]::IsNullOrWhiteSpace($serverBase)) {
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourcePath = $scriptRoot
-$configPath = Join-Path $InstallPath "agent.config.json"
-$statePath = "C:\ProgramData\NightOwl\AgentDotNet\agent-dotnet.state.json"
-$logPath = "C:\ProgramData\NightOwl\Logs\agent-dotnet.jsonl"
+$configPath = [string]$script:NightOwlPaths.ConfigPath
+$legacyConfigPath = [string]$script:NightOwlPaths.LegacyConfigPath
+$statePath = [string]$script:NightOwlPaths.StatePath
+$legacyStatePath = [string]$script:NightOwlPaths.LegacyStatePath
+$logPath = [string]$script:NightOwlPaths.AgentLog
 $enrollResponse = $null
+$existingInstallation = Test-Path (Join-Path $InstallPath "NightOwl.Agent.Windows.exe")
+Write-InstallLog ("operation.{0}.started" -f $script:Operation) "Operacao do agente iniciada." @{
+    operation = $script:Operation
+    server_url = $serverBase
+    install_path = $InstallPath
+    existing_installation = $existingInstallation
+    force_recovery = [bool]$ForceRecovery
+}
+Add-ReportAction "operation.started" @{ server_url = $serverBase; install_path = $InstallPath; existing_installation = $existingInstallation }
 
 $directories = @(
-    "C:\ProgramData\NightOwl",
+    [string]$script:NightOwlPaths.Root,
     $InstallPath,
-    "C:\ProgramData\NightOwl\Logs",
-    "C:\ProgramData\NightOwl\Jobs",
-    "C:\ProgramData\NightOwl\Packages",
-    "C:\ProgramData\NightOwl\Cache",
-    "C:\ProgramData\NightOwl\Updates",
-    "C:\ProgramData\NightOwl\Updates\Downloads",
-    "C:\ProgramData\NightOwl\Updates\Staging",
-    "C:\ProgramData\NightOwl\Backups"
+    [string]$script:NightOwlPaths.ConfigDir,
+    [string]$script:NightOwlPaths.IdentityDir,
+    [string]$script:NightOwlPaths.StateDir,
+    [string]$script:NightOwlPaths.PendingResultsPath,
+    [string]$script:NightOwlPaths.Logs,
+    [string]$script:NightOwlPaths.Packages,
+    [string]$script:NightOwlPaths.Cache,
+    [string]$script:NightOwlPaths.Updates,
+    [string]$script:NightOwlPaths.UpdatesDownloads,
+    [string]$script:NightOwlPaths.UpdatesStaging,
+    [string]$script:NightOwlPaths.UpdatesBackup,
+    [string]$script:NightOwlPaths.UpdatesPending,
+    [string]$script:NightOwlPaths.Diagnostics
 )
 foreach ($dir in $directories) {
+    $existed = Test-Path $dir
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    if (-not $existed) {
+        Write-InstallLog "path.directory.created" "Diretorio criado." @{ path = $dir }
+        Add-ReportAction "directory.created" @{ path = $dir }
+    }
 }
+Set-NightOwlSecureAcl -Paths @(
+    [string]$script:NightOwlPaths.ConfigDir,
+    [string]$script:NightOwlPaths.IdentityDir,
+    [string]$script:NightOwlPaths.StateDir
+) -AllowUsersRead
+Set-NightOwlSecureAcl -Paths @(
+    [string]$script:NightOwlPaths.Updates,
+    [string]$script:NightOwlPaths.Diagnostics
+)
+
+$configInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_CONFIG_INVALID" } else { "INSTALL_CONFIG_INVALID" }
+$identityInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_IDENTITY_INVALID" } else { "INSTALL_IDENTITY_INVALID" }
+Repair-JsonFileIfInvalid -Path $configPath -ErrorCode $configInvalidCode
+Repair-JsonFileIfInvalid -Path ([string]$script:NightOwlPaths.IdentityPath) -ErrorCode $identityInvalidCode
 
 $localExe = Join-Path $sourcePath "NightOwl.Agent.Windows.exe"
 $tempPackageDir = $null
@@ -618,18 +1044,60 @@ else {
     Write-Step "OK" "Modo local/offline ativo"
 }
 
+$preservedConfig = Read-JsonFile $configPath
+if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
+    Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
+    Write-InstallLog "path.file.migrated" "Config legado copiado para Config." @{ source = $legacyConfigPath; destination = $configPath }
+    $preservedConfig = Read-JsonFile $configPath
+}
+elseif (Test-Path $legacyConfigPath) {
+    Write-InstallLog "path.legacy.preserved" "Config legado preservado; Config ja existe." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
+}
+
+$existingToken = Get-ConfigAgentToken $preservedConfig
+$existingServer = Get-ConfigServerUrl $preservedConfig
+if (-not [string]::IsNullOrWhiteSpace($existingServer) -and [string]::IsNullOrWhiteSpace($ServerUrl)) {
+    $serverBase = Normalize-ServerUrl $existingServer
+}
+
+if ((-not (Test-Path $statePath)) -and (Test-Path $legacyStatePath)) {
+    Copy-Item -Path $legacyStatePath -Destination $statePath -Force
+    Write-InstallLog "path.file.migrated" "State legado copiado para State." @{ source = $legacyStatePath; destination = $statePath }
+}
+
 $identity = Resolve-MachineId -ConfigPath $configPath -StatePath $statePath
 $machineId = $identity.Value
 $identitySource = $identity.Source
-$preservedConfig = Read-JsonFile $configPath
+$existingIdentity = Read-JsonFile ([string]$script:NightOwlPaths.IdentityPath)
+$existingIdentityMachineId = Get-JsonProperty $existingIdentity @("machine_id", "machineId")
+if ((Test-MachineId $machineId) -and (Test-MachineId $existingIdentityMachineId) -and $existingIdentityMachineId -ne $machineId) {
+    Preserve-File -Path ([string]$script:NightOwlPaths.IdentityPath) -Reason "REPAIR_IDENTITY_CONFLICT" | Out-Null
+    Write-InstallLog "identity.conflict" "Conflito entre Config/State e Identity; Config/State sera fonte de verdade." @{
+        config_or_state_machine_id = (Protect-SecretValue $machineId)
+        identity_machine_id = (Protect-SecretValue $existingIdentityMachineId)
+    }
+    Add-ReportWarning "REPAIR_IDENTITY_CONFLICT" "Conflito de machine_id; Config/State preservado como fonte operacional." @{}
+}
+$script:Report.machine_id = Protect-SecretValue $machineId
+$script:Report.identity_preserved = Test-MachineId $machineId
 
 if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken) -and $EnrollmentToken.StartsWith("rmm_live_")) {
     Write-Step "WARN" "EnrollmentToken parece ser agent token legado/dev; usando como AgentToken."
     $AgentToken = $EnrollmentToken
 }
+elseif ([string]::IsNullOrWhiteSpace($AgentToken) -and -not [string]::IsNullOrWhiteSpace($existingToken) -and (Test-MachineId $machineId)) {
+    $AgentToken = $existingToken
+    Write-Step "OK" "Identidade existente preservada; enrollment nao sera executado"
+    Write-InstallLog "identity.preserved" "Token e machine_id existentes preservados." @{
+        machine_id = (Protect-SecretValue $machineId)
+        operation = $script:Operation
+    }
+    Add-ReportAction "identity.preserved" @{ source = $identitySource }
+}
 elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
     Write-Step "OK" "Executando enrollment no servidor NightOwl"
     $enrollResponse = Invoke-NightOwlEnrollment -BaseUrl $serverBase -EnrollmentTokenValue $EnrollmentToken -ManualTokenValue $ManualValidationToken -MachineId $machineId -InstallPath $InstallPath -NoGuiMode:$NoGui
+    $script:Report.enrollment_performed = $true
     if ($enrollResponse.agent_token) {
         $AgentToken = [string]$enrollResponse.agent_token
     }
@@ -648,10 +1116,11 @@ if ([string]::IsNullOrWhiteSpace($AgentToken)) {
 
 if ($InstallAsService) {
     Stop-ServiceIfExists $ServiceName
+    Stop-TrayIfExists
 }
 
-$exclude = @("*.pdb", "agent.config.json")
-Copy-Item -Path (Join-Path $sourcePath "*") -Destination $InstallPath -Recurse -Force -Exclude $exclude
+$previousVersion = Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig
+Copy-AgentBinaries -SourceDir $sourcePath -DestinationDir $InstallPath
 $exePath = Join-Path $InstallPath "NightOwl.Agent.Windows.exe"
 if (-not (Test-Path $exePath)) {
     throw "Executavel do agente nao encontrado apos copia: $exePath"
@@ -672,6 +1141,8 @@ $packageVersion = Get-JsonProperty $packageVersionFile @("version")
 if ([string]::IsNullOrWhiteSpace($packageVersion)) {
     $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0.7" }
 }
+$script:Report.previous_version = $previousVersion
+$script:Report.installed_version = $packageVersion
 
 $existingConfig = $preservedConfig
 if ($null -eq $existingConfig) {
@@ -694,14 +1165,21 @@ $config = [ordered]@{
     }
     logPath = $logPath
     statePath = $statePath
+    pendingResultsPath = [string]$script:NightOwlPaths.PendingResultsPath
     installPath = $InstallPath
-    packagesPath = "C:\ProgramData\NightOwl\Packages"
-    cachePath = "C:\ProgramData\NightOwl\Cache"
-    jobsPath = "C:\ProgramData\NightOwl\Jobs"
+    packagesPath = [string]$script:NightOwlPaths.Packages
+    cachePath = [string]$script:NightOwlPaths.Cache
+    jobsPath = [string]$script:NightOwlPaths.StateDir
     allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "restart_agent")
 }
 Save-AgentConfig -Path $configPath -Config $config
 Write-StateMachineId -Path $statePath -MachineId $machineId
+$identityInfo = [ordered]@{
+    machine_id = $machineId
+    source = $identitySource
+    updated_at = (Get-Date).ToUniversalTime().ToString("o")
+}
+$identityInfo | ConvertTo-Json -Depth 5 | Set-Content -Path ([string]$script:NightOwlPaths.IdentityPath) -Encoding UTF8
 $versionInfo = [ordered]@{
     version = $packageVersion
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -780,8 +1258,39 @@ if ($RunCheck) {
     }
 }
 
+$healthErrors = Test-AgentLifecycleHealth -Name $ServiceName -ConfigPath $configPath -IdentityPath ([string]$script:NightOwlPaths.IdentityPath) -ExpectedMachineId $machineId -ExePath $exePath
+if ($healthErrors.Count -gt 0) {
+    $healthCode = switch ($script:Operation) {
+        "repair" { "REPAIR_HEALTHCHECK_FAILED" }
+        "reinstall" { "REPAIR_HEALTHCHECK_FAILED" }
+        default { "INSTALL_HEALTHCHECK_FAILED" }
+    }
+    Add-ReportWarning $healthCode "Health check local encontrou pendencias." @{ errors = $healthErrors }
+    Write-InstallLog "operation.healthcheck.warning" "Health check local encontrou pendencias." @{ operation = $script:Operation; errors = $healthErrors; error_code = $healthCode }
+}
+else {
+    Add-ReportAction "healthcheck.ok" @{ service_name = $ServiceName; version = $packageVersion }
+    Write-InstallLog "operation.healthcheck.ok" "Health check local concluido." @{ operation = $script:Operation; service_name = $ServiceName; version = $packageVersion }
+}
+
 if ($tempPackageDir -and (Test-Path $tempPackageDir)) {
     Remove-Item -Path $tempPackageDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Step "OK" "Instalacao concluida"
+Write-OperationReport -Status "completed"
+Write-InstallLog ("operation.{0}.completed" -f $script:Operation) "Operacao do agente concluida." @{ operation = $script:Operation; version = $packageVersion; machine_id = (Protect-SecretValue $machineId) }
+Write-Step "OK" ("Operacao concluida: {0}" -f $script:Operation)
+}
+catch {
+    $message = $_.Exception.Message
+    $code = if ($message -match "^([A-Z0-9_]+):") { $matches[1] } else { Get-OperationErrorCode "UNEXPECTED_ERROR" }
+    Write-InstallLog ("operation.{0}.failed" -f $script:Operation) "Operacao do agente falhou." @{ operation = $script:Operation; error_code = $code; error = $message }
+    Write-OperationReport -Status "failed" -ErrorCode $code -ErrorMessage $message
+    throw
+}
+finally {
+    Release-UpdaterLock
+    if ($tempPackageDir -and (Test-Path $tempPackageDir)) {
+        Remove-Item -Path $tempPackageDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

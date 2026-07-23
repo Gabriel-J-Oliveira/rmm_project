@@ -18,6 +18,8 @@ builder.Services.AddSingleton<JsonlLogger>();
 builder.Services.AddSingleton<AgentApiClient>();
 builder.Services.AddSingleton<WindowsInventoryCollector>();
 builder.Services.AddSingleton<JobExecutionPolicy>();
+builder.Services.AddSingleton(_ => new PendingResultQueue(NightOwlPaths.Current.PendingResultsDir));
+builder.Services.AddSingleton<JobExecutionCoordinator>();
 builder.Services.AddSingleton<JobExecutor>();
 builder.Services.AddHostedService<Worker>();
 builder.Services.AddHttpClient();

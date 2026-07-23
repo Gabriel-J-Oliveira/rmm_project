@@ -36,15 +36,19 @@ public sealed class AgentApiClient
         return JsonSerializer.Deserialize<AgentJobsPullResponse>(body, JsonOptions) ?? new AgentJobsPullResponse();
     }
 
-    public Task SendJobResultAsync(AgentConfig config, JobExecutionResult result, CancellationToken ct)
+    public Task SendJobResultAsync(AgentConfig config, JobExecutionResult result, CancellationToken ct, string? idempotencyKey = null)
     {
-        return SendJsonAsync(config, HttpMethod.Post, config.JobsResultUrl, result, ct, "jobs.result");
+        return SendJsonAsync(config, HttpMethod.Post, config.JobsResultUrl, result, ct, "jobs.result", idempotencyKey);
     }
 
-    private async Task SendJsonAsync(AgentConfig config, HttpMethod method, string url, object payload, CancellationToken ct, string operation)
+    private async Task SendJsonAsync(AgentConfig config, HttpMethod method, string url, object payload, CancellationToken ct, string operation, string? idempotencyKey = null)
     {
         using HttpRequestMessage request = new(method, url);
         AddAuth(config, request);
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+        }
         string json = JsonSerializer.Serialize(payload, JsonOptions);
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         using HttpClient client = _httpClientFactory.CreateClient();

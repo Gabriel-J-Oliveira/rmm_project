@@ -1,10 +1,20 @@
 from django.urls import path
 
-from .views import AgentEnrollView, AgentHeartbeatView, AgentInventoryCollectionView, AgentJobsPullView, AgentJobsResultView
+from .views import (
+    AgentEnrollView,
+    AgentHeartbeatView,
+    AgentInventoryCollectionView,
+    AgentJobsPullView,
+    AgentJobsResultView,
+    AgentStatusView,
+    AgentUpdatePolicyView,
+)
 
 urlpatterns = [
     path('enroll/', AgentEnrollView.as_view(), name='agent-enroll'),
     path('heartbeat/', AgentHeartbeatView.as_view(), name='agent-heartbeat'),
+    path('status/', AgentStatusView.as_view(), name='agent-status'),
+    path('update-policy/', AgentUpdatePolicyView.as_view(), name='agent-update-policy'),
     path('inventory/', AgentInventoryCollectionView.as_view(collection_type='full_inventory'), name='agent-inventory'),
     path('inventory/system/', AgentInventoryCollectionView.as_view(collection_type='system'), name='agent-inventory-system'),
     path('inventory/hardware/', AgentInventoryCollectionView.as_view(collection_type='hardware'), name='agent-inventory-hardware'),

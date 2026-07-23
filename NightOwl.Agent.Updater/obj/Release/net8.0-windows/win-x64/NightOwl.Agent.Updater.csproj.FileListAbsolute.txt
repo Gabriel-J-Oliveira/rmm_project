@@ -476,3 +476,5 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Updater\obj\Relea
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Updater\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Updater.pdb
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Updater\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Updater.genruntimeconfig.cache
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Updater\obj\Release\net8.0-windows\win-x64\ref\NightOwl.Agent.Updater.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Updater\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Updater\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.pdb

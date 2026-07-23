@@ -11,7 +11,12 @@ param(
     [string]$PublishPath = "/opt/nightowl/downloads/agent/windows",
     [string]$PublicBaseUrl = "https://nightowl.controlsul.com.br/downloads/nightowl-agent",
     [string]$Runtime = "win-x64",
-    [string]$MinimumUpdaterVersion = "0.1.0.7"
+    [string]$MinimumUpdaterVersion = "0.1.0.7",
+
+    [ValidateSet("development", "pilot", "stable")]
+    [string]$Channel = "",
+
+    [switch]$UpdatePublicLatest
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +28,7 @@ $workRoot = Join-Path $repoRoot "artifacts\nightowl-agent\work"
 $agentProject = Join-Path $repoRoot "NightOwl.Agent.Windows\NightOwl.Agent.Windows.csproj"
 $trayProject = Join-Path $repoRoot "NightOwl.Agent.Tray\NightOwl.Agent.Tray.csproj"
 $updaterProject = Join-Path $repoRoot "NightOwl.Agent.Updater\NightOwl.Agent.Updater.csproj"
+$diagnosticsProject = Join-Path $repoRoot "NightOwl.Agent.Diagnostics\NightOwl.Agent.Diagnostics.csproj"
 $sharedProject = Join-Path $repoRoot "NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj"
 $testProject = Join-Path $repoRoot "NightOwl.Agent.Shared.Tests\NightOwl.Agent.Shared.Tests.csproj"
 $installScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Install-NightOwlAgentDotNet.ps1"
@@ -41,13 +47,23 @@ function Assert-Version([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) {
         throw "Version nao pode ser vazia."
     }
-    if ($Value -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
-        throw "Version invalida: $Value. Use formato numerico major.minor.patch ou major.minor.patch.build, ex: 0.1.0.8."
+    if ($Value -notmatch '^\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+        throw "Version invalida: $Value. Use SemVer major.minor.patch[.build][-prerelease], ex: 0.1.1.0-rc1."
     }
 }
 
+function Get-VersionCore([string]$Value) {
+    return (($Value -split "\+", 2)[0] -split "-", 2)[0]
+}
+
+function Get-VersionPrerelease([string]$Value) {
+    $withoutBuild = ($Value -split "\+", 2)[0]
+    if ($withoutBuild -notmatch "-") { return "" }
+    return ($withoutBuild -split "-", 2)[1]
+}
+
 function Convert-VersionParts([string]$Value) {
-    $parts = @($Value.Split(".") | ForEach-Object { [int]$_ })
+    $parts = @((Get-VersionCore $Value).Split(".") | ForEach-Object { [int]$_ })
     while ($parts.Count -lt 4) {
         $parts += 0
     }
@@ -61,6 +77,12 @@ function Compare-NightOwlVersion([string]$Left, [string]$Right) {
         if ($a[$i] -lt $b[$i]) { return -1 }
         if ($a[$i] -gt $b[$i]) { return 1 }
     }
+    $leftPre = Get-VersionPrerelease $Left
+    $rightPre = Get-VersionPrerelease $Right
+    if ([string]::IsNullOrWhiteSpace($leftPre) -and -not [string]::IsNullOrWhiteSpace($rightPre)) { return 1 }
+    if (-not [string]::IsNullOrWhiteSpace($leftPre) -and [string]::IsNullOrWhiteSpace($rightPre)) { return -1 }
+    if ($leftPre -lt $rightPre) { return -1 }
+    if ($leftPre -gt $rightPre) { return 1 }
     return 0
 }
 
@@ -140,7 +162,7 @@ function New-AgentVersionFile([string]$Path, [string]$BuildId, [string]$BuiltAt,
         minimum_updater_version = $MinimumUpdaterVersion
         package = "NightOwl.Agent.Windows.zip"
         installedAt = ""
-        channel = "stable"
+        channel = $Channel
         packageSha256 = ""
         updatedBy = "installer"
     }
@@ -192,6 +214,7 @@ function Validate-Release([string]$Path) {
             "NightOwl.Agent.Windows.exe",
             "NightOwl.Agent.Tray.exe",
             "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
             "agent.version.json"
@@ -267,10 +290,15 @@ function Publish-LocalAtomic([string]$Source, [string]$DestinationRoot) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $releaseStore) | Out-Null
         if (Test-Path $releaseStore) { Remove-Item -Path $releaseStore -Recurse -Force }
         Move-Item -Path $temp -Destination $releaseStore
-        foreach ($file in @("Install-NightOwlAgentDotNet.ps1", "Uninstall-NightOwlAgentDotNet.ps1", "NightOwl.ico", "NightOwl.Agent.Windows.zip", "checksums.json", "release-manifest.json")) {
-            Copy-Item -Path (Join-Path $releaseStore $file) -Destination (Join-Path $destination $file) -Force
+        if ($UpdatePublicLatest -or $Channel -eq "stable") {
+            foreach ($file in @("Install-NightOwlAgentDotNet.ps1", "Uninstall-NightOwlAgentDotNet.ps1", "NightOwl.ico", "NightOwl.Agent.Windows.zip", "checksums.json", "release-manifest.json")) {
+                Copy-Item -Path (Join-Path $releaseStore $file) -Destination (Join-Path $destination $file) -Force
+            }
+            Copy-Item -Path (Join-Path $releaseStore "version.json") -Destination (Join-Path $destination "version.json") -Force
         }
-        Copy-Item -Path (Join-Path $releaseStore "version.json") -Destination (Join-Path $destination "version.json") -Force
+        else {
+            Write-Step "Release $Version publicada apenas em releases/$Version; latest publico preservado."
+        }
     }
     catch {
         if (Test-Path $temp) { Remove-Item -Path $temp -Recurse -Force -ErrorAction SilentlyContinue }
@@ -290,7 +318,12 @@ function Publish-RemoteAtomic([string]$Source, [string]$HostName, [string]$Desti
             Invoke-Checked "ssh" @($HostName, "if [ -e '$remoteRelease' ]; then echo 'remote release exists: $remoteRelease' >&2; exit 17; fi")
         }
         Invoke-Checked "ssh" @($HostName, "rm -rf '$remoteRelease' && mv '$remoteTemp' '$remoteRelease'")
-        Invoke-Checked "ssh" @($HostName, "cp '$remoteRelease/Install-NightOwlAgentDotNet.ps1' '$DestinationRoot/Install-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/Uninstall-NightOwlAgentDotNet.ps1' '$DestinationRoot/Uninstall-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/NightOwl.ico' '$DestinationRoot/NightOwl.ico' && cp '$remoteRelease/NightOwl.Agent.Windows.zip' '$DestinationRoot/NightOwl.Agent.Windows.zip' && cp '$remoteRelease/checksums.json' '$DestinationRoot/checksums.json' && cp '$remoteRelease/release-manifest.json' '$DestinationRoot/release-manifest.json' && cp '$remoteRelease/version.json' '$DestinationRoot/version.json'")
+        if ($UpdatePublicLatest -or $Channel -eq "stable") {
+            Invoke-Checked "ssh" @($HostName, "cp '$remoteRelease/Install-NightOwlAgentDotNet.ps1' '$DestinationRoot/Install-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/Uninstall-NightOwlAgentDotNet.ps1' '$DestinationRoot/Uninstall-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/NightOwl.ico' '$DestinationRoot/NightOwl.ico' && cp '$remoteRelease/NightOwl.Agent.Windows.zip' '$DestinationRoot/NightOwl.Agent.Windows.zip' && cp '$remoteRelease/checksums.json' '$DestinationRoot/checksums.json' && cp '$remoteRelease/release-manifest.json' '$DestinationRoot/release-manifest.json' && cp '$remoteRelease/version.json' '$DestinationRoot/version.json'")
+        }
+        else {
+            Write-Step "Release $Version publicada apenas em releases/$Version; latest publico preservado."
+        }
     }
     catch {
         & ssh $HostName "rm -rf '$remoteTemp'" 2>$null
@@ -299,6 +332,12 @@ function Publish-RemoteAtomic([string]$Source, [string]$HostName, [string]$Desti
 }
 
 Assert-Version $Version
+if ([string]::IsNullOrWhiteSpace($Channel)) {
+    $Channel = if ($Version -match "-") { "development" } else { "stable" }
+}
+if ($Channel -ne "stable" -and $UpdatePublicLatest) {
+    throw "-UpdatePublicLatest so pode ser usado com canal stable."
+}
 
 if ([string]::IsNullOrWhiteSpace($ReleaseDir)) {
     $ReleaseDir = Join-Path $releaseRoot $Version
@@ -332,32 +371,36 @@ $packageDir = Join-Path $workDir "package"
 New-Item -ItemType Directory -Force -Path $publishDir,$packageDir | Out-Null
 $releaseReady = $false
 
-$assemblyVersion = ($Version.Split(".") + @("0", "0", "0", "0"))[0..3] -join "."
+$assemblyVersion = ((Get-VersionCore $Version).Split(".") + @("0", "0", "0", "0"))[0..3] -join "."
 $msbuildVersionArgs = @(
     "-p:Version=$Version",
     "-p:AssemblyVersion=$assemblyVersion",
     "-p:FileVersion=$assemblyVersion",
     "-p:InformationalVersion=$Version+$buildId"
 )
-$projects = @($sharedProject, $agentProject, $trayProject, $updaterProject, $testProject)
+$projects = @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject)
 
 try {
+    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject)) {
+        Invoke-Checked "dotnet" @("clean", $project, "-c", "Release")
+    }
+
     foreach ($project in @($sharedProject, $testProject)) {
         Invoke-Checked "dotnet" @("restore", $project)
     }
 
-    foreach ($project in @($agentProject, $trayProject, $updaterProject)) {
+    foreach ($project in @($agentProject, $trayProject, $updaterProject, $diagnosticsProject)) {
         Invoke-Checked "dotnet" @("restore", $project, "-r", $Runtime)
     }
 
-    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $testProject)) {
+    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject)) {
         Invoke-Checked "dotnet" (@("build", $project, "-c", "Release", "--no-restore") + $msbuildVersionArgs)
     }
 
     Invoke-Checked "dotnet" (@("test", $testProject, "-c", "Release", "--no-restore", "--no-build") + $msbuildVersionArgs)
     Invoke-Checked "dotnet" @("run", "--project", $testProject, "-c", "Release", "--no-restore")
 
-    foreach ($project in @($agentProject, $trayProject, $updaterProject)) {
+    foreach ($project in @($agentProject, $trayProject, $updaterProject, $diagnosticsProject)) {
         Invoke-Checked "dotnet" (@("publish", $project, "-c", "Release", "-r", $Runtime, "--self-contained", "true", "-o", $publishDir, "--no-restore") + $msbuildVersionArgs)
     }
 
@@ -378,18 +421,24 @@ try {
 
     $zipSha = Get-FileSha256 $zipPath
     $zipSize = (Get-Item $zipPath).Length
+    $artifactBaseUrl = if ($UpdatePublicLatest -or $Channel -eq "stable") {
+        $PublicBaseUrl.TrimEnd("/")
+    }
+    else {
+        "{0}/releases/{1}" -f $PublicBaseUrl.TrimEnd("/"), $Version
+    }
     $versionManifest = [ordered]@{
         product = "NightOwl Agent Windows"
         agent = "NightOwl.Agent.Windows"
-        channel = "stable"
+        channel = $Channel
         version = $Version
         publishedAt = $builtAt
         published_at = $builtAt
         minimumSupportedVersion = "0.1.0"
         minimum_updater_version = $MinimumUpdaterVersion
-        packageUrl = ("{0}/NightOwl.Agent.Windows.zip" -f $PublicBaseUrl.TrimEnd("/"))
-        checksumUrl = ("{0}/checksums.json" -f $PublicBaseUrl.TrimEnd("/"))
-        installerUrl = ("{0}/Install-NightOwlAgentDotNet.ps1" -f $PublicBaseUrl.TrimEnd("/"))
+        packageUrl = ("{0}/NightOwl.Agent.Windows.zip" -f $artifactBaseUrl)
+        checksumUrl = ("{0}/checksums.json" -f $artifactBaseUrl)
+        installerUrl = ("{0}/Install-NightOwlAgentDotNet.ps1" -f $artifactBaseUrl)
         notes = "Release $Version do NightOwl Agent Windows."
         requiresRestart = $true
         force = $false
@@ -410,6 +459,11 @@ try {
         git_commit = $commit
         runtime = $Runtime
         public_base_url = $PublicBaseUrl
+        artifact_base_url = $artifactBaseUrl
+        initial_channel = $Channel
+        rollout_percentage = 0
+        rollout_paused = $true
+        auto_publish_latest = [bool]$UpdatePublicLatest
         package = [ordered]@{
             name = "NightOwl.Agent.Windows.zip"
             sha256 = $zipSha
@@ -419,6 +473,7 @@ try {
             "NightOwl.Agent.Windows.exe",
             "NightOwl.Agent.Tray.exe",
             "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
             "agent.version.json"

@@ -476,3 +476,5 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.genruntimeconfig.cache
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\ref\NightOwl.Agent.Tray.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\assets\icons\NightOwl.ico
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.pdb

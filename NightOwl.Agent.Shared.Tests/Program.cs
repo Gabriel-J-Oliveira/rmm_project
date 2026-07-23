@@ -152,6 +152,71 @@ try
     jobStore.Prune();
     Require(Directory.GetFiles(jobsDir, "*.json").Length <= 2, "Job retention did not prune old records.");
 
+    string resultQueueDir = Path.Combine(paths.StateDir, "pending-results-test");
+    PendingResultQueue resultQueue = new(resultQueueDir, maxRecords: 5, maxTotalBytes: 512 * 1024, maxPayloadBytes: 64 * 1024);
+    var resultPayload = new
+    {
+        job_id = Guid.NewGuid().ToString(),
+        status = JobFinalStatuses.Completed,
+        started_at = DateTimeOffset.UtcNow.AddSeconds(-1),
+        finished_at = DateTimeOffset.UtcNow,
+        result = new { type = "ping", success = true }
+    };
+    PendingResultRecord pending = resultQueue.Enqueue("ping", resultPayload);
+    Require(File.Exists(Path.Combine(resultQueueDir, $"{pending.ResultId}.json")), "Pending result was not persisted.");
+    Require(resultQueue.ListDue(DateTimeOffset.UtcNow).Count == 1, "Pending result should be due immediately.");
+    Require(!string.IsNullOrWhiteSpace(pending.PayloadSha256), "Payload hash was not calculated.");
+
+    resultQueue.MarkAttemptFailed(pending, JobErrorCodes.ResultSendFailed, "backend unavailable");
+    PendingResultRecord retried = resultQueue.LoadAll().Single(record => record.ResultId == pending.ResultId);
+    Require(retried.AttemptCount == 1, "Retry attempt was not recorded.");
+    Require(retried.NextAttemptAt > DateTimeOffset.UtcNow, "Retry backoff was not applied.");
+    Require(resultQueue.ListDue(DateTimeOffset.UtcNow).Count == 0, "Backoff result should not be due yet.");
+
+    resultQueue.MarkSent(retried);
+    Require(resultQueue.LoadAll().Count == 0, "Sent pending result should leave active queue.");
+    Require(Directory.GetFiles(resultQueue.SentDirectory, "*.json").Length == 1, "Sent result was not archived.");
+
+    string corruptPath = Path.Combine(resultQueueDir, "corrupt.json");
+    File.WriteAllText(corruptPath, "{ invalid json");
+    _ = resultQueue.LoadAll();
+    Require(!File.Exists(corruptPath), "Corrupted pending result should be moved out of active queue.");
+    Require(Directory.GetFiles(resultQueue.QuarantineDirectory, "*.json").Length == 1, "Corrupted pending result was not quarantined.");
+
+    bool queueFull = false;
+    PendingResultQueue tinyQueue = new(Path.Combine(paths.StateDir, "pending-results-full"), maxRecords: 1, maxTotalBytes: 512, maxPayloadBytes: 64 * 1024);
+    tinyQueue.Enqueue("update_agent", resultPayload, critical: true);
+    try
+    {
+        tinyQueue.Enqueue("ping", new { job_id = Guid.NewGuid().ToString(), status = JobFinalStatuses.Completed });
+    }
+    catch (InvalidOperationException ex) when (ex.Message == JobErrorCodes.ResultQueueFull)
+    {
+        queueFull = true;
+    }
+    Require(queueFull, "Queue full condition should be explicit.");
+
+    string secretText = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz token=secret-value https://nightowl.example/path?agentToken=secret";
+    SanitizationResult sanitizedText = NightOwlSanitizer.SanitizeText(secretText);
+    Require(sanitizedText.RedactionApplied, "Text sanitizer should redact known secret patterns.");
+    Require(!sanitizedText.Value.Contains("abcdefghijklmnopqrstuvwxyz", StringComparison.Ordinal), "Bearer token was not redacted.");
+    Require(!sanitizedText.Value.Contains("secret-value", StringComparison.Ordinal), "Key-value token was not redacted.");
+    Require(!sanitizedText.Value.Contains("agentToken=secret", StringComparison.Ordinal), "Sensitive URL query was not removed.");
+
+    SanitizationResult sanitizedJson = NightOwlSanitizer.SanitizeJson("""
+    {
+      "agentToken": "fixture-token-value",
+      "machineId": "machine-test",
+      "nested": {
+        "Authorization": "Bearer nested-secret-token"
+      }
+    }
+    """);
+    Require(sanitizedJson.RedactionApplied, "JSON sanitizer should report redaction.");
+    Require(!sanitizedJson.Value.Contains("fixture-token-value", StringComparison.Ordinal), "JSON token was not redacted.");
+    Require(!sanitizedJson.Value.Contains("nested-secret-token", StringComparison.Ordinal), "Nested authorization token was not redacted.");
+    Require(!NightOwlSanitizer.ContainsSecretLikeContent(sanitizedJson.Value), "Sanitized JSON still contains secret-like content.");
+
     Console.WriteLine("NightOwlPaths migration tests passed.");
 }
 finally

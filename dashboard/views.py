@@ -23,6 +23,10 @@ from agents.models import (
     AgentJob,
     AgentMachine,
     AgentManualValidationToken,
+    AgentOperationalStatus,
+    AgentRelease,
+    AgentReleaseAudit,
+    AgentReleaseGroup,
     AlertEvent,
     AuditEvent,
     EndpointAlert,
@@ -32,7 +36,9 @@ from agents.models import (
     SoftwarePolicyTargetEndpoint,
     SoftwarePolicyViolation,
 )
+from config.authz import is_nightowl_technical_user
 from agents.audit import create_audit_event
+from agents.services import evaluate_agent_update_policy
 from agents.software_catalog import (
     ADMIN_NETWORK_SOFTWARE,
     CATEGORY_LABELS,
@@ -42,7 +48,7 @@ from agents.software_catalog import (
     classify_software as classify_software_catalog,
     normalize_key,
 )
-from agents.versioning import agent_version_state
+from agents.versioning import agent_version_state, parse_semver
 from tickets.models import NotificationOutbox
 from tickets.services.email_outbox import (
     cancel_email,
@@ -112,6 +118,13 @@ EVENT_CATEGORY_PREFIXES = {
 
 
 def latest_agent_version():
+    release = AgentRelease.objects.filter(
+        channel=AgentRelease.CHANNEL_STABLE,
+        status=AgentRelease.STATUS_AVAILABLE,
+        revoked=False,
+    ).order_by('-released_at', '-created_at').first()
+    if release:
+        return release.version
     candidates = [
         getattr(settings, 'NIGHTOWL_AGENT_VERSION_MANIFEST', ''),
         settings.BASE_DIR / 'downloads' / 'agent' / 'windows' / 'version.json',
@@ -2429,6 +2442,13 @@ def _job_progress(status):
         AgentJob.STATUS_FAILED: 100,
         AgentJob.STATUS_EXPIRED: 100,
         AgentJob.STATUS_CANCELLED: 100,
+        AgentJob.STATUS_TIMED_OUT: 100,
+        AgentJob.STATUS_DUPLICATE: 100,
+        AgentJob.STATUS_UNSUPPORTED: 100,
+        AgentJob.STATUS_INVALID_PARAMETERS: 100,
+        AgentJob.STATUS_INTERRUPTED: 100,
+        AgentJob.STATUS_ROLLED_BACK: 100,
+        AgentJob.STATUS_ROLLBACK_FAILED: 100,
     }.get(status, 0)
 
 
@@ -2437,6 +2457,7 @@ def _job_public_status(status):
         AgentJob.STATUS_QUEUED: 'pending',
         AgentJob.STATUS_SENT: 'dispatched',
         AgentJob.STATUS_CANCELLED: 'canceled',
+        AgentJob.STATUS_INTERRUPTED: 'interrupted',
     }.get(status, status)
 
 
@@ -2444,11 +2465,16 @@ def serialize_agent_job(job):
     public_status = _job_public_status(job.status)
     return {
         'id': str(job.id),
+        'jobId': str(job.id),
+        'resultId': job.result_id or '',
+        'correlationId': job.correlation_id or '',
         'name': dict(AgentJob.TYPE_CHOICES).get(job.job_type, job.job_type),
         'type': job.job_type,
         'command': job.job_type,
         'status': public_status,
         'rawStatus': job.status,
+        'attempt': job.attempt,
+        'timeoutSeconds': job.timeout_seconds,
         'endpoint': job.endpoint.hostname if job.endpoint_id else '',
         'createdBy': job.created_by or 'Sistema',
         'createdAt': _iso_or_none(job.created_at),
@@ -2462,7 +2488,15 @@ def serialize_agent_job(job):
         'stdout': job.stdout,
         'stderr': job.stderr,
         'exitCode': job.exit_code,
+        'errorCode': job.error_code,
+        'outputTruncated': job.output_truncated,
+        'receivedAt': _iso_or_none(job.result_received_at),
         'payload': job.payload,
+        'release': {
+            'id': str(job.agent_release_id) if job.agent_release_id else (job.payload or {}).get('release_id', ''),
+            'version': (job.agent_release.version if job.agent_release_id else (job.payload or {}).get('target_version', '')),
+            'channel': (job.agent_release.channel if job.agent_release_id else (job.payload or {}).get('source_channel') or (job.payload or {}).get('channel', '')),
+        },
         'resultJson': job.result,
         'errorMessage': job.error_message,
         'progress': _job_progress(job.status),
@@ -2543,8 +2577,90 @@ def _normalize_network_collection(value):
     return {}
 
 
-def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets):
-    recommended_version = latest_agent_version()
+def _agent_indicator_from_status(endpoint, diagnostic, recommended_version):
+    if getattr(endpoint, 'status', '') == AgentMachine.STATUS_OFFLINE:
+        return 'offline'
+    if diagnostic:
+        return diagnostic.health_indicator
+    if agent_version_state(endpoint.agent_version, recommended_version) == 'outdated':
+        return 'attention'
+    return 'healthy'
+
+
+def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version, *, can_view_technical=False, can_view_admin=False):
+    installed_version = endpoint.agent_version or (diagnostic.installed_version if diagnostic else '')
+    available_version = (diagnostic.available_version if diagnostic else '') or recommended_version
+    running_jobs = [job for job in jobs if job.status in {AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING}]
+    last_error_message = diagnostic.last_error_message if diagnostic and can_view_admin else (diagnostic.last_error_message[:160] if diagnostic and can_view_technical else '')
+    update_error_message = diagnostic.update_error_message if diagnostic and can_view_admin else (diagnostic.update_error_message[:160] if diagnostic and can_view_technical else '')
+    rollback_error_message = diagnostic.rollback_error_message if diagnostic and can_view_admin else (diagnostic.rollback_error_message[:160] if diagnostic and can_view_technical else '')
+    result_last_send_error = diagnostic.result_last_send_error if diagnostic and can_view_admin else (diagnostic.result_last_send_error[:160] if diagnostic and can_view_technical else '')
+    return {
+        'visible': bool(can_view_technical),
+        'admin': bool(can_view_admin),
+        'indicator': _agent_indicator_from_status(endpoint, diagnostic, available_version),
+        'summary': {
+            'installed_version': installed_version or '',
+            'available_version': available_version or '',
+            'last_heartbeat_at': _iso_or_none((diagnostic.last_heartbeat_at if diagnostic else None) or endpoint.last_seen_at),
+            'last_inventory_at': _iso_or_none(diagnostic.last_inventory_at if diagnostic else None),
+            'last_agent_start_at': _iso_or_none(diagnostic.last_agent_start_at if diagnostic else None),
+            'agent_uptime_seconds': diagnostic.agent_uptime_seconds if diagnostic else None,
+            'service_status': (diagnostic.service_status if diagnostic else '') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE else ''),
+            'current_user': diagnostic.current_user if diagnostic else endpoint.last_logged_user,
+            'current_ip': str((diagnostic.current_ip if diagnostic else None) or endpoint.last_ip or ''),
+            'pending_result_count': diagnostic.pending_result_count if diagnostic else 0,
+            'running_job_count': diagnostic.running_job_count if diagnostic else len(running_jobs),
+        },
+        'last_error': {
+            'component': diagnostic.last_error_component if diagnostic else '',
+            'code': diagnostic.last_error_code if diagnostic else '',
+            'message': last_error_message,
+            'at': _iso_or_none(diagnostic.last_error_at if diagnostic else None),
+        },
+        'updater': {
+            'update_id': diagnostic.update_id if diagnostic else '',
+            'job_id': diagnostic.update_job_id if diagnostic else '',
+            'from_version': diagnostic.from_version if diagnostic else '',
+            'target_version': diagnostic.target_version if diagnostic else '',
+            'current_stage': diagnostic.update_current_stage if diagnostic else '',
+            'status': diagnostic.update_status if diagnostic else '',
+            'started_at': _iso_or_none(diagnostic.update_started_at if diagnostic else None),
+            'completed_at': _iso_or_none(diagnostic.update_completed_at if diagnostic else None),
+            'rollback_status': diagnostic.rollback_status if diagnostic else '',
+            'rollback_attempt': diagnostic.rollback_attempt if diagnostic else 0,
+            'health_check_confirmed': diagnostic.health_check_confirmed if diagnostic else False,
+            'error_code': diagnostic.update_error_code if diagnostic else '',
+            'error_message': update_error_message,
+            'rollback_error_code': diagnostic.rollback_error_code if diagnostic else '',
+            'rollback_error_message': rollback_error_message,
+            'package_url': diagnostic.package_url_sanitized if diagnostic and can_view_admin else '',
+        },
+        'queue': {
+            'pending_count': diagnostic.result_pending_count if diagnostic else 0,
+            'oldest_pending_at': _iso_or_none(diagnostic.result_oldest_pending_at if diagnostic else None),
+            'retrying_count': diagnostic.result_retrying_count if diagnostic else 0,
+            'quarantined_count': diagnostic.result_quarantined_count if diagnostic else 0,
+            'queue_full': diagnostic.result_queue_full if diagnostic else False,
+            'last_send_error': result_last_send_error,
+        },
+    }
+
+
+def _endpoint_diagnostic(endpoint):
+    try:
+        return endpoint.operational_status
+    except AgentOperationalStatus.DoesNotExist:
+        return None
+
+
+def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets, *, request=None):
+    update_decision = evaluate_agent_update_policy(endpoint, manual=False)
+    recommended_version = update_decision.target_version or latest_agent_version()
+    can_view_technical = is_nightowl_technical_user(getattr(request, 'user', None)) if request is not None else True
+    user = getattr(request, 'user', None)
+    can_view_admin = bool(user and getattr(user, 'is_authenticated', False) and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
+    diagnostic = _endpoint_diagnostic(endpoint)
     raw_payload = ensure_dict(snapshot.raw_payload if snapshot else {})
     raw_agent = ensure_dict(raw_payload.get('agent'))
     system = _normalize_collection_dict(_raw_collection(snapshot, 'system'))
@@ -2577,8 +2693,8 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'install_path': endpoint.agent_install_path or raw_agent.get('install_path') or r'C:\ProgramData\NightOwl\Agent',
         'legacy_install_path': raw_agent.get('legacy_install_path') or r'C:\RMM',
         'config_path': raw_agent.get('config_path') or r'C:\ProgramData\NightOwl\Agent\RmmAgent.config.json',
-        'log_path': raw_agent.get('log_path') or r'C:\ProgramData\NightOwl\Logs',
-        'log_file': raw_agent.get('log_file') or r'C:\ProgramData\NightOwl\Logs\agent-service.jsonl',
+        'log_path': (raw_agent.get('log_path') or r'C:\ProgramData\NightOwl\Logs') if can_view_admin else '',
+        'log_file': (raw_agent.get('log_file') or r'C:\ProgramData\NightOwl\Logs\agent-service.jsonl') if can_view_admin else 'agent-service.jsonl',
         'heartbeat_url': raw_agent.get('heartbeat_url') or '',
         'jobs_pull_url': raw_agent.get('jobs_pull_url') or '',
         'jobs_result_url': raw_agent.get('jobs_result_url') or '',
@@ -2768,7 +2884,8 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'priority': getattr(ticket, 'priority', ''),
         })
 
-    jobs = [serialize_agent_job(job) for job in endpoint.jobs.order_by('-created_at')[:20]]
+    job_objects = list(endpoint.jobs.order_by('-created_at')[:20])
+    jobs = [serialize_agent_job(job) for job in job_objects]
     last_job = endpoint.jobs.filter(finished_at__isnull=False).order_by('-finished_at', '-updated_at').first()
 
     return {
@@ -2790,11 +2907,24 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'agent_version': endpoint.agent_version or '',
             'agent_version_state': agent_version_state(endpoint.agent_version, recommended_version),
             'latest_agent_version': recommended_version,
+            'update_channel': endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE,
+            'update_policy': endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL,
+            'update_paused': endpoint.update_paused,
+            'pinned_agent_version': endpoint.pinned_agent_version or '',
             'identity_source': 'machine_id' if endpoint.machine_id else 'internal_id',
         },
         'latest_agent_version': recommended_version,
         'recommended_agent_version': recommended_version,
+        'agent_update_policy': update_decision.as_panel_payload(),
         'agent_health': agent_health,
+        'agent_diagnostic': _serialize_agent_diagnostic(
+            endpoint,
+            diagnostic,
+            job_objects,
+            recommended_version,
+            can_view_technical=can_view_technical,
+            can_view_admin=can_view_admin,
+        ),
         'inventory': inventory,
         'hardware': hardware or None,
         'network': network or {'interfaces': []},
@@ -2893,12 +3023,13 @@ def endpoint_detail(request, pk):
         endpoint_alerts,
         audit_events,
         related_tickets,
+        request=request,
     )
     return render(request, 'dashboard/endpoint_detail.html', context)
 
 
 def endpoint_detail_data(request, pk):
-    if not (request.user.is_staff or request.user.is_superuser):
+    if not is_nightowl_technical_user(request.user):
         return JsonResponse({'error': 'forbidden'}, status=403)
 
     endpoint = resolve_agent_endpoint(pk)
@@ -2930,6 +3061,7 @@ def endpoint_detail_data(request, pk):
             endpoint_alerts,
             audit_events,
             related_tickets,
+            request=request,
         ),
     )
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -2939,7 +3071,7 @@ def endpoint_detail_data(request, pk):
 
 @require_POST
 def endpoint_job_create(request, pk):
-    if not (request.user.is_staff or request.user.is_superuser):
+    if not is_nightowl_technical_user(request.user):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para criar jobs tecnicos.'}, status=403)
 
     endpoint = resolve_agent_endpoint(pk)
@@ -2999,9 +3131,31 @@ def endpoint_job_create(request, pk):
                 },
                 status=409,
             )
+        update_decision = evaluate_agent_update_policy(endpoint, manual=True)
+        if not update_decision.eligible or not update_decision.release:
+            return JsonResponse(
+                {
+                    'error': 'endpoint_not_eligible_for_update',
+                    'detail': 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.',
+                    'reason_code': update_decision.reason_code,
+                    'policy': update_decision.as_panel_payload(),
+                },
+                status=409,
+            )
+        release = update_decision.release
         payload.update({
-            'target_version': 'latest',
-            'channel': 'stable',
+            'target_version': release.version,
+            'channel': update_decision.channel,
+            'source_channel': update_decision.channel,
+            'release_id': str(release.id),
+            'policy_reason': update_decision.reason_code,
+            'package_url': release.package_url,
+            'checksum_url': release.checksum_url,
+            'sha256': release.sha256,
+            'size': release.size,
+            'minimum_updater_version': release.minimum_updater_version,
+            'mandatory': release.mandatory,
+            'timeout_seconds': 900,
             'force': False,
             'source': 'manual_panel',
         })
@@ -3013,9 +3167,13 @@ def endpoint_job_create(request, pk):
 
     job = AgentJob.objects.create(
         endpoint=endpoint,
+        agent_release=payload.get('release_id') and AgentRelease.objects.filter(pk=payload.get('release_id')).first(),
         job_type=selected_type,
         created_by=request.user.get_username(),
         payload=payload,
+        correlation_id=str(uuid.uuid4()),
+        attempt=1,
+        timeout_seconds=payload.get('timeout_seconds') or 300,
         expires_at=timezone.now() + timedelta(minutes=30),
     )
     create_audit_event(
@@ -3037,13 +3195,262 @@ def endpoint_job_create(request, pk):
         request.user.get_username(),
     )
     if selected_type == AgentJob.TYPE_UPDATE_AGENT:
+        AgentReleaseAudit.objects.create(
+            user=request.user,
+            action=AgentReleaseAudit.ACTION_UPDATED,
+            release=job.agent_release,
+            endpoint=endpoint,
+            version=payload.get('target_version', ''),
+            channel_after=payload.get('source_channel', ''),
+            reason='manual_panel_update_job_created',
+            metadata={'job_id': str(job.id), 'reason_code': payload.get('policy_reason', '')},
+        )
         logger.info(
-            'update_agent job created endpoint_id=%s job_id=%s created_by=%s',
+            'update_agent job created endpoint_id=%s job_id=%s release_id=%s target_version=%s created_by=%s',
             endpoint.id,
             job.id,
+            payload.get('release_id', ''),
+            payload.get('target_version', ''),
             request.user.get_username(),
         )
     return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job)}, status=201)
+
+
+@require_POST
+def endpoint_update_policy_update(request, pk):
+    if not is_nightowl_technical_user(request.user):
+        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para alterar politica de update.'}, status=403)
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
+        raise Http404
+
+    channel_before = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
+    rollout_before = None
+    channel = (request.POST.get('update_channel') or endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE).strip()
+    policy = (request.POST.get('update_policy') or endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL).strip()
+    if channel not in {choice[0] for choice in AgentMachine.UPDATE_CHANNEL_CHOICES}:
+        return JsonResponse({'error': 'invalid_channel', 'detail': 'Canal invalido.'}, status=400)
+    if policy not in {choice[0] for choice in AgentMachine.UPDATE_POLICY_CHOICES}:
+        return JsonResponse({'error': 'invalid_policy', 'detail': 'Politica invalida.'}, status=400)
+
+    endpoint.update_channel = channel
+    endpoint.update_policy = policy
+    endpoint.auto_update_enabled = (request.POST.get('auto_update_enabled') or '').lower() in {'1', 'true', 'on', 'yes'}
+    endpoint.update_paused = (request.POST.get('update_paused') or '').lower() in {'1', 'true', 'on', 'yes'}
+    endpoint.pinned_agent_version = (request.POST.get('pinned_agent_version') or '').strip()[:50]
+    start = (request.POST.get('maintenance_window_start') or '').strip()
+    end = (request.POST.get('maintenance_window_end') or '').strip()
+    try:
+        endpoint.maintenance_window_start = time.fromisoformat(start) if start else None
+        endpoint.maintenance_window_end = time.fromisoformat(end) if end else None
+    except ValueError:
+        return JsonResponse({'error': 'invalid_maintenance_window', 'detail': 'Janela de manutencao invalida.'}, status=400)
+    endpoint.save(update_fields=[
+        'update_channel',
+        'update_policy',
+        'auto_update_enabled',
+        'update_paused',
+        'pinned_agent_version',
+        'maintenance_window_start',
+        'maintenance_window_end',
+        'updated_at',
+    ])
+
+    group_ids = request.POST.getlist('rollout_groups')
+    if group_ids:
+        endpoint.rollout_groups.set(AgentReleaseGroup.objects.filter(id__in=group_ids))
+
+    AgentReleaseAudit.objects.create(
+        user=request.user,
+        action=AgentReleaseAudit.ACTION_ENDPOINT_POLICY_CHANGED,
+        endpoint=endpoint,
+        version=endpoint.pinned_agent_version,
+        channel_before=channel_before,
+        channel_after=endpoint.update_channel,
+        rollout_before=rollout_before,
+        reason=(request.POST.get('reason') or '').strip(),
+        metadata={
+            'update_policy': endpoint.update_policy,
+            'auto_update_enabled': endpoint.auto_update_enabled,
+            'update_paused': endpoint.update_paused,
+            'pinned_agent_version': endpoint.pinned_agent_version,
+        },
+    )
+    decision = evaluate_agent_update_policy(endpoint, manual=False)
+    return JsonResponse({'status': 'ok', 'policy': decision.as_panel_payload()})
+
+
+def _release_metrics(release):
+    endpoints = AgentMachine.objects.filter(update_channel=release.channel)
+    eligible = 0
+    updated = 0
+    pending = 0
+    failed = 0
+    rolled_back = 0
+    rollback_failed = 0
+    for endpoint in endpoints:
+        decision = evaluate_agent_update_policy(endpoint, manual=True)
+        if decision.release and decision.release.id == release.id and decision.eligible:
+            eligible += 1
+        if endpoint.agent_version == release.version:
+            updated += 1
+    jobs = AgentJob.objects.filter(agent_release=release)
+    pending = jobs.filter(status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING]).count()
+    failed = jobs.filter(status=AgentJob.STATUS_FAILED).count()
+    rolled_back = jobs.filter(status=AgentJob.STATUS_ROLLED_BACK).count()
+    rollback_failed = jobs.filter(status=AgentJob.STATUS_ROLLBACK_FAILED).count()
+    return {
+        'eligible': eligible,
+        'updated': updated,
+        'pending': pending,
+        'failed': failed,
+        'rolled_back': rolled_back,
+        'rollback_failed': rollback_failed,
+        'success_percentage': round((updated / max(1, endpoints.count())) * 100, 1),
+    }
+
+
+def agent_releases(request):
+    if not is_nightowl_technical_user(request.user):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    groups = AgentReleaseGroup.objects.all()
+    if request.method == 'POST':
+        version = (request.POST.get('version') or '').strip()
+        channel = (request.POST.get('channel') or AgentRelease.CHANNEL_STABLE).strip()
+        release_status = (request.POST.get('status') or AgentRelease.STATUS_DRAFT).strip()
+        package_url = (request.POST.get('package_url') or '').strip()
+        checksum_url = (request.POST.get('checksum_url') or '').strip()
+        sha256 = (request.POST.get('sha256') or '').strip().lower()
+        release_notes = (request.POST.get('release_notes') or '').strip()
+        try:
+            size = int(request.POST.get('size') or 0)
+            rollout_percentage = min(100, max(0, int(request.POST.get('rollout_percentage') or 0)))
+        except ValueError:
+            messages.error(request, 'Tamanho ou percentual invalido.')
+            return redirect('agent-releases')
+        if channel not in {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}:
+            messages.error(request, 'Canal invalido.')
+            return redirect('agent-releases')
+        if release_status not in {choice[0] for choice in AgentRelease.STATUS_CHOICES}:
+            messages.error(request, 'Status invalido.')
+            return redirect('agent-releases')
+        if AgentRelease.objects.filter(version=version).exists():
+            messages.error(request, 'Esta versao ja existe.')
+            return redirect('agent-releases')
+        if parse_semver(version) is None:
+            messages.error(request, 'Versao invalida. Use SemVer, exemplo 0.1.1.0-rc1.')
+            return redirect('agent-releases')
+        if not version or not package_url or len(sha256) != 64:
+            messages.error(request, 'Versao, URL do pacote e SHA-256 sao obrigatorios.')
+            return redirect('agent-releases')
+        release = AgentRelease.objects.create(
+            version=version,
+            channel=channel,
+            status=release_status,
+            package_url=package_url,
+            checksum_url=checksum_url,
+            sha256=sha256,
+            size=size,
+            released_at=timezone.now() if release_status == AgentRelease.STATUS_AVAILABLE else None,
+            minimum_updater_version=(request.POST.get('minimum_updater_version') or '').strip(),
+            release_notes=release_notes,
+            rollout_percentage=rollout_percentage,
+            mandatory=bool(request.POST.get('mandatory')),
+            created_by=request.user,
+        )
+        group_ids = request.POST.getlist('allowed_groups')
+        if group_ids:
+            release.allowed_groups.set(groups.filter(id__in=group_ids))
+        AgentReleaseAudit.objects.create(
+            user=request.user,
+            action=AgentReleaseAudit.ACTION_CREATED,
+            release=release,
+            version=release.version,
+            channel_after=release.channel,
+            rollout_after=release.rollout_percentage,
+            reason='release_created_from_panel',
+        )
+        messages.success(request, f'Release {release.version} criada.')
+        return redirect('agent-releases')
+
+    releases = list(AgentRelease.objects.prefetch_related('allowed_groups').select_related('created_by')[:50])
+    rows = [{'release': release, 'metrics': _release_metrics(release)} for release in releases]
+    return render(
+        request,
+        'dashboard/agent_releases.html',
+        {
+            'active_nav': 'agent_releases',
+            'releases': rows,
+            'groups': groups,
+            'channel_choices': AgentRelease.CHANNEL_CHOICES,
+            'status_choices': AgentRelease.STATUS_CHOICES,
+        },
+    )
+
+
+@require_POST
+def agent_release_action(request, pk):
+    if not is_nightowl_technical_user(request.user):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    release = get_object_or_404(AgentRelease, pk=pk)
+    action = (request.POST.get('action') or '').strip()
+    channel_before = release.channel
+    rollout_before = release.rollout_percentage
+    audit_action = AgentReleaseAudit.ACTION_UPDATED
+
+    if action == 'pause':
+        release.rollout_paused = True
+        release.status = AgentRelease.STATUS_PAUSED
+        audit_action = AgentReleaseAudit.ACTION_PAUSED
+    elif action == 'resume':
+        release.rollout_paused = False
+        release.status = AgentRelease.STATUS_AVAILABLE
+        if not release.released_at:
+            release.released_at = timezone.now()
+        audit_action = AgentReleaseAudit.ACTION_RESUMED
+    elif action == 'revoke':
+        release.revoked = True
+        release.status = AgentRelease.STATUS_REVOKED
+        audit_action = AgentReleaseAudit.ACTION_REVOKED
+        AgentJob.objects.filter(
+            agent_release=release,
+            status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT],
+        ).update(status=AgentJob.STATUS_CANCELLED, finished_at=timezone.now(), error_code='RELEASE_REVOKED', error_message='Release revogada antes da execucao.')
+    elif action == 'promote':
+        next_channel = (request.POST.get('channel') or '').strip()
+        if next_channel not in {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}:
+            messages.error(request, 'Canal de promocao invalido.')
+            return redirect('agent-releases')
+        release.channel = next_channel
+        release.status = AgentRelease.STATUS_AVAILABLE
+        release.rollout_paused = False
+        if not release.released_at:
+            release.released_at = timezone.now()
+        audit_action = AgentReleaseAudit.ACTION_PROMOTED
+    elif action == 'rollout':
+        try:
+            release.rollout_percentage = min(100, max(0, int(request.POST.get('rollout_percentage') or 0)))
+        except ValueError:
+            messages.error(request, 'Percentual invalido.')
+            return redirect('agent-releases')
+    else:
+        messages.error(request, 'Acao invalida.')
+        return redirect('agent-releases')
+
+    release.save()
+    AgentReleaseAudit.objects.create(
+        user=request.user,
+        action=audit_action,
+        release=release,
+        version=release.version,
+        channel_before=channel_before,
+        channel_after=release.channel,
+        rollout_before=rollout_before,
+        rollout_after=release.rollout_percentage,
+        reason=(request.POST.get('reason') or '').strip(),
+    )
+    messages.success(request, f'Release {release.version} atualizada.')
+    return redirect('agent-releases')
 
 
 def agent_install(request):

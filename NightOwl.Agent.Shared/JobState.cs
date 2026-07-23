@@ -40,6 +40,14 @@ public static class JobErrorCodes
     public const string JobExecutionFailed = "JOB_EXECUTION_FAILED";
     public const string JobResultTooLarge = "JOB_RESULT_TOO_LARGE";
     public const string JobStateInvalid = "JOB_STATE_INVALID";
+    public const string JobConcurrencyLimit = "JOB_CONCURRENCY_LIMIT";
+    public const string JobExclusiveConflict = "JOB_EXCLUSIVE_CONFLICT";
+    public const string JobInterrupted = "JOB_INTERRUPTED";
+    public const string ResultSendFailed = "RESULT_SEND_FAILED";
+    public const string ResultQueueCorrupted = "RESULT_QUEUE_CORRUPTED";
+    public const string ResultQueueFull = "RESULT_QUEUE_FULL";
+    public const string ResultPayloadInvalid = "RESULT_PAYLOAD_INVALID";
+    public const string ResultRetryExhausted = "RESULT_RETRY_EXHAUSTED";
 }
 
 public sealed class RemoteJob
@@ -282,6 +290,31 @@ public sealed class JobStore
         }
     }
 
+    public IReadOnlyList<JobStateRecord> LoadAll()
+    {
+        if (!Directory.Exists(_directory))
+        {
+            return Array.Empty<JobStateRecord>();
+        }
+
+        List<JobStateRecord> records = new();
+        foreach (string path in Directory.GetFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            try
+            {
+                JobStateRecord record = JsonSerializer.Deserialize<JobStateRecord>(File.ReadAllText(path), JsonOptions)
+                    ?? throw new InvalidOperationException("Job state JSON is empty.");
+                Validate(record);
+                records.Add(record);
+            }
+            catch
+            {
+                // Corrupt job-state files are handled by the policy/coordinator paths that need them.
+            }
+        }
+        return records;
+    }
+
     private string PathFor(string jobId)
     {
         string safe = jobId.Replace("/", "_").Replace("\\", "_").Replace(":", "_");
@@ -298,5 +331,297 @@ public sealed class JobStore
         {
             throw new InvalidOperationException("status is required.");
         }
+    }
+}
+
+public sealed class PendingResultRecord
+{
+    [JsonPropertyName("result_id")]
+    public string ResultId { get; set; } = Guid.NewGuid().ToString("D");
+
+    [JsonPropertyName("job_id")]
+    public string JobId { get; set; } = "";
+
+    [JsonPropertyName("job_type")]
+    public string JobType { get; set; } = "";
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "";
+
+    [JsonPropertyName("payload")]
+    public JsonElement Payload { get; set; }
+
+    [JsonPropertyName("created_at")]
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    [JsonPropertyName("last_attempt_at")]
+    public DateTimeOffset? LastAttemptAt { get; set; }
+
+    [JsonPropertyName("attempt_count")]
+    public int AttemptCount { get; set; }
+
+    [JsonPropertyName("next_attempt_at")]
+    public DateTimeOffset NextAttemptAt { get; set; } = DateTimeOffset.UtcNow;
+
+    [JsonPropertyName("last_error_code")]
+    public string LastErrorCode { get; set; } = "";
+
+    [JsonPropertyName("last_error_message")]
+    public string LastErrorMessage { get; set; } = "";
+
+    [JsonPropertyName("payload_sha256")]
+    public string PayloadSha256 { get; set; } = "";
+
+    [JsonPropertyName("critical")]
+    public bool Critical { get; set; }
+}
+
+public sealed class PendingResultQueue
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly TimeSpan[] BackoffSchedule =
+    {
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(15),
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromMinutes(1),
+        TimeSpan.FromMinutes(5)
+    };
+
+    private readonly string _directory;
+    private readonly int _maxRecords;
+    private readonly long _maxTotalBytes;
+    private readonly int _maxPayloadBytes;
+    private readonly TimeSpan _retention;
+
+    public PendingResultQueue(
+        string directory,
+        int maxRecords = 1000,
+        long maxTotalBytes = 128L * 1024L * 1024L,
+        int maxPayloadBytes = 256 * 1024,
+        TimeSpan? retention = null)
+    {
+        _directory = directory;
+        _maxRecords = maxRecords;
+        _maxTotalBytes = maxTotalBytes;
+        _maxPayloadBytes = maxPayloadBytes;
+        _retention = retention ?? TimeSpan.FromDays(14);
+    }
+
+    public string DirectoryPath => _directory;
+    public string SentDirectory => Path.Combine(_directory, "sent");
+    public string QuarantineDirectory => Path.Combine(_directory, "quarantine");
+
+    public PendingResultRecord Enqueue<TPayload>(string jobType, TPayload payload, bool critical = false, string? resultId = null)
+    {
+        Directory.CreateDirectory(_directory);
+        JsonElement element = JsonSerializer.SerializeToElement(payload, JsonOptions);
+        byte[] payloadBytes = JsonSerializer.SerializeToUtf8Bytes(element, JsonOptions);
+        if (payloadBytes.Length > _maxPayloadBytes)
+        {
+            throw new InvalidOperationException(JobErrorCodes.ResultPayloadInvalid);
+        }
+
+        string jobId = GetJsonString(element, "job_id") ?? GetJsonString(element, "jobId") ?? "";
+        string status = GetJsonString(element, "status") ?? "";
+        PendingResultRecord record = new()
+        {
+            ResultId = string.IsNullOrWhiteSpace(resultId) ? Guid.NewGuid().ToString("D") : resultId,
+            JobId = jobId,
+            JobType = jobType,
+            Status = status,
+            Payload = element,
+            CreatedAt = DateTimeOffset.UtcNow,
+            NextAttemptAt = DateTimeOffset.UtcNow,
+            PayloadSha256 = Sha256Hex(payloadBytes),
+            Critical = critical
+        };
+        EnforceLimits(record.Critical);
+        Save(record);
+        return record;
+    }
+
+    public IReadOnlyList<PendingResultRecord> ListDue(DateTimeOffset now)
+    {
+        return LoadAll(now, dueOnly: true);
+    }
+
+    public IReadOnlyList<PendingResultRecord> LoadAll(DateTimeOffset? now = null, bool dueOnly = false)
+    {
+        if (!Directory.Exists(_directory))
+        {
+            return Array.Empty<PendingResultRecord>();
+        }
+
+        List<PendingResultRecord> records = new();
+        foreach (string path in Directory.GetFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            try
+            {
+                PendingResultRecord record = JsonSerializer.Deserialize<PendingResultRecord>(File.ReadAllText(path), JsonOptions)
+                    ?? throw new InvalidOperationException("Pending result JSON is empty.");
+                Validate(record);
+                if (!dueOnly || record.NextAttemptAt <= (now ?? DateTimeOffset.UtcNow))
+                {
+                    records.Add(record);
+                }
+            }
+            catch
+            {
+                Quarantine(path);
+            }
+        }
+        return records.OrderBy(record => record.CreatedAt).ToArray();
+    }
+
+    public void MarkAttemptFailed(PendingResultRecord record, string errorCode, string errorMessage)
+    {
+        record.AttemptCount++;
+        record.LastAttemptAt = DateTimeOffset.UtcNow;
+        record.LastErrorCode = errorCode;
+        record.LastErrorMessage = errorMessage.Length > 1000 ? errorMessage[..1000] : errorMessage;
+        TimeSpan delay = BackoffSchedule[Math.Min(record.AttemptCount - 1, BackoffSchedule.Length - 1)];
+        if (record.AttemptCount > BackoffSchedule.Length)
+        {
+            delay = TimeSpan.FromMinutes(Math.Min(15, 5 + record.AttemptCount));
+        }
+        int jitter = Random.Shared.Next(0, Math.Max(1, (int)Math.Min(delay.TotalSeconds / 4, 30)));
+        record.NextAttemptAt = DateTimeOffset.UtcNow.Add(delay).Add(TimeSpan.FromSeconds(jitter));
+        Save(record);
+    }
+
+    public void MarkSent(PendingResultRecord record)
+    {
+        Directory.CreateDirectory(SentDirectory);
+        string source = PathFor(record.ResultId);
+        if (!File.Exists(source))
+        {
+            return;
+        }
+        string destination = Path.Combine(SentDirectory, $"{record.ResultId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+        File.Move(source, destination, overwrite: true);
+    }
+
+    public void Prune()
+    {
+        EnforceLimits(false);
+    }
+
+    private void EnforceLimits(bool incomingCritical)
+    {
+        Directory.CreateDirectory(_directory);
+        FileInfo[] files = new DirectoryInfo(_directory)
+            .GetFiles("*.json", SearchOption.TopDirectoryOnly)
+            .OrderBy(file => file.CreationTimeUtc)
+            .ToArray();
+
+        long totalBytes = files.Sum(file => file.Length);
+        DateTimeOffset cutoff = DateTimeOffset.UtcNow.Subtract(_retention);
+        foreach (FileInfo file in files)
+        {
+            if (files.Length <= _maxRecords && totalBytes <= _maxTotalBytes && file.LastWriteTimeUtc >= cutoff.UtcDateTime)
+            {
+                continue;
+            }
+
+            PendingResultRecord? record = TryLoad(file.FullName);
+            if (record?.Critical == true)
+            {
+                continue;
+            }
+
+            try
+            {
+                totalBytes -= file.Length;
+                file.Delete();
+            }
+            catch { }
+            files = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly).OrderBy(f => f.CreationTimeUtc).ToArray();
+        }
+
+        int currentCount = Directory.GetFiles(_directory, "*.json", SearchOption.TopDirectoryOnly).Length;
+        long currentBytes = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly).Sum(file => file.Length);
+        if ((currentCount >= _maxRecords || currentBytes >= _maxTotalBytes) && incomingCritical == false)
+        {
+            throw new InvalidOperationException(JobErrorCodes.ResultQueueFull);
+        }
+    }
+
+    private PendingResultRecord? TryLoad(string path)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<PendingResultRecord>(File.ReadAllText(path), JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void Save(PendingResultRecord record)
+    {
+        Validate(record);
+        Directory.CreateDirectory(_directory);
+        string path = PathFor(record.ResultId);
+        string temp = Path.Combine(_directory, $".{record.ResultId}.{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
+        if (File.Exists(path))
+        {
+            File.Replace(temp, path, null);
+        }
+        else
+        {
+            File.Move(temp, path);
+        }
+    }
+
+    private void Quarantine(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(QuarantineDirectory);
+            string destination = Path.Combine(QuarantineDirectory, $"{Path.GetFileNameWithoutExtension(path)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+            File.Move(path, destination, overwrite: true);
+        }
+        catch { }
+    }
+
+    private string PathFor(string resultId)
+    {
+        string safe = resultId.Replace("/", "_").Replace("\\", "_").Replace(":", "_");
+        return Path.Combine(_directory, $"{safe}.json");
+    }
+
+    private static void Validate(PendingResultRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.ResultId))
+        {
+            throw new InvalidOperationException("result_id is required.");
+        }
+        if (record.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            throw new InvalidOperationException(JobErrorCodes.ResultPayloadInvalid);
+        }
+        byte[] payloadBytes = JsonSerializer.SerializeToUtf8Bytes(record.Payload, JsonOptions);
+        string actualHash = Sha256Hex(payloadBytes);
+        if (!string.IsNullOrWhiteSpace(record.PayloadSha256) && !actualHash.Equals(record.PayloadSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(JobErrorCodes.ResultPayloadInvalid);
+        }
+        record.PayloadSha256 = actualHash;
+    }
+
+    private static string? GetJsonString(JsonElement element, string propertyName)
+    {
+        return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out JsonElement value)
+            ? value.GetString()
+            : null;
+    }
+
+    private static string Sha256Hex(byte[] bytes)
+    {
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(bytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }

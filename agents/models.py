@@ -50,6 +50,26 @@ class AgentMachine(models.Model):
         (STATUS_UNKNOWN, 'Unknown'),
     ]
 
+    UPDATE_CHANNEL_DEVELOPMENT = 'development'
+    UPDATE_CHANNEL_PILOT = 'pilot'
+    UPDATE_CHANNEL_STABLE = 'stable'
+    UPDATE_CHANNEL_CHOICES = [
+        (UPDATE_CHANNEL_DEVELOPMENT, 'Development'),
+        (UPDATE_CHANNEL_PILOT, 'Pilot'),
+        (UPDATE_CHANNEL_STABLE, 'Stable'),
+    ]
+
+    UPDATE_POLICY_MANUAL = 'manual'
+    UPDATE_POLICY_NOTIFY_ONLY = 'notify_only'
+    UPDATE_POLICY_AUTOMATIC = 'automatic'
+    UPDATE_POLICY_MAINTENANCE_WINDOW = 'maintenance_window'
+    UPDATE_POLICY_CHOICES = [
+        (UPDATE_POLICY_MANUAL, 'Manual'),
+        (UPDATE_POLICY_NOTIFY_ONLY, 'Notify only'),
+        (UPDATE_POLICY_AUTOMATIC, 'Automatic'),
+        (UPDATE_POLICY_MAINTENANCE_WINDOW, 'Maintenance window'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     machine_id = models.CharField(max_length=255, blank=True, db_index=True)
     hostname = models.CharField(max_length=255)
@@ -80,6 +100,29 @@ class AgentMachine(models.Model):
     agent_runtime_version = models.CharField(max_length=80, blank=True)
     agent_update_source = models.CharField(max_length=500, blank=True)
     agent_reported_at = models.DateTimeField(null=True, blank=True)
+    update_channel = models.CharField(
+        max_length=20,
+        choices=UPDATE_CHANNEL_CHOICES,
+        default=UPDATE_CHANNEL_STABLE,
+        db_index=True,
+    )
+    auto_update_enabled = models.BooleanField(default=False)
+    update_policy = models.CharField(
+        max_length=30,
+        choices=UPDATE_POLICY_CHOICES,
+        default=UPDATE_POLICY_MANUAL,
+        db_index=True,
+    )
+    maintenance_window_start = models.TimeField(null=True, blank=True)
+    maintenance_window_end = models.TimeField(null=True, blank=True)
+    update_paused = models.BooleanField(default=False, db_index=True)
+    pinned_agent_version = models.CharField(max_length=50, blank=True, db_index=True)
+    rollout_groups = models.ManyToManyField(
+        'AgentReleaseGroup',
+        blank=True,
+        related_name='endpoints',
+    )
+    last_update_policy_evaluation_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -117,6 +160,162 @@ class AgentMachine(models.Model):
         if self.first_seen_at is None:
             self.first_seen_at = now
         self.last_seen_at = now
+
+
+class AgentReleaseGroup(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120, unique=True)
+    slug = models.SlugField(max_length=120, unique=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class AgentRelease(models.Model):
+    CHANNEL_DEVELOPMENT = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+    CHANNEL_PILOT = AgentMachine.UPDATE_CHANNEL_PILOT
+    CHANNEL_STABLE = AgentMachine.UPDATE_CHANNEL_STABLE
+    CHANNEL_CHOICES = AgentMachine.UPDATE_CHANNEL_CHOICES
+
+    STATUS_DRAFT = 'draft'
+    STATUS_VALIDATING = 'validating'
+    STATUS_AVAILABLE = 'available'
+    STATUS_PAUSED = 'paused'
+    STATUS_REVOKED = 'revoked'
+    STATUS_SUPERSEDED = 'superseded'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_VALIDATING, 'Validating'),
+        (STATUS_AVAILABLE, 'Available'),
+        (STATUS_PAUSED, 'Paused'),
+        (STATUS_REVOKED, 'Revoked'),
+        (STATUS_SUPERSEDED, 'Superseded'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    version = models.CharField(max_length=50, unique=True)
+    channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
+    package_url = models.URLField(max_length=1000)
+    checksum_url = models.URLField(max_length=1000, blank=True)
+    sha256 = models.CharField(max_length=64)
+    size = models.BigIntegerField(default=0)
+    released_at = models.DateTimeField(null=True, blank=True)
+    minimum_updater_version = models.CharField(max_length=50, blank=True)
+    release_notes = models.TextField(blank=True)
+    rollout_percentage = models.PositiveSmallIntegerField(default=0)
+    rollout_paused = models.BooleanField(default=False, db_index=True)
+    mandatory = models.BooleanField(default=False)
+    revoked = models.BooleanField(default=False, db_index=True)
+    replacement_release = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='replaced_releases',
+    )
+    allowed_groups = models.ManyToManyField(
+        AgentReleaseGroup,
+        blank=True,
+        related_name='releases',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='agent_releases',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-released_at', '-created_at']
+        permissions = [
+            ('view_agent_release_rollout', 'Can view agent release rollout'),
+            ('create_agent_release_draft', 'Can create agent release draft'),
+            ('publish_agent_release_development', 'Can publish development agent release'),
+            ('promote_agent_release_pilot', 'Can promote agent release to pilot'),
+            ('promote_agent_release_stable', 'Can promote agent release to stable'),
+            ('pause_agent_release_rollout', 'Can pause agent release rollout'),
+            ('revoke_agent_release', 'Can revoke agent release'),
+            ('force_agent_update', 'Can force agent update'),
+        ]
+        indexes = [
+            models.Index(fields=['channel', 'status', '-released_at']),
+            models.Index(fields=['revoked', 'rollout_paused']),
+            models.Index(fields=['version']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.version} ({self.channel})'
+
+
+class AgentReleaseAudit(models.Model):
+    ACTION_CREATED = 'created'
+    ACTION_UPDATED = 'updated'
+    ACTION_PAUSED = 'paused'
+    ACTION_RESUMED = 'resumed'
+    ACTION_PROMOTED = 'promoted'
+    ACTION_REVOKED = 'revoked'
+    ACTION_ENDPOINT_POLICY_CHANGED = 'endpoint_policy_changed'
+    ACTION_CHOICES = [
+        (ACTION_CREATED, 'Created'),
+        (ACTION_UPDATED, 'Updated'),
+        (ACTION_PAUSED, 'Paused'),
+        (ACTION_RESUMED, 'Resumed'),
+        (ACTION_PROMOTED, 'Promoted'),
+        (ACTION_REVOKED, 'Revoked'),
+        (ACTION_ENDPOINT_POLICY_CHANGED, 'Endpoint policy changed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='agent_release_audits',
+    )
+    action = models.CharField(max_length=60, choices=ACTION_CHOICES)
+    release = models.ForeignKey(
+        AgentRelease,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='audits',
+    )
+    endpoint = models.ForeignKey(
+        AgentMachine,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='release_audits',
+    )
+    version = models.CharField(max_length=50, blank=True)
+    channel_before = models.CharField(max_length=20, blank=True)
+    channel_after = models.CharField(max_length=20, blank=True)
+    rollout_before = models.PositiveSmallIntegerField(null=True, blank=True)
+    rollout_after = models.PositiveSmallIntegerField(null=True, blank=True)
+    reason = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['action', '-created_at']),
+            models.Index(fields=['release', '-created_at']),
+            models.Index(fields=['endpoint', '-created_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.action} - {self.version or self.release_id}'
 
 
 class AgentEnrollmentToken(models.Model):
@@ -804,6 +1003,13 @@ class AgentJob(models.Model):
     STATUS_FAILED = 'failed'
     STATUS_EXPIRED = 'expired'
     STATUS_CANCELLED = 'cancelled'
+    STATUS_TIMED_OUT = 'timed_out'
+    STATUS_DUPLICATE = 'duplicate'
+    STATUS_UNSUPPORTED = 'unsupported'
+    STATUS_INVALID_PARAMETERS = 'invalid_parameters'
+    STATUS_INTERRUPTED = 'interrupted'
+    STATUS_ROLLED_BACK = 'rolled_back'
+    STATUS_ROLLBACK_FAILED = 'rollback_failed'
     STATUS_CHOICES = [
         (STATUS_QUEUED, 'Queued'),
         (STATUS_SENT, 'Sent'),
@@ -812,6 +1018,13 @@ class AgentJob(models.Model):
         (STATUS_FAILED, 'Failed'),
         (STATUS_EXPIRED, 'Expired'),
         (STATUS_CANCELLED, 'Cancelled'),
+        (STATUS_TIMED_OUT, 'Timed out'),
+        (STATUS_DUPLICATE, 'Duplicate'),
+        (STATUS_UNSUPPORTED, 'Unsupported'),
+        (STATUS_INVALID_PARAMETERS, 'Invalid parameters'),
+        (STATUS_INTERRUPTED, 'Interrupted'),
+        (STATUS_ROLLED_BACK, 'Rolled back'),
+        (STATUS_ROLLBACK_FAILED, 'Rollback failed'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -820,11 +1033,24 @@ class AgentJob(models.Model):
         on_delete=models.CASCADE,
         related_name='jobs',
     )
+    agent_release = models.ForeignKey(
+        AgentRelease,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='jobs',
+    )
     job_type = models.CharField(max_length=80, choices=TYPE_CHOICES)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_QUEUED)
     created_by = models.CharField(max_length=150, blank=True)
     payload = models.JSONField(default=dict, blank=True)
     result = models.JSONField(default=dict, blank=True)
+    result_id = models.CharField(max_length=80, blank=True, db_index=True)
+    correlation_id = models.CharField(max_length=120, blank=True)
+    attempt = models.PositiveIntegerField(default=1)
+    timeout_seconds = models.PositiveIntegerField(null=True, blank=True)
+    error_code = models.CharField(max_length=80, blank=True)
+    output_truncated = models.BooleanField(default=False)
     stdout = models.TextField(blank=True)
     stderr = models.TextField(blank=True)
     error_message = models.TextField(blank=True)
@@ -834,6 +1060,7 @@ class AgentJob(models.Model):
     dispatched_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    result_received_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -854,6 +1081,114 @@ class AgentJob(models.Model):
         if self.status != self.STATUS_QUEUED:
             return False
         return not self.expires_at or self.expires_at > timezone.now()
+
+
+class AgentJobResultReceipt(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    result_id = models.CharField(max_length=80, unique=True)
+    job = models.ForeignKey(
+        AgentJob,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='result_receipts',
+    )
+    endpoint = models.ForeignKey(
+        AgentMachine,
+        on_delete=models.CASCADE,
+        related_name='job_result_receipts',
+    )
+    payload_sha256 = models.CharField(max_length=64)
+    first_payload = models.JSONField(default=dict, blank=True)
+    conflict_count = models.PositiveIntegerField(default=0)
+    last_conflict_at = models.DateTimeField(null=True, blank=True)
+    received_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-received_at']
+        indexes = [
+            models.Index(fields=['endpoint', '-received_at']),
+            models.Index(fields=['job', '-received_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.result_id} - {self.endpoint}'
+
+
+class AgentOperationalStatus(models.Model):
+    HEALTH_HEALTHY = 'healthy'
+    HEALTH_ATTENTION = 'attention'
+    HEALTH_CRITICAL = 'critical'
+    HEALTH_OFFLINE = 'offline'
+    HEALTH_CHOICES = [
+        (HEALTH_HEALTHY, 'Healthy'),
+        (HEALTH_ATTENTION, 'Attention'),
+        (HEALTH_CRITICAL, 'Critical'),
+        (HEALTH_OFFLINE, 'Offline'),
+    ]
+
+    endpoint = models.OneToOneField(
+        AgentMachine,
+        on_delete=models.CASCADE,
+        related_name='operational_status',
+    )
+    installed_version = models.CharField(max_length=50, blank=True)
+    available_version = models.CharField(max_length=50, blank=True)
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    last_inventory_at = models.DateTimeField(null=True, blank=True)
+    last_agent_start_at = models.DateTimeField(null=True, blank=True)
+    agent_uptime_seconds = models.BigIntegerField(null=True, blank=True)
+    service_status = models.CharField(max_length=80, blank=True)
+    current_user = models.CharField(max_length=255, blank=True)
+    current_ip = models.GenericIPAddressField(null=True, blank=True)
+    pending_result_count = models.PositiveIntegerField(default=0)
+    running_job_count = models.PositiveIntegerField(default=0)
+    last_error_code = models.CharField(max_length=80, blank=True)
+    last_error_message = models.TextField(blank=True)
+    last_error_component = models.CharField(max_length=80, blank=True)
+    last_error_at = models.DateTimeField(null=True, blank=True)
+
+    update_id = models.CharField(max_length=80, blank=True)
+    update_job_id = models.CharField(max_length=80, blank=True)
+    from_version = models.CharField(max_length=50, blank=True)
+    target_version = models.CharField(max_length=50, blank=True)
+    update_current_stage = models.CharField(max_length=80, blank=True)
+    update_status = models.CharField(max_length=40, blank=True)
+    update_started_at = models.DateTimeField(null=True, blank=True)
+    update_completed_at = models.DateTimeField(null=True, blank=True)
+    rollback_status = models.CharField(max_length=40, blank=True)
+    rollback_attempt = models.PositiveIntegerField(default=0)
+    health_check_confirmed = models.BooleanField(default=False)
+    update_error_code = models.CharField(max_length=80, blank=True)
+    update_error_message = models.TextField(blank=True)
+    rollback_error_code = models.CharField(max_length=80, blank=True)
+    rollback_error_message = models.TextField(blank=True)
+    package_url_sanitized = models.CharField(max_length=500, blank=True)
+
+    result_pending_count = models.PositiveIntegerField(default=0)
+    result_oldest_pending_at = models.DateTimeField(null=True, blank=True)
+    result_retrying_count = models.PositiveIntegerField(default=0)
+    result_quarantined_count = models.PositiveIntegerField(default=0)
+    result_queue_full = models.BooleanField(default=False)
+    result_last_send_error = models.TextField(blank=True)
+
+    health_indicator = models.CharField(max_length=20, choices=HEALTH_CHOICES, default=HEALTH_HEALTHY)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['endpoint__hostname']
+        indexes = [
+            models.Index(fields=['health_indicator']),
+            models.Index(fields=['service_status']),
+            models.Index(fields=['update_status']),
+            models.Index(fields=['result_queue_full']),
+            models.Index(fields=['last_error_code']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.endpoint} - {self.health_indicator}'
 
 
 class MaintenanceRun(models.Model):

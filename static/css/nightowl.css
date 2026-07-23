@@ -31562,3 +31562,195 @@ body.page-endpoint-detail .endpoint-actions-card .endpoint-quick-action-button {
     font-size: 12.5px;
     justify-content: flex-start;
 }
+
+/* Endpoint agent diagnostics */
+body.page-endpoint-detail .endpoint-diagnostics-grid {
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-diagnostics-grid .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-diagnostics-grid pre {
+    max-height: 320px;
+    overflow: auto;
+}
+/* Agent release rollout management */
+body.page-agent-releases .agent-release-shell {
+    display: grid;
+    gap: 16px;
+}
+
+body.page-agent-releases .agent-release-form,
+body.page-agent-releases .agent-release-card {
+    padding: 0;
+}
+
+body.page-agent-releases .release-grid-form {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    padding: 16px;
+}
+
+body.page-agent-releases .release-grid-form label,
+body.page-agent-releases .release-groups {
+    display: grid;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+body.page-agent-releases .release-grid-form input,
+body.page-agent-releases .release-grid-form select,
+body.page-agent-releases .release-grid-form textarea,
+body.page-agent-releases .release-card-actions input,
+body.page-agent-releases .release-card-actions select {
+    width: 100%;
+    min-height: 34px;
+    border: 1px solid rgba(141, 104, 255, .28);
+    border-radius: 8px;
+    background: rgba(6, 8, 18, .72);
+    color: var(--text-primary);
+    padding: 8px 10px;
+}
+
+body.page-agent-releases .release-wide {
+    grid-column: span 2;
+}
+
+body.page-agent-releases .release-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: none;
+}
+
+body.page-agent-releases .release-checkbox input,
+body.page-agent-releases .release-groups input {
+    width: auto;
+    min-height: auto;
+}
+
+body.page-agent-releases .release-groups {
+    border: 1px solid rgba(141, 104, 255, .2);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+body.page-agent-releases .release-groups label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-transform: none;
+}
+
+body.page-agent-releases .agent-release-list {
+    display: grid;
+    gap: 12px;
+}
+
+body.page-agent-releases .agent-release-card {
+    overflow: hidden;
+}
+
+body.page-agent-releases .agent-release-card > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(141, 104, 255, .14);
+}
+
+body.page-agent-releases .agent-release-card h2 {
+    margin: 0;
+    font-size: 16px;
+}
+
+body.page-agent-releases .agent-release-card p {
+    margin: 4px 0 0;
+    color: var(--text-muted);
+}
+
+body.page-agent-releases .release-metrics {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px 16px;
+}
+
+body.page-agent-releases .release-metrics div {
+    border: 1px solid rgba(141, 104, 255, .16);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, .02);
+}
+
+body.page-agent-releases .release-metrics dt {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+body.page-agent-releases .release-metrics dd {
+    margin: 3px 0 0;
+    font-weight: 800;
+}
+
+body.page-agent-releases .release-package {
+    display: grid;
+    gap: 6px;
+    padding: 0 16px 12px;
+    color: var(--text-muted);
+}
+
+body.page-agent-releases .release-package span,
+body.page-agent-releases .release-package code {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-agent-releases .release-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px 16px;
+}
+
+body.page-agent-releases .release-card-actions form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+body.page-agent-releases .release-card-actions button,
+body.page-agent-releases .release-actions button {
+    min-height: 34px;
+    border: 1px solid rgba(141, 104, 255, .36);
+    border-radius: 8px;
+    background: rgba(141, 104, 255, .16);
+    color: var(--text-primary);
+    font-weight: 800;
+    padding: 8px 12px;
+}
+
+body.page-agent-releases .release-card-actions button.danger {
+    border-color: rgba(255, 77, 109, .42);
+    background: rgba(255, 77, 109, .14);
+    color: #ff9aaa;
+}
+
+@media (max-width: 980px) {
+    body.page-agent-releases .release-grid-form,
+    body.page-agent-releases .release-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    body.page-agent-releases .release-wide {
+        grid-column: 1 / -1;
+    }
+}

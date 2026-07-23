@@ -16,6 +16,8 @@ public sealed class Worker : BackgroundService
     private readonly AgentApiClient _api;
     private readonly WindowsInventoryCollector _collector;
     private readonly JobExecutor _jobExecutor;
+    private readonly JobExecutionCoordinator _jobCoordinator;
+    private readonly PendingResultQueue _resultQueue;
 
     public Worker(
         ConfigService configService,
@@ -23,7 +25,9 @@ public sealed class Worker : BackgroundService
         JsonlLogger logger,
         AgentApiClient api,
         WindowsInventoryCollector collector,
-        JobExecutor jobExecutor)
+        JobExecutor jobExecutor,
+        JobExecutionCoordinator jobCoordinator,
+        PendingResultQueue resultQueue)
     {
         _configService = configService;
         _stateService = stateService;
@@ -31,6 +35,8 @@ public sealed class Worker : BackgroundService
         _api = api;
         _collector = collector;
         _jobExecutor = jobExecutor;
+        _jobCoordinator = jobCoordinator;
+        _resultQueue = resultQueue;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -53,6 +59,8 @@ public sealed class Worker : BackgroundService
         }, stoppingToken);
         await _logger.LogAsync("service.starting", "NightOwl .NET agent starting.", new { config.AgentVersion }, stoppingToken);
         await ConfirmPendingUpdateAsync(config, stoppingToken);
+        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
+        await MigrateLegacyPendingResultsAsync(config, stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -72,7 +80,7 @@ public sealed class Worker : BackgroundService
 
                 DateTimeOffset now = DateTimeOffset.UtcNow;
 
-                await SendPendingUpdateResultAsync(config, stoppingToken);
+                await FlushPendingResultsAsync(config, stoppingToken);
 
                 if (IsDue(state.LastHeartbeatAt, config.Intervals.HeartbeatSeconds, now))
                 {
@@ -265,15 +273,16 @@ public sealed class Worker : BackgroundService
         return string.Equals((left ?? "").Trim(), (right ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task SendPendingUpdateResultAsync(AgentConfig config, CancellationToken ct)
+    private async Task MigrateLegacyPendingResultsAsync(AgentConfig config, CancellationToken ct)
     {
         List<string> pendingFiles = new();
         string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
-            ? Path.Combine(config.JobsPath, "Pending")
+            ? NightOwlPaths.Current.PendingResultsDir
             : config.PendingResultsPath;
         if (Directory.Exists(pendingDir))
         {
-            pendingFiles.AddRange(Directory.GetFiles(pendingDir, "*.json", SearchOption.TopDirectoryOnly));
+            pendingFiles.AddRange(Directory.GetFiles(pendingDir, "*.json", SearchOption.TopDirectoryOnly)
+                .Where(path => !Path.GetFileName(path).StartsWith(".", StringComparison.OrdinalIgnoreCase)));
         }
 
         string legacyPendingPath = Path.Combine(config.JobsPath, "pending-update-result.json");
@@ -282,32 +291,77 @@ public sealed class Worker : BackgroundService
             pendingFiles.Add(legacyPendingPath);
         }
 
+        string legacyPendingDir = Path.Combine(config.JobsPath, "Pending");
+        if (Directory.Exists(legacyPendingDir))
+        {
+            pendingFiles.AddRange(Directory.GetFiles(legacyPendingDir, "*.json", SearchOption.TopDirectoryOnly));
+        }
+
         foreach (string pendingPath in pendingFiles.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path))
         {
-            await _logger.LogAsync("job.result.pending_found", "Pending job result found.", new { pendingPath }, ct);
+            await _logger.LogAsync("job.result.legacy_pending_found", "Legacy pending job result found.", new { pendingPath }, ct);
             try
             {
                 string json = await File.ReadAllTextAsync(pendingPath, ct);
+                using JsonDocument document = JsonDocument.Parse(json);
+                if (document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("result_id", out _)
+                    && document.RootElement.TryGetProperty("payload", out _))
+                {
+                    continue;
+                }
                 JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("Pending job result is invalid.");
-                await _api.SendJobResultAsync(config, result, ct);
-                string completedDir = Path.Combine(pendingDir, "completed");
-                Directory.CreateDirectory(completedDir);
-                string completedPath = Path.Combine(completedDir, $"{Path.GetFileNameWithoutExtension(pendingPath)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-                File.Move(pendingPath, completedPath, overwrite: true);
-                await _logger.LogAsync("job.result.pending_sent", "Pending job result sent.", new { result.JobId, completedPath }, ct);
+                string jobType = InferJobType(result);
+                PendingResultRecord queued = _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType));
+                string migratedDir = Path.Combine(pendingDir, "migrated");
+                Directory.CreateDirectory(migratedDir);
+                string migratedPath = Path.Combine(migratedDir, $"{Path.GetFileNameWithoutExtension(pendingPath)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+                File.Move(pendingPath, migratedPath, overwrite: true);
+                await _logger.LogAsync("job.result.legacy_migrated", "Legacy pending job result migrated into persistent queue.", new { result.JobId, jobType, result_id = queued.ResultId, migratedPath }, ct);
                 if (Path.GetFileName(pendingPath).Equals("pending-update-result.json", StringComparison.OrdinalIgnoreCase))
                 {
-                    await _logger.LogAsync("update.result.sent", "Legacy pending update result sent.", new { result.JobId, completedPath }, ct);
+                    await _logger.LogAsync("update.result.pending_migrated", "Legacy pending update result migrated into persistent queue.", new { result.JobId, result_id = queued.ResultId, migratedPath }, ct);
                 }
             }
             catch (Exception ex)
             {
-                await _logger.LogAsync("job.result.pending_send_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
-                if (Path.GetFileName(pendingPath).Equals("pending-update-result.json", StringComparison.OrdinalIgnoreCase))
+                await _logger.LogAsync("job.result.legacy_migration_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
+            }
+        }
+    }
+
+    private async Task FlushPendingResultsAsync(AgentConfig config, CancellationToken ct)
+    {
+        foreach (PendingResultRecord pending in _resultQueue.ListDue(DateTimeOffset.UtcNow))
+        {
+            try
+            {
+                JobExecutionResult result = pending.Payload.Deserialize<JobExecutionResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                    ?? throw new InvalidOperationException(JobErrorCodes.ResultPayloadInvalid);
+                await _api.SendJobResultAsync(config, result, ct, pending.ResultId);
+                _resultQueue.MarkSent(pending);
+                await _logger.LogAsync("job.result.sent", "Queued job result sent.", new
                 {
-                    await _logger.LogAsync("update.result.send_failed", ex.Message, BuildErrorData(ex, new { pendingPath }), ct, "error");
-                }
+                    pending.JobId,
+                    pending.JobType,
+                    result_id = pending.ResultId,
+                    pending.Status,
+                    attempt_count = pending.AttemptCount,
+                    idempotency_key = pending.ResultId
+                }, ct);
+            }
+            catch (Exception ex)
+            {
+                _resultQueue.MarkAttemptFailed(pending, JobErrorCodes.ResultSendFailed, ex.Message);
+                await _logger.LogAsync("job.result.send_failed", ex.Message, BuildErrorData(ex, new
+                {
+                    pending.JobId,
+                    pending.JobType,
+                    result_id = pending.ResultId,
+                    attempt_count = pending.AttemptCount + 1,
+                    next_attempt_at = pending.NextAttemptAt
+                }), ct, "error");
             }
         }
     }
@@ -375,22 +429,84 @@ public sealed class Worker : BackgroundService
             return;
         }
 
-        foreach (AgentJobRequest job in response.Jobs)
+        IEnumerable<AgentJobRequest> orderedJobs = response.Jobs
+            .OrderBy(job => JobExecutionCoordinator.GetCategory(job.Type).Equals(JobCategories.Exclusive, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenByDescending(job => job.Priority)
+            .ThenBy(job => job.CreatedAt ?? DateTimeOffset.UtcNow);
+
+        foreach (AgentJobRequest job in orderedJobs)
         {
             await _logger.LogAsync("job.received", "Job received.", new { job.Id, job.Type }, ct);
-            JobExecutionResult result = await _jobExecutor.ExecuteAsync(config, job, ct);
+            JobExecutionResult result;
+            bool started = false;
+            JobStartDecision startDecision = await _jobCoordinator.TryStartAsync(config, job, ct);
+            if (!startDecision.CanStart)
+            {
+                result = startDecision.Result!;
+            }
+            else
+            {
+                started = true;
+                try
+                {
+                    result = await _jobExecutor.ExecuteAsync(config, job, ct);
+                }
+                finally
+                {
+                    _jobCoordinator.Release(job);
+                }
+            }
 
             try
             {
-                await _api.SendJobResultAsync(config, result, ct);
-                await _logger.LogAsync("job.result.sent", "Job result sent.", new { job.Id, result.Status }, ct);
+                string jobType = InferJobType(result, job.Type);
+                PendingResultRecord queued = _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType));
+                await _logger.LogAsync("job.result.queued", "Job result persisted before send.", new
+                {
+                    job.Id,
+                    job.Type,
+                    result.Status,
+                    result_id = queued.ResultId,
+                    category = JobExecutionCoordinator.GetCategory(jobType),
+                    critical = queued.Critical
+                }, ct);
+                await FlushPendingResultsAsync(config, ct);
                 state.RememberJob(job.Id);
             }
             catch (Exception ex)
             {
-                await _logger.LogAsync("job.result.failed", ex.Message, BuildErrorData(ex, new { job.Id }), ct, "error");
+                await _logger.LogAsync("job.result.queue_failed", ex.Message, BuildErrorData(ex, new { job.Id, job.Type, started }), ct, "error");
             }
         }
+    }
+
+    private static string InferJobType(JobExecutionResult result, string fallback = "")
+    {
+        if (result.Result is JsonElement element)
+        {
+            string? type = TryGetResultType(element);
+            if (!string.IsNullOrWhiteSpace(type))
+            {
+                return type;
+            }
+        }
+        else if (result.Result is not null)
+        {
+            JsonElement serialized = JsonSerializer.SerializeToElement(result.Result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            string? type = TryGetResultType(serialized);
+            if (!string.IsNullOrWhiteSpace(type))
+            {
+                return type;
+            }
+        }
+        return string.IsNullOrWhiteSpace(fallback) ? "unknown" : fallback;
+    }
+
+    private static string? TryGetResultType(JsonElement element)
+    {
+        return element.ValueKind == JsonValueKind.Object && element.TryGetProperty("type", out JsonElement typeElement)
+            ? typeElement.GetString()
+            : null;
     }
 
     private static object BuildErrorData(Exception ex, object? context = null)

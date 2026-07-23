@@ -53,6 +53,7 @@
         <button type="button" data-endpoint-tab="patches"><i data-lucide="badge-check"></i>Patches</button>
         <button type="button" data-endpoint-tab="activity"><i data-lucide="history"></i>Atividade</button>
         <button type="button" data-endpoint-tab="tasks"><i data-lucide="list-checks"></i>Ações e Jobs</button>
+        <button type="button" data-endpoint-tab="diagnostics"><i data-lucide="stethoscope"></i>Diagn&oacute;stico</button>
     </nav>
 
     <section class="endpoint-tab-panel is-active" data-endpoint-tab-panel="overview" data-dynamic-endpoint-panel>
@@ -321,6 +322,13 @@
                 <button type="button" data-endpoint-action="ping"><i data-lucide="activity"></i>Ping</button>
                 <button type="button" data-endpoint-action="execute_check"><i data-lucide="code-2"></i>Executar script</button>
             </div>
+        </section>
+    </section>
+
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="diagnostics" data-dynamic-endpoint-panel hidden>
+        <section class="panel endpoint-dense-card">
+            <header><h2><i data-lucide="stethoscope"></i>Diagn&oacute;stico do agente</h2></header>
+            <div class="endpoint-empty-state"><i data-lucide="loader-circle"></i><strong>Carregando diagn&oacute;stico</strong><p>Estado operacional do agente, updater e fila local.</p></div>
         </section>
     </section>
 </section>

@@ -1,10 +1,173 @@
+import hashlib
+from dataclasses import dataclass
+from datetime import timedelta
+from urllib.parse import urlparse
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_ipv46_address
 from django.db import transaction
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from .audit import create_audit_event
 from .models import AuditEvent
+from .models import AgentMachine
+from .models import AgentOperationalStatus
+from .models import AgentRelease
 from .models import InventorySnapshot
+from .versioning import compare_versions
+
+
+AGENT_DIAGNOSTIC_STAGES = {
+    'received',
+    'checking_version',
+    'downloading',
+    'downloaded',
+    'validating',
+    'validated',
+    'staging',
+    'staged',
+    'stopping_service',
+    'service_stopped',
+    'creating_backup',
+    'backup_created',
+    'replacing_files',
+    'files_replaced',
+    'starting_service',
+    'service_started',
+    'waiting_health_check',
+    'completed',
+    'failed',
+    'rollback_required',
+    'rollback_starting',
+    'rollback_stopping_service',
+    'rollback_restoring_files',
+    'rollback_starting_service',
+    'rollback_waiting_health_check',
+    'rolled_back',
+    'rollback_failed',
+}
+
+AGENT_DIAGNOSTIC_STATUSES = {'idle', 'running', 'completed', 'failed', 'rolled_back', 'rollback_failed', 'pending'}
+
+AGENT_DIAGNOSTIC_ERROR_CODES = {
+    '',
+    'UPDATE_ALREADY_RUNNING',
+    'UPDATE_STATE_INVALID',
+    'UPDATE_DOWNLOAD_FAILED',
+    'UPDATE_HASH_MISMATCH',
+    'UPDATE_PACKAGE_INVALID',
+    'UPDATE_SERVICE_STOP_TIMEOUT',
+    'UPDATE_BACKUP_FAILED',
+    'UPDATE_FILE_REPLACE_FAILED',
+    'UPDATE_SERVICE_START_FAILED',
+    'UPDATE_INTERRUPTED',
+    'UPDATE_UNEXPECTED_ERROR',
+    'UPDATE_HEALTHCHECK_TIMEOUT',
+    'UPDATE_PROCESS_EXITED_EARLY',
+    'UPDATE_HEALTHCHECK_VERSION_MISMATCH',
+    'ROLLBACK_BACKUP_INVALID',
+    'ROLLBACK_SERVICE_STOP_FAILED',
+    'ROLLBACK_FILE_RESTORE_FAILED',
+    'ROLLBACK_SERVICE_START_FAILED',
+    'ROLLBACK_HEALTHCHECK_TIMEOUT',
+    'ROLLBACK_VERSION_MISMATCH',
+    'ROLLBACK_FAILED',
+    'JOB_ID_INVALID',
+    'JOB_DUPLICATE',
+    'JOB_EXPIRED',
+    'JOB_NOT_READY',
+    'JOB_UNSUPPORTED',
+    'JOB_INVALID_PARAMETERS',
+    'JOB_TIMEOUT',
+    'JOB_CANCELLED',
+    'JOB_EXECUTION_FAILED',
+    'JOB_RESULT_TOO_LARGE',
+    'JOB_STATE_INVALID',
+    'JOB_CONCURRENCY_LIMIT',
+    'JOB_EXCLUSIVE_CONFLICT',
+    'JOB_INTERRUPTED',
+    'RESULT_SEND_FAILED',
+    'RESULT_QUEUE_CORRUPTED',
+    'RESULT_QUEUE_FULL',
+    'RESULT_PAYLOAD_INVALID',
+    'RESULT_RETRY_EXHAUSTED',
+}
+
+
+UPDATE_POLICY_REASON_ELIGIBLE = 'eligible'
+UPDATE_POLICY_REASON_ALREADY_CURRENT = 'already_current'
+UPDATE_POLICY_REASON_NO_RELEASE = 'no_release'
+UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE = 'channel_no_release'
+UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE = 'release_not_available'
+UPDATE_POLICY_REASON_RELEASE_REVOKED = 'release_revoked'
+UPDATE_POLICY_REASON_RELEASE_PAUSED = 'release_paused'
+UPDATE_POLICY_REASON_ENDPOINT_PAUSED = 'endpoint_paused'
+UPDATE_POLICY_REASON_MANUAL_POLICY = 'manual_policy'
+UPDATE_POLICY_REASON_NOTIFY_ONLY = 'notify_only'
+UPDATE_POLICY_REASON_OUTSIDE_MAINTENANCE_WINDOW = 'outside_maintenance_window'
+UPDATE_POLICY_REASON_MINIMUM_UPDATER_INCOMPATIBLE = 'minimum_updater_incompatible'
+UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED = 'group_not_allowed'
+UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED = 'rollout_not_selected'
+UPDATE_POLICY_REASON_PINNED_RELEASE_NOT_FOUND = 'pinned_release_not_found'
+UPDATE_POLICY_REASON_PINNED_RELEASE_UNAVAILABLE = 'pinned_release_unavailable'
+UPDATE_POLICY_REASON_INVALID_VERSION = 'invalid_version'
+
+
+@dataclass(frozen=True)
+class AgentUpdateDecision:
+    eligible: bool
+    reason_code: str
+    endpoint: AgentMachine
+    release: AgentRelease | None = None
+    current_version: str = ''
+    target_version: str = ''
+    selected_release_id: str = ''
+    channel: str = AgentMachine.UPDATE_CHANNEL_STABLE
+    rollout_bucket: int | None = None
+
+    def as_agent_payload(self) -> dict:
+        release = self.release
+        return {
+            'update_available': bool(self.eligible and release),
+            'current_version': self.current_version or '',
+            'target_version': self.target_version or '',
+            'channel': self.channel or AgentMachine.UPDATE_CHANNEL_STABLE,
+            'package_url': release.package_url if release and self.eligible else '',
+            'checksum_url': release.checksum_url if release and self.eligible else '',
+            'sha256': release.sha256 if release and self.eligible else '',
+            'size': release.size if release and self.eligible else 0,
+            'minimum_updater_version': release.minimum_updater_version if release and self.eligible else '',
+            'mandatory': bool(release.mandatory) if release and self.eligible else False,
+            'reason_code': self.reason_code,
+            'release_id': self.selected_release_id if self.eligible else '',
+        }
+
+    def as_panel_payload(self) -> dict:
+        release = self.release
+        return {
+            'eligible': self.eligible,
+            'reason_code': self.reason_code,
+            'current_version': self.current_version or '',
+            'target_version': self.target_version or '',
+            'channel': self.channel or AgentMachine.UPDATE_CHANNEL_STABLE,
+            'selected_release_id': self.selected_release_id,
+            'rollout_bucket': self.rollout_bucket,
+            'rollout_percentage': release.rollout_percentage if release else None,
+            'rollout_paused': release.rollout_paused if release else False,
+            'mandatory': release.mandatory if release else False,
+            'pinned_version': self.endpoint.pinned_agent_version or '',
+            'update_paused': self.endpoint.update_paused,
+            'update_policy': self.endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL,
+            'auto_update_enabled': self.endpoint.auto_update_enabled,
+            'maintenance_window_start': self.endpoint.maintenance_window_start.isoformat() if self.endpoint.maintenance_window_start else '',
+            'maintenance_window_end': self.endpoint.maintenance_window_end.isoformat() if self.endpoint.maintenance_window_end else '',
+            'package_url': release.package_url if release and self.eligible else '',
+            'checksum_url': release.checksum_url if release and self.eligible else '',
+            'sha256': release.sha256 if release and self.eligible else '',
+            'minimum_updater_version': release.minimum_updater_version if release else '',
+        }
 
 
 def build_fqdn(hostname: str, domain: str) -> str:
@@ -134,6 +297,251 @@ def _as_dict(value):
 
 def _as_list(value):
     return value if isinstance(value, list) else []
+
+
+def _clip(value, limit=500):
+    text = str(value or '')
+    return text[:limit]
+
+
+def _safe_int(value, default=0):
+    try:
+        if value is None or value == '':
+            return default
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'sim', 'on'}
+    return bool(value)
+
+
+def _safe_datetime(value):
+    if value in (None, ''):
+        return None
+    if hasattr(value, 'tzinfo'):
+        return timezone.make_aware(value, timezone.get_current_timezone()) if timezone.is_naive(value) else value
+    parsed = parse_datetime(str(value))
+    if parsed is None:
+        return None
+    return timezone.make_aware(parsed, timezone.get_current_timezone()) if timezone.is_naive(parsed) else parsed
+
+
+def _safe_version(value):
+    text = _clip(value, 50).strip()
+    if not text:
+        return ''
+    parts = text.split('.')
+    if not 2 <= len(parts) <= 4:
+        return ''
+    return text if all(part.isdigit() for part in parts) else ''
+
+
+def _release_domain_allowed(url):
+    allowed_hosts = getattr(settings, 'NIGHTOWL_AGENT_PACKAGE_ALLOWED_HOSTS', None)
+    if allowed_hosts is None:
+        allowed_hosts = ['nightowl.controlsul.com.br', 'rmm.controlsul.com', 'nightowl.controlsul.com']
+    if not allowed_hosts:
+        return True
+    try:
+        parsed = urlparse(str(url or ''))
+    except ValueError:
+        return False
+    return parsed.scheme == 'https' and parsed.hostname in set(allowed_hosts)
+
+
+def deterministic_rollout_bucket(endpoint, release):
+    stable_identity = endpoint.machine_id or str(endpoint.id)
+    release_key = str(release.id or release.version)
+    digest = hashlib.sha256(f'{stable_identity}:{release_key}'.encode('utf-8')).hexdigest()
+    return int(digest[:8], 16) % 100
+
+
+def _is_now_inside_window(start, end, now):
+    if not start or not end:
+        return False
+    local_time = timezone.localtime(now).time()
+    if start <= end:
+        return start <= local_time <= end
+    return local_time >= start or local_time <= end
+
+
+def _release_query_for_channel(channel):
+    return AgentRelease.objects.filter(
+        channel=channel,
+        status=AgentRelease.STATUS_AVAILABLE,
+        revoked=False,
+    ).order_by('-released_at', '-created_at')
+
+
+def _latest_available_release_for_endpoint(endpoint, channel):
+    pinned = (endpoint.pinned_agent_version or '').strip()
+    if pinned:
+        return _release_query_for_channel(channel).filter(version=pinned).first()
+    return _release_query_for_channel(channel).first()
+
+
+def _endpoint_group_ids(endpoint):
+    if not getattr(endpoint, 'pk', None):
+        return set()
+    return set(endpoint.rollout_groups.values_list('id', flat=True))
+
+
+def _release_group_allowed(endpoint, release):
+    release_groups = set(release.allowed_groups.values_list('id', flat=True))
+    if not release_groups:
+        return True
+    return bool(release_groups & _endpoint_group_ids(endpoint))
+
+
+def _updater_version(endpoint):
+    try:
+        diagnostic = endpoint.operational_status
+    except AgentOperationalStatus.DoesNotExist:
+        return endpoint.agent_version or ''
+    return getattr(diagnostic, 'updater_version', '') or endpoint.agent_version or ''
+
+
+def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=False):
+    now = now or timezone.now()
+    channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
+    current_version = endpoint.agent_version or ''
+    release = _latest_available_release_for_endpoint(endpoint, channel)
+    endpoint.last_update_policy_evaluation_at = now
+    endpoint.save(update_fields=['last_update_policy_evaluation_at', 'updated_at'])
+
+    def decision(eligible, reason_code, selected_release=release, bucket=None):
+        return AgentUpdateDecision(
+            eligible=eligible,
+            reason_code=reason_code,
+            endpoint=endpoint,
+            release=selected_release,
+            current_version=current_version,
+            target_version=(selected_release.version if selected_release else ''),
+            selected_release_id=str(selected_release.id) if selected_release else '',
+            channel=channel,
+            rollout_bucket=bucket,
+        )
+
+    if endpoint.update_paused:
+        return decision(False, UPDATE_POLICY_REASON_ENDPOINT_PAUSED, release)
+
+    if endpoint.pinned_agent_version and release is None:
+        return decision(False, UPDATE_POLICY_REASON_PINNED_RELEASE_NOT_FOUND, None)
+
+    if release is None:
+        return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, None)
+
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
+    if release.status != AgentRelease.STATUS_AVAILABLE:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
+    if release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
+    if not _release_domain_allowed(release.package_url):
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
+
+    comparison = compare_versions(current_version, release.version)
+    if comparison is None and current_version:
+        return decision(False, UPDATE_POLICY_REASON_INVALID_VERSION, release)
+    if comparison is not None and comparison >= 0:
+        return decision(False, UPDATE_POLICY_REASON_ALREADY_CURRENT, release)
+
+    minimum_updater = (release.minimum_updater_version or '').strip()
+    if minimum_updater:
+        updater_version = _updater_version(endpoint)
+        updater_comparison = compare_versions(updater_version, minimum_updater)
+        if updater_comparison is None or updater_comparison < 0:
+            return decision(False, UPDATE_POLICY_REASON_MINIMUM_UPDATER_INCOMPATIBLE, release)
+
+    if not _release_group_allowed(endpoint, release):
+        return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
+
+    bucket = deterministic_rollout_bucket(endpoint, release)
+    rollout_percentage = 100 if release.mandatory else min(100, max(0, release.rollout_percentage or 0))
+    if bucket >= rollout_percentage:
+        return decision(False, UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED, release, bucket)
+
+    policy = endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL
+    if policy == AgentMachine.UPDATE_POLICY_MANUAL and not manual:
+        return decision(False, UPDATE_POLICY_REASON_MANUAL_POLICY, release, bucket)
+    if policy == AgentMachine.UPDATE_POLICY_NOTIFY_ONLY and not manual:
+        return decision(False, UPDATE_POLICY_REASON_NOTIFY_ONLY, release, bucket)
+    if policy == AgentMachine.UPDATE_POLICY_MAINTENANCE_WINDOW and not manual:
+        if not _is_now_inside_window(endpoint.maintenance_window_start, endpoint.maintenance_window_end, now):
+            return decision(False, UPDATE_POLICY_REASON_OUTSIDE_MAINTENANCE_WINDOW, release, bucket)
+    if policy == AgentMachine.UPDATE_POLICY_AUTOMATIC and not endpoint.auto_update_enabled and not release.mandatory and not manual:
+        return decision(False, UPDATE_POLICY_REASON_MANUAL_POLICY, release, bucket)
+
+    return decision(True, UPDATE_POLICY_REASON_ELIGIBLE, release, bucket)
+
+
+def _safe_ip(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    try:
+        validate_ipv46_address(text)
+        return text
+    except ValidationError:
+        return None
+
+
+def _allowed(value, allowed, default=''):
+    text = _clip(value, 80).strip()
+    return text if text in allowed else default
+
+
+def _sanitize_url(value):
+    text = _clip(value, 500).strip()
+    if not text:
+        return ''
+    for marker in ('token=', 'agent_token=', 'enrollment_token=', 'manual_validation_token='):
+        if marker in text.lower():
+            return text.split('?', 1)[0]
+    return text
+
+
+def _strip_secrets(value):
+    if isinstance(value, dict):
+        clean = {}
+        for key, item in value.items():
+            normalized = str(key).lower()
+            if any(secret in normalized for secret in ('token', 'secret', 'password', 'credential')):
+                continue
+            clean[str(key)[:80]] = _strip_secrets(item)
+        return clean
+    if isinstance(value, list):
+        return [_strip_secrets(item) for item in value[:50]]
+    if isinstance(value, str):
+        return _clip(value, 1000)
+    return value
+
+
+def _dedupe_agent_event(endpoint, event_type, title, description, severity, metadata=None, cooldown_seconds=300):
+    since = timezone.now() - timedelta(seconds=cooldown_seconds)
+    exists = endpoint.audit_events.filter(
+        event_type=event_type,
+        created_at__gte=since,
+        metadata__code=(metadata or {}).get('code', ''),
+    ).exists()
+    if exists:
+        return None
+    return create_audit_event(
+        event_type=event_type,
+        title=title,
+        description=description,
+        severity=severity,
+        actor_type=AuditEvent.ACTOR_AGENT,
+        actor_name='NightOwlAgent',
+        endpoint=endpoint,
+        metadata=metadata or {},
+    )
 
 
 def _normalize_machine_id(value):
@@ -554,3 +962,143 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
                 },
             )
     return snapshot
+
+
+@transaction.atomic
+def record_agent_operational_status(machine, payload: dict):
+    payload = _as_dict(payload)
+    if not payload:
+        return None
+
+    machine_id = _normalize_machine_id(payload.get('machine_id') or payload.get('agent_id'))
+    if machine_id and machine.machine_id and machine_id != machine.machine_id:
+        raise ValueError('machine_id does not match authenticated endpoint.')
+
+    agent = _as_dict(payload.get('agent') or payload.get('agent_status') or payload)
+    updater = _as_dict(payload.get('updater') or payload.get('update_state'))
+    queue = _as_dict(payload.get('result_queue') or payload.get('pending_results') or payload.get('queue'))
+    last_error = _as_dict(payload.get('last_error') or agent.get('last_error'))
+
+    installed_version = _safe_version(
+        agent.get('installed_version') or agent.get('agent_version') or payload.get('agent_version') or machine.agent_version
+    )
+    available_version = _safe_version(agent.get('available_version') or payload.get('available_version'))
+    service_status = _clip(agent.get('service_status') or payload.get('service_status'), 80)
+    current_user = _clip(agent.get('current_user') or payload.get('current_user') or payload.get('username') or payload.get('logged_user'), 255)
+    current_ip = _safe_ip(agent.get('current_ip') or payload.get('current_ip') or payload.get('ip_address'))
+
+    current_stage = _allowed(updater.get('current_stage'), AGENT_DIAGNOSTIC_STAGES)
+    update_status = _allowed(updater.get('status'), AGENT_DIAGNOSTIC_STATUSES)
+    rollback_status = _allowed(updater.get('rollback_status'), AGENT_DIAGNOSTIC_STATUSES)
+    last_error_code = _allowed(last_error.get('code') or agent.get('last_error_code') or payload.get('last_error_code'), AGENT_DIAGNOSTIC_ERROR_CODES)
+    update_error_code = _allowed(updater.get('error_code'), AGENT_DIAGNOSTIC_ERROR_CODES)
+    rollback_error_code = _allowed(updater.get('rollback_error_code'), AGENT_DIAGNOSTIC_ERROR_CODES)
+
+    result_queue_full = _safe_bool(queue.get('queue_full'))
+    pending_count = _safe_int(queue.get('pending_count'))
+    running_job_count = _safe_int(agent.get('running_job_count') or payload.get('running_job_count'))
+
+    indicator = AgentOperationalStatus.HEALTH_HEALTHY
+    heartbeat_at = _safe_datetime(agent.get('last_heartbeat_at') or payload.get('last_heartbeat_at')) or machine.last_seen_at
+    if machine.status == machine.STATUS_OFFLINE:
+        indicator = AgentOperationalStatus.HEALTH_OFFLINE
+    if service_status and service_status.lower() not in {'running', 'started'}:
+        indicator = AgentOperationalStatus.HEALTH_CRITICAL
+    if update_status == 'rollback_failed' or rollback_status == 'rollback_failed':
+        indicator = AgentOperationalStatus.HEALTH_CRITICAL
+    if result_queue_full:
+        indicator = AgentOperationalStatus.HEALTH_CRITICAL
+    if indicator == AgentOperationalStatus.HEALTH_HEALTHY and (pending_count or last_error_code or available_version and installed_version and available_version != installed_version):
+        indicator = AgentOperationalStatus.HEALTH_ATTENTION
+    if heartbeat_at and timezone.now() - heartbeat_at > timedelta(minutes=15):
+        indicator = AgentOperationalStatus.HEALTH_OFFLINE
+
+    status, _ = AgentOperationalStatus.objects.select_for_update().get_or_create(endpoint=machine)
+    status.installed_version = installed_version or status.installed_version
+    status.available_version = available_version or status.available_version
+    status.last_heartbeat_at = heartbeat_at or status.last_heartbeat_at
+    status.last_inventory_at = _safe_datetime(agent.get('last_inventory_at') or payload.get('last_inventory_at')) or status.last_inventory_at
+    status.last_agent_start_at = _safe_datetime(agent.get('last_agent_start_at') or payload.get('last_agent_start_at')) or status.last_agent_start_at
+    status.agent_uptime_seconds = _safe_int(agent.get('agent_uptime_seconds') or payload.get('agent_uptime_seconds'), status.agent_uptime_seconds or 0)
+    status.service_status = service_status or status.service_status
+    status.current_user = current_user or status.current_user
+    status.current_ip = current_ip or status.current_ip
+    status.pending_result_count = pending_count
+    status.running_job_count = running_job_count
+    status.last_error_code = last_error_code
+    status.last_error_message = _clip(last_error.get('message') or agent.get('last_error_message') or payload.get('last_error_message'), 1000)
+    status.last_error_component = _clip(last_error.get('component') or agent.get('last_error_component') or payload.get('last_error_component'), 80)
+    status.last_error_at = _safe_datetime(last_error.get('at') or agent.get('last_error_at') or payload.get('last_error_at'))
+
+    status.update_id = _clip(updater.get('update_id'), 80)
+    status.update_job_id = _clip(updater.get('job_id'), 80)
+    status.from_version = _safe_version(updater.get('from_version'))
+    status.target_version = _safe_version(updater.get('target_version'))
+    status.update_current_stage = current_stage
+    status.update_status = update_status
+    status.update_started_at = _safe_datetime(updater.get('started_at'))
+    status.update_completed_at = _safe_datetime(updater.get('completed_at'))
+    status.rollback_status = rollback_status
+    status.rollback_attempt = _safe_int(updater.get('rollback_attempt'))
+    status.health_check_confirmed = _safe_bool(updater.get('health_check_confirmed'))
+    status.update_error_code = update_error_code
+    status.update_error_message = _clip(updater.get('error_message'), 1000)
+    status.rollback_error_code = rollback_error_code
+    status.rollback_error_message = _clip(updater.get('rollback_error_message'), 1000)
+    status.package_url_sanitized = _sanitize_url(updater.get('package_url'))
+
+    status.result_pending_count = pending_count
+    status.result_oldest_pending_at = _safe_datetime(queue.get('oldest_pending_at'))
+    status.result_retrying_count = _safe_int(queue.get('retrying_count'))
+    status.result_quarantined_count = _safe_int(queue.get('quarantined_count'))
+    status.result_queue_full = result_queue_full
+    status.result_last_send_error = _clip(queue.get('last_send_error'), 1000)
+    status.health_indicator = indicator
+    status.raw_payload = _strip_secrets(payload)
+    status.save()
+
+    if last_error_code:
+        _dedupe_agent_event(
+            machine,
+            'agent.error',
+            'Erro reportado pelo agente',
+            status.last_error_message or last_error_code,
+            AuditEvent.SEVERITY_WARNING,
+            metadata={'code': last_error_code, 'component': status.last_error_component},
+        )
+    if result_queue_full:
+        _dedupe_agent_event(
+            machine,
+            'result.queue_full',
+            'Fila de resultados cheia',
+            'O agente reportou fila local de resultados cheia.',
+            AuditEvent.SEVERITY_CRITICAL,
+            metadata={'code': 'RESULT_QUEUE_FULL'},
+        )
+    if status.result_quarantined_count:
+        _dedupe_agent_event(
+            machine,
+            'result.quarantined',
+            'Resultado pendente em quarentena',
+            'O agente reportou arquivo corrompido na fila de resultados.',
+            AuditEvent.SEVERITY_WARNING,
+            metadata={'code': 'RESULT_QUEUE_CORRUPTED', 'count': status.result_quarantined_count},
+        )
+    if update_status in {'completed', 'failed', 'rolled_back', 'rollback_failed'} or rollback_status in {'rolled_back', 'rollback_failed'}:
+        event_type = {
+            'completed': 'update.completed',
+            'failed': 'update.failed',
+            'rolled_back': 'update.rolled_back',
+            'rollback_failed': 'update.rollback_failed',
+        }.get(rollback_status if rollback_status in {'rolled_back', 'rollback_failed'} else update_status)
+        severity = AuditEvent.SEVERITY_CRITICAL if event_type == 'update.rollback_failed' else AuditEvent.SEVERITY_WARNING if event_type in {'update.failed', 'update.rolled_back'} else AuditEvent.SEVERITY_SUCCESS
+        _dedupe_agent_event(
+            machine,
+            event_type,
+            'Estado de update reportado',
+            f'Update {update_status or rollback_status}: {current_stage or "-"}',
+            severity,
+            metadata={'code': update_error_code or rollback_error_code or '', 'update_id': status.update_id, 'job_id': status.update_job_id},
+        )
+
+    return status

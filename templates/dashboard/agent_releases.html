@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Night Owl | Releases do agente{% endblock %}
+{% block body_class %}page-agent-releases{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Releases do agente</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="agent-release-shell">
+    <header class="page-header">
+        <div>
+            <span class="page-kicker">Distribuicao controlada</span>
+            <h1>Releases do NightOwl Agent</h1>
+            <p>Publique versoes por canal, grupos e rollout gradual. O pacote continua sendo baixado e aplicado pelo updater do endpoint.</p>
+        </div>
+    </header>
+
+    <section class="panel agent-release-form">
+        <header><h2><i data-lucide="package-plus"></i>Criar ou importar release</h2></header>
+        <form method="post" class="release-grid-form">
+            {% csrf_token %}
+            <label>Versao<input name="version" placeholder="0.1.0.8" required></label>
+            <label>Canal
+                <select name="channel">
+                    {% for value,label in channel_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                </select>
+            </label>
+            <label>Status
+                <select name="status">
+                    {% for value,label in status_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                </select>
+            </label>
+            <label>Rollout %<input name="rollout_percentage" type="number" min="0" max="100" value="0"></label>
+            <label class="release-wide">Package URL<input name="package_url" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/NightOwl.Agent.Windows.zip" required></label>
+            <label class="release-wide">Checksums URL<input name="checksum_url" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/checksums.json"></label>
+            <label>SHA-256<input name="sha256" maxlength="64" required></label>
+            <label>Tamanho bytes<input name="size" type="number" min="0" value="0"></label>
+            <label>Updater minimo<input name="minimum_updater_version" placeholder="0.1.0.0"></label>
+            <label class="release-checkbox"><input name="mandatory" type="checkbox">Obrigatoria</label>
+            <fieldset class="release-wide release-groups">
+                <legend>Grupos permitidos</legend>
+                {% for group in groups %}
+                    <label><input type="checkbox" name="allowed_groups" value="{{ group.id }}">{{ group.name }}</label>
+                {% empty %}
+                    <span>Nenhum grupo cadastrado. Sem grupos, a release fica disponivel para todo o canal.</span>
+                {% endfor %}
+            </fieldset>
+            <label class="release-wide">Notas<textarea name="release_notes" rows="3"></textarea></label>
+            <div class="release-wide release-actions"><button class="btn-primary" type="submit"><i data-lucide="save"></i>Salvar release</button></div>
+        </form>
+    </section>
+
+    <section class="agent-release-list">
+        {% for row in releases %}
+            {% with release=row.release metrics=row.metrics %}
+            <article class="panel agent-release-card">
+                <header>
+                    <div>
+                        <h2>{{ release.version }} <span class="badge badge-muted">{{ release.channel }}</span></h2>
+                        <p>{{ release.get_status_display }}{% if release.revoked %} · revogada{% endif %}</p>
+                    </div>
+                    <span class="agent-version-pill agent-{% if release.status == 'available' and not release.rollout_paused and not release.revoked %}current{% else %}outdated{% endif %}">{{ release.rollout_percentage }}%</span>
+                </header>
+                <dl class="release-metrics">
+                    <div><dt>Elegiveis</dt><dd>{{ metrics.eligible }}</dd></div>
+                    <div><dt>Atualizados</dt><dd>{{ metrics.updated }}</dd></div>
+                    <div><dt>Pendentes</dt><dd>{{ metrics.pending }}</dd></div>
+                    <div><dt>Falhas</dt><dd>{{ metrics.failed }}</dd></div>
+                    <div><dt>Rollback</dt><dd>{{ metrics.rolled_back }}</dd></div>
+                    <div><dt>Rollback failed</dt><dd>{{ metrics.rollback_failed }}</dd></div>
+                </dl>
+                <div class="release-package">
+                    <span title="{{ release.package_url }}">{{ release.package_url }}</span>
+                    <code>{{ release.sha256 }}</code>
+                </div>
+                <div class="release-card-actions">
+                    <form method="post" action="{% url 'agent-release-action' release.id %}">
+                        {% csrf_token %}<input type="hidden" name="action" value="{% if release.rollout_paused or release.status == 'paused' %}resume{% else %}pause{% endif %}">
+                        <button type="submit">{% if release.rollout_paused or release.status == 'paused' %}Retomar{% else %}Pausar{% endif %}</button>
+                    </form>
+                    <form method="post" action="{% url 'agent-release-action' release.id %}">
+                        {% csrf_token %}<input type="hidden" name="action" value="rollout">
+                        <input name="rollout_percentage" type="number" min="0" max="100" value="{{ release.rollout_percentage }}">
+                        <button type="submit">Ajustar rollout</button>
+                    </form>
+                    <form method="post" action="{% url 'agent-release-action' release.id %}">
+                        {% csrf_token %}<input type="hidden" name="action" value="promote">
+                        <select name="channel">{% for value,label in channel_choices %}<option value="{{ value }}" {% if value == release.channel %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+                        <button type="submit">Promover</button>
+                    </form>
+                    <form method="post" action="{% url 'agent-release-action' release.id %}">
+                        {% csrf_token %}<input type="hidden" name="action" value="revoke">
+                        <button class="danger" type="submit">Revogar</button>
+                    </form>
+                </div>
+            </article>
+            {% endwith %}
+        {% empty %}
+            <article class="panel empty-state"><h2>Nenhuma release cadastrada</h2><p>Importe a primeira release publicada pelo pipeline para controlar o rollout pelo painel.</p></article>
+        {% endfor %}
+    </section>
+</section>
+{% endblock %}

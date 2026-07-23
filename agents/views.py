@@ -1,4 +1,7 @@
+import hashlib
+import json
 import logging
+from datetime import timedelta
 
 from django.db import models, transaction
 from django.db.models import Q
@@ -15,6 +18,7 @@ from .models import (
     AgentEnrollmentLog,
     AgentEnrollmentToken,
     AgentJob,
+    AgentJobResultReceipt,
     AgentMachine,
     AgentManualValidationToken,
     AuditEvent,
@@ -22,10 +26,57 @@ from .models import (
     hash_manual_validation_token,
 )
 from .serializers import AgentEnrollmentSerializer, HeartbeatSerializer
-from .services import build_fqdn, record_collection, record_heartbeat
+from .services import (
+    build_fqdn,
+    evaluate_agent_update_policy,
+    record_agent_operational_status,
+    record_collection,
+    record_heartbeat,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+RESULT_FINAL_STATUSES = {
+    AgentJob.STATUS_COMPLETED,
+    AgentJob.STATUS_FAILED,
+    AgentJob.STATUS_EXPIRED,
+    AgentJob.STATUS_CANCELLED,
+    AgentJob.STATUS_TIMED_OUT,
+    AgentJob.STATUS_DUPLICATE,
+    AgentJob.STATUS_UNSUPPORTED,
+    AgentJob.STATUS_INVALID_PARAMETERS,
+    AgentJob.STATUS_INTERRUPTED,
+    AgentJob.STATUS_ROLLED_BACK,
+    AgentJob.STATUS_ROLLBACK_FAILED,
+}
+
+
+def _payload_sha256(payload):
+    encoded = json.dumps(payload or {}, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _result_id_from_request(request, payload):
+    return (
+        request.headers.get('Idempotency-Key')
+        or request.META.get('HTTP_IDEMPOTENCY_KEY')
+        or payload.get('result_id')
+        or payload.get('resultId')
+        or ''
+    ).strip()[:80]
+
+
+def _normalize_job_status(value):
+    job_status = str(value or 'unknown').strip().lower()
+    aliases = {
+        'pending': AgentJob.STATUS_QUEUED,
+        'dispatched': AgentJob.STATUS_SENT,
+        'canceled': AgentJob.STATUS_CANCELLED,
+        'interrupted': AgentJob.STATUS_INTERRUPTED,
+    }
+    return aliases.get(job_status, job_status)
 
 
 def _parse_agent_datetime(value, default=None):
@@ -66,6 +117,12 @@ class AgentHeartbeatView(APIView):
                 payload=serializer.validated_data,
                 raw_payload=request.data,
             )
+            diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
+            if isinstance(diagnostic_payload, dict):
+                diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))
+                diagnostic_payload.setdefault('agent_version', request.data.get('agent_version') or serializer.validated_data.get('agent_version'))
+                diagnostic_payload.setdefault('last_heartbeat_at', request.data.get('heartbeat_at') or request.data.get('timestamp'))
+                record_agent_operational_status(machine, diagnostic_payload)
         except Exception as exc:
             logger.exception('Failed to record heartbeat for machine_id=%s', machine.id)
             return Response(
@@ -84,6 +141,128 @@ class AgentHeartbeatView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class AgentStatusView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request):
+        machine = authenticate_agent_token(request)
+        payload = request.data if isinstance(request.data, dict) else {}
+        if not payload:
+            return Response(
+                {'error': 'invalid_payload', 'detail': 'Payload de status vazio.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            status_record = record_agent_operational_status(machine, payload)
+        except ValueError as exc:
+            return Response(
+                {'error': 'machine_id_mismatch', 'detail': str(exc)},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        except Exception as exc:
+            logger.exception('Failed to record agent status for endpoint_id=%s', machine.id)
+            return Response(
+                {'error': 'status_record_failed', 'detail': str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'status': 'ok',
+                'machine_id': machine.machine_id or str(machine.id),
+                'health_indicator': status_record.health_indicator if status_record else 'unknown',
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AgentUpdatePolicyView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        machine = authenticate_agent_token(request)
+        machine_id = (request.query_params.get('machine_id') or '').strip()
+        if machine_id and machine.machine_id and machine_id.lower() != machine.machine_id.lower():
+            return Response(
+                {
+                    'error': 'machine_id_mismatch',
+                    'detail': 'machine_id nao corresponde ao endpoint autenticado.',
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        decision = evaluate_agent_update_policy(machine, for_agent=True)
+        auto_job_id = ''
+        if decision.eligible and decision.release:
+            pending_update = machine.jobs.filter(
+                job_type=AgentJob.TYPE_UPDATE_AGENT,
+                status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+            ).order_by('-created_at').first()
+            if pending_update:
+                auto_job_id = str(pending_update.id)
+            else:
+                release = decision.release
+                auto_job = AgentJob.objects.create(
+                    endpoint=machine,
+                    agent_release=release,
+                    job_type=AgentJob.TYPE_UPDATE_AGENT,
+                    created_by='update_policy',
+                    payload={
+                        'target_version': release.version,
+                        'channel': decision.channel,
+                        'source_channel': decision.channel,
+                        'release_id': str(release.id),
+                        'policy_reason': decision.reason_code,
+                        'package_url': release.package_url,
+                        'checksum_url': release.checksum_url,
+                        'sha256': release.sha256,
+                        'size': release.size,
+                        'minimum_updater_version': release.minimum_updater_version,
+                        'mandatory': release.mandatory,
+                        'force': False,
+                        'source': 'update_policy',
+                    },
+                    correlation_id=str(release.id),
+                    attempt=1,
+                    timeout_seconds=900,
+                    expires_at=timezone.now() + timedelta(minutes=30),
+                )
+                auto_job_id = str(auto_job.id)
+                create_audit_event(
+                    event_type='job.created',
+                    title='Job automatico de update criado',
+                    description=f'Politica de update criou job para {machine.hostname}.',
+                    severity=AuditEvent.SEVERITY_INFO,
+                    actor_type=AuditEvent.ACTOR_SCHEDULER,
+                    actor_name='UpdatePolicy',
+                    endpoint=machine,
+                    metadata={'job_id': auto_job_id, 'release_id': str(release.id), 'target_version': release.version},
+                )
+        create_audit_event(
+            event_type='agent.update_policy_evaluated',
+            title='Politica de update avaliada',
+            description=f'Politica de update avaliada para {machine.hostname}.',
+            severity=AuditEvent.SEVERITY_DEBUG,
+            actor_type=AuditEvent.ACTOR_AGENT,
+            actor_name='NightOwlAgent',
+            endpoint=machine,
+            metadata={
+                'eligible': decision.eligible,
+                'reason_code': decision.reason_code,
+                'release_id': decision.selected_release_id,
+                'target_version': decision.target_version,
+                'channel': decision.channel,
+                'rollout_bucket': decision.rollout_bucket,
+            },
+        )
+        payload = decision.as_agent_payload()
+        if auto_job_id:
+            payload['job_id'] = auto_job_id
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class AgentInventoryCollectionView(APIView):
@@ -164,10 +343,17 @@ class AgentJobsPullView(APIView):
             job.save(update_fields=['status', 'dispatched_at', 'started_at', 'updated_at'])
             response_jobs.append({
                 'id': str(job.id),
+                'job_id': str(job.id),
                 'type': job.job_type,
+                'job_type': job.job_type,
                 'payload': job.payload,
+                'parameters': job.payload,
                 'created_at': job.created_at.isoformat(),
                 'timeout_seconds': job.payload.get('timeout_seconds') or 300,
+                'attempt': job.attempt or 1,
+                'max_attempts': job.payload.get('max_attempts') or 1,
+                'priority': job.payload.get('priority') or 0,
+                'correlation_id': job.correlation_id or '',
                 'expires_at': job.expires_at.isoformat() if job.expires_at else None,
             })
             create_audit_event(
@@ -229,13 +415,9 @@ class AgentJobsResultView(APIView):
         machine = authenticate_agent_token(request)
         payload = request.data if isinstance(request.data, dict) else {}
         job_id = payload.get('job_id') or payload.get('id') or ''
-        job_status = str(payload.get('status') or 'unknown').strip().lower()
-        if job_status == 'pending':
-            job_status = AgentJob.STATUS_QUEUED
-        elif job_status == 'dispatched':
-            job_status = AgentJob.STATUS_SENT
-        elif job_status == 'canceled':
-            job_status = AgentJob.STATUS_CANCELLED
+        result_id = _result_id_from_request(request, payload)
+        payload_hash = _payload_sha256(payload)
+        job_status = _normalize_job_status(payload.get('status'))
         job = None
         if job_id:
             job = AgentJob.objects.filter(pk=job_id, endpoint=machine).first()
@@ -259,10 +441,50 @@ class AgentJobsResultView(APIView):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
+        if result_id:
+            receipt = AgentJobResultReceipt.objects.filter(result_id=result_id).select_related('job', 'endpoint').first()
+            if receipt:
+                receipt.last_seen_at = timezone.now()
+                if receipt.payload_sha256 != payload_hash:
+                    receipt.conflict_count += 1
+                    receipt.last_conflict_at = timezone.now()
+                    receipt.save(update_fields=['last_seen_at', 'conflict_count', 'last_conflict_at'])
+                    create_audit_event(
+                        event_type='job.result_conflict',
+                        title='Conflito de idempotencia em resultado de job',
+                        description=f'Resultado {result_id} reenviado com payload diferente.',
+                        severity=AuditEvent.SEVERITY_CRITICAL,
+                        actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent',
+                        endpoint=machine,
+                        metadata={'job_id': str(job_id), 'result_id': result_id},
+                    )
+                    return Response(
+                        {
+                            'error': 'idempotency_conflict',
+                            'detail': 'result_id ja recebido com payload diferente.',
+                            'result_id': result_id,
+                            'job_id': str(job_id),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                receipt.save(update_fields=['last_seen_at'])
+                return Response(
+                    {
+                        'status': 'ok',
+                        'duplicate': True,
+                        'result_id': result_id,
+                        'machine_id': machine.machine_id or str(machine.id),
+                        'job_id': str(receipt.job_id or job_id),
+                        'job_status': receipt.job.status if receipt.job else job_status,
+                        'updated': False,
+                    },
+                    status=status.HTTP_200_OK,
+                )
         if job:
             job.status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             job.started_at = _parse_agent_datetime(payload.get('started_at'), job.started_at)
-            if job.status in {AgentJob.STATUS_COMPLETED, AgentJob.STATUS_FAILED, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_CANCELLED}:
+            if job.status in RESULT_FINAL_STATUSES:
                 job.finished_at = _parse_agent_datetime(payload.get('finished_at'), timezone.now())
             job.duration_seconds = payload.get('duration_seconds')
             job.exit_code = payload.get('exit_code')
@@ -270,6 +492,13 @@ class AgentJobsResultView(APIView):
             job.stderr = payload.get('stderr') or ''
             job.result = payload.get('result') or {}
             job.error_message = payload.get('error_message') or ''
+            job.result_id = result_id or job.result_id
+            job.correlation_id = payload.get('correlation_id') or job.correlation_id
+            job.attempt = payload.get('attempt') or job.attempt or 1
+            job.timeout_seconds = payload.get('timeout_seconds') or job.timeout_seconds
+            job.error_code = payload.get('error_code') or (job.result.get('error_code') if isinstance(job.result, dict) else '') or ''
+            job.output_truncated = bool(payload.get('output_truncated') or (job.result.get('output_truncated') if isinstance(job.result, dict) else False))
+            job.result_received_at = timezone.now()
             job.save(update_fields=[
                 'status',
                 'started_at',
@@ -279,7 +508,14 @@ class AgentJobsResultView(APIView):
                 'stdout',
                 'stderr',
                 'result',
+                'result_id',
+                'correlation_id',
+                'attempt',
+                'timeout_seconds',
+                'error_code',
+                'output_truncated',
                 'error_message',
+                'result_received_at',
                 'updated_at',
             ])
             if job.status == AgentJob.STATUS_COMPLETED and isinstance(job.result, dict):
@@ -319,8 +555,28 @@ class AgentJobsResultView(APIView):
                     job.job_type,
                     job.error_message,
                 )
-        event_type = 'job.completed' if job_status == 'completed' else 'job.failed' if job_status == 'failed' else 'job.result_received'
-        severity = AuditEvent.SEVERITY_SUCCESS if job_status == 'completed' else AuditEvent.SEVERITY_WARNING if job_status in {'failed', 'expired'} else AuditEvent.SEVERITY_INFO
+        if result_id:
+            AgentJobResultReceipt.objects.create(
+                result_id=result_id,
+                job=job,
+                endpoint=machine,
+                payload_sha256=payload_hash,
+                first_payload=payload,
+            )
+        event_type = (
+            'job.completed' if job_status == 'completed'
+            else 'job.interrupted' if job_status == 'interrupted'
+            else 'update.rolled_back' if job_status == 'rolled_back'
+            else 'update.rollback_failed' if job_status == 'rollback_failed'
+            else 'job.failed' if job_status in {'failed', 'timed_out', 'expired', 'unsupported', 'invalid_parameters'}
+            else 'job.result_received'
+        )
+        severity = (
+            AuditEvent.SEVERITY_SUCCESS if job_status in {'completed', 'duplicate'}
+            else AuditEvent.SEVERITY_CRITICAL if job_status in {'rollback_failed'}
+            else AuditEvent.SEVERITY_WARNING if job_status in {'failed', 'expired', 'timed_out', 'interrupted', 'rolled_back', 'unsupported', 'invalid_parameters'}
+            else AuditEvent.SEVERITY_INFO
+        )
         create_audit_event(
             event_type=event_type,
             title='Resultado de job recebido',
@@ -331,10 +587,16 @@ class AgentJobsResultView(APIView):
             endpoint=machine,
             metadata={
                 'job_id': str(job_id),
+                'result_id': result_id,
+                'correlation_id': payload.get('correlation_id') or '',
                 'job_type': payload.get('job_type') or '',
                 'status': job_status,
+                'attempt': payload.get('attempt'),
+                'timeout_seconds': payload.get('timeout_seconds'),
                 'duration_seconds': payload.get('duration_seconds'),
                 'exit_code': payload.get('exit_code'),
+                'error_code': payload.get('error_code') or '',
+                'output_truncated': bool(payload.get('output_truncated')),
                 'result': payload.get('result') or {},
                 'error_message': payload.get('error_message') or '',
             },
@@ -344,6 +606,7 @@ class AgentJobsResultView(APIView):
                 'status': 'ok',
                 'machine_id': machine.machine_id or str(machine.id),
                 'job_id': str(job_id),
+                'result_id': result_id,
                 'job_status': job.status if job else job_status,
                 'updated': bool(job),
                 'finished_at': job.finished_at.isoformat() if job and job.finished_at else None,

@@ -35,6 +35,16 @@ RMM/
 last_payload.json
 agent.state.json
 RmmAgent.config.ps1
+agent.config.json
+agent.identity.json
+update-state.json
+*.preserved-*
+NightOwl-Diagnostics-*.zip
+install-report-*.json
+repair-report-*.json
+reinstall-report-*.json
+uninstall-report-*.json
+purge-report-*.json
 
 # Secrets/tokens
 *.key
@@ -42,9 +52,15 @@ RmmAgent.config.ps1
 *.crt
 *.pfx
 secrets.json
+*token*
+*secret*
 
 # Node/build, if ever used
 node_modules/
 dist/
 build/
 artifacts/
+bin/
+obj/
+tests/e2e/reports/
+*.zip
