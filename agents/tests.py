@@ -236,7 +236,14 @@ class AgentReleasePolicyTests(TestCase):
         release = self.release(rollout=10)
         endpoints = []
         for index in range(250):
-            machine = AgentMachine(hostname=f'CS-ROLL-{index:03d}', machine_id=f'rollout-{index}', agent_version='0.1.0.6', agent_token_hash=f'hash-{index}')
+            machine = AgentMachine(
+                hostname=f'CS-ROLL-{index:03d}',
+                machine_id=f'rollout-{index}',
+                agent_version='0.1.0.6',
+                agent_token_hash=f'hash-{index}',
+                update_policy=AgentMachine.UPDATE_POLICY_AUTOMATIC,
+                auto_update_enabled=True,
+            )
             machine.save()
             bucket = deterministic_rollout_bucket(machine, release)
             if bucket < 10 or 10 <= bucket < 25:
@@ -246,10 +253,10 @@ class AgentReleasePolicyTests(TestCase):
 
         release.rollout_percentage = 10
         release.save(update_fields=['rollout_percentage'])
-        initially_selected = {machine.id for machine, _ in endpoints if evaluate_agent_update_policy(machine, manual=True).eligible}
+        initially_selected = {machine.id for machine, _ in endpoints if evaluate_agent_update_policy(machine, manual=False).eligible}
         release.rollout_percentage = 25
         release.save(update_fields=['rollout_percentage'])
-        expanded_selected = {machine.id for machine, _ in endpoints if evaluate_agent_update_policy(machine, manual=True).eligible}
+        expanded_selected = {machine.id for machine, _ in endpoints if evaluate_agent_update_policy(machine, manual=False).eligible}
 
         self.assertTrue(initially_selected)
         self.assertTrue(initially_selected.issubset(expanded_selected))
@@ -350,6 +357,101 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(first.status_code, 201)
         self.assertEqual(second.status_code, 409)
         self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 1)
+
+    def test_manual_update_allows_development_release_with_rollout_zero(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.update_policy = AgentMachine.UPDATE_POLICY_MANUAL
+        self.machine.auto_update_enabled = False
+        self.machine.update_paused = False
+        self.machine.agent_version = '0.1.0.7'
+        self.machine.save(update_fields=['update_channel', 'update_policy', 'auto_update_enabled', 'update_paused', 'agent_version'])
+        release = self.release(version='0.1.1.0-rc1', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0, minimum_updater_version='0.1.0.7')
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True)
+
+        self.assertTrue(decision.eligible)
+        self.assertEqual(decision.release, release)
+
+    def test_automatic_rollout_zero_blocks_release(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.update_policy = AgentMachine.UPDATE_POLICY_AUTOMATIC
+        self.machine.auto_update_enabled = True
+        self.machine.agent_version = '0.1.0.7'
+        self.machine.save(update_fields=['update_channel', 'update_policy', 'auto_update_enabled', 'agent_version'])
+        self.release(version='0.1.1.0-rc1', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0, minimum_updater_version='0.1.0.7')
+
+        response = self.client.get('/api/agent/update-policy/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['update_available'])
+        self.assertEqual(response.json()['reason_code'], 'rollout_not_selected')
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
+
+    def test_manual_update_blocks_paused_release(self):
+        release = self.release(rollout=0, rollout_paused=True)
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'release_paused')
+
+    def test_manual_update_blocks_explicit_revoked_release(self):
+        release = self.release(rollout=0, revoked=True)
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'release_revoked')
+
+    def test_manual_panel_update_blocks_paused_endpoint(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-paused', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_paused = True
+        self.machine.save(update_fields=['update_paused'])
+        release = self.release(rollout=0)
+
+        response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'endpoint_paused')
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
+
+    def test_manual_update_without_explicit_release_keeps_endpoint_channel(self):
+        self.release(version='0.1.1.0-rc1', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0)
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'channel_no_release')
+
+    def test_manual_panel_update_uses_explicit_release_and_persists_metadata(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-explicit', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.0.7'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        release = self.release(version='0.1.1.0-rc1', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0, minimum_updater_version='0.1.0.7')
+
+        response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
+
+        self.assertEqual(response.status_code, 201)
+        job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
+        self.assertEqual(job.agent_release, release)
+        self.assertEqual(job.payload['target_version'], '0.1.1.0-rc1')
+        self.assertEqual(job.payload['release_id'], str(release.id))
+        self.assertEqual(job.payload['package_url'], release.package_url)
+        self.assertEqual(job.payload['checksum_url'], release.checksum_url)
+        self.assertEqual(job.payload['sha256'], release.sha256)
+        self.assertEqual(job.payload['size'], release.size)
+        self.assertEqual(job.payload['minimum_updater_version'], release.minimum_updater_version)
+        self.assertEqual(job.payload['channel'], release.channel)
+        self.assertEqual(job.payload['source'], 'manual_panel')
+        self.assertEqual(job.timeout_seconds, 900)
+        self.assertIsNotNone(job.expires_at)
 
     def test_semver_prerelease_is_supported(self):
         self.assertIsNotNone(parse_semver('0.1.1.0-rc1'))

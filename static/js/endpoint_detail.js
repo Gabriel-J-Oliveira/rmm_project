@@ -275,6 +275,7 @@
         const collectionState = asObject(payload.collection_state);
         const agentDiagnostic = asObject(payload.agent_diagnostic);
         const agentUpdatePolicy = asObject(payload.agent_update_policy);
+        const agentUpdateReleases = asArray(payload.agent_update_releases).map(function (item) { return asObject(item); });
         const patches = maybeObject(payload.patches);
         const patchPending = patches && Array.isArray(patches.pending_updates_sample) ? patches.pending_updates_sample.map(function (item) {
             item = asObject(item);
@@ -339,6 +340,7 @@
                 updateChannel: agentUpdatePolicy.channel || endpoint.update_channel || "stable",
                 updatePolicy: agentUpdatePolicy.update_policy || endpoint.update_policy || "manual",
                 updateReason: agentUpdatePolicy.reason_code || "",
+                updateReleases: agentUpdateReleases,
                 rolloutPercentage: agentUpdatePolicy.rollout_percentage,
                 rolloutBucket: agentUpdatePolicy.rollout_bucket,
                 pinnedVersion: agentUpdatePolicy.pinned_version || endpoint.pinned_agent_version || "",
@@ -1130,10 +1132,14 @@
         }, 5000);
     }
 
-    function createRealJob(action) {
+    function createRealJob(action, options) {
+        options = options || {};
         const id = root.dataset.endpointId || "";
         const body = new URLSearchParams();
         body.set("action", action || "");
+        if (options.releaseId) {
+            body.set("release_id", options.releaseId);
+        }
         if (action === "ping" && endpointDetail && endpointDetail.ip) {
             body.set("target", endpointDetail.ip);
         }
@@ -1159,11 +1165,37 @@
                         payload.status = "already_pending";
                         return payload;
                     }
-                    throw new Error(payload.detail || payload.error || response.statusText || "job_create_failed");
+                    const reason = payload.reason_code || (payload.policy && payload.policy.reason_code) || "";
+                    const message = [payload.detail || payload.error || response.statusText || "job_create_failed", reason ? "Motivo: " + reason : ""].filter(Boolean).join(" ");
+                    const error = new Error(message);
+                    error.payload = payload;
+                    throw error;
                 }
                 return payload;
             });
         });
+    }
+
+    function chooseUpdateRelease() {
+        const releases = ((endpointDetail && endpointDetail.agent && endpointDetail.agent.updateReleases) || []).filter(function (release) {
+            return release && release.id;
+        });
+        const eligible = releases.filter(function (release) { return release.eligible; });
+        if (eligible.length === 1) return eligible[0];
+        if (!releases.length) return null;
+        const lines = releases.map(function (release, index) {
+            return (index + 1) + ". " + (release.version || "-") +
+                " [" + (release.channel || "-") + "] " +
+                (release.eligible ? "autorizada" : "bloqueada: " + (release.reason_code || "-"));
+        });
+        const selected = window.prompt("Selecione a release para atualizar o agente:\n\n" + lines.join("\n"), eligible.length ? String(releases.indexOf(eligible[0]) + 1) : "1");
+        if (selected === null) return false;
+        const index = parseInt(selected, 10) - 1;
+        if (Number.isNaN(index) || !releases[index]) {
+            showToast("Release selecionada invalida.");
+            return false;
+        }
+        return releases[index];
     }
 
     function runEndpointAction(action) {
@@ -1174,7 +1206,13 @@
         }
         const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "restart_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
+            let jobOptions = {};
             if (action === "update_agent") {
+                const selectedRelease = chooseUpdateRelease();
+                if (selectedRelease === false) return;
+                if (selectedRelease && selectedRelease.id) {
+                    jobOptions.releaseId = selectedRelease.id;
+                }
                 const confirmed = window.confirm("Deseja enviar um comando de atualizacao do agente para este endpoint? O servico pode ser reiniciado durante o processo.");
                 if (!confirmed) return;
                 showToast("Enviando job de atualizacao para o agente...");
@@ -1183,7 +1221,7 @@
                 if (!confirmed) return;
                 showToast("Enviando job de reinicio para o agente...");
             }
-            createRealJob(action).then(function (payload) {
+            createRealJob(action, jobOptions).then(function (payload) {
                 const isPendingUpdate = payload.status === "already_pending";
                 showToast(action === "update_agent"
                     ? (isPendingUpdate ? "Ja existe um job de atualizacao pendente para este endpoint." : "Job enviado com sucesso.")

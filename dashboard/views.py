@@ -38,7 +38,7 @@ from agents.models import (
 )
 from config.authz import is_nightowl_technical_user
 from agents.audit import create_audit_event
-from agents.services import evaluate_agent_update_policy
+from agents.services import AGENT_RELEASE_AVAILABLE_STATUSES, evaluate_agent_update_policy
 from agents.software_catalog import (
     ADMIN_NETWORK_SOFTWARE,
     CATEGORY_LABELS,
@@ -2654,6 +2654,56 @@ def _endpoint_diagnostic(endpoint):
         return None
 
 
+def _manual_update_release_options(endpoint):
+    channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
+    releases = AgentRelease.objects.filter(
+        status__in=AGENT_RELEASE_AVAILABLE_STATUSES,
+        revoked=False,
+    ).order_by('-released_at', '-created_at')[:20]
+    rows = []
+    for release in releases:
+        decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=release, record_evaluation=False)
+        rows.append({
+            'id': str(release.id),
+            'version': release.version,
+            'channel': release.channel,
+            'status': release.status,
+            'is_endpoint_channel': release.channel == channel,
+            'rollout_percentage': release.rollout_percentage,
+            'rollout_paused': release.rollout_paused,
+            'mandatory': release.mandatory,
+            'eligible': decision.eligible,
+            'reason_code': decision.reason_code,
+            'sha256': release.sha256,
+            'size': release.size,
+            'minimum_updater_version': release.minimum_updater_version,
+        })
+    return rows
+
+
+def _update_policy_message(reason_code):
+    messages_by_reason = {
+        'eligible': 'Release autorizada para atualizacao.',
+        'already_current': 'O endpoint ja esta na versao selecionada.',
+        'channel_no_release': 'Nao ha release disponivel para o canal do endpoint.',
+        'release_not_found': 'A release selecionada nao foi encontrada.',
+        'release_not_available': 'A release selecionada nao esta disponivel.',
+        'release_revoked': 'A release selecionada foi revogada.',
+        'release_paused': 'A release selecionada esta pausada.',
+        'endpoint_paused': 'As atualizacoes deste endpoint estao pausadas.',
+        'manual_policy': 'A politica do endpoint exige acionamento manual.',
+        'notify_only': 'A politica atual e apenas notificacao.',
+        'outside_maintenance_window': 'O endpoint esta fora da janela de manutencao.',
+        'minimum_updater_incompatible': 'O updater instalado nao atende a versao minima exigida pela release.',
+        'group_not_allowed': 'O endpoint nao pertence aos grupos autorizados para esta release.',
+        'rollout_not_selected': 'O endpoint nao foi selecionado pelo rollout automatico.',
+        'pinned_release_not_found': 'A versao fixada no endpoint nao foi encontrada.',
+        'pinned_release_unavailable': 'A versao fixada no endpoint nao esta disponivel.',
+        'invalid_version': 'A versao instalada do endpoint nao pode ser comparada com seguranca.',
+    }
+    return messages_by_reason.get(reason_code or '', 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.')
+
+
 def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets, *, request=None):
     update_decision = evaluate_agent_update_policy(endpoint, manual=False)
     recommended_version = update_decision.target_version or latest_agent_version()
@@ -2916,6 +2966,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'latest_agent_version': recommended_version,
         'recommended_agent_version': recommended_version,
         'agent_update_policy': update_decision.as_panel_payload(),
+        'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
         'agent_health': agent_health,
         'agent_diagnostic': _serialize_agent_diagnostic(
             endpoint,
@@ -3112,6 +3163,30 @@ def endpoint_job_create(request, pk):
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
         payload['lines'] = 120
     elif selected_type == AgentJob.TYPE_UPDATE_AGENT:
+        selected_release_id = (request.POST.get('release_id') or request.POST.get('agent_release_id') or '').strip()
+        selected_release = None
+        if selected_release_id:
+            selected_release = AgentRelease.objects.filter(pk=selected_release_id).first()
+            if selected_release is None:
+                create_audit_event(
+                    event_type='agent.update_manual_blocked',
+                    title='Update manual bloqueado',
+                    description=f'Release informada nao foi encontrada para {endpoint.hostname}.',
+                    severity=AuditEvent.SEVERITY_WARNING,
+                    actor_type=AuditEvent.ACTOR_USER,
+                    actor_name=request.user.get_username(),
+                    endpoint=endpoint,
+                    metadata={'release_id': selected_release_id, 'reason_code': 'release_not_found'},
+                    request=request,
+                )
+                return JsonResponse(
+                    {
+                        'error': 'endpoint_not_eligible_for_update',
+                        'detail': 'A release selecionada nao foi encontrada.',
+                        'reason_code': 'release_not_found',
+                    },
+                    status=409,
+                )
         pending_update = endpoint.jobs.filter(
             job_type=AgentJob.TYPE_UPDATE_AGENT,
             status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
@@ -3131,12 +3206,46 @@ def endpoint_job_create(request, pk):
                 },
                 status=409,
             )
-        update_decision = evaluate_agent_update_policy(endpoint, manual=True)
+        update_decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=selected_release)
+        create_audit_event(
+            event_type='agent.update_policy_evaluated',
+            title='Politica de update manual avaliada',
+            description=f'Politica de update manual avaliada para {endpoint.hostname}.',
+            severity=AuditEvent.SEVERITY_INFO if update_decision.eligible else AuditEvent.SEVERITY_WARNING,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=request.user.get_username(),
+            endpoint=endpoint,
+            metadata={
+                'manual': True,
+                'eligible': update_decision.eligible,
+                'reason_code': update_decision.reason_code,
+                'release_id': update_decision.selected_release_id or selected_release_id,
+                'target_version': update_decision.target_version,
+                'channel': update_decision.channel,
+                'rollout_bucket': update_decision.rollout_bucket,
+                'operator': request.user.get_username(),
+            },
+            request=request,
+        )
         if not update_decision.eligible or not update_decision.release:
+            AgentReleaseAudit.objects.create(
+                user=request.user,
+                action=AgentReleaseAudit.ACTION_UPDATED,
+                release=update_decision.release or selected_release,
+                endpoint=endpoint,
+                version=update_decision.target_version or (selected_release.version if selected_release else ''),
+                channel_after=update_decision.channel or (selected_release.channel if selected_release else ''),
+                reason='manual_panel_update_blocked',
+                metadata={
+                    'reason_code': update_decision.reason_code,
+                    'selected_release_id': selected_release_id,
+                    'operator': request.user.get_username(),
+                },
+            )
             return JsonResponse(
                 {
                     'error': 'endpoint_not_eligible_for_update',
-                    'detail': 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.',
+                    'detail': _update_policy_message(update_decision.reason_code),
                     'reason_code': update_decision.reason_code,
                     'policy': update_decision.as_panel_payload(),
                 },
@@ -3289,7 +3398,7 @@ def _release_metrics(release):
     rolled_back = 0
     rollback_failed = 0
     for endpoint in endpoints:
-        decision = evaluate_agent_update_policy(endpoint, manual=True)
+        decision = evaluate_agent_update_policy(endpoint, manual=True, record_evaluation=False)
         if decision.release and decision.release.id == release.id and decision.eligible:
             eligible += 1
         if endpoint.agent_version == release.version:

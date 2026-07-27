@@ -113,6 +113,7 @@ UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED = 'rollout_not_selected'
 UPDATE_POLICY_REASON_PINNED_RELEASE_NOT_FOUND = 'pinned_release_not_found'
 UPDATE_POLICY_REASON_PINNED_RELEASE_UNAVAILABLE = 'pinned_release_unavailable'
 UPDATE_POLICY_REASON_INVALID_VERSION = 'invalid_version'
+AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_AVAILABLE, 'active'}
 
 
 @dataclass(frozen=True)
@@ -374,7 +375,7 @@ def _is_now_inside_window(start, end, now):
 def _release_query_for_channel(channel):
     return AgentRelease.objects.filter(
         channel=channel,
-        status=AgentRelease.STATUS_AVAILABLE,
+        status__in=AGENT_RELEASE_AVAILABLE_STATUSES,
         revoked=False,
     ).order_by('-released_at', '-created_at')
 
@@ -407,13 +408,14 @@ def _updater_version(endpoint):
     return getattr(diagnostic, 'updater_version', '') or endpoint.agent_version or ''
 
 
-def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=False):
+def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=False, explicit_release=None, record_evaluation=True):
     now = now or timezone.now()
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     current_version = endpoint.agent_version or ''
-    release = _latest_available_release_for_endpoint(endpoint, channel)
-    endpoint.last_update_policy_evaluation_at = now
-    endpoint.save(update_fields=['last_update_policy_evaluation_at', 'updated_at'])
+    release = explicit_release or _latest_available_release_for_endpoint(endpoint, channel)
+    if record_evaluation:
+        endpoint.last_update_policy_evaluation_at = now
+        endpoint.save(update_fields=['last_update_policy_evaluation_at', 'updated_at'])
 
     def decision(eligible, reason_code, selected_release=release, bucket=None):
         return AgentUpdateDecision(
@@ -424,7 +426,7 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
             current_version=current_version,
             target_version=(selected_release.version if selected_release else ''),
             selected_release_id=str(selected_release.id) if selected_release else '',
-            channel=channel,
+            channel=(selected_release.channel if explicit_release and selected_release else channel),
             rollout_bucket=bucket,
         )
 
@@ -437,9 +439,12 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
     if release is None:
         return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, None)
 
+    if explicit_release is not None and explicit_release.channel != channel and not manual:
+        return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, release)
+
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
-    if release.status != AgentRelease.STATUS_AVAILABLE:
+    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     if release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
@@ -464,7 +469,7 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
 
     bucket = deterministic_rollout_bucket(endpoint, release)
     rollout_percentage = 100 if release.mandatory else min(100, max(0, release.rollout_percentage or 0))
-    if bucket >= rollout_percentage:
+    if not manual and bucket >= rollout_percentage:
         return decision(False, UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED, release, bucket)
 
     policy = endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL

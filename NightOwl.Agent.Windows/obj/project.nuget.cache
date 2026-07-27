@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "kJUH04Xmy6Y=",
+  "dgSpecHash": "8INPYYBL7KU=",
   "success": true,
-  "projectFilePath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
+  "projectFilePath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.extensions.configuration\\8.0.0\\microsoft.extensions.configuration.8.0.0.nupkg.sha512",
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.extensions.configuration.abstractions\\8.0.0\\microsoft.extensions.configuration.abstractions.8.0.0.nupkg.sha512",
