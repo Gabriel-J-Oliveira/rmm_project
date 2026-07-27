@@ -313,10 +313,29 @@ function Invoke-PackageNegativeTests([string]$Path) {
     }
 }
 
+function Invoke-ExplicitReleaseUpdaterContractTest {
+    $executor = Get-Content -Path (Join-Path $script:RepoRoot "NightOwl.Agent.Windows\Jobs\JobExecutor.cs") -Raw
+    $policy = Get-Content -Path (Join-Path $script:RepoRoot "NightOwl.Agent.Windows\Jobs\JobExecutionPolicy.cs") -Raw
+    $updater = Get-Content -Path (Join-Path $script:RepoRoot "NightOwl.Agent.Updater\Program.cs") -Raw
+
+    foreach ($arg in @("--release-id", "--package-url", "--checksum-url", "--sha256", "--size", "--minimum-updater-version", "--mandatory", "--force")) {
+        Assert-True ($executor.Contains($arg)) "JobExecutor nao repassa $arg para o updater."
+    }
+    foreach ($field in @("release_id", "package_url", "checksum_url", "sha256", "size", "minimum_updater_version", "mandatory")) {
+        Assert-True ($policy.Contains($field)) "JobExecutionPolicy nao permite o campo $field em update_agent."
+    }
+    Assert-True ($updater.Contains("HasExplicitReleaseMetadata")) "Updater nao diferencia release explicita."
+    Assert-True ($updater.Contains("UpdateReleaseMetadataMissing")) "Updater nao falha explicitamente quando metadados da release faltam."
+    Assert-True ($updater.Contains("BuildManifestFromJobContext")) "Updater nao cria manifest a partir do payload do job."
+    Assert-True ($updater.Contains("ChecksumsManifest.FromPackage")) "Updater nao usa SHA256 recebido pelo job."
+    Assert-True ($updater.Contains("target_version_not_reached")) "Updater nao falha quando target explicito nao e atingido."
+}
+
 function Invoke-Simulated {
     $release = Find-ReleaseDir
     Invoke-Scenario "release.valida" { Assert-ReleasePackage $release }
     Invoke-Scenario "release.hash_invalido_e_exe_obrigatorio_ausente" { Invoke-PackageNegativeTests $release }
+    Invoke-Scenario "update_agent.release_explicita_contrato_runner" { Invoke-ExplicitReleaseUpdaterContractTest }
     Invoke-Scenario "update_state.valido" { Assert-UpdateStateScenario "completed" "completed" $false $false }
     Invoke-Scenario "update_state.corrompido" {
         $bad = "{ invalid json"

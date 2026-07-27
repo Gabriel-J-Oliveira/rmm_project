@@ -239,11 +239,22 @@ public sealed class Worker : BackgroundService
                 attempted_version = state.TargetVersion,
                 active_version = installedVersion,
                 target_version = state.TargetVersion,
+                updated = status == "completed" && exitCode == 0,
+                rollback_performed = status == "rolled_back" || state.RollbackAttempt > 0,
+                health_check = new
+                {
+                    confirmed = state.HealthCheckConfirmed,
+                    service_started = state.ServiceStarted,
+                    stage = state.CurrentStage,
+                    machine_id_preserved = !string.IsNullOrWhiteSpace(config.MachineId)
+                },
+                exit_code = exitCode,
                 failure_stage = state.RollbackReason,
                 original_error_code = state.ErrorCode,
                 rollback_duration = state.RollbackStartedAt is null ? null : (double?)Math.Round((DateTimeOffset.UtcNow - state.RollbackStartedAt.Value).TotalSeconds, 3),
                 rollback_confirmed = status == "rolled_back",
                 error_code = state.ErrorCode,
+                error_message = status == "failed" ? message : "",
                 message,
                 completed_at = DateTimeOffset.UtcNow
             }

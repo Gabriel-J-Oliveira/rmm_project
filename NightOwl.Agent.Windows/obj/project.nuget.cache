@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "8INPYYBL7KU=",
+  "dgSpecHash": "9tSstmUEnDY=",
   "success": true,
-  "projectFilePath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
+  "projectFilePath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.extensions.configuration\\8.0.0\\microsoft.extensions.configuration.8.0.0.nupkg.sha512",
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.extensions.configuration.abstractions\\8.0.0\\microsoft.extensions.configuration.abstractions.8.0.0.nupkg.sha512",
@@ -34,10 +34,7 @@
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.extensions.options.configurationextensions\\8.0.0\\microsoft.extensions.options.configurationextensions.8.0.0.nupkg.sha512",
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.extensions.primitives\\8.0.0\\microsoft.extensions.primitives.8.0.0.nupkg.sha512",
     "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\system.diagnostics.eventlog\\8.0.1\\system.diagnostics.eventlog.8.0.1.nupkg.sha512",
-    "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\system.serviceprocess.servicecontroller\\8.0.1\\system.serviceprocess.servicecontroller.8.0.1.nupkg.sha512",
-    "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\8.0.28\\microsoft.netcore.app.runtime.win-x64.8.0.28.nupkg.sha512",
-    "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\8.0.28\\microsoft.windowsdesktop.app.runtime.win-x64.8.0.28.nupkg.sha512",
-    "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\8.0.28\\microsoft.aspnetcore.app.runtime.win-x64.8.0.28.nupkg.sha512"
+    "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\system.serviceprocess.servicecontroller\\8.0.1\\system.serviceprocess.servicecontroller.8.0.1.nupkg.sha512"
   ],
   "logs": []
 }

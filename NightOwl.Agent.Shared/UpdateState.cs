@@ -57,6 +57,9 @@ public static class UpdateErrorCodes
     public const string UpdateHealthcheckVersionMismatch = "UPDATE_HEALTHCHECK_VERSION_MISMATCH";
     public const string UpdateHealthcheckTimeout = "UPDATE_HEALTHCHECK_TIMEOUT";
     public const string UpdateProcessExitedEarly = "UPDATE_PROCESS_EXITED_EARLY";
+    public const string UpdateReleaseMetadataMissing = "UPDATE_RELEASE_METADATA_MISSING";
+    public const string UpdateTargetReleaseNotResolved = "UPDATE_TARGET_RELEASE_NOT_RESOLVED";
+    public const string UpdateMinimumUpdaterVersionNotMet = "UPDATE_MINIMUM_UPDATER_VERSION_NOT_MET";
     public const string RollbackBackupInvalid = "ROLLBACK_BACKUP_INVALID";
     public const string RollbackServiceStopFailed = "ROLLBACK_SERVICE_STOP_FAILED";
     public const string RollbackFileRestoreFailed = "ROLLBACK_FILE_RESTORE_FAILED";

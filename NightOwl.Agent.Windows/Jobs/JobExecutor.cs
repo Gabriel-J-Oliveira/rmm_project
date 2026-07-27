@@ -261,8 +261,62 @@ public sealed class JobExecutor
 
         string channel = GetPayloadString(job, "channel", "stable");
         string targetVersion = GetPayloadString(job, "target_version", "latest");
-        string arguments = $"update --source job --job-id \"{job.Id}\" --channel \"{channel}\" --target-version \"{targetVersion}\" --quiet --json-output";
-        await _logger.LogAsync("job.update_agent.started", "Starting updater for update_agent job.", new { job.Id, channel, targetVersion }, ct);
+        string releaseId = GetPayloadString(job, "release_id", "");
+        string packageUrl = GetPayloadString(job, "package_url", "");
+        string checksumUrl = GetPayloadString(job, "checksum_url", "");
+        string sha256 = GetPayloadString(job, "sha256", "");
+        long size = GetPayloadLong(job, "size", 0);
+        string minimumUpdaterVersion = GetPayloadString(job, "minimum_updater_version", "");
+        bool mandatory = GetPayloadBool(job, "mandatory", false);
+        bool force = GetPayloadBool(job, "force", false);
+
+        List<string> args = new()
+        {
+            "update",
+            "--source", "job",
+            "--job-id", job.Id,
+            "--channel", channel,
+            "--target-version", targetVersion,
+            "--quiet",
+            "--json-output"
+        };
+        AddOption(args, "--release-id", releaseId);
+        AddOption(args, "--package-url", packageUrl);
+        AddOption(args, "--checksum-url", checksumUrl);
+        AddOption(args, "--sha256", sha256);
+        if (size > 0)
+        {
+            AddOption(args, "--size", size.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        AddOption(args, "--minimum-updater-version", minimumUpdaterVersion);
+        if (mandatory)
+        {
+            args.Add("--mandatory");
+        }
+        if (force)
+        {
+            args.Add("--force");
+        }
+
+        string arguments = string.Join(" ", args.Select(QuoteArg));
+        await _logger.LogAsync(
+            "job.update_agent.started",
+            "Starting updater for update_agent job.",
+            new
+            {
+                job.Id,
+                channel,
+                targetVersion,
+                releaseId,
+                hasPackageUrl = !string.IsNullOrWhiteSpace(packageUrl),
+                hasChecksumUrl = !string.IsNullOrWhiteSpace(checksumUrl),
+                hasSha256 = !string.IsNullOrWhiteSpace(sha256),
+                size,
+                minimumUpdaterVersion,
+                mandatory,
+                force
+            },
+            ct);
 
         using Process process = new()
         {
@@ -296,9 +350,27 @@ public sealed class JobExecutor
                 update_status = "runner_started",
                 message = "Updater runner started. Final result will be sent by the restarted service.",
                 channel,
-                target_version = targetVersion
+                target_version = targetVersion,
+                release_id = releaseId,
+                package_url = SanitizeUrl(packageUrl),
+                checksum_url = SanitizeUrl(checksumUrl),
+                sha256_present = !string.IsNullOrWhiteSpace(sha256),
+                size,
+                minimum_updater_version = minimumUpdaterVersion,
+                mandatory,
+                force
             }
         };
+    }
+
+    private static void AddOption(List<string> args, string name, string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+        args.Add(name);
+        args.Add(value);
     }
 
     private static string GetPayloadString(AgentJobRequest job, string key, string fallback)
@@ -319,6 +391,60 @@ public sealed class JobExecutor
             return parsedElement;
         }
         return int.TryParse(value.ToString(), out int parsed) ? parsed : fallback;
+    }
+
+    private static long GetPayloadLong(AgentJobRequest job, string key, long fallback)
+    {
+        if (!job.Payload.TryGetValue(key, out object? value) || value is null)
+        {
+            return fallback;
+        }
+        if (value is JsonElement element && element.TryGetInt64(out long parsedElement))
+        {
+            return parsedElement;
+        }
+        return long.TryParse(value.ToString(), out long parsed) ? parsed : fallback;
+    }
+
+    private static bool GetPayloadBool(AgentJobRequest job, string key, bool fallback)
+    {
+        if (!job.Payload.TryGetValue(key, out object? value) || value is null)
+        {
+            return fallback;
+        }
+        if (value is JsonElement element)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String => bool.TryParse(element.GetString(), out bool parsedElement) ? parsedElement : fallback,
+                _ => fallback
+            };
+        }
+        return bool.TryParse(value.ToString(), out bool parsed) ? parsed : fallback;
+    }
+
+    private static string QuoteArg(string arg)
+    {
+        if (string.IsNullOrEmpty(arg))
+        {
+            return "\"\"";
+        }
+        if (!arg.Any(char.IsWhiteSpace) && !arg.Contains('"'))
+        {
+            return arg;
+        }
+        return "\"" + arg.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
+    private static string SanitizeUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
+        {
+            return "";
+        }
+        return uri.GetLeftPart(UriPartial.Path);
     }
 
     private static void WritePendingJobResult(AgentConfig config, JobExecutionResult result)

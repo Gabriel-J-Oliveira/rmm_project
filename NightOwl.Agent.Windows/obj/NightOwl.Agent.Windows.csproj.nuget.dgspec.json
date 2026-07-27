@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj": {}
+    "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj": {}
   },
   "projects": {
-    "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
+    "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
+        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
         "projectName": "NightOwl.Agent.Shared",
-        "projectPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
+        "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
         "packagesPath": "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\obj\\",
+        "outputPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\gabriel.oliveira\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -53,20 +53,6 @@
           ],
           "assetTargetFallback": true,
           "warn": true,
-          "downloadDependencies": [
-            {
-              "name": "Microsoft.AspNetCore.App.Runtime.win-x64",
-              "version": "[8.0.28, 8.0.28]"
-            },
-            {
-              "name": "Microsoft.NETCore.App.Runtime.win-x64",
-              "version": "[8.0.28, 8.0.28]"
-            },
-            {
-              "name": "Microsoft.WindowsDesktop.App.Runtime.win-x64",
-              "version": "[8.0.28, 8.0.28]"
-            }
-          ],
           "frameworkReferences": {
             "Microsoft.NETCore.App": {
               "privateAssets": "all"
@@ -74,21 +60,16 @@
           },
           "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.422/PortableRuntimeIdentifierGraph.json"
         }
-      },
-      "runtimes": {
-        "win-x64": {
-          "#import": []
-        }
       }
     },
-    "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj": {
+    "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj": {
       "version": "0.1.0.7",
       "restore": {
-        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
+        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
         "projectName": "NightOwl.Agent.Windows",
-        "projectPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
+        "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\NightOwl.Agent.Windows.csproj",
         "packagesPath": "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Windows\\obj\\",
+        "outputPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Windows\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\gabriel.oliveira\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -103,8 +84,8 @@
           "net8.0-windows7.0": {
             "targetAlias": "net8.0-windows",
             "projectReferences": {
-              "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
-                "projectPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj"
+              "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
+                "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj"
               }
             }
           }
@@ -144,31 +125,12 @@
           ],
           "assetTargetFallback": true,
           "warn": true,
-          "downloadDependencies": [
-            {
-              "name": "Microsoft.AspNetCore.App.Runtime.win-x64",
-              "version": "[8.0.28, 8.0.28]"
-            },
-            {
-              "name": "Microsoft.NETCore.App.Runtime.win-x64",
-              "version": "[8.0.28, 8.0.28]"
-            },
-            {
-              "name": "Microsoft.WindowsDesktop.App.Runtime.win-x64",
-              "version": "[8.0.28, 8.0.28]"
-            }
-          ],
           "frameworkReferences": {
             "Microsoft.NETCore.App": {
               "privateAssets": "all"
             }
           },
           "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.422/PortableRuntimeIdentifierGraph.json"
-        }
-      },
-      "runtimes": {
-        "win-x64": {
-          "#import": []
         }
       }
     }

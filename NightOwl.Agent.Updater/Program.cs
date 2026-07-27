@@ -155,17 +155,156 @@ internal static class Program
 
         AgentConfig config = LoadConfig();
         MarkStage(state, UpdateStages.CheckingVersion);
-        UpdateManifest manifest = await DownloadManifestAsync(config);
         AgentVersionInfo installed = LoadInstalledVersion(config);
+        state.FromVersion = installed.Version;
+        if (jobContext.HasExplicitTarget)
+        {
+            state.TargetVersion = jobContext.TargetVersion;
+        }
+        UpdateStateStore.Save(state);
+        UpdateManifest manifest;
+        ChecksumsManifest? explicitChecksums = null;
+        try
+        {
+            if (jobContext.HasExplicitReleaseMetadata)
+            {
+                manifest = BuildManifestFromJobContext(config, jobContext);
+                explicitChecksums = ChecksumsManifest.FromPackage("NightOwl.Agent.Windows.zip", jobContext.Sha256, jobContext.Size);
+                WriteLog("updater.release.explicit", "Using explicit release metadata from update_agent job.", new
+                {
+                    update_id = state.UpdateId,
+                    job_id = state.JobId,
+                    release_id = jobContext.ReleaseId,
+                    target_version = jobContext.TargetVersion,
+                    channel = jobContext.Channel,
+                    package_url = SanitizeUrl(jobContext.PackageUrl),
+                    has_sha256 = !string.IsNullOrWhiteSpace(jobContext.Sha256),
+                    size = jobContext.Size
+                });
+            }
+            else if (jobContext.HasExplicitTarget)
+            {
+                string message = "Explicit target_version was provided without complete release metadata.";
+                MarkFailed(state, UpdateErrorCodes.UpdateReleaseMetadataMissing, message);
+                var missing = new
+                {
+                    ok = false,
+                    updated = false,
+                    reason = "release_metadata_missing",
+                    error_code = UpdateErrorCodes.UpdateReleaseMetadataMissing,
+                    installedVersion = installed.Version,
+                    targetVersion = jobContext.TargetVersion,
+                    availableVersion = ""
+                };
+                if (jobContext.IsJob)
+                {
+                    WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, missing, "");
+                }
+                WriteJson(missing);
+                return 25;
+            }
+            else
+            {
+                manifest = await DownloadManifestAsync(config);
+            }
+        }
+        catch (Exception ex)
+        {
+            MarkFailed(state, ex.Message.Contains(UpdateErrorCodes.UpdateMinimumUpdaterVersionNotMet, StringComparison.OrdinalIgnoreCase)
+                ? UpdateErrorCodes.UpdateMinimumUpdaterVersionNotMet
+                : UpdateErrorCodes.UpdatePackageInvalid, SanitizeMessage(ex.Message));
+            var failedResolution = new
+            {
+                ok = false,
+                updated = false,
+                reason = jobContext.HasExplicitTarget ? "target_release_not_resolved" : "manifest_resolution_failed",
+                error_code = state.ErrorCode,
+                installedVersion = installed.Version,
+                targetVersion = jobContext.TargetVersion,
+                error = SanitizeMessage(ex.Message)
+            };
+            if (jobContext.IsJob)
+            {
+                WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, SanitizeMessage(ex.Message), failedResolution, SanitizeMessage(ex.ToString()));
+            }
+            WriteJson(failedResolution);
+            return 25;
+        }
+
         state.FromVersion = installed.Version;
         state.TargetVersion = manifest.Version;
         UpdateStateStore.Save(state);
-        if (CompareVersions(manifest.Version, installed.Version) <= 0 && !manifest.Force)
+        if (jobContext.HasExplicitTarget && !manifest.Version.Equals(jobContext.TargetVersion, StringComparison.OrdinalIgnoreCase))
         {
+            string message = $"Resolved release version {manifest.Version} does not match requested target {jobContext.TargetVersion}.";
+            MarkFailed(state, UpdateErrorCodes.UpdateTargetReleaseNotResolved, message);
+            var mismatch = new
+            {
+                ok = false,
+                updated = false,
+                reason = "target_release_not_resolved",
+                error_code = UpdateErrorCodes.UpdateTargetReleaseNotResolved,
+                installedVersion = installed.Version,
+                targetVersion = jobContext.TargetVersion,
+                availableVersion = manifest.Version
+            };
+            if (jobContext.IsJob)
+            {
+                WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, mismatch, "");
+            }
+            WriteJson(mismatch);
+            return 25;
+        }
+
+        int versionComparison = CompareVersions(manifest.Version, installed.Version);
+        if (versionComparison <= 0 && !manifest.Force)
+        {
+            if (jobContext.HasExplicitTarget && !installed.Version.Equals(manifest.Version, StringComparison.OrdinalIgnoreCase))
+            {
+                string message = $"Installed version {installed.Version} does not match explicit target {manifest.Version}.";
+                MarkFailed(state, UpdateErrorCodes.UpdateTargetReleaseNotResolved, message);
+                var targetNotReached = new
+                {
+                    ok = false,
+                    updated = false,
+                    reason = "target_version_not_reached",
+                    error_code = UpdateErrorCodes.UpdateTargetReleaseNotResolved,
+                    installedVersion = installed.Version,
+                    targetVersion = manifest.Version,
+                    availableVersion = manifest.Version
+                };
+                if (jobContext.IsJob)
+                {
+                    WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, targetNotReached, "");
+                }
+                WriteJson(targetNotReached);
+                return 25;
+            }
+            if (jobContext.HasExplicitTarget && versionComparison < 0)
+            {
+                string message = $"Explicit target {manifest.Version} is older than installed version {installed.Version}.";
+                MarkFailed(state, UpdateErrorCodes.UpdateTargetReleaseNotResolved, message);
+                var targetOlder = new
+                {
+                    ok = false,
+                    updated = false,
+                    reason = "target_version_not_reached",
+                    error_code = UpdateErrorCodes.UpdateTargetReleaseNotResolved,
+                    installedVersion = installed.Version,
+                    targetVersion = manifest.Version,
+                    availableVersion = manifest.Version
+                };
+                if (jobContext.IsJob)
+                {
+                    WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, targetOlder, "");
+                }
+                WriteJson(targetOlder);
+                return 25;
+            }
             WriteLog("updater.update.skipped", "Nenhuma atualizacao disponivel.", new { installed = installed.Version, available = manifest.Version });
             state.HealthCheckConfirmed = true;
             MarkStage(state, UpdateStages.Completed, UpdateStatuses.Completed);
-            var skipped = new { ok = true, updated = false, reason = "already_current", installedVersion = installed.Version, availableVersion = manifest.Version };
+            var skipped = new { ok = true, updated = false, reason = "already_current", installedVersion = installed.Version, targetVersion = manifest.Version, availableVersion = manifest.Version };
             if (jobContext.IsJob)
             {
                 WritePendingUpdateResult(jobContext, state, "completed", 10, installed.Version, installed.Version, "Agent already up to date.", skipped, "");
@@ -186,7 +325,7 @@ internal static class Program
             return 0;
         }
 
-        ChecksumsManifest checksums = await DownloadChecksumsAsync(config, manifest);
+        ChecksumsManifest checksums = explicitChecksums ?? await DownloadChecksumsAsync(config, manifest);
         string packageUrl = ResolvePackageUrl(config, manifest);
         EnsurePackageUrlAllowed(config, packageUrl);
         state.PackageUrl = packageUrl;
@@ -749,6 +888,82 @@ internal static class Program
             manifest.InstallerUrl = JoinUrl(config.ServerBaseUrlOrDefault, "/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1");
         }
         return manifest;
+    }
+
+    private static UpdateManifest BuildManifestFromJobContext(AgentConfig config, JobContext jobContext)
+    {
+        if (!jobContext.HasExplicitReleaseMetadata)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateReleaseMetadataMissing}: release metadata is incomplete.");
+        }
+        if (!RegexSha256(jobContext.Sha256))
+        {
+            throw new InvalidOperationException("Invalid package sha256 in release metadata.");
+        }
+        if (jobContext.Size < 0)
+        {
+            throw new InvalidOperationException("Invalid package size in release metadata.");
+        }
+        EnsurePackageUrlAllowed(config, jobContext.PackageUrl);
+        if (!string.IsNullOrWhiteSpace(jobContext.ChecksumUrl))
+        {
+            EnsurePackageUrlAllowed(config, jobContext.ChecksumUrl);
+        }
+        EnsureMinimumUpdaterVersion(jobContext.MinimumUpdaterVersion);
+
+        return new UpdateManifest
+        {
+            Product = ProductName,
+            Channel = string.IsNullOrWhiteSpace(jobContext.Channel) ? "stable" : jobContext.Channel,
+            Version = jobContext.TargetVersion,
+            PublishedAt = DateTimeOffset.UtcNow.ToString("O"),
+            MinimumSupportedVersion = jobContext.MinimumUpdaterVersion,
+            PackageUrl = jobContext.PackageUrl,
+            ChecksumUrl = jobContext.ChecksumUrl,
+            Notes = string.IsNullOrWhiteSpace(jobContext.ReleaseId) ? "Explicit update_agent release." : $"Explicit release {jobContext.ReleaseId}.",
+            RequiresRestart = true,
+            Force = jobContext.Force
+        };
+    }
+
+    private static void EnsureMinimumUpdaterVersion(string minimumUpdaterVersion)
+    {
+        if (string.IsNullOrWhiteSpace(minimumUpdaterVersion))
+        {
+            return;
+        }
+        string current = GetCurrentUpdaterVersion();
+        if (CompareVersions(current, minimumUpdaterVersion) < 0)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateMinimumUpdaterVersionNotMet}: updater {current} is lower than required {minimumUpdaterVersion}.");
+        }
+    }
+
+    private static string GetCurrentUpdaterVersion()
+    {
+        try
+        {
+            string? informational = typeof(Program).Assembly
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), inherit: false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                .FirstOrDefault()?
+                .InformationalVersion;
+            string version = (informational ?? typeof(Program).Assembly.GetName().Version?.ToString() ?? "").Split('+')[0];
+            return string.IsNullOrWhiteSpace(version) ? "0.0.0" : version;
+        }
+        catch
+        {
+            return "0.0.0";
+        }
+    }
+
+    private static bool RegexSha256(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length != 64)
+        {
+            return false;
+        }
+        return value.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
     }
 
     private static async Task<ChecksumsManifest> DownloadChecksumsAsync(AgentConfig config, UpdateManifest manifest)
@@ -1409,6 +1624,19 @@ internal static class Program
                 update_status = exitCode == 10 ? "no_update_available" : status == "completed" ? "success" : "failed",
                 installed_version = installedVersion,
                 previous_version = previousVersion,
+                target_version = string.IsNullOrWhiteSpace(state.TargetVersion) ? jobContext.TargetVersion : state.TargetVersion,
+                updated = status == "completed" && exitCode == 0,
+                rollback_performed = state.CurrentStage.Equals(UpdateStages.RolledBack, StringComparison.OrdinalIgnoreCase)
+                    || status.Equals("rolled_back", StringComparison.OrdinalIgnoreCase)
+                    || state.RollbackAttempt > 0,
+                health_check = new
+                {
+                    confirmed = state.HealthCheckConfirmed,
+                    service_started = state.ServiceStarted,
+                    stage = state.CurrentStage
+                },
+                exit_code = exitCode,
+                error_message = status == "failed" ? message : "",
                 message,
                 completed_at = DateTimeOffset.UtcNow,
                 details = result
@@ -1454,8 +1682,12 @@ internal static class Program
 
     private static void EnsurePackageUrlAllowed(AgentConfig config, string url)
     {
-        Uri server = new(config.ServerBaseUrlOrDefault);
-        Uri target = new(url);
+        if (!Uri.TryCreate(config.ServerBaseUrlOrDefault, UriKind.Absolute, out Uri? server)
+            || !Uri.TryCreate(url, UriKind.Absolute, out Uri? target)
+            || !target.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("packageUrl/checksumUrl invalida ou sem HTTPS.");
+        }
         if (!server.Host.Equals(target.Host, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("packageUrl/checksumUrl fora do ServerUrl oficial nao e permitido.");
@@ -1586,6 +1818,12 @@ internal static class Program
     {
         string? value = GetOption(args, name);
         return int.TryParse(value, out int parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static long GetOptionLong(string[] args, string name, long fallback)
+    {
+        string? value = GetOption(args, name);
+        return long.TryParse(value, out long parsed) && parsed >= 0 ? parsed : fallback;
     }
 
     private static void WriteJson(object value)
@@ -1747,6 +1985,13 @@ internal static class Program
             return manifest;
         }
 
+        public static ChecksumsManifest FromPackage(string name, string sha256, long size)
+        {
+            ChecksumsManifest manifest = new();
+            manifest._files[name] = new FileChecksum(name, sha256, size);
+            return manifest;
+        }
+
         public FileChecksum GetRequired(string name)
         {
             if (_files.TryGetValue(name, out FileChecksum? checksum))
@@ -1818,6 +2063,22 @@ internal static class Program
         public string JobId { get; init; } = "";
         public string Channel { get; init; } = "stable";
         public string TargetVersion { get; init; } = "latest";
+        public string ReleaseId { get; init; } = "";
+        public string PackageUrl { get; init; } = "";
+        public string ChecksumUrl { get; init; } = "";
+        public string Sha256 { get; init; } = "";
+        public long Size { get; init; }
+        public string MinimumUpdaterVersion { get; init; } = "";
+        public bool Mandatory { get; init; }
+        public bool Force { get; init; }
+
+        public bool HasExplicitTarget => IsJob
+            && !string.IsNullOrWhiteSpace(TargetVersion)
+            && !TargetVersion.Equals("latest", StringComparison.OrdinalIgnoreCase);
+
+        public bool HasExplicitReleaseMetadata => HasExplicitTarget
+            && !string.IsNullOrWhiteSpace(PackageUrl)
+            && !string.IsNullOrWhiteSpace(Sha256);
 
         public static JobContext FromArgs(string[] args)
         {
@@ -1829,6 +2090,14 @@ internal static class Program
                 JobId = jobId,
                 Channel = GetOption(args, "--channel") ?? "stable",
                 TargetVersion = GetOption(args, "--target-version") ?? "latest",
+                ReleaseId = GetOption(args, "--release-id") ?? "",
+                PackageUrl = GetOption(args, "--package-url") ?? "",
+                ChecksumUrl = GetOption(args, "--checksum-url") ?? "",
+                Sha256 = GetOption(args, "--sha256") ?? "",
+                Size = GetOptionLong(args, "--size", 0),
+                MinimumUpdaterVersion = GetOption(args, "--minimum-updater-version") ?? "",
+                Mandatory = HasFlag(args, "--mandatory"),
+                Force = HasFlag(args, "--force"),
             };
         }
     }

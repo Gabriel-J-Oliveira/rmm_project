@@ -164,8 +164,38 @@ public sealed class JobExecutionPolicy
                 }
                 break;
             case "update_agent":
-                EnsureAllowedFields(p, "target_version", "channel", "force", "source");
-                if (GetString(p, "target_version", "latest").Length > 32 || GetString(p, "channel", "stable").Length > 32)
+                EnsureAllowedFields(
+                    p,
+                    "target_version",
+                    "release_id",
+                    "package_url",
+                    "checksum_url",
+                    "sha256",
+                    "size",
+                    "channel",
+                    "minimum_updater_version",
+                    "mandatory",
+                    "force",
+                    "source",
+                    "source_channel",
+                    "policy_reason",
+                    "timeout_seconds");
+                string targetVersion = GetString(p, "target_version", "latest");
+                string channel = GetString(p, "channel", "stable");
+                string releaseId = GetString(p, "release_id", "");
+                string packageUrl = GetString(p, "package_url", "");
+                string checksumUrl = GetString(p, "checksum_url", "");
+                string sha256 = GetString(p, "sha256", "");
+                string minimumUpdaterVersion = GetString(p, "minimum_updater_version", "");
+                long size = GetLong(p, "size", 0);
+                if (targetVersion.Length > 64
+                    || channel.Length > 32
+                    || releaseId.Length > 64
+                    || minimumUpdaterVersion.Length > 64
+                    || size < 0
+                    || (!string.IsNullOrWhiteSpace(sha256) && !Regex.IsMatch(sha256, "^[0-9a-fA-F]{64}$"))
+                    || !IsValidHttpsUrl(packageUrl)
+                    || !IsValidHttpsUrl(checksumUrl))
                 {
                     throw new InvalidOperationException("Invalid update parameters.");
                 }
@@ -267,6 +297,29 @@ public sealed class JobExecutionPolicy
             return parsedElement;
         }
         return int.TryParse(value.ToString(), out int parsed) ? parsed : fallback;
+    }
+
+    private static long GetLong(Dictionary<string, object?> parameters, string key, long fallback)
+    {
+        if (!parameters.TryGetValue(key, out object? value) || value is null)
+        {
+            return fallback;
+        }
+        if (value is JsonElement element && element.TryGetInt64(out long parsedElement))
+        {
+            return parsedElement;
+        }
+        return long.TryParse(value.ToString(), out long parsed) ? parsed : fallback;
+    }
+
+    private static bool IsValidHttpsUrl(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+        return Uri.TryCreate(value, UriKind.Absolute, out Uri? uri)
+            && uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
     }
 }
 
