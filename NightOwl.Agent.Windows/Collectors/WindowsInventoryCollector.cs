@@ -31,6 +31,8 @@ public sealed class WindowsInventoryCollector
         DateTimeOffset now = DateTimeOffset.UtcNow;
         Dictionary<string, object?> cpu = AsDict(hardware.GetValueOrDefault("cpu"));
         Dictionary<string, object?> os = AsDict(system.GetValueOrDefault("os"));
+        FileVersionDetails trayVersion = GetFileVersionDetails(Path.Combine(config.InstallPath, "NightOwl.Agent.Tray.exe"));
+        FileVersionDetails updaterVersion = GetFileVersionDetails(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe"));
 
         return new AgentHeartbeatPayload
         {
@@ -45,9 +47,9 @@ public sealed class WindowsInventoryCollector
             OsName = os.GetValueOrDefault("name")?.ToString() ?? RuntimeInformation.OSDescription,
             OsVersion = os.GetValueOrDefault("version")?.ToString() ?? Environment.OSVersion.VersionString,
             WindowsBuild = os.GetValueOrDefault("build")?.ToString() ?? Environment.OSVersion.Version.Build.ToString(CultureInfo.InvariantCulture),
-            AgentVersion = config.AgentVersion,
-            TrayVersion = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Tray.exe")),
-            UpdaterVersion = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe")),
+            AgentVersion = NormalizeFunctionalVersion(config.AgentVersion),
+            TrayVersion = trayVersion.FunctionalVersion,
+            UpdaterVersion = updaterVersion.FunctionalVersion,
             AgentMode = "dotnet-service",
             InstallMode = "dotnet-service",
             Ips = ips,
@@ -61,7 +63,7 @@ public sealed class WindowsInventoryCollector
                 ["serial_number"] = hardware.GetValueOrDefault("serial_number")?.ToString() ?? system.GetValueOrDefault("serial_number")?.ToString() ?? ""
             },
             UptimeSeconds = ToLong(system.GetValueOrDefault("uptime_seconds")) ?? Environment.TickCount64 / 1000,
-            Agent = BuildAgentMetadata(config),
+            Agent = BuildAgentMetadata(config, trayVersion, updaterVersion),
             HeartbeatAt = now,
             Timestamp = now
         };
@@ -485,13 +487,16 @@ public sealed class WindowsInventoryCollector
         };
     }
 
-    private static Dictionary<string, object?> BuildAgentMetadata(AgentConfig config)
+    private static Dictionary<string, object?> BuildAgentMetadata(AgentConfig config, FileVersionDetails trayVersion, FileVersionDetails updaterVersion)
     {
         return new Dictionary<string, object?>
         {
-            ["version"] = config.AgentVersion,
-            ["tray_version"] = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Tray.exe")),
-            ["updater_version"] = GetFileVersion(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe")),
+            ["version"] = NormalizeFunctionalVersion(config.AgentVersion),
+            ["tray_version"] = trayVersion.FunctionalVersion,
+            ["updater_version"] = updaterVersion.FunctionalVersion,
+            ["informational_version"] = updaterVersion.InformationalVersion,
+            ["build_id"] = updaterVersion.BuildId,
+            ["git_commit"] = updaterVersion.GitCommit,
             ["mode"] = "dotnet-service",
             ["install_mode"] = "dotnet-service",
             ["install_path"] = config.InstallPath,
@@ -514,21 +519,58 @@ public sealed class WindowsInventoryCollector
         };
     }
 
-    private static string GetFileVersion(string path)
+    private static FileVersionDetails GetFileVersionDetails(string path)
     {
         try
         {
             if (!File.Exists(path))
             {
-                return "";
+                return FileVersionDetails.Empty;
             }
             FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
-            return info.ProductVersion ?? info.FileVersion ?? "";
+            string informational = info.ProductVersion ?? info.FileVersion ?? "";
+            string functional = NormalizeFunctionalVersion(informational);
+            if (string.IsNullOrWhiteSpace(functional))
+            {
+                functional = NormalizeFunctionalVersion(info.FileVersion ?? "");
+            }
+            string metadata = "";
+            int plusIndex = informational.IndexOf('+');
+            if (plusIndex >= 0 && plusIndex + 1 < informational.Length)
+            {
+                metadata = informational[(plusIndex + 1)..];
+            }
+            string[] metadataParts = metadata.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            return new FileVersionDetails(
+                functional,
+                informational,
+                metadataParts.ElementAtOrDefault(0) ?? "",
+                metadataParts.LastOrDefault() ?? "");
         }
         catch
         {
+            return FileVersionDetails.Empty;
+        }
+    }
+
+    private static string NormalizeFunctionalVersion(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
             return "";
         }
+        string trimmed = value.Trim();
+        int plusIndex = trimmed.IndexOf('+');
+        if (plusIndex >= 0)
+        {
+            trimmed = trimmed[..plusIndex];
+        }
+        return trimmed.Length <= 50 ? trimmed : trimmed[..50];
+    }
+
+    private sealed record FileVersionDetails(string FunctionalVersion, string InformationalVersion, string BuildId, string GitCommit)
+    {
+        public static FileVersionDetails Empty { get; } = new("", "", "", "");
     }
 
     private static void ReadUninstallKey(List<Dictionary<string, object?>> rows, RegistryView view, string architecture, string source)

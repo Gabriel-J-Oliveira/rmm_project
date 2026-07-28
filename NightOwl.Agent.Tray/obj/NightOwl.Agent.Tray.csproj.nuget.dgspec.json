@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj": {}
+    "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj": {}
   },
   "projects": {
-    "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
+    "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
+        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
         "projectName": "NightOwl.Agent.Shared",
-        "projectPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
+        "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj",
         "packagesPath": "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\obj\\",
+        "outputPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\gabriel.oliveira\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -81,14 +81,14 @@
         }
       }
     },
-    "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj": {
+    "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj": {
       "version": "0.1.0.7",
       "restore": {
-        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj",
+        "projectUniqueName": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj",
         "projectName": "NightOwl.Agent.Tray",
-        "projectPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj",
+        "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Tray\\NightOwl.Agent.Tray.csproj",
         "packagesPath": "C:\\Users\\gabriel.oliveira\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Tray\\obj\\",
+        "outputPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Tray\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\gabriel.oliveira\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -103,8 +103,8 @@
           "net8.0-windows7.0": {
             "targetAlias": "net8.0-windows",
             "projectReferences": {
-              "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
-                "projectPath": "C:\\Users\\gabriel.oliveira\\downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj"
+              "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj": {
+                "projectPath": "C:\\Users\\gabriel.oliveira\\Downloads\\rmm_project\\NightOwl.Agent.Shared\\NightOwl.Agent.Shared.csproj"
               }
             }
           }

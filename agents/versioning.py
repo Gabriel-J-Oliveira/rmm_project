@@ -1,8 +1,27 @@
-def parse_semver(value):
+import re
+
+
+SEMVER_PATTERN = re.compile(
+    r'(?P<version>\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?'
+)
+
+
+def normalize_agent_version(value):
     raw = str(value or '').strip()
     if not raw:
+        return ''
+    match = SEMVER_PATTERN.search(raw)
+    if not match:
+        return ''
+    version = match.group('version')
+    return version[:50]
+
+
+def parse_semver(value):
+    raw = normalize_agent_version(value)
+    if not raw:
         return None
-    version_core = raw.split('+', 1)[0]
+    version_core = raw
     if '-' in version_core:
         version_core, prerelease = version_core.split('-', 1)
     else:

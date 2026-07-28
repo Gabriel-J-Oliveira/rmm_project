@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from .models import AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseGroup
 from .services import deterministic_rollout_bucket, evaluate_agent_update_policy
-from .versioning import compare_versions, parse_semver
+from .versioning import compare_versions, normalize_agent_version, parse_semver
 
 
 class AgentOperationalDiagnosticsTests(TestCase):
@@ -41,6 +41,67 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.machine.refresh_from_db()
         self.assertEqual(self.machine.agent_version, '0.1.0.8')
+
+    def test_heartbeat_accepts_prerelease_agent_versions(self):
+        response = self.client.post(
+            '/api/agent/heartbeat/',
+            data={
+                'machine_id': 'machine-001',
+                'hostname': 'CS-TEST-001',
+                'agent_version': '0.1.1.0-rc2',
+                'tray_version': '0.1.1.0-rc2',
+                'updater_version': '0.1.1.0-rc2',
+                'timestamp': timezone.now().isoformat(),
+            },
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.agent_version, '0.1.1.0-rc2')
+
+    def test_heartbeat_normalizes_long_product_versions(self):
+        product_version = '0.1.1.0-rc2+4cede41a96bc45baa85d3a30a17d44b1.36c72a1e5ed17b7cbfbb4515a6f9b549cfe1b2f8'
+        response = self.client.post(
+            '/api/agent/heartbeat/',
+            data={
+                'machine_id': 'machine-001',
+                'hostname': 'CS-TEST-001',
+                'agent_version': product_version,
+                'tray_version': product_version,
+                'updater_version': product_version,
+                'agent': {
+                    'version': product_version,
+                    'tray_version': product_version,
+                    'updater_version': product_version,
+                    'informational_version': product_version,
+                    'build_id': '4cede41a96bc45baa85d3a30a17d44b1',
+                    'git_commit': '36c72a1e5ed17b7cbfbb4515a6f9b549cfe1b2f8',
+                },
+                'timestamp': timezone.now().isoformat(),
+            },
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.agent_version, '0.1.1.0-rc2')
+
+    def test_invalid_version_shape_does_not_update_agent_version(self):
+        response = self.client.post(
+            '/api/agent/heartbeat/',
+            data={
+                'machine_id': 'machine-001',
+                'hostname': 'CS-TEST-001',
+                'agent_version': 'not-a-version',
+                'timestamp': timezone.now().isoformat(),
+            },
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.agent_version, '')
 
     def test_status_endpoint_records_diagnostics(self):
         response = self.client.post(
@@ -458,6 +519,11 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(compare_versions('0.1.1.0-rc1', '0.1.1.0'), -1)
         self.assertEqual(compare_versions('0.1.1.0-rc2', '0.1.1.0-rc1'), 1)
         self.assertEqual(compare_versions('0.1.1.0-rc1', '0.1.0.9'), 1)
+        self.assertEqual(
+            normalize_agent_version('0.1.1.0-rc2+4cede41a96bc45baa85d3a30a17d44b1.36c72a1e5ed17b7cbfbb4515a6f9b549cfe1b2f8'),
+            '0.1.1.0-rc2',
+        )
+        self.assertEqual(compare_versions('0.1.1.0-rc2+build.metadata', '0.1.1.0-rc1'), 1)
 
     def test_import_agent_release_creates_paused_development_release(self):
         manifest = {

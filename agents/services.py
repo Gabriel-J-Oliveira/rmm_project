@@ -16,7 +16,7 @@ from .models import AgentMachine
 from .models import AgentOperationalStatus
 from .models import AgentRelease
 from .models import InventorySnapshot
-from .versioning import compare_versions
+from .versioning import compare_versions, normalize_agent_version
 
 
 AGENT_DIAGNOSTIC_STAGES = {
@@ -334,13 +334,7 @@ def _safe_datetime(value):
 
 
 def _safe_version(value):
-    text = _clip(value, 50).strip()
-    if not text:
-        return ''
-    parts = text.split('.')
-    if not 2 <= len(parts) <= 4:
-        return ''
-    return text if all(part.isdigit() for part in parts) else ''
+    return normalize_agent_version(value)
 
 
 def _release_domain_allowed(url):
@@ -698,7 +692,7 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
     machine.serial_number = hardware.get('serial_number', '')
     agent_update_fields = []
     if agent_data:
-        machine.agent_version = agent_data.get('version', '')
+        machine.agent_version = _safe_version(agent_data.get('version'))
         machine.agent_mode = agent_data.get('mode', '')
         machine.agent_install_path = agent_data.get('install_path', '')
         machine.agent_task_name = agent_data.get('task_name', '')
