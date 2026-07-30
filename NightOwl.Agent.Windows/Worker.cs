@@ -324,7 +324,10 @@ public sealed class Worker : BackgroundService
                 JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("Pending job result is invalid.");
                 string jobType = InferJobType(result);
-                PendingResultRecord queued = _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType));
+                string? resultId = Path.GetFileName(pendingPath).Equals("pending-update-result.json", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(result.JobId)
+                    ? $"update-{result.JobId}"
+                    : null;
+                PendingResultRecord queued = _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType), resultId);
                 string migratedDir = Path.Combine(pendingDir, "migrated");
                 Directory.CreateDirectory(migratedDir);
                 string migratedPath = Path.Combine(migratedDir, $"{Path.GetFileNameWithoutExtension(pendingPath)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
@@ -374,6 +377,16 @@ public sealed class Worker : BackgroundService
                     next_attempt_at = pending.NextAttemptAt
                 }), ct, "error");
             }
+        }
+
+        foreach (PendingResultQuarantineEvent quarantined in _resultQueue.DrainQuarantineEvents())
+        {
+            await _logger.LogAsync("pending_result.quarantined", "Pending result moved to quarantine.", new
+            {
+                source_path = quarantined.SourcePath,
+                destination_path = quarantined.DestinationPath,
+                reason = quarantined.Reason
+            }, ct, "warning");
         }
     }
 

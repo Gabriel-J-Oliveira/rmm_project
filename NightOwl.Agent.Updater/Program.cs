@@ -233,6 +233,11 @@ internal static class Program
 
         state.FromVersion = installed.Version;
         state.TargetVersion = manifest.Version;
+        state.PackageUrl = ResolvePackageUrl(config, manifest);
+        if (explicitChecksums is not null)
+        {
+            state.ExpectedSha256 = explicitChecksums.GetRequired("NightOwl.Agent.Windows.zip").Sha256;
+        }
         UpdateStateStore.Save(state);
         if (jobContext.HasExplicitTarget && !manifest.Version.Equals(jobContext.TargetVersion, StringComparison.OrdinalIgnoreCase))
         {
@@ -256,51 +261,30 @@ internal static class Program
             return 25;
         }
 
-        int versionComparison = CompareVersions(manifest.Version, installed.Version);
-        if (versionComparison <= 0 && !manifest.Force)
+        VersionUpdateAction versionAction = DecideVersionAction(installed.Version, manifest.Version, manifest.Force);
+        if (versionAction == VersionUpdateAction.DowngradeBlocked)
         {
-            if (jobContext.HasExplicitTarget && !installed.Version.Equals(manifest.Version, StringComparison.OrdinalIgnoreCase))
+            string message = $"Explicit target {manifest.Version} is older than installed version {installed.Version}.";
+            MarkFailed(state, UpdateErrorCodes.UpdateTargetReleaseNotResolved, message);
+            var targetOlder = new
             {
-                string message = $"Installed version {installed.Version} does not match explicit target {manifest.Version}.";
-                MarkFailed(state, UpdateErrorCodes.UpdateTargetReleaseNotResolved, message);
-                var targetNotReached = new
-                {
-                    ok = false,
-                    updated = false,
-                    reason = "target_version_not_reached",
-                    error_code = UpdateErrorCodes.UpdateTargetReleaseNotResolved,
-                    installedVersion = installed.Version,
-                    targetVersion = manifest.Version,
-                    availableVersion = manifest.Version
-                };
-                if (jobContext.IsJob)
-                {
-                    WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, targetNotReached, "");
-                }
-                WriteJson(targetNotReached);
-                return 25;
-            }
-            if (jobContext.HasExplicitTarget && versionComparison < 0)
+                ok = false,
+                updated = false,
+                reason = "downgrade_blocked",
+                error_code = UpdateErrorCodes.UpdateTargetReleaseNotResolved,
+                installedVersion = installed.Version,
+                targetVersion = manifest.Version,
+                availableVersion = manifest.Version
+            };
+            if (jobContext.IsJob)
             {
-                string message = $"Explicit target {manifest.Version} is older than installed version {installed.Version}.";
-                MarkFailed(state, UpdateErrorCodes.UpdateTargetReleaseNotResolved, message);
-                var targetOlder = new
-                {
-                    ok = false,
-                    updated = false,
-                    reason = "target_version_not_reached",
-                    error_code = UpdateErrorCodes.UpdateTargetReleaseNotResolved,
-                    installedVersion = installed.Version,
-                    targetVersion = manifest.Version,
-                    availableVersion = manifest.Version
-                };
-                if (jobContext.IsJob)
-                {
-                    WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, targetOlder, "");
-                }
-                WriteJson(targetOlder);
-                return 25;
+                WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, targetOlder, "");
             }
+            WriteJson(targetOlder);
+            return 25;
+        }
+        if (versionAction == VersionUpdateAction.AlreadyCurrent)
+        {
             WriteLog("updater.update.skipped", "Nenhuma atualizacao disponivel.", new { installed = installed.Version, available = manifest.Version });
             state.HealthCheckConfirmed = true;
             MarkStage(state, UpdateStages.Completed, UpdateStatuses.Completed);
@@ -326,7 +310,7 @@ internal static class Program
         }
 
         ChecksumsManifest checksums = explicitChecksums ?? await DownloadChecksumsAsync(config, manifest);
-        string packageUrl = ResolvePackageUrl(config, manifest);
+        string packageUrl = state.PackageUrl;
         EnsurePackageUrlAllowed(config, packageUrl);
         state.PackageUrl = packageUrl;
 
@@ -1642,9 +1626,10 @@ internal static class Program
                 details = result
             }
         };
-        File.WriteAllText(PendingUpdateResultPath, JsonSerializer.Serialize(payload, JsonOptions));
-        WriteLog("updater.pending_result.written", "Resultado de update gravado para envio pelo agente.", new { jobContext.JobId, status, exitCode });
-        WriteLog("pending_result.written", "Pending update result written.", new { jobContext.JobId, status, exitCode });
+        PendingResultQueue queue = new(PendingJobsRoot);
+        PendingResultRecord queued = queue.Enqueue("update_agent", payload, critical: true, resultId: $"update-{jobContext.JobId}");
+        WriteLog("updater.pending_result.written", "Resultado de update gravado para envio pelo agente.", new { jobContext.JobId, status, exitCode, result_id = queued.ResultId });
+        WriteLog("pending_result.written", "Pending update result written.", new { jobContext.JobId, status, exitCode, result_id = queued.ResultId });
     }
 
     private static string GetServiceStatus()
@@ -1708,21 +1693,130 @@ internal static class Program
         return Convert.ToHexString(sha.ComputeHash(stream)).ToLowerInvariant();
     }
 
-    private static int CompareVersions(string left, string right)
+    internal static VersionUpdateAction DecideVersionAction(string installedVersion, string targetVersion, bool force)
     {
-        Version l = ParseVersion(left);
-        Version r = ParseVersion(right);
-        return l.CompareTo(r);
+        int comparison = CompareVersions(targetVersion, installedVersion);
+        if (comparison == 0 && !force)
+        {
+            return VersionUpdateAction.AlreadyCurrent;
+        }
+        if (comparison < 0 && !force)
+        {
+            return VersionUpdateAction.DowngradeBlocked;
+        }
+        return VersionUpdateAction.UpdateAllowed;
     }
 
-    private static Version ParseVersion(string value)
+    internal static int CompareVersions(string left, string right)
     {
-        string clean = new((value ?? "0.0.0").TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
+        ParsedSemVersion l = ParseSemVersion(left);
+        ParsedSemVersion r = ParseSemVersion(right);
+        int core = l.Core.CompareTo(r.Core);
+        if (core != 0)
+        {
+            return core;
+        }
+        if (string.IsNullOrWhiteSpace(l.Prerelease) && string.IsNullOrWhiteSpace(r.Prerelease))
+        {
+            return 0;
+        }
+        if (string.IsNullOrWhiteSpace(l.Prerelease))
+        {
+            return 1;
+        }
+        if (string.IsNullOrWhiteSpace(r.Prerelease))
+        {
+            return -1;
+        }
+        return ComparePrerelease(l.Prerelease, r.Prerelease);
+    }
+
+    private static ParsedSemVersion ParseSemVersion(string value)
+    {
+        string text = (value ?? "0.0.0").Split('+')[0].Trim();
+        string[] split = text.Split('-', 2);
+        string clean = new(split[0].TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
         if (Version.TryParse(string.IsNullOrWhiteSpace(clean) ? "0.0.0" : clean, out Version? version))
         {
-            return version;
+            return new ParsedSemVersion(version, split.Length > 1 ? split[1] : "");
         }
-        return new Version(0, 0, 0);
+        return new ParsedSemVersion(new Version(0, 0, 0), split.Length > 1 ? split[1] : "");
+    }
+
+    private static int ComparePrerelease(string left, string right)
+    {
+        string[] leftParts = left.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        string[] rightParts = right.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        int length = Math.Max(leftParts.Length, rightParts.Length);
+        for (int index = 0; index < length; index++)
+        {
+            if (index >= leftParts.Length) return -1;
+            if (index >= rightParts.Length) return 1;
+            bool leftNumber = int.TryParse(leftParts[index], out int leftInt);
+            bool rightNumber = int.TryParse(rightParts[index], out int rightInt);
+            int comparison = leftNumber && rightNumber
+                ? leftInt.CompareTo(rightInt)
+                : leftNumber
+                    ? -1
+                    : rightNumber
+                        ? 1
+                        : CompareIdentifierNatural(leftParts[index], rightParts[index]);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+        }
+        return 0;
+    }
+
+    private static int CompareIdentifierNatural(string left, string right)
+    {
+        int leftIndex = 0;
+        int rightIndex = 0;
+        while (leftIndex < left.Length && rightIndex < right.Length)
+        {
+            bool leftDigit = char.IsDigit(left[leftIndex]);
+            bool rightDigit = char.IsDigit(right[rightIndex]);
+            int leftStart = leftIndex;
+            int rightStart = rightIndex;
+            while (leftIndex < left.Length && char.IsDigit(left[leftIndex]) == leftDigit)
+            {
+                leftIndex++;
+            }
+            while (rightIndex < right.Length && char.IsDigit(right[rightIndex]) == rightDigit)
+            {
+                rightIndex++;
+            }
+            string leftPart = left[leftStart..leftIndex];
+            string rightPart = right[rightStart..rightIndex];
+            int comparison;
+            if (leftDigit && rightDigit && int.TryParse(leftPart, out int leftNumber) && int.TryParse(rightPart, out int rightNumber))
+            {
+                comparison = leftNumber.CompareTo(rightNumber);
+            }
+            else if (leftDigit != rightDigit)
+            {
+                comparison = leftDigit ? -1 : 1;
+            }
+            else
+            {
+                comparison = string.Compare(leftPart, rightPart, StringComparison.OrdinalIgnoreCase);
+            }
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+        }
+        return (left.Length - leftIndex).CompareTo(right.Length - rightIndex);
+    }
+
+    private sealed record ParsedSemVersion(Version Core, string Prerelease);
+
+    internal enum VersionUpdateAction
+    {
+        AlreadyCurrent,
+        UpdateAllowed,
+        DowngradeBlocked
     }
 
     private static string JoinUrl(string baseUrl, string path)

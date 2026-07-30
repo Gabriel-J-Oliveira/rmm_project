@@ -13,6 +13,9 @@ public static class JobFinalStatuses
     public const string Unsupported = "unsupported";
     public const string InvalidParameters = "invalid_parameters";
     public const string Cancelled = "cancelled";
+    public const string Interrupted = "interrupted";
+    public const string RolledBack = "rolled_back";
+    public const string RollbackFailed = "rollback_failed";
 
     public static readonly HashSet<string> All = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -23,7 +26,10 @@ public static class JobFinalStatuses
         Duplicate,
         Unsupported,
         InvalidParameters,
-        Cancelled
+        Cancelled,
+        Interrupted,
+        RolledBack,
+        RollbackFailed
     };
 }
 
@@ -393,6 +399,7 @@ public sealed class PendingResultQueue
     private readonly long _maxTotalBytes;
     private readonly int _maxPayloadBytes;
     private readonly TimeSpan _retention;
+    private readonly List<PendingResultQuarantineEvent> _quarantineEvents = new();
 
     public PendingResultQueue(
         string directory,
@@ -411,6 +418,13 @@ public sealed class PendingResultQueue
     public string DirectoryPath => _directory;
     public string SentDirectory => Path.Combine(_directory, "sent");
     public string QuarantineDirectory => Path.Combine(_directory, "quarantine");
+
+    public IReadOnlyList<PendingResultQuarantineEvent> DrainQuarantineEvents()
+    {
+        PendingResultQuarantineEvent[] events = _quarantineEvents.ToArray();
+        _quarantineEvents.Clear();
+        return events;
+    }
 
     public PendingResultRecord Enqueue<TPayload>(string jobType, TPayload payload, bool critical = false, string? resultId = null)
     {
@@ -466,9 +480,9 @@ public sealed class PendingResultQueue
                     records.Add(record);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                Quarantine(path);
+                Quarantine(path, ex.Message);
             }
         }
         return records.OrderBy(record => record.CreatedAt).ToArray();
@@ -576,13 +590,14 @@ public sealed class PendingResultQueue
         }
     }
 
-    private void Quarantine(string path)
+    private void Quarantine(string path, string reason)
     {
         try
         {
             Directory.CreateDirectory(QuarantineDirectory);
             string destination = Path.Combine(QuarantineDirectory, $"{Path.GetFileNameWithoutExtension(path)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
             File.Move(path, destination, overwrite: true);
+            _quarantineEvents.Add(new PendingResultQuarantineEvent(path, destination, reason));
         }
         catch { }
     }
@@ -625,3 +640,5 @@ public sealed class PendingResultQueue
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }
+
+public sealed record PendingResultQuarantineEvent(string SourcePath, string DestinationPath, string Reason);

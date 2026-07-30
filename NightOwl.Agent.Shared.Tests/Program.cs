@@ -126,6 +126,8 @@ try
     JobStateRecord completedJob = jobStore.Load(jobId) ?? throw new InvalidOperationException("Completed job was not loaded.");
     Require(completedJob.IsFinal, "Completed job should be final.");
     Require(completedJob.Result?.JobId == jobId, "Completed job result was not preserved.");
+    Require(JobFinalStatuses.All.Contains(JobFinalStatuses.RolledBack), "rolled_back should be a final job result status.");
+    Require(JobFinalStatuses.All.Contains(JobFinalStatuses.RollbackFailed), "rollback_failed should be a final job result status.");
 
     File.WriteAllText(Path.Combine(jobsDir, $"{Guid.NewGuid()}.json"), "{ invalid json");
     bool invalidThrown = false;
@@ -182,6 +184,7 @@ try
     _ = resultQueue.LoadAll();
     Require(!File.Exists(corruptPath), "Corrupted pending result should be moved out of active queue.");
     Require(Directory.GetFiles(resultQueue.QuarantineDirectory, "*.json").Length == 1, "Corrupted pending result was not quarantined.");
+    Require(resultQueue.DrainQuarantineEvents().Count == 1, "Quarantine reason should be available for logging.");
 
     bool queueFull = false;
     PendingResultQueue tinyQueue = new(Path.Combine(paths.StateDir, "pending-results-full"), maxRecords: 1, maxTotalBytes: 512, maxPayloadBytes: 64 * 1024);
