@@ -464,3 +464,5 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\w
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\zh-Hant\WindowsBase.resources.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\zh-Hant\WindowsFormsIntegration.resources.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\System.ServiceProcess.ServiceController.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Shared.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\publish\win-x64\NightOwl.Agent.Shared.pdb

@@ -410,10 +410,10 @@ class AgentReleasePolicyTests(TestCase):
         user = user_model.objects.create_user(username='tech-release', password='pass', is_staff=True)
         portal = Client()
         portal.force_login(user)
-        self.release(rollout=100)
+        release = self.release(rollout=100)
 
-        first = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent'})
-        second = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent'})
+        first = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
+        second = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
 
         self.assertEqual(first.status_code, 201)
         self.assertEqual(second.status_code, 409)
@@ -448,13 +448,14 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(response.json()['reason_code'], 'rollout_not_selected')
         self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
 
-    def test_manual_update_blocks_paused_release(self):
-        release = self.release(rollout=0, rollout_paused=True)
+    def test_manual_update_allows_explicit_paused_release(self):
+        release = self.release(rollout=0, rollout_paused=True, status=AgentRelease.STATUS_PAUSED)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
-        self.assertFalse(decision.eligible)
-        self.assertEqual(decision.reason_code, 'release_paused')
+        self.assertTrue(decision.eligible)
+        self.assertEqual(decision.reason_code, 'eligible')
+        self.assertEqual(decision.release, release)
 
     def test_manual_update_blocks_explicit_revoked_release(self):
         release = self.release(rollout=0, revoked=True)
@@ -487,6 +488,29 @@ class AgentReleasePolicyTests(TestCase):
         self.assertFalse(decision.eligible)
         self.assertEqual(decision.reason_code, 'channel_no_release')
 
+    def test_manual_panel_update_without_release_id_does_not_use_paused_release(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-no-release-id', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc2'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        self.release(
+            version='0.1.1.0-rc3',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
+
+        response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent'})
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'channel_no_release')
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
+
     def test_manual_panel_update_uses_explicit_release_and_persists_metadata(self):
         user_model = get_user_model()
         user = user_model.objects.create_user(username='tech-explicit', password='pass', is_staff=True)
@@ -495,7 +519,14 @@ class AgentReleasePolicyTests(TestCase):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
         self.machine.agent_version = '0.1.0.7'
         self.machine.save(update_fields=['update_channel', 'agent_version'])
-        release = self.release(version='0.1.1.0-rc1', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0, minimum_updater_version='0.1.0.7')
+        release = self.release(
+            version='0.1.1.0-rc1',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
 
         response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
 
@@ -511,8 +542,88 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(job.payload['minimum_updater_version'], release.minimum_updater_version)
         self.assertEqual(job.payload['channel'], release.channel)
         self.assertEqual(job.payload['source'], 'manual_panel')
+        self.assertEqual(job.payload['policy_reason'], 'eligible')
         self.assertEqual(job.timeout_seconds, 900)
         self.assertIsNotNone(job.expires_at)
+
+    def test_manual_panel_update_rejects_invalid_release_id(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-invalid-release', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(uuid.uuid4())},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'release_not_found')
+
+    def test_manual_panel_update_rejects_incompatible_release_channel(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-channel-release', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_STABLE
+        self.machine.agent_version = '0.1.0.7'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc1',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id)},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'channel_no_release')
+
+    def test_manual_panel_update_rejects_revoked_explicit_release(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-revoked-release', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        release = self.release(rollout=0, revoked=True)
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id)},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'release_revoked')
+
+    def test_endpoint_detail_exposes_manual_paused_release_option(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-release-options', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc2'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc3',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
+
+        response = portal.get(reverse('api-endpoint-detail', kwargs={'pk': str(self.machine.id)}))
+
+        self.assertEqual(response.status_code, 200)
+        options = response.json()['agent_update_releases']
+        self.assertEqual(len(options), 1)
+        self.assertEqual(options[0]['id'], str(release.id))
+        self.assertEqual(options[0]['version'], '0.1.1.0-rc3')
+        self.assertTrue(options[0]['eligible'])
 
     def test_semver_prerelease_is_supported(self):
         self.assertIsNotNone(parse_semver('0.1.1.0-rc1'))

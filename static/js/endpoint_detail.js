@@ -465,6 +465,24 @@
         return '<span class="agent-version-compare"><strong class="agent-installed-current">' + escapeHtml(installed) + '</strong></span>';
     }
 
+    function renderUpdateReleaseSelector(agent) {
+        const releases = ((agent && agent.updateReleases) || []).filter(function (release) {
+            return release && release.id;
+        });
+        if (!releases.length) {
+            return '<div class="endpoint-agent-release-picker is-empty"><span>Release alvo</span><strong>Nenhuma release manual disponivel</strong></div>';
+        }
+        const eligible = releases.filter(function (release) { return release.eligible; });
+        const options = releases.map(function (release) {
+            const label = (release.version || "-") + " / " + (release.channel || "-") + (release.eligible ? "" : " - bloqueada: " + (release.reason_code || "-"));
+            return '<option value="' + escapeHtml(release.id) + '"' +
+                (release.eligible ? "" : " disabled") +
+                (!release.eligible ? ' title="' + escapeHtml(release.reason_code || "release_blocked") + '"' : "") +
+                '>' + escapeHtml(label) + '</option>';
+        }).join("");
+        return '<label class="endpoint-agent-release-picker"><span>Release alvo</span><select data-agent-release-select' + (eligible.length ? "" : " disabled") + '>' + options + '</select></label>';
+    }
+
     function healthParts(detail) {
         const diskRows = diskDisplayRows(detail.disks || []);
         const diskScore = diskRows.some(function (disk) { return diskUsedPercent(disk) >= 90; }) ? 35 : diskRows.some(function (disk) { return diskUsedPercent(disk) >= 80; }) ? 70 : 95;
@@ -738,6 +756,7 @@
         setSlotBadge("agent-badge", "agent-version-pill agent-" + escapeHtml(agent.state || "unknown"), escapeHtml(agent.state === "current" ? "Atual" : labels[agent.state] || agent.state || "Sem informacao"));
         setSlot("agent-body",
             '<div class="endpoint-agent-body"><div class="agent-version-panel">' + agentVersionDisplay(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual</small>') + '</div>' +
+            renderUpdateReleaseSelector(agent) +
             '<div class="endpoint-agent-facts">' + factList([
                 { label: "Servico/status", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "-") },
                 { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
@@ -1140,6 +1159,9 @@
         if (options.releaseId) {
             body.set("release_id", options.releaseId);
         }
+        if (options.force !== undefined) {
+            body.set("force", options.force ? "true" : "false");
+        }
         if (action === "ping" && endpointDetail && endpointDetail.ip) {
             body.set("target", endpointDetail.ip);
         }
@@ -1180,6 +1202,23 @@
         const releases = ((endpointDetail && endpointDetail.agent && endpointDetail.agent.updateReleases) || []).filter(function (release) {
             return release && release.id;
         });
+        const select = root.querySelector("[data-agent-release-select]");
+        if (select) {
+            if (!select.value) {
+                showToast("Selecione uma release do agente antes de enviar a atualizacao.");
+                return false;
+            }
+            const selectedFromDom = releases.find(function (release) { return String(release.id) === String(select.value); });
+            if (!selectedFromDom) {
+                showToast("Release selecionada invalida.");
+                return false;
+            }
+            if (!selectedFromDom.eligible) {
+                showToast("Release selecionada bloqueada: " + (selectedFromDom.reason_code || "release_blocked"));
+                return false;
+            }
+            return selectedFromDom;
+        }
         const eligible = releases.filter(function (release) { return release.eligible; });
         if (eligible.length === 1) return eligible[0];
         if (!releases.length) return null;
@@ -1212,8 +1251,12 @@
                 if (selectedRelease === false) return;
                 if (selectedRelease && selectedRelease.id) {
                     jobOptions.releaseId = selectedRelease.id;
+                    jobOptions.force = false;
+                } else {
+                    showToast("Selecione uma release do agente antes de enviar a atualizacao.");
+                    return;
                 }
-                const confirmed = window.confirm("Deseja enviar um comando de atualizacao do agente para este endpoint? O servico pode ser reiniciado durante o processo.");
+                const confirmed = window.confirm("Deseja enviar a atualizacao do agente para a versao " + (selectedRelease.version || "-") + "? O servico pode ser reiniciado durante o processo.");
                 if (!confirmed) return;
                 showToast("Enviando job de atualizacao para o agente...");
             } else if (action === "restart_agent") {

@@ -2657,7 +2657,8 @@ def _endpoint_diagnostic(endpoint):
 def _manual_update_release_options(endpoint):
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     releases = AgentRelease.objects.filter(
-        status__in=AGENT_RELEASE_AVAILABLE_STATUSES,
+        channel=channel,
+        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED},
         revoked=False,
     ).order_by('-released_at', '-created_at')[:20]
     rows = []
@@ -3206,7 +3207,11 @@ def endpoint_job_create(request, pk):
                 },
                 status=409,
             )
-        update_decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=selected_release)
+        update_decision = evaluate_agent_update_policy(
+            endpoint,
+            manual=selected_release is not None,
+            explicit_release=selected_release,
+        )
         create_audit_event(
             event_type='agent.update_policy_evaluated',
             title='Politica de update manual avaliada',

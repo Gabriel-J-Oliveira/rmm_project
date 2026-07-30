@@ -2,6 +2,7 @@ param(
     [string]$ProjectPath = ".\NightOwl.Agent.Windows\NightOwl.Agent.Windows.csproj",
     [string]$TrayProjectPath = ".\NightOwl.Agent.Tray\NightOwl.Agent.Tray.csproj",
     [string]$UpdaterProjectPath = ".\NightOwl.Agent.Updater\NightOwl.Agent.Updater.csproj",
+    [string]$DiagnosticsProjectPath = ".\NightOwl.Agent.Diagnostics\NightOwl.Agent.Diagnostics.csproj",
     [string]$PublishDir = ".\NightOwl.Agent.Windows\publish\win-x64",
     [string]$OutputDir = ".\NightOwl.Agent.Windows\publish\downloads\agent\windows",
     [string]$Version = "0.1.0.7",
@@ -31,6 +32,7 @@ if (-not $SkipPublish) {
     dotnet publish $ProjectPath -c Release -r $Runtime --self-contained true -o $publishPath
     dotnet publish $TrayProjectPath -c Release -r $Runtime --self-contained true -o $publishPath
     dotnet publish $UpdaterProjectPath -c Release -r $Runtime --self-contained true -o $publishPath
+    dotnet publish $DiagnosticsProjectPath -c Release -r $Runtime --self-contained true -o $publishPath
 }
 
 if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Windows.exe"))) {
@@ -41,6 +43,9 @@ if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Tray.exe"))) {
 }
 if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Updater.exe"))) {
     throw "Publish invalido: NightOwl.Agent.Updater.exe nao encontrado em $publishPath"
+}
+if (-not (Test-Path (Join-Path $publishPath "NightOwl.Agent.Diagnostics.exe"))) {
+    throw "Publish invalido: NightOwl.Agent.Diagnostics.exe nao encontrado em $publishPath"
 }
 $iconSource = Resolve-FullPath ".\assets\icons\NightOwl.ico"
 $publishIconDir = Join-Path $publishPath "assets\icons"

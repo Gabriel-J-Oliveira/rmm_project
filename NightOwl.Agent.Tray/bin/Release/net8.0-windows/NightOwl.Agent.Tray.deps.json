@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "NightOwl.Agent.Tray/0.1.1.0-rc2": {
+      "NightOwl.Agent.Tray/0.1.1.0-rc3": {
         "dependencies": {
           "NightOwl.Agent.Shared": "1.0.0",
           "System.ServiceProcess.ServiceController": "8.0.1"
@@ -61,7 +61,7 @@
     }
   },
   "libraries": {
-    "NightOwl.Agent.Tray/0.1.1.0-rc2": {
+    "NightOwl.Agent.Tray/0.1.1.0-rc3": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

@@ -13,11 +13,12 @@
     "jobsSeconds": 10
   },
   "logPath": "C:\\ProgramData\\NightOwl\\Logs\\agent-dotnet.jsonl",
-  "statePath": "C:\\ProgramData\\NightOwl\\AgentDotNet\\agent-dotnet.state.json",
+  "statePath": "C:\\ProgramData\\NightOwl\\State\\agent.state.json",
+  "pendingResultsPath": "C:\\ProgramData\\NightOwl\\State\\pending-results",
   "installPath": "C:\\ProgramData\\NightOwl\\AgentDotNet",
   "packagesPath": "C:\\ProgramData\\NightOwl\\Packages",
   "cachePath": "C:\\ProgramData\\NightOwl\\Cache",
-  "jobsPath": "C:\\ProgramData\\NightOwl\\Jobs",
+  "jobsPath": "C:\\ProgramData\\NightOwl\\State",
   "allowedJobTypes": [
     "ping",
     "collect_logs",

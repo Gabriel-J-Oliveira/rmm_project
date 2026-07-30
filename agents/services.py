@@ -433,14 +433,19 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
     if release is None:
         return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, None)
 
-    if explicit_release is not None and explicit_release.channel != channel and not manual:
+    if explicit_release is not None and explicit_release.channel != channel:
         return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, release)
 
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
-    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES:
+    manual_explicit_release = manual and explicit_release is not None
+    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not (
+        manual_explicit_release and release.status == AgentRelease.STATUS_PAUSED
+    ):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
-    if release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED:
+    if not release.package_url or not release.sha256:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
+    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and not manual_explicit_release:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
     if not _release_domain_allowed(release.package_url):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
