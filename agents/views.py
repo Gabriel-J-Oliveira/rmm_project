@@ -79,6 +79,20 @@ def _normalize_job_status(value):
     return aliases.get(job_status, job_status)
 
 
+def _is_update_interrupted_resolution(job, incoming_status):
+    return (
+        job is not None
+        and job.job_type == AgentJob.TYPE_UPDATE_AGENT
+        and job.status == AgentJob.STATUS_INTERRUPTED
+        and incoming_status in {
+            AgentJob.STATUS_COMPLETED,
+            AgentJob.STATUS_FAILED,
+            AgentJob.STATUS_ROLLED_BACK,
+            AgentJob.STATUS_ROLLBACK_FAILED,
+        }
+    )
+
+
 def _parse_agent_datetime(value, default=None):
     if value is None:
         return default
@@ -441,47 +455,91 @@ class AgentJobsResultView(APIView):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
+        receipt = None
         if result_id:
             receipt = AgentJobResultReceipt.objects.filter(result_id=result_id).select_related('job', 'endpoint').first()
             if receipt:
                 receipt.last_seen_at = timezone.now()
                 if receipt.payload_sha256 != payload_hash:
-                    receipt.conflict_count += 1
-                    receipt.last_conflict_at = timezone.now()
-                    receipt.save(update_fields=['last_seen_at', 'conflict_count', 'last_conflict_at'])
-                    create_audit_event(
-                        event_type='job.result_conflict',
-                        title='Conflito de idempotencia em resultado de job',
-                        description=f'Resultado {result_id} reenviado com payload diferente.',
-                        severity=AuditEvent.SEVERITY_CRITICAL,
-                        actor_type=AuditEvent.ACTOR_AGENT,
-                        actor_name='NightOwlAgent',
-                        endpoint=machine,
-                        metadata={'job_id': str(job_id), 'result_id': result_id},
+                    same_job_progression = (
+                        job is not None
+                        and receipt.job_id == job.id
+                        and (
+                            job.status not in RESULT_FINAL_STATUSES
+                            or _is_update_interrupted_resolution(job, job_status)
+                        )
+                        and job_status in RESULT_FINAL_STATUSES
                     )
+                    if same_job_progression:
+                        receipt.payload_sha256 = payload_hash
+                        receipt.first_payload = payload
+                        receipt.save(update_fields=['last_seen_at', 'payload_sha256', 'first_payload'])
+                    else:
+                        receipt.conflict_count += 1
+                        receipt.last_conflict_at = timezone.now()
+                        receipt.save(update_fields=['last_seen_at', 'conflict_count', 'last_conflict_at'])
+                        create_audit_event(
+                            event_type='job.result_conflict',
+                            title='Conflito de idempotencia em resultado de job',
+                            description=f'Resultado {result_id} reenviado com payload diferente.',
+                            severity=AuditEvent.SEVERITY_CRITICAL,
+                            actor_type=AuditEvent.ACTOR_AGENT,
+                            actor_name='NightOwlAgent',
+                            endpoint=machine,
+                            metadata={'job_id': str(job_id), 'result_id': result_id},
+                        )
+                        return Response(
+                            {
+                                'error': 'idempotency_conflict',
+                                'detail': 'result_id ja recebido com payload diferente.',
+                                'result_id': result_id,
+                                'job_id': str(job_id),
+                            },
+                            status=status.HTTP_409_CONFLICT,
+                        )
+                else:
+                    receipt.save(update_fields=['last_seen_at'])
                     return Response(
                         {
-                            'error': 'idempotency_conflict',
-                            'detail': 'result_id ja recebido com payload diferente.',
+                            'status': 'ok',
+                            'duplicate': True,
                             'result_id': result_id,
-                            'job_id': str(job_id),
+                            'machine_id': machine.machine_id or str(machine.id),
+                            'job_id': str(receipt.job_id or job_id),
+                            'job_status': receipt.job.status if receipt.job else job_status,
+                            'updated': False,
                         },
-                        status=status.HTTP_409_CONFLICT,
+                        status=status.HTTP_200_OK,
                     )
-                receipt.save(update_fields=['last_seen_at'])
+        if job:
+            incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
+            if job.status in RESULT_FINAL_STATUSES and not _is_update_interrupted_resolution(job, incoming_status):
+                logger.info(
+                    'job.result.ignored_final_job endpoint_id=%s job_id=%s current_status=%s incoming_status=%s',
+                    machine.id,
+                    job.id,
+                    job.status,
+                    incoming_status,
+                )
+                if result_id:
+                    AgentJobResultReceipt.objects.create(
+                        result_id=result_id,
+                        job=job,
+                        endpoint=machine,
+                        payload_sha256=payload_hash,
+                        first_payload=payload,
+                    )
                 return Response(
                     {
                         'status': 'ok',
-                        'duplicate': True,
-                        'result_id': result_id,
+                        'ignored': True,
+                        'reason': 'job_already_final',
                         'machine_id': machine.machine_id or str(machine.id),
-                        'job_id': str(receipt.job_id or job_id),
-                        'job_status': receipt.job.status if receipt.job else job_status,
-                        'updated': False,
+                        'job_id': str(job.id),
+                        'job_status': job.status,
                     },
                     status=status.HTTP_200_OK,
                 )
-        if job:
             job.status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             job.started_at = _parse_agent_datetime(payload.get('started_at'), job.started_at)
             if job.status in RESULT_FINAL_STATUSES:
@@ -555,7 +613,7 @@ class AgentJobsResultView(APIView):
                     job.job_type,
                     job.error_message,
                 )
-        if result_id:
+        if result_id and receipt is None:
             AgentJobResultReceipt.objects.create(
                 result_id=result_id,
                 job=job,

@@ -36,6 +36,18 @@ from agents.models import (
     SoftwarePolicyTargetEndpoint,
     SoftwarePolicyViolation,
 )
+from agents.job_progress import (
+    job_expected_timeout_at,
+    job_installed_version,
+    job_previous_version,
+    job_progress_message,
+    job_progress_percentage,
+    job_stage,
+    job_stale_info,
+    job_target_version,
+    public_job_status,
+    sanitize_job_value,
+)
 from config.authz import is_nightowl_technical_user
 from agents.audit import create_audit_event
 from agents.services import AGENT_RELEASE_AVAILABLE_STATUSES, evaluate_agent_update_policy
@@ -48,7 +60,7 @@ from agents.software_catalog import (
     classify_software as classify_software_catalog,
     normalize_key,
 )
-from agents.versioning import agent_version_state, parse_semver
+from agents.versioning import agent_version_state, compare_versions, parse_semver
 from tickets.models import NotificationOutbox
 from tickets.services.email_outbox import (
     cancel_email,
@@ -2433,36 +2445,22 @@ def _iso_or_none(value):
     return str(value)
 
 
-def _job_progress(status):
-    return {
-        AgentJob.STATUS_QUEUED: 10,
-        AgentJob.STATUS_SENT: 25,
-        AgentJob.STATUS_RUNNING: 60,
-        AgentJob.STATUS_COMPLETED: 100,
-        AgentJob.STATUS_FAILED: 100,
-        AgentJob.STATUS_EXPIRED: 100,
-        AgentJob.STATUS_CANCELLED: 100,
-        AgentJob.STATUS_TIMED_OUT: 100,
-        AgentJob.STATUS_DUPLICATE: 100,
-        AgentJob.STATUS_UNSUPPORTED: 100,
-        AgentJob.STATUS_INVALID_PARAMETERS: 100,
-        AgentJob.STATUS_INTERRUPTED: 100,
-        AgentJob.STATUS_ROLLED_BACK: 100,
-        AgentJob.STATUS_ROLLBACK_FAILED: 100,
-    }.get(status, 0)
-
-
-def _job_public_status(status):
-    return {
-        AgentJob.STATUS_QUEUED: 'pending',
-        AgentJob.STATUS_SENT: 'dispatched',
-        AgentJob.STATUS_CANCELLED: 'canceled',
-        AgentJob.STATUS_INTERRUPTED: 'interrupted',
-    }.get(status, status)
-
-
 def serialize_agent_job(job):
-    public_status = _job_public_status(job.status)
+    public_status = public_job_status(job)
+    stale = job_stale_info(job)
+    stage = job_stage(job)
+    progress = job_progress_percentage(job)
+    progress_message = job_progress_message(job)
+    sanitized_payload = sanitize_job_value(job.payload or {})
+    sanitized_result = sanitize_job_value(job.result or {})
+    target_version = job_target_version(job)
+    previous_version = job_previous_version(job)
+    installed_version = job_installed_version(job)
+    rollback_status = ''
+    if job.status == AgentJob.STATUS_ROLLED_BACK or (isinstance(job.result, dict) and job.result.get('rollback_performed')):
+        rollback_status = 'rolled_back'
+    elif job.status == AgentJob.STATUS_ROLLBACK_FAILED:
+        rollback_status = 'rollback_failed'
     return {
         'id': str(job.id),
         'jobId': str(job.id),
@@ -2473,33 +2471,71 @@ def serialize_agent_job(job):
         'command': job.job_type,
         'status': public_status,
         'rawStatus': job.status,
+        'stage': stage,
+        'progressPercentage': progress,
+        'progress_percentage': progress,
+        'progressMessage': progress_message,
+        'progress_message': progress_message,
         'attempt': job.attempt,
         'timeoutSeconds': job.timeout_seconds,
+        'timeout_seconds': job.timeout_seconds,
         'endpoint': job.endpoint.hostname if job.endpoint_id else '',
         'createdBy': job.created_by or 'Sistema',
+        'created_by': job.created_by or 'Sistema',
         'createdAt': _iso_or_none(job.created_at),
+        'created_at': _iso_or_none(job.created_at),
         'queuedAt': _iso_or_none(job.queued_at),
         'dispatchedAt': _iso_or_none(job.dispatched_at),
+        'dispatched_at': _iso_or_none(job.dispatched_at),
         'startedAt': _iso_or_none(job.started_at),
+        'started_at': _iso_or_none(job.started_at),
         'finishedAt': _iso_or_none(job.finished_at),
+        'finished_at': _iso_or_none(job.finished_at),
+        'lastUpdateAt': _iso_or_none(job.result_received_at or job.updated_at),
+        'last_update_at': _iso_or_none(job.result_received_at or job.updated_at),
         'durationMs': int((job.duration_seconds or 0) * 1000) if job.duration_seconds is not None else 0,
         'durationSeconds': job.duration_seconds,
-        'result': job.error_message or (job.stdout[:140] if job.stdout else ''),
-        'stdout': job.stdout,
-        'stderr': job.stderr,
+        'duration_seconds': job.duration_seconds,
+        'result': job.error_message or progress_message or (job.stdout[:140] if job.stdout else ''),
+        'stdout': sanitize_job_value(job.stdout or ''),
+        'stderr': sanitize_job_value(job.stderr or ''),
         'exitCode': job.exit_code,
+        'exit_code': job.exit_code,
         'errorCode': job.error_code,
+        'error_code': job.error_code,
         'outputTruncated': job.output_truncated,
+        'output_truncated': job.output_truncated,
         'receivedAt': _iso_or_none(job.result_received_at),
-        'payload': job.payload,
+        'payload': sanitized_payload,
+        'payloadSanitized': sanitized_payload,
         'release': {
             'id': str(job.agent_release_id) if job.agent_release_id else (job.payload or {}).get('release_id', ''),
             'version': (job.agent_release.version if job.agent_release_id else (job.payload or {}).get('target_version', '')),
             'channel': (job.agent_release.channel if job.agent_release_id else (job.payload or {}).get('source_channel') or (job.payload or {}).get('channel', '')),
         },
-        'resultJson': job.result,
+        'targetVersion': target_version,
+        'target_version': target_version,
+        'previousVersion': previous_version,
+        'previous_version': previous_version,
+        'installedVersion': installed_version,
+        'installed_version': installed_version,
+        'rollbackPerformed': bool(rollback_status),
+        'rollback_performed': bool(rollback_status),
+        'rollbackStatus': rollback_status,
+        'rollback_status': rollback_status,
+        'resultJson': sanitized_result,
+        'result_sanitized': sanitized_result,
         'errorMessage': job.error_message,
-        'progress': _job_progress(job.status),
+        'error_message': job.error_message,
+        'progress': progress,
+        'isStale': stale['is_stale'],
+        'is_stale': stale['is_stale'],
+        'staleReason': stale['stale_reason'],
+        'stale_reason': stale['stale_reason'],
+        'staleSince': _iso_or_none(stale['stale_since']),
+        'stale_since': _iso_or_none(stale['stale_since']),
+        'expectedTimeoutAt': _iso_or_none(stale['expected_timeout_at'] or job_expected_timeout_at(job)),
+        'expected_timeout_at': _iso_or_none(stale['expected_timeout_at'] or job_expected_timeout_at(job)),
         'timeline': [
             item for item in [
                 'pending' if job.queued_at else '',
@@ -2664,19 +2700,28 @@ def _manual_update_release_options(endpoint):
     rows = []
     for release in releases:
         decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=release, record_evaluation=False)
+        version_comparison = compare_versions(endpoint.agent_version or '', release.version)
         rows.append({
             'id': str(release.id),
             'version': release.version,
             'channel': release.channel,
             'status': release.status,
+            'status_label': release.get_status_display() if hasattr(release, 'get_status_display') else release.status,
             'is_endpoint_channel': release.channel == channel,
             'rollout_percentage': release.rollout_percentage,
             'rollout_paused': release.rollout_paused,
             'mandatory': release.mandatory,
+            'revoked': release.revoked,
             'eligible': decision.eligible,
             'reason_code': decision.reason_code,
-            'sha256': release.sha256,
+            'requires_force': decision.reason_code == 'downgrade_requires_force' or (version_comparison is not None and version_comparison > 0),
+            'same_version': version_comparison == 0,
+            'metadata_complete': bool(release.package_url and release.sha256 and release.size),
+            'package_url_present': bool(release.package_url),
+            'sha256_present': bool(release.sha256),
             'size': release.size,
+            'released_at': _iso_or_none(release.released_at),
+            'release_notes': release.release_notes,
             'minimum_updater_version': release.minimum_updater_version,
         })
     return rows
@@ -2701,6 +2746,7 @@ def _update_policy_message(reason_code):
         'pinned_release_not_found': 'A versao fixada no endpoint nao foi encontrada.',
         'pinned_release_unavailable': 'A versao fixada no endpoint nao esta disponivel.',
         'invalid_version': 'A versao instalada do endpoint nao pode ser comparada com seguranca.',
+        'downgrade_requires_force': 'A release selecionada e anterior a versao instalada. Confirme o downgrade nas opcoes avancadas.',
     }
     return messages_by_reason.get(reason_code or '', 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.')
 
@@ -2938,6 +2984,13 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     job_objects = list(endpoint.jobs.order_by('-created_at')[:20])
     jobs = [serialize_agent_job(job) for job in job_objects]
     last_job = endpoint.jobs.filter(finished_at__isnull=False).order_by('-finished_at', '-updated_at').first()
+    active_job = endpoint.jobs.filter(
+        status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+    ).order_by('-created_at').first()
+    active_update_job = endpoint.jobs.filter(
+        job_type=AgentJob.TYPE_UPDATE_AGENT,
+        status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+    ).order_by('-created_at').first()
 
     return {
         'data_source': 'real',
@@ -2968,6 +3021,8 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'recommended_agent_version': recommended_version,
         'agent_update_policy': update_decision.as_panel_payload(),
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
+        'active_job': serialize_agent_job(active_job) if active_job else None,
+        'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
         'agent_health': agent_health,
         'agent_diagnostic': _serialize_agent_diagnostic(
             endpoint,
@@ -3165,6 +3220,7 @@ def endpoint_job_create(request, pk):
         payload['lines'] = 120
     elif selected_type == AgentJob.TYPE_UPDATE_AGENT:
         selected_release_id = (request.POST.get('release_id') or request.POST.get('agent_release_id') or '').strip()
+        force_update = (request.POST.get('force') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
         selected_release = None
         if selected_release_id:
             selected_release = AgentRelease.objects.filter(pk=selected_release_id).first()
@@ -3211,6 +3267,7 @@ def endpoint_job_create(request, pk):
             endpoint,
             manual=selected_release is not None,
             explicit_release=selected_release,
+            allow_downgrade=force_update,
         )
         create_audit_event(
             event_type='agent.update_policy_evaluated',
@@ -3228,6 +3285,7 @@ def endpoint_job_create(request, pk):
                 'target_version': update_decision.target_version,
                 'channel': update_decision.channel,
                 'rollout_bucket': update_decision.rollout_bucket,
+                'force': force_update,
                 'operator': request.user.get_username(),
             },
             request=request,
@@ -3270,7 +3328,7 @@ def endpoint_job_create(request, pk):
             'minimum_updater_version': release.minimum_updater_version,
             'mandatory': release.mandatory,
             'timeout_seconds': 900,
-            'force': False,
+            'force': force_update,
             'source': 'manual_panel',
         })
     elif selected_type == AgentJob.TYPE_RESTART_AGENT:
@@ -3328,6 +3386,61 @@ def endpoint_job_create(request, pk):
             request.user.get_username(),
         )
     return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job)}, status=201)
+
+
+@require_POST
+def endpoint_job_mark_failed(request, pk, job_id):
+    if not is_nightowl_technical_user(request.user):
+        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para alterar jobs tecnicos.'}, status=403)
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
+        raise Http404
+    job = get_object_or_404(AgentJob, pk=job_id, endpoint=endpoint)
+    if job.status in {
+        AgentJob.STATUS_COMPLETED,
+        AgentJob.STATUS_FAILED,
+        AgentJob.STATUS_CANCELLED,
+        AgentJob.STATUS_TIMED_OUT,
+        AgentJob.STATUS_ROLLED_BACK,
+        AgentJob.STATUS_ROLLBACK_FAILED,
+    }:
+        return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job), 'updated': False}, status=200)
+    reason = (request.POST.get('reason') or 'Marcado manualmente como falha pelo operador.').strip()[:500]
+    job.status = AgentJob.STATUS_FAILED
+    job.finished_at = timezone.now()
+    job.error_code = 'JOB_MANUALLY_MARKED_FAILED'
+    job.error_message = reason
+    job.result_received_at = timezone.now()
+    if job.started_at:
+        job.duration_seconds = max(0, (job.finished_at - job.started_at).total_seconds())
+    job.save(update_fields=[
+        'status',
+        'finished_at',
+        'error_code',
+        'error_message',
+        'result_received_at',
+        'duration_seconds',
+        'updated_at',
+    ])
+    create_audit_event(
+        event_type='job.marked_failed',
+        title='Job marcado como falha',
+        description=f'Job {job.job_type} marcado manualmente como falha em {endpoint.hostname}.',
+        severity=AuditEvent.SEVERITY_WARNING,
+        actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(),
+        endpoint=endpoint,
+        metadata={'job_id': str(job.id), 'job_type': job.job_type, 'reason': reason},
+        request=request,
+    )
+    logger.warning(
+        'job.marked_failed endpoint_id=%s job_id=%s job_type=%s marked_by=%s',
+        endpoint.id,
+        job.id,
+        job.job_type,
+        request.user.get_username(),
+    )
+    return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job), 'updated': True}, status=200)
 
 
 @require_POST

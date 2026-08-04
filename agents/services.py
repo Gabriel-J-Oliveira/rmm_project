@@ -113,6 +113,7 @@ UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED = 'rollout_not_selected'
 UPDATE_POLICY_REASON_PINNED_RELEASE_NOT_FOUND = 'pinned_release_not_found'
 UPDATE_POLICY_REASON_PINNED_RELEASE_UNAVAILABLE = 'pinned_release_unavailable'
 UPDATE_POLICY_REASON_INVALID_VERSION = 'invalid_version'
+UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE = 'downgrade_requires_force'
 AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_AVAILABLE, 'active'}
 
 
@@ -402,7 +403,7 @@ def _updater_version(endpoint):
     return getattr(diagnostic, 'updater_version', '') or endpoint.agent_version or ''
 
 
-def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=False, explicit_release=None, record_evaluation=True):
+def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=False, explicit_release=None, record_evaluation=True, allow_downgrade=False):
     now = now or timezone.now()
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     current_version = endpoint.agent_version or ''
@@ -453,8 +454,10 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
     comparison = compare_versions(current_version, release.version)
     if comparison is None and current_version:
         return decision(False, UPDATE_POLICY_REASON_INVALID_VERSION, release)
-    if comparison is not None and comparison >= 0:
+    if comparison is not None and comparison == 0:
         return decision(False, UPDATE_POLICY_REASON_ALREADY_CURRENT, release)
+    if comparison is not None and comparison > 0 and not allow_downgrade:
+        return decision(False, UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE, release)
 
     minimum_updater = (release.minimum_updater_version or '').strip()
     if minimum_updater:

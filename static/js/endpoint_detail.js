@@ -26,6 +26,7 @@
     let softwareRisk = "all";
     let activityCategory = "all";
     let reloadTimer = null;
+    let lastPollingAt = 0;
     let pollingUntil = 0;
 
     const labels = {
@@ -136,11 +137,44 @@
         return Math.round(ms / 60000) + "min";
     }
 
+    function normalizeVersion(value) {
+        const match = String(value || "").trim().match(/\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?/);
+        return match ? match[0] : "";
+    }
+
     function parseVersion(value) {
-        const parts = String(value || "").trim().split(".");
+        const normalized = normalizeVersion(value);
+        if (!normalized) return null;
+        const split = normalized.split("-");
+        const core = split[0];
+        const prerelease = split.length > 1 ? split.slice(1).join("-").split(".") : [];
+        const parts = core.split(".");
         if (!parts.length || parts.some(function (part) { return !/^\d+$/.test(part); })) return null;
         while (parts.length < 4) parts.push("0");
-        return parts.slice(0, 4).map(function (part) { return Number(part); });
+        return {
+            numbers: parts.slice(0, 4).map(function (part) { return Number(part); }),
+            prerelease: prerelease
+        };
+    }
+
+    function comparePrerelease(left, right) {
+        if (!left.length && !right.length) return 0;
+        if (!left.length) return 1;
+        if (!right.length) return -1;
+        const length = Math.max(left.length, right.length);
+        for (let index = 0; index < length; index += 1) {
+            if (left[index] == null) return -1;
+            if (right[index] == null) return 1;
+            const leftNumeric = /^\d+$/.test(left[index]);
+            const rightNumeric = /^\d+$/.test(right[index]);
+            let leftValue = leftNumeric ? Number(left[index]) : left[index];
+            let rightValue = rightNumeric ? Number(right[index]) : right[index];
+            if (leftNumeric && !rightNumeric) return -1;
+            if (!leftNumeric && rightNumeric) return 1;
+            if (leftValue < rightValue) return -1;
+            if (leftValue > rightValue) return 1;
+        }
+        return 0;
     }
 
     function compareVersions(left, right) {
@@ -148,10 +182,10 @@
         const b = parseVersion(right);
         if (!a || !b) return null;
         for (let index = 0; index < 4; index += 1) {
-            if (a[index] < b[index]) return -1;
-            if (a[index] > b[index]) return 1;
+            if (a.numbers[index] < b.numbers[index]) return -1;
+            if (a.numbers[index] > b.numbers[index]) return 1;
         }
-        return 0;
+        return comparePrerelease(a.prerelease, b.prerelease);
     }
 
     function agentState(installed, latest, fallback) {
@@ -179,6 +213,10 @@
     }
 
     function jobProgress(job) {
+        if (job && (job.progressPercentage != null || job.progress_percentage != null)) {
+            const backendProgress = Number(job.progressPercentage != null ? job.progressPercentage : job.progress_percentage);
+            return Math.max(0, Math.min(100, Number.isNaN(backendProgress) ? 0 : Math.round(backendProgress)));
+        }
         const statusProgress = {
             queued: 10,
             pending: 10,
@@ -276,6 +314,8 @@
         const agentDiagnostic = asObject(payload.agent_diagnostic);
         const agentUpdatePolicy = asObject(payload.agent_update_policy);
         const agentUpdateReleases = asArray(payload.agent_update_releases).map(function (item) { return asObject(item); });
+        const activeJob = maybeObject(payload.active_job);
+        const activeUpdateJob = maybeObject(payload.active_update_job);
         const patches = maybeObject(payload.patches);
         const patchPending = patches && Array.isArray(patches.pending_updates_sample) ? patches.pending_updates_sample.map(function (item) {
             item = asObject(item);
@@ -347,6 +387,8 @@
                 updatePaused: !!(agentUpdatePolicy.update_paused || endpoint.update_paused)
             },
             agentDiagnostic: agentDiagnostic,
+            activeJob: activeJob,
+            activeUpdateJob: activeUpdateJob,
             inventory: inventory,
             hardware: maybeObject(payload.hardware),
             network: maybeObject(payload.network) || { interfaces: [] },
@@ -464,24 +506,6 @@
             return '<span class="agent-version-compare"><strong class="agent-installed-outdated">' + escapeHtml(installed) + '</strong><i>&rarr;</i><strong class="agent-latest-version">' + escapeHtml(latest) + '</strong></span>';
         }
         return '<span class="agent-version-compare"><strong class="agent-installed-current">' + escapeHtml(installed) + '</strong></span>';
-    }
-
-    function renderUpdateReleaseSelector(agent) {
-        const releases = ((agent && agent.updateReleases) || []).filter(function (release) {
-            return release && release.id;
-        });
-        if (!releases.length) {
-            return '<div class="endpoint-agent-release-picker is-empty"><span>Release alvo</span><strong>Nenhuma release manual disponivel</strong></div>';
-        }
-        const eligible = releases.filter(function (release) { return release.eligible; });
-        const options = releases.map(function (release) {
-            const label = (release.version || "-") + " / " + (release.channel || "-") + (release.eligible ? "" : " - bloqueada: " + (release.reason_code || "-"));
-            return '<option value="' + escapeHtml(release.id) + '"' +
-                (release.eligible ? "" : " disabled") +
-                (!release.eligible ? ' title="' + escapeHtml(release.reason_code || "release_blocked") + '"' : "") +
-                '>' + escapeHtml(label) + '</option>';
-        }).join("");
-        return '<label class="endpoint-agent-release-picker"><span>Release alvo</span><select data-agent-release-select' + (eligible.length ? "" : " disabled") + '>' + options + '</select></label>';
     }
 
     function healthParts(detail) {
@@ -642,19 +666,32 @@
     }
 
     function renderJobs(jobs, limit) {
-        const rows = (jobs || []).slice(0, limit || jobs.length);
-        if (!rows.length) return emptyState("Nenhuma tarefa tecnica executada neste endpoint", "Use as acoes rapidas para enfileirar jobs reais para o agente.", "list-checks");
-        return '<div class="endpoint-job-list">' + rows.map(function (job) {
+        const sourceRows = (jobs || []);
+        const activeJob = endpointDetail && endpointDetail.activeJob ? endpointDetail.activeJob : null;
+        const rows = sourceRows.filter(function (job) {
+            return !activeJob || String(job.id) !== String(activeJob.id);
+        }).slice(0, limit || sourceRows.length);
+        if (!rows.length && !activeJob) return emptyState("Nenhuma tarefa tecnica executada neste endpoint", "Use as acoes rapidas para enfileirar jobs reais para o agente.", "list-checks");
+        const activeMarkup = activeJob ? '<section class="endpoint-active-job"><h3>Job em execucao</h3>' + renderJobItem(activeJob, true) + '</section>' : "";
+        const historyMarkup = rows.length ? '<section class="endpoint-job-history"><h3>Historico recente</h3>' + rows.map(function (job) { return renderJobItem(job, false); }).join("") + '</section>' : "";
+        return '<div class="endpoint-job-list">' + activeMarkup + historyMarkup + "</div>";
+    }
+
+    function renderJobItem(job, isActive) {
             const progress = jobProgress(job);
             const result = jobResultLabel(job);
             const primaryTime = job.finishedAt || job.startedAt || job.dispatchedAt || job.createdAt;
-            return '<article class="endpoint-job-item endpoint-job-item-' + escapeHtml(job.status || "pending") + '">' +
+            const stale = job.isStale || job.is_stale;
+            const staleText = stale ? '<div class="endpoint-job-stale">Possivelmente travado - ' + escapeHtml(staleReasonLabel(job.staleReason || job.stale_reason)) + '</div>' : "";
+            const versionLine = job.targetVersion || job.previousVersion ? '<small class="endpoint-job-version">' + escapeHtml([job.previousVersion, job.targetVersion].filter(Boolean).join(" -> ")) + '</small>' : "";
+            return '<article class="endpoint-job-item ' + (isActive ? "is-active " : "") + 'endpoint-job-item-' + escapeHtml(job.status || "pending") + (stale ? " is-stale" : "") + '">' +
                 '<div class="endpoint-job-identity">' +
-                    jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' +
+                    jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' + versionLine +
                 '</div>' +
                 '<div class="endpoint-job-output">' +
                     '<div class="endpoint-job-progressline"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' +
-                    '<div class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</div>' +
+                    '<div class="endpoint-job-stage">' + escapeHtml(job.stage || "-") + '</div>' +
+                    '<div class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</div>' + staleText +
                 '</div>' +
                 '<div class="endpoint-job-time">' +
                     '<span><b>Horario</b>' + escapeHtml(formatDate(primaryTime)) + '</span>' +
@@ -663,10 +700,19 @@
                 '<div class="endpoint-job-actions">' +
                     '<button class="endpoint-job-action-button" type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
                     '<button class="endpoint-job-action-button" type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
-                    (job.status === "completed" ? '<button class="endpoint-job-action-button" type="button" data-refresh-endpoint>Atualizar dados</button>' : "") +
+                    (stale ? '<button class="endpoint-job-action-button endpoint-job-action-danger" type="button" data-mark-job-failed="' + escapeHtml(job.id) + '">Marcar falha</button>' : "") +
                 '</div>' +
             '</article>';
-        }).join("") + "</div>";
+    }
+
+    function staleReasonLabel(value) {
+        return {
+            queued_too_long: "aguardando ha mais de 5 minutos",
+            dispatched_too_long: "entregue sem inicio ha mais de 5 minutos",
+            running_without_update: "sem atualizacao recente",
+            waiting_health_check_too_long: "health check sem confirmacao",
+            timeout_exceeded: "tempo limite excedido"
+        }[value] || "sem atualizacao recente";
     }
 
     function actionGroup(title, buttons) {
@@ -699,6 +745,7 @@
     }
 
     function jobResultLabel(job) {
+        if (job.progressMessage || job.progress_message) return job.progressMessage || job.progress_message;
         const result = job.resultJson || {};
         if (job.type === "update_agent") {
             const updateStatus = result.update_status || (result.details && result.details.reason);
@@ -757,7 +804,6 @@
         setSlotBadge("agent-badge", "agent-version-pill agent-" + escapeHtml(agent.state || "unknown"), escapeHtml(agent.state === "current" ? "Atual" : labels[agent.state] || agent.state || "Sem informacao"));
         setSlot("agent-body",
             '<div class="endpoint-agent-body"><div class="agent-version-panel">' + agentVersionDisplay(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual</small>') + '</div>' +
-            renderUpdateReleaseSelector(agent) +
             '<div class="endpoint-agent-facts">' + factList([
                 { label: "Servico/status", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "-") },
                 { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
@@ -1139,17 +1185,24 @@
                 reloadTimer = null;
                 return;
             }
+            const now = Date.now();
+            if (document.hidden && now - lastPollingAt < 15000) {
+                return;
+            }
+            lastPollingAt = now;
             reloadEndpoint(false).then(function (detail) {
-                const running = detail && (detail.jobs || []).some(function (job) {
+                const running = !!(detail && detail.activeJob) || (detail && (detail.jobs || []).some(function (job) {
                     return ["queued", "pending", "sent", "dispatched", "waiting_agent", "running"].indexOf(job.status) >= 0;
-                });
+                }));
                 if (!running && reloadTimer) {
                     showToast("Dados do endpoint atualizados.");
                     window.clearInterval(reloadTimer);
                     reloadTimer = null;
                 }
+            }).catch(function () {
+                showToast("Falha temporaria ao atualizar lista de jobs.");
             });
-        }, 5000);
+        }, 3500);
     }
 
     function createRealJob(action, options) {
@@ -1199,46 +1252,418 @@
         });
     }
 
-    function chooseUpdateRelease() {
-        const releases = ((endpointDetail && endpointDetail.agent && endpointDetail.agent.updateReleases) || []).filter(function (release) {
-            return release && release.id;
-        });
-        const select = root.querySelector("[data-agent-release-select]");
-        if (select) {
-            if (!select.value) {
-                showToast("Selecione uma release do agente antes de enviar a atualizacao.");
-                return false;
-            }
-            const selectedFromDom = releases.find(function (release) { return String(release.id) === String(select.value); });
-            if (!selectedFromDom) {
-                showToast("Release selecionada invalida.");
-                return false;
-            }
-            if (!selectedFromDom.eligible) {
-                showToast("Release selecionada bloqueada: " + (selectedFromDom.reason_code || "release_blocked"));
-                return false;
-            }
-            return selectedFromDom;
-        }
-        const eligible = releases.filter(function (release) { return release.eligible; });
-        if (eligible.length === 1) return eligible[0];
-        if (!releases.length) return null;
-        const lines = releases.map(function (release, index) {
-            return (index + 1) + ". " + (release.version || "-") +
-                " [" + (release.channel || "-") + "] " +
-                (release.eligible ? "autorizada" : "bloqueada: " + (release.reason_code || "-"));
-        });
-        const selected = window.prompt("Selecione a release para atualizar o agente:\n\n" + lines.join("\n"), eligible.length ? String(releases.indexOf(eligible[0]) + 1) : "1");
-        if (selected === null) return false;
-        const index = parseInt(selected, 10) - 1;
-        if (Number.isNaN(index) || !releases[index]) {
-            showToast("Release selecionada invalida.");
-            return false;
-        }
-        return releases[index];
+    const updateModal = {
+        backdrop: null,
+        dialog: null,
+        origin: null,
+        selectedRelease: null,
+        sending: false
+    };
+
+    function appendText(parent, tag, text, className) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        element.textContent = text == null || text === "" ? "-" : String(text);
+        parent.appendChild(element);
+        return element;
     }
 
-    function runEndpointAction(action) {
+    function appendButton(parent, text, className, type) {
+        const button = document.createElement("button");
+        button.type = type || "button";
+        if (className) button.className = className;
+        button.textContent = text;
+        parent.appendChild(button);
+        return button;
+    }
+
+    function formatPackageSize(value) {
+        const size = Number(value || 0);
+        if (!size || Number.isNaN(size)) return "-";
+        if (size >= 1073741824) return (size / 1073741824).toFixed(1).replace(".", ",") + " GB";
+        if (size >= 1048576) return (size / 1048576).toFixed(1).replace(".", ",") + " MB";
+        if (size >= 1024) return (size / 1024).toFixed(1).replace(".", ",") + " KB";
+        return size + " B";
+    }
+
+    function releaseStatusText(release) {
+        if (!release) return "-";
+        if (release.revoked) return "Revogada";
+        if (release.status === "paused" || release.rollout_paused) return "Pausada - atualizacao manual permitida";
+        if (release.status === "available" || release.status === "active") return "Disponivel";
+        return release.status_label || release.status || "-";
+    }
+
+    function getManualUpdateReleases() {
+        const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
+        const channel = agent.updateChannel || "stable";
+        return ((agent.updateReleases || [])).filter(function (release) {
+            return release && release.id && release.channel === channel && !release.revoked;
+        }).sort(function (left, right) {
+            const comparison = compareVersions(right.version, left.version);
+            if (comparison != null && comparison !== 0) return comparison;
+            return String(right.released_at || "").localeCompare(String(left.released_at || ""));
+        });
+    }
+
+    function findActiveUpdateJob() {
+        const activeStatuses = ["queued", "pending", "sent", "dispatched", "waiting_agent", "running"];
+        if (endpointDetail && endpointDetail.activeUpdateJob && activeStatuses.indexOf(endpointDetail.activeUpdateJob.status) >= 0) {
+            return endpointDetail.activeUpdateJob;
+        }
+        return ((endpointDetail && endpointDetail.jobs) || []).find(function (job) {
+            return job.type === "update_agent" && activeStatuses.indexOf(job.status) >= 0;
+        }) || null;
+    }
+
+    function setModalError(message) {
+        if (!updateModal.dialog) return;
+        const errorBox = updateModal.dialog.querySelector("[data-update-modal-error]");
+        if (!errorBox) return;
+        errorBox.textContent = message || "";
+        errorBox.hidden = !message;
+    }
+
+    function updateModalSubmitState() {
+        if (!updateModal.dialog) return;
+        const submit = updateModal.dialog.querySelector("[data-update-submit]");
+        if (!submit) return;
+        submit.disabled = updateModal.sending;
+        submit.textContent = updateModal.sending ? "Enviando..." : "Atualizar agente";
+    }
+
+    function selectedUpdateRelease() {
+        if (!updateModal.dialog) return null;
+        const select = updateModal.dialog.querySelector("[data-update-release-select]");
+        if (!select || !select.value) return null;
+        return getManualUpdateReleases().find(function (release) {
+            return String(release.id) === String(select.value);
+        }) || null;
+    }
+
+    function isDowngradeRelease(release) {
+        const installed = endpointDetail && endpointDetail.agent ? endpointDetail.agent.version : "";
+        const comparison = compareVersions(installed, release && release.version);
+        return comparison != null && comparison > 0;
+    }
+
+    function validateUpdateSelection(showMessage) {
+        const release = selectedUpdateRelease();
+        const activeJob = findActiveUpdateJob();
+        const installed = endpointDetail && endpointDetail.agent ? endpointDetail.agent.version : "-";
+        if (activeJob) {
+            if (showMessage) setModalError("Ja existe uma atualizacao em execucao para este endpoint.");
+            return null;
+        }
+        if (!release) {
+            if (showMessage) setModalError("Nenhuma release foi selecionada.");
+            return null;
+        }
+        if (release.revoked) {
+            if (showMessage) setModalError("Esta release foi revogada e nao pode ser instalada.");
+            return null;
+        }
+        if (!release.metadata_complete || !release.size || !release.minimum_updater_version) {
+            if (showMessage) setModalError("Os dados da release estao incompletos.");
+            return null;
+        }
+        const comparison = compareVersions(installed, release.version);
+        if (comparison === 0 || release.same_version) {
+            if (showMessage) setModalError("O endpoint ja esta na versao " + (release.version || installed) + ".");
+            return null;
+        }
+        const forceDowngrade = !!updateModal.dialog.querySelector("[data-force-downgrade]") && updateModal.dialog.querySelector("[data-force-downgrade]").checked;
+        const confirmDowngrade = !!updateModal.dialog.querySelector("[data-confirm-downgrade]") && updateModal.dialog.querySelector("[data-confirm-downgrade]").checked;
+        if (comparison != null && comparison > 0 && (!forceDowngrade || !confirmDowngrade)) {
+            if (showMessage) setModalError("Downgrade exige abrir Opcoes avancadas, marcar Forcar downgrade e confirmar a acao.");
+            return null;
+        }
+        if (showMessage) setModalError("");
+        return {
+            release: release,
+            force: comparison != null && comparison > 0 && forceDowngrade && confirmDowngrade
+        };
+    }
+
+    function renderReleaseDetails(release) {
+        if (!updateModal.dialog) return;
+        updateModal.selectedRelease = release || null;
+        const details = updateModal.dialog.querySelector("[data-update-release-details]");
+        const advanced = updateModal.dialog.querySelector("[data-update-advanced]");
+        const downgradeAlert = updateModal.dialog.querySelector("[data-update-downgrade-alert]");
+        if (!details) return;
+        details.textContent = "";
+        if (!release) {
+            details.classList.add("is-empty");
+            appendText(details, "p", "Selecione uma release para ver os detalhes antes de enviar o job.", "endpoint-update-modal__hint");
+            if (advanced) advanced.hidden = true;
+            setModalError("");
+            updateModalSubmitState();
+            return;
+        }
+        details.classList.remove("is-empty");
+        const grid = document.createElement("dl");
+        grid.className = "endpoint-update-release-grid";
+        [
+            ["Status", releaseStatusText(release)],
+            ["Versao", release.version || "-"],
+            ["Publicada em", formatDate(release.released_at)],
+            ["Tamanho", formatPackageSize(release.size)],
+            ["Updater minimo", release.minimum_updater_version || "-"],
+            ["Rollout", (release.rollout_percentage == null ? "-" : release.rollout_percentage + "%") + (release.rollout_paused ? " / pausado" : "")]
+        ].forEach(function (item) {
+            const tile = document.createElement("div");
+            appendText(tile, "dt", item[0]);
+            appendText(tile, "dd", item[1]);
+            grid.appendChild(tile);
+        });
+        details.appendChild(grid);
+        const notes = document.createElement("section");
+        notes.className = "endpoint-update-release-notes";
+        appendText(notes, "h3", "Release notes");
+        appendText(notes, "p", release.release_notes || "Sem notas de release cadastradas.");
+        details.appendChild(notes);
+
+        const downgrade = isDowngradeRelease(release);
+        if (advanced) {
+            advanced.hidden = !downgrade;
+            advanced.open = false;
+            advanced.querySelectorAll("input").forEach(function (input) { input.checked = false; });
+        }
+        if (downgradeAlert) {
+            downgradeAlert.hidden = !downgrade;
+            downgradeAlert.textContent = downgrade ? "A versao alvo e anterior a instalada. Use somente para recuperacao controlada." : "";
+        }
+        validateUpdateSelection(false);
+        updateModalSubmitState();
+    }
+
+    function createUpdateModal() {
+        if (updateModal.dialog) return updateModal.dialog;
+        const backdrop = document.createElement("div");
+        backdrop.className = "endpoint-update-modal-backdrop";
+        backdrop.hidden = true;
+        backdrop.dataset.updateModalBackdrop = "";
+
+        const dialog = document.createElement("section");
+        dialog.className = "endpoint-update-modal";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.setAttribute("aria-labelledby", "endpoint-update-modal-title");
+        dialog.hidden = true;
+        dialog.tabIndex = -1;
+
+        const header = document.createElement("header");
+        appendText(header, "h2", "Atualizar agente").id = "endpoint-update-modal-title";
+        appendButton(header, "Fechar", "endpoint-update-modal__close").setAttribute("data-update-close", "");
+        dialog.appendChild(header);
+
+        const body = document.createElement("div");
+        body.className = "endpoint-update-modal__body";
+        const summary = document.createElement("dl");
+        summary.className = "endpoint-update-summary";
+        [
+            ["Endpoint", "endpoint"],
+            ["Versao atual", "version"],
+            ["Canal", "channel"],
+            ["Politica", "policy"]
+        ].forEach(function (item) {
+            const tile = document.createElement("div");
+            appendText(tile, "dt", item[0]);
+            const value = appendText(tile, "dd", "-");
+            value.dataset.updateSummary = item[1];
+            summary.appendChild(tile);
+        });
+        body.appendChild(summary);
+
+        const field = document.createElement("label");
+        field.className = "endpoint-update-release-field";
+        appendText(field, "span", "Release alvo");
+        const select = document.createElement("select");
+        select.dataset.updateReleaseSelect = "";
+        field.appendChild(select);
+        body.appendChild(field);
+
+        const errorBox = document.createElement("div");
+        errorBox.className = "endpoint-update-modal__error";
+        errorBox.dataset.updateModalError = "";
+        errorBox.hidden = true;
+        body.appendChild(errorBox);
+
+        const downgradeAlert = document.createElement("div");
+        downgradeAlert.className = "endpoint-update-modal__warning";
+        downgradeAlert.dataset.updateDowngradeAlert = "";
+        downgradeAlert.hidden = true;
+        body.appendChild(downgradeAlert);
+
+        const details = document.createElement("div");
+        details.className = "endpoint-update-release-details is-empty";
+        details.dataset.updateReleaseDetails = "";
+        body.appendChild(details);
+
+        const advanced = document.createElement("details");
+        advanced.className = "endpoint-update-advanced";
+        advanced.dataset.updateAdvanced = "";
+        advanced.hidden = true;
+        appendText(advanced, "summary", "Opcoes avancadas");
+        const forceLabel = document.createElement("label");
+        forceLabel.className = "endpoint-update-check";
+        const force = document.createElement("input");
+        force.type = "checkbox";
+        force.dataset.forceDowngrade = "";
+        forceLabel.appendChild(force);
+        appendText(forceLabel, "span", "Forcar downgrade");
+        advanced.appendChild(forceLabel);
+        const confirmLabel = document.createElement("label");
+        confirmLabel.className = "endpoint-update-check";
+        const confirm = document.createElement("input");
+        confirm.type = "checkbox";
+        confirm.dataset.confirmDowngrade = "";
+        confirmLabel.appendChild(confirm);
+        appendText(confirmLabel, "span", "Confirmo que esta acao e uma recuperacao administrativa.");
+        advanced.appendChild(confirmLabel);
+        body.appendChild(advanced);
+        dialog.appendChild(body);
+
+        const footer = document.createElement("footer");
+        appendButton(footer, "Cancelar", "endpoint-update-modal__cancel").setAttribute("data-update-close", "");
+        const submit = appendButton(footer, "Atualizar agente", "endpoint-update-modal__submit");
+        submit.dataset.updateSubmit = "";
+        dialog.appendChild(footer);
+
+        document.body.appendChild(backdrop);
+        document.body.appendChild(dialog);
+        updateModal.backdrop = backdrop;
+        updateModal.dialog = dialog;
+
+        select.addEventListener("change", function () {
+            renderReleaseDetails(selectedUpdateRelease());
+        });
+        advanced.addEventListener("change", function () {
+            validateUpdateSelection(false);
+        });
+        dialog.addEventListener("click", function (event) {
+            if (event.target.closest("[data-update-close]")) {
+                closeUpdateModal();
+                return;
+            }
+            if (event.target.closest("[data-update-submit]")) {
+                submitUpdateFromModal();
+            }
+        });
+        backdrop.addEventListener("click", closeUpdateModal);
+        dialog.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                closeUpdateModal();
+                return;
+            }
+            if (event.key !== "Tab") return;
+            const focusable = Array.prototype.slice.call(dialog.querySelectorAll('button, select, input, summary, [href], [tabindex]:not([tabindex="-1"])')).filter(function (item) {
+                return !item.disabled && !item.hidden && item.offsetParent !== null;
+            });
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        });
+        return dialog;
+    }
+
+    function openUpdateModal(origin, suggestedReleaseId) {
+        createUpdateModal();
+        updateModal.origin = origin || document.activeElement;
+        updateModal.sending = false;
+        const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
+        updateModal.dialog.querySelector('[data-update-summary="endpoint"]').textContent = endpointDetail.hostname || "-";
+        updateModal.dialog.querySelector('[data-update-summary="version"]').textContent = agent.version || "-";
+        updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = agent.updateChannel || "stable";
+        updateModal.dialog.querySelector('[data-update-summary="policy"]').textContent = agent.updatePolicy || "manual";
+        const select = updateModal.dialog.querySelector("[data-update-release-select]");
+        select.textContent = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Selecione uma release";
+        select.appendChild(placeholder);
+        const releases = getManualUpdateReleases();
+        releases.forEach(function (release, index) {
+            const option = document.createElement("option");
+            option.value = release.id;
+            option.textContent = release.version + " / " + releaseStatusText(release) + (index === 0 ? " / mais recente" : "");
+            option.disabled = !!release.revoked;
+            select.appendChild(option);
+        });
+        select.value = suggestedReleaseId || "";
+        updateModal.backdrop.hidden = false;
+        updateModal.dialog.hidden = false;
+        updateModal.dialog.classList.add("is-open");
+        renderReleaseDetails(selectedUpdateRelease());
+        const activeJob = findActiveUpdateJob();
+        if (activeJob) {
+            setModalError("Ja existe uma atualizacao em execucao para este endpoint.");
+        } else if (!releases.length) {
+            setModalError("Nao ha release disponivel para o canal deste endpoint.");
+        }
+        window.setTimeout(function () {
+            select.focus();
+        }, 0);
+    }
+
+    function closeUpdateModal() {
+        if (!updateModal.dialog) return;
+        updateModal.dialog.classList.remove("is-open");
+        updateModal.dialog.hidden = true;
+        if (updateModal.backdrop) updateModal.backdrop.hidden = true;
+        updateModal.sending = false;
+        updateModalSubmitState();
+        if (updateModal.origin && typeof updateModal.origin.focus === "function") {
+            updateModal.origin.focus();
+        }
+    }
+
+    function submitUpdateFromModal() {
+        if (updateModal.sending) return;
+        const selection = validateUpdateSelection(true);
+        if (!selection) return;
+        updateModal.sending = true;
+        updateModalSubmitState();
+        createRealJob("update_agent", {
+            releaseId: selection.release.id,
+            force: selection.force
+        }).then(function (payload) {
+            if (payload.status === "already_pending") {
+                updateModal.sending = false;
+                updateModalSubmitState();
+                setModalError("Ja existe uma atualizacao em execucao para este endpoint.");
+                return;
+            }
+            if (!endpointDetail.jobs) endpointDetail.jobs = [];
+            if (payload.job && !endpointDetail.jobs.some(function (job) { return job.id === payload.job.id; })) {
+                endpointDetail.jobs.unshift(payload.job);
+            }
+            showToast("Atualizacao para " + (selection.release.version || "-") + " enviada ao endpoint " + (endpointDetail.hostname || "-") + ".");
+            closeUpdateModal();
+            renderActivePanel();
+            activateTab("tasks");
+            schedulePolling();
+            return reloadEndpoint(false);
+        }).catch(function (error) {
+            updateModal.sending = false;
+            updateModalSubmitState();
+            const payload = error.payload || {};
+            const reason = payload.reason_code || (payload.policy && payload.policy.reason_code) || "";
+            const detail = payload.detail || payload.error || error.message || "Nao foi possivel criar o job de atualizacao.";
+            setModalError(detail + (reason ? " Motivo: " + reason : ""));
+        });
+    }
+
+    function runEndpointAction(action, origin) {
         if (!endpointDetail) return;
         if (action === "execute_check" || action === "run_cleanup") {
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
@@ -1248,18 +1673,8 @@
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
             let jobOptions = {};
             if (action === "update_agent") {
-                const selectedRelease = chooseUpdateRelease();
-                if (selectedRelease === false) return;
-                if (selectedRelease && selectedRelease.id) {
-                    jobOptions.releaseId = selectedRelease.id;
-                    jobOptions.force = false;
-                } else {
-                    showToast("Selecione uma release do agente antes de enviar a atualizacao.");
-                    return;
-                }
-                const confirmed = window.confirm("Deseja enviar a atualizacao do agente para a versao " + (selectedRelease.version || "-") + "? O servico pode ser reiniciado durante o processo.");
-                if (!confirmed) return;
-                showToast("Enviando job de atualizacao para o agente...");
+                openUpdateModal(origin);
+                return;
             } else if (action === "restart_agent") {
                 const confirmed = window.confirm("Deseja enviar um comando para reiniciar o agente neste endpoint?");
                 if (!confirmed) return;
@@ -1321,6 +1736,9 @@
     }
 
     function findJob(id) {
+        if (endpointDetail && endpointDetail.activeJob && String(endpointDetail.activeJob.id) === String(id)) {
+            return endpointDetail.activeJob;
+        }
         return (endpointDetail && endpointDetail.jobs || []).find(function (item) { return item.id === id; });
     }
 
@@ -1361,33 +1779,72 @@
         const job = findJob(id);
         if (!job) return;
         const result = job.resultJson || {};
+        const technicalDetails = {
+            job_id: job.jobId || job.id,
+            result_id: job.resultId || "",
+            correlation_id: job.correlationId || "",
+            endpoint: job.endpoint || (endpointDetail && endpointDetail.hostname) || "",
+            job_type: job.type,
+            status: job.status,
+            raw_status: job.rawStatus,
+            stage: job.stage,
+            progress_percentage: job.progressPercentage || job.progress_percentage || job.progress,
+            progress_message: job.progressMessage || job.progress_message || jobResultLabel(job),
+            attempt: job.attempt,
+            timeout_seconds: job.timeoutSeconds,
+            created_at: job.createdAt,
+            dispatched_at: job.dispatchedAt,
+            started_at: job.startedAt,
+            finished_at: job.finishedAt,
+            last_update_at: job.lastUpdateAt,
+            duration_seconds: job.durationSeconds,
+            error_code: job.errorCode,
+            error_message: job.errorMessage,
+            target_version: job.targetVersion,
+            previous_version: job.previousVersion,
+            installed_version: job.installedVersion,
+            rollback_status: job.rollbackStatus,
+            is_stale: job.isStale,
+            stale_reason: job.staleReason,
+            payload: job.payload || {},
+            result: job.resultJson || {},
+            stdout: job.stdout || "",
+            stderr: job.stderr || ""
+        };
+        job.__technicalDetails = technicalDetails;
+        const staleAction = job.isStale || job.is_stale ? '<button type="button" class="danger" data-mark-job-failed="' + escapeHtml(job.id) + '">Marcar como falha</button>' : "";
         openDrawer("Tarefa", job.name, job.command, '<section><h3>Execucao</h3>' + factList([
             { label: "Job ID", value: job.jobId || job.id, mono: true },
             { label: "Result ID", value: job.resultId || "-", mono: true },
             { label: "Correlation ID", value: job.correlationId || "-", mono: true },
             { label: "Status", value: labels[job.status] || job.status },
+            { label: "Etapa", value: job.stage || "-" },
+            { label: "Progresso", value: (job.progressPercentage || job.progress_percentage || job.progress || 0) + "%" },
             { label: "Tipo", value: labels[job.type] || job.type },
             { label: "Tentativa", value: job.attempt || "-" },
             { label: "Timeout", value: job.timeoutSeconds ? job.timeoutSeconds + "s" : "-" },
             { label: "Endpoint", value: job.endpoint || (endpointDetail && endpointDetail.hostname) || "-" },
-            { label: "Versao anterior", value: result.previous_version || result.previousVersion || (result.details && (result.details.previous_version || result.details.previousVersion)) || "-" },
-            { label: "Versao nova", value: result.installed_version || result.installedVersion || (result.details && (result.details.installed_version || result.details.installedVersion)) || result.version || "-" },
+            { label: "Versao anterior", value: job.previousVersion || result.previous_version || result.previousVersion || (result.details && (result.details.previous_version || result.details.previousVersion)) || "-" },
+            { label: "Versao alvo", value: job.targetVersion || "-" },
+            { label: "Versao ativa", value: job.installedVersion || result.installed_version || result.installedVersion || (result.details && (result.details.installed_version || result.details.installedVersion)) || result.version || "-" },
             { label: "Update ID", value: result.update_id || result.updateId || "-", mono: true },
-            { label: "From/Target", value: [result.from_version, result.target_version].filter(Boolean).join(" -> ") || "-" },
+            { label: "From/Target", value: [job.previousVersion || result.from_version, job.targetVersion || result.target_version].filter(Boolean).join(" -> ") || "-" },
             { label: "Falha em", value: result.failure_stage || "-" },
-            { label: "Rollback", value: result.rollback_confirmed ? "Confirmado" : (result.update_status === "rolled_back" ? "Aplicado" : "-") },
+            { label: "Rollback", value: job.rollbackStatus || (result.rollback_confirmed ? "Confirmado" : (result.update_status === "rolled_back" ? "Aplicado" : "-")) },
             { label: "Codigo", value: job.errorCode || result.error_code || result.original_error_code || "-", mono: true },
             { label: "Resultado", value: jobResultLabel(job) },
+            { label: "Stale", value: job.isStale ? staleReasonLabel(job.staleReason) : "Nao" },
             { label: "Criado por", value: job.createdBy },
             { label: "Criado em", value: formatDate(job.createdAt) },
             { label: "Despachado em", value: formatDate(job.dispatchedAt) },
             { label: "Iniciado em", value: formatDate(job.startedAt) },
             { label: "Finalizado em", value: formatDate(job.finishedAt) },
+            { label: "Ultima atualizacao", value: formatDate(job.lastUpdateAt) },
             { label: "Recebido backend", value: formatDate(job.receivedAt) },
             { label: "Duracao", value: formatDuration(job.durationMs) },
             { label: "Exit code", value: job.exitCode == null ? "-" : job.exitCode },
             { label: "Output truncado", value: job.outputTruncated ? "Sim" : "Nao" }
-        ]) + '</section><section><h3>Payload</h3><pre>' + escapeHtml(JSON.stringify(job.payload || {}, null, 2)) + '</pre></section><section><h3>Resultado JSON</h3><pre>' + escapeHtml(JSON.stringify(job.resultJson || {}, null, 2)) + '</pre></section><section><h3>Stdout</h3><pre>' + escapeHtml(job.stdout || "Sem saida.") + '</pre></section><section><h3>Stderr</h3><pre>' + escapeHtml(job.stderr || job.errorMessage || "Sem erro.") + '</pre></section><section><h3>Timeline</h3><p>' + escapeHtml((job.timeline || []).join(" -> ") || "-") + '</p></section><div class="event-drawer-actions"><button type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button><button type="button" data-refresh-endpoint>Atualizar dados</button></div>');
+        ]) + '</section><section><h3>Payload sanitizado</h3><pre>' + escapeHtml(JSON.stringify(job.payload || {}, null, 2)) + '</pre></section><section><h3>Resultado sanitizado</h3><pre>' + escapeHtml(JSON.stringify(job.resultJson || {}, null, 2)) + '</pre></section><section><h3>Stdout</h3><pre>' + escapeHtml(job.stdout || "Sem saida.") + '</pre></section><section><h3>Stderr</h3><pre>' + escapeHtml(job.stderr || job.errorMessage || "Sem erro.") + '</pre></section><section><h3>Timeline</h3><p>' + escapeHtml((job.timeline || []).join(" -> ") || "-") + '</p></section><div class="event-drawer-actions"><button type="button" data-copy-job-details="' + escapeHtml(job.id) + '">Copiar detalhes tecnicos</button>' + staleAction + '<button type="button" data-refresh-endpoint>Atualizar lista</button></div>');
     }
 
     function copyText(value) {
@@ -1404,6 +1861,63 @@
             showToast("Saida da tarefa copiada.");
         }).catch(function () {
             showToast("Nao foi possivel copiar a saida.");
+        });
+    }
+
+    function handleJobDetailsCopy(id) {
+        const job = findJob(id);
+        if (!job) return;
+        const details = job.__technicalDetails || {
+            job_id: job.jobId || job.id,
+            type: job.type,
+            status: job.status,
+            stage: job.stage,
+            progress: job.progressPercentage || job.progress,
+            payload: job.payload || {},
+            result: job.resultJson || {},
+            stdout: job.stdout || "",
+            stderr: job.stderr || ""
+        };
+        copyText(JSON.stringify(details, null, 2)).then(function () {
+            showToast("Detalhes tecnicos copiados.");
+        }).catch(function () {
+            showToast("Nao foi possivel copiar os detalhes.");
+        });
+    }
+
+    function markJobFailed(id) {
+        const job = findJob(id);
+        if (!job) return;
+        if (!window.confirm("Marcar este job como falha? O historico sera preservado e nenhuma acao sera enviada ao endpoint.")) return;
+        const endpointId = root.dataset.endpointId || "";
+        const body = new URLSearchParams();
+        body.set("reason", "Marcado manualmente como falha pelo painel.");
+        fetch("/api/endpoints/" + encodeURIComponent(endpointId) + "/jobs/" + encodeURIComponent(id) + "/mark-failed/", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                "X-CSRFToken": getCookie("csrftoken"),
+                "Accept": "application/json"
+            },
+            body: body.toString()
+        }).then(function (response) {
+            return response.json().then(function (payload) {
+                if (!response.ok) throw new Error(payload.detail || payload.error || "Nao foi possivel marcar o job como falha.");
+                return payload;
+            });
+        }).then(function (payload) {
+            showToast("Job marcado como falha.");
+            if (payload.job && endpointDetail && endpointDetail.jobs) {
+                endpointDetail.jobs = endpointDetail.jobs.map(function (item) {
+                    return String(item.id) === String(payload.job.id) ? payload.job : item;
+                });
+                if (endpointDetail.activeJob && String(endpointDetail.activeJob.id) === String(payload.job.id)) endpointDetail.activeJob = null;
+            }
+            renderActivePanel();
+            return reloadEndpoint(false);
+        }).catch(function (error) {
+            showToast(error.message || "Nao foi possivel marcar o job como falha.");
         });
     }
 
@@ -1450,7 +1964,7 @@
         const action = event.target.closest("[data-endpoint-action]");
         if (action) {
             event.preventDefault();
-            runEndpointAction(action.dataset.endpointAction || "execute_check");
+            runEndpointAction(action.dataset.endpointAction || "execute_check", action);
             root.querySelectorAll(".endpoint-remote-popover").forEach(function (item) { item.hidden = true; });
             return;
         }
@@ -1502,6 +2016,18 @@
         const jobCopy = event.target.closest("[data-copy-job]");
         if (jobCopy) {
             handleJobCopy(jobCopy.dataset.copyJob);
+            return;
+        }
+
+        const jobDetailsCopy = event.target.closest("[data-copy-job-details]");
+        if (jobDetailsCopy) {
+            handleJobDetailsCopy(jobDetailsCopy.dataset.copyJobDetails);
+            return;
+        }
+
+        const markFailed = event.target.closest("[data-mark-job-failed]");
+        if (markFailed) {
+            markJobFailed(markFailed.dataset.markJobFailed);
             return;
         }
 
@@ -1572,6 +2098,17 @@
         }).catch(function () {
             showToast("Nao foi possivel copiar.");
         });
+    });
+
+    document.addEventListener("click", function (event) {
+        const jobDetailsCopy = event.target.closest("[data-copy-job-details]");
+        if (jobDetailsCopy && !root.contains(jobDetailsCopy)) {
+            handleJobDetailsCopy(jobDetailsCopy.dataset.copyJobDetails);
+        }
+        const markFailed = event.target.closest("[data-mark-job-failed]");
+        if (markFailed && !root.contains(markFailed)) {
+            markJobFailed(markFailed.dataset.markJobFailed);
+        }
     });
 
     document.addEventListener("click", function (event) {

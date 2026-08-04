@@ -1,6 +1,7 @@
 import uuid
 import json
 import tempfile
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -9,6 +10,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseGroup
+from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import deterministic_rollout_bucket, evaluate_agent_update_policy
 from .versioning import compare_versions, normalize_agent_version, parse_semver
 
@@ -183,6 +185,137 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertEqual(response.status_code, 409)
         receipt = AgentJobResultReceipt.objects.get(result_id=result_id)
         self.assertEqual(receipt.conflict_count, 1)
+
+    def test_update_job_stage_maps_to_progress_and_message(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': '0.1.1.0-rc6'},
+            result={'update_status': 'downloading', 'target_version': '0.1.1.0-rc6'},
+        )
+
+        self.assertEqual(job_progress_percentage(job), 35)
+        self.assertIn('Baixando pacote', job_progress_message(job))
+        self.assertIn('0.1.1.0-rc6', job_progress_message(job))
+
+    def test_waiting_health_check_stale_after_five_minutes(self):
+        now = timezone.now()
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            started_at=now - timedelta(minutes=10),
+            result_received_at=now - timedelta(minutes=6),
+            result={'update_status': 'waiting_health_check'},
+        )
+
+        stale = job_stale_info(job, now=now)
+        self.assertTrue(stale['is_stale'])
+        self.assertEqual(stale['stale_reason'], 'waiting_health_check_too_long')
+
+    def test_sanitized_job_details_redact_secrets(self):
+        sanitized = sanitize_job_value({
+            'agent_token': 'secret-token',
+            'nested': {'Authorization': 'Bearer secret-value'},
+            'message': 'download failed Authorization: Bearer secret-value',
+        })
+
+        self.assertEqual(sanitized['agent_token'], '[REDACTED]')
+        self.assertEqual(sanitized['nested']['Authorization'], '[REDACTED]')
+        self.assertIn('[REDACTED]', sanitized['message'])
+        self.assertNotIn('secret-value', json.dumps(sanitized))
+
+    def test_partial_result_keeps_running_and_final_result_completes_same_result_id(self):
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
+        result_id = str(uuid.uuid4())
+        partial = {
+            'job_id': str(job.id),
+            'status': 'running',
+            'result': {'update_status': 'runner_started', 'target_version': '0.1.1.0-rc6'},
+        }
+        final = {
+            'job_id': str(job.id),
+            'status': 'completed',
+            'result': {'update_status': 'completed', 'target_version': '0.1.1.0-rc6'},
+            'duration_seconds': 45,
+        }
+
+        first = self.client.post('/api/agent/jobs/result/', data=partial, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+        second = self.client.post('/api/agent/jobs/result/', data=final, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        self.assertEqual(job.duration_seconds, 45)
+        self.assertEqual(AgentJobResultReceipt.objects.get(result_id=result_id).conflict_count, 0)
+
+    def test_interrupted_update_can_be_resolved_by_final_completed_result(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_INTERRUPTED,
+            result={'update_status': 'runner_started'},
+        )
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'completed',
+                'result': {'update_status': 'completed', 'target_version': '0.1.1.0-rc6'},
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def test_final_job_ignores_late_running_result(self):
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_PING, status=AgentJob.STATUS_COMPLETED)
+
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={'job_id': str(job.id), 'status': 'running', 'result': {'stage': 'late'}},
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['ignored'])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def test_mark_job_failed_requires_permission_and_updates_job(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            started_at=timezone.now() - timedelta(minutes=20),
+        )
+        user_model = get_user_model()
+        basic_user = user_model.objects.create_user(username='job-basic', password='pass')
+        forbidden_client = Client()
+        forbidden_client.force_login(basic_user)
+        forbidden = forbidden_client.post(reverse('api-endpoint-job-mark-failed', kwargs={'pk': str(self.machine.id), 'job_id': job.id}))
+        self.assertIn(forbidden.status_code, (302, 403))
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_RUNNING)
+
+        user = user_model.objects.create_user(username='job-admin', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        response = portal.post(
+            reverse('api-endpoint-job-mark-failed', kwargs={'pk': str(self.machine.id), 'job_id': job.id}),
+            {'reason': 'Sem atualizacao ha muito tempo.'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_FAILED)
+        self.assertEqual(job.error_code, 'JOB_MANUALLY_MARKED_FAILED')
 
     def test_rollback_failed_is_critical(self):
         response = self.client.post(
@@ -546,6 +679,61 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(job.timeout_seconds, 900)
         self.assertIsNotNone(job.expires_at)
 
+    def test_manual_panel_update_rejects_same_version(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-same-version', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.agent_version = '0.1.1.0-rc5'
+        self.machine.save(update_fields=['agent_version'])
+        release = self.release(version='0.1.1.0-rc5', minimum_updater_version='0.1.0.7')
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id)},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'already_current')
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
+
+    def test_manual_panel_update_rejects_downgrade_without_force(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-downgrade-block', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.agent_version = '0.1.1.0-rc5'
+        self.machine.save(update_fields=['agent_version'])
+        release = self.release(version='0.1.1.0-rc4', minimum_updater_version='0.1.0.7')
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id), 'force': 'false'},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'downgrade_requires_force')
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
+
+    def test_manual_panel_update_allows_downgrade_with_explicit_force(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-downgrade-force', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.agent_version = '0.1.1.0-rc5'
+        self.machine.save(update_fields=['agent_version'])
+        release = self.release(version='0.1.1.0-rc4', minimum_updater_version='0.1.0.7')
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id), 'force': 'true'},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
+        self.assertEqual(job.agent_release, release)
+        self.assertTrue(job.payload['force'])
+
     def test_manual_panel_update_rejects_invalid_release_id(self):
         user_model = get_user_model()
         user = user_model.objects.create_user(username='tech-invalid-release', password='pass', is_staff=True)
@@ -624,6 +812,46 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(options[0]['id'], str(release.id))
         self.assertEqual(options[0]['version'], '0.1.1.0-rc3')
         self.assertTrue(options[0]['eligible'])
+        self.assertEqual(options[0]['status'], AgentRelease.STATUS_PAUSED)
+        self.assertTrue(options[0]['rollout_paused'])
+        self.assertIn('released_at', options[0])
+        self.assertIn('release_notes', options[0])
+        self.assertTrue(options[0]['metadata_complete'])
+
+    def test_endpoint_detail_marks_downgrade_release_as_requires_force(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-release-downgrade-option', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.agent_version = '0.1.1.0-rc5'
+        self.machine.save(update_fields=['agent_version'])
+        release = self.release(version='0.1.1.0-rc4', minimum_updater_version='0.1.0.7')
+
+        response = portal.get(reverse('api-endpoint-detail', kwargs={'pk': str(self.machine.id)}))
+
+        self.assertEqual(response.status_code, 200)
+        options = response.json()['agent_update_releases']
+        selected = next(item for item in options if item['id'] == str(release.id))
+        self.assertFalse(selected['eligible'])
+        self.assertTrue(selected['requires_force'])
+        self.assertEqual(selected['reason_code'], 'downgrade_requires_force')
+
+    def test_endpoint_detail_reports_active_update_job(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-active-update', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': '0.1.1.0-rc5'},
+        )
+
+        response = portal.get(reverse('api-endpoint-detail', kwargs={'pk': str(self.machine.id)}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['active_update_job']['id'], str(job.id))
 
     def test_semver_prerelease_is_supported(self):
         self.assertIsNotNone(parse_semver('0.1.1.0-rc1'))

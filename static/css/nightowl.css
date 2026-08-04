@@ -31795,6 +31795,251 @@ body.page-endpoint-detail .endpoint-agent-release-picker select:disabled {
     opacity: .76;
 }
 
+/* Endpoint manual agent update modal */
+body.page-endpoint-detail .endpoint-update-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1800;
+    background: rgba(2, 4, 12, .72);
+    backdrop-filter: blur(8px);
+}
+
+body.page-endpoint-detail .endpoint-update-modal {
+    position: fixed;
+    z-index: 1810;
+    top: 50%;
+    left: 50%;
+    width: min(720px, calc(100vw - 32px));
+    max-height: min(840px, calc(100vh - 32px));
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid rgba(155, 132, 255, .4);
+    border-radius: 12px;
+    background: #101323;
+    box-shadow: 0 28px 72px rgba(0, 0, 0, .56);
+}
+
+body.page-endpoint-detail .endpoint-update-modal[hidden],
+body.page-endpoint-detail .endpoint-update-modal-backdrop[hidden] {
+    display: none !important;
+}
+
+body.page-endpoint-detail .endpoint-update-modal > header,
+body.page-endpoint-detail .endpoint-update-modal > footer {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 18px;
+    border-bottom: 1px solid rgba(139, 119, 255, .18);
+    background: rgba(14, 16, 30, .92);
+}
+
+body.page-endpoint-detail .endpoint-update-modal > footer {
+    justify-content: flex-end;
+    border-top: 1px solid rgba(139, 119, 255, .18);
+    border-bottom: 0;
+}
+
+body.page-endpoint-detail .endpoint-update-modal h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 900;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__close,
+body.page-endpoint-detail .endpoint-update-modal__cancel,
+body.page-endpoint-detail .endpoint-update-modal__submit {
+    min-height: 36px;
+    border-radius: 8px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 850;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__submit {
+    border-color: rgba(99, 231, 177, .42);
+    background: linear-gradient(135deg, rgba(99, 231, 177, .18), rgba(141, 104, 255, .22));
+    color: var(--text-primary);
+}
+
+body.page-endpoint-detail .endpoint-update-modal__submit:disabled {
+    opacity: .58;
+    cursor: wait;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__body {
+    overflow: auto;
+    padding: 16px 18px 18px;
+    display: grid;
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-update-summary,
+body.page-endpoint-detail .endpoint-update-release-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-update-summary > div,
+body.page-endpoint-detail .endpoint-update-release-grid > div {
+    min-width: 0;
+    min-height: 54px;
+    padding: 10px 12px;
+    display: grid;
+    align-content: center;
+    gap: 4px;
+    border: 1px solid rgba(124, 149, 255, .17);
+    border-radius: 8px;
+    background: rgba(8, 10, 22, .58);
+}
+
+body.page-endpoint-detail .endpoint-update-summary dt,
+body.page-endpoint-detail .endpoint-update-release-grid dt {
+    color: #9dc6ff;
+    font-size: 11.5px;
+    font-weight: 850;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .endpoint-update-summary dd,
+body.page-endpoint-detail .endpoint-update-release-grid dd {
+    min-width: 0;
+    overflow: hidden;
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 850;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-update-release-field {
+    display: grid;
+    gap: 7px;
+}
+
+body.page-endpoint-detail .endpoint-update-release-field span {
+    color: #9dc6ff;
+    font-size: 12px;
+    font-weight: 850;
+    text-transform: uppercase;
+}
+
+body.page-endpoint-detail .endpoint-update-release-field select {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid rgba(141, 104, 255, .36);
+    border-radius: 9px;
+    background: rgba(8, 10, 22, .9);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 800;
+    padding: 8px 12px;
+}
+
+body.page-endpoint-detail .endpoint-update-release-details {
+    display: grid;
+    gap: 12px;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__hint,
+body.page-endpoint-detail .endpoint-update-release-notes p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+body.page-endpoint-detail .endpoint-update-release-notes {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+    border: 1px solid rgba(124, 149, 255, .15);
+    border-radius: 8px;
+    background: rgba(8, 10, 22, .42);
+}
+
+body.page-endpoint-detail .endpoint-update-release-notes h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 900;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__error,
+body.page-endpoint-detail .endpoint-update-modal__warning {
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__error {
+    border: 1px solid rgba(255, 101, 128, .32);
+    background: rgba(255, 101, 128, .12);
+    color: #ffb8c3;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__warning {
+    border: 1px solid rgba(255, 180, 66, .32);
+    background: rgba(255, 180, 66, .12);
+    color: #ffd89c;
+}
+
+body.page-endpoint-detail .endpoint-update-advanced {
+    border: 1px solid rgba(255, 180, 66, .28);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: rgba(255, 180, 66, .07);
+}
+
+body.page-endpoint-detail .endpoint-update-advanced summary {
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 900;
+}
+
+body.page-endpoint-detail .endpoint-update-check {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 750;
+}
+
+body.page-endpoint-detail .endpoint-update-check input {
+    width: 16px;
+    height: 16px;
+    accent-color: #8d68ff;
+}
+
+@media (max-width: 720px) {
+    body.page-endpoint-detail .endpoint-update-summary,
+    body.page-endpoint-detail .endpoint-update-release-grid {
+        grid-template-columns: 1fr;
+    }
+
+    body.page-endpoint-detail .endpoint-update-modal > footer {
+        align-items: stretch;
+        flex-direction: column-reverse;
+    }
+
+    body.page-endpoint-detail .endpoint-update-modal > footer button {
+        width: 100%;
+    }
+}
+
 /* Endpoint RMM card system final */
 body.page-endpoint-detail {
     --rmm-card-bg: rgba(18, 20, 36, .96);
@@ -32192,12 +32437,36 @@ body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
     padding: 12px !important;
 }
 
+body.page-endpoint-detail .endpoint-active-job,
+body.page-endpoint-detail .endpoint-job-history {
+    display: grid;
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-active-job h3,
+body.page-endpoint-detail .endpoint-job-history h3 {
+    margin: 0;
+    color: #aac9ff;
+    font-size: 11.5px;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
 body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
     min-height: 72px !important;
     padding: 10px 12px !important;
     border-radius: 8px !important;
     grid-template-columns: minmax(190px, .78fr) minmax(320px, 1.55fr) minmax(132px, .48fr) minmax(112px, .34fr) !important;
     gap: 14px !important;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item.is-active {
+    border-color: rgba(99, 231, 177, .42) !important;
+    background: linear-gradient(135deg, rgba(99, 231, 177, .08), rgba(141, 104, 255, .1)) !important;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item.is-stale {
+    border-color: rgba(255, 180, 66, .4) !important;
 }
 
 body.page-endpoint-detail .endpoint-job-identity {
@@ -32219,6 +32488,13 @@ body.page-endpoint-detail .endpoint-job-output .endpoint-job-progress {
     height: 4px !important;
 }
 
+body.page-endpoint-detail .endpoint-job-stage {
+    color: #9dc6ff;
+    font-size: 11.5px;
+    font-weight: 850;
+    text-transform: uppercase;
+}
+
 body.page-endpoint-detail .endpoint-job-result {
     max-width: 100%;
     overflow: hidden;
@@ -32228,6 +32504,21 @@ body.page-endpoint-detail .endpoint-job-result {
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-stale {
+    overflow: hidden;
+    color: #ffd89c;
+    font-size: 12px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-version {
+    flex-basis: 100%;
+    color: #63e7b1 !important;
+    font-weight: 850 !important;
 }
 
 body.page-endpoint-detail .endpoint-job-actions {
@@ -32246,6 +32537,13 @@ body.page-endpoint-detail .endpoint-job-action-button {
 
 body.page-endpoint-detail .endpoint-job-action-button:not(:first-child) {
     opacity: .82;
+}
+
+body.page-endpoint-detail .endpoint-job-action-danger,
+body.page-endpoint-detail .event-drawer-actions .danger {
+    border-color: rgba(255, 101, 128, .45) !important;
+    background: rgba(255, 101, 128, .12) !important;
+    color: #ffbdc7 !important;
 }
 
 body.page-endpoint-detail .endpoint-actions-card {

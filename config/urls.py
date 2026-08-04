@@ -32,6 +32,7 @@ urlpatterns = [
     path('api/agent/', include('agents.urls')),
     path('api/endpoints/<str:pk>/', dashboard_views.endpoint_detail_data, name='api-endpoint-detail'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
+    path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
     path('api/endpoints/<str:pk>/update-policy/', dashboard_views.endpoint_update_policy_update, name='api-endpoint-update-policy'),
     path('api/access-inventory/', include('access_inventory.api_urls')),
     path('access-inventory/', include('access_inventory.urls')),
