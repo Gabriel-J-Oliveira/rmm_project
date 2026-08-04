@@ -427,11 +427,12 @@
     }
 
     function factList(items) {
-        return '<dl class="endpoint-fact-list">' + items.map(function (item) {
+        return '<dl class="endpoint-fact-list rmm-info-grid">' + items.map(function (item) {
             const rawValue = item.value == null || item.value === "" ? "-" : item.value;
             const renderedValue = item.html ? rawValue : escapeHtml(rawValue);
             const title = item.html ? "" : ' title="' + escapeHtml(rawValue) + '"';
-            return '<div class="' + escapeHtml(item.className || "") + '"><dt>' + escapeHtml(item.label) + '</dt><dd class="' + (item.mono ? "mono" : "") + '"' + title + '>' + renderedValue + "</dd></div>";
+            const tileClass = ["rmm-info-tile", item.className || ""].filter(Boolean).join(" ");
+            return '<div class="' + escapeHtml(tileClass) + '"><dt>' + escapeHtml(item.label) + '</dt><dd class="' + (item.mono ? "mono" : "") + '"' + title + '>' + renderedValue + "</dd></div>";
         }).join("") + "</dl>";
     }
 

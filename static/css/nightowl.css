@@ -31794,3 +31794,577 @@ body.page-endpoint-detail .endpoint-agent-release-picker select:disabled {
     color: var(--text-muted);
     opacity: .76;
 }
+
+/* Endpoint RMM card system final */
+body.page-endpoint-detail {
+    --rmm-card-bg: rgba(18, 20, 36, .96);
+    --rmm-card-border: rgba(139, 119, 255, .24);
+    --rmm-card-border-strong: rgba(155, 132, 255, .38);
+    --rmm-card-header-bg: rgba(14, 16, 30, .74);
+    --rmm-tile-bg: rgba(8, 10, 22, .58);
+    --rmm-tile-border: rgba(124, 149, 255, .17);
+    --rmm-action-bg: rgba(13, 24, 40, .72);
+    --rmm-action-border: rgba(100, 146, 255, .28);
+}
+
+body.page-endpoint-detail .endpoint-overview-layout {
+    gap: 14px !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row {
+    gap: 14px !important;
+    align-items: stretch !important;
+}
+
+body.page-endpoint-detail .rmm-card,
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-operational-row > .endpoint-dense-card {
+    display: flex !important;
+    flex-direction: column !important;
+    align-self: stretch !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: hidden;
+    border: 1px solid var(--rmm-card-border) !important;
+    border-radius: 8px !important;
+    background: var(--rmm-card-bg) !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card {
+    min-height: 272px !important;
+}
+
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card {
+    min-height: 206px !important;
+}
+
+body.page-endpoint-detail .rmm-card > .rmm-card__header,
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-operational-row > .endpoint-dense-card > header {
+    flex: 0 0 auto;
+    min-height: 42px !important;
+    padding: 10px 14px !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+    border-bottom: 1px solid rgba(139, 119, 255, .14) !important;
+    background: var(--rmm-card-header-bg);
+}
+
+body.page-endpoint-detail .rmm-card__title,
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card > header h2,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card > header h2,
+body.page-endpoint-detail .endpoint-operational-row > .endpoint-dense-card > header h2 {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    margin: 0 !important;
+    color: var(--text-primary) !important;
+    font-size: 15px !important;
+    font-weight: 850 !important;
+    line-height: 1.15 !important;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .rmm-card__title svg,
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card > header h2 svg,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card > header h2 svg,
+body.page-endpoint-detail .endpoint-operational-row > .endpoint-dense-card > header h2 svg {
+    width: 15px !important;
+    height: 15px !important;
+    color: #a990ff !important;
+}
+
+body.page-endpoint-detail .rmm-card > header > span,
+body.page-endpoint-detail .rmm-card > header > button,
+body.page-endpoint-detail .rmm-card > header > a,
+body.page-endpoint-detail .endpoint-card-actions button {
+    min-height: 30px !important;
+    border-radius: 8px !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row [data-overview-slot$="-body"],
+body.page-endpoint-detail .endpoint-summary-row [data-overview-slot$="-body"],
+body.page-endpoint-detail .endpoint-operational-row [data-overview-slot$="-body"] {
+    flex: 1 1 auto;
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .rmm-info-grid,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 9px !important;
+    margin: 0 !important;
+}
+
+body.page-endpoint-detail .rmm-info-tile,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list > div,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list > div {
+    min-width: 0;
+    min-height: 54px !important;
+    padding: 10px 11px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    gap: 4px !important;
+    border: 1px solid var(--rmm-tile-border) !important;
+    border-radius: 8px !important;
+    background: var(--rmm-tile-bg) !important;
+}
+
+body.page-endpoint-detail .endpoint-fact-list .endpoint-fact-wide,
+body.page-endpoint-detail .endpoint-primary-row .endpoint-fact-list > .endpoint-fact-wide,
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list > .endpoint-fact-wide {
+    grid-column: 1 / -1 !important;
+}
+
+body.page-endpoint-detail .endpoint-fact-list dt {
+    color: #9dc6ff !important;
+    font-size: 11.5px !important;
+    font-weight: 850 !important;
+    line-height: 1.05 !important;
+    text-transform: uppercase;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-fact-list dd {
+    min-width: 0;
+    overflow: hidden;
+    margin: 0;
+    color: var(--text-primary) !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+    line-height: 1.18 !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    height: 100%;
+    min-height: 0 !important;
+    padding: 16px 18px 18px !important;
+    display: grid !important;
+    grid-template-columns: minmax(126px, .48fr) minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+    gap: 14px 18px !important;
+    align-items: center !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
+    grid-row: 1 / 3;
+    align-self: center !important;
+    justify-self: center !important;
+    display: flex !important;
+    align-items: baseline !important;
+    justify-content: center !important;
+    min-width: 116px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
+    color: var(--text-primary);
+    font-size: 50px !important;
+    line-height: .95 !important;
+    font-weight: 900;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block span {
+    margin-left: 5px;
+    color: var(--text-secondary);
+    font-size: 13px !important;
+    font-weight: 750;
+}
+
+body.page-endpoint-detail .endpoint-health-body > .health-bar {
+    align-self: end;
+    width: 100%;
+    height: 6px !important;
+    margin: 0 !important;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .07);
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+    align-self: start;
+    display: grid !important;
+    gap: 9px !important;
+    margin: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown div {
+    display: grid !important;
+    grid-template-columns: minmax(108px, .9fr) 40px minmax(120px, 1.2fr) !important;
+    align-items: center !important;
+    gap: 10px !important;
+    min-height: 17px !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown span,
+body.page-endpoint-detail .endpoint-health-body .health-breakdown strong {
+    font-size: 12.5px !important;
+    line-height: 1.1 !important;
+    font-weight: 800;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown em {
+    height: 5px !important;
+    border-radius: 999px;
+}
+
+body.page-endpoint-detail .endpoint-agent-body {
+    height: 100%;
+    min-height: 0 !important;
+    padding: 14px 14px 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel {
+    min-height: 44px !important;
+    padding: 10px 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+    border: 1px solid rgba(141, 104, 255, .2);
+    border-radius: 8px;
+    background: rgba(8, 10, 22, .5);
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-compare {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-compare strong {
+    font-size: 17px !important;
+    line-height: 1.05 !important;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .agent-version-panel small {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 11.5px !important;
+    font-weight: 800;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-agent-release-picker {
+    margin: 0 !important;
+    padding: 9px 10px !important;
+    gap: 6px !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-agent-release-picker select {
+    min-height: 34px !important;
+    font-size: 12.5px !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-agent-facts {
+    min-height: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-agent-facts .endpoint-fact-list {
+    gap: 8px !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-agent-facts .endpoint-fact-list > div {
+    min-height: 50px !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    margin-top: auto !important;
+    padding: 10px 14px 14px !important;
+    display: flex !important;
+    justify-content: flex-end !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions button {
+    min-width: 150px;
+}
+
+body.page-endpoint-detail .endpoint-security-body,
+body.page-endpoint-detail .endpoint-overview-facts {
+    height: 100%;
+    min-height: 0 !important;
+    padding: 14px !important;
+}
+
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-list {
+    height: 100%;
+    align-content: start;
+    gap: 10px !important;
+}
+
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-list > div {
+    min-height: 56px !important;
+}
+
+body.page-endpoint-detail .endpoint-security-summary .endpoint-fact-list dd {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list {
+    align-content: start;
+}
+
+body.page-endpoint-detail .endpoint-summary-row .endpoint-fact-list > div {
+    min-height: 56px !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary [data-overview-slot="disks-body"] {
+    display: flex;
+    flex-direction: column;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list {
+    flex: 1;
+    min-height: 0 !important;
+    padding: 18px 18px 20px !important;
+    display: grid !important;
+    align-content: center !important;
+    gap: 13px !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list div {
+    min-height: 76px !important;
+    padding: 0 !important;
+    display: grid !important;
+    grid-template-columns: 60px 70px minmax(0, 1fr) !important;
+    grid-template-rows: auto auto !important;
+    align-items: center !important;
+    gap: 9px 14px !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list strong {
+    color: var(--text-primary);
+    font-size: 16px !important;
+    font-weight: 900 !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list span {
+    color: var(--text-primary);
+    font-size: 18px !important;
+    font-weight: 900 !important;
+    justify-self: start !important;
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list em {
+    width: 100%;
+    height: 8px !important;
+    margin: 0 !important;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .08);
+}
+
+body.page-endpoint-detail .endpoint-disk-summary .endpoint-mini-disk-list small {
+    grid-column: 3;
+    min-width: 0;
+    overflow: hidden;
+    margin: 0 !important;
+    color: var(--text-secondary);
+    font-size: 13px !important;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-list {
+    gap: 8px !important;
+    padding: 12px !important;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+    min-height: 72px !important;
+    padding: 10px 12px !important;
+    border-radius: 8px !important;
+    grid-template-columns: minmax(190px, .78fr) minmax(320px, 1.55fr) minmax(132px, .48fr) minmax(112px, .34fr) !important;
+    gap: 14px !important;
+}
+
+body.page-endpoint-detail .endpoint-job-identity {
+    gap: 7px !important;
+}
+
+body.page-endpoint-detail .endpoint-job-identity small {
+    color: var(--text-secondary);
+    font-size: 12px !important;
+    font-weight: 750;
+}
+
+body.page-endpoint-detail .endpoint-job-output {
+    min-width: 0;
+    gap: 5px !important;
+}
+
+body.page-endpoint-detail .endpoint-job-output .endpoint-job-progress {
+    height: 4px !important;
+}
+
+body.page-endpoint-detail .endpoint-job-result {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 12.5px !important;
+    font-weight: 750;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    gap: 5px !important;
+}
+
+body.page-endpoint-detail .endpoint-job-action-button {
+    min-height: 28px !important;
+    padding: 0 9px !important;
+    border-color: rgba(157, 128, 255, .42) !important;
+    background: rgba(16, 13, 34, .78) !important;
+    color: var(--text-primary) !important;
+    font-size: 11.75px !important;
+    font-weight: 850 !important;
+}
+
+body.page-endpoint-detail .endpoint-job-action-button:not(:first-child) {
+    opacity: .82;
+}
+
+body.page-endpoint-detail .endpoint-actions-card {
+    align-self: start !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    padding: 14px !important;
+    display: grid !important;
+    gap: 13px !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group {
+    display: grid !important;
+    gap: 8px !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group h3 {
+    margin: 0 !important;
+    color: #aac9ff !important;
+    font-size: 11.5px !important;
+    font-weight: 900 !important;
+    line-height: 1.1 !important;
+    text-transform: uppercase;
+    letter-spacing: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group > div {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button {
+    min-width: 0;
+    min-height: 38px !important;
+    padding: 0 12px !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+    border: 1px solid var(--rmm-action-border) !important;
+    border-radius: 8px !important;
+    background: var(--rmm-action-bg) !important;
+    color: var(--text-primary) !important;
+    font-size: 12.5px !important;
+    font-weight: 850 !important;
+    line-height: 1.15 !important;
+    text-align: left;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button svg {
+    flex: 0 0 auto;
+    width: 15px !important;
+    height: 15px !important;
+    color: #a990ff;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:hover {
+    border-color: rgba(99, 231, 177, .48) !important;
+    background: rgba(23, 38, 56, .82) !important;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:disabled {
+    border-color: rgba(125, 136, 164, .18) !important;
+    background: rgba(31, 35, 50, .5) !important;
+    color: rgba(210, 218, 236, .48) !important;
+    cursor: not-allowed;
+}
+
+@media (max-width: 1380px) {
+    body.page-endpoint-detail .endpoint-primary-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, .9fr) !important;
+    }
+
+    body.page-endpoint-detail .endpoint-health-body {
+        grid-template-columns: 122px minmax(0, 1fr) !important;
+        gap: 12px 14px !important;
+    }
+
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: minmax(170px, .8fr) minmax(240px, 1.25fr) minmax(118px, .45fr) 104px !important;
+        gap: 10px !important;
+    }
+}
+
+@media (max-width: 980px) {
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-operational-row {
+        grid-template-columns: 1fr !important;
+    }
+
+    body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card,
+    body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card {
+        min-height: 0 !important;
+    }
+
+    body.page-endpoint-detail .endpoint-health-body {
+        grid-template-columns: 1fr !important;
+    }
+
+    body.page-endpoint-detail .endpoint-health-body .endpoint-score-block,
+    body.page-endpoint-detail .endpoint-health-body > .health-bar,
+    body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+        grid-column: 1 !important;
+        grid-row: auto !important;
+    }
+
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+        grid-template-columns: 1fr !important;
+    }
+
+    body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group > div {
+        grid-template-columns: 1fr !important;
+    }
+}

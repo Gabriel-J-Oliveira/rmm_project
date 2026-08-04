@@ -22,7 +22,8 @@ param(
     [switch]$PruneOldReleases,
     [ValidateRange(1, 50)]
     [int]$KeepLastReleases = 5,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,11 +88,86 @@ function Invoke-Native([string]$FileName, [string[]]$Arguments, [string]$Failure
     if ($DryRun) {
         return @()
     }
-    $output = & $FileName @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Fail $FailureCode ("Comando falhou ({0}): {1} {2}`n{3}" -f $LASTEXITCODE, $FileName, ($Arguments -join " "), ($output | Out-String))
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    try {
+        & $FileName @Arguments > $stdoutFile 2> $stderrFile
+        $nativeExitCode = $LASTEXITCODE
+        $stdout = Get-Content -Path $stdoutFile -Raw -ErrorAction SilentlyContinue
+        $stderr = Get-Content -Path $stderrFile -Raw -ErrorAction SilentlyContinue
+        if ($nativeExitCode -ne 0) {
+            $message = @(
+                "Comando executado: $FileName $($Arguments -join ' ')",
+                "Exit code: $nativeExitCode",
+                "Pipeline error code: $FailureCode",
+                "STDOUT:",
+                ($stdout -replace '\s+$', ''),
+                "STDERR:",
+                ($stderr -replace '\s+$', '')
+            ) -join "`n"
+            Fail $FailureCode $message
+        }
+        return @($stdout -split "`r?`n" | Where-Object { $_ -ne "" })
     }
-    return $output
+    finally {
+        Remove-Item -LiteralPath $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-BuildReleaseArguments([string]$RequestedVersion, [string]$RequestedChannel, [string]$RequestedPublicBaseUrl, [bool]$AllowForce) {
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $script:BuildScript,
+        "-Version", $RequestedVersion,
+        "-Channel", $RequestedChannel,
+        "-PublicBaseUrl", $RequestedPublicBaseUrl
+    )
+    if ($AllowForce) {
+        $arguments += "-Force"
+    }
+    return ,$arguments
+}
+
+function Assert-ArrayDoesNotContainFalseSwitch([string[]]$Arguments) {
+    foreach ($argument in $Arguments) {
+        if ($argument -match '^-[-A-Za-z0-9]+:(False|false|\$false)$') {
+            Fail "validation_failed" "Switch falso serializado incorretamente: $argument"
+        }
+    }
+}
+
+function Invoke-SelfTest {
+    $oldBuildScript = $script:BuildScript
+    try {
+        $script:BuildScript = "C:\Path With Spaces\Build-NightOwlAgentRelease.ps1"
+        $withoutForce = New-BuildReleaseArguments -RequestedVersion "0.1.1.0-rc4" -RequestedChannel "development" -RequestedPublicBaseUrl "https://nightowl.controlsul.com.br/downloads/nightowl-agent?x=1&y=2" -AllowForce $false
+        Assert-ArrayDoesNotContainFalseSwitch $withoutForce
+        if ($withoutForce -contains "-Force") {
+            Fail "validation_failed" "SelfTest falhou: Force false incluiu -Force."
+        }
+        if (@($withoutForce | Where-Object { $_ -eq "-Force" }).Count -ne 0) {
+            Fail "validation_failed" "SelfTest falhou: Force false duplicou -Force."
+        }
+        if ($withoutForce[4] -ne "C:\Path With Spaces\Build-NightOwlAgentRelease.ps1") {
+            Fail "validation_failed" "SelfTest falhou: path com espacos nao foi preservado."
+        }
+
+        $withForce = New-BuildReleaseArguments -RequestedVersion "0.1.1.0-rc4" -RequestedChannel "development" -RequestedPublicBaseUrl "https://nightowl.controlsul.com.br/downloads/nightowl-agent" -AllowForce $true
+        Assert-ArrayDoesNotContainFalseSwitch $withForce
+        if (@($withForce | Where-Object { $_ -eq "-Force" }).Count -ne 1) {
+            Fail "validation_failed" "SelfTest falhou: Force true deve incluir -Force exatamente uma vez."
+        }
+        if ($withForce -contains "-Force:False" -or $withForce -contains "-Force:$false") {
+            Fail "validation_failed" "SelfTest falhou: Force true/false gerou sintaxe :False."
+        }
+        Write-Step "SelfTest OK: argumentos do build montados sem switches falsos."
+        Write-Step ("Force false: powershell.exe {0}" -f ($withoutForce -join " "))
+        Write-Step ("Force true:  powershell.exe {0}" -f ($withForce -join " "))
+    }
+    finally {
+        $script:BuildScript = $oldBuildScript
+    }
 }
 
 function Invoke-Ssh([string]$Command, [string]$FailureCode = "ssh_failed") {
@@ -321,6 +397,11 @@ PY
 }
 
 try {
+    if ($SelfTest) {
+        Invoke-SelfTest
+        exit 0
+    }
+
     Assert-Version $Version
     Assert-SafeRemoteSegment $Version
     if (-not (Test-Path $script:BuildScript)) {
@@ -334,7 +415,9 @@ try {
     Test-SshNoPassword
 
     if (-not $SkipBuild) {
-        Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:BuildScript, "-Version", $Version, "-Channel", $Channel, "-PublicBaseUrl", $PublicBaseUrl, "-Force:$($Force.IsPresent)") "build_failed" | Out-Null
+        $buildArguments = New-BuildReleaseArguments -RequestedVersion $Version -RequestedChannel $Channel -RequestedPublicBaseUrl $PublicBaseUrl -AllowForce ([bool]$Force)
+        Assert-ArrayDoesNotContainFalseSwitch $buildArguments
+        Invoke-Native "powershell.exe" $buildArguments "build_failed" | Out-Null
     }
     else {
         Write-Step "SkipBuild ativo; usando artefatos locais existentes."

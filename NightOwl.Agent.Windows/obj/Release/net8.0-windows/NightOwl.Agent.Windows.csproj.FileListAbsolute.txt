@@ -3,6 +3,8 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Relea
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\downloads\agent\windows\version.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\agent.config.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\agent.version.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Diagnostics.deps.json
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Diagnostics.runtimeconfig.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Tray.deps.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Tray.runtimeconfig.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Updater.deps.json
@@ -68,5 +70,3 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\obj\Relea
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\obj\Release\net8.0-windows\NightOwl.Agent.Windows.pdb
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\obj\Release\net8.0-windows\NightOwl.Agent.Windows.genruntimeconfig.cache
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\obj\Release\net8.0-windows\ref\NightOwl.Agent.Windows.dll
-C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Diagnostics.deps.json
-C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Windows\bin\Release\net8.0-windows\publish\win-x64\NightOwl.Agent.Diagnostics.runtimeconfig.json

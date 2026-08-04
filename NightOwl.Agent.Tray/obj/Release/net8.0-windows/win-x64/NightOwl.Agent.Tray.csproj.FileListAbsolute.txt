@@ -1,3 +1,4 @@
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\assets\icons\NightOwl.ico
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.exe
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.deps.json
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.runtimeconfig.json
@@ -463,6 +464,8 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\zh-Hant\UIAutomationTypes.resources.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\zh-Hant\WindowsBase.resources.dll
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\zh-Hant\WindowsFormsIntegration.resources.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.dll
+C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.pdb
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.csproj.AssemblyReference.cache
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.GeneratedMSBuildEditorConfig.editorconfig
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.AssemblyInfoInputs.cache
@@ -475,6 +478,3 @@ C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.pdb
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\NightOwl.Agent.Tray.genruntimeconfig.cache
 C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\obj\Release\net8.0-windows\win-x64\ref\NightOwl.Agent.Tray.dll
-C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\assets\icons\NightOwl.ico
-C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.dll
-C:\Users\gabriel.oliveira\Downloads\rmm_project\NightOwl.Agent.Tray\bin\Release\net8.0-windows\win-x64\NightOwl.Agent.Shared.pdb

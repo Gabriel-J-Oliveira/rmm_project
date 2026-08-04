@@ -2,8 +2,8 @@
     "product":  "NightOwl Agent Windows",
     "agent":  "NightOwl.Agent.Windows",
     "channel":  "stable",
-    "version":  "0.1.0.6",
-    "publishedAt":  "2026-07-14T13:21:48.2717964Z",
+    "version":  "0.1.1.0-rc3",
+    "publishedAt":  "2026-07-28T18:02:23.3124485Z",
     "minimumSupportedVersion":  "0.1.0",
     "packageUrl":  "https://nightowl.controlsul.com.br/downloads/nightowl-agent/NightOwl.Agent.Windows.zip",
     "checksumUrl":  "https://nightowl.controlsul.com.br/downloads/nightowl-agent/checksums.json",
@@ -13,6 +13,6 @@
     "force":  false,
     "platform":  "windows-x64",
     "package":  "NightOwl.Agent.Windows.zip",
-    "published_at":  "2026-07-14T13:21:48.2717964Z",
-    "sha256":  "d381bce28555d5fdf17a73e0270eea66ee052e7c066441f09b2e87297c2044ab"
+    "published_at":  "2026-07-28T18:02:23.3124485Z",
+    "sha256":  "6776d36b51444a9cc569db62fa4cbcf76031c1321d653fe2714519623a7b0e25"
 }

@@ -59,9 +59,9 @@
     <section class="endpoint-tab-panel is-active" data-endpoint-tab-panel="overview" data-dynamic-endpoint-panel>
         <div class="endpoint-overview-layout" data-overview-layout>
             <section class="endpoint-primary-row">
-                <article class="panel endpoint-dense-card endpoint-health-dense" data-overview-card="health">
-                    <header><h2><i data-lucide="activity"></i>Sa&uacute;de do endpoint</h2><span data-overview-slot="health-badge" class="endpoint-skeleton-pill">Carregando</span></header>
-                    <div data-overview-slot="health-body">
+                <article class="panel endpoint-dense-card endpoint-health-dense rmm-card" data-overview-card="health">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="activity"></i>Sa&uacute;de do endpoint</h2><span data-overview-slot="health-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <div class="rmm-card__body" data-overview-slot="health-body">
                         <div class="endpoint-score-block endpoint-skeleton-score"><strong>--</strong><span>/100</span></div>
                         <div class="endpoint-skeleton-line endpoint-skeleton-line-wide"></div>
                         <div class="health-breakdown endpoint-skeleton-breakdown">
@@ -73,9 +73,9 @@
                     </div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-agent-card" data-overview-card="agent">
-                    <header><h2><i data-lucide="bot"></i>Agente NightOwl</h2><span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span></header>
-                    <div data-overview-slot="agent-body">
+                <article class="panel endpoint-dense-card endpoint-agent-card rmm-card" data-overview-card="agent">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="bot"></i>Agente NightOwl</h2><span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <div class="rmm-card__body" data-overview-slot="agent-body">
                         <div class="agent-version-panel endpoint-skeleton-panel"><span class="endpoint-skeleton-line endpoint-skeleton-version"></span><small>Carregando dados do agente</small></div>
                         <dl class="endpoint-fact-list endpoint-skeleton-facts">
                             <div><dt></dt><dd></dd></div>
@@ -88,9 +88,9 @@
                     <div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent"><i data-lucide="download-cloud"></i>Atualizar agente</button></div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-security-summary" data-overview-card="security">
-                    <header><h2><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
-                    <div data-overview-slot="security-body">
+                <article class="panel endpoint-dense-card endpoint-security-summary rmm-card" data-overview-card="security">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <div class="rmm-card__body" data-overview-slot="security-body">
                         <dl class="endpoint-fact-list endpoint-skeleton-facts">
                             <div><dt></dt><dd></dd></div>
                             <div><dt></dt><dd></dd></div>
@@ -102,9 +102,9 @@
             </section>
 
             <section class="endpoint-summary-row">
-                <article class="panel endpoint-dense-card endpoint-summary-card" data-overview-card="summary">
-                    <header><h2><i data-lucide="id-card"></i>Resumo t&eacute;cnico</h2></header>
-                    <div data-overview-slot="summary-body">
+                <article class="panel endpoint-dense-card endpoint-summary-card rmm-card" data-overview-card="summary">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="id-card"></i>Resumo t&eacute;cnico</h2></header>
+                    <div class="rmm-card__body" data-overview-slot="summary-body">
                         <dl class="endpoint-fact-list endpoint-skeleton-facts">
                             <div><dt></dt><dd></dd></div>
                             <div><dt></dt><dd></dd></div>
@@ -116,9 +116,9 @@
                     </div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-inventory-summary" data-overview-card="inventory">
-                    <header><h2><i data-lucide="cpu"></i>Invent&aacute;rio r&aacute;pido</h2></header>
-                    <div data-overview-slot="inventory-body">
+                <article class="panel endpoint-dense-card endpoint-inventory-summary rmm-card" data-overview-card="inventory">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="cpu"></i>Invent&aacute;rio r&aacute;pido</h2></header>
+                    <div class="rmm-card__body" data-overview-slot="inventory-body">
                         <dl class="endpoint-fact-list endpoint-skeleton-facts">
                             <div><dt></dt><dd></dd></div>
                             <div><dt></dt><dd></dd></div>
@@ -130,9 +130,9 @@
                     </div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-disk-summary" data-overview-card="disks">
-                    <header><h2><i data-lucide="hard-drive"></i>Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver invent&aacute;rio</button></header>
-                    <div data-overview-slot="disks-body">
+                <article class="panel endpoint-dense-card endpoint-disk-summary rmm-card" data-overview-card="disks">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="hard-drive"></i>Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver invent&aacute;rio</button></header>
+                    <div class="rmm-card__body" data-overview-slot="disks-body">
                         <div class="endpoint-mini-disk-list endpoint-skeleton-disks">
                             <div><strong></strong><span></span><em><i></i></em><small></small></div>
                             <div><strong></strong><span></span><em><i></i></em><small></small></div>
@@ -142,14 +142,14 @@
             </section>
 
             <section class="endpoint-operational-row">
-                <article class="panel endpoint-dense-card endpoint-jobs-card" data-overview-card="jobs">
-                    <header><h2><i data-lucide="list-checks"></i>Fila de a&ccedil;&otilde;es</h2><button type="button" data-refresh-endpoint><i data-lucide="refresh-ccw"></i>Atualizar dados</button></header>
-                    <div data-overview-slot="jobs-body"><div class="endpoint-job-list endpoint-skeleton-jobs"><article></article><article></article><article></article></div></div>
+                <article class="panel endpoint-dense-card endpoint-jobs-card rmm-card" data-overview-card="jobs">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="list-checks"></i>Fila de a&ccedil;&otilde;es</h2><button type="button" data-refresh-endpoint><i data-lucide="refresh-ccw"></i>Atualizar dados</button></header>
+                    <div class="rmm-card__body" data-overview-slot="jobs-body"><div class="endpoint-job-list endpoint-skeleton-jobs"><article></article><article></article><article></article></div></div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-actions-card" data-overview-card="actions">
-                    <header><h2><i data-lucide="zap"></i>A&ccedil;&otilde;es r&aacute;pidas</h2></header>
-                    <div data-overview-slot="actions-body"><div class="endpoint-action-groups endpoint-skeleton-actions"><section></section><section></section><section></section></div></div>
+                <article class="panel endpoint-dense-card endpoint-actions-card rmm-card" data-overview-card="actions">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="zap"></i>A&ccedil;&otilde;es r&aacute;pidas</h2></header>
+                    <div class="rmm-card__body" data-overview-slot="actions-body"><div class="endpoint-action-groups endpoint-skeleton-actions"><section></section><section></section><section></section></div></div>
                 </article>
             </section>
 

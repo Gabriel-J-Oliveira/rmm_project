@@ -16,7 +16,8 @@ param(
     [ValidateSet("development", "pilot", "stable")]
     [string]$Channel = "",
 
-    [switch]$UpdatePublicLatest
+    [switch]$UpdatePublicLatest,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +108,54 @@ function Get-FileSha256([string]$Path) {
     return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
 }
 
+function Write-Utf8NoBomText([string]$Path, [string]$Content) {
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
+function Write-Utf8NoBomJson([string]$Path, $Value, [int]$Depth = 8) {
+    $content = $Value | ConvertTo-Json -Depth $Depth
+    Write-Utf8NoBomText -Path $Path -Content $content
+}
+
+function Test-FileHasUtf8Bom([string]$Path) {
+    if (-not (Test-Path $Path)) { throw "Arquivo nao encontrado para validacao BOM: $Path" }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    return $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+}
+
+function Assert-JsonFileUtf8NoBom([string]$Path) {
+    if (Test-FileHasUtf8Bom $Path) {
+        throw "JSON contem UTF-8 BOM: $Path"
+    }
+    $null = Get-Content -Raw -Path $Path | ConvertFrom-Json
+}
+
+function Assert-JsonTextNoBom([string]$Name, [string]$Content) {
+    if ($Content.Length -gt 0 -and [int][char]$Content[0] -eq 0xFEFF) {
+        throw "JSON contem UTF-8 BOM: $Name"
+    }
+    $null = $Content | ConvertFrom-Json
+}
+
+function Invoke-SelfTest {
+    $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("nightowl-json-selftest-{0}" -f ([guid]::NewGuid().ToString("N")))
+    New-Item -ItemType Directory -Force -Path $temp | Out-Null
+    try {
+        $jsonPath = Join-Path $temp "selftest.json"
+        Write-Utf8NoBomJson -Path $jsonPath -Value ([ordered]@{ version = "0.1.1.0-rc4"; url = "https://nightowl.controlsul.com.br/downloads/nightowl-agent" })
+        Assert-JsonFileUtf8NoBom $jsonPath
+        Write-Step "SelfTest OK: JSON escrito como UTF-8 sem BOM em Windows PowerShell."
+    }
+    finally {
+        Remove-Item -Path $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-Checked([string]$FileName, [string[]]$Arguments) {
     Write-Step ("Executando: {0} {1}" -f $FileName, ($Arguments -join " "))
     & $FileName @Arguments
@@ -167,7 +216,7 @@ function New-AgentVersionFile([string]$Path, [string]$BuildId, [string]$BuiltAt,
         packageSha256 = ""
         updatedBy = "installer"
     }
-    $agentVersion | ConvertTo-Json -Depth 6 | Set-Content -Path $Path -Encoding UTF8
+    Write-Utf8NoBomJson -Path $Path -Value $agentVersion -Depth 6
 }
 
 function Compress-ReleaseZip([string]$PackageDir, [string]$ZipPath) {
@@ -206,6 +255,9 @@ function Validate-Release([string]$Path) {
     foreach ($required in @($zipPath, $versionPath, $checksumsPath, $manifestPath)) {
         if (-not (Test-Path $required)) { throw "Artefato obrigatorio ausente: $required" }
     }
+    foreach ($jsonPath in @($versionPath, $checksumsPath, $manifestPath)) {
+        Assert-JsonFileUtf8NoBom $jsonPath
+    }
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
@@ -230,6 +282,7 @@ function Validate-Release([string]$Path) {
             }
         }
         $agentVersionJson = Read-ZipEntryText -Zip $zip -EntryName "agent.version.json"
+        Assert-JsonTextNoBom -Name "agent.version.json" -Content $agentVersionJson
         $agentVersion = $agentVersionJson | ConvertFrom-Json
         if ([string]$agentVersion.version -ne $Version) {
             throw "agent.version.json inconsistente. Esperado $Version, obtido $($agentVersion.version)"
@@ -274,7 +327,7 @@ function New-Checksums([string]$ReleasePath) {
         $items += [ordered]@{ name = $file; sha256 = $sha; size = $size }
     }
     $map["files"] = $items
-    $map | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $ReleasePath "checksums.json") -Encoding UTF8
+    Write-Utf8NoBomJson -Path (Join-Path $ReleasePath "checksums.json") -Value $map -Depth 8
 }
 
 function Publish-LocalAtomic([string]$Source, [string]$DestinationRoot) {
@@ -330,6 +383,11 @@ function Publish-RemoteAtomic([string]$Source, [string]$HostName, [string]$Desti
         & ssh $HostName "rm -rf '$remoteTemp'" 2>$null
         throw
     }
+}
+
+if ($SelfTest) {
+    Invoke-SelfTest
+    return
 }
 
 Assert-Version $Version
@@ -451,7 +509,7 @@ try {
         build_id = $buildId
         git_commit = $commit
     }
-    $versionManifest | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $ReleaseDir "version.json") -Encoding UTF8
+    Write-Utf8NoBomJson -Path (Join-Path $ReleaseDir "version.json") -Value $versionManifest -Depth 8
 
     $releaseManifest = [ordered]@{
         product = "NightOwl Agent Windows"
@@ -482,7 +540,7 @@ try {
         )
         forbidden_patterns = @("agent.config.json", "agent.identity.json", "agent.state.json", "agent-dotnet.state.json", "update-state.json", "*.preserved-*", "*.log", "*.tmp", "*.pdb", "*.ps1", "bin/", "obj/", "publish/", "downloads/", "artifacts/", "releases/")
     }
-    $releaseManifest | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $ReleaseDir "release-manifest.json") -Encoding UTF8
+    Write-Utf8NoBomJson -Path (Join-Path $ReleaseDir "release-manifest.json") -Value $releaseManifest -Depth 8
 
     New-Checksums $ReleaseDir
     Validate-Release $ReleaseDir
