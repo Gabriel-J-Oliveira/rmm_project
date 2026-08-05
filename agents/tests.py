@@ -951,6 +951,10 @@ class AgentReleaseGovernanceTests(TestCase):
         call_command('import_agent_release', '--agent-version', release.version, '--channel', release.channel, '--version-json', path)
         self.assertEqual(AgentRelease.objects.filter(version=release.version).count(), 1)
 
+    def test_verify_agent_release_uses_agent_version_argument(self):
+        release = self.release(version='0.1.1.0-rc6')
+        call_command('verify_agent_release', '--agent-version', release.version, '--skip-remote')
+
     def test_different_hash_import_is_blocked(self):
         release = self.release()
         with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:

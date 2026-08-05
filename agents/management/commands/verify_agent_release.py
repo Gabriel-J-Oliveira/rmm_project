@@ -12,7 +12,7 @@ class Command(BaseCommand):
     help = 'Verifica consistencia basica de uma release importada.'
 
     def add_arguments(self, parser):
-        parser.add_argument('--version', required=True)
+        parser.add_argument('--agent-version', '--release-version', dest='version', required=True)
         parser.add_argument('--skip-remote', action='store_true')
 
     def handle(self, *args, **options):
