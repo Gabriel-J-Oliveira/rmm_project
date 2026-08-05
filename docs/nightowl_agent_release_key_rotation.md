@@ -10,6 +10,26 @@ NightOwl Agent releases are signed with RSA-PSS + SHA-256. The private key must 
 - Public key bundle inside the agent ZIP: `release-public-keys.json`.
 - Manifest signature: `release-manifest.sig`, Base64 encoded RSA-PSS/SHA-256 over the exact bytes of `release-manifest.json`.
 
+## Export Public Keys
+
+Generate the public key bundle outside the repository from the private XML key:
+
+```powershell
+$env:NIGHTOWL_RELEASE_SIGNING_KEY="C:\secure\nightowl-release-private.xml"
+$env:NIGHTOWL_RELEASE_SIGNING_KEY_ID="nightowl-release-2026-01"
+
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\Export-NightOwlReleasePublicKeys.ps1"
+```
+
+Default output:
+
+```text
+%USERPROFILE%\.nightowl\release-public-keys.json
+```
+
+The script exports only the public RSA XML, verifies it against the private key with RSA-PSS/SHA-256, rejects private RSA parameters in the output, and writes UTF-8 without BOM.
+
 ## Rotation
 
 1. Generate the new private/public RSA key pair outside the repository.
