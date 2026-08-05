@@ -60,6 +60,15 @@ public static class UpdateErrorCodes
     public const string UpdateReleaseMetadataMissing = "UPDATE_RELEASE_METADATA_MISSING";
     public const string UpdateTargetReleaseNotResolved = "UPDATE_TARGET_RELEASE_NOT_RESOLVED";
     public const string UpdateMinimumUpdaterVersionNotMet = "UPDATE_MINIMUM_UPDATER_VERSION_NOT_MET";
+    public const string ReleaseManifestMissing = "RELEASE_MANIFEST_MISSING";
+    public const string ReleaseManifestInvalid = "RELEASE_MANIFEST_INVALID";
+    public const string ReleaseSignatureMissing = "RELEASE_SIGNATURE_MISSING";
+    public const string ReleaseSignatureInvalid = "RELEASE_SIGNATURE_INVALID";
+    public const string ReleaseKeyUnknown = "RELEASE_KEY_UNKNOWN";
+    public const string ReleaseVersionMismatch = "RELEASE_VERSION_MISMATCH";
+    public const string ReleaseChannelMismatch = "RELEASE_CHANNEL_MISMATCH";
+    public const string ReleaseHashMismatch = "RELEASE_HASH_MISMATCH";
+    public const string ReleaseSizeMismatch = "RELEASE_SIZE_MISMATCH";
     public const string RollbackBackupInvalid = "ROLLBACK_BACKUP_INVALID";
     public const string RollbackServiceStopFailed = "ROLLBACK_SERVICE_STOP_FAILED";
     public const string RollbackFileRestoreFailed = "ROLLBACK_FILE_RESTORE_FAILED";

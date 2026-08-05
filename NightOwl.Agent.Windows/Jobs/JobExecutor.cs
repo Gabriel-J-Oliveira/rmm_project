@@ -266,6 +266,11 @@ public sealed class JobExecutor
         string checksumUrl = GetPayloadString(job, "checksum_url", "");
         string sha256 = GetPayloadString(job, "sha256", "");
         long size = GetPayloadLong(job, "size", 0);
+        string manifestUrl = GetPayloadString(job, "manifest_url", "");
+        string manifestSha256 = GetPayloadString(job, "manifest_sha256", "");
+        string signatureUrl = GetPayloadString(job, "signature_url", "");
+        string signatureSha256 = GetPayloadString(job, "signature_sha256", "");
+        string signatureKeyId = GetPayloadString(job, "signature_key_id", "");
         string minimumUpdaterVersion = GetPayloadString(job, "minimum_updater_version", "");
         bool mandatory = GetPayloadBool(job, "mandatory", false);
         bool force = GetPayloadBool(job, "force", false);
@@ -284,6 +289,11 @@ public sealed class JobExecutor
         AddOption(args, "--package-url", packageUrl);
         AddOption(args, "--checksum-url", checksumUrl);
         AddOption(args, "--sha256", sha256);
+        AddOption(args, "--manifest-url", manifestUrl);
+        AddOption(args, "--manifest-sha256", manifestSha256);
+        AddOption(args, "--signature-url", signatureUrl);
+        AddOption(args, "--signature-sha256", signatureSha256);
+        AddOption(args, "--signature-key-id", signatureKeyId);
         if (size > 0)
         {
             AddOption(args, "--size", size.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -310,6 +320,9 @@ public sealed class JobExecutor
                 releaseId,
                 hasPackageUrl = !string.IsNullOrWhiteSpace(packageUrl),
                 hasChecksumUrl = !string.IsNullOrWhiteSpace(checksumUrl),
+                hasManifestUrl = !string.IsNullOrWhiteSpace(manifestUrl),
+                hasSignatureUrl = !string.IsNullOrWhiteSpace(signatureUrl),
+                signatureKeyId,
                 hasSha256 = !string.IsNullOrWhiteSpace(sha256),
                 size,
                 minimumUpdaterVersion,
@@ -354,6 +367,11 @@ public sealed class JobExecutor
                 release_id = releaseId,
                 package_url = SanitizeUrl(packageUrl),
                 checksum_url = SanitizeUrl(checksumUrl),
+                manifest_url = SanitizeUrl(manifestUrl),
+                manifest_sha256 = manifestSha256,
+                signature_url = SanitizeUrl(signatureUrl),
+                signature_sha256 = signatureSha256,
+                signature_key_id = signatureKeyId,
                 sha256_present = !string.IsNullOrWhiteSpace(sha256),
                 size,
                 minimum_updater_version = minimumUpdaterVersion,

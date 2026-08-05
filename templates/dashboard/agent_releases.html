@@ -38,9 +38,15 @@
             <label>Rollout %<input name="rollout_percentage" type="number" min="0" max="100" value="0"></label>
             <label class="release-wide">Package URL<input name="package_url" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/NightOwl.Agent.Windows.zip" required></label>
             <label class="release-wide">Checksums URL<input name="checksum_url" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/checksums.json"></label>
+            <label class="release-wide">Manifest URL<input name="manifest_url" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.json"></label>
+            <label class="release-wide">Signature URL<input name="signature_url" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.sig"></label>
             <label>SHA-256<input name="sha256" maxlength="64" required></label>
             <label>Tamanho bytes<input name="size" type="number" min="0" value="0"></label>
+            <label>Manifest SHA-256<input name="manifest_sha256" maxlength="64"></label>
+            <label>Signature SHA-256<input name="signature_sha256" maxlength="64"></label>
+            <label>Key ID<input name="signature_key_id" placeholder="nightowl-release-2026-01"></label>
             <label>Updater minimo<input name="minimum_updater_version" placeholder="0.1.0.0"></label>
+            <label class="release-checkbox"><input name="signature_valid" type="checkbox">Assinatura validada</label>
             <label class="release-checkbox"><input name="mandatory" type="checkbox">Obrigatoria</label>
             <fieldset class="release-wide release-groups">
                 <legend>Grupos permitidos</legend>
@@ -62,9 +68,15 @@
                 <header>
                     <div>
                         <h2>{{ release.version }} <span class="badge badge-muted">{{ release.channel }}</span></h2>
-                        <p>{{ release.get_status_display }}{% if release.revoked %} · revogada{% endif %}</p>
+                        <p>
+                            {{ release.get_status_display }}
+                            {% if release.legacy_unsigned %} · legacy_unsigned{% endif %}
+                            {% if release.signature_valid %} · assinatura OK{% endif %}
+                            {% if release.revoked %} · revogada{% endif %}
+                            {% if release.replacement_release %} · substituta: {{ release.replacement_release.version }}{% endif %}
+                        </p>
                     </div>
-                    <span class="agent-version-pill agent-{% if release.status == 'available' and not release.rollout_paused and not release.revoked %}current{% else %}outdated{% endif %}">{{ release.rollout_percentage }}%</span>
+                    <span class="agent-version-pill agent-{% if release.status == 'published' and not release.rollout_paused and not release.revoked %}current{% else %}outdated{% endif %}">{{ release.rollout_percentage }}%</span>
                 </header>
                 <dl class="release-metrics">
                     <div><dt>Elegiveis</dt><dd>{{ metrics.eligible }}</dd></div>
@@ -77,6 +89,8 @@
                 <div class="release-package">
                     <span title="{{ release.package_url }}">{{ release.package_url }}</span>
                     <code>{{ release.sha256 }}</code>
+                    {% if release.manifest_url %}<span title="{{ release.manifest_url }}">{{ release.manifest_url }}</span>{% endif %}
+                    {% if release.signature_key_id %}<code>{{ release.signature_key_id }}</code>{% endif %}
                 </div>
                 <div class="release-card-actions">
                     <form method="post" action="{% url 'agent-release-action' release.id %}">
@@ -91,10 +105,23 @@
                     <form method="post" action="{% url 'agent-release-action' release.id %}">
                         {% csrf_token %}<input type="hidden" name="action" value="promote">
                         <select name="channel">{% for value,label in channel_choices %}<option value="{{ value }}" {% if value == release.channel %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+                        <input name="rollout_percentage" type="number" min="0" max="100" value="{{ release.rollout_percentage }}">
+                        <label class="inline-checkbox"><input name="paused" type="checkbox" checked> pausado</label>
+                        <input name="reason" placeholder="Motivo/aprovacao">
                         <button type="submit">Promover</button>
                     </form>
                     <form method="post" action="{% url 'agent-release-action' release.id %}">
+                        {% csrf_token %}<input type="hidden" name="action" value="supersede">
+                        <select name="replacement_release">
+                            <option value="">Substituta</option>
+                            {% for other in releases %}{% if other.release.id != release.id %}<option value="{{ other.release.id }}">{{ other.release.version }}</option>{% endif %}{% endfor %}
+                        </select>
+                        <input name="reason" placeholder="Motivo">
+                        <button type="submit">Superseder</button>
+                    </form>
+                    <form method="post" action="{% url 'agent-release-action' release.id %}">
                         {% csrf_token %}<input type="hidden" name="action" value="revoke">
+                        <input name="reason" placeholder="Motivo da revogacao" required>
                         <button class="danger" type="submit">Revogar</button>
                     </form>
                 </div>

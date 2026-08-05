@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.ServiceProcess;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using NightOwl.Agent.Shared;
@@ -210,9 +211,7 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            MarkFailed(state, ex.Message.Contains(UpdateErrorCodes.UpdateMinimumUpdaterVersionNotMet, StringComparison.OrdinalIgnoreCase)
-                ? UpdateErrorCodes.UpdateMinimumUpdaterVersionNotMet
-                : UpdateErrorCodes.UpdatePackageInvalid, SanitizeMessage(ex.Message));
+            MarkFailed(state, ErrorCodeFromException(ex, UpdateErrorCodes.UpdatePackageInvalid), SanitizeMessage(ex.Message));
             var failedResolution = new
             {
                 ok = false,
@@ -239,6 +238,31 @@ internal static class Program
             state.ExpectedSha256 = explicitChecksums.GetRequired("NightOwl.Agent.Windows.zip").Sha256;
         }
         UpdateStateStore.Save(state);
+        try
+        {
+            await ValidateReleaseManifestAsync(config, manifest);
+        }
+        catch (Exception ex)
+        {
+            MarkFailed(state, ErrorCodeFromException(ex, UpdateErrorCodes.ReleaseManifestInvalid), SanitizeMessage(ex.Message));
+            var failedManifest = new
+            {
+                ok = false,
+                updated = false,
+                reason = "release_manifest_invalid",
+                error_code = state.ErrorCode,
+                installedVersion = installed.Version,
+                targetVersion = manifest.Version,
+                availableVersion = manifest.Version,
+                error = SanitizeMessage(ex.Message)
+            };
+            if (jobContext.IsJob)
+            {
+                WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, SanitizeMessage(ex.Message), failedManifest, SanitizeMessage(ex.ToString()));
+            }
+            WriteJson(failedManifest);
+            return 25;
+        }
         if (jobContext.HasExplicitTarget && !manifest.Version.Equals(jobContext.TargetVersion, StringComparison.OrdinalIgnoreCase))
         {
             string message = $"Resolved release version {manifest.Version} does not match requested target {jobContext.TargetVersion}.";
@@ -902,12 +926,218 @@ internal static class Program
             Version = jobContext.TargetVersion,
             PublishedAt = DateTimeOffset.UtcNow.ToString("O"),
             MinimumSupportedVersion = jobContext.MinimumUpdaterVersion,
+            MinimumUpdaterVersion = jobContext.MinimumUpdaterVersion,
             PackageUrl = jobContext.PackageUrl,
             ChecksumUrl = jobContext.ChecksumUrl,
+            ManifestUrl = string.IsNullOrWhiteSpace(jobContext.ManifestUrl) ? InferSiblingUrl(jobContext.PackageUrl, "release-manifest.json") : jobContext.ManifestUrl,
+            SignatureUrl = string.IsNullOrWhiteSpace(jobContext.SignatureUrl) ? InferSiblingUrl(jobContext.PackageUrl, "release-manifest.sig") : jobContext.SignatureUrl,
+            ManifestSha256 = jobContext.ManifestSha256,
+            SignatureSha256 = jobContext.SignatureSha256,
+            KeyId = jobContext.SignatureKeyId,
+            Sha256 = jobContext.Sha256,
+            Size = jobContext.Size,
             Notes = string.IsNullOrWhiteSpace(jobContext.ReleaseId) ? "Explicit update_agent release." : $"Explicit release {jobContext.ReleaseId}.",
             RequiresRestart = true,
             Force = jobContext.Force
         };
+    }
+
+    private static async Task ValidateReleaseManifestAsync(AgentConfig config, UpdateManifest manifest)
+    {
+        string manifestUrl = string.IsNullOrWhiteSpace(manifest.ManifestUrl)
+            ? InferSiblingUrl(manifest.PackageUrl, "release-manifest.json")
+            : manifest.ManifestUrl;
+        string signatureUrl = string.IsNullOrWhiteSpace(manifest.SignatureUrl)
+            ? InferSiblingUrl(manifest.PackageUrl, "release-manifest.sig")
+            : manifest.SignatureUrl;
+        bool legacyUnsigned = manifest.LegacyUnsigned || string.IsNullOrWhiteSpace(manifest.KeyId);
+        if (legacyUnsigned && manifest.Channel.Equals("development", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteLog("release.manifest.legacy_unsigned", "Legacy unsigned development release accepted with warning.", new { version = manifest.Version, channel = manifest.Channel });
+            return;
+        }
+        if (legacyUnsigned && manifest.Channel.Equals("stable", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureMissing}: stable release requires signature.");
+        }
+        EnsurePackageUrlAllowed(config, manifestUrl);
+        EnsurePackageUrlAllowed(config, signatureUrl);
+
+        using HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
+        byte[] manifestBytes;
+        try
+        {
+            manifestBytes = await http.GetByteArrayAsync(manifestUrl);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseManifestMissing}: {ex.Message}", ex);
+        }
+        if (!string.IsNullOrWhiteSpace(manifest.ManifestSha256))
+        {
+            string actualManifestSha = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
+            if (!actualManifestSha.Equals(manifest.ManifestSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseManifestInvalid}: manifest sha256 mismatch.");
+            }
+        }
+        ReleaseManifest signedManifest;
+        try
+        {
+            signedManifest = JsonSerializer.Deserialize<ReleaseManifest>(manifestBytes, JsonOptions)
+                ?? throw new InvalidOperationException("manifest empty");
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseManifestInvalid}: {ex.Message}", ex);
+        }
+        if (!signedManifest.Version.Equals(manifest.Version, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseVersionMismatch}: manifest version {signedManifest.Version} != {manifest.Version}");
+        }
+        if (!signedManifest.Channel.Equals(manifest.Channel, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseChannelMismatch}: manifest channel {signedManifest.Channel} != {manifest.Channel}");
+        }
+        if (!signedManifest.Package.Sha256.Equals(GetManifestPackageSha(manifest), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseHashMismatch}: manifest package hash mismatch.");
+        }
+        if (manifest.Size > 0 && signedManifest.Package.Size > 0 && signedManifest.Package.Size != manifest.Size)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSizeMismatch}: manifest package size mismatch.");
+        }
+        byte[] signatureBytes;
+        byte[] signature;
+        try
+        {
+            signatureBytes = await http.GetByteArrayAsync(signatureUrl);
+            string signatureText = System.Text.Encoding.UTF8.GetString(signatureBytes);
+            signature = Convert.FromBase64String(signatureText.Trim());
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureMissing}: {ex.Message}", ex);
+        }
+        if (!string.IsNullOrWhiteSpace(manifest.SignatureSha256))
+        {
+            string actualSignatureSha = Convert.ToHexString(SHA256.HashData(signatureBytes)).ToLowerInvariant();
+            if (!actualSignatureSha.Equals(manifest.SignatureSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureInvalid}: signature sha256 mismatch.");
+            }
+        }
+        TrustedReleaseKey key = LoadTrustedReleaseKey(signedManifest.KeyId);
+        if (key.Revoked)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseKeyUnknown}: key {signedManifest.KeyId} is revoked.");
+        }
+        bool valid = VerifyReleaseManifestSignature(manifestBytes, signature, key.PublicKeyXml);
+        if (!valid)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureInvalid}: manifest signature invalid.");
+        }
+        manifest.KeyId = signedManifest.KeyId;
+        manifest.LegacyUnsigned = false;
+        WriteLog("release.signature.valid", "Release manifest signature validated.", new { version = manifest.Version, channel = manifest.Channel, key_id = signedManifest.KeyId });
+    }
+
+    internal static bool VerifyReleaseManifestSignatureForTest(byte[] manifestBytes, byte[] signature, string publicKeyXml)
+        => VerifyReleaseManifestSignature(manifestBytes, signature, publicKeyXml);
+
+    private static bool VerifyReleaseManifestSignature(byte[] manifestBytes, byte[] signature, string publicKeyXml)
+    {
+        using RSA rsa = CreateRsaPssPublicKeyFromXml(publicKeyXml);
+        return rsa.VerifyData(manifestBytes, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    }
+
+    private static RSA CreateRsaPssPublicKeyFromXml(string publicKeyXml)
+    {
+        try
+        {
+            using RSACryptoServiceProvider legacyProvider = new();
+            legacyProvider.PersistKeyInCsp = false;
+            legacyProvider.FromXmlString(publicKeyXml);
+            RSAParameters parameters = legacyProvider.ExportParameters(false);
+            RSACng cng = new();
+            cng.ImportParameters(parameters);
+            return cng;
+        }
+        catch (PlatformNotSupportedException ex)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseKeyUnknown}: RSA-PSS provider unavailable.", ex);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseKeyUnknown}: invalid trusted RSA public key.", ex);
+        }
+    }
+
+    private static string GetManifestPackageSha(UpdateManifest manifest)
+    {
+        return string.IsNullOrWhiteSpace(manifest.Sha256) ? "" : manifest.Sha256;
+    }
+
+    private static TrustedReleaseKey LoadTrustedReleaseKey(string keyId)
+    {
+        if (string.IsNullOrWhiteSpace(keyId))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseKeyUnknown}: key_id missing.");
+        }
+        string keyPath = Path.Combine(AppContext.BaseDirectory, "release-public-keys.json");
+        if (!File.Exists(keyPath))
+        {
+            keyPath = Path.Combine(Paths.InstallDir, "release-public-keys.json");
+        }
+        if (!File.Exists(keyPath))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseKeyUnknown}: trusted key store not found.");
+        }
+        TrustedReleaseKeySet? keySet = JsonSerializer.Deserialize<TrustedReleaseKeySet>(File.ReadAllText(keyPath), JsonOptions);
+        TrustedReleaseKey? key = keySet?.Keys.FirstOrDefault(item =>
+            item.KeyId.Equals(keyId, StringComparison.OrdinalIgnoreCase)
+            && item.Status.Equals("active", StringComparison.OrdinalIgnoreCase));
+        if (key is null)
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseKeyUnknown}: key {keyId} not trusted.");
+        }
+        return key;
+    }
+
+    private static string InferSiblingUrl(string url, string fileName)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
+        {
+            return "";
+        }
+        string left = uri.GetLeftPart(UriPartial.Path);
+        int slash = left.LastIndexOf('/');
+        return slash >= 0 ? left[..(slash + 1)] + fileName : "";
+    }
+
+    private static string ErrorCodeFromException(Exception ex, string fallback)
+    {
+        string message = ex.Message ?? "";
+        foreach (string code in new[]
+        {
+            UpdateErrorCodes.UpdateMinimumUpdaterVersionNotMet,
+            UpdateErrorCodes.ReleaseManifestMissing,
+            UpdateErrorCodes.ReleaseManifestInvalid,
+            UpdateErrorCodes.ReleaseSignatureMissing,
+            UpdateErrorCodes.ReleaseSignatureInvalid,
+            UpdateErrorCodes.ReleaseKeyUnknown,
+            UpdateErrorCodes.ReleaseVersionMismatch,
+            UpdateErrorCodes.ReleaseChannelMismatch,
+            UpdateErrorCodes.ReleaseHashMismatch,
+            UpdateErrorCodes.ReleaseSizeMismatch,
+        })
+        {
+            if (message.Contains(code, StringComparison.OrdinalIgnoreCase))
+            {
+                return code;
+            }
+        }
+        return fallback;
     }
 
     private static void EnsureMinimumUpdaterVersion(string minimumUpdaterVersion)
@@ -1999,11 +2229,45 @@ internal static class Program
         [JsonPropertyName("minimumSupportedVersion")]
         public string MinimumSupportedVersion { get; set; } = "0.0.0";
 
+        [JsonPropertyName("minimum_updater_version")]
+        public string MinimumUpdaterVersion { get; set; } = "";
+
         [JsonPropertyName("packageUrl")]
         public string PackageUrl { get; set; } = "";
 
         [JsonPropertyName("checksumUrl")]
         public string ChecksumUrl { get; set; } = "";
+
+        [JsonPropertyName("manifestUrl")]
+        public string ManifestUrl { get; set; } = "";
+
+        [JsonPropertyName("signatureUrl")]
+        public string SignatureUrl { get; set; } = "";
+
+        [JsonPropertyName("manifest_sha256")]
+        public string ManifestSha256 { get; set; } = "";
+
+        [JsonPropertyName("signature_sha256")]
+        public string SignatureSha256 { get; set; } = "";
+
+        [JsonPropertyName("key_id")]
+        public string KeyId { get; set; } = "";
+
+        [JsonPropertyName("signature_key_id")]
+        public string SignatureKeyId
+        {
+            get => KeyId;
+            set => KeyId = value;
+        }
+
+        [JsonPropertyName("sha256")]
+        public string Sha256 { get; set; } = "";
+
+        [JsonPropertyName("size")]
+        public long Size { get; set; }
+
+        [JsonPropertyName("legacyUnsigned")]
+        public bool LegacyUnsigned { get; set; }
 
         [JsonPropertyName("installerUrl")]
         public string InstallerUrl { get; set; } = "";
@@ -2016,6 +2280,63 @@ internal static class Program
 
         [JsonPropertyName("force")]
         public bool Force { get; set; }
+    }
+
+    private sealed class ReleaseManifest
+    {
+        [JsonPropertyName("schema_version")]
+        public int SchemaVersion { get; set; }
+
+        [JsonPropertyName("version")]
+        public string Version { get; set; } = "";
+
+        [JsonPropertyName("channel")]
+        public string Channel { get; set; } = "";
+
+        [JsonPropertyName("key_id")]
+        public string KeyId { get; set; } = "";
+
+        [JsonPropertyName("package")]
+        public ReleaseManifestPackage Package { get; set; } = new();
+    }
+
+    private sealed class ReleaseManifestPackage
+    {
+        [JsonPropertyName("filename")]
+        public string Filename { get; set; } = "";
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = "";
+
+        [JsonPropertyName("sha256")]
+        public string Sha256 { get; set; } = "";
+
+        [JsonPropertyName("size")]
+        public long Size { get; set; }
+    }
+
+    private sealed class TrustedReleaseKeySet
+    {
+        [JsonPropertyName("keys")]
+        public List<TrustedReleaseKey> Keys { get; set; } = new();
+    }
+
+    private sealed class TrustedReleaseKey
+    {
+        [JsonPropertyName("key_id")]
+        public string KeyId { get; set; } = "";
+
+        [JsonPropertyName("public_key_xml")]
+        public string PublicKeyXml { get; set; } = "";
+
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = "active";
+
+        [JsonPropertyName("revoked_at")]
+        public string RevokedAt { get; set; } = "";
+
+        [JsonIgnore]
+        public bool Revoked => !string.IsNullOrWhiteSpace(RevokedAt) || Status.Equals("revoked", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class AgentVersionInfo
@@ -2162,6 +2483,11 @@ internal static class Program
         public string ChecksumUrl { get; init; } = "";
         public string Sha256 { get; init; } = "";
         public long Size { get; init; }
+        public string ManifestUrl { get; init; } = "";
+        public string ManifestSha256 { get; init; } = "";
+        public string SignatureUrl { get; init; } = "";
+        public string SignatureSha256 { get; init; } = "";
+        public string SignatureKeyId { get; init; } = "";
         public string MinimumUpdaterVersion { get; init; } = "";
         public bool Mandatory { get; init; }
         public bool Force { get; init; }
@@ -2189,6 +2515,11 @@ internal static class Program
                 ChecksumUrl = GetOption(args, "--checksum-url") ?? "",
                 Sha256 = GetOption(args, "--sha256") ?? "",
                 Size = GetOptionLong(args, "--size", 0),
+                ManifestUrl = GetOption(args, "--manifest-url") ?? "",
+                ManifestSha256 = GetOption(args, "--manifest-sha256") ?? "",
+                SignatureUrl = GetOption(args, "--signature-url") ?? "",
+                SignatureSha256 = GetOption(args, "--signature-sha256") ?? "",
+                SignatureKeyId = GetOption(args, "--signature-key-id") ?? "",
                 MinimumUpdaterVersion = GetOption(args, "--minimum-updater-version") ?? "",
                 Mandatory = HasFlag(args, "--mandatory"),
                 Force = HasFlag(args, "--force"),

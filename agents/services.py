@@ -114,7 +114,8 @@ UPDATE_POLICY_REASON_PINNED_RELEASE_NOT_FOUND = 'pinned_release_not_found'
 UPDATE_POLICY_REASON_PINNED_RELEASE_UNAVAILABLE = 'pinned_release_unavailable'
 UPDATE_POLICY_REASON_INVALID_VERSION = 'invalid_version'
 UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE = 'downgrade_requires_force'
-AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_AVAILABLE, 'active'}
+AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
+AGENT_RELEASE_AUTOMATIC_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
 
 
 @dataclass(frozen=True)
@@ -351,6 +352,187 @@ def _release_domain_allowed(url):
     return parsed.scheme == 'https' and parsed.hostname in set(allowed_hosts)
 
 
+def _actor_name(actor):
+    if actor is None:
+        return 'system'
+    if hasattr(actor, 'get_username'):
+        return actor.get_username() or 'system'
+    return str(actor) or 'system'
+
+
+def _release_audit(release, action, *, actor=None, reason='', channel_before='', rollout_before=None, metadata=None):
+    from .models import AgentReleaseAudit
+
+    AgentReleaseAudit.objects.create(
+        user=actor if getattr(actor, 'is_authenticated', False) else None,
+        action=action,
+        release=release,
+        version=release.version,
+        channel_before=channel_before,
+        channel_after=release.channel,
+        rollout_before=rollout_before,
+        rollout_after=release.rollout_percentage,
+        reason=reason,
+        metadata=metadata or {},
+    )
+
+
+def assert_release_immutable_compatible(existing, metadata):
+    critical = {
+        'package_url': metadata.get('package_url') or metadata.get('packageUrl') or '',
+        'checksum_url': metadata.get('checksum_url') or metadata.get('checksumUrl') or '',
+        'sha256': (metadata.get('sha256') or '').lower(),
+        'size': int(metadata.get('size') or 0),
+        'manifest_url': metadata.get('manifest_url') or metadata.get('manifestUrl') or '',
+        'manifest_sha256': (metadata.get('manifest_sha256') or metadata.get('manifestSha256') or '').lower(),
+        'signature_url': metadata.get('signature_url') or metadata.get('signatureUrl') or '',
+        'signature_sha256': (metadata.get('signature_sha256') or metadata.get('signatureSha256') or '').lower(),
+        'signature_key_id': metadata.get('signature_key_id') or metadata.get('signatureKeyId') or '',
+        'minimum_updater_version': metadata.get('minimum_updater_version') or metadata.get('minimumUpdaterVersion') or '',
+    }
+    differences = {
+        field: {'existing': getattr(existing, field), 'incoming': value}
+        for field, value in critical.items()
+        if value not in ('', 0) and getattr(existing, field) != value
+    }
+    if differences and existing.status in AgentRelease.IMMUTABLE_STATUSES:
+        _release_audit(
+            existing,
+            'immutability_blocked',
+            reason='RELEASE_IMMUTABILITY_VIOLATION',
+            metadata={'differences': differences},
+        )
+        raise ValidationError(f'RELEASE_IMMUTABILITY_VIOLATION: release {existing.version} ja publicada com metadados diferentes.')
+
+
+@transaction.atomic
+def promote_agent_release(release, target_channel, actor, rollout_percentage=0, rollout_paused=True, approval_reason='', allow_direct_stable=False):
+    target_channel = (target_channel or '').strip()
+    if target_channel not in {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}:
+        raise ValidationError('Canal alvo invalido.')
+    channel_before = release.channel
+    rollout_before = release.rollout_percentage
+    allowed = {
+        AgentRelease.CHANNEL_DEVELOPMENT: {AgentRelease.CHANNEL_PILOT},
+        AgentRelease.CHANNEL_PILOT: {AgentRelease.CHANNEL_STABLE},
+        AgentRelease.CHANNEL_STABLE: set(),
+    }
+    if target_channel == channel_before:
+        return release
+    if target_channel not in allowed.get(channel_before, set()):
+        if not (allow_direct_stable and channel_before == AgentRelease.CHANNEL_DEVELOPMENT and target_channel == AgentRelease.CHANNEL_STABLE):
+            raise ValidationError('Transicao de canal nao permitida.')
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        raise ValidationError('Release revogada nao pode ser promovida.')
+    if release.status == AgentRelease.STATUS_DRAFT:
+        raise ValidationError('Release draft precisa ser publicada antes da promocao.')
+    if release.legacy_unsigned and target_channel == AgentRelease.CHANNEL_STABLE:
+        raise ValidationError('Release legacy_unsigned nao pode ser promovida para stable.')
+    if target_channel == AgentRelease.CHANNEL_STABLE:
+        if not getattr(actor, 'has_perm', lambda perm: False)('agents.promote_agentrelease_stable'):
+            raise ValidationError('Permissao agents.promote_agentrelease_stable obrigatoria.')
+        if not approval_reason.strip():
+            raise ValidationError('Promocao para stable exige motivo/aprovacao.')
+        release.stable_approval_reason = approval_reason.strip()
+    elif not getattr(actor, 'has_perm', lambda perm: False)('agents.promote_agentrelease'):
+        raise ValidationError('Permissao agents.promote_agentrelease obrigatoria.')
+
+    release.channel = target_channel
+    release.status = AgentRelease.STATUS_PAUSED if rollout_paused else AgentRelease.STATUS_PUBLISHED
+    release.rollout_paused = bool(rollout_paused)
+    release.rollout_percentage = min(100, max(0, int(rollout_percentage or 0)))
+    release.save()
+    _release_audit(
+        release,
+        'promoted',
+        actor=actor,
+        reason=approval_reason,
+        channel_before=channel_before,
+        rollout_before=rollout_before,
+        metadata={'target_channel': target_channel, 'actor': _actor_name(actor), 'sha256': release.sha256},
+    )
+    return release
+
+
+@transaction.atomic
+def revoke_agent_release(release, actor, reason, replacement_release=None):
+    reason = (reason or '').strip()
+    if not reason:
+        raise ValidationError('Revogacao exige motivo.')
+    if not getattr(actor, 'has_perm', lambda perm: False)('agents.revoke_agentrelease'):
+        raise ValidationError('Permissao agents.revoke_agentrelease obrigatoria.')
+    channel_before = release.channel
+    rollout_before = release.rollout_percentage
+    release.revoked = True
+    release.revoked_at = timezone.now()
+    release.revoked_by = actor if getattr(actor, 'is_authenticated', False) else None
+    release.revocation_reason = reason
+    release.replacement_release = replacement_release
+    release.status = AgentRelease.STATUS_REVOKED
+    release.rollout_paused = True
+    release.save()
+    _release_audit(
+        release,
+        'revoked',
+        actor=actor,
+        reason=reason,
+        channel_before=channel_before,
+        rollout_before=rollout_before,
+        metadata={'replacement_release': str(replacement_release.id) if replacement_release else ''},
+    )
+    return release
+
+
+@transaction.atomic
+def supersede_agent_release(release, replacement_release, actor, reason=''):
+    if replacement_release is None:
+        raise ValidationError('Release substituta obrigatoria.')
+    if release.pk == replacement_release.pk:
+        raise ValidationError('Release nao pode substituir a si mesma.')
+    channel_before = release.channel
+    rollout_before = release.rollout_percentage
+    release.status = AgentRelease.STATUS_SUPERSEDED
+    release.rollout_paused = True
+    release.superseded_at = timezone.now()
+    release.superseded_by = actor if getattr(actor, 'is_authenticated', False) else None
+    release.superseded_reason = reason or ''
+    release.replacement_release = replacement_release
+    release.save()
+    _release_audit(
+        release,
+        'superseded',
+        actor=actor,
+        reason=reason,
+        channel_before=channel_before,
+        rollout_before=rollout_before,
+        metadata={'replacement_release': str(replacement_release.id), 'replacement_version': replacement_release.version},
+    )
+    return release
+
+
+@transaction.atomic
+def change_agent_release_rollout(release, actor, rollout_percentage, paused=None, reason=''):
+    rollout_before = release.rollout_percentage
+    channel_before = release.channel
+    release.rollout_percentage = min(100, max(0, int(rollout_percentage or 0)))
+    if paused is not None:
+        release.rollout_paused = bool(paused)
+        if release.rollout_paused and release.status == AgentRelease.STATUS_PUBLISHED:
+            release.status = AgentRelease.STATUS_PAUSED
+        elif not release.rollout_paused and release.status == AgentRelease.STATUS_PAUSED:
+            release.status = AgentRelease.STATUS_PUBLISHED
+    release.save()
+    _release_audit(
+        release,
+        'rollout_changed',
+        actor=actor,
+        reason=reason,
+        channel_before=channel_before,
+        rollout_before=rollout_before,
+    )
+    return release
+
+
 def deterministic_rollout_bucket(endpoint, release):
     stable_identity = endpoint.machine_id or str(endpoint.id)
     release_key = str(release.id or release.version)
@@ -437,11 +619,14 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
     if explicit_release is not None and explicit_release.channel != channel:
         return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, release)
 
+    if release.channel == AgentRelease.CHANNEL_PILOT and not getattr(endpoint, 'is_pilot_endpoint', False):
+        return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
+
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
     manual_explicit_release = manual and explicit_release is not None
     if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not (
-        manual_explicit_release and release.status == AgentRelease.STATUS_PAUSED
+        manual_explicit_release and release.status in {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED}
     ):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     if not release.package_url or not release.sha256:

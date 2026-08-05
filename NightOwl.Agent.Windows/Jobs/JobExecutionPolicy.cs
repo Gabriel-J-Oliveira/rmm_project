@@ -172,6 +172,13 @@ public sealed class JobExecutionPolicy
                     "checksum_url",
                     "sha256",
                     "size",
+                    "manifest_url",
+                    "manifest_sha256",
+                    "signature_url",
+                    "signature_sha256",
+                    "signature_key_id",
+                    "signature_valid",
+                    "legacy_unsigned",
                     "channel",
                     "minimum_updater_version",
                     "mandatory",
@@ -185,6 +192,11 @@ public sealed class JobExecutionPolicy
                 string releaseId = GetString(p, "release_id", "");
                 string packageUrl = GetString(p, "package_url", "");
                 string checksumUrl = GetString(p, "checksum_url", "");
+                string manifestUrl = GetString(p, "manifest_url", "");
+                string manifestSha256 = GetString(p, "manifest_sha256", "");
+                string signatureUrl = GetString(p, "signature_url", "");
+                string signatureSha256 = GetString(p, "signature_sha256", "");
+                string signatureKeyId = GetString(p, "signature_key_id", "");
                 string sha256 = GetString(p, "sha256", "");
                 string minimumUpdaterVersion = GetString(p, "minimum_updater_version", "");
                 long size = GetLong(p, "size", 0);
@@ -192,10 +204,15 @@ public sealed class JobExecutionPolicy
                     || channel.Length > 32
                     || releaseId.Length > 64
                     || minimumUpdaterVersion.Length > 64
+                    || signatureKeyId.Length > 120
                     || size < 0
                     || (!string.IsNullOrWhiteSpace(sha256) && !Regex.IsMatch(sha256, "^[0-9a-fA-F]{64}$"))
+                    || (!string.IsNullOrWhiteSpace(manifestSha256) && !Regex.IsMatch(manifestSha256, "^[0-9a-fA-F]{64}$"))
+                    || (!string.IsNullOrWhiteSpace(signatureSha256) && !Regex.IsMatch(signatureSha256, "^[0-9a-fA-F]{64}$"))
                     || !IsValidHttpsUrl(packageUrl)
-                    || !IsValidHttpsUrl(checksumUrl))
+                    || !IsValidHttpsUrl(checksumUrl)
+                    || !IsValidHttpsUrl(manifestUrl)
+                    || !IsValidHttpsUrl(signatureUrl))
                 {
                     throw new InvalidOperationException("Invalid update parameters.");
                 }

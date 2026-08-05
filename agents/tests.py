@@ -4,6 +4,7 @@ import tempfile
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import Client, TestCase
 from django.urls import reverse
@@ -12,6 +13,7 @@ from django.utils import timezone
 from .models import AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseGroup
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import deterministic_rollout_bucket, evaluate_agent_update_policy
+from .services import promote_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver
 
 
@@ -398,7 +400,8 @@ class AgentReleasePolicyTests(TestCase):
 
     def test_pilot_endpoint_receives_pilot_release(self):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
-        self.machine.save(update_fields=['update_channel'])
+        self.machine.is_pilot_endpoint = True
+        self.machine.save(update_fields=['update_channel', 'is_pilot_endpoint'])
         release = self.release(version='0.1.0.8', channel=AgentRelease.CHANNEL_PILOT)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True)
@@ -885,3 +888,133 @@ class AgentReleasePolicyTests(TestCase):
         self.assertTrue(release.rollout_paused)
         self.assertEqual(release.rollout_percentage, 0)
         self.assertEqual(AgentJob.objects.filter(job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
+
+
+class AgentReleaseGovernanceTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.admin = user_model.objects.create_user(username='release-admin', password='pass', is_staff=True, is_superuser=True)
+        self.machine = AgentMachine.objects.create(
+            machine_id='gov-machine-001',
+            hostname='CS-GOV-001',
+            agent_token_hash='hash',
+            agent_version='0.1.1.0-rc5',
+            update_channel=AgentMachine.UPDATE_CHANNEL_DEVELOPMENT,
+        )
+
+    def release(self, version='0.1.1.0-rc6', channel=AgentRelease.CHANNEL_DEVELOPMENT, status=AgentRelease.STATUS_PUBLISHED, **kwargs):
+        defaults = {
+            'package_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/{version}/NightOwl.Agent.Windows.zip',
+            'checksum_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/{version}/checksums.json',
+            'manifest_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/{version}/release-manifest.json',
+            'signature_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/{version}/release-manifest.sig',
+            'sha256': 'c' * 64,
+            'manifest_sha256': 'd' * 64,
+            'signature_sha256': 'e' * 64,
+            'signature_key_id': 'nightowl-release-2026-01',
+            'signature_valid': True,
+            'legacy_unsigned': False,
+            'size': 1234,
+            'minimum_updater_version': '0.1.0.7',
+            'rollout_percentage': 0,
+            'rollout_paused': True,
+            'released_at': timezone.now(),
+            'created_by': self.admin,
+        }
+        defaults.update(kwargs)
+        return AgentRelease.objects.create(version=version, channel=channel, status=status, **defaults)
+
+    def test_published_release_is_immutable_for_artifact_fields(self):
+        release = self.release()
+        release.sha256 = 'f' * 64
+        with self.assertRaises(ValidationError):
+            release.save()
+
+    def test_same_hash_import_is_idempotent(self):
+        release = self.release()
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump({
+                'version': release.version,
+                'packageUrl': release.package_url,
+                'checksumUrl': release.checksum_url,
+                'manifestUrl': release.manifest_url,
+                'signatureUrl': release.signature_url,
+                'sha256': release.sha256,
+                'manifest_sha256': release.manifest_sha256,
+                'signature_sha256': release.signature_sha256,
+                'key_id': release.signature_key_id,
+                'size': release.size,
+                'minimum_updater_version': release.minimum_updater_version,
+            }, handle)
+            path = handle.name
+
+        call_command('import_agent_release', '--agent-version', release.version, '--channel', release.channel, '--version-json', path)
+        self.assertEqual(AgentRelease.objects.filter(version=release.version).count(), 1)
+
+    def test_different_hash_import_is_blocked(self):
+        release = self.release()
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump({
+                'version': release.version,
+                'packageUrl': release.package_url,
+                'checksumUrl': release.checksum_url,
+                'sha256': 'a' * 64,
+                'size': release.size,
+            }, handle)
+            path = handle.name
+
+        with self.assertRaises(Exception) as ctx:
+            call_command('import_agent_release', '--agent-version', release.version, '--channel', release.channel, '--version-json', path)
+        self.assertIn('RELEASE_IMMUTABILITY_VIOLATION', str(ctx.exception))
+
+    def test_promote_development_to_pilot_and_pilot_to_stable(self):
+        release = self.release()
+        promote_agent_release(release, AgentRelease.CHANNEL_PILOT, self.admin, rollout_percentage=20, rollout_paused=True, approval_reason='Piloto inicial')
+        release.refresh_from_db()
+        self.assertEqual(release.channel, AgentRelease.CHANNEL_PILOT)
+        self.assertEqual(release.rollout_percentage, 20)
+        promote_agent_release(release, AgentRelease.CHANNEL_STABLE, self.admin, rollout_percentage=5, rollout_paused=True, approval_reason='Aprovado para stable')
+        release.refresh_from_db()
+        self.assertEqual(release.channel, AgentRelease.CHANNEL_STABLE)
+        self.assertEqual(release.stable_approval_reason, 'Aprovado para stable')
+
+    def test_legacy_unsigned_cannot_promote_to_stable(self):
+        release = self.release(version='0.1.1.0-legacy', signature_valid=False, legacy_unsigned=True, signature_key_id='', signature_url='', signature_sha256='')
+        promote_agent_release(release, AgentRelease.CHANNEL_PILOT, self.admin, rollout_percentage=10, rollout_paused=True, approval_reason='legacy pilot')
+        with self.assertRaises(ValidationError):
+            promote_agent_release(release, AgentRelease.CHANNEL_STABLE, self.admin, rollout_percentage=5, rollout_paused=True, approval_reason='legacy stable')
+
+    def test_revoke_blocks_manual_update(self):
+        release = self.release()
+        revoke_agent_release(release, self.admin, 'Falha critica')
+        release.refresh_from_db()
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'release_revoked')
+
+    def test_superseded_not_selected_automatically(self):
+        old = self.release(version='0.1.1.0-rc6')
+        new = self.release(version='0.1.1.0-rc7')
+        supersede_agent_release(old, new, self.admin, 'RC7 substitui RC6')
+        decision = evaluate_agent_update_policy(self.machine, manual=False)
+        self.assertEqual(decision.release, new)
+
+    def test_pilot_release_requires_pilot_endpoint(self):
+        release = self.release(channel=AgentRelease.CHANNEL_PILOT)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
+        self.machine.is_pilot_endpoint = False
+        self.machine.save(update_fields=['update_channel', 'is_pilot_endpoint'])
+        blocked = evaluate_agent_update_policy(self.machine, manual=False, explicit_release=release)
+        self.assertFalse(blocked.eligible)
+        self.machine.is_pilot_endpoint = True
+        self.machine.save(update_fields=['is_pilot_endpoint'])
+        allowed = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+        self.assertNotEqual(allowed.reason_code, 'group_not_allowed')
+
+    def test_rollout_bucket_is_deterministic(self):
+        release = self.release()
+        first = deterministic_rollout_bucket(self.machine, release)
+        second = deterministic_rollout_bucket(self.machine, release)
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(first, 0)
+        self.assertLess(first, 100)

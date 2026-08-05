@@ -6,6 +6,9 @@ from .models import (
     AgentMachine,
     AgentManualValidationToken,
     AlertEvent,
+    AgentRelease,
+    AgentReleaseAudit,
+    AgentReleaseGroup,
     AuditEvent,
     EndpointAlert,
     InventorySnapshot,
@@ -32,7 +35,7 @@ class AgentMachineAdmin(admin.ModelAdmin):
         'os_name',
         'is_active',
     )
-    list_filter = ('domain', 'status', 'is_active', 'os_name', 'agent_version')
+    list_filter = ('domain', 'status', 'is_active', 'os_name', 'agent_version', 'update_channel', 'is_pilot_endpoint')
     search_fields = ('hostname', 'machine_id', 'serial_number', 'last_logged_user', 'agent_version')
     readonly_fields = (
         'id',
@@ -89,6 +92,96 @@ class AgentMachineAdmin(admin.ModelAdmin):
             'fields': ('created_at', 'updated_at'),
         }),
     )
+
+
+@admin.register(AgentReleaseGroup)
+class AgentReleaseGroupAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'created_at')
+    search_fields = ('name', 'slug', 'description')
+    readonly_fields = ('id', 'created_at')
+
+
+@admin.register(AgentRelease)
+class AgentReleaseAdmin(admin.ModelAdmin):
+    list_display = (
+        'version',
+        'channel',
+        'status',
+        'rollout_percentage',
+        'rollout_paused',
+        'legacy_unsigned',
+        'signature_valid',
+        'signature_key_id',
+        'revoked',
+        'released_at',
+    )
+    list_filter = ('channel', 'status', 'rollout_paused', 'legacy_unsigned', 'signature_valid', 'revoked', 'mandatory')
+    search_fields = ('version', 'package_url', 'sha256', 'signature_key_id', 'release_notes')
+    autocomplete_fields = ('replacement_release', 'created_by', 'published_by', 'revoked_by', 'superseded_by')
+    filter_horizontal = ('allowed_groups',)
+    readonly_fields = ('id', 'created_at', 'updated_at')
+    fieldsets = (
+        ('Release', {
+            'fields': ('id', 'version', 'channel', 'source_channel', 'status', 'release_notes'),
+        }),
+        ('Artefatos imutaveis', {
+            'fields': (
+                'package_url',
+                'checksum_url',
+                'sha256',
+                'size',
+                'manifest_url',
+                'manifest_sha256',
+                'signature_url',
+                'signature_sha256',
+                'signature_key_id',
+                'signature_valid',
+                'legacy_unsigned',
+                'minimum_updater_version',
+            ),
+        }),
+        ('Rollout', {
+            'fields': ('rollout_percentage', 'rollout_paused', 'mandatory', 'allowed_groups'),
+        }),
+        ('Ciclo de vida', {
+            'fields': (
+                'released_at',
+                'published_by',
+                'stable_approval_reason',
+                'revoked',
+                'revoked_at',
+                'revoked_by',
+                'revocation_reason',
+                'replacement_release',
+                'superseded_at',
+                'superseded_by',
+                'superseded_reason',
+            ),
+        }),
+        ('Controle', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+        }),
+    )
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj and obj.status in AgentRelease.IMMUTABLE_STATUSES:
+            fields.extend(sorted(AgentRelease.IMMUTABLE_FIELDS))
+        return tuple(dict.fromkeys(fields))
+
+
+@admin.register(AgentReleaseAudit)
+class AgentReleaseAuditAdmin(admin.ModelAdmin):
+    list_display = ('created_at', 'action', 'version', 'release', 'endpoint', 'user', 'channel_before', 'channel_after', 'rollout_before', 'rollout_after')
+    list_filter = ('action', 'channel_before', 'channel_after', 'created_at')
+    search_fields = ('version', 'reason', 'metadata', 'release__version', 'endpoint__hostname', 'user__username')
+    readonly_fields = tuple(field.name for field in AgentReleaseAudit._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(InventorySnapshot)

@@ -16,6 +16,10 @@ param(
     [ValidateSet("development", "pilot", "stable")]
     [string]$Channel = "",
 
+    [string]$SigningKeyPath = $env:NIGHTOWL_RELEASE_SIGNING_KEY,
+    [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
+    [switch]$AllowUnsignedDevelopment,
+
     [switch]$UpdatePublicLatest,
     [switch]$SelfTest
 )
@@ -122,6 +126,182 @@ function Write-Utf8NoBomJson([string]$Path, $Value, [int]$Depth = 8) {
     Write-Utf8NoBomText -Path $Path -Content $content
 }
 
+function ConvertTo-CanonicalJson($Value) {
+    if ($null -eq $Value) { return "null" }
+    if ($Value -is [bool]) { if ($Value) { return "true" } else { return "false" } }
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
+        return [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0}", $Value)
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $parts = New-Object System.Collections.Generic.List[string]
+        foreach ($key in ($Value.Keys | Sort-Object)) {
+            $parts.Add(("{0}:{1}" -f (ConvertTo-CanonicalJson ([string]$key)), (ConvertTo-CanonicalJson $Value[$key])))
+        }
+        return "{" + ($parts -join ",") + "}"
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $parts = @()
+        foreach ($item in $Value) { $parts += (ConvertTo-CanonicalJson $item) }
+        return "[" + ($parts -join ",") + "]"
+    }
+    return ([string]$Value | ConvertTo-Json -Compress)
+}
+
+function Write-CanonicalJson([string]$Path, $Value) {
+    Write-Utf8NoBomText -Path $Path -Content (ConvertTo-CanonicalJson $Value)
+}
+
+function Assert-RsaPssProviderAvailable {
+    if ($null -eq ("System.Security.Cryptography.RSACng" -as [type])) {
+        throw "RELEASE_RSA_PSS_PROVIDER_UNAVAILABLE: Provedor CNG RSA indisponivel neste Windows/PowerShell. RSA-PSS e obrigatorio; PKCS#1 nao sera usado como fallback."
+    }
+}
+
+function New-RsaCngInstance {
+    Assert-RsaPssProviderAvailable
+    try {
+        return New-Object System.Security.Cryptography.RSACng
+    }
+    catch {
+        throw "RELEASE_RSA_PSS_PROVIDER_UNAVAILABLE: Falha ao criar provedor CNG RSA para RSA-PSS. Detalhe: $($_.Exception.Message)"
+    }
+}
+
+function Import-RsaParametersFromXml([string]$Xml, [bool]$IncludePrivateParameters) {
+    $legacyProvider = $null
+    try {
+        $legacyProvider = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+        $legacyProvider.PersistKeyInCsp = $false
+        $legacyProvider.FromXmlString($Xml)
+        return $legacyProvider.ExportParameters($IncludePrivateParameters)
+    }
+    catch {
+        $purpose = if ($IncludePrivateParameters) { "privada" } else { "publica" }
+        throw "RELEASE_SIGNING_KEY_INVALID: Nao foi possivel importar a chave RSA XML $purpose. Detalhe: $($_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $legacyProvider) {
+            $legacyProvider.PersistKeyInCsp = $false
+            $legacyProvider.Clear()
+            $legacyProvider.Dispose()
+        }
+    }
+}
+
+function New-RsaPssPrivateKeyFromXml([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        throw "Chave privada de assinatura nao encontrada. Informe -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY."
+    }
+    $xml = Get-Content -Raw -Path $Path
+    $parameters = Import-RsaParametersFromXml -Xml $xml -IncludePrivateParameters $true
+    $rsa = New-RsaCngInstance
+    try {
+        $rsa.ImportParameters($parameters)
+        return $rsa
+    }
+    catch {
+        $rsa.Dispose()
+        throw "RELEASE_SIGNING_KEY_INVALID: Chave privada RSA XML nao pode ser usada pelo provedor CNG/RSA-PSS. Detalhe: $($_.Exception.Message)"
+    }
+}
+
+function New-RsaPssPublicKeyFromXmlText([string]$Xml) {
+    $parameters = Import-RsaParametersFromXml -Xml $Xml -IncludePrivateParameters $false
+    $rsa = New-RsaCngInstance
+    try {
+        $rsa.ImportParameters($parameters)
+        return $rsa
+    }
+    catch {
+        $rsa.Dispose()
+        throw "RELEASE_SIGNING_KEY_INVALID: Chave publica RSA XML nao pode ser usada pelo provedor CNG/RSA-PSS. Detalhe: $($_.Exception.Message)"
+    }
+}
+
+function New-RsaPssPublicKeyFromXml([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        throw "Chave publica de assinatura nao encontrada: $Path"
+    }
+    return New-RsaPssPublicKeyFromXmlText -Xml (Get-Content -Raw -Path $Path)
+}
+
+function Export-RsaPublicXmlFromPrivateXmlFile([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        throw "Chave privada de assinatura nao encontrada. Informe -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY."
+    }
+    $legacyProvider = $null
+    try {
+        $legacyProvider = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+        $legacyProvider.PersistKeyInCsp = $false
+        $legacyProvider.FromXmlString((Get-Content -Raw -Path $Path))
+        return $legacyProvider.ToXmlString($false)
+    }
+    catch {
+        throw "RELEASE_SIGNING_KEY_INVALID: Nao foi possivel extrair chave publica da chave privada RSA XML. Detalhe: $($_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $legacyProvider) {
+            $legacyProvider.PersistKeyInCsp = $false
+            $legacyProvider.Clear()
+            $legacyProvider.Dispose()
+        }
+    }
+}
+
+function Sign-ReleaseManifest([string]$ManifestPath, [string]$SignaturePath, [string]$PrivateKeyPath, [string]$KeyId) {
+    if ([string]::IsNullOrWhiteSpace($KeyId)) {
+        throw "SigningKeyId obrigatorio para assinatura do manifesto."
+    }
+    $rsa = New-RsaPssPrivateKeyFromXml $PrivateKeyPath
+    $publicRsa = $null
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($ManifestPath)
+        try {
+            $signature = $rsa.SignData(
+                $bytes,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pss
+            )
+        }
+        catch {
+            throw "RELEASE_SIGNATURE_GENERATION_FAILED: Falha ao gerar assinatura RSA-PSS. Verifique o formato da chave e a disponibilidade do provedor CNG. Detalhe: $($_.Exception.Message)"
+        }
+        Write-Utf8NoBomText -Path $SignaturePath -Content ([Convert]::ToBase64String($signature))
+        $publicXml = Export-RsaPublicXmlFromPrivateXmlFile $PrivateKeyPath
+        $publicRsa = New-RsaPssPublicKeyFromXmlText $publicXml
+        $valid = $publicRsa.VerifyData(
+            $bytes,
+            $signature,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pss
+        )
+        if (-not $valid) { throw "RELEASE_SIGNATURE_VERIFICATION_FAILED: Assinatura RSA-PSS gerada nao passou na verificacao local." }
+    }
+    finally {
+        if ($null -ne $publicRsa) { $publicRsa.Dispose() }
+        $rsa.Dispose()
+    }
+}
+
+function Write-TrustedReleasePublicKeys([string]$Path, [string]$PrivateKeyPath, [string]$KeyId) {
+    if ([string]::IsNullOrWhiteSpace($PrivateKeyPath)) { return }
+    $publicXml = Export-RsaPublicXmlFromPrivateXmlFile $PrivateKeyPath
+    $keys = [ordered]@{
+        keys = @(
+            [ordered]@{
+                key_id = $KeyId
+                algorithm = "RSA-PSS-SHA256"
+                public_key_xml = $publicXml
+                status = "active"
+                valid_from = (Get-Date).ToUniversalTime().ToString("O")
+                valid_until = ""
+                revoked_at = ""
+            }
+        )
+    }
+    Write-Utf8NoBomJson -Path $Path -Value $keys -Depth 8
+}
+
 function Test-FileHasUtf8Bom([string]$Path) {
     if (-not (Test-Path $Path)) { throw "Arquivo nao encontrado para validacao BOM: $Path" }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
@@ -149,7 +329,105 @@ function Invoke-SelfTest {
         $jsonPath = Join-Path $temp "selftest.json"
         Write-Utf8NoBomJson -Path $jsonPath -Value ([ordered]@{ version = "0.1.1.0-rc4"; url = "https://nightowl.controlsul.com.br/downloads/nightowl-agent" })
         Assert-JsonFileUtf8NoBom $jsonPath
-        Write-Step "SelfTest OK: JSON escrito como UTF-8 sem BOM em Windows PowerShell."
+        $canonical = ConvertTo-CanonicalJson ([ordered]@{ z = 1; a = [ordered]@{ b = "ok"; a = $true } })
+        if ($canonical -ne '{"a":{"a":true,"b":"ok"},"z":1}') { throw "Canonical JSON inconsistente: $canonical" }
+
+        $legacyProvider = New-Object System.Security.Cryptography.RSACryptoServiceProvider 2048
+        try {
+            $legacyProvider.PersistKeyInCsp = $false
+            $privateKeyPath = Join-Path $temp "release-private.xml"
+            $publicKeyPath = Join-Path $temp "release-public.xml"
+            Write-Utf8NoBomText -Path $privateKeyPath -Content $legacyProvider.ToXmlString($true)
+            Write-Utf8NoBomText -Path $publicKeyPath -Content $legacyProvider.ToXmlString($false)
+        }
+        finally {
+            $legacyProvider.PersistKeyInCsp = $false
+            $legacyProvider.Clear()
+            $legacyProvider.Dispose()
+        }
+
+        $privateRsa = New-RsaPssPrivateKeyFromXml $privateKeyPath
+        $publicRsa = New-RsaPssPublicKeyFromXml $publicKeyPath
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes("nightowl-rsa-pss-selftest")
+            $signature = $privateRsa.SignData(
+                $bytes,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pss
+            )
+            $valid = $publicRsa.VerifyData(
+                $bytes,
+                $signature,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pss
+            )
+            if (-not $valid) { throw "SelfTest RSA-PSS falhou: assinatura valida rejeitada." }
+            $tampered = [byte[]]$bytes.Clone()
+            $tampered[0] = $tampered[0] -bxor 0x01
+            $tamperedValid = $publicRsa.VerifyData(
+                $tampered,
+                $signature,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pss
+            )
+            if ($tamperedValid) { throw "SelfTest RSA-PSS falhou: manifesto alterado foi aceito." }
+        }
+        finally {
+            $publicRsa.Dispose()
+            $privateRsa.Dispose()
+        }
+
+        $invalidKeyPath = Join-Path $temp "invalid.xml"
+        Write-Utf8NoBomText -Path $invalidKeyPath -Content "<not-rsa />"
+        $invalidRejected = $false
+        try { $null = New-RsaPssPrivateKeyFromXml $invalidKeyPath }
+        catch { $invalidRejected = $true }
+        if (-not $invalidRejected) { throw "SelfTest RSA-PSS falhou: XML invalido foi aceito." }
+
+        $publicAsPrivateRejected = $false
+        try { $null = New-RsaPssPrivateKeyFromXml $publicKeyPath }
+        catch { $publicAsPrivateRejected = $true }
+        if (-not $publicAsPrivateRejected) { throw "SelfTest RSA-PSS falhou: chave publica foi aceita para assinatura." }
+
+        $manifestPath = Join-Path $temp "release-manifest.json"
+        $signaturePath = Join-Path $temp "release-manifest.sig"
+        Write-CanonicalJson -Path $manifestPath -Value ([ordered]@{
+            schema_version = 1
+            version = "0.1.1.0-rc6"
+            channel = "development"
+            key_id = "nightowl-selftest"
+            package = [ordered]@{
+                filename = "NightOwl.Agent.Windows.zip"
+                sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                size = 123
+            }
+        })
+        Sign-ReleaseManifest -ManifestPath $manifestPath -SignaturePath $signaturePath -PrivateKeyPath $privateKeyPath -KeyId "nightowl-selftest"
+        $manifestBytes = [System.IO.File]::ReadAllBytes($manifestPath)
+        $signatureBytes = [Convert]::FromBase64String((Get-Content -Raw -Path $signaturePath).Trim())
+        $manifestPublicRsa = New-RsaPssPublicKeyFromXml $publicKeyPath
+        try {
+            $manifestSignatureValid = $manifestPublicRsa.VerifyData(
+                $manifestBytes,
+                $signatureBytes,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pss
+            )
+            if (-not $manifestSignatureValid) { throw "SelfTest RSA-PSS falhou: release-manifest.sig valida foi rejeitada." }
+            $manifestBytes[0] = $manifestBytes[0] -bxor 0x01
+            $tamperedManifestValid = $manifestPublicRsa.VerifyData(
+                $manifestBytes,
+                $signatureBytes,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pss
+            )
+            if ($tamperedManifestValid) { throw "SelfTest RSA-PSS falhou: release-manifest.json alterado foi aceito." }
+        }
+        finally {
+            $manifestPublicRsa.Dispose()
+        }
+
+        Write-Step "SelfTest OK: JSON UTF-8 sem BOM e assinatura RSA-PSS/CNG validados em Windows PowerShell."
     }
     finally {
         Remove-Item -Path $temp -Recurse -Force -ErrorAction SilentlyContinue
@@ -252,6 +530,7 @@ function Validate-Release([string]$Path) {
     $versionPath = Join-Path $Path "version.json"
     $checksumsPath = Join-Path $Path "checksums.json"
     $manifestPath = Join-Path $Path "release-manifest.json"
+    $signaturePath = Join-Path $Path "release-manifest.sig"
     foreach ($required in @($zipPath, $versionPath, $checksumsPath, $manifestPath)) {
         if (-not (Test-Path $required)) { throw "Artefato obrigatorio ausente: $required" }
     }
@@ -297,6 +576,9 @@ function Validate-Release([string]$Path) {
     if ([string]$versionManifest.version -ne $Version) { throw "version.json com versao inconsistente." }
     if ([string]$versionManifest.sha256 -ne $zipSha) { throw "version.json com SHA256 inconsistente." }
     if ([long]$versionManifest.size -ne (Get-Item $zipPath).Length) { throw "version.json com tamanho inconsistente." }
+    if (-not (Test-Path $signaturePath) -and (-not [bool]$versionManifest.legacyUnsigned -or [string]$versionManifest.channel -ne "development")) {
+        throw "release-manifest.sig ausente. Releases pilot/stable e releases assinadas exigem assinatura."
+    }
 
     $checksums = Get-Content -Raw -Path $checksumsPath | ConvertFrom-Json
     $zipEntry = @($checksums.files | Where-Object { $_.name -eq "NightOwl.Agent.Windows.zip" }) | Select-Object -First 1
@@ -314,7 +596,8 @@ function New-Checksums([string]$ReleasePath) {
         "Uninstall-NightOwlAgentDotNet.ps1",
         "NightOwl.ico",
         "version.json",
-        "release-manifest.json"
+        "release-manifest.json",
+        "release-manifest.sig"
     )
     $map = [ordered]@{}
     $items = @()
@@ -469,6 +752,9 @@ try {
     New-Item -ItemType Directory -Force -Path $packageIconDir | Out-Null
     Copy-Item -Path $iconPath -Destination (Join-Path $packageIconDir "NightOwl.ico") -Force
     New-AgentVersionFile -Path (Join-Path $packageDir "agent.version.json") -BuildId $buildId -BuiltAt $builtAt -Commit $commit
+    if (-not [string]::IsNullOrWhiteSpace($SigningKeyPath)) {
+        Write-TrustedReleasePublicKeys -Path (Join-Path $packageDir "release-public-keys.json") -PrivateKeyPath $SigningKeyPath -KeyId $SigningKeyId
+    }
 
     $zipPath = Join-Path $ReleaseDir "NightOwl.Agent.Windows.zip"
     Compress-ReleaseZip -PackageDir $packageDir -ZipPath $zipPath
@@ -487,6 +773,12 @@ try {
     else {
         "{0}/releases/{1}" -f $PublicBaseUrl.TrimEnd("/"), $Version
     }
+    $manifestPath = Join-Path $ReleaseDir "release-manifest.json"
+    $signaturePath = Join-Path $ReleaseDir "release-manifest.sig"
+    $signed = -not [string]::IsNullOrWhiteSpace($SigningKeyPath)
+    if (-not $signed -and (-not $AllowUnsignedDevelopment -or $Channel -ne "development")) {
+        throw "Chave privada obrigatoria para assinar release. Use -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY. Bypass somente com -AllowUnsignedDevelopment em development."
+    }
     $versionManifest = [ordered]@{
         product = "NightOwl Agent Windows"
         agent = "NightOwl.Agent.Windows"
@@ -504,16 +796,24 @@ try {
         force = $false
         platform = "windows-x64"
         package = "NightOwl.Agent.Windows.zip"
+        manifestUrl = ("{0}/release-manifest.json" -f $artifactBaseUrl)
+        signatureUrl = if ($signed) { ("{0}/release-manifest.sig" -f $artifactBaseUrl) } else { "" }
+        key_id = if ($signed) { $SigningKeyId } else { "" }
         sha256 = $zipSha
         size = $zipSize
+        manifest_sha256 = ""
+        signature_sha256 = ""
+        signature_key_id = if ($signed) { $SigningKeyId } else { "" }
+        legacyUnsigned = -not $signed
         build_id = $buildId
         git_commit = $commit
     }
-    Write-Utf8NoBomJson -Path (Join-Path $ReleaseDir "version.json") -Value $versionManifest -Depth 8
 
     $releaseManifest = [ordered]@{
+        schema_version = 1
         product = "NightOwl Agent Windows"
         version = $Version
+        channel = $Channel
         build_id = $buildId
         built_at = $builtAt
         git_commit = $commit
@@ -521,10 +821,15 @@ try {
         public_base_url = $PublicBaseUrl
         artifact_base_url = $artifactBaseUrl
         initial_channel = $Channel
+        minimum_updater_version = $MinimumUpdaterVersion
+        published_at = $builtAt
+        key_id = if ($signed) { $SigningKeyId } else { "" }
+        legacy_unsigned = -not $signed
         rollout_percentage = 0
         rollout_paused = $true
         auto_publish_latest = [bool]$UpdatePublicLatest
         package = [ordered]@{
+            filename = "NightOwl.Agent.Windows.zip"
             name = "NightOwl.Agent.Windows.zip"
             sha256 = $zipSha
             size = $zipSize
@@ -540,7 +845,13 @@ try {
         )
         forbidden_patterns = @("agent.config.json", "agent.identity.json", "agent.state.json", "agent-dotnet.state.json", "update-state.json", "*.preserved-*", "*.log", "*.tmp", "*.pdb", "*.ps1", "bin/", "obj/", "publish/", "downloads/", "artifacts/", "releases/")
     }
-    Write-Utf8NoBomJson -Path (Join-Path $ReleaseDir "release-manifest.json") -Value $releaseManifest -Depth 8
+    Write-CanonicalJson -Path $manifestPath -Value $releaseManifest
+    $versionManifest.manifest_sha256 = Get-FileSha256 $manifestPath
+    if ($signed) {
+        Sign-ReleaseManifest -ManifestPath $manifestPath -SignaturePath $signaturePath -PrivateKeyPath $SigningKeyPath -KeyId $SigningKeyId
+        $versionManifest.signature_sha256 = Get-FileSha256 $signaturePath
+    }
+    Write-Utf8NoBomJson -Path (Join-Path $ReleaseDir "version.json") -Value $versionManifest -Depth 8
 
     New-Checksums $ReleaseDir
     Validate-Release $ReleaseDir

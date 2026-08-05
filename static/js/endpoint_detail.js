@@ -1289,8 +1289,9 @@
     function releaseStatusText(release) {
         if (!release) return "-";
         if (release.revoked) return "Revogada";
+        if (release.status === "superseded" || release.superseded) return "Substituida";
         if (release.status === "paused" || release.rollout_paused) return "Pausada - atualizacao manual permitida";
-        if (release.status === "available" || release.status === "active") return "Disponivel";
+        if (release.status === "published" || release.status === "available" || release.status === "active") return "Publicada";
         return release.status_label || release.status || "-";
     }
 
@@ -1410,6 +1411,8 @@
             ["Publicada em", formatDate(release.released_at)],
             ["Tamanho", formatPackageSize(release.size)],
             ["Updater minimo", release.minimum_updater_version || "-"],
+            ["Assinatura", release.signature_valid ? "Valida (" + (release.signature_key_id || "-") + ")" : (release.legacy_unsigned ? "Legacy unsigned" : "Nao validada")],
+            ["Substituta", release.replacement_version || "-"],
             ["Rollout", (release.rollout_percentage == null ? "-" : release.rollout_percentage + "%") + (release.rollout_paused ? " / pausado" : "")]
         ].forEach(function (item) {
             const tile = document.createElement("div");

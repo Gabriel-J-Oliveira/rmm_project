@@ -50,7 +50,14 @@ from agents.job_progress import (
 )
 from config.authz import is_nightowl_technical_user
 from agents.audit import create_audit_event
-from agents.services import AGENT_RELEASE_AVAILABLE_STATUSES, evaluate_agent_update_policy
+from agents.services import (
+    AGENT_RELEASE_AVAILABLE_STATUSES,
+    change_agent_release_rollout,
+    evaluate_agent_update_policy,
+    promote_agent_release,
+    revoke_agent_release,
+    supersede_agent_release,
+)
 from agents.software_catalog import (
     ADMIN_NETWORK_SOFTWARE,
     CATEGORY_LABELS,
@@ -2692,9 +2699,9 @@ def _endpoint_diagnostic(endpoint):
 
 def _manual_update_release_options(endpoint):
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
-    releases = AgentRelease.objects.filter(
+    releases = AgentRelease.objects.select_related('replacement_release').filter(
         channel=channel,
-        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED},
+        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED},
         revoked=False,
     ).order_by('-released_at', '-created_at')[:20]
     rows = []
@@ -2712,6 +2719,13 @@ def _manual_update_release_options(endpoint):
             'rollout_paused': release.rollout_paused,
             'mandatory': release.mandatory,
             'revoked': release.revoked,
+            'superseded': release.status == AgentRelease.STATUS_SUPERSEDED,
+            'replacement_release_id': str(release.replacement_release_id) if release.replacement_release_id else '',
+            'replacement_version': release.replacement_release.version if release.replacement_release_id else '',
+            'signature_valid': release.signature_valid,
+            'signature_key_id': release.signature_key_id,
+            'legacy_unsigned': release.legacy_unsigned,
+            'manifest_url': release.manifest_url,
             'eligible': decision.eligible,
             'reason_code': decision.reason_code,
             'requires_force': decision.reason_code == 'downgrade_requires_force' or (version_comparison is not None and version_comparison > 0),
@@ -3325,6 +3339,13 @@ def endpoint_job_create(request, pk):
             'checksum_url': release.checksum_url,
             'sha256': release.sha256,
             'size': release.size,
+            'manifest_url': release.manifest_url,
+            'manifest_sha256': release.manifest_sha256,
+            'signature_url': release.signature_url,
+            'signature_sha256': release.signature_sha256,
+            'signature_key_id': release.signature_key_id,
+            'signature_valid': release.signature_valid,
+            'legacy_unsigned': release.legacy_unsigned,
             'minimum_updater_version': release.minimum_updater_version,
             'mandatory': release.mandatory,
             'timeout_seconds': 900,
@@ -3547,6 +3568,8 @@ def agent_releases(request):
         release_status = (request.POST.get('status') or AgentRelease.STATUS_DRAFT).strip()
         package_url = (request.POST.get('package_url') or '').strip()
         checksum_url = (request.POST.get('checksum_url') or '').strip()
+        manifest_url = (request.POST.get('manifest_url') or '').strip()
+        signature_url = (request.POST.get('signature_url') or '').strip()
         sha256 = (request.POST.get('sha256') or '').strip().lower()
         release_notes = (request.POST.get('release_notes') or '').strip()
         try:
@@ -3578,10 +3601,19 @@ def agent_releases(request):
             checksum_url=checksum_url,
             sha256=sha256,
             size=size,
-            released_at=timezone.now() if release_status == AgentRelease.STATUS_AVAILABLE else None,
+            manifest_url=manifest_url,
+            manifest_sha256=(request.POST.get('manifest_sha256') or '').strip().lower(),
+            signature_url=signature_url,
+            signature_sha256=(request.POST.get('signature_sha256') or '').strip().lower(),
+            signature_key_id=(request.POST.get('signature_key_id') or '').strip(),
+            signature_valid=bool(request.POST.get('signature_valid')),
+            legacy_unsigned=not bool(request.POST.get('signature_valid')),
+            released_at=timezone.now() if release_status == AgentRelease.STATUS_PUBLISHED else None,
+            published_by=request.user if release_status == AgentRelease.STATUS_PUBLISHED else None,
             minimum_updater_version=(request.POST.get('minimum_updater_version') or '').strip(),
             release_notes=release_notes,
             rollout_percentage=rollout_percentage,
+            rollout_paused=release_status == AgentRelease.STATUS_PAUSED,
             mandatory=bool(request.POST.get('mandatory')),
             created_by=request.user,
         )
@@ -3621,61 +3653,46 @@ def agent_release_action(request, pk):
         return JsonResponse({'error': 'forbidden'}, status=403)
     release = get_object_or_404(AgentRelease, pk=pk)
     action = (request.POST.get('action') or '').strip()
-    channel_before = release.channel
-    rollout_before = release.rollout_percentage
-    audit_action = AgentReleaseAudit.ACTION_UPDATED
-
-    if action == 'pause':
-        release.rollout_paused = True
-        release.status = AgentRelease.STATUS_PAUSED
-        audit_action = AgentReleaseAudit.ACTION_PAUSED
-    elif action == 'resume':
-        release.rollout_paused = False
-        release.status = AgentRelease.STATUS_AVAILABLE
-        if not release.released_at:
-            release.released_at = timezone.now()
-        audit_action = AgentReleaseAudit.ACTION_RESUMED
-    elif action == 'revoke':
-        release.revoked = True
-        release.status = AgentRelease.STATUS_REVOKED
-        audit_action = AgentReleaseAudit.ACTION_REVOKED
-        AgentJob.objects.filter(
-            agent_release=release,
-            status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT],
-        ).update(status=AgentJob.STATUS_CANCELLED, finished_at=timezone.now(), error_code='RELEASE_REVOKED', error_message='Release revogada antes da execucao.')
-    elif action == 'promote':
-        next_channel = (request.POST.get('channel') or '').strip()
-        if next_channel not in {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}:
-            messages.error(request, 'Canal de promocao invalido.')
+    reason = (request.POST.get('reason') or '').strip()
+    try:
+        if action == 'pause':
+            change_agent_release_rollout(release, request.user, release.rollout_percentage, paused=True, reason=reason or 'rollout_paused')
+        elif action == 'resume':
+            change_agent_release_rollout(release, request.user, release.rollout_percentage, paused=False, reason=reason or 'rollout_resumed')
+        elif action == 'revoke':
+            replacement_id = (request.POST.get('replacement_release') or '').strip()
+            replacement = AgentRelease.objects.filter(pk=replacement_id).first() if replacement_id else None
+            revoke_agent_release(release, request.user, reason, replacement)
+            AgentJob.objects.filter(
+                agent_release=release,
+                status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT],
+            ).update(status=AgentJob.STATUS_CANCELLED, finished_at=timezone.now(), error_code='RELEASE_REVOKED', error_message='Release revogada antes da execucao.')
+        elif action == 'promote':
+            promote_agent_release(
+                release,
+                (request.POST.get('channel') or '').strip(),
+                request.user,
+                rollout_percentage=int(request.POST.get('rollout_percentage') or 0),
+                rollout_paused=bool(request.POST.get('paused')),
+                approval_reason=reason,
+            )
+        elif action == 'rollout':
+            change_agent_release_rollout(
+                release,
+                request.user,
+                int(request.POST.get('rollout_percentage') or 0),
+                paused=None,
+                reason=reason or 'rollout_percentage_changed',
+            )
+        elif action == 'supersede':
+            replacement = get_object_or_404(AgentRelease, pk=(request.POST.get('replacement_release') or '').strip())
+            supersede_agent_release(release, replacement, request.user, reason)
+        else:
+            messages.error(request, 'Acao invalida.')
             return redirect('agent-releases')
-        release.channel = next_channel
-        release.status = AgentRelease.STATUS_AVAILABLE
-        release.rollout_paused = False
-        if not release.released_at:
-            release.released_at = timezone.now()
-        audit_action = AgentReleaseAudit.ACTION_PROMOTED
-    elif action == 'rollout':
-        try:
-            release.rollout_percentage = min(100, max(0, int(request.POST.get('rollout_percentage') or 0)))
-        except ValueError:
-            messages.error(request, 'Percentual invalido.')
-            return redirect('agent-releases')
-    else:
-        messages.error(request, 'Acao invalida.')
+    except (ValueError, ValidationError) as exc:
+        messages.error(request, str(exc))
         return redirect('agent-releases')
-
-    release.save()
-    AgentReleaseAudit.objects.create(
-        user=request.user,
-        action=audit_action,
-        release=release,
-        version=release.version,
-        channel_before=channel_before,
-        channel_after=release.channel,
-        rollout_before=rollout_before,
-        rollout_after=release.rollout_percentage,
-        reason=(request.POST.get('reason') or '').strip(),
-    )
     messages.success(request, f'Release {release.version} atualizada.')
     return redirect('agent-releases')
 

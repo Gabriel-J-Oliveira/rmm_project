@@ -23,6 +23,9 @@ param(
     [ValidateRange(1, 50)]
     [int]$KeepLastReleases = 5,
     [switch]$DryRun,
+    [string]$SigningKeyPath = $env:NIGHTOWL_RELEASE_SIGNING_KEY,
+    [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
+    [switch]$AllowUnsignedDevelopment,
     [switch]$SelfTest
 )
 
@@ -123,6 +126,15 @@ function New-BuildReleaseArguments([string]$RequestedVersion, [string]$Requested
         "-Channel", $RequestedChannel,
         "-PublicBaseUrl", $RequestedPublicBaseUrl
     )
+    if (-not [string]::IsNullOrWhiteSpace($SigningKeyPath)) {
+        $arguments += @("-SigningKeyPath", $SigningKeyPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SigningKeyId)) {
+        $arguments += @("-SigningKeyId", $SigningKeyId)
+    }
+    if ($AllowUnsignedDevelopment) {
+        $arguments += "-AllowUnsignedDevelopment"
+    }
     if ($AllowForce) {
         $arguments += "-Force"
     }
@@ -247,6 +259,10 @@ function Copy-ReleaseToRemote([string]$ReleaseDir, [string]$RemoteTemp) {
     foreach ($file in $script:RequiredFiles) {
         $files += (Join-Path $ReleaseDir $file)
     }
+    $signaturePath = Join-Path $ReleaseDir "release-manifest.sig"
+    if (Test-Path $signaturePath) {
+        $files += $signaturePath
+    }
     $target = "${RemoteAlias}:$RemoteTemp/"
     Invoke-Native "scp.exe" (@("-q") + $files + @($target)) "upload_failed" | Out-Null
 }
@@ -260,6 +276,17 @@ for f in $required; do test -s "`$f"; done
 python3 -m json.tool version.json >/dev/null
 python3 -m json.tool checksums.json >/dev/null
 python3 -m json.tool release-manifest.json >/dev/null
+legacy=`$(python3 - <<'PY'
+import json
+print('1' if json.load(open('version.json', encoding='utf-8')).get('legacyUnsigned') else '0')
+PY
+)
+channel=`$(python3 - <<'PY'
+import json
+print(json.load(open('version.json', encoding='utf-8')).get('channel',''))
+PY
+)
+if [ "`$legacy" != "1" ] || [ "`$channel" != "development" ]; then test -s release-manifest.sig; fi
 actual=`$(sha256sum NightOwl.Agent.Windows.zip | awk '{print `$1}')
 test "x`$actual" = "x$ExpectedSha"
 size=`$(stat -c%s NightOwl.Agent.Windows.zip)
@@ -282,6 +309,14 @@ if [ -e "`$target" ] && [ "`$allow_replace" != "1" ]; then
   exit 17
 fi
 if [ -e "`$target" ]; then
+  old_sha=`$(sha256sum "`$target/NightOwl.Agent.Windows.zip" | awk '{print `$1}' 2>/dev/null || true)
+  new_sha=`$(sha256sum "`$tmp/NightOwl.Agent.Windows.zip" | awk '{print `$1}' 2>/dev/null || true)
+  old_manifest=`$(sha256sum "`$target/release-manifest.json" | awk '{print `$1}' 2>/dev/null || true)
+  new_manifest=`$(sha256sum "`$tmp/release-manifest.json" | awk '{print `$1}' 2>/dev/null || true)
+  if [ "x`$old_sha" != "x`$new_sha" ] || [ "x`$old_manifest" != "x`$new_manifest" ]; then
+    echo "RELEASE_IMMUTABILITY_VIOLATION"
+    exit 19
+  fi
   rm -rf "`$backup"
   mv "`$target" "`$backup"
 fi
@@ -344,7 +379,7 @@ function Import-ReleaseInDjango($LocalRelease) {
 set -euo pipefail
 cd $(ConvertTo-BashSingleQuoted $RemoteProjectPath)
 source .venv/bin/activate
-python manage.py import_agent_release --agent-version $(ConvertTo-BashSingleQuoted $Version) --channel $(ConvertTo-BashSingleQuoted $Channel) --version-json $(ConvertTo-BashSingleQuoted $versionJsonUrl)$forceFlag
+python manage.py import_agent_release --agent-version $(ConvertTo-BashSingleQuoted $Version) --channel $(ConvertTo-BashSingleQuoted $Channel) --release-status paused --version-json $(ConvertTo-BashSingleQuoted $versionJsonUrl)$forceFlag
 python manage.py shell -c $(ConvertTo-BashSingleQuoted "from agents.models import AgentRelease; r=AgentRelease.objects.get(version='$Version'); assert r.channel == '$Channel'; assert r.rollout_percentage == $Rollout; assert r.rollout_paused == $pyPaused; assert r.package_url == '$($LocalRelease.VersionJson.packageUrl)'; assert r.sha256 == '$($LocalRelease.ZipSha)'; print('release_import_verified')")
 "@
     Invoke-Ssh $command "import_failed" | Out-Null
@@ -368,7 +403,7 @@ keep = int("$keep")
 protected = {current}
 protected.update(v for v in AgentMachine.objects.exclude(agent_version='').values_list('agent_version', flat=True))
 protected.update(v for v in AgentMachine.objects.exclude(pinned_agent_version='').values_list('pinned_agent_version', flat=True))
-protected.update(AgentRelease.objects.filter(channel='stable', status__in=['available', 'active']).values_list('version', flat=True))
+protected.update(AgentRelease.objects.filter(channel='stable', status__in=['published', 'paused']).values_list('version', flat=True))
 for job in AgentJob.objects.filter(status__in=['queued','pending','dispatched','running'], job_type='update_agent'):
     payload = job.payload or {}
     if payload.get('target_version'):

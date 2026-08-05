@@ -4,6 +4,7 @@ import secrets
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -117,6 +118,7 @@ class AgentMachine(models.Model):
     maintenance_window_end = models.TimeField(null=True, blank=True)
     update_paused = models.BooleanField(default=False, db_index=True)
     pinned_agent_version = models.CharField(max_length=50, blank=True, db_index=True)
+    is_pilot_endpoint = models.BooleanField(default=False, db_index=True)
     rollout_groups = models.ManyToManyField(
         'AgentReleaseGroup',
         blank=True,
@@ -183,35 +185,84 @@ class AgentRelease(models.Model):
     CHANNEL_CHOICES = AgentMachine.UPDATE_CHANNEL_CHOICES
 
     STATUS_DRAFT = 'draft'
-    STATUS_VALIDATING = 'validating'
-    STATUS_AVAILABLE = 'available'
+    STATUS_PUBLISHED = 'published'
+    STATUS_AVAILABLE = STATUS_PUBLISHED
     STATUS_PAUSED = 'paused'
     STATUS_REVOKED = 'revoked'
     STATUS_SUPERSEDED = 'superseded'
     STATUS_CHOICES = [
         (STATUS_DRAFT, 'Draft'),
-        (STATUS_VALIDATING, 'Validating'),
-        (STATUS_AVAILABLE, 'Available'),
+        (STATUS_PUBLISHED, 'Published'),
         (STATUS_PAUSED, 'Paused'),
         (STATUS_REVOKED, 'Revoked'),
         (STATUS_SUPERSEDED, 'Superseded'),
     ]
+    IMMUTABLE_STATUSES = {STATUS_PUBLISHED, STATUS_PAUSED, STATUS_REVOKED, STATUS_SUPERSEDED}
+    IMMUTABLE_FIELDS = {
+        'version',
+        'package_url',
+        'checksum_url',
+        'sha256',
+        'size',
+        'manifest_url',
+        'manifest_sha256',
+        'signature_url',
+        'signature_sha256',
+        'signature_key_id',
+        'source_channel',
+        'released_at',
+        'minimum_updater_version',
+    }
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     version = models.CharField(max_length=50, unique=True)
     channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, db_index=True)
+    source_channel = models.CharField(max_length=20, choices=CHANNEL_CHOICES, blank=True, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
     package_url = models.URLField(max_length=1000)
     checksum_url = models.URLField(max_length=1000, blank=True)
     sha256 = models.CharField(max_length=64)
     size = models.BigIntegerField(default=0)
+    manifest_url = models.URLField(max_length=1000, blank=True)
+    manifest_sha256 = models.CharField(max_length=64, blank=True)
+    signature_url = models.URLField(max_length=1000, blank=True)
+    signature_sha256 = models.CharField(max_length=64, blank=True)
+    signature_key_id = models.CharField(max_length=120, blank=True)
+    signature_valid = models.BooleanField(default=False)
+    legacy_unsigned = models.BooleanField(default=True, db_index=True)
     released_at = models.DateTimeField(null=True, blank=True)
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='published_agent_releases',
+    )
     minimum_updater_version = models.CharField(max_length=50, blank=True)
+    stable_approval_reason = models.TextField(blank=True)
     release_notes = models.TextField(blank=True)
     rollout_percentage = models.PositiveSmallIntegerField(default=0)
     rollout_paused = models.BooleanField(default=False, db_index=True)
     mandatory = models.BooleanField(default=False)
     revoked = models.BooleanField(default=False, db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='revoked_agent_releases',
+    )
+    revocation_reason = models.TextField(blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+    superseded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='superseded_agent_releases',
+    )
+    superseded_reason = models.TextField(blank=True)
     replacement_release = models.ForeignKey(
         'self',
         null=True,
@@ -239,6 +290,11 @@ class AgentRelease(models.Model):
         permissions = [
             ('view_agent_release_rollout', 'Can view agent release rollout'),
             ('create_agent_release_draft', 'Can create agent release draft'),
+            ('publish_agentrelease', 'Can publish agent releases'),
+            ('promote_agentrelease', 'Can promote agent releases'),
+            ('promote_agentrelease_stable', 'Can promote agent releases to stable'),
+            ('pause_agentrelease', 'Can pause agent releases'),
+            ('revoke_agentrelease', 'Can revoke agent releases'),
             ('publish_agent_release_development', 'Can publish development agent release'),
             ('promote_agent_release_pilot', 'Can promote agent release to pilot'),
             ('promote_agent_release_stable', 'Can promote agent release to stable'),
@@ -250,10 +306,53 @@ class AgentRelease(models.Model):
             models.Index(fields=['channel', 'status', '-released_at']),
             models.Index(fields=['revoked', 'rollout_paused']),
             models.Index(fields=['version']),
+            models.Index(fields=['legacy_unsigned', 'signature_valid']),
         ]
 
     def __str__(self) -> str:
         return f'{self.version} ({self.channel})'
+
+    @property
+    def is_published_state(self) -> bool:
+        return self.status in self.IMMUTABLE_STATUSES
+
+    @property
+    def is_selectable_manually(self) -> bool:
+        return self.status in {self.STATUS_PUBLISHED, self.STATUS_PAUSED, self.STATUS_SUPERSEDED} and not self.revoked
+
+    def clean(self):
+        super().clean()
+        if self.rollout_percentage < 0 or self.rollout_percentage > 100:
+            raise ValidationError({'rollout_percentage': 'Rollout deve estar entre 0 e 100.'})
+        if self.status == self.STATUS_REVOKED:
+            self.revoked = True
+            if self.revoked_at is None:
+                self.revoked_at = timezone.now()
+        if self.revoked:
+            self.status = self.STATUS_REVOKED
+        if self.status == self.STATUS_PAUSED:
+            self.rollout_paused = True
+        if self.status == self.STATUS_PUBLISHED and self.revoked:
+            raise ValidationError('Release publicada nao pode estar marcada como revogada.')
+        if not self.source_channel:
+            self.source_channel = self.channel
+        if self.status in {self.STATUS_PUBLISHED, self.STATUS_PAUSED} and not self.legacy_unsigned and not self.signature_valid:
+            raise ValidationError('Release assinada precisa ter assinatura valida.')
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = AgentRelease.objects.filter(pk=self.pk).first()
+            if previous and previous.status in self.IMMUTABLE_STATUSES:
+                changed = [
+                    field for field in self.IMMUTABLE_FIELDS
+                    if getattr(previous, field) != getattr(self, field)
+                ]
+                if changed:
+                    raise ValidationError(
+                        f'RELEASE_IMMUTABILITY_VIOLATION: campos imutaveis alterados: {", ".join(changed)}'
+                    )
+        self.full_clean()
+        super().save(*args, **kwargs)
 
 
 class AgentReleaseAudit(models.Model):
@@ -263,6 +362,11 @@ class AgentReleaseAudit(models.Model):
     ACTION_RESUMED = 'resumed'
     ACTION_PROMOTED = 'promoted'
     ACTION_REVOKED = 'revoked'
+    ACTION_PUBLISHED = 'published'
+    ACTION_ROLLOUT_CHANGED = 'rollout_changed'
+    ACTION_SUPERSEDED = 'superseded'
+    ACTION_IMMUTABILITY_BLOCKED = 'immutability_blocked'
+    ACTION_SIGNATURE_FAILED = 'signature_failed'
     ACTION_ENDPOINT_POLICY_CHANGED = 'endpoint_policy_changed'
     ACTION_CHOICES = [
         (ACTION_CREATED, 'Created'),
@@ -271,6 +375,11 @@ class AgentReleaseAudit(models.Model):
         (ACTION_RESUMED, 'Resumed'),
         (ACTION_PROMOTED, 'Promoted'),
         (ACTION_REVOKED, 'Revoked'),
+        (ACTION_PUBLISHED, 'Published'),
+        (ACTION_ROLLOUT_CHANGED, 'Rollout changed'),
+        (ACTION_SUPERSEDED, 'Superseded'),
+        (ACTION_IMMUTABILITY_BLOCKED, 'Immutability blocked'),
+        (ACTION_SIGNATURE_FAILED, 'Signature failed'),
         (ACTION_ENDPOINT_POLICY_CHANGED, 'Endpoint policy changed'),
     ]
 

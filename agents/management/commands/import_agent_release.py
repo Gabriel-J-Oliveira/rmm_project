@@ -3,10 +3,12 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
+from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from agents.models import AgentRelease, AgentReleaseAudit
+from agents.services import assert_release_immutable_compatible
 from agents.versioning import parse_semver
 
 
@@ -28,9 +30,10 @@ class Command(BaseCommand):
         parser.add_argument('--agent-version', '--release-version', dest='version', required=True)
         parser.add_argument('--channel', default=AgentRelease.CHANNEL_DEVELOPMENT, choices=[choice[0] for choice in AgentRelease.CHANNEL_CHOICES])
         parser.add_argument('--version-json', required=True, help='Caminho local ou URL HTTPS do version.json gerado pelo pipeline.')
+        parser.add_argument('--release-status', default=AgentRelease.STATUS_PAUSED, choices=[choice[0] for choice in AgentRelease.STATUS_CHOICES])
         parser.add_argument('--release-notes', default='')
         parser.add_argument('--minimum-updater-version', default='')
-        parser.add_argument('--force', action='store_true', help='Atualiza uma release existente apenas em ambiente de desenvolvimento.')
+        parser.add_argument('--force', action='store_true', help='Permite recriar draft local; nunca sobrescreve release publicada com metadados diferentes.')
 
     def handle(self, *args, **options):
         version = options['version'].strip()
@@ -44,8 +47,13 @@ class Command(BaseCommand):
 
         package_url = str(manifest.get('packageUrl') or manifest.get('package_url') or '').strip()
         checksum_url = str(manifest.get('checksumUrl') or manifest.get('checksum_url') or '').strip()
+        manifest_url = str(manifest.get('manifestUrl') or manifest.get('manifest_url') or '').strip()
+        signature_url = str(manifest.get('signatureUrl') or manifest.get('signature_url') or '').strip()
         sha256 = str(manifest.get('sha256') or '').strip().lower()
         size = int(manifest.get('size') or 0)
+        signature_key_id = str(manifest.get('key_id') or manifest.get('signature_key_id') or '').strip()
+        signature_sha256 = str(manifest.get('signature_sha256') or '').strip().lower()
+        manifest_sha256 = str(manifest.get('manifest_sha256') or '').strip().lower()
         minimum_updater_version = (options['minimum_updater_version'] or manifest.get('minimum_updater_version') or '').strip()
         self._validate_https('packageUrl', package_url)
         if checksum_url:
@@ -56,23 +64,54 @@ class Command(BaseCommand):
             raise CommandError('Tamanho do pacote invalido no version.json.')
 
         existing = AgentRelease.objects.filter(version=version).first()
-        if existing and not options['force']:
-            raise CommandError(f'Release {version} ja existe. Use --force apenas em desenvolvimento.')
+        if existing:
+            incoming = {
+                'package_url': package_url,
+                'checksum_url': checksum_url,
+                'sha256': sha256,
+                'size': size,
+                'manifest_url': manifest_url,
+                'manifest_sha256': manifest_sha256,
+                'signature_url': signature_url,
+                'signature_sha256': signature_sha256,
+                'signature_key_id': signature_key_id,
+                'minimum_updater_version': minimum_updater_version,
+            }
+            try:
+                assert_release_immutable_compatible(existing, incoming)
+            except ValidationError as exc:
+                raise CommandError(str(exc)) from exc
+            if existing.status in AgentRelease.IMMUTABLE_STATUSES:
+                self.stdout.write(self.style.SUCCESS(
+                    f'Release {version} ja importada com mesmos metadados; operacao idempotente.'
+                ))
+                return
+            if not options['force']:
+                raise CommandError(f'Release draft {version} ja existe. Use --force para atualizar draft local.')
 
         release, created = AgentRelease.objects.update_or_create(
             version=version,
             defaults={
                 'channel': channel,
-                'status': AgentRelease.STATUS_PAUSED,
+                'source_channel': channel,
+                'status': options['release_status'],
                 'package_url': package_url,
                 'checksum_url': checksum_url,
                 'sha256': sha256,
                 'size': size,
-                'released_at': timezone.now(),
+                'manifest_url': manifest_url,
+                'manifest_sha256': manifest_sha256,
+                'signature_url': signature_url,
+                'signature_sha256': signature_sha256,
+                'signature_key_id': signature_key_id,
+                'signature_valid': bool(signature_key_id and signature_url),
+                'legacy_unsigned': not bool(signature_key_id and signature_url),
+                'released_at': timezone.now() if options['release_status'] != AgentRelease.STATUS_DRAFT else None,
+                'published_by': None,
                 'minimum_updater_version': minimum_updater_version,
                 'release_notes': options['release_notes'] or manifest.get('notes') or '',
                 'rollout_percentage': 0,
-                'rollout_paused': True,
+                'rollout_paused': options['release_status'] == AgentRelease.STATUS_PAUSED,
                 'mandatory': bool(manifest.get('mandatory') or manifest.get('force')),
                 'revoked': False,
             },
@@ -87,7 +126,7 @@ class Command(BaseCommand):
             metadata={'version_json': self._sanitize_source(options['version_json']), 'created': created},
         )
         self.stdout.write(self.style.SUCCESS(
-            f'Release {release.version} importada em {release.channel}, pausada, rollout {release.rollout_percentage}%, jobs nao criados.'
+            f'Release {release.version} importada em {release.channel}, status {release.status}, rollout {release.rollout_percentage}%, jobs nao criados.'
         ))
 
     def _read_manifest(self, source):
