@@ -12,7 +12,7 @@ from django.utils import timezone
 
 from .models import AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseGroup
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
-from .services import deterministic_rollout_bucket, evaluate_agent_update_policy
+from .services import build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
 from .services import promote_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver
 
@@ -653,15 +653,22 @@ class AgentReleasePolicyTests(TestCase):
         portal = Client()
         portal.force_login(user)
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
-        self.machine.agent_version = '0.1.0.7'
+        self.machine.agent_version = '0.1.1.0-rc6'
         self.machine.save(update_fields=['update_channel', 'agent_version'])
         release = self.release(
-            version='0.1.1.0-rc1',
+            version='0.1.1.0-rc7',
             channel=AgentRelease.CHANNEL_DEVELOPMENT,
             rollout=0,
             rollout_paused=True,
             status=AgentRelease.STATUS_PAUSED,
             minimum_updater_version='0.1.0.7',
+            manifest_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc7/release-manifest.json',
+            manifest_sha256='b' * 64,
+            signature_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc7/release-manifest.sig',
+            signature_sha256='c' * 64,
+            signature_key_id='nightowl-release-2026-01',
+            signature_valid=True,
+            legacy_unsigned=False,
         )
 
         response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
@@ -669,7 +676,7 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(response.status_code, 201)
         job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
         self.assertEqual(job.agent_release, release)
-        self.assertEqual(job.payload['target_version'], '0.1.1.0-rc1')
+        self.assertEqual(job.payload['target_version'], '0.1.1.0-rc7')
         self.assertEqual(job.payload['release_id'], str(release.id))
         self.assertEqual(job.payload['package_url'], release.package_url)
         self.assertEqual(job.payload['checksum_url'], release.checksum_url)
@@ -679,8 +686,123 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(job.payload['channel'], release.channel)
         self.assertEqual(job.payload['source'], 'manual_panel')
         self.assertEqual(job.payload['policy_reason'], 'eligible')
+        self.assertEqual(job.payload['manifest_url'], release.manifest_url)
+        self.assertEqual(job.payload['manifest_sha256'], release.manifest_sha256)
+        self.assertEqual(job.payload['signature_url'], release.signature_url)
+        self.assertEqual(job.payload['signature_sha256'], release.signature_sha256)
+        self.assertEqual(job.payload['signature_key_id'], release.signature_key_id)
+        self.assertTrue(job.payload['signature_valid'])
+        self.assertFalse(job.payload['legacy_unsigned'])
         self.assertEqual(job.timeout_seconds, 900)
         self.assertIsNotNone(job.expires_at)
+
+    def test_manual_panel_update_rc5_to_rc6_uses_legacy_bootstrap_payload(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-rc5-bootstrap', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc5'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc6',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+            manifest_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.json',
+            manifest_sha256='b' * 64,
+            signature_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.sig',
+            signature_sha256='c' * 64,
+            signature_key_id='nightowl-release-2026-01',
+            signature_valid=True,
+            legacy_unsigned=False,
+        )
+
+        response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
+
+        self.assertEqual(response.status_code, 201)
+        job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
+        self.assertEqual(set(job.payload.keys()), {
+            'release_id',
+            'target_version',
+            'channel',
+            'package_url',
+            'checksum_url',
+            'sha256',
+            'size',
+            'minimum_updater_version',
+            'force',
+            'mandatory',
+            'timeout_seconds',
+            'source',
+        })
+        self.assertEqual(job.payload['target_version'], '0.1.1.0-rc6')
+        self.assertNotIn('manifest_url', job.payload)
+        self.assertNotIn('signature_url', job.payload)
+        self.assertNotIn('signature_key_id', job.payload)
+        self.assertNotIn('source_channel', job.payload)
+        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='agent.update_legacy_bootstrap_payload').exists())
+
+    def test_update_payload_rc6_to_rc7_contains_signature_fields(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc6'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc7',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+            manifest_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc7/release-manifest.json',
+            manifest_sha256='d' * 64,
+            signature_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc7/release-manifest.sig',
+            signature_sha256='e' * 64,
+            signature_key_id='nightowl-release-2026-01',
+            signature_valid=True,
+            legacy_unsigned=False,
+        )
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        payload = build_update_agent_job_payload(self.machine, decision, source='manual_panel', manual_explicit=True)
+
+        self.assertEqual(payload['target_version'], '0.1.1.0-rc7')
+        self.assertEqual(payload['manifest_url'], release.manifest_url)
+        self.assertEqual(payload['manifest_sha256'], release.manifest_sha256)
+        self.assertEqual(payload['signature_url'], release.signature_url)
+        self.assertEqual(payload['signature_sha256'], release.signature_sha256)
+        self.assertEqual(payload['signature_key_id'], release.signature_key_id)
+        self.assertTrue(payload['signature_valid'])
+        self.assertFalse(payload['legacy_unsigned'])
+
+    def test_legacy_bootstrap_payload_is_not_used_for_pilot_channel(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
+        self.machine.is_pilot_endpoint = True
+        self.machine.agent_version = '0.1.1.0-rc5'
+        self.machine.save(update_fields=['update_channel', 'is_pilot_endpoint', 'agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc6',
+            channel=AgentRelease.CHANNEL_PILOT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+            manifest_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.json',
+            manifest_sha256='d' * 64,
+            signature_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.sig',
+            signature_sha256='e' * 64,
+            signature_key_id='nightowl-release-2026-01',
+            signature_valid=True,
+            legacy_unsigned=False,
+        )
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        payload = build_update_agent_job_payload(self.machine, decision, source='manual_panel', manual_explicit=True)
+
+        self.assertIn('manifest_url', payload)
+        self.assertIn('signature_key_id', payload)
 
     def test_manual_panel_update_rejects_same_version(self):
         user_model = get_user_model()

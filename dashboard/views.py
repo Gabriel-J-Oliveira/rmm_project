@@ -52,6 +52,7 @@ from config.authz import is_nightowl_technical_user
 from agents.audit import create_audit_event
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
+    build_update_agent_job_payload,
     change_agent_release_rollout,
     evaluate_agent_update_policy,
     promote_agent_release,
@@ -3329,29 +3330,31 @@ def endpoint_job_create(request, pk):
                 status=409,
             )
         release = update_decision.release
-        payload.update({
-            'target_version': release.version,
-            'channel': update_decision.channel,
-            'source_channel': update_decision.channel,
-            'release_id': str(release.id),
-            'policy_reason': update_decision.reason_code,
-            'package_url': release.package_url,
-            'checksum_url': release.checksum_url,
-            'sha256': release.sha256,
-            'size': release.size,
-            'manifest_url': release.manifest_url,
-            'manifest_sha256': release.manifest_sha256,
-            'signature_url': release.signature_url,
-            'signature_sha256': release.signature_sha256,
-            'signature_key_id': release.signature_key_id,
-            'signature_valid': release.signature_valid,
-            'legacy_unsigned': release.legacy_unsigned,
-            'minimum_updater_version': release.minimum_updater_version,
-            'mandatory': release.mandatory,
-            'timeout_seconds': 900,
-            'force': force_update,
-            'source': 'manual_panel',
-        })
+        payload.update(build_update_agent_job_payload(
+            endpoint,
+            update_decision,
+            force=force_update,
+            source='manual_panel',
+            manual_explicit=selected_release is not None,
+        ))
+        if 'manifest_url' not in payload and release.channel == AgentRelease.CHANNEL_DEVELOPMENT:
+            create_audit_event(
+                event_type='agent.update_legacy_bootstrap_payload',
+                title='Payload legado usado para bootstrap de update',
+                description=f'Update manual de {endpoint.hostname} usara payload legado para permitir bootstrap ate RC6.',
+                severity=AuditEvent.SEVERITY_WARNING,
+                actor_type=AuditEvent.ACTOR_USER,
+                actor_name=request.user.get_username(),
+                endpoint=endpoint,
+                metadata={
+                    'release_id': str(release.id),
+                    'target_version': release.version,
+                    'current_version': endpoint.agent_version or '',
+                    'channel': release.channel,
+                    'reason': 'agent_version_before_rc6',
+                },
+                request=request,
+            )
     elif selected_type == AgentJob.TYPE_RESTART_AGENT:
         payload.update({
             'source': 'manual_panel',
@@ -3394,9 +3397,9 @@ def endpoint_job_create(request, pk):
             release=job.agent_release,
             endpoint=endpoint,
             version=payload.get('target_version', ''),
-            channel_after=payload.get('source_channel', ''),
+            channel_after=payload.get('source_channel') or payload.get('channel', ''),
             reason='manual_panel_update_job_created',
-            metadata={'job_id': str(job.id), 'reason_code': payload.get('policy_reason', '')},
+            metadata={'job_id': str(job.id), 'reason_code': payload.get('policy_reason') or update_decision.reason_code},
         )
         logger.info(
             'update_agent job created endpoint_id=%s job_id=%s release_id=%s target_version=%s created_by=%s',

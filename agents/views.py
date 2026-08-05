@@ -27,6 +27,7 @@ from .models import (
 )
 from .serializers import AgentEnrollmentSerializer, HeartbeatSerializer
 from .services import (
+    build_update_agent_job_payload,
     build_fqdn,
     evaluate_agent_update_policy,
     record_agent_operational_status,
@@ -225,21 +226,13 @@ class AgentUpdatePolicyView(APIView):
                     agent_release=release,
                     job_type=AgentJob.TYPE_UPDATE_AGENT,
                     created_by='update_policy',
-                    payload={
-                        'target_version': release.version,
-                        'channel': decision.channel,
-                        'source_channel': decision.channel,
-                        'release_id': str(release.id),
-                        'policy_reason': decision.reason_code,
-                        'package_url': release.package_url,
-                        'checksum_url': release.checksum_url,
-                        'sha256': release.sha256,
-                        'size': release.size,
-                        'minimum_updater_version': release.minimum_updater_version,
-                        'mandatory': release.mandatory,
-                        'force': False,
-                        'source': 'update_policy',
-                    },
+                    payload=build_update_agent_job_payload(
+                        machine,
+                        decision,
+                        force=False,
+                        source='update_policy',
+                        manual_explicit=False,
+                    ),
                     correlation_id=str(release.id),
                     attempt=1,
                     timeout_seconds=900,

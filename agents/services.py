@@ -116,6 +116,7 @@ UPDATE_POLICY_REASON_INVALID_VERSION = 'invalid_version'
 UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE = 'downgrade_requires_force'
 AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
 AGENT_RELEASE_AUTOMATIC_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
+UPDATE_AGENT_SIGNED_PAYLOAD_MIN_VERSION = '0.1.1.0-rc6'
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,56 @@ class AgentUpdateDecision:
             'sha256': release.sha256 if release and self.eligible else '',
             'minimum_updater_version': release.minimum_updater_version if release else '',
         }
+
+
+def update_agent_uses_legacy_bootstrap_payload(endpoint, *, manual_explicit=False, channel='') -> bool:
+    if not manual_explicit:
+        return False
+    if (channel or endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE) != AgentMachine.UPDATE_CHANNEL_DEVELOPMENT:
+        return False
+    comparison = compare_versions(endpoint.agent_version or '', UPDATE_AGENT_SIGNED_PAYLOAD_MIN_VERSION)
+    return comparison is not None and comparison < 0
+
+
+def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, force=False, source='manual_panel', manual_explicit=False) -> dict:
+    release = decision.release
+    if release is None:
+        raise ValueError('AgentUpdateDecision sem release nao pode gerar payload update_agent.')
+
+    legacy_bootstrap = update_agent_uses_legacy_bootstrap_payload(
+        endpoint,
+        manual_explicit=manual_explicit,
+        channel=decision.channel,
+    )
+    payload = {
+        'release_id': str(release.id),
+        'target_version': release.version,
+        'channel': decision.channel,
+        'package_url': release.package_url,
+        'checksum_url': release.checksum_url,
+        'sha256': release.sha256,
+        'size': release.size,
+        'minimum_updater_version': release.minimum_updater_version,
+        'force': bool(force),
+        'mandatory': bool(release.mandatory),
+        'timeout_seconds': 900,
+        'source': source,
+    }
+    if legacy_bootstrap:
+        return payload
+
+    payload.update({
+        'source_channel': decision.channel,
+        'policy_reason': decision.reason_code,
+        'manifest_url': release.manifest_url,
+        'manifest_sha256': release.manifest_sha256,
+        'signature_url': release.signature_url,
+        'signature_sha256': release.signature_sha256,
+        'signature_key_id': release.signature_key_id,
+        'signature_valid': release.signature_valid,
+        'legacy_unsigned': release.legacy_unsigned,
+    })
+    return payload
 
 
 def build_fqdn(hostname: str, domain: str) -> str:
