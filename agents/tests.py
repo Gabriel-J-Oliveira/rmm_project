@@ -259,13 +259,19 @@ class AgentOperationalDiagnosticsTests(TestCase):
             job_type=AgentJob.TYPE_UPDATE_AGENT,
             status=AgentJob.STATUS_INTERRUPTED,
             result={'update_status': 'runner_started'},
+            payload={'target_version': '0.1.1.0-rc6'},
         )
         response = self.client.post(
             '/api/agent/jobs/result/',
             data={
                 'job_id': str(job.id),
                 'status': 'completed',
-                'result': {'update_status': 'completed', 'target_version': '0.1.1.0-rc6'},
+                'result': {
+                    'update_status': 'completed',
+                    'target_version': '0.1.1.0-rc6',
+                    'installed_version': '0.1.1.0-rc6',
+                    'health_check_confirmed': True,
+                },
             },
             content_type='application/json',
             HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
@@ -274,6 +280,180 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         job.refresh_from_db()
         self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def test_update_restart_interruption_waits_for_reconciliation_then_completes(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': '0.1.1.0-rc6'},
+            result={'update_status': 'runner_started', 'target_version': '0.1.1.0-rc6'},
+            timeout_seconds=900,
+        )
+
+        restart = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'failed',
+                'error_code': 'JOB_INTERRUPTED',
+                'error_message': 'Job was interrupted by agent restart.',
+                'result': {'update_status': 'runner_started', 'target_version': '0.1.1.0-rc6'},
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(restart.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_RUNNING)
+        self.assertEqual(job.result['update_status'], 'awaiting_reconciliation')
+        self.assertEqual(job_progress_message(job), 'Agente reiniciando / aguardando confirmacao.')
+
+        final = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'completed',
+                'result': {
+                    'update_status': 'completed',
+                    'target_version': '0.1.1.0-rc6',
+                    'installed_version': '0.1.1.0-rc6',
+                    'health_check_confirmed': True,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(final.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='update.reconciled').exists())
+
+    def test_update_restart_interruption_can_reconcile_to_rollback(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': '0.1.1.0-rc6'},
+            result={'update_status': 'runner_started', 'target_version': '0.1.1.0-rc6'},
+            timeout_seconds=900,
+        )
+
+        self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'interrupted',
+                'error_code': 'JOB_INTERRUPTED',
+                'result': {'update_status': 'runner_started', 'target_version': '0.1.1.0-rc6'},
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+        rollback = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'rolled_back',
+                'error_code': 'UPDATE_SERVICE_START_FAILED',
+                'result': {
+                    'update_status': 'rolled_back',
+                    'target_version': '0.1.1.0-rc6',
+                    'installed_version': '0.1.1.0-rc5',
+                    'rollback_confirmed': True,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(rollback.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_ROLLED_BACK)
+        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='update.reconciled').exists())
+
+    def test_common_job_interrupted_remains_interrupted(self):
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_PING, status=AgentJob.STATUS_RUNNING)
+
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'failed',
+                'error_code': 'JOB_INTERRUPTED',
+                'error_message': 'Job was interrupted by agent restart.',
+                'result': {'type': 'ping'},
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_FAILED)
+        self.assertEqual(job.error_code, 'JOB_INTERRUPTED')
+
+    def test_duplicate_final_update_result_is_idempotent_after_reconciliation(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': '0.1.1.0-rc6'},
+            result={'update_status': 'awaiting_reconciliation'},
+        )
+        result_id = str(uuid.uuid4())
+        payload = {
+            'job_id': str(job.id),
+            'status': 'completed',
+            'result': {
+                'update_status': 'completed',
+                'target_version': '0.1.1.0-rc6',
+                'installed_version': '0.1.1.0-rc6',
+                'health_check_confirmed': True,
+            },
+        }
+
+        first = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+        second = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json()['duplicate'])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def test_failed_job_interrupted_update_can_be_corrected_to_completed(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_FAILED,
+            error_code='JOB_INTERRUPTED',
+            payload={'target_version': '0.1.1.0-rc6'},
+            result={'update_status': 'runner_started'},
+        )
+
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'completed',
+                'result': {
+                    'update_status': 'completed',
+                    'target_version': '0.1.1.0-rc6',
+                    'installed_version': '0.1.1.0-rc6',
+                    'health_check_confirmed': True,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='update.reconciled').exists())
 
     def test_final_job_ignores_late_running_result(self):
         job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_PING, status=AgentJob.STATUS_COMPLETED)

@@ -34,6 +34,7 @@ from .services import (
     record_collection,
     record_heartbeat,
 )
+from .versioning import compare_versions
 
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,10 @@ def _is_update_interrupted_resolution(job, incoming_status):
     return (
         job is not None
         and job.job_type == AgentJob.TYPE_UPDATE_AGENT
-        and job.status == AgentJob.STATUS_INTERRUPTED
+        and (
+            job.status == AgentJob.STATUS_INTERRUPTED
+            or (job.status == AgentJob.STATUS_FAILED and str(job.error_code or '').upper() == 'JOB_INTERRUPTED')
+        )
         and incoming_status in {
             AgentJob.STATUS_COMPLETED,
             AgentJob.STATUS_FAILED,
@@ -92,6 +96,95 @@ def _is_update_interrupted_resolution(job, incoming_status):
             AgentJob.STATUS_ROLLBACK_FAILED,
         }
     )
+
+
+def _payload_result(payload):
+    result = payload.get('result') if isinstance(payload, dict) else {}
+    return result if isinstance(result, dict) else {}
+
+
+def _result_stage(result):
+    return str(
+        result.get('update_status')
+        or result.get('stage')
+        or result.get('current_stage')
+        or result.get('currentStage')
+        or ''
+    ).strip().lower()
+
+
+def _is_expected_update_restart_interruption(job, incoming_status, payload):
+    if (
+        job is None
+        or job.job_type != AgentJob.TYPE_UPDATE_AGENT
+        or incoming_status not in {AgentJob.STATUS_INTERRUPTED, AgentJob.STATUS_FAILED}
+    ):
+        return False
+    error_code = str(payload.get('error_code') or '').strip().upper()
+    if error_code != 'JOB_INTERRUPTED':
+        return False
+    current_stage = _result_stage(job.result if isinstance(job.result, dict) else {})
+    incoming_stage = _result_stage(_payload_result(payload))
+    restart_stages = {
+        'runner_started',
+        'stopping_service',
+        'service_stopped',
+        'replacing_files',
+        'files_replaced',
+        'starting_service',
+        'service_started',
+        'waiting_health_check',
+        'awaiting_reconciliation',
+        'restarting',
+    }
+    return (
+        job.status in {AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING}
+        and (current_stage in restart_stages or incoming_stage in restart_stages or bool(job.payload.get('target_version') if isinstance(job.payload, dict) else ''))
+    )
+
+
+def _update_completion_health_confirmed(job, payload):
+    result = _payload_result(payload)
+    details = result.get('details') if isinstance(result.get('details'), dict) else {}
+    target_version = str(
+        result.get('target_version')
+        or result.get('targetVersion')
+        or details.get('target_version')
+        or details.get('targetVersion')
+        or (job.payload.get('target_version') if isinstance(job.payload, dict) else '')
+        or ''
+    ).strip()
+    installed_version = str(
+        result.get('installed_version')
+        or result.get('installedVersion')
+        or details.get('installed_version')
+        or details.get('installedVersion')
+        or ''
+    ).strip()
+    health_check = result.get('health_check') if isinstance(result.get('health_check'), dict) else {}
+    health_confirmed = bool(
+        result.get('health_check_confirmed')
+        or result.get('healthCheckConfirmed')
+        or health_check.get('confirmed')
+        or health_check.get('success')
+    )
+    if not target_version or not installed_version:
+        return False
+    return compare_versions(installed_version, target_version) == 0 and health_confirmed
+
+
+def _coerce_expected_update_restart_payload(payload):
+    coerced = dict(payload)
+    result = dict(_payload_result(payload))
+    previous_stage = _result_stage(result)
+    result.setdefault('previous_update_status', previous_stage or 'interrupted')
+    result['update_status'] = 'awaiting_reconciliation'
+    result['message'] = 'Agente reiniciando / aguardando confirmacao.'
+    coerced['result'] = result
+    coerced['status'] = AgentJob.STATUS_RUNNING
+    coerced['error_code'] = ''
+    coerced['error_message'] = ''
+    return coerced
 
 
 def _parse_agent_datetime(value, default=None):
@@ -448,6 +541,25 @@ class AgentJobsResultView(APIView):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
+        expected_update_restart = _is_expected_update_restart_interruption(job, job_status, payload)
+        if expected_update_restart:
+            payload = _coerce_expected_update_restart_payload(payload)
+            job_status = AgentJob.STATUS_RUNNING
+            create_audit_event(
+                event_type='update.awaiting_reconciliation',
+                title='Update aguardando reconciliacao',
+                description=f'{machine.hostname} reiniciou durante update_agent; aguardando resultado final do updater.',
+                severity=AuditEvent.SEVERITY_INFO,
+                actor_type=AuditEvent.ACTOR_AGENT,
+                actor_name='NightOwlAgent',
+                endpoint=machine,
+                metadata={
+                    'job_id': str(job_id),
+                    'result_id': result_id,
+                    'previous_status': 'interrupted',
+                    'error_code': 'JOB_INTERRUPTED',
+                },
+            )
         receipt = None
         if result_id:
             receipt = AgentJobResultReceipt.objects.filter(result_id=result_id).select_related('job', 'endpoint').first()
@@ -533,6 +645,36 @@ class AgentJobsResultView(APIView):
                     },
                     status=status.HTTP_200_OK,
                 )
+            previous_status = job.status
+            previous_stage = _result_stage(job.result if isinstance(job.result, dict) else {})
+            if (
+                job.job_type == AgentJob.TYPE_UPDATE_AGENT
+                and incoming_status == AgentJob.STATUS_COMPLETED
+                and (
+                    previous_status == AgentJob.STATUS_INTERRUPTED
+                    or (previous_status == AgentJob.STATUS_FAILED and str(job.error_code or '').upper() == 'JOB_INTERRUPTED')
+                    or previous_stage in {'awaiting_reconciliation', 'restarting'}
+                )
+                and not _update_completion_health_confirmed(job, payload)
+            ):
+                payload = _coerce_expected_update_restart_payload(payload)
+                job_status = AgentJob.STATUS_RUNNING
+                incoming_status = AgentJob.STATUS_RUNNING
+                create_audit_event(
+                    event_type='update.reconciliation_waiting_health_check',
+                    title='Update aguardando health check',
+                    description=f'Resultado completed de update_agent recebido sem confirmacao de versao/saude para {machine.hostname}.',
+                    severity=AuditEvent.SEVERITY_WARNING,
+                    actor_type=AuditEvent.ACTOR_AGENT,
+                    actor_name='NightOwlAgent',
+                    endpoint=machine,
+                    metadata={
+                        'job_id': str(job.id),
+                        'result_id': result_id,
+                        'previous_status': previous_status,
+                        'previous_stage': previous_stage,
+                    },
+                )
             job.status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             job.started_at = _parse_agent_datetime(payload.get('started_at'), job.started_at)
             if job.status in RESULT_FINAL_STATUSES:
@@ -590,6 +732,39 @@ class AgentJobsResultView(APIView):
                     job.status,
                     job.exit_code,
                 )
+                if (
+                    job.status in {
+                        AgentJob.STATUS_COMPLETED,
+                        AgentJob.STATUS_FAILED,
+                        AgentJob.STATUS_ROLLED_BACK,
+                        AgentJob.STATUS_ROLLBACK_FAILED,
+                    }
+                    and (
+                        previous_status == AgentJob.STATUS_INTERRUPTED
+                        or (previous_status == AgentJob.STATUS_FAILED and str(job.error_code or '').upper() == 'JOB_INTERRUPTED')
+                        or previous_stage in {'awaiting_reconciliation', 'restarting'}
+                    )
+                ):
+                    create_audit_event(
+                        event_type='update.reconciled',
+                        title='Update reconciliado apos restart',
+                        description=f'Resultado final de update_agent reconciliado para {machine.hostname}.',
+                        severity=AuditEvent.SEVERITY_SUCCESS if job.status == AgentJob.STATUS_COMPLETED else AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent',
+                        endpoint=machine,
+                        metadata={
+                            'job_id': str(job.id),
+                            'result_id': result_id,
+                            'previous_status': previous_status,
+                            'previous_stage': previous_stage,
+                            'final_status': job.status,
+                            'error_code': job.error_code,
+                            'target_version': job.payload.get('target_version', '') if isinstance(job.payload, dict) else '',
+                            'installed_version': job.result.get('installed_version', '') if isinstance(job.result, dict) else '',
+                            'health_check_confirmed': bool(job.result.get('health_check_confirmed')) if isinstance(job.result, dict) else False,
+                        },
+                    )
             logger.info(
                 'job.result.received endpoint_id=%s job_id=%s job_type=%s status=%s exit_code=%s',
                 machine.id,
