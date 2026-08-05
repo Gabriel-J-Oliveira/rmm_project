@@ -10,13 +10,14 @@ class Command(BaseCommand):
     help = 'Promove uma release do NightOwl Agent entre canais, sem reconstruir ou copiar artefatos.'
 
     def add_arguments(self, parser):
-        parser.add_argument('--version', required=True)
+        parser.add_argument('--agent-version', '--release-version', dest='version', required=True)
         parser.add_argument('--to-channel', required=True, choices=[AgentRelease.CHANNEL_PILOT, AgentRelease.CHANNEL_STABLE])
         parser.add_argument('--rollout-percentage', type=int, default=0)
         parser.add_argument('--paused', action='store_true')
         parser.add_argument('--reason', required=True)
         parser.add_argument('--actor', default='release-bot')
         parser.add_argument('--allow-direct-stable', action='store_true')
+        parser.add_argument('--allow-prerelease-stable', action='store_true')
 
     def handle(self, *args, **options):
         release = AgentRelease.objects.filter(version=options['version']).first()
@@ -32,6 +33,7 @@ class Command(BaseCommand):
                 rollout_paused=options['paused'],
                 approval_reason=options['reason'],
                 allow_direct_stable=options['allow_direct_stable'],
+                allow_prerelease_stable=options['allow_prerelease_stable'],
             )
         except ValidationError as exc:
             raise CommandError(str(exc)) from exc

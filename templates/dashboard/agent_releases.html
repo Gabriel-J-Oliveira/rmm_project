@@ -91,8 +91,23 @@
                     <code>{{ release.sha256 }}</code>
                     {% if release.manifest_url %}<span title="{{ release.manifest_url }}">{{ release.manifest_url }}</span>{% endif %}
                     {% if release.signature_key_id %}<code>{{ release.signature_key_id }}</code>{% endif %}
+                    {% if release.mandatory %}<span>Mandatory: sim</span>{% endif %}
+                    <span>Tamanho: {{ release.size }} bytes</span>
+                    <span>Updater minimo: {{ release.minimum_updater_version|default:"-" }}</span>
+                    <span>Publicado por: {{ release.published_by|default:"-" }}</span>
+                    <span>Publicado em: {{ release.released_at|date:"d/m/Y H:i"|default:"-" }}</span>
+                    {% if release.revocation_reason %}<span>Revogacao: {{ release.revocation_reason }}</span>{% endif %}
+                    {% if release.superseded_reason %}<span>Supersedencia: {{ release.superseded_reason }}</span>{% endif %}
                 </div>
                 <div class="release-card-actions">
+                    {% if release.status == 'draft' %}
+                    <form method="post" action="{% url 'agent-release-action' release.id %}" onsubmit="return confirm('Publicar esta release sem criar jobs automaticos?');">
+                        {% csrf_token %}<input type="hidden" name="action" value="publish">
+                        <input name="reason" placeholder="Motivo da publicacao" required>
+                        <label class="inline-checkbox"><input name="paused" type="checkbox" checked> pausado</label>
+                        <button type="submit">Publicar</button>
+                    </form>
+                    {% endif %}
                     <form method="post" action="{% url 'agent-release-action' release.id %}">
                         {% csrf_token %}<input type="hidden" name="action" value="{% if release.rollout_paused or release.status == 'paused' %}resume{% else %}pause{% endif %}">
                         <button type="submit">{% if release.rollout_paused or release.status == 'paused' %}Retomar{% else %}Pausar{% endif %}</button>
@@ -107,6 +122,7 @@
                         <select name="channel">{% for value,label in channel_choices %}<option value="{{ value }}" {% if value == release.channel %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
                         <input name="rollout_percentage" type="number" min="0" max="100" value="{{ release.rollout_percentage }}">
                         <label class="inline-checkbox"><input name="paused" type="checkbox" checked> pausado</label>
+                        <label class="inline-checkbox"><input name="allow_prerelease_stable" type="checkbox"> permitir RC em stable</label>
                         <input name="reason" placeholder="Motivo/aprovacao">
                         <button type="submit">Promover</button>
                     </form>
@@ -120,6 +136,11 @@
                         <button type="submit">Superseder</button>
                     </form>
                     <form method="post" action="{% url 'agent-release-action' release.id %}">
+                        {% csrf_token %}<input type="hidden" name="action" value="mandatory">
+                        <label class="inline-checkbox"><input name="mandatory" type="checkbox" {% if release.mandatory %}checked{% endif %}> mandatory</label>
+                        <button type="submit">Salvar flag</button>
+                    </form>
+                    <form method="post" action="{% url 'agent-release-action' release.id %}" onsubmit="return confirm('Revogar esta release bloqueia novos jobs. Confirmar?');">
                         {% csrf_token %}<input type="hidden" name="action" value="revoke">
                         <input name="reason" placeholder="Motivo da revogacao" required>
                         <button class="danger" type="submit">Revogar</button>

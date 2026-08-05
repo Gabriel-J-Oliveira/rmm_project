@@ -178,6 +178,61 @@ class AgentReleaseGroup(models.Model):
         return self.name
 
 
+class AgentReleaseSigningKey(models.Model):
+    STATUS_ACTIVE = 'active'
+    STATUS_REVOKED = 'revoked'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_REVOKED, 'Revoked'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key_id = models.CharField(max_length=120, unique=True)
+    algorithm = models.CharField(max_length=40, default='RSA-PSS-SHA256')
+    public_key_xml = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='revoked_agent_release_keys',
+    )
+    revocation_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['key_id']
+        indexes = [
+            models.Index(fields=['key_id', 'status']),
+            models.Index(fields=['status', 'valid_from', 'valid_until']),
+        ]
+
+    def __str__(self) -> str:
+        return self.key_id
+
+    @property
+    def revoked(self) -> bool:
+        return self.status == self.STATUS_REVOKED or self.revoked_at is not None
+
+    def clean(self):
+        super().clean()
+        if self.algorithm != 'RSA-PSS-SHA256':
+            raise ValidationError({'algorithm': 'Somente RSA-PSS-SHA256 e suportado para releases do agente.'})
+        if self.status == self.STATUS_REVOKED and not self.revocation_reason:
+            raise ValidationError({'revocation_reason': 'Revogacao de chave exige motivo.'})
+        if self.status == self.STATUS_REVOKED and self.revoked_at is None:
+            self.revoked_at = timezone.now()
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
 class AgentRelease(models.Model):
     CHANNEL_DEVELOPMENT = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
     CHANNEL_PILOT = AgentMachine.UPDATE_CHANNEL_PILOT
@@ -336,8 +391,23 @@ class AgentRelease(models.Model):
             raise ValidationError('Release publicada nao pode estar marcada como revogada.')
         if not self.source_channel:
             self.source_channel = self.channel
-        if self.status in {self.STATUS_PUBLISHED, self.STATUS_PAUSED} and not self.legacy_unsigned and not self.signature_valid:
-            raise ValidationError('Release assinada precisa ter assinatura valida.')
+        if self.channel == self.CHANNEL_STABLE and self.status in self.IMMUTABLE_STATUSES and self.legacy_unsigned:
+            raise ValidationError('Release stable nao pode ser legacy_unsigned.')
+        if self.status in {self.STATUS_PUBLISHED, self.STATUS_PAUSED} and not self.legacy_unsigned:
+            if not self.signature_valid:
+                raise ValidationError('Release assinada precisa ter assinatura valida.')
+            missing = [
+                field for field in (
+                    'manifest_url',
+                    'manifest_sha256',
+                    'signature_url',
+                    'signature_sha256',
+                    'signature_key_id',
+                )
+                if not getattr(self, field)
+            ]
+            if missing:
+                raise ValidationError(f'Release assinada sem metadados obrigatorios: {", ".join(missing)}')
 
     def save(self, *args, **kwargs):
         if self.pk:

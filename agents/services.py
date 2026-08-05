@@ -15,8 +15,9 @@ from .models import AuditEvent
 from .models import AgentMachine
 from .models import AgentOperationalStatus
 from .models import AgentRelease
+from .models import AgentReleaseSigningKey
 from .models import InventorySnapshot
-from .versioning import compare_versions, normalize_agent_version
+from .versioning import compare_versions, normalize_agent_version, parse_semver
 
 
 AGENT_DIAGNOSTIC_STAGES = {
@@ -114,6 +115,9 @@ UPDATE_POLICY_REASON_PINNED_RELEASE_NOT_FOUND = 'pinned_release_not_found'
 UPDATE_POLICY_REASON_PINNED_RELEASE_UNAVAILABLE = 'pinned_release_unavailable'
 UPDATE_POLICY_REASON_INVALID_VERSION = 'invalid_version'
 UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE = 'downgrade_requires_force'
+UPDATE_POLICY_REASON_SIGNATURE_INVALID = 'signature_invalid'
+UPDATE_POLICY_REASON_KEY_UNKNOWN = 'key_unknown'
+UPDATE_POLICY_REASON_KEY_REVOKED = 'key_revoked'
 AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
 AGENT_RELEASE_AUTOMATIC_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
 UPDATE_AGENT_SIGNED_PAYLOAD_MIN_VERSION = '0.1.1.0-rc6'
@@ -428,6 +432,54 @@ def _release_audit(release, action, *, actor=None, reason='', channel_before='',
     )
 
 
+def _release_audit_event_type(action):
+    return {
+        'created': 'release.created',
+        'updated': 'release.updated',
+        'published': 'release.published',
+        'promoted': 'release.promoted',
+        'paused': 'release.paused',
+        'resumed': 'release.resumed',
+        'revoked': 'release.revoked',
+        'superseded': 'release.superseded',
+        'rollout_changed': 'release.rollout_changed',
+        'immutability_blocked': 'release.immutability_blocked',
+        'signature_failed': 'release.signature_validation_failed',
+    }.get(action, f'release.{action}')
+
+
+def audit_release_event(release, action, *, actor=None, reason='', channel_before='', rollout_before=None, endpoint=None, job=None, metadata=None):
+    _release_audit(
+        release,
+        action,
+        actor=actor,
+        reason=reason,
+        channel_before=channel_before,
+        rollout_before=rollout_before,
+        metadata=metadata,
+    )
+    create_audit_event(
+        event_type=_release_audit_event_type(action),
+        title=f'Release {release.version}: {action}',
+        description=reason or f'Acao {action} registrada para release {release.version}.',
+        severity=AuditEvent.SEVERITY_WARNING if action in {'revoked', 'superseded', 'signature_failed', 'immutability_blocked'} else AuditEvent.SEVERITY_INFO,
+        actor_type=AuditEvent.ACTOR_USER if actor is not None else AuditEvent.ACTOR_SYSTEM,
+        actor_name=_actor_name(actor),
+        endpoint=endpoint,
+        metadata={
+            'release_id': str(release.id),
+            'version': release.version,
+            'channel_before': channel_before,
+            'channel_after': release.channel,
+            'rollout_before': rollout_before,
+            'rollout_after': release.rollout_percentage,
+            'reason': reason,
+            'job_id': str(job.id) if job is not None else '',
+            **(metadata or {}),
+        },
+    )
+
+
 def assert_release_immutable_compatible(existing, metadata):
     critical = {
         'package_url': metadata.get('package_url') or metadata.get('packageUrl') or '',
@@ -456,9 +508,81 @@ def assert_release_immutable_compatible(existing, metadata):
         raise ValidationError(f'RELEASE_IMMUTABILITY_VIOLATION: release {existing.version} ja publicada com metadados diferentes.')
 
 
+def _release_signing_key(release):
+    key_id = (release.signature_key_id or '').strip()
+    if not key_id:
+        return None
+    return AgentReleaseSigningKey.objects.filter(key_id=key_id).first()
+
+
+def ensure_release_signature_policy(release):
+    if release.legacy_unsigned:
+        if release.channel == AgentRelease.CHANNEL_STABLE:
+            raise ValidationError('Release stable nao pode ser legacy_unsigned.')
+        return
+    if not release.signature_valid:
+        raise ValidationError('Release assinada precisa ter assinatura valida registrada.')
+    for field in ('manifest_url', 'manifest_sha256', 'signature_url', 'signature_sha256', 'signature_key_id'):
+        if not getattr(release, field):
+            raise ValidationError(f'Release assinada sem {field}.')
+    key = _release_signing_key(release)
+    if key is None:
+        raise ValidationError(f'RELEASE_KEY_UNKNOWN: key_id {release.signature_key_id} nao cadastrado.')
+    if key.revoked:
+        raise ValidationError(f'RELEASE_KEY_REVOKED: key_id {release.signature_key_id} revogado.')
+    now = timezone.now()
+    if key.valid_from and key.valid_from > now:
+        raise ValidationError(f'RELEASE_KEY_NOT_YET_VALID: key_id {release.signature_key_id}.')
+    if key.valid_until and key.valid_until < now:
+        raise ValidationError(f'RELEASE_KEY_EXPIRED: key_id {release.signature_key_id}.')
+
+
 @transaction.atomic
-def promote_agent_release(release, target_channel, actor, rollout_percentage=0, rollout_paused=True, approval_reason='', allow_direct_stable=False):
+def publish_agent_release(release, actor, reason='', *, rollout_percentage=None, rollout_paused=True):
+    reason = (reason or '').strip()
+    if not reason:
+        raise ValidationError('Publicacao exige motivo.')
+    if release.status in {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_PAUSED}:
+        return release
+    if release.status in {AgentRelease.STATUS_REVOKED, AgentRelease.STATUS_SUPERSEDED} or release.revoked:
+        raise ValidationError('Release revogada ou superseded nao pode ser publicada.')
+    if not getattr(actor, 'has_perm', lambda perm: False)('agents.publish_agentrelease'):
+        raise ValidationError('Permissao agents.publish_agentrelease obrigatoria.')
+    ensure_release_signature_policy(release)
+    channel_before = release.channel
+    rollout_before = release.rollout_percentage
+    if rollout_percentage is not None:
+        release.rollout_percentage = min(100, max(0, int(rollout_percentage or 0)))
+    release.rollout_paused = bool(rollout_paused)
+    release.status = AgentRelease.STATUS_PAUSED if release.rollout_paused else AgentRelease.STATUS_PUBLISHED
+    release.released_at = release.released_at or timezone.now()
+    release.published_by = actor if getattr(actor, 'is_authenticated', False) else None
+    release.save()
+    audit_release_event(
+        release,
+        'published',
+        actor=actor,
+        reason=reason,
+        channel_before=channel_before,
+        rollout_before=rollout_before,
+        metadata={'signature_key_id': release.signature_key_id, 'sha256': release.sha256},
+    )
+    return release
+
+
+@transaction.atomic
+def promote_agent_release(
+    release,
+    target_channel,
+    actor,
+    rollout_percentage=0,
+    rollout_paused=True,
+    approval_reason='',
+    allow_direct_stable=False,
+    allow_prerelease_stable=False,
+):
     target_channel = (target_channel or '').strip()
+    approval_reason = (approval_reason or '').strip()
     if target_channel not in {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}:
         raise ValidationError('Canal alvo invalido.')
     channel_before = release.channel
@@ -475,16 +599,22 @@ def promote_agent_release(release, target_channel, actor, rollout_percentage=0, 
             raise ValidationError('Transicao de canal nao permitida.')
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         raise ValidationError('Release revogada nao pode ser promovida.')
+    if release.status == AgentRelease.STATUS_SUPERSEDED:
+        raise ValidationError('Release superseded nao pode ser promovida.')
     if release.status == AgentRelease.STATUS_DRAFT:
         raise ValidationError('Release draft precisa ser publicada antes da promocao.')
-    if release.legacy_unsigned and target_channel == AgentRelease.CHANNEL_STABLE:
-        raise ValidationError('Release legacy_unsigned nao pode ser promovida para stable.')
+    if not approval_reason:
+        raise ValidationError('Promocao exige motivo/aprovacao.')
+    if release.legacy_unsigned:
+        raise ValidationError('Release legacy_unsigned nao pode ser promovida.')
+    ensure_release_signature_policy(release)
     if target_channel == AgentRelease.CHANNEL_STABLE:
         if not getattr(actor, 'has_perm', lambda perm: False)('agents.promote_agentrelease_stable'):
             raise ValidationError('Permissao agents.promote_agentrelease_stable obrigatoria.')
-        if not approval_reason.strip():
-            raise ValidationError('Promocao para stable exige motivo/aprovacao.')
-        release.stable_approval_reason = approval_reason.strip()
+        parsed_version = parse_semver(release.version)
+        if parsed_version and parsed_version[1] and not allow_prerelease_stable:
+            raise ValidationError('Promocao de prerelease para stable exige confirmacao administrativa explicita.')
+        release.stable_approval_reason = approval_reason
     elif not getattr(actor, 'has_perm', lambda perm: False)('agents.promote_agentrelease'):
         raise ValidationError('Permissao agents.promote_agentrelease obrigatoria.')
 
@@ -493,7 +623,7 @@ def promote_agent_release(release, target_channel, actor, rollout_percentage=0, 
     release.rollout_paused = bool(rollout_paused)
     release.rollout_percentage = min(100, max(0, int(rollout_percentage or 0)))
     release.save()
-    _release_audit(
+    audit_release_event(
         release,
         'promoted',
         actor=actor,
@@ -512,6 +642,8 @@ def revoke_agent_release(release, actor, reason, replacement_release=None):
         raise ValidationError('Revogacao exige motivo.')
     if not getattr(actor, 'has_perm', lambda perm: False)('agents.revoke_agentrelease'):
         raise ValidationError('Permissao agents.revoke_agentrelease obrigatoria.')
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        return release
     channel_before = release.channel
     rollout_before = release.rollout_percentage
     release.revoked = True
@@ -522,7 +654,17 @@ def revoke_agent_release(release, actor, reason, replacement_release=None):
     release.status = AgentRelease.STATUS_REVOKED
     release.rollout_paused = True
     release.save()
-    _release_audit(
+    from .models import AgentJob
+    AgentJob.objects.filter(
+        agent_release=release,
+        status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT],
+    ).update(
+        status=AgentJob.STATUS_CANCELLED,
+        finished_at=timezone.now(),
+        error_code='RELEASE_REVOKED',
+        error_message='Release revogada antes da execucao.',
+    )
+    audit_release_event(
         release,
         'revoked',
         actor=actor,
@@ -536,20 +678,31 @@ def revoke_agent_release(release, actor, reason, replacement_release=None):
 
 @transaction.atomic
 def supersede_agent_release(release, replacement_release, actor, reason=''):
+    reason = (reason or '').strip()
+    if not reason:
+        raise ValidationError('Supersedencia exige motivo.')
     if replacement_release is None:
         raise ValidationError('Release substituta obrigatoria.')
     if release.pk == replacement_release.pk:
         raise ValidationError('Release nao pode substituir a si mesma.')
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        raise ValidationError('Release revogada nao pode ser supersedida.')
+    if release.status == AgentRelease.STATUS_SUPERSEDED:
+        if release.replacement_release_id == replacement_release.id:
+            return release
+        raise ValidationError('Release ja supersedida por outra substituta.')
+    if replacement_release.revoked or replacement_release.status == AgentRelease.STATUS_REVOKED:
+        raise ValidationError('Release substituta revogada nao pode ser usada.')
     channel_before = release.channel
     rollout_before = release.rollout_percentage
     release.status = AgentRelease.STATUS_SUPERSEDED
     release.rollout_paused = True
     release.superseded_at = timezone.now()
     release.superseded_by = actor if getattr(actor, 'is_authenticated', False) else None
-    release.superseded_reason = reason or ''
+    release.superseded_reason = reason
     release.replacement_release = replacement_release
     release.save()
-    _release_audit(
+    audit_release_event(
         release,
         'superseded',
         actor=actor,
@@ -563,8 +716,14 @@ def supersede_agent_release(release, replacement_release, actor, reason=''):
 
 @transaction.atomic
 def change_agent_release_rollout(release, actor, rollout_percentage, paused=None, reason=''):
+    reason = (reason or '').strip()
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        raise ValidationError('Release revogada nao pode ter rollout alterado.')
+    if release.status == AgentRelease.STATUS_SUPERSEDED:
+        raise ValidationError('Release superseded nao pode ter rollout alterado.')
     rollout_before = release.rollout_percentage
     channel_before = release.channel
+    previous_paused = release.rollout_paused
     release.rollout_percentage = min(100, max(0, int(rollout_percentage or 0)))
     if paused is not None:
         release.rollout_paused = bool(paused)
@@ -573,9 +732,12 @@ def change_agent_release_rollout(release, actor, rollout_percentage, paused=None
         elif not release.rollout_paused and release.status == AgentRelease.STATUS_PAUSED:
             release.status = AgentRelease.STATUS_PUBLISHED
     release.save()
-    _release_audit(
+    action = 'rollout_changed'
+    if paused is not None and bool(paused) != previous_paused:
+        action = 'paused' if paused else 'resumed'
+    audit_release_event(
         release,
-        'rollout_changed',
+        action,
         actor=actor,
         reason=reason,
         channel_before=channel_before,
@@ -686,6 +848,15 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
         return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
     if not _release_domain_allowed(release.package_url):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
+    try:
+        ensure_release_signature_policy(release)
+    except ValidationError as exc:
+        text = str(exc)
+        if 'RELEASE_KEY_REVOKED' in text:
+            return decision(False, UPDATE_POLICY_REASON_KEY_REVOKED, release)
+        if 'RELEASE_KEY_UNKNOWN' in text:
+            return decision(False, UPDATE_POLICY_REASON_KEY_UNKNOWN, release)
+        return decision(False, UPDATE_POLICY_REASON_SIGNATURE_INVALID, release)
 
     comparison = compare_versions(current_version, release.version)
     if comparison is None and current_version:

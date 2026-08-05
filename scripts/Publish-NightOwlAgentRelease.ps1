@@ -25,6 +25,7 @@ param(
     [switch]$DryRun,
     [string]$SigningKeyPath = $env:NIGHTOWL_RELEASE_SIGNING_KEY,
     [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
+    [string]$TrustedPublicKeysPath = $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON,
     [switch]$AllowUnsignedDevelopment,
     [switch]$SelfTest
 )
@@ -131,6 +132,9 @@ function New-BuildReleaseArguments([string]$RequestedVersion, [string]$Requested
     }
     if (-not [string]::IsNullOrWhiteSpace($SigningKeyId)) {
         $arguments += @("-SigningKeyId", $SigningKeyId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TrustedPublicKeysPath)) {
+        $arguments += @("-TrustedPublicKeysPath", $TrustedPublicKeysPath)
     }
     if ($AllowUnsignedDevelopment) {
         $arguments += "-AllowUnsignedDevelopment"

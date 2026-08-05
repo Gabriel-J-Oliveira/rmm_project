@@ -10,7 +10,7 @@ class Command(BaseCommand):
     help = 'Revoga uma release do NightOwl Agent e bloqueia novos jobs.'
 
     def add_arguments(self, parser):
-        parser.add_argument('--version', required=True)
+        parser.add_argument('--agent-version', '--release-version', dest='version', required=True)
         parser.add_argument('--reason', required=True)
         parser.add_argument('--replacement-version', default='')
         parser.add_argument('--actor', default='release-bot')

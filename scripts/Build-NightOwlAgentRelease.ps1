@@ -18,6 +18,7 @@ param(
 
     [string]$SigningKeyPath = $env:NIGHTOWL_RELEASE_SIGNING_KEY,
     [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
+    [string]$TrustedPublicKeysPath = $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON,
     [switch]$AllowUnsignedDevelopment,
 
     [switch]$UpdatePublicLatest,
@@ -283,21 +284,45 @@ function Sign-ReleaseManifest([string]$ManifestPath, [string]$SignaturePath, [st
     }
 }
 
-function Write-TrustedReleasePublicKeys([string]$Path, [string]$PrivateKeyPath, [string]$KeyId) {
+function Write-TrustedReleasePublicKeys([string]$Path, [string]$PrivateKeyPath, [string]$KeyId, [string]$TrustedPublicKeysPath = "") {
     if ([string]::IsNullOrWhiteSpace($PrivateKeyPath)) { return }
     $publicXml = Export-RsaPublicXmlFromPrivateXmlFile $PrivateKeyPath
-    $keys = [ordered]@{
-        keys = @(
-            [ordered]@{
-                key_id = $KeyId
-                algorithm = "RSA-PSS-SHA256"
-                public_key_xml = $publicXml
-                status = "active"
-                valid_from = (Get-Date).ToUniversalTime().ToString("O")
-                valid_until = ""
-                revoked_at = ""
+    $entries = @()
+    if (-not [string]::IsNullOrWhiteSpace($TrustedPublicKeysPath)) {
+        if (-not (Test-Path $TrustedPublicKeysPath)) {
+            throw "Arquivo de chaves publicas confiaveis nao encontrado: $TrustedPublicKeysPath"
+        }
+        try {
+            $trusted = Get-Content -Raw -Path $TrustedPublicKeysPath | ConvertFrom-Json
+        }
+        catch {
+            throw "release-public-keys.json invalido em TrustedPublicKeysPath: $($_.Exception.Message)"
+        }
+        foreach ($item in @($trusted.keys)) {
+            if ([string]::IsNullOrWhiteSpace($item.key_id)) { continue }
+            $entries += [ordered]@{
+                key_id = [string]$item.key_id
+                algorithm = if ([string]::IsNullOrWhiteSpace($item.algorithm)) { "RSA-PSS-SHA256" } else { [string]$item.algorithm }
+                public_key_xml = [string]$item.public_key_xml
+                status = if ([string]::IsNullOrWhiteSpace($item.status)) { "active" } else { [string]$item.status }
+                valid_from = if ($null -eq $item.valid_from) { "" } else { [string]$item.valid_from }
+                valid_until = if ($null -eq $item.valid_until) { "" } else { [string]$item.valid_until }
+                revoked_at = if ($null -eq $item.revoked_at) { "" } else { [string]$item.revoked_at }
             }
-        )
+        }
+    }
+    $entries = @($entries | Where-Object { $_.key_id -ne $KeyId })
+    $entries += [ordered]@{
+        key_id = $KeyId
+        algorithm = "RSA-PSS-SHA256"
+        public_key_xml = $publicXml
+        status = "active"
+        valid_from = (Get-Date).ToUniversalTime().ToString("O")
+        valid_until = ""
+        revoked_at = ""
+    }
+    $keys = [ordered]@{
+        keys = @($entries | Sort-Object { $_.key_id })
     }
     Write-Utf8NoBomJson -Path $Path -Value $keys -Depth 8
 }
@@ -753,7 +778,7 @@ try {
     Copy-Item -Path $iconPath -Destination (Join-Path $packageIconDir "NightOwl.ico") -Force
     New-AgentVersionFile -Path (Join-Path $packageDir "agent.version.json") -BuildId $buildId -BuiltAt $builtAt -Commit $commit
     if (-not [string]::IsNullOrWhiteSpace($SigningKeyPath)) {
-        Write-TrustedReleasePublicKeys -Path (Join-Path $packageDir "release-public-keys.json") -PrivateKeyPath $SigningKeyPath -KeyId $SigningKeyId
+        Write-TrustedReleasePublicKeys -Path (Join-Path $packageDir "release-public-keys.json") -PrivateKeyPath $SigningKeyPath -KeyId $SigningKeyId -TrustedPublicKeysPath $TrustedPublicKeysPath
     }
 
     $zipPath = Join-Path $ReleaseDir "NightOwl.Agent.Windows.zip"

@@ -9,6 +9,7 @@ from .models import (
     AgentRelease,
     AgentReleaseAudit,
     AgentReleaseGroup,
+    AgentReleaseSigningKey,
     AuditEvent,
     EndpointAlert,
     InventorySnapshot,
@@ -168,6 +169,15 @@ class AgentReleaseAdmin(admin.ModelAdmin):
         if obj and obj.status in AgentRelease.IMMUTABLE_STATUSES:
             fields.extend(sorted(AgentRelease.IMMUTABLE_FIELDS))
         return tuple(dict.fromkeys(fields))
+
+
+@admin.register(AgentReleaseSigningKey)
+class AgentReleaseSigningKeyAdmin(admin.ModelAdmin):
+    list_display = ('key_id', 'algorithm', 'status', 'valid_from', 'valid_until', 'revoked_at', 'updated_at')
+    list_filter = ('status', 'algorithm')
+    search_fields = ('key_id', 'public_key_xml', 'revocation_reason')
+    autocomplete_fields = ('revoked_by',)
+    readonly_fields = ('id', 'created_at', 'updated_at')
 
 
 @admin.register(AgentReleaseAudit)

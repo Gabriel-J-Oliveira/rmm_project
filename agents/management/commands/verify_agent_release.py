@@ -5,7 +5,8 @@ from urllib.parse import urlparse
 
 from django.core.management.base import BaseCommand, CommandError
 
-from agents.models import AgentRelease
+from agents.models import AgentRelease, AgentReleaseSigningKey
+from agents.services import audit_release_event
 
 
 class Command(BaseCommand):
@@ -28,11 +29,32 @@ class Command(BaseCommand):
             errors.append('release assinada sem assinatura valida registrada')
         if release.channel == AgentRelease.CHANNEL_STABLE and release.legacy_unsigned:
             errors.append('release stable nao pode ser legacy_unsigned')
+        if not release.legacy_unsigned:
+            if not release.signature_key_id:
+                errors.append('release assinada sem key_id')
+            else:
+                key = AgentReleaseSigningKey.objects.filter(key_id=release.signature_key_id).first()
+                if key is None:
+                    errors.append(f'key_id desconhecido: {release.signature_key_id}')
+                elif key.revoked:
+                    errors.append(f'key_id revogado: {release.signature_key_id}')
         if not options['skip_remote']:
             self._verify_remote_json('manifest', release.manifest_url, release.manifest_sha256, errors)
             self._verify_remote_json('signature', release.signature_url, release.signature_sha256, errors, allow_json=False)
         if errors:
+            audit_release_event(
+                release,
+                'signature_failed',
+                reason='verify_agent_release_failed',
+                metadata={'errors': errors},
+            )
             raise CommandError('; '.join(errors))
+        audit_release_event(
+            release,
+            'updated',
+            reason='release.verified',
+            metadata={'event': 'release.verified', 'skip_remote': options['skip_remote']},
+        )
         self.stdout.write(self.style.SUCCESS(
             f'Release {release.version} OK: channel={release.channel} status={release.status} sha256={release.sha256[:12]}...'
         ))

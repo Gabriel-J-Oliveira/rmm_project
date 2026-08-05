@@ -55,6 +55,7 @@ from agents.services import (
     build_update_agent_job_payload,
     change_agent_release_rollout,
     evaluate_agent_update_policy,
+    publish_agent_release,
     promote_agent_release,
     revoke_agent_release,
     supersede_agent_release,
@@ -2762,6 +2763,9 @@ def _update_policy_message(reason_code):
         'pinned_release_unavailable': 'A versao fixada no endpoint nao esta disponivel.',
         'invalid_version': 'A versao instalada do endpoint nao pode ser comparada com seguranca.',
         'downgrade_requires_force': 'A release selecionada e anterior a versao instalada. Confirme o downgrade nas opcoes avancadas.',
+        'signature_invalid': 'A release selecionada nao possui assinatura valida para distribuicao segura.',
+        'key_unknown': 'A chave de assinatura da release nao e confiavel para este backend.',
+        'key_revoked': 'A chave de assinatura da release foi revogada.',
     }
     return messages_by_reason.get(reason_code or '', 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.')
 
@@ -3658,7 +3662,15 @@ def agent_release_action(request, pk):
     action = (request.POST.get('action') or '').strip()
     reason = (request.POST.get('reason') or '').strip()
     try:
-        if action == 'pause':
+        if action == 'publish':
+            publish_agent_release(
+                release,
+                request.user,
+                reason or 'release_published_from_panel',
+                rollout_percentage=int(request.POST.get('rollout_percentage') or release.rollout_percentage or 0),
+                rollout_paused=bool(request.POST.get('paused')),
+            )
+        elif action == 'pause':
             change_agent_release_rollout(release, request.user, release.rollout_percentage, paused=True, reason=reason or 'rollout_paused')
         elif action == 'resume':
             change_agent_release_rollout(release, request.user, release.rollout_percentage, paused=False, reason=reason or 'rollout_resumed')
@@ -3678,6 +3690,7 @@ def agent_release_action(request, pk):
                 rollout_percentage=int(request.POST.get('rollout_percentage') or 0),
                 rollout_paused=bool(request.POST.get('paused')),
                 approval_reason=reason,
+                allow_prerelease_stable=bool(request.POST.get('allow_prerelease_stable')),
             )
         elif action == 'rollout':
             change_agent_release_rollout(
@@ -3686,6 +3699,22 @@ def agent_release_action(request, pk):
                 int(request.POST.get('rollout_percentage') or 0),
                 paused=None,
                 reason=reason or 'rollout_percentage_changed',
+            )
+        elif action == 'mandatory':
+            before = bool(release.mandatory)
+            release.mandatory = bool(request.POST.get('mandatory'))
+            release.save(update_fields=['mandatory', 'updated_at'])
+            AgentReleaseAudit.objects.create(
+                user=request.user,
+                action=AgentReleaseAudit.ACTION_UPDATED,
+                release=release,
+                version=release.version,
+                channel_before=release.channel,
+                channel_after=release.channel,
+                rollout_before=release.rollout_percentage,
+                rollout_after=release.rollout_percentage,
+                reason=reason or 'mandatory_changed',
+                metadata={'mandatory_before': before, 'mandatory_after': release.mandatory},
             )
         elif action == 'supersede':
             replacement = get_object_or_404(AgentRelease, pk=(request.POST.get('replacement_release') or '').strip())

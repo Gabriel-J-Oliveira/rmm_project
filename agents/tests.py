@@ -10,10 +10,10 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseGroup
+from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseSigningKey
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
-from .services import promote_agent_release, revoke_agent_release, supersede_agent_release
+from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver
 
 
@@ -555,12 +555,24 @@ class AgentReleasePolicyTests(TestCase):
         self.machine.set_agent_token(self.token)
         self.machine.save()
         self.client = Client(HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        AgentReleaseSigningKey.objects.create(
+            key_id='nightowl-release-2026-01',
+            public_key_xml='<RSAKeyValue><Modulus>test</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>',
+            status=AgentReleaseSigningKey.STATUS_ACTIVE,
+        )
 
     def release(self, version='0.1.0.7', channel=AgentRelease.CHANNEL_STABLE, rollout=100, **kwargs):
         defaults = {
             'status': AgentRelease.STATUS_AVAILABLE,
             'package_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/{version}/NightOwl.Agent.Windows.zip',
             'checksum_url': 'https://nightowl.controlsul.com.br/downloads/nightowl-agent/checksums.json',
+            'manifest_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/{version}/release-manifest.json',
+            'manifest_sha256': 'b' * 64,
+            'signature_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/{version}/release-manifest.sig',
+            'signature_sha256': 'c' * 64,
+            'signature_key_id': 'nightowl-release-2026-01',
+            'signature_valid': True,
+            'legacy_unsigned': False,
             'sha256': 'a' * 64,
             'size': 1234,
             'rollout_percentage': rollout,
@@ -1203,6 +1215,11 @@ class AgentReleaseGovernanceTests(TestCase):
             agent_version='0.1.1.0-rc5',
             update_channel=AgentMachine.UPDATE_CHANNEL_DEVELOPMENT,
         )
+        AgentReleaseSigningKey.objects.create(
+            key_id='nightowl-release-2026-01',
+            public_key_xml='<RSAKeyValue><Modulus>test</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>',
+            status=AgentReleaseSigningKey.STATUS_ACTIVE,
+        )
 
     def release(self, version='0.1.1.0-rc6', channel=AgentRelease.CHANNEL_DEVELOPMENT, status=AgentRelease.STATUS_PUBLISHED, **kwargs):
         defaults = {
@@ -1279,16 +1296,76 @@ class AgentReleaseGovernanceTests(TestCase):
         release.refresh_from_db()
         self.assertEqual(release.channel, AgentRelease.CHANNEL_PILOT)
         self.assertEqual(release.rollout_percentage, 20)
-        promote_agent_release(release, AgentRelease.CHANNEL_STABLE, self.admin, rollout_percentage=5, rollout_paused=True, approval_reason='Aprovado para stable')
+        promote_agent_release(
+            release,
+            AgentRelease.CHANNEL_STABLE,
+            self.admin,
+            rollout_percentage=5,
+            rollout_paused=True,
+            approval_reason='Aprovado para stable',
+            allow_prerelease_stable=True,
+        )
         release.refresh_from_db()
         self.assertEqual(release.channel, AgentRelease.CHANNEL_STABLE)
         self.assertEqual(release.stable_approval_reason, 'Aprovado para stable')
 
-    def test_legacy_unsigned_cannot_promote_to_stable(self):
-        release = self.release(version='0.1.1.0-legacy', signature_valid=False, legacy_unsigned=True, signature_key_id='', signature_url='', signature_sha256='')
-        promote_agent_release(release, AgentRelease.CHANNEL_PILOT, self.admin, rollout_percentage=10, rollout_paused=True, approval_reason='legacy pilot')
+    def test_prerelease_stable_requires_explicit_confirmation(self):
+        release = self.release()
+        promote_agent_release(release, AgentRelease.CHANNEL_PILOT, self.admin, rollout_percentage=20, rollout_paused=True, approval_reason='Piloto inicial')
+
         with self.assertRaises(ValidationError):
-            promote_agent_release(release, AgentRelease.CHANNEL_STABLE, self.admin, rollout_percentage=5, rollout_paused=True, approval_reason='legacy stable')
+            promote_agent_release(release, AgentRelease.CHANNEL_STABLE, self.admin, rollout_percentage=5, rollout_paused=True, approval_reason='Aprovado para stable')
+
+    def test_legacy_unsigned_cannot_be_promoted(self):
+        release = self.release(version='0.1.1.0-legacy', signature_valid=False, legacy_unsigned=True, signature_key_id='', signature_url='', signature_sha256='')
+        with self.assertRaises(ValidationError):
+            promote_agent_release(release, AgentRelease.CHANNEL_PILOT, self.admin, rollout_percentage=10, rollout_paused=True, approval_reason='legacy pilot')
+
+    def test_publish_requires_signature_policy_for_signed_release(self):
+        release = self.release(status=AgentRelease.STATUS_DRAFT, signature_valid=False)
+        with self.assertRaises(ValidationError):
+            publish_agent_release(release, self.admin, 'publicacao sem assinatura')
+
+    def test_publish_signed_draft_is_audited_and_idempotent(self):
+        release = self.release(status=AgentRelease.STATUS_DRAFT, released_at=None)
+
+        publish_agent_release(release, self.admin, 'publicacao rc6', rollout_percentage=0, rollout_paused=True)
+        release.refresh_from_db()
+
+        self.assertEqual(release.status, AgentRelease.STATUS_PAUSED)
+        self.assertTrue(AgentReleaseAudit.objects.filter(release=release, action=AgentReleaseAudit.ACTION_PUBLISHED).exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type='release.published', metadata__release_id=str(release.id)).exists())
+
+        publish_agent_release(release, self.admin, 'publicacao rc6 repetida', rollout_percentage=0, rollout_paused=True)
+        self.assertEqual(AgentReleaseAudit.objects.filter(release=release, action=AgentReleaseAudit.ACTION_PUBLISHED).count(), 1)
+
+    def test_revoked_signing_key_blocks_policy(self):
+        AgentReleaseSigningKey.objects.filter(key_id='nightowl-release-2026-01').update(
+            status=AgentReleaseSigningKey.STATUS_REVOKED,
+            revoked_at=timezone.now(),
+            revocation_reason='rotacao comprometida',
+        )
+        release = self.release()
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'key_revoked')
+
+    def test_unknown_signing_key_blocks_policy(self):
+        release = self.release(signature_key_id='nightowl-unknown-key')
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'key_unknown')
+
+    def test_supersede_requires_reason_and_replacement(self):
+        old = self.release(version='0.1.1.0-rc6')
+        new = self.release(version='0.1.1.0-rc7')
+
+        with self.assertRaises(ValidationError):
+            supersede_agent_release(old, new, self.admin, '')
 
     def test_revoke_blocks_manual_update(self):
         release = self.release()
@@ -1297,6 +1374,22 @@ class AgentReleaseGovernanceTests(TestCase):
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
         self.assertFalse(decision.eligible)
         self.assertEqual(decision.reason_code, 'release_revoked')
+
+    def test_revoke_cancels_not_started_jobs_for_release(self):
+        release = self.release()
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            agent_release=release,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_QUEUED,
+            payload={'target_version': release.version},
+        )
+
+        revoke_agent_release(release, self.admin, 'Falha critica')
+        job.refresh_from_db()
+
+        self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(job.error_code, 'RELEASE_REVOKED')
 
     def test_superseded_not_selected_automatically(self):
         old = self.release(version='0.1.1.0-rc6')
@@ -1324,3 +1417,14 @@ class AgentReleaseGovernanceTests(TestCase):
         self.assertEqual(first, second)
         self.assertGreaterEqual(first, 0)
         self.assertLess(first, 100)
+
+    def test_rollout_change_is_audited(self):
+        release = self.release()
+
+        change_agent_release_rollout(release, self.admin, 25, paused=False, reason='piloto ampliado')
+
+        release.refresh_from_db()
+        self.assertEqual(release.rollout_percentage, 25)
+        self.assertEqual(release.status, AgentRelease.STATUS_PUBLISHED)
+        self.assertTrue(AgentReleaseAudit.objects.filter(release=release, action=AgentReleaseAudit.ACTION_RESUMED).exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type='release.resumed', metadata__release_id=str(release.id)).exists())

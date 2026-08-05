@@ -1,5 +1,7 @@
 import json
 import urllib.request
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -7,8 +9,8 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from agents.models import AgentRelease, AgentReleaseAudit
-from agents.services import assert_release_immutable_compatible
+from agents.models import AgentRelease, AgentReleaseAudit, AgentReleaseSigningKey
+from agents.services import assert_release_immutable_compatible, audit_release_event
 from agents.versioning import parse_semver
 
 
@@ -33,6 +35,7 @@ class Command(BaseCommand):
         parser.add_argument('--release-status', default=AgentRelease.STATUS_PAUSED, choices=[choice[0] for choice in AgentRelease.STATUS_CHOICES])
         parser.add_argument('--release-notes', default='')
         parser.add_argument('--minimum-updater-version', default='')
+        parser.add_argument('--public-keys-json', default='', help='Caminho local ou URL HTTPS opcional do release-public-keys.json.')
         parser.add_argument('--force', action='store_true', help='Permite recriar draft local; nunca sobrescreve release publicada com metadados diferentes.')
 
     def handle(self, *args, **options):
@@ -62,6 +65,11 @@ class Command(BaseCommand):
             raise CommandError('SHA-256 invalido no version.json.')
         if size <= 0:
             raise CommandError('Tamanho do pacote invalido no version.json.')
+        key_registration_status = ''
+        if signature_key_id:
+            key_registration_status = self._register_public_key(signature_key_id, options['public_keys_json'], package_url)
+            if not key_registration_status:
+                raise CommandError(f'RELEASE_KEY_UNKNOWN: key_id {signature_key_id} nao encontrado no registro nem no pacote.')
 
         existing = AgentRelease.objects.filter(version=version).first()
         if existing:
@@ -125,6 +133,27 @@ class Command(BaseCommand):
             reason='import_agent_release',
             metadata={'version_json': self._sanitize_source(options['version_json']), 'created': created},
         )
+        audit_release_event(
+            release,
+            'created' if created else 'updated',
+            reason='release.imported',
+            metadata={
+                'event': 'release.imported',
+                'version_json': self._sanitize_source(options['version_json']),
+                'created': created,
+                'signature_key_id': signature_key_id,
+            },
+        )
+        if key_registration_status == 'created':
+            AgentReleaseAudit.objects.create(
+                action=AgentReleaseAudit.ACTION_UPDATED,
+                release=release,
+                version=release.version,
+                channel_after=release.channel,
+                rollout_after=release.rollout_percentage,
+                reason='release_signing_key_registered',
+                metadata={'key_id': signature_key_id},
+            )
         self.stdout.write(self.style.SUCCESS(
             f'Release {release.version} importada em {release.channel}, status {release.status}, rollout {release.rollout_percentage}%, jobs nao criados.'
         ))
@@ -151,3 +180,38 @@ class Command(BaseCommand):
 
     def _sanitize_source(self, source):
         return str(source).split('?', 1)[0]
+
+    def _register_public_key(self, key_id, public_keys_source, package_url):
+        existing = AgentReleaseSigningKey.objects.filter(key_id=key_id).first()
+        if existing:
+            if existing.revoked:
+                raise CommandError(f'RELEASE_KEY_REVOKED: key_id {key_id} esta revogado.')
+            return 'existing'
+        key_set = self._read_public_keys(public_keys_source, package_url)
+        for item in key_set.get('keys') or []:
+            if str(item.get('key_id') or '').strip() != key_id:
+                continue
+            if str(item.get('status') or 'active').strip().lower() == AgentReleaseSigningKey.STATUS_REVOKED:
+                raise CommandError(f'RELEASE_KEY_REVOKED: key_id {key_id} esta revogado no pacote.')
+            AgentReleaseSigningKey.objects.create(
+                key_id=key_id,
+                algorithm=str(item.get('algorithm') or 'RSA-PSS-SHA256').strip(),
+                public_key_xml=str(item.get('public_key_xml') or '').strip(),
+                status=AgentReleaseSigningKey.STATUS_ACTIVE,
+            )
+            return 'created'
+        return ''
+
+    def _read_public_keys(self, source, package_url):
+        if source:
+            return self._read_manifest(source)
+        try:
+            with urllib.request.urlopen(package_url, timeout=30) as response:
+                package_bytes = response.read()
+            with zipfile.ZipFile(BytesIO(package_bytes)) as archive:
+                with archive.open('release-public-keys.json') as handle:
+                    return json.loads(handle.read().decode('utf-8-sig'))
+        except KeyError:
+            return {}
+        except (OSError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+            raise CommandError(f'Falha ao ler release-public-keys.json do pacote: {exc}') from exc
