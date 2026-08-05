@@ -30,6 +30,32 @@ Default output:
 
 The script exports only the public RSA XML, verifies it against the private key with RSA-PSS/SHA-256, rejects private RSA parameters in the output, and writes UTF-8 without BOM.
 
+## Generate A New Key Pair
+
+Create the next RSA 3072 signing key pair outside the repository:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\New-NightOwlReleaseSigningKey.ps1"
+```
+
+Default outputs:
+
+```text
+%USERPROFILE%\.nightowl\release-signing\nightowl-release-2026-02-private.xml
+%USERPROFILE%\.nightowl\release-public-keys.json
+```
+
+The script uses `key_id=nightowl-release-2026-02`, writes UTF-8 without BOM, validates the pair with RSA-PSS/SHA-256, and restricts the private key ACL to the current Windows user and `SYSTEM`.
+
+It refuses to overwrite either file unless `-Force` is supplied:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\New-NightOwlReleaseSigningKey.ps1" `
+  -Force
+```
+
 ## Rotation
 
 1. Generate the new private/public RSA key pair outside the repository.
