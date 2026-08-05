@@ -30,6 +30,8 @@ Default output:
 
 The script exports only the public RSA XML, verifies it against the private key with RSA-PSS/SHA-256, rejects private RSA parameters in the output, and writes UTF-8 without BOM.
 
+Normal release publication is handled by `scripts\Publish-NightOwlAgentRelease.ps1` using the local publisher configuration described in `docs/nightowl_agent_release_publishing.md`. Key generation and transition bundles are rotation-only operations; do not run them for every RC.
+
 ## Generate A New Key Pair
 
 Create the next RSA 3072 signing key pair outside the repository:
@@ -70,6 +72,63 @@ python manage.py revoke_agent_release_key --key-id nightowl-release-2026-01 --re
 ```
 
 Revoked keys block new release eligibility and `verify_agent_release`. Existing installed versions remain audit records; revocation does not delete artifacts.
+
+## Secure Bootstrap For RC6
+
+RC6 can trust a new public key only if the new bundle is signed by a key it already trusts. For the current rotation, the bundle containing `nightowl-release-2026-01` and `nightowl-release-2026-02` must be signed by the private key for `nightowl-release-2026-01`.
+
+Generate a signed bundle when the old private key is available:
+
+```powershell
+$env:NIGHTOWL_RELEASE_ROTATION_SIGNING_KEY="C:\secure\nightowl-release-2026-01-private.xml"
+
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\New-NightOwlReleasePublicKeysBundle.ps1" `
+  -ExistingPublicKeysPath "C:\path\release-public-keys-2026-01.json" `
+  -NewPublicKeysPath "$env:USERPROFILE\.nightowl\release-public-keys.json"
+```
+
+Apply the signed bundle locally on the endpoint as Administrator:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\Apply-NightOwlReleasePublicKeysBootstrap.ps1" `
+  -BundlePath "$env:USERPROFILE\.nightowl\release-public-keys-2026-01-2026-02.json" `
+  -SignaturePath "$env:USERPROFILE\.nightowl\release-public-keys-2026-01-2026-02.sig"
+```
+
+Rollback to the preserved backup:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\Apply-NightOwlReleasePublicKeysBootstrap.ps1" `
+  -Rollback `
+  -BackupPath "C:\ProgramData\NightOwl\AgentDotNet\release-public-keys.json.backup-YYYYMMDDHHMMSS"
+```
+
+The signed bootstrap validates SHA-256 when provided, RSA-PSS/SHA-256 with `nightowl-release-2026-01`, schema, unique `key_id`, allowed algorithm, absence of private RSA parameters, atomic write, backup, ACL and structured JSONL logging.
+
+## Laboratory Bootstrap Only
+
+If the private key for `nightowl-release-2026-01` no longer exists, there is no cryptographically valid way for RC6 to authenticate `nightowl-release-2026-02` before installing RC7. Do not invent a bypass for production.
+
+For a disposable development endpoint such as TAXCEL, an administrator may apply the bundle locally with an explicit test marker:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\New-NightOwlReleasePublicKeysBundle.ps1" `
+  -ExistingPublicKeysPath "C:\ProgramData\NightOwl\AgentDotNet\release-public-keys.json" `
+  -NewPublicKeysPath "$env:USERPROFILE\.nightowl\release-public-keys.json" `
+  -AllowUnsignedTestBundle
+
+powershell.exe -ExecutionPolicy Bypass `
+  -File ".\scripts\Apply-NightOwlReleasePublicKeysBootstrap.ps1" `
+  -BundlePath "$env:USERPROFILE\.nightowl\release-public-keys-2026-01-2026-02.json" `
+  -TestBootstrapUntrusted `
+  -ConfirmTestBootstrap TEST_BOOTSTRAP_UNTRUSTED
+```
+
+This writes `TEST_BOOTSTRAP_UNTRUSTED` to `C:\ProgramData\NightOwl\Logs\agent-key-bootstrap.jsonl`. It must remain limited to development/laboratory use, must never be triggered by the backend, and must not be allowed for pilot or stable rollout.
 
 ## Stable Rule
 

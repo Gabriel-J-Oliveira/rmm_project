@@ -20,6 +20,7 @@ param(
     [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
     [string]$TrustedPublicKeysPath = $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON,
     [switch]$AllowUnsignedDevelopment,
+    [switch]$SkipTests,
 
     [switch]$UpdatePublicLatest,
     [switch]$SelfTest
@@ -764,9 +765,14 @@ try {
         Invoke-Checked "dotnet" (@("build", $project, "-c", "Release", "--no-restore") + $msbuildVersionArgs)
     }
 
-    Invoke-Checked "dotnet" (@("test", $testProject, "-c", "Release", "--no-restore", "--no-build") + $msbuildVersionArgs)
-    Invoke-Checked "dotnet" @("run", "--project", $testProject, "-c", "Release", "--no-restore")
-    Invoke-Checked "dotnet" @("run", "--project", $updaterTestProject, "-c", "Release", "--no-restore")
+    if ($SkipTests) {
+        Write-Step "SkipTests ativo; build/publish serao executados sem rodar testes .NET."
+    }
+    else {
+        Invoke-Checked "dotnet" (@("test", $testProject, "-c", "Release", "--no-restore", "--no-build") + $msbuildVersionArgs)
+        Invoke-Checked "dotnet" @("run", "--project", $testProject, "-c", "Release", "--no-restore")
+        Invoke-Checked "dotnet" @("run", "--project", $updaterTestProject, "-c", "Release", "--no-restore")
+    }
 
     foreach ($project in @($agentProject, $trayProject, $updaterProject, $diagnosticsProject)) {
         Invoke-Checked "dotnet" (@("publish", $project, "-c", "Release", "-r", $Runtime, "--self-contained", "true", "-o", $publishDir, "--no-restore") + $msbuildVersionArgs)
