@@ -1,6 +1,7 @@
 import uuid
 import json
 import tempfile
+from io import StringIO
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -10,7 +11,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseSigningKey
+from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
@@ -1428,3 +1429,124 @@ class AgentReleaseGovernanceTests(TestCase):
         self.assertEqual(release.status, AgentRelease.STATUS_PUBLISHED)
         self.assertTrue(AgentReleaseAudit.objects.filter(release=release, action=AgentReleaseAudit.ACTION_RESUMED).exists())
         self.assertTrue(AuditEvent.objects.filter(event_type='release.resumed', metadata__release_id=str(release.id)).exists())
+
+
+class ImportAgentReleaseRootCommandTests(TestCase):
+    public_xml = '<RSAKeyValue><Modulus>abc</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+    other_public_xml = '<RSAKeyValue><Modulus>def</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+    private_xml = '<RSAKeyValue><Modulus>abc</Modulus><Exponent>AQAB</Exponent><D>secret</D></RSAKeyValue>'
+
+    def roots_file(self, roots, schema_version=1):
+        handle = tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False)
+        with handle:
+            json.dump({'schema_version': schema_version, 'roots': roots}, handle)
+        return handle.name
+
+    def root_item(self, **overrides):
+        item = {
+            'key_id': 'nightowl-trust-root-lab-2026-01',
+            'algorithm': 'RSA-PSS-SHA256',
+            'public_key_xml': self.public_xml,
+            'status': 'active',
+        }
+        item.update(overrides)
+        return item
+
+    def call_import(self, path, root_key_id='nightowl-trust-root-lab-2026-01', **kwargs):
+        output = StringIO()
+        call_command(
+            'import_agent_release_root',
+            roots_file=path,
+            root_key_id=root_key_id,
+            stdout=output,
+            **kwargs,
+        )
+        return output.getvalue()
+
+    def test_import_valid_root(self):
+        path = self.roots_file([self.root_item()])
+
+        self.call_import(path)
+
+        root = AgentReleaseRootKey.objects.get(root_key_id='nightowl-trust-root-lab-2026-01')
+        self.assertEqual(root.status, AgentReleaseRootKey.STATUS_ACTIVE)
+        self.assertEqual(root.algorithm, 'RSA-PSS-SHA256')
+        self.assertEqual(root.public_key_xml, self.public_xml)
+        self.assertTrue(AgentReleaseAudit.objects.filter(metadata__event_type='trust.root.imported').exists())
+
+    def test_dry_run_does_not_create_root(self):
+        path = self.roots_file([self.root_item()])
+
+        output = self.call_import(path, dry_run=True)
+
+        self.assertIn('DRY RUN', output)
+        self.assertFalse(AgentReleaseRootKey.objects.exists())
+
+    def test_reimport_identical_is_noop(self):
+        path = self.roots_file([self.root_item()])
+        self.call_import(path)
+
+        output = self.call_import(path)
+
+        self.assertIn('no-op idempotente', output)
+        self.assertEqual(AgentReleaseRootKey.objects.count(), 1)
+
+    def test_divergent_existing_root_is_blocked(self):
+        AgentReleaseRootKey.objects.create(
+            root_key_id='nightowl-trust-root-lab-2026-01',
+            algorithm='RSA-PSS-SHA256',
+            public_key_xml=self.other_public_xml,
+            status=AgentReleaseRootKey.STATUS_ACTIVE,
+        )
+        path = self.roots_file([self.root_item()])
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOT_IMMUTABILITY_VIOLATION'):
+            self.call_import(path)
+
+    def test_private_parameters_are_blocked(self):
+        path = self.roots_file([self.root_item(public_key_xml=self.private_xml)])
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOT_PRIVATE_PARAMETERS'):
+            self.call_import(path)
+
+    def test_invalid_algorithm_is_blocked(self):
+        path = self.roots_file([self.root_item(algorithm='RSA-PKCS1-SHA256')])
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOT_ALGORITHM_INVALID'):
+            self.call_import(path)
+
+    def test_unknown_root_key_id_is_blocked(self):
+        path = self.roots_file([self.root_item()])
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOT_NOT_FOUND'):
+            self.call_import(path, root_key_id='missing-root')
+
+    def test_revoked_root_does_not_return_to_active(self):
+        AgentReleaseRootKey.objects.create(
+            root_key_id='nightowl-trust-root-lab-2026-01',
+            algorithm='RSA-PSS-SHA256',
+            public_key_xml=self.public_xml,
+            status=AgentReleaseRootKey.STATUS_REVOKED,
+            revocation_reason='teste',
+            revoked_at=timezone.now(),
+        )
+        path = self.roots_file([self.root_item()])
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOT_REVOKED'):
+            self.call_import(path)
+
+    def test_empty_file_is_blocked(self):
+        handle = tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False)
+        with handle:
+            handle.write('')
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOTS_FILE_EMPTY'):
+            self.call_import(handle.name)
+
+    def test_invalid_json_is_blocked(self):
+        handle = tempfile.NamedTemporaryFile('w', encoding='utf-8', suffix='.json', delete=False)
+        with handle:
+            handle.write('{')
+
+        with self.assertRaisesMessage(Exception, 'TRUST_ROOTS_FILE_INVALID'):
+            self.call_import(handle.name)

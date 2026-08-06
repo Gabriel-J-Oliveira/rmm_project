@@ -93,8 +93,17 @@ if ($LASTEXITCODE -ne 0) { Fail "TRUST_BUNDLE_VALIDATION_FAILED" "validacao loca
 
 $meta = Get-Content -Raw -Path (Join-Path $BundleDir "release-public-keys.meta.json") | ConvertFrom-Json
 if ($DryRun) {
+    $bundle = Get-Content -Raw -Path (Join-Path $BundleDir "release-public-keys.json") | ConvertFrom-Json
+    $activeKeyIds = @($bundle.keys | Where-Object { [string]$_.status -eq "active" -or [string]::IsNullOrWhiteSpace($_.status) } | ForEach-Object { [string]$_.key_id })
+    $revokedKeyIds = @($bundle.keys | Where-Object { [string]$_.status -eq "revoked" } | ForEach-Object { [string]$_.key_id })
     Write-Step "DRY RUN: nenhum SSH/SCP/import Django sera executado."
     Write-Step "Bundle v$BundleVersion pronto localmente em $BundleDir"
+    Write-Step "Root key ID: $($meta.root_key_id)"
+    Write-Step "Bundle SHA-256: $($meta.bundle_sha256)"
+    Write-Step "Signature SHA-256: $($meta.signature_sha256)"
+    Write-Step "Tamanho: $($meta.size) bytes"
+    Write-Step "Active key IDs: $($activeKeyIds -join ', ')"
+    Write-Step "Revoked key IDs: $($revokedKeyIds -join ', ')"
     Write-Step "DRY RUN CONCLUIDO. Nenhum arquivo foi enviado e nenhum trust bundle foi alterado."
     exit 0
 }
