@@ -258,8 +258,8 @@ class AgentReleaseRootKey(models.Model):
     class Meta:
         ordering = ['root_key_id']
         indexes = [
-            models.Index(fields=['root_key_id', 'status']),
-            models.Index(fields=['status', 'valid_from', 'valid_until']),
+            models.Index(fields=['root_key_id', 'status'], name='agents_agen_root_ke_1b449c_idx'),
+            models.Index(fields=['status', 'valid_from', 'valid_until'], name='agents_agen_status_e0f6b9_idx'),
         ]
 
     def __str__(self) -> str:
@@ -351,9 +351,9 @@ class AgentReleaseTrustBundle(models.Model):
     class Meta:
         ordering = ['-bundle_version']
         indexes = [
-            models.Index(fields=['status', '-bundle_version']),
-            models.Index(fields=['root_key_id', 'status']),
-            models.Index(fields=['bundle_sha256']),
+            models.Index(fields=['status', '-bundle_version'], name='agents_agen_status_3a9462_idx'),
+            models.Index(fields=['root_key_id', 'status'], name='agents_agen_root_ke_c1f0f2_idx'),
+            models.Index(fields=['bundle_sha256'], name='agents_agen_bundle__68959c_idx'),
         ]
 
     def __str__(self) -> str:
