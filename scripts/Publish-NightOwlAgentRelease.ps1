@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Version,
+    [string]$Version = "",
 
     [string]$RemoteAlias = "nightowl-release",
     [string]$RemoteProjectPath = "/opt/nightowl",
@@ -28,10 +27,11 @@ param(
     [switch]$SkipTests,
     [switch]$SaveConfig,
     [switch]$AllowDirtyWorkingTree,
-    [string]$ConfigPath = (Join-Path $env:USERPROFILE ".nightowl\release-publisher.json"),
-    [string]$SigningKeyPath = $env:NIGHTOWL_RELEASE_SIGNING_KEY,
-    [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
-    [string]$TrustedPublicKeysPath = $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON,
+    [switch]$Ci,
+    [string]$ConfigPath = "",
+    [string]$SigningKeyPath = "",
+    [string]$SigningKeyId = "",
+    [string]$TrustedPublicKeysPath = "",
     [switch]$AllowUnsignedDevelopment,
     [switch]$SelfTest
 )
@@ -42,6 +42,7 @@ $script:InitialBoundParameters = @{}
 foreach ($key in $PSBoundParameters.Keys) {
     $script:InitialBoundParameters[$key] = $true
 }
+$script:PublisherMutex = $null
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $script:ReleaseRoot = Join-Path $script:RepoRoot "artifacts\nightowl-agent\releases"
@@ -69,6 +70,23 @@ $script:DefaultRemoteAlias = "nightowl-release"
 $script:DefaultRemoteProjectPath = "/opt/nightowl"
 $script:DefaultPublicBaseUrl = "https://nightowl.controlsul.com.br/downloads/nightowl-agent"
 
+function Get-DefaultPublisherConfigPath {
+    if (-not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_PUBLISHER_CONFIG)) {
+        return $env:NIGHTOWL_RELEASE_PUBLISHER_CONFIG
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        return (Join-Path $env:USERPROFILE ".nightowl\release-publisher.json")
+    }
+    return ""
+}
+
+function Get-FirstNonEmpty([string[]]$Values) {
+    foreach ($value in $Values) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+    }
+    return ""
+}
+
 function Write-Step([string]$Message) {
     Write-Host ("[nightowl-release-publish] {0}" -f $Message)
 }
@@ -79,6 +97,27 @@ function Fail([string]$Code, [string]$Message) {
     $ex.Data["ExitCode"] = $exitCode
     $ex.Data["Code"] = $Code
     throw $ex
+}
+
+function Enter-PublisherLock {
+    $createdNew = $false
+    $script:PublisherMutex = New-Object System.Threading.Mutex($false, "Global\NightOwlAgentReleasePublisher", [ref]$createdNew)
+    try {
+        if (-not $script:PublisherMutex.WaitOne(0)) {
+            Fail "validation_failed" "Ja existe uma publicacao NightOwl Agent em execucao neste runner."
+        }
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        Write-Step "Aviso: lock anterior estava abandonado; assumindo controle da publicacao."
+    }
+}
+
+function Exit-PublisherLock {
+    if ($null -ne $script:PublisherMutex) {
+        try { $script:PublisherMutex.ReleaseMutex() | Out-Null } catch {}
+        $script:PublisherMutex.Dispose()
+        $script:PublisherMutex = $null
+    }
 }
 
 function Write-Utf8NoBomText([string]$Path, [string]$Content) {
@@ -106,30 +145,44 @@ function Read-PublisherConfig([string]$Path) {
     }
 }
 
-function Resolve-ConfigValue([string]$ParameterName, [string]$CurrentValue, [string]$EnvironmentValue, $ConfigValue, [string]$DefaultValue) {
+function Resolve-ConfigValue([string]$ParameterName, [string]$CurrentValue, [string[]]$EnvironmentValues, $ConfigValue, [string]$DefaultValue) {
     if ($script:InitialBoundParameters.ContainsKey($ParameterName) -and -not [string]::IsNullOrWhiteSpace($CurrentValue)) { return $CurrentValue }
-    if (-not [string]::IsNullOrWhiteSpace($EnvironmentValue)) { return $EnvironmentValue }
+    $environmentValue = Get-FirstNonEmpty $EnvironmentValues
+    if (-not [string]::IsNullOrWhiteSpace($environmentValue)) { return $environmentValue }
     if ($null -ne $ConfigValue -and -not [string]::IsNullOrWhiteSpace([string]$ConfigValue)) { return [string]$ConfigValue }
-    return $CurrentValue
+    if (-not [string]::IsNullOrWhiteSpace($CurrentValue)) { return $CurrentValue }
+    return $DefaultValue
 }
 
 function Initialize-PublisherConfiguration {
+    if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+        $script:ConfigPath = Get-DefaultPublisherConfigPath
+    }
     $config = Read-PublisherConfig $ConfigPath
     if ($null -ne $config) {
-        $script:SigningKeyPath = Resolve-ConfigValue "SigningKeyPath" $SigningKeyPath $env:NIGHTOWL_RELEASE_SIGNING_KEY $config.signing_key_path ""
-        $script:SigningKeyId = Resolve-ConfigValue "SigningKeyId" $SigningKeyId $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID $config.signing_key_id ""
-        $script:TrustedPublicKeysPath = Resolve-ConfigValue "TrustedPublicKeysPath" $TrustedPublicKeysPath $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON $config.trusted_public_keys_path ""
-        $script:RemoteAlias = Resolve-ConfigValue "RemoteAlias" $RemoteAlias $env:NIGHTOWL_RELEASE_REMOTE_ALIAS $config.remote_alias $script:DefaultRemoteAlias
-        $script:RemoteProjectPath = Resolve-ConfigValue "RemoteProjectPath" $RemoteProjectPath $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH $config.remote_project_path $script:DefaultRemoteProjectPath
-        $script:PublicBaseUrl = Resolve-ConfigValue "PublicBaseUrl" $PublicBaseUrl $env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL $config.public_base_url $script:DefaultPublicBaseUrl
+        $script:SigningKeyPath = Resolve-ConfigValue "SigningKeyPath" $SigningKeyPath @($env:NIGHTOWL_RELEASE_SIGNING_KEY_PATH, $env:NIGHTOWL_RELEASE_SIGNING_KEY) $config.signing_key_path ""
+        $script:SigningKeyId = Resolve-ConfigValue "SigningKeyId" $SigningKeyId @($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID) $config.signing_key_id ""
+        $script:TrustedPublicKeysPath = Resolve-ConfigValue "TrustedPublicKeysPath" $TrustedPublicKeysPath @($env:NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH, $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON) $config.trusted_public_keys_path ""
+        $script:RemoteAlias = Resolve-ConfigValue "RemoteAlias" $RemoteAlias @($env:NIGHTOWL_RELEASE_SSH_TARGET, $env:NIGHTOWL_RELEASE_REMOTE_ALIAS) $config.remote_alias $script:DefaultRemoteAlias
+        $script:RemoteProjectPath = Resolve-ConfigValue "RemoteProjectPath" $RemoteProjectPath @($env:NIGHTOWL_RELEASE_DJANGO_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) $config.remote_project_path $script:DefaultRemoteProjectPath
+        $script:PublicBaseUrl = Resolve-ConfigValue "PublicBaseUrl" $PublicBaseUrl @($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) $config.public_base_url $script:DefaultPublicBaseUrl
     }
     else {
-        if (-not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_REMOTE_ALIAS) -and $RemoteAlias -eq $script:DefaultRemoteAlias) { $script:RemoteAlias = $env:NIGHTOWL_RELEASE_REMOTE_ALIAS }
-        if (-not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) -and $RemoteProjectPath -eq $script:DefaultRemoteProjectPath) { $script:RemoteProjectPath = $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH }
-        if (-not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) -and $PublicBaseUrl -eq $script:DefaultPublicBaseUrl) { $script:PublicBaseUrl = $env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL }
+        $script:SigningKeyPath = Resolve-ConfigValue "SigningKeyPath" $SigningKeyPath @($env:NIGHTOWL_RELEASE_SIGNING_KEY_PATH, $env:NIGHTOWL_RELEASE_SIGNING_KEY) $null ""
+        $script:SigningKeyId = Resolve-ConfigValue "SigningKeyId" $SigningKeyId @($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID) $null ""
+        $script:TrustedPublicKeysPath = Resolve-ConfigValue "TrustedPublicKeysPath" $TrustedPublicKeysPath @($env:NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH, $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON) $null ""
+        $script:RemoteAlias = Resolve-ConfigValue "RemoteAlias" $RemoteAlias @($env:NIGHTOWL_RELEASE_SSH_TARGET, $env:NIGHTOWL_RELEASE_REMOTE_ALIAS) $null $script:DefaultRemoteAlias
+        $script:RemoteProjectPath = Resolve-ConfigValue "RemoteProjectPath" $RemoteProjectPath @($env:NIGHTOWL_RELEASE_DJANGO_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) $null $script:DefaultRemoteProjectPath
+        $script:PublicBaseUrl = Resolve-ConfigValue "PublicBaseUrl" $PublicBaseUrl @($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) $null $script:DefaultPublicBaseUrl
     }
 
     if ($SaveConfig) {
+        if ($Ci) {
+            Fail "validation_failed" "-SaveConfig nao e permitido em -Ci."
+        }
+        if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+            Fail "validation_failed" "ConfigPath nao resolvido; informe -ConfigPath para salvar configuracao local."
+        }
         $safeConfig = [ordered]@{
             signing_key_path = $SigningKeyPath
             signing_key_id = $SigningKeyId
@@ -140,6 +193,21 @@ function Initialize-PublisherConfiguration {
         }
         Write-Utf8NoBomJson -Path $ConfigPath -Value $safeConfig -Depth 4
         Write-Step "Configuracao local salva em $ConfigPath (sem material de chave privada)."
+    }
+
+    if ($Ci) {
+        foreach ($required in @(
+            @{ name = "SigningKeyPath"; value = $SigningKeyPath },
+            @{ name = "SigningKeyId"; value = $SigningKeyId },
+            @{ name = "TrustedPublicKeysPath"; value = $TrustedPublicKeysPath },
+            @{ name = "RemoteAlias"; value = $RemoteAlias },
+            @{ name = "RemoteProjectPath"; value = $RemoteProjectPath },
+            @{ name = "PublicBaseUrl"; value = $PublicBaseUrl }
+        )) {
+            if ([string]::IsNullOrWhiteSpace([string]$required.value)) {
+                Fail "validation_failed" "Modo CI requer $($required.name) via parametro ou variavel de ambiente."
+            }
+        }
     }
 }
 
@@ -279,6 +347,24 @@ function Assert-Version([string]$Value) {
     }
 }
 
+function Assert-OptionCombination {
+    if ($ValidateOnly -and $DryRun) {
+        Fail "validation_failed" "Use -ValidateOnly ou -DryRun, nao ambos. ValidateOnly nao executa build; DryRun executa fluxo local sem alterar remoto."
+    }
+    if ($ValidateOnly -and $ResumeImport) {
+        Fail "validation_failed" "-ValidateOnly e -ResumeImport sao mutuamente exclusivos."
+    }
+    if ($DryRun -and $ResumeImport) {
+        Fail "validation_failed" "-DryRun e -ResumeImport sao mutuamente exclusivos."
+    }
+    if ($Ci -and $SaveConfig) {
+        Fail "validation_failed" "-SaveConfig nao e permitido em -Ci."
+    }
+    if ($Channel -ne "development" -and $AllowUnsignedDevelopment) {
+        Fail "validation_failed" "-AllowUnsignedDevelopment so e permitido em development."
+    }
+}
+
 function Assert-SafeRemoteSegment([string]$Value) {
     if ($Value -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
         Fail "validation_failed" "Segmento de path remoto inseguro: $Value"
@@ -291,7 +377,9 @@ function ConvertTo-BashSingleQuoted([string]$Value) {
 
 function Invoke-Native([string]$FileName, [string[]]$Arguments, [string]$FailureCode) {
     Write-Step ("Executando: {0} {1}" -f $FileName, ($Arguments -join " "))
-    if ($DryRun) {
+    $leafName = Split-Path -Leaf $FileName
+    if ($DryRun -and $leafName -in @("ssh.exe", "ssh", "scp.exe", "scp")) {
+        Write-Step ("DRY RUN: NAO EXECUTADO: {0} {1}" -f $FileName, ($Arguments -join " "))
         return @()
     }
     $stdoutFile = [System.IO.Path]::GetTempFileName()
@@ -365,6 +453,8 @@ function Invoke-SelfTest {
     $oldSigningKeyId = $script:SigningKeyId
     $oldTrustedPublicKeysPath = $script:TrustedPublicKeysPath
     $oldAllowUnsignedDevelopment = $script:AllowUnsignedDevelopment
+    $oldDryRun = $script:DryRun
+    $oldInitialBoundParameters = $script:InitialBoundParameters.Clone()
     $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("nightowl-publisher-selftest-{0}" -f ([guid]::NewGuid().ToString("N")))
     try {
         New-Item -ItemType Directory -Force -Path $temp | Out-Null
@@ -425,6 +515,22 @@ function Invoke-SelfTest {
         $script:AllowUnsignedDevelopment = $false
         Assert-SigningMaterial
 
+        $script:InitialBoundParameters = @{}
+        $resolvedFromEnv = Resolve-ConfigValue "SigningKeyPath" "" @("env-value") "config-value" "default-value"
+        if ($resolvedFromEnv -ne "env-value") { Fail "validation_failed" "SelfTest falhou: ambiente deve preceder config." }
+        $script:InitialBoundParameters["SigningKeyPath"] = $true
+        $resolvedFromParam = Resolve-ConfigValue "SigningKeyPath" "param-value" @("env-value") "config-value" "default-value"
+        if ($resolvedFromParam -ne "param-value") { Fail "validation_failed" "SelfTest falhou: parametro deve preceder ambiente." }
+        $script:InitialBoundParameters = @{}
+        $resolvedFromConfig = Resolve-ConfigValue "SigningKeyPath" "" @("") "config-value" "default-value"
+        if ($resolvedFromConfig -ne "config-value") { Fail "validation_failed" "SelfTest falhou: config deve preceder default." }
+
+        $script:DryRun = $true
+        $dryRunOutput = Invoke-Native "ssh.exe" @("unreachable-nightowl-selftest", "echo", "should-not-run") "ssh_failed"
+        if (@($dryRunOutput).Count -ne 0) { Fail "validation_failed" "SelfTest falhou: DryRun retornou saida para SSH nao executado." }
+        $dryRunScpOutput = Invoke-Native "scp.exe" @("missing-local-file", "unreachable-nightowl-selftest:/tmp/should-not-run") "upload_failed"
+        if (@($dryRunScpOutput).Count -ne 0) { Fail "validation_failed" "SelfTest falhou: DryRun retornou saida para SCP nao executado." }
+
         Write-Step "SelfTest OK: argumentos do build montados sem switches falsos."
         Write-Step ("Force false: powershell.exe {0}" -f ($withoutForce -join " "))
         Write-Step ("Force true:  powershell.exe {0}" -f ($withForce -join " "))
@@ -436,6 +542,8 @@ function Invoke-SelfTest {
         $script:SigningKeyId = $oldSigningKeyId
         $script:TrustedPublicKeysPath = $oldTrustedPublicKeysPath
         $script:AllowUnsignedDevelopment = $oldAllowUnsignedDevelopment
+        $script:DryRun = $oldDryRun
+        $script:InitialBoundParameters = $oldInitialBoundParameters
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -806,6 +914,8 @@ try {
         exit 0
     }
 
+    Enter-PublisherLock
+    Assert-OptionCombination
     Initialize-PublisherConfiguration
     Assert-Version $Version
     Assert-SafeRemoteSegment $Version
@@ -823,7 +933,8 @@ try {
     Assert-RemoteServerConfiguration
 
     if ($ValidateOnly) {
-        Write-Step "ValidateOnly ativo; validando artefatos locais e remoto sem build/upload/import."
+        Write-Step "VALIDATE ONLY CONCLUIDO. Ambiente, Git, configuracao, chave, bundle e conectividade foram validados; build/upload/import nao foram executados."
+        exit 0
     }
     elseif ($ResumeImport) {
         Write-Step "ResumeImport ativo; pulando build/upload e retomando importacao/verificacao no Django."
@@ -842,8 +953,14 @@ try {
 
     $releaseDir = Join-Path $script:ReleaseRoot $Version
     $localRelease = Assert-LocalRelease $releaseDir
-    if ($ValidateOnly) {
-        Write-Step "ValidateOnly OK: release local validada com assinatura, hashes e bundle publico."
+    if ($DryRun) {
+        Write-Host ""
+        Write-Host "DRY RUN CONCLUIDO. Nenhum arquivo foi enviado e nenhuma release foi alterada."
+        Write-Host "  Versao:      $Version"
+        Write-Host "  Canal:       $Channel"
+        Write-Host "  Key ID:      $([string]$localRelease.VersionJson.signature_key_id)"
+        Write-Host "  SHA256 ZIP:  $($localRelease.ZipSha)"
+        Write-Host "  Tamanho:     $($localRelease.ZipSize) bytes"
         exit 0
     }
     $releaseRootRemote = "$RemoteProjectPath/downloads/agent/windows/releases"
@@ -914,4 +1031,7 @@ catch {
     }
     Write-Error ("Falha [{0}]: {1}" -f $code, $_.Exception.Message)
     exit $exit
+}
+finally {
+    Exit-PublisherLock
 }

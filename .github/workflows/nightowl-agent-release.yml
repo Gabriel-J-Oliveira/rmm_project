@@ -1,0 +1,127 @@
+name: NightOwl Agent Release
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Agent version, for example 0.1.1.0-rc9"
+        required: true
+        type: string
+      channel:
+        description: "Release channel"
+        required: true
+        default: development
+        type: choice
+        options:
+          - development
+          - pilot
+          - stable
+      validate_only:
+        description: "Validate runner/configuration only; no build, upload or import"
+        required: true
+        default: true
+        type: boolean
+      dry_run:
+        description: "Build and sign locally, but do not upload/import"
+        required: true
+        default: false
+        type: boolean
+      skip_tests:
+        description: "Exceptional: skip .NET tests during build"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: nightowl-agent-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release agent
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 90
+
+    steps:
+      - name: Validate inputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ inputs.validate_only }}" -eq "true" -and "${{ inputs.dry_run }}" -eq "true") {
+            throw "validate_only and dry_run are mutually exclusive."
+          }
+          if ("${{ inputs.version }}" -notmatch '^\d+\.\d+\.\d+(\.\d+)?(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+            throw "Invalid version: ${{ inputs.version }}"
+          }
+          if ("${{ inputs.channel }}" -eq "stable" -and "${{ inputs.version }}" -match "-") {
+            Write-Warning "Stable prerelease requires administrative approval in Django; publisher will keep release paused."
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare log directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ".\artifacts\ci-release-logs" | Out-Null
+
+      - name: Test release runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File ".\scripts\Test-NightOwlReleaseRunner.ps1" `
+            -Version "${{ inputs.version }}" `
+            -Channel "${{ inputs.channel }}" `
+            -Ci *>&1 | Tee-Object -FilePath ".\artifacts\ci-release-logs\runner-test.log"
+
+      - name: Publish or validate release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $publisherArgs = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", ".\scripts\Publish-NightOwlAgentRelease.ps1",
+            "-Version", "${{ inputs.version }}",
+            "-Channel", "${{ inputs.channel }}",
+            "-Ci"
+          )
+          if ("${{ inputs.validate_only }}" -eq "true") { $publisherArgs += "-ValidateOnly" }
+          if ("${{ inputs.dry_run }}" -eq "true") { $publisherArgs += "-DryRun" }
+          if ("${{ inputs.skip_tests }}" -eq "true") { $publisherArgs += "-SkipTests" }
+          powershell.exe @publisherArgs *>&1 | Tee-Object -FilePath ".\artifacts\ci-release-logs\publisher.log"
+
+      - name: Write summary
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = @"
+          ## NightOwl Agent Release
+
+          - Version: `${{ inputs.version }}`
+          - Channel: `${{ inputs.channel }}`
+          - Validate only: `${{ inputs.validate_only }}`
+          - Dry run: `${{ inputs.dry_run }}`
+          - Skip tests: `${{ inputs.skip_tests }}`
+          - Runner: `$env:COMPUTERNAME`
+
+          Logs are uploaded as artifacts. Private keys, user profiles and publisher configuration files are never uploaded by this workflow.
+          "@
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $summary | Out-File -FilePath ".\artifacts\ci-release-logs\summary.md" -Encoding utf8
+
+      - name: Upload release logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightowl-agent-release-logs
+          path: artifacts/ci-release-logs/
+          if-no-files-found: warn
+          include-hidden-files: false
+          retention-days: 14

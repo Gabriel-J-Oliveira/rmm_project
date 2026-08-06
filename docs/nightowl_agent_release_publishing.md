@@ -43,6 +43,20 @@ The persisted configuration is:
 
 Explicit parameters and environment variables override this file.
 
+For CI and self-hosted runners, prefer environment variables instead of a user profile config file:
+
+```text
+NIGHTOWL_RELEASE_SIGNING_KEY_PATH
+NIGHTOWL_RELEASE_SIGNING_KEY_ID
+NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH
+NIGHTOWL_RELEASE_SSH_TARGET
+NIGHTOWL_RELEASE_REMOTE_ROOT
+NIGHTOWL_RELEASE_PUBLIC_BASE_URL
+NIGHTOWL_RELEASE_DJANGO_ROOT
+```
+
+The full runner setup is documented in `docs/nightowl_agent_release_ci.md`.
+
 ## Normal release
 
 ```powershell
@@ -78,7 +92,11 @@ powershell.exe -ExecutionPolicy Bypass `
   -ResumeImport
 ```
 
-`-DryRun` skips network mutations. `-SkipTests` is reserved for laboratory use and keeps build/test responsibility with the operator.
+`-ValidateOnly` checks environment, Git, configuration, key material, public key bundle and connectivity. It does not build.
+
+`-DryRun` runs the local release flow, including tests, build, manifest generation, signature and local validation, but does not run SSH/SCP, public URL checks, Django import or remote mutation.
+
+`-SkipTests` is reserved for exceptional laboratory use and keeps build/test responsibility with the operator.
 
 ## Immutability
 
