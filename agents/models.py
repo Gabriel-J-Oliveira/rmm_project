@@ -233,6 +233,161 @@ class AgentReleaseSigningKey(models.Model):
         super().save(*args, **kwargs)
 
 
+class AgentReleaseRootKey(models.Model):
+    STATUS_ACTIVE = 'active'
+    STATUS_REVOKED = 'revoked'
+    STATUS_RETIRED = 'retired'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_REVOKED, 'Revoked'),
+        (STATUS_RETIRED, 'Retired'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    root_key_id = models.CharField(max_length=120, unique=True)
+    algorithm = models.CharField(max_length=40, default='RSA-PSS-SHA256')
+    public_key_xml = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revocation_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['root_key_id']
+        indexes = [
+            models.Index(fields=['root_key_id', 'status']),
+            models.Index(fields=['status', 'valid_from', 'valid_until']),
+        ]
+
+    def __str__(self) -> str:
+        return self.root_key_id
+
+    @property
+    def revoked(self) -> bool:
+        return self.status == self.STATUS_REVOKED or self.revoked_at is not None
+
+    def clean(self):
+        super().clean()
+        if self.algorithm != 'RSA-PSS-SHA256':
+            raise ValidationError({'algorithm': 'Somente RSA-PSS-SHA256 e suportado para bundles de confianca.'})
+        if self.status == self.STATUS_REVOKED and not self.revocation_reason:
+            raise ValidationError({'revocation_reason': 'Revogacao de raiz exige motivo.'})
+        if self.status == self.STATUS_REVOKED and self.revoked_at is None:
+            self.revoked_at = timezone.now()
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
+class AgentReleaseTrustBundle(models.Model):
+    STATUS_DRAFT = 'draft'
+    STATUS_PUBLISHED = 'published'
+    STATUS_REVOKED = 'revoked'
+    STATUS_SUPERSEDED = 'superseded'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_PUBLISHED, 'Published'),
+        (STATUS_REVOKED, 'Revoked'),
+        (STATUS_SUPERSEDED, 'Superseded'),
+    ]
+    IMMUTABLE_STATUSES = {STATUS_PUBLISHED, STATUS_REVOKED, STATUS_SUPERSEDED}
+    IMMUTABLE_FIELDS = {
+        'bundle_version',
+        'schema_version',
+        'root_key_id',
+        'bundle_url',
+        'signature_url',
+        'metadata_url',
+        'bundle_sha256',
+        'signature_sha256',
+        'size',
+        'generated_at',
+        'valid_from',
+        'valid_until',
+    }
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    bundle_version = models.PositiveBigIntegerField(unique=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
+    schema_version = models.PositiveSmallIntegerField(default=1)
+    root_key_id = models.CharField(max_length=120, db_index=True)
+    bundle_url = models.URLField(max_length=1000)
+    signature_url = models.URLField(max_length=1000)
+    metadata_url = models.URLField(max_length=1000)
+    bundle_sha256 = models.CharField(max_length=64)
+    signature_sha256 = models.CharField(max_length=64)
+    size = models.BigIntegerField(default=0)
+    generated_at = models.DateTimeField(null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_until = models.DateTimeField(null=True, blank=True)
+    active_key_ids = models.JSONField(default=list, blank=True)
+    revoked_key_ids = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_agent_release_trust_bundles',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revocation_reason = models.TextField(blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+    superseded_reason = models.TextField(blank=True)
+    replacement_bundle = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='replaced_trust_bundles',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-bundle_version']
+        indexes = [
+            models.Index(fields=['status', '-bundle_version']),
+            models.Index(fields=['root_key_id', 'status']),
+            models.Index(fields=['bundle_sha256']),
+        ]
+
+    def __str__(self) -> str:
+        return f'trust bundle v{self.bundle_version}'
+
+    def clean(self):
+        super().clean()
+        if self.schema_version != 1:
+            raise ValidationError({'schema_version': 'Somente schema_version=1 e suportado.'})
+        if self.status == self.STATUS_REVOKED and not self.revocation_reason:
+            raise ValidationError({'revocation_reason': 'Revogacao do bundle exige motivo.'})
+        if self.status == self.STATUS_REVOKED and self.revoked_at is None:
+            self.revoked_at = timezone.now()
+        if self.status == self.STATUS_SUPERSEDED and (not self.replacement_bundle_id or not self.superseded_reason):
+            raise ValidationError('Supersedencia exige replacement_bundle e motivo.')
+        if self.valid_from and self.valid_until and self.valid_until <= self.valid_from:
+            raise ValidationError('Janela de validade do bundle e invalida.')
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            previous = AgentReleaseTrustBundle.objects.filter(pk=self.pk).first()
+            if previous and previous.status in self.IMMUTABLE_STATUSES:
+                changed = [
+                    field for field in self.IMMUTABLE_FIELDS
+                    if getattr(previous, field) != getattr(self, field)
+                ]
+                if changed:
+                    raise ValidationError(
+                        f'TRUST_BUNDLE_IMMUTABILITY_VIOLATION: campos imutaveis alterados: {", ".join(changed)}'
+                    )
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
 class AgentRelease(models.Model):
     CHANNEL_DEVELOPMENT = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
     CHANNEL_PILOT = AgentMachine.UPDATE_CHANNEL_PILOT
@@ -1162,6 +1317,7 @@ class AgentJob(models.Model):
     TYPE_COLLECT_LOGS = 'collect_logs'
     TYPE_WINDOWS_UPDATE_SCAN = 'windows_update_scan'
     TYPE_UPDATE_AGENT = 'update_agent'
+    TYPE_UPDATE_TRUSTED_RELEASE_KEYS = 'update_trusted_release_keys'
     TYPE_RESTART_AGENT = 'restart_agent'
     TYPE_CHOICES = [
         (TYPE_FORCE_INVENTORY, 'Force inventory'),
@@ -1172,6 +1328,7 @@ class AgentJob(models.Model):
         (TYPE_COLLECT_LOGS, 'Collect logs'),
         (TYPE_WINDOWS_UPDATE_SCAN, 'Windows Update scan'),
         (TYPE_UPDATE_AGENT, 'Update agent'),
+        (TYPE_UPDATE_TRUSTED_RELEASE_KEYS, 'Update trusted release keys'),
         (TYPE_RESTART_AGENT, 'Restart agent'),
     ]
 

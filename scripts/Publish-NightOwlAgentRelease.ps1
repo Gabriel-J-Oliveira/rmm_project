@@ -32,6 +32,7 @@ param(
     [string]$SigningKeyPath = "",
     [string]$SigningKeyId = "",
     [string]$TrustedPublicKeysPath = "",
+    [string]$TrustRootsPath = "",
     [switch]$AllowUnsignedDevelopment,
     [switch]$SelfTest
 )
@@ -145,6 +146,17 @@ function Read-PublisherConfig([string]$Path) {
     }
 }
 
+function Get-ConfigPropertyValue($Config, [string]$PropertyName) {
+    if ($null -eq $Config -or [string]::IsNullOrWhiteSpace($PropertyName)) {
+        return $null
+    }
+    $property = $Config.PSObject.Properties[$PropertyName]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
 function Resolve-ConfigValue([string]$ParameterName, [string]$CurrentValue, [string[]]$EnvironmentValues, $ConfigValue, [string]$DefaultValue) {
     if ($script:InitialBoundParameters.ContainsKey($ParameterName) -and -not [string]::IsNullOrWhiteSpace($CurrentValue)) { return $CurrentValue }
     $environmentValue = Get-FirstNonEmpty $EnvironmentValues
@@ -160,17 +172,19 @@ function Initialize-PublisherConfiguration {
     }
     $config = Read-PublisherConfig $ConfigPath
     if ($null -ne $config) {
-        $script:SigningKeyPath = Resolve-ConfigValue "SigningKeyPath" $SigningKeyPath @($env:NIGHTOWL_RELEASE_SIGNING_KEY_PATH, $env:NIGHTOWL_RELEASE_SIGNING_KEY) $config.signing_key_path ""
-        $script:SigningKeyId = Resolve-ConfigValue "SigningKeyId" $SigningKeyId @($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID) $config.signing_key_id ""
-        $script:TrustedPublicKeysPath = Resolve-ConfigValue "TrustedPublicKeysPath" $TrustedPublicKeysPath @($env:NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH, $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON) $config.trusted_public_keys_path ""
-        $script:RemoteAlias = Resolve-ConfigValue "RemoteAlias" $RemoteAlias @($env:NIGHTOWL_RELEASE_SSH_TARGET, $env:NIGHTOWL_RELEASE_REMOTE_ALIAS) $config.remote_alias $script:DefaultRemoteAlias
-        $script:RemoteProjectPath = Resolve-ConfigValue "RemoteProjectPath" $RemoteProjectPath @($env:NIGHTOWL_RELEASE_DJANGO_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) $config.remote_project_path $script:DefaultRemoteProjectPath
-        $script:PublicBaseUrl = Resolve-ConfigValue "PublicBaseUrl" $PublicBaseUrl @($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) $config.public_base_url $script:DefaultPublicBaseUrl
+        $script:SigningKeyPath = Resolve-ConfigValue "SigningKeyPath" $SigningKeyPath @($env:NIGHTOWL_RELEASE_SIGNING_KEY_PATH, $env:NIGHTOWL_RELEASE_SIGNING_KEY) (Get-ConfigPropertyValue $config "signing_key_path") ""
+        $script:SigningKeyId = Resolve-ConfigValue "SigningKeyId" $SigningKeyId @($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID) (Get-ConfigPropertyValue $config "signing_key_id") ""
+        $script:TrustedPublicKeysPath = Resolve-ConfigValue "TrustedPublicKeysPath" $TrustedPublicKeysPath @($env:NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH, $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON) (Get-ConfigPropertyValue $config "trusted_public_keys_path") ""
+        $script:TrustRootsPath = Resolve-ConfigValue "TrustRootsPath" $TrustRootsPath @($env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON, $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH) (Get-ConfigPropertyValue $config "trust_roots_path") ""
+        $script:RemoteAlias = Resolve-ConfigValue "RemoteAlias" $RemoteAlias @($env:NIGHTOWL_RELEASE_SSH_TARGET, $env:NIGHTOWL_RELEASE_REMOTE_ALIAS) (Get-ConfigPropertyValue $config "remote_alias") $script:DefaultRemoteAlias
+        $script:RemoteProjectPath = Resolve-ConfigValue "RemoteProjectPath" $RemoteProjectPath @($env:NIGHTOWL_RELEASE_DJANGO_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) (Get-ConfigPropertyValue $config "remote_project_path") $script:DefaultRemoteProjectPath
+        $script:PublicBaseUrl = Resolve-ConfigValue "PublicBaseUrl" $PublicBaseUrl @($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) (Get-ConfigPropertyValue $config "public_base_url") $script:DefaultPublicBaseUrl
     }
     else {
         $script:SigningKeyPath = Resolve-ConfigValue "SigningKeyPath" $SigningKeyPath @($env:NIGHTOWL_RELEASE_SIGNING_KEY_PATH, $env:NIGHTOWL_RELEASE_SIGNING_KEY) $null ""
         $script:SigningKeyId = Resolve-ConfigValue "SigningKeyId" $SigningKeyId @($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID) $null ""
         $script:TrustedPublicKeysPath = Resolve-ConfigValue "TrustedPublicKeysPath" $TrustedPublicKeysPath @($env:NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH, $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON) $null ""
+        $script:TrustRootsPath = Resolve-ConfigValue "TrustRootsPath" $TrustRootsPath @($env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON, $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH) $null ""
         $script:RemoteAlias = Resolve-ConfigValue "RemoteAlias" $RemoteAlias @($env:NIGHTOWL_RELEASE_SSH_TARGET, $env:NIGHTOWL_RELEASE_REMOTE_ALIAS) $null $script:DefaultRemoteAlias
         $script:RemoteProjectPath = Resolve-ConfigValue "RemoteProjectPath" $RemoteProjectPath @($env:NIGHTOWL_RELEASE_DJANGO_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) $null $script:DefaultRemoteProjectPath
         $script:PublicBaseUrl = Resolve-ConfigValue "PublicBaseUrl" $PublicBaseUrl @($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) $null $script:DefaultPublicBaseUrl
@@ -187,6 +201,7 @@ function Initialize-PublisherConfiguration {
             signing_key_path = $SigningKeyPath
             signing_key_id = $SigningKeyId
             trusted_public_keys_path = $TrustedPublicKeysPath
+            trust_roots_path = $TrustRootsPath
             remote_alias = $RemoteAlias
             remote_project_path = $RemoteProjectPath
             public_base_url = $PublicBaseUrl
@@ -200,6 +215,7 @@ function Initialize-PublisherConfiguration {
             @{ name = "SigningKeyPath"; value = $SigningKeyPath },
             @{ name = "SigningKeyId"; value = $SigningKeyId },
             @{ name = "TrustedPublicKeysPath"; value = $TrustedPublicKeysPath },
+            @{ name = "TrustRootsPath"; value = $TrustRootsPath },
             @{ name = "RemoteAlias"; value = $RemoteAlias },
             @{ name = "RemoteProjectPath"; value = $RemoteProjectPath },
             @{ name = "PublicBaseUrl"; value = $PublicBaseUrl }
@@ -286,6 +302,31 @@ function Test-PublicKeyXmlHasPrivateParameters([string]$Xml) {
         if ($Xml -match ("<\s*{0}\s*>" -f $privateElement)) { return $true }
     }
     return $false
+}
+
+function Assert-TrustRootsMaterial {
+    if ([string]::IsNullOrWhiteSpace($TrustRootsPath) -or -not (Test-Path -LiteralPath $TrustRootsPath)) {
+        Fail "validation_failed" "release-trust-roots.json nao encontrado. Configure trust_roots_path, -TrustRootsPath ou NIGHTOWL_RELEASE_TRUST_ROOTS_JSON."
+    }
+    $rootsJson = Read-JsonFile $TrustRootsPath
+    if ([int]$rootsJson.schema_version -ne 1) {
+        Fail "validation_failed" "release-trust-roots.json deve usar schema_version=1."
+    }
+    $seen = @{}
+    $roots = @($rootsJson.roots)
+    if ($roots.Count -eq 0) {
+        Fail "validation_failed" "release-trust-roots.json nao pode ter roots vazio."
+    }
+    foreach ($root in $roots) {
+        $keyId = [string]$root.key_id
+        if ([string]::IsNullOrWhiteSpace($keyId)) { Fail "validation_failed" "release-trust-roots.json contem key_id vazio." }
+        if ($seen.ContainsKey($keyId)) { Fail "validation_failed" "release-trust-roots.json contem key_id duplicado: $keyId." }
+        if ([string]$root.algorithm -ne "RSA-PSS-SHA256") { Fail "validation_failed" "release-trust-roots.json contem algoritmo invalido para $keyId." }
+        if (Test-PublicKeyXmlHasPrivateParameters ([string]$root.public_key_xml)) {
+            Fail "validation_failed" "release-trust-roots.json contem parametros privados para root $keyId."
+        }
+        $seen[$keyId] = $true
+    }
 }
 
 function Assert-SigningMaterial {
@@ -426,6 +467,9 @@ function New-BuildReleaseArguments([string]$RequestedVersion, [string]$Requested
     if (-not [string]::IsNullOrWhiteSpace($TrustedPublicKeysPath)) {
         $arguments += @("-TrustedPublicKeysPath", $TrustedPublicKeysPath)
     }
+    if (-not [string]::IsNullOrWhiteSpace($TrustRootsPath)) {
+        $arguments += @("-TrustRootsPath", $TrustRootsPath)
+    }
     if ($AllowUnsignedDevelopment) {
         $arguments += "-AllowUnsignedDevelopment"
     }
@@ -452,9 +496,17 @@ function Invoke-SelfTest {
     $oldSigningKeyPath = $script:SigningKeyPath
     $oldSigningKeyId = $script:SigningKeyId
     $oldTrustedPublicKeysPath = $script:TrustedPublicKeysPath
+    $oldTrustRootsPath = $script:TrustRootsPath
+    $oldRemoteAlias = $script:RemoteAlias
+    $oldRemoteProjectPath = $script:RemoteProjectPath
+    $oldPublicBaseUrl = $script:PublicBaseUrl
+    $oldConfigPath = $script:ConfigPath
+    $oldCi = $script:Ci
     $oldAllowUnsignedDevelopment = $script:AllowUnsignedDevelopment
     $oldDryRun = $script:DryRun
     $oldInitialBoundParameters = $script:InitialBoundParameters.Clone()
+    $oldTrustRootsJsonEnv = $env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON
+    $oldTrustRootsPathEnv = $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH
     $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("nightowl-publisher-selftest-{0}" -f ([guid]::NewGuid().ToString("N")))
     try {
         New-Item -ItemType Directory -Force -Path $temp | Out-Null
@@ -489,6 +541,7 @@ function Invoke-SelfTest {
             $legacyProvider.PersistKeyInCsp = $false
             $privatePath = Join-Path $temp "private.xml"
             $bundlePath = Join-Path $temp "release-public-keys.json"
+            $rootsPath = Join-Path $temp "release-trust-roots.json"
             Write-Utf8NoBomText -Path $privatePath -Content $legacyProvider.ToXmlString($true)
             $bundle = [ordered]@{
                 keys = @([ordered]@{
@@ -502,6 +555,16 @@ function Invoke-SelfTest {
                 })
             }
             Write-Utf8NoBomJson -Path $bundlePath -Value $bundle -Depth 8
+            $roots = [ordered]@{
+                schema_version = 1
+                roots = @([ordered]@{
+                    key_id = "nightowl-root-selftest"
+                    algorithm = "RSA-PSS-SHA256"
+                    public_key_xml = $legacyProvider.ToXmlString($false)
+                    status = "active"
+                })
+            }
+            Write-Utf8NoBomJson -Path $rootsPath -Value $roots -Depth 8
         }
         finally {
             $legacyProvider.PersistKeyInCsp = $false
@@ -512,8 +575,21 @@ function Invoke-SelfTest {
         $script:SigningKeyPath = $privatePath
         $script:SigningKeyId = "nightowl-selftest"
         $script:TrustedPublicKeysPath = $bundlePath
+        $script:TrustRootsPath = $rootsPath
         $script:AllowUnsignedDevelopment = $false
         Assert-SigningMaterial
+        Assert-TrustRootsMaterial
+        $withTrustRoots = New-BuildReleaseArguments -RequestedVersion "0.1.1.0-rc4" -RequestedChannel "development" -RequestedPublicBaseUrl "https://nightowl.controlsul.com.br/downloads/nightowl-agent" -AllowForce $false
+        if ($withTrustRoots -notcontains "-TrustRootsPath" -or $withTrustRoots -notcontains $rootsPath) {
+            Fail "validation_failed" "SelfTest falhou: TrustRootsPath nao foi repassado ao build."
+        }
+        $fakeReleaseDir = Join-Path $temp "fake-release"
+        $fakePackageDir = Join-Path $temp "fake-package"
+        New-Item -ItemType Directory -Force -Path $fakeReleaseDir,$fakePackageDir | Out-Null
+        Copy-Item -Path $rootsPath -Destination (Join-Path $fakePackageDir "release-trust-roots.json")
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($fakePackageDir, (Join-Path $fakeReleaseDir "NightOwl.Agent.Windows.zip"))
+        Assert-PackagedTrustRoots -ReleaseDir $fakeReleaseDir
 
         $script:InitialBoundParameters = @{}
         $resolvedFromEnv = Resolve-ConfigValue "SigningKeyPath" "" @("env-value") "config-value" "default-value"
@@ -524,6 +600,41 @@ function Invoke-SelfTest {
         $script:InitialBoundParameters = @{}
         $resolvedFromConfig = Resolve-ConfigValue "SigningKeyPath" "" @("") "config-value" "default-value"
         if ($resolvedFromConfig -ne "config-value") { Fail "validation_failed" "SelfTest falhou: config deve preceder default." }
+
+        $legacyConfigPath = Join-Path $temp "release-publisher-legacy.json"
+        $legacyConfig = [ordered]@{
+            signing_key_path = "legacy-signing-key.xml"
+            signing_key_id = "legacy-signing-key-id"
+            trusted_public_keys_path = "legacy-release-public-keys.json"
+            remote_alias = "legacy-nightowl-release"
+            remote_project_path = "/legacy/nightowl"
+            public_base_url = "https://legacy.example.test/downloads/nightowl-agent"
+        }
+        Write-Utf8NoBomJson -Path $legacyConfigPath -Value $legacyConfig -Depth 4
+        $script:InitialBoundParameters = @{}
+        $script:ConfigPath = $legacyConfigPath
+        $script:TrustRootsPath = ""
+        $script:Ci = $false
+        $env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON = $rootsPath
+        $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH = ""
+        Initialize-PublisherConfiguration
+        if ($script:TrustRootsPath -ne $rootsPath) {
+            Fail "validation_failed" "SelfTest falhou: config antiga sem trust_roots_path deve usar NIGHTOWL_RELEASE_TRUST_ROOTS_JSON."
+        }
+
+        $script:InitialBoundParameters = @{ TrustRootsPath = $true }
+        $script:ConfigPath = $legacyConfigPath
+        $script:TrustRootsPath = "C:\explicit\release-trust-roots.json"
+        $env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON = $rootsPath
+        Initialize-PublisherConfiguration
+        if ($script:TrustRootsPath -ne "C:\explicit\release-trust-roots.json") {
+            Fail "validation_failed" "SelfTest falhou: parametro TrustRootsPath deve preceder ambiente e config antiga."
+        }
+
+        $legacyConfigObject = Read-PublisherConfig $legacyConfigPath
+        if ($null -ne (Get-ConfigPropertyValue $legacyConfigObject "trust_roots_path")) {
+            Fail "validation_failed" "SelfTest falhou: helper de config deveria retornar null para trust_roots_path ausente."
+        }
 
         $script:DryRun = $true
         $dryRunOutput = Invoke-Native "ssh.exe" @("unreachable-nightowl-selftest", "echo", "should-not-run") "ssh_failed"
@@ -541,9 +652,17 @@ function Invoke-SelfTest {
         $script:SigningKeyPath = $oldSigningKeyPath
         $script:SigningKeyId = $oldSigningKeyId
         $script:TrustedPublicKeysPath = $oldTrustedPublicKeysPath
+        $script:TrustRootsPath = $oldTrustRootsPath
+        $script:RemoteAlias = $oldRemoteAlias
+        $script:RemoteProjectPath = $oldRemoteProjectPath
+        $script:PublicBaseUrl = $oldPublicBaseUrl
+        $script:ConfigPath = $oldConfigPath
+        $script:Ci = $oldCi
         $script:AllowUnsignedDevelopment = $oldAllowUnsignedDevelopment
         $script:DryRun = $oldDryRun
         $script:InitialBoundParameters = $oldInitialBoundParameters
+        $env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON = $oldTrustRootsJsonEnv
+        $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH = $oldTrustRootsPathEnv
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -651,6 +770,30 @@ function Assert-ReleaseSignatureWithPackagedBundle([string]$ReleaseDir, $Version
     Write-Step "Assinatura local validada contra o bundle publico empacotado."
 }
 
+function Assert-PackagedTrustRoots([string]$ReleaseDir) {
+    $zipPath = Join-Path $ReleaseDir "NightOwl.Agent.Windows.zip"
+    $roots = Read-ZipEntryJson -ZipPath $zipPath -EntryName "release-trust-roots.json"
+    if ([int]$roots.schema_version -ne 1) {
+        Fail "validation_failed" "release-trust-roots.json do ZIP deve usar schema_version=1."
+    }
+    $seen = @{}
+    $rootItems = @($roots.roots)
+    if ($rootItems.Count -eq 0) {
+        Fail "validation_failed" "release-trust-roots.json do ZIP nao pode ter roots vazio."
+    }
+    foreach ($root in $rootItems) {
+        $keyId = [string]$root.key_id
+        if ([string]::IsNullOrWhiteSpace($keyId)) { Fail "validation_failed" "release-trust-roots.json do ZIP contem key_id vazio." }
+        if ($seen.ContainsKey($keyId)) { Fail "validation_failed" "release-trust-roots.json do ZIP contem root duplicada: $keyId." }
+        if ([string]$root.algorithm -ne "RSA-PSS-SHA256") { Fail "validation_failed" "release-trust-roots.json do ZIP contem algoritmo invalido para $keyId." }
+        if (Test-PublicKeyXmlHasPrivateParameters ([string]$root.public_key_xml)) {
+            Fail "validation_failed" "release-trust-roots.json do ZIP contem parametros privados para $keyId."
+        }
+        $seen[$keyId] = $true
+    }
+    Write-Step "Trust roots publicas validadas dentro do ZIP."
+}
+
 function Get-ChecksumEntry($Checksums, [string]$Name) {
     return @($Checksums.files | Where-Object { $_.name -eq $Name }) | Select-Object -First 1
 }
@@ -689,6 +832,7 @@ function Assert-LocalRelease([string]$ReleaseDir) {
         Fail "checksum_failed" "checksums.json sem SHA256 correto do ZIP."
     }
     Assert-ReleaseSignatureWithPackagedBundle -ReleaseDir $ReleaseDir -VersionJson $versionJson
+    Assert-PackagedTrustRoots -ReleaseDir $ReleaseDir
     return [ordered]@{
         VersionJson = $versionJson
         ChecksumsJson = $checksumsJson
@@ -927,6 +1071,7 @@ try {
         Fail "validation_failed" "O comando import_agent_release atual importa sempre pausado e rollout 0. Use Rollout=0 e Paused=true."
     }
     Assert-SigningMaterial
+    Assert-TrustRootsMaterial
 
     Write-Step "Validando SSH sem senha para $RemoteAlias"
     Test-SshNoPassword

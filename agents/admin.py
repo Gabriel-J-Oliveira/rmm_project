@@ -9,7 +9,9 @@ from .models import (
     AgentRelease,
     AgentReleaseAudit,
     AgentReleaseGroup,
+    AgentReleaseRootKey,
     AgentReleaseSigningKey,
+    AgentReleaseTrustBundle,
     AuditEvent,
     EndpointAlert,
     InventorySnapshot,
@@ -168,6 +170,71 @@ class AgentReleaseAdmin(admin.ModelAdmin):
         fields = list(super().get_readonly_fields(request, obj))
         if obj and obj.status in AgentRelease.IMMUTABLE_STATUSES:
             fields.extend(sorted(AgentRelease.IMMUTABLE_FIELDS))
+        return tuple(dict.fromkeys(fields))
+
+
+@admin.register(AgentReleaseRootKey)
+class AgentReleaseRootKeyAdmin(admin.ModelAdmin):
+    list_display = ('root_key_id', 'algorithm', 'status', 'valid_from', 'valid_until', 'revoked_at')
+    list_filter = ('status', 'algorithm')
+    search_fields = ('root_key_id', 'public_key_xml')
+    readonly_fields = ('id', 'created_at', 'updated_at')
+
+
+@admin.register(AgentReleaseTrustBundle)
+class AgentReleaseTrustBundleAdmin(admin.ModelAdmin):
+    list_display = (
+        'bundle_version',
+        'status',
+        'root_key_id',
+        'bundle_sha256',
+        'size',
+        'generated_at',
+        'published_at',
+        'valid_until',
+    )
+    list_filter = ('status', 'root_key_id', 'schema_version')
+    search_fields = ('bundle_version', 'root_key_id', 'bundle_sha256', 'bundle_url')
+    readonly_fields = ('id', 'created_at', 'updated_at')
+    autocomplete_fields = ('created_by', 'replacement_bundle')
+    fieldsets = (
+        ('Bundle', {
+            'fields': ('id', 'bundle_version', 'schema_version', 'status', 'root_key_id'),
+        }),
+        ('Artefatos imutaveis', {
+            'fields': (
+                'bundle_url',
+                'signature_url',
+                'metadata_url',
+                'bundle_sha256',
+                'signature_sha256',
+                'size',
+            ),
+        }),
+        ('Validade', {
+            'fields': ('generated_at', 'published_at', 'valid_from', 'valid_until'),
+        }),
+        ('Chaves', {
+            'fields': ('active_key_ids', 'revoked_key_ids'),
+        }),
+        ('Ciclo de vida', {
+            'fields': (
+                'created_by',
+                'revoked_at',
+                'revocation_reason',
+                'superseded_at',
+                'superseded_reason',
+                'replacement_bundle',
+                'created_at',
+                'updated_at',
+            ),
+        }),
+    )
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj and obj.status in AgentReleaseTrustBundle.IMMUTABLE_STATUSES:
+            fields.extend(sorted(AgentReleaseTrustBundle.IMMUTABLE_FIELDS))
         return tuple(dict.fromkeys(fields))
 
 

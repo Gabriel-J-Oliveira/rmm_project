@@ -65,6 +65,12 @@ public sealed class JobExecutor
                 _policy.MarkFinal(config, job, restartResult);
                 return restartResult;
             }
+            if (job.Type == "update_trusted_release_keys")
+            {
+                JobExecutionResult trustResult = await UpdateTrustedReleaseKeysAsync(config, job, started, stopwatch, jobToken);
+                _policy.MarkFinal(config, job, trustResult, ExtractErrorCode(trustResult));
+                return trustResult;
+            }
 
             object result = job.Type switch
             {
@@ -244,6 +250,96 @@ public sealed class JobExecutor
                 type = "restart_agent",
                 restart_status = "helper_started",
                 message = "Restart helper started. Final result will be sent after service restart."
+            }
+        };
+    }
+
+    private async Task<JobExecutionResult> UpdateTrustedReleaseKeysAsync(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, CancellationToken ct)
+    {
+        string metadataUrl = GetPayloadString(job, "metadata_url", "");
+        string bundleUrl = GetPayloadString(job, "bundle_url", "");
+        string signatureUrl = GetPayloadString(job, "signature_url", "");
+        string expectedRootKeyId = GetPayloadString(job, "expected_root_key_id", "");
+        string expectedSha256 = GetPayloadString(job, "expected_sha256", "");
+        long expectedBundleVersion = GetPayloadLong(job, "expected_bundle_version", 0);
+
+        await _logger.LogAsync("trust.sync.start", "Trusted release keys sync started.", new
+        {
+            job_id = job.Id,
+            metadata_url = SanitizeUrl(metadataUrl),
+            bundle_url = SanitizeUrl(bundleUrl),
+            signature_url = SanitizeUrl(signatureUrl),
+            expected_root_key_id = expectedRootKeyId,
+            expected_bundle_version = expectedBundleVersion > 0 ? (long?)expectedBundleVersion : null
+        }, ct);
+
+        ReleaseTrustStore store = new(NightOwlPaths.Current);
+        IReadOnlyList<ReleaseTrustRootKey> roots = ReleaseTrustAnchors.Load(NightOwlPaths.Current);
+        if (roots.Count == 0)
+        {
+            stopwatch.Stop();
+            await _logger.LogAsync("trust.sync.failed", "No release trust roots are installed.", new
+            {
+                job_id = job.Id,
+                error_code = ReleaseTrustErrorCodes.TrustRootUnknown
+            }, ct, "error");
+            return BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, ReleaseTrustErrorCodes.TrustRootUnknown, "No release trust roots are installed.", "");
+        }
+
+        using HttpClient http = new() { Timeout = TimeSpan.FromSeconds(Math.Clamp(job.TimeoutSeconds <= 0 ? 180 : job.TimeoutSeconds, 30, 300)) };
+        ReleaseTrustBundleUpdater updater = new(http, store, roots);
+        ReleaseTrustSyncResult syncResult = await updater.SyncAsync(new ReleaseTrustSyncRequest
+        {
+            MetadataUrl = metadataUrl,
+            BundleUrl = bundleUrl,
+            SignatureUrl = signatureUrl,
+            ExpectedRootKeyId = expectedRootKeyId,
+            ExpectedBundleVersion = expectedBundleVersion > 0 ? expectedBundleVersion : null,
+            ExpectedSha256 = expectedSha256,
+            JobId = job.Id
+        }, ct);
+
+        stopwatch.Stop();
+        if (!syncResult.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
+        {
+            await _logger.LogAsync("trust.sync.failed", "Trusted release keys sync failed.", new
+            {
+                job_id = job.Id,
+                error_code = syncResult.ErrorCode,
+                error = syncResult.ErrorMessage
+            }, ct, "error");
+            return BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, syncResult.ErrorCode, syncResult.ErrorMessage, syncResult.ErrorMessage);
+        }
+
+        await _logger.LogAsync("trust.install.completed", "Trusted release keys bundle installed.", new
+        {
+            job_id = job.Id,
+            bundle_version = syncResult.InstalledBundleVersion,
+            bundle_sha256 = syncResult.InstalledBundleSha256,
+            root_key_id = syncResult.RootKeyId,
+            active_key_ids = syncResult.ActiveKeyIds,
+            revoked_key_ids = syncResult.RevokedKeyIds,
+            duration_seconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3)
+        }, ct);
+
+        return new JobExecutionResult
+        {
+            JobId = job.Id,
+            Status = "completed",
+            StartedAt = started,
+            FinishedAt = DateTimeOffset.UtcNow,
+            DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
+            ExitCode = 0,
+            Stdout = "trusted release keys updated",
+            Result = new
+            {
+                type = "update_trusted_release_keys",
+                update_status = "completed",
+                bundle_version = syncResult.InstalledBundleVersion,
+                bundle_sha256 = syncResult.InstalledBundleSha256,
+                root_key_id = syncResult.RootKeyId,
+                active_key_ids = syncResult.ActiveKeyIds,
+                revoked_key_ids = syncResult.RevokedKeyIds
             }
         };
     }

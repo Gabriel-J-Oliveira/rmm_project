@@ -1087,6 +1087,10 @@ internal static class Program
         string keyPath = Path.Combine(AppContext.BaseDirectory, "release-public-keys.json");
         if (!File.Exists(keyPath))
         {
+            keyPath = Paths.TrustBundlePath;
+        }
+        if (!File.Exists(keyPath))
+        {
             keyPath = Path.Combine(Paths.InstallDir, "release-public-keys.json");
         }
         if (!File.Exists(keyPath))

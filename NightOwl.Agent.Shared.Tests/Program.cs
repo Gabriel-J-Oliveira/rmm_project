@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using NightOwl.Agent.Shared;
 
 string root = Path.Combine(Path.GetTempPath(), "NightOwlPathsTests", Guid.NewGuid().ToString("N"));
@@ -219,6 +220,169 @@ try
     Require(!sanitizedJson.Value.Contains("fixture-token-value", StringComparison.Ordinal), "JSON token was not redacted.");
     Require(!sanitizedJson.Value.Contains("nested-secret-token", StringComparison.Ordinal), "Nested authorization token was not redacted.");
     Require(!NightOwlSanitizer.ContainsSecretLikeContent(sanitizedJson.Value), "Sanitized JSON still contains secret-like content.");
+
+    using RSA rootKey = RSA.Create(3072);
+    using RSA releaseKey = RSA.Create(3072);
+    string rootPublicXml = rootKey.ToXmlString(false);
+    string releasePublicXml = releaseKey.ToXmlString(false);
+    byte[] trustBundleBytes = JsonSerializer.SerializeToUtf8Bytes(new ReleaseTrustBundle
+    {
+        SchemaVersion = 1,
+        BundleVersion = 2,
+        GeneratedAt = DateTimeOffset.UtcNow,
+        ValidFrom = DateTimeOffset.UtcNow.AddMinutes(-1),
+        ValidUntil = DateTimeOffset.UtcNow.AddDays(7),
+        Keys = new()
+        {
+            new ReleaseTrustKey
+            {
+                KeyId = "nightowl-release-test-01",
+                Algorithm = "RSA-PSS-SHA256",
+                PublicKeyXml = releasePublicXml,
+                Status = "active"
+            }
+        }
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    byte[] trustSignature = rootKey.SignData(trustBundleBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    ReleaseTrustBundleMetadata trustMetadata = new()
+    {
+        SchemaVersion = 1,
+        BundleVersion = 2,
+        BundleSha256 = ReleaseTrustBundleValidator.Sha256Hex(trustBundleBytes),
+        SignatureSha256 = ReleaseTrustBundleValidator.Sha256Hex(trustSignature),
+        RootKeyId = "nightowl-root-test",
+        Size = trustBundleBytes.Length,
+        GeneratedAt = DateTimeOffset.UtcNow,
+        BundleUrl = "https://nightowl.example/trust/bundles/2/release-public-keys.json",
+        SignatureUrl = "https://nightowl.example/trust/bundles/2/release-public-keys.sig",
+        MetadataUrl = "https://nightowl.example/trust/bundles/2/release-public-keys.meta.json"
+    };
+    ReleaseTrustValidationResult trustOk = ReleaseTrustBundleValidator.Validate(
+        trustBundleBytes,
+        trustSignature,
+        trustMetadata,
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } },
+        new ReleaseTrustState { InstalledBundleVersion = 1, InstalledBundleSha256 = "" });
+    Require(trustOk.IsValid, $"Valid trust bundle failed validation: {trustOk.ErrorCode} {trustOk.ErrorMessage}");
+    ReleaseTrustValidationResult trustBase64Ok = ReleaseTrustBundleValidator.Validate(
+        trustBundleBytes,
+        System.Text.Encoding.ASCII.GetBytes(Convert.ToBase64String(trustSignature)),
+        new ReleaseTrustBundleMetadata
+        {
+            SchemaVersion = trustMetadata.SchemaVersion,
+            BundleVersion = trustMetadata.BundleVersion,
+            BundleSha256 = trustMetadata.BundleSha256,
+            SignatureSha256 = ReleaseTrustBundleValidator.Sha256Hex(System.Text.Encoding.ASCII.GetBytes(Convert.ToBase64String(trustSignature))),
+            RootKeyId = trustMetadata.RootKeyId,
+            Size = trustMetadata.Size
+        },
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
+    Require(trustBase64Ok.IsValid, $"Base64 trust signature failed validation: {trustBase64Ok.ErrorCode} {trustBase64Ok.ErrorMessage}");
+
+    byte[] tamperedSignature = trustSignature.ToArray();
+    tamperedSignature[0] ^= 1;
+    ReleaseTrustValidationResult badSignature = ReleaseTrustBundleValidator.Validate(
+        trustBundleBytes,
+        tamperedSignature,
+        trustMetadata,
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
+    Require(!badSignature.IsValid && badSignature.ErrorCode == ReleaseTrustErrorCodes.TrustMetadataInvalid,
+        "Signature byte tamper should fail metadata hash before signature validation.");
+
+    ReleaseTrustValidationResult unknownRoot = ReleaseTrustBundleValidator.Validate(
+        trustBundleBytes,
+        trustSignature,
+        trustMetadata,
+        Array.Empty<ReleaseTrustRootKey>());
+    Require(!unknownRoot.IsValid && unknownRoot.ErrorCode == ReleaseTrustErrorCodes.TrustRootUnknown, "Unknown trust root should be blocked.");
+
+    ReleaseTrustValidationResult downgrade = ReleaseTrustBundleValidator.Validate(
+        trustBundleBytes,
+        trustSignature,
+        trustMetadata,
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } },
+        new ReleaseTrustState { InstalledBundleVersion = 3, InstalledBundleSha256 = "" });
+    Require(!downgrade.IsValid && downgrade.ErrorCode == ReleaseTrustErrorCodes.TrustBundleDowngrade, "Trust bundle downgrade should be blocked.");
+
+    byte[] duplicateBundleBytes = JsonSerializer.SerializeToUtf8Bytes(new ReleaseTrustBundle
+    {
+        SchemaVersion = 1,
+        BundleVersion = 4,
+        GeneratedAt = DateTimeOffset.UtcNow,
+        ValidUntil = DateTimeOffset.UtcNow.AddDays(7),
+        Keys = new()
+        {
+            new ReleaseTrustKey { KeyId = "dup", PublicKeyXml = releasePublicXml, Status = "active" },
+            new ReleaseTrustKey { KeyId = "dup", PublicKeyXml = releasePublicXml, Status = "active" }
+        }
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    byte[] duplicateSig = rootKey.SignData(duplicateBundleBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    ReleaseTrustValidationResult duplicate = ReleaseTrustBundleValidator.Validate(
+        duplicateBundleBytes,
+        duplicateSig,
+        new ReleaseTrustBundleMetadata
+        {
+            SchemaVersion = 1,
+            BundleVersion = 4,
+            BundleSha256 = ReleaseTrustBundleValidator.Sha256Hex(duplicateBundleBytes),
+            SignatureSha256 = ReleaseTrustBundleValidator.Sha256Hex(duplicateSig),
+            RootKeyId = "nightowl-root-test",
+            Size = duplicateBundleBytes.Length
+        },
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
+    Require(!duplicate.IsValid && duplicate.ErrorCode == ReleaseTrustErrorCodes.TrustKeyDuplicate, "Duplicate release key should be blocked.");
+
+    byte[] privateParamBundleBytes = JsonSerializer.SerializeToUtf8Bytes(new ReleaseTrustBundle
+    {
+        SchemaVersion = 1,
+        BundleVersion = 5,
+        GeneratedAt = DateTimeOffset.UtcNow,
+        ValidUntil = DateTimeOffset.UtcNow.AddDays(7),
+        Keys = new() { new ReleaseTrustKey { KeyId = "private", PublicKeyXml = releaseKey.ToXmlString(true), Status = "active" } }
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    byte[] privateParamSig = rootKey.SignData(privateParamBundleBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    ReleaseTrustValidationResult privateParam = ReleaseTrustBundleValidator.Validate(
+        privateParamBundleBytes,
+        privateParamSig,
+        new ReleaseTrustBundleMetadata
+        {
+            SchemaVersion = 1,
+            BundleVersion = 5,
+            BundleSha256 = ReleaseTrustBundleValidator.Sha256Hex(privateParamBundleBytes),
+            SignatureSha256 = ReleaseTrustBundleValidator.Sha256Hex(privateParamSig),
+            RootKeyId = "nightowl-root-test",
+            Size = privateParamBundleBytes.Length
+        },
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
+    Require(!privateParam.IsValid && privateParam.ErrorCode == ReleaseTrustErrorCodes.TrustPrivateParameters, "Private RSA parameters should be blocked.");
+
+    File.WriteAllText(paths.LegacyTrustBundlePath, JsonSerializer.Serialize(new { keys = new[] { new { key_id = "legacy", public_key_xml = releasePublicXml, algorithm = "RSA-PSS-SHA256", status = "active" } } }));
+    string trustRoot2 = Path.Combine(root, "trust-migration");
+    Directory.CreateDirectory(trustRoot2);
+    Environment.SetEnvironmentVariable("NIGHTOWL_HOME", trustRoot2);
+    NightOwlPaths trustPaths = NightOwlPaths.FromEnvironment();
+    Directory.CreateDirectory(trustPaths.InstallDir);
+    File.Copy(paths.LegacyTrustBundlePath, trustPaths.LegacyTrustBundlePath);
+    File.WriteAllText(Path.Combine(trustPaths.InstallDir, "release-trust-roots.json"), JsonSerializer.Serialize(new
+    {
+        schema_version = 1,
+        roots = new[]
+        {
+            new
+            {
+                key_id = "nightowl-root-test",
+                algorithm = "RSA-PSS-SHA256",
+                public_key_xml = rootPublicXml,
+                status = "active"
+            }
+        }
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    trustPaths.Bootstrap("test", applyAcl: false);
+    Require(File.Exists(trustPaths.TrustBundlePath), "Legacy trust bundle was not migrated to Trust directory.");
+    Require(Directory.Exists(trustPaths.TrustBackupsDir), "Trust backups directory was not created.");
+    IReadOnlyList<ReleaseTrustRootKey> loadedRoots = ReleaseTrustAnchors.Load(trustPaths);
+    Require(loadedRoots.Count == 1, "Agent did not load release-trust-roots.json.");
+    Require(loadedRoots[0].KeyId == "nightowl-root-test", "Loaded trust root key_id mismatch.");
 
     Console.WriteLine("NightOwlPaths migration tests passed.");
 }

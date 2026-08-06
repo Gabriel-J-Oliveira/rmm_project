@@ -27,6 +27,7 @@ from agents.models import (
     AgentRelease,
     AgentReleaseAudit,
     AgentReleaseGroup,
+    AgentReleaseTrustBundle,
     AlertEvent,
     AuditEvent,
     EndpointAlert,
@@ -3218,6 +3219,7 @@ def endpoint_job_create(request, pk):
         'collect_software': AgentJob.TYPE_COLLECT_SOFTWARE,
         'windows_update_scan': AgentJob.TYPE_WINDOWS_UPDATE_SCAN,
         'update_agent': AgentJob.TYPE_UPDATE_AGENT,
+        'update_trusted_release_keys': AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS,
         'restart_agent': AgentJob.TYPE_RESTART_AGENT,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
@@ -3364,6 +3366,93 @@ def endpoint_job_create(request, pk):
             'source': 'manual_panel',
             'reason': 'manual_endpoint_action',
         })
+    elif selected_type == AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS:
+        active_trust_job = endpoint.jobs.filter(
+            job_type=AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS,
+            status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+        ).order_by('-created_at').first()
+        if active_trust_job:
+            return JsonResponse(
+                {
+                    'error': 'trust_bundle_job_already_pending',
+                    'detail': 'Ja existe um job de sincronizacao de chaves confiaveis pendente ou em execucao para este endpoint.',
+                    'job': serialize_agent_job(active_trust_job),
+                },
+                status=409,
+            )
+        trust_bundle_id = (request.POST.get('trust_bundle_id') or request.POST.get('bundle_id') or '').strip()
+        trust_bundle = None
+        if trust_bundle_id:
+            trust_bundle = AgentReleaseTrustBundle.objects.filter(pk=trust_bundle_id).first()
+            if trust_bundle is None:
+                return JsonResponse(
+                    {
+                        'error': 'trust_bundle_not_found',
+                        'detail': 'O bundle de confianca selecionado nao foi encontrado.',
+                        'reason_code': 'trust_bundle_not_found',
+                    },
+                    status=409,
+                )
+            if trust_bundle.status != AgentReleaseTrustBundle.STATUS_PUBLISHED:
+                return JsonResponse(
+                    {
+                        'error': 'trust_bundle_not_published',
+                        'detail': 'Somente bundles de confianca publicados podem ser enviados ao endpoint.',
+                        'reason_code': 'trust_bundle_not_published',
+                    },
+                    status=409,
+                )
+            payload.update({
+                'metadata_url': trust_bundle.metadata_url,
+                'bundle_url': trust_bundle.bundle_url,
+                'signature_url': trust_bundle.signature_url,
+                'expected_root_key_id': trust_bundle.root_key_id,
+                'expected_bundle_version': trust_bundle.bundle_version,
+                'expected_sha256': trust_bundle.bundle_sha256,
+                'source': 'manual_panel',
+                'timeout_seconds': 180,
+            })
+        else:
+            try:
+                expected_bundle_version = int(request.POST.get('expected_bundle_version') or 0)
+            except (TypeError, ValueError):
+                expected_bundle_version = 0
+            payload.update({
+                'metadata_url': (request.POST.get('metadata_url') or '').strip(),
+                'bundle_url': (request.POST.get('bundle_url') or '').strip(),
+                'signature_url': (request.POST.get('signature_url') or '').strip(),
+                'expected_root_key_id': (request.POST.get('expected_root_key_id') or '').strip(),
+                'expected_bundle_version': expected_bundle_version,
+                'expected_sha256': (request.POST.get('expected_sha256') or '').strip(),
+                'source': 'manual_panel',
+                'timeout_seconds': 180,
+            })
+        missing = [key for key in ('metadata_url', 'bundle_url', 'signature_url', 'expected_root_key_id') if not payload.get(key)]
+        if missing:
+            return JsonResponse(
+                {
+                    'error': 'invalid_trust_bundle_payload',
+                    'detail': f'Campos obrigatorios ausentes: {", ".join(missing)}.',
+                    'reason_code': 'invalid_trust_bundle_payload',
+                },
+                status=400,
+            )
+        create_audit_event(
+            event_type='trust.sync.job_requested',
+            title='Sincronizacao de trust bundle solicitada',
+            description=f'Sincronizacao de chaves confiaveis solicitada para {endpoint.hostname}.',
+            severity=AuditEvent.SEVERITY_INFO,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=request.user.get_username(),
+            endpoint=endpoint,
+            metadata={
+                'trust_bundle_id': trust_bundle_id,
+                'bundle_version': payload.get('expected_bundle_version'),
+                'root_key_id': payload.get('expected_root_key_id'),
+                'bundle_sha256': payload.get('expected_sha256'),
+            },
+            request=request,
+        )
 
     job = AgentJob.objects.create(
         endpoint=endpoint,

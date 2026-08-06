@@ -162,4 +162,24 @@ powershell.exe -ExecutionPolicy Bypass `
 
 ## Future key rotation
 
-Key generation and trust bundle rotation remain separate from normal release publication. Etapa 0B will automate trusted bundle synchronization; this Etapa 0A only makes the runner able to use a pre-provisioned key and public bundle.
+Key generation and trust bundle rotation remain separate from normal release publication. Etapa 0B adds trust bundle build, validation, publication and endpoint synchronization; the runner uses pre-provisioned private keys and public bundles from protected paths.
+
+## Trust bundle publishing variables
+
+Etapa 0B adds automated trust bundle publishing. The runner may also define:
+
+```text
+NIGHTOWL_TRUST_ROOT_SIGNING_KEY_PATH
+NIGHTOWL_TRUST_ROOT_KEY_ID
+NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH
+NIGHTOWL_RELEASE_TRUST_ROOTS_JSON
+```
+
+Validate without publishing:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\Publish-NightOwlReleaseTrustBundle.ps1 -SelfTest
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\Publish-NightOwlReleaseTrustBundle.ps1 -BundleVersion 2 -DryRun
+```
+
+The trust root private key must remain outside the repository and workspace, protected with ACLs for the runner service account and SYSTEM only. `NIGHTOWL_RELEASE_TRUST_ROOTS_JSON` points to the public `release-trust-roots.json` copied into future agent ZIPs; it must contain only public root material.

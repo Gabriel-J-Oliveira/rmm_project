@@ -75,6 +75,7 @@ if ($WriteTemplateConfig) {
         signing_key_path = "C:\ProgramData\NightOwl\ReleaseSigning\nightowl-release-private.xml"
         signing_key_id = "nightowl-release-YYYY-MM"
         trusted_public_keys_path = "C:\ProgramData\NightOwl\ReleaseSigning\release-public-keys.json"
+        trust_roots_path = "C:\ProgramData\NightOwl\ReleaseSigning\release-trust-roots.json"
         remote_alias = "nightowl-release"
         remote_project_path = "/opt/nightowl"
         public_base_url = "https://nightowl.controlsul.com.br/downloads/nightowl-agent"

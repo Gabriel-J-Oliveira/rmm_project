@@ -133,3 +133,24 @@ This writes `TEST_BOOTSTRAP_UNTRUSTED` to `C:\ProgramData\NightOwl\Logs\agent-ke
 ## Stable Rule
 
 Stable releases must be signed, must reference a known active key, and cannot use `legacy_unsigned`. Signature bypass is allowed only for explicit manual development bootstrap of pre-RC6 agents.
+
+## Etapa 0B Trust Bundle
+
+The operational replacement for manual endpoint key copies is a signed trust bundle:
+
+- release keys continue signing `release-manifest.json`;
+- a separate root key signs `release-public-keys.json`;
+- the agent accepts a new release key only after validating the trust bundle signature with an already trusted root;
+- bundles are installed under `C:\ProgramData\NightOwl\Trust`;
+- the legacy `C:\ProgramData\NightOwl\AgentDotNet\release-public-keys.json` is migrated once and preserved for compatibility.
+
+Build and validate without publishing:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\Build-NightOwlReleaseTrustBundle.ps1 -SelfTest
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\Test-NightOwlReleaseTrustBundle.ps1 -SelfTest
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\Publish-NightOwlReleaseTrustBundle.ps1 -SelfTest
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\Publish-NightOwlReleaseTrustBundle.ps1 -BundleVersion 2 -DryRun
+```
+
+The root private key must remain outside the repository and outside the endpoint. The file `release-trust-roots.json` contains only public root keys and must be distributed with a future agent release before pilot/stable trust-bundle synchronization is enabled.

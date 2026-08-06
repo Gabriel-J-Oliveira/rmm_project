@@ -7,6 +7,7 @@ param(
     [string]$SigningKeyPath = "",
     [string]$SigningKeyId = "",
     [string]$TrustedPublicKeysPath = "",
+    [string]$TrustRootsPath = "",
     [string]$RemoteAlias = "",
     [string]$RemoteProjectPath = "",
     [string]$PublicBaseUrl = "",
@@ -122,6 +123,7 @@ function Invoke-PublisherValidateOnly([hashtable]$Resolved) {
         @{ flag = "-SigningKeyPath"; value = $Resolved.SigningKeyPath },
         @{ flag = "-SigningKeyId"; value = $Resolved.SigningKeyId },
         @{ flag = "-TrustedPublicKeysPath"; value = $Resolved.TrustedPublicKeysPath },
+        @{ flag = "-TrustRootsPath"; value = $Resolved.TrustRootsPath },
         @{ flag = "-RemoteAlias"; value = $Resolved.RemoteAlias },
         @{ flag = "-RemoteProjectPath"; value = $Resolved.RemoteProjectPath },
         @{ flag = "-PublicBaseUrl"; value = $Resolved.PublicBaseUrl },
@@ -171,19 +173,21 @@ try {
         SigningKeyPath = Resolve-RunnerValue $SigningKeyPath @($env:NIGHTOWL_RELEASE_SIGNING_KEY_PATH, $env:NIGHTOWL_RELEASE_SIGNING_KEY) (Get-ConfigProperty $config "signing_key_path")
         SigningKeyId = Resolve-RunnerValue $SigningKeyId @($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID) (Get-ConfigProperty $config "signing_key_id")
         TrustedPublicKeysPath = Resolve-RunnerValue $TrustedPublicKeysPath @($env:NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH, $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON) (Get-ConfigProperty $config "trusted_public_keys_path")
+        TrustRootsPath = Resolve-RunnerValue $TrustRootsPath @($env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON, $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH) (Get-ConfigProperty $config "trust_roots_path")
         RemoteAlias = Resolve-RunnerValue $RemoteAlias @($env:NIGHTOWL_RELEASE_SSH_TARGET, $env:NIGHTOWL_RELEASE_REMOTE_ALIAS) (Get-ConfigProperty $config "remote_alias") "nightowl-release"
         RemoteProjectPath = Resolve-RunnerValue $RemoteProjectPath @($env:NIGHTOWL_RELEASE_DJANGO_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_ROOT, $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH) (Get-ConfigProperty $config "remote_project_path") "/opt/nightowl"
         PublicBaseUrl = Resolve-RunnerValue $PublicBaseUrl @($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL) (Get-ConfigProperty $config "public_base_url") "https://nightowl.controlsul.com.br/downloads/nightowl-agent"
         ConfigPath = $effectiveConfigPath
     }
 
-    foreach ($required in @("SigningKeyPath", "SigningKeyId", "TrustedPublicKeysPath", "RemoteAlias", "RemoteProjectPath", "PublicBaseUrl")) {
+    foreach ($required in @("SigningKeyPath", "SigningKeyId", "TrustedPublicKeysPath", "TrustRootsPath", "RemoteAlias", "RemoteProjectPath", "PublicBaseUrl")) {
         if ([string]::IsNullOrWhiteSpace([string]$resolved[$required])) {
             Fail "RUNNER_CONFIG_MISSING" "Configuracao obrigatoria ausente: $required"
         }
     }
     if (-not (Test-Path -LiteralPath $resolved.SigningKeyPath)) { Fail "RUNNER_SIGNING_KEY_MISSING" "Chave privada nao encontrada no caminho configurado." }
     if (-not (Test-Path -LiteralPath $resolved.TrustedPublicKeysPath)) { Fail "RUNNER_PUBLIC_KEYS_MISSING" "Bundle publico nao encontrado no caminho configurado." }
+    if (-not (Test-Path -LiteralPath $resolved.TrustRootsPath)) { Fail "RUNNER_TRUST_ROOTS_MISSING" "release-trust-roots.json nao encontrado no caminho configurado." }
 
     $sdkList = Invoke-NativeCaptured "dotnet" @("--list-sdks") "RUNNER_DOTNET_FAILED"
     if (-not ($sdkList | Where-Object { $_ -match '^8\.' })) {

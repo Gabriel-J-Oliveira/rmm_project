@@ -206,7 +206,8 @@ public sealed class JobExecutionCoordinator
             return JobCategories.Light;
         }
         if (jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
-            || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase))
+            || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase))
         {
             return JobCategories.Exclusive;
         }
@@ -216,7 +217,8 @@ public sealed class JobExecutionCoordinator
     public static bool IsCritical(string jobType)
     {
         return jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
-            || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase);
+            || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record ActiveJob(string JobId, string JobType, string Category, DateTimeOffset StartedAt);

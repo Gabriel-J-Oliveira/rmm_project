@@ -31,6 +31,7 @@ powershell.exe -ExecutionPolicy Bypass `
   -SigningKeyPath "$env:USERPROFILE\.nightowl\release-signing\nightowl-release-2026-02-private.xml" `
   -SigningKeyId "nightowl-release-2026-02" `
   -TrustedPublicKeysPath "$env:USERPROFILE\.nightowl\release-public-keys.json" `
+  -TrustRootsPath "$env:USERPROFILE\.nightowl\release-trust-roots.json" `
   -SaveConfig `
   -DryRun
 ```
@@ -49,6 +50,7 @@ For CI and self-hosted runners, prefer environment variables instead of a user p
 NIGHTOWL_RELEASE_SIGNING_KEY_PATH
 NIGHTOWL_RELEASE_SIGNING_KEY_ID
 NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH
+NIGHTOWL_RELEASE_TRUST_ROOTS_JSON
 NIGHTOWL_RELEASE_SSH_TARGET
 NIGHTOWL_RELEASE_REMOTE_ROOT
 NIGHTOWL_RELEASE_PUBLIC_BASE_URL

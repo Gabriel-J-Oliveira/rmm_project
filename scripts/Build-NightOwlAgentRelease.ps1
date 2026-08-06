@@ -19,6 +19,7 @@ param(
     [string]$SigningKeyPath = $env:NIGHTOWL_RELEASE_SIGNING_KEY,
     [string]$SigningKeyId = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID,
     [string]$TrustedPublicKeysPath = $env:NIGHTOWL_RELEASE_TRUSTED_KEYS_JSON,
+    [string]$TrustRootsPath = $env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON,
     [switch]$AllowUnsignedDevelopment,
     [switch]$SkipTests,
 
@@ -42,6 +43,9 @@ $updaterTestProject = Join-Path $repoRoot "NightOwl.Agent.Updater.Tests\NightOwl
 $installScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Install-NightOwlAgentDotNet.ps1"
 $uninstallScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Uninstall-NightOwlAgentDotNet.ps1"
 $iconPath = Join-Path $repoRoot "assets\icons\NightOwl.ico"
+if ([string]::IsNullOrWhiteSpace($TrustRootsPath)) {
+    $TrustRootsPath = $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH
+}
 
 function Write-Step([string]$Message) {
     Write-Host ("[nightowl-release] {0}" -f $Message)
@@ -328,6 +332,57 @@ function Write-TrustedReleasePublicKeys([string]$Path, [string]$PrivateKeyPath, 
     Write-Utf8NoBomJson -Path $Path -Value $keys -Depth 8
 }
 
+function Assert-ReleaseTrustRootsJson([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        throw "RELEASE_TRUST_ROOTS_MISSING: release-trust-roots.json nao encontrado. Use -TrustRootsPath ou NIGHTOWL_RELEASE_TRUST_ROOTS_JSON."
+    }
+    if (Test-FileHasUtf8Bom $Path) {
+        throw "RELEASE_TRUST_ROOTS_INVALID: release-trust-roots.json contem UTF-8 BOM."
+    }
+    try {
+        $rootsJson = Get-Content -Raw -Path $Path | ConvertFrom-Json
+    }
+    catch {
+        throw "RELEASE_TRUST_ROOTS_INVALID: JSON invalido. Detalhe: $($_.Exception.Message)"
+    }
+    if ([int]$rootsJson.schema_version -ne 1) {
+        throw "RELEASE_TRUST_ROOTS_INVALID: schema_version deve ser 1."
+    }
+    $roots = @($rootsJson.roots)
+    if ($roots.Count -eq 0) {
+        throw "RELEASE_TRUST_ROOTS_INVALID: roots vazio."
+    }
+    $seen = @{}
+    foreach ($root in $roots) {
+        $keyId = [string]$root.key_id
+        $algorithm = [string]$root.algorithm
+        $publicXml = [string]$root.public_key_xml
+        if ([string]::IsNullOrWhiteSpace($keyId)) {
+            throw "RELEASE_TRUST_ROOTS_INVALID: key_id vazio."
+        }
+        if ($seen.ContainsKey($keyId)) {
+            throw "RELEASE_TRUST_ROOTS_INVALID: key_id duplicado: $keyId."
+        }
+        if ($algorithm -ne "RSA-PSS-SHA256") {
+            throw "RELEASE_TRUST_ROOTS_INVALID: algoritmo invalido para $keyId."
+        }
+        if ([string]::IsNullOrWhiteSpace($publicXml)) {
+            throw "RELEASE_TRUST_ROOTS_INVALID: public_key_xml vazio para $keyId."
+        }
+        foreach ($privateElement in @("P", "Q", "DP", "DQ", "InverseQ", "D")) {
+            if ($publicXml -match ("<{0}>" -f [regex]::Escape($privateElement))) {
+                throw "RELEASE_TRUST_ROOTS_INVALID: root $keyId contem parametro privado $privateElement."
+            }
+        }
+        $seen[$keyId] = $true
+    }
+}
+
+function Copy-ReleaseTrustRoots([string]$SourcePath, [string]$PackageDir) {
+    Assert-ReleaseTrustRootsJson $SourcePath
+    Copy-Item -Path $SourcePath -Destination (Join-Path $PackageDir "release-trust-roots.json") -Force
+}
+
 function Test-FileHasUtf8Bom([string]$Path) {
     if (-not (Test-Path $Path)) { throw "Arquivo nao encontrado para validacao BOM: $Path" }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
@@ -575,7 +630,8 @@ function Validate-Release([string]$Path) {
             "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
-            "agent.version.json"
+            "agent.version.json",
+            "release-trust-roots.json"
         )) {
             if ($entryNames -notcontains $requiredEntry) {
                 throw "ZIP sem arquivo obrigatorio: $requiredEntry"
@@ -786,6 +842,7 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($SigningKeyPath)) {
         Write-TrustedReleasePublicKeys -Path (Join-Path $packageDir "release-public-keys.json") -PrivateKeyPath $SigningKeyPath -KeyId $SigningKeyId -TrustedPublicKeysPath $TrustedPublicKeysPath
     }
+    Copy-ReleaseTrustRoots -SourcePath $TrustRootsPath -PackageDir $packageDir
 
     $zipPath = Join-Path $ReleaseDir "NightOwl.Agent.Windows.zip"
     Compress-ReleaseZip -PackageDir $packageDir -ZipPath $zipPath
@@ -872,7 +929,8 @@ try {
             "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
-            "agent.version.json"
+            "agent.version.json",
+            "release-trust-roots.json"
         )
         forbidden_patterns = @("agent.config.json", "agent.identity.json", "agent.state.json", "agent-dotnet.state.json", "update-state.json", "*.preserved-*", "*.log", "*.tmp", "*.pdb", "*.ps1", "bin/", "obj/", "publish/", "downloads/", "artifacts/", "releases/")
     }

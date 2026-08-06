@@ -21,6 +21,14 @@ public sealed class NightOwlPaths
     public string LegacyStatePath { get; }
     public string UpdateStatePath { get; }
     public string PendingResultsDir { get; }
+    public string TrustDir { get; }
+    public string TrustBundlePath { get; }
+    public string TrustSignaturePath { get; }
+    public string TrustMetadataPath { get; }
+    public string TrustStatePath { get; }
+    public string TrustBackupsDir { get; }
+    public string TrustDownloadsDir { get; }
+    public string LegacyTrustBundlePath { get; }
     public string LogsDir { get; }
     public string AgentLogPath { get; }
     public string UpdaterLogPath { get; }
@@ -55,6 +63,14 @@ public sealed class NightOwlPaths
         LegacyStatePath = Path.Combine(InstallDir, "agent-dotnet.state.json");
         UpdateStatePath = Path.Combine(StateDir, "update-state.json");
         PendingResultsDir = Path.Combine(StateDir, "pending-results");
+        TrustDir = Path.Combine(Root, "Trust");
+        TrustBundlePath = Path.Combine(TrustDir, "release-public-keys.json");
+        TrustSignaturePath = Path.Combine(TrustDir, "release-public-keys.sig");
+        TrustMetadataPath = Path.Combine(TrustDir, "release-public-keys.meta.json");
+        TrustStatePath = Path.Combine(TrustDir, "state.json");
+        TrustBackupsDir = Path.Combine(TrustDir, "Backups");
+        TrustDownloadsDir = Path.Combine(TrustDir, "Downloads");
+        LegacyTrustBundlePath = Path.Combine(InstallDir, "release-public-keys.json");
         LogsDir = Path.Combine(Root, "Logs");
         AgentLogPath = Path.Combine(LogsDir, "agent-dotnet.jsonl");
         UpdaterLogPath = Path.Combine(LogsDir, "agent-updater.jsonl");
@@ -96,6 +112,9 @@ public sealed class NightOwlPaths
         IdentityDir,
         StateDir,
         PendingResultsDir,
+        TrustDir,
+        TrustBackupsDir,
+        TrustDownloadsDir,
         LogsDir,
         UpdatesDir,
         UpdatesDownloadsDir,
@@ -123,6 +142,7 @@ public sealed class NightOwlPaths
         MigrateConfig(component);
         MigrateState(component);
         MigratePendingResults(component);
+        MigrateTrustBundle(component);
         EnsureIdentity(component);
         WriteLog(component, "path.migration.completed", "NightOwl path bootstrap completed.", new
         {
@@ -130,7 +150,9 @@ public sealed class NightOwlPaths
             install_dir = InstallDir,
             config_path = ConfigPath,
             state_path = StatePath,
-            pending_results_dir = PendingResultsDir
+            pending_results_dir = PendingResultsDir,
+            trust_dir = TrustDir,
+            trust_bundle_path = TrustBundlePath
         });
     }
 
@@ -306,6 +328,51 @@ public sealed class NightOwlPaths
         }
     }
 
+    private void MigrateTrustBundle(string component)
+    {
+        try
+        {
+            if (!File.Exists(LegacyTrustBundlePath))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(TrustDir);
+            Directory.CreateDirectory(TrustBackupsDir);
+            string legacyHash = ComputeSha256(LegacyTrustBundlePath);
+            if (!File.Exists(TrustBundlePath))
+            {
+                File.Copy(LegacyTrustBundlePath, TrustBundlePath, overwrite: false);
+                string backup = Path.Combine(TrustBackupsDir, $"legacy-release-public-keys-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
+                File.Copy(LegacyTrustBundlePath, backup, overwrite: false);
+                WriteLog(component, "trust.legacy.migrated", "Legacy release public keys copied to Trust directory.", new
+                {
+                    source = LegacyTrustBundlePath,
+                    destination = TrustBundlePath,
+                    backup_path = backup,
+                    sha256 = legacyHash
+                });
+                return;
+            }
+
+            string currentHash = ComputeSha256(TrustBundlePath);
+            if (!legacyHash.Equals(currentHash, StringComparison.OrdinalIgnoreCase))
+            {
+                WriteLog(component, "trust.legacy.preserved", "Legacy release public keys preserved because Trust bundle already exists with different content.", new
+                {
+                    legacy_path = LegacyTrustBundlePath,
+                    trust_bundle_path = TrustBundlePath,
+                    legacy_sha256 = legacyHash,
+                    trust_sha256 = currentHash
+                }, "warning");
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteLog(component, "trust.legacy.migration_failed", "Legacy release public key migration failed.", new { error = ex.Message }, "error");
+        }
+    }
+
     private void EnsureIdentity(string component)
     {
         try
@@ -345,21 +412,21 @@ public sealed class NightOwlPaths
 
     private void ProtectPersistentDirectories(string component)
     {
-        foreach (string directory in new[] { ConfigDir, IdentityDir, StateDir })
+        foreach (string directory in new[] { ConfigDir, IdentityDir, StateDir, TrustDir })
         {
             TryRunIcacls(directory, "/inheritance:r", component);
-            TryRunIcacls(directory, "/grant:r", component, "SYSTEM:(OI)(CI)(F)", "Administrators:(OI)(CI)(F)", "Users:(OI)(CI)(RX)");
+            TryRunIcacls(directory, "/grant:r", component, "*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(RX)");
         }
 
-        foreach (string directory in new[] { UpdatesDir, DiagnosticsDir })
+        foreach (string directory in new[] { UpdatesDir, DiagnosticsDir, TrustBackupsDir, TrustDownloadsDir })
         {
             TryRunIcacls(directory, "/inheritance:r", component);
-            TryRunIcacls(directory, "/grant:r", component, "SYSTEM:(OI)(CI)(F)", "Administrators:(OI)(CI)(F)");
+            TryRunIcacls(directory, "/grant:r", component, "*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)");
         }
 
         foreach (string directory in new[] { LogsDir })
         {
-            TryRunIcacls(directory, "/grant:r", component, "SYSTEM:(OI)(CI)(M)", "Administrators:(OI)(CI)(F)", "Users:(OI)(CI)(RX)");
+            TryRunIcacls(directory, "/grant:r", component, "*S-1-5-18:(OI)(CI)(M)", "*S-1-5-32-544:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(RX)");
         }
     }
 
@@ -464,6 +531,12 @@ public sealed class NightOwlPaths
     }
 
     private static string FullPath(string path) => Path.GetFullPath(Environment.ExpandEnvironmentVariables(path));
+
+    private static string ComputeSha256(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+    }
 
     private static string Quote(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
 

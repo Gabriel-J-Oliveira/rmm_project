@@ -20,7 +20,8 @@ public sealed class JobExecutionPolicy
         "collect_logs",
         "windows_update_scan",
         "restart_agent",
-        "update_agent"
+        "update_agent",
+        "update_trusted_release_keys"
     };
 
     private readonly JobStore _store;
@@ -119,6 +120,7 @@ public sealed class JobExecutionPolicy
             job.Type.Equals("force_inventory", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("collect_software", StringComparison.OrdinalIgnoreCase) ? 300 :
             job.Type.Equals("collect_logs", StringComparison.OrdinalIgnoreCase) ? 180 :
             job.Type.Equals("restart_agent", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("update_agent", StringComparison.OrdinalIgnoreCase) ? 60 :
+            job.Type.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase) ? 180 :
             120;
         return Math.Clamp(requested, min, max);
     }
@@ -132,6 +134,7 @@ public sealed class JobExecutionPolicy
         "windows_update_scan" => TimeSpan.FromSeconds(900),
         "restart_agent" => TimeSpan.FromSeconds(60),
         "update_agent" => TimeSpan.FromSeconds(60),
+        "update_trusted_release_keys" => TimeSpan.FromSeconds(180),
         _ => TimeSpan.FromSeconds(120)
     };
 
@@ -164,6 +167,7 @@ public sealed class JobExecutionPolicy
                 }
                 break;
             case "update_agent":
+            {
                 EnsureAllowedFields(
                     p,
                     "target_version",
@@ -217,6 +221,37 @@ public sealed class JobExecutionPolicy
                     throw new InvalidOperationException("Invalid update parameters.");
                 }
                 break;
+            }
+            case "update_trusted_release_keys":
+            {
+                EnsureAllowedFields(
+                    p,
+                    "metadata_url",
+                    "bundle_url",
+                    "signature_url",
+                    "expected_root_key_id",
+                    "expected_bundle_version",
+                    "expected_sha256",
+                    "source",
+                    "timeout_seconds");
+                string metadataUrl = GetString(p, "metadata_url", "");
+                string bundleUrl = GetString(p, "bundle_url", "");
+                string signatureUrl = GetString(p, "signature_url", "");
+                string rootKeyId = GetString(p, "expected_root_key_id", "");
+                string expectedSha = GetString(p, "expected_sha256", "");
+                long expectedBundleVersion = GetLong(p, "expected_bundle_version", 0);
+                if (!IsValidHttpsUrl(metadataUrl)
+                    || !IsValidHttpsUrl(bundleUrl)
+                    || !IsValidHttpsUrl(signatureUrl)
+                    || string.IsNullOrWhiteSpace(rootKeyId)
+                    || rootKeyId.Length > 120
+                    || expectedBundleVersion < 0
+                    || (!string.IsNullOrWhiteSpace(expectedSha) && !Regex.IsMatch(expectedSha, "^[0-9a-fA-F]{64}$")))
+                {
+                    throw new InvalidOperationException("Invalid trust bundle update parameters.");
+                }
+                break;
+            }
             case "restart_agent":
                 EnsureAllowedFields(p, "reason");
                 if (GetString(p, "reason", "").Length > 256)
