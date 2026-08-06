@@ -24,6 +24,54 @@ if ([string]::IsNullOrWhiteSpace($PublicBaseUrl)) { $PublicBaseUrl = "https://ni
 function Write-Step([string]$Message) { Write-Host "[nightowl-trust-publish] $Message" }
 function Fail([string]$Code, [string]$Message) { throw "$Code`: $Message" }
 
+function ConvertTo-WindowsCommandLineArgument([string]$Value) {
+    if ($null -eq $Value) { $Value = "" }
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') {
+        return $Value
+    }
+    $result = New-Object System.Text.StringBuilder
+    [void]$result.Append('"')
+    $backslashes = 0
+    foreach ($char in $Value.ToCharArray()) {
+        if ($char -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($char -eq '"') {
+            [void]$result.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$result.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$result.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$result.Append($char)
+    }
+    if ($backslashes -gt 0) {
+        [void]$result.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$result.Append('"')
+    return $result.ToString()
+}
+
+function ConvertTo-WindowsCommandLine([string[]]$Arguments) {
+    return (@($Arguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument ([string]$_) }) -join " ")
+}
+
+function Set-ProcessStartInfoArguments([System.Diagnostics.ProcessStartInfo]$ProcessStartInfo, [string[]]$Arguments, [switch]$ForceArgumentsFallback) {
+    $hasArgumentList = $ProcessStartInfo.PSObject.Properties.Match("ArgumentList").Count -gt 0
+    if ($hasArgumentList -and -not $ForceArgumentsFallback) {
+        foreach ($arg in $Arguments) {
+            [void]$ProcessStartInfo.ArgumentList.Add($arg)
+        }
+        return "ArgumentList"
+    }
+    $ProcessStartInfo.Arguments = ConvertTo-WindowsCommandLine $Arguments
+    return "Arguments"
+}
+
 function Invoke-SelfTest {
     $build = Join-Path $PSScriptRoot "Build-NightOwlReleaseTrustBundle.ps1"
     $test = Join-Path $PSScriptRoot "Test-NightOwlReleaseTrustBundle.ps1"
@@ -31,23 +79,77 @@ function Invoke-SelfTest {
     if ($LASTEXITCODE -ne 0) { Fail "TRUST_SELFTEST_FAILED" "Build self-test falhou." }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $test -SelfTest
     if ($LASTEXITCODE -ne 0) { Fail "TRUST_SELFTEST_FAILED" "Test self-test falhou." }
+    $quoted = ConvertTo-WindowsCommandLine @("simple", "with space", "C:\Path With Spaces\file.txt", 'quote "inside"', "", 'C:\path\ending\')
+    if ($quoted -ne 'simple "with space" "C:\Path With Spaces\file.txt" "quote \"inside\"" "" C:\path\ending\') {
+        Fail "TRUST_SELFTEST_FAILED" "Quoting Windows inesperado: $quoted"
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $mode = Set-ProcessStartInfoArguments -ProcessStartInfo $psi -Arguments @("a b", 'c"d', "", 'C:\x\') -ForceArgumentsFallback
+    if ($mode -ne "Arguments" -or [string]::IsNullOrWhiteSpace($psi.Arguments)) {
+        Fail "TRUST_SELFTEST_FAILED" "Fallback Arguments nao foi exercitado."
+    }
+    $probeScript = Join-Path ([System.IO.Path]::GetTempPath()) ("nightowl-native-args-{0}.ps1" -f ([guid]::NewGuid().ToString("N")))
+    try {
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($probeScript, 'foreach ($arg in $args) { "ARG=[$arg]" }', $encoding)
+        $argumentProbe = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $probeScript,
+            "simple",
+            "with space",
+            "C:\Path With Spaces\file.txt",
+            'quote "inside"',
+            "",
+            'C:\path\ending\'
+        )
+        $output = Invoke-Native "powershell.exe" $argumentProbe -ForceArgumentsFallback
+        foreach ($expected in @("ARG=[simple]", "ARG=[with space]", "ARG=[C:\Path With Spaces\file.txt]", 'ARG=[quote "inside"]', "ARG=[]", 'ARG=[C:\path\ending\')) {
+            if ($output -notmatch [regex]::Escape($expected)) {
+                Fail "TRUST_SELFTEST_FAILED" "Argumento nao preservado no fallback: $expected. Saida=$output"
+            }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $probeScript -Force -ErrorAction SilentlyContinue
+    }
+    try {
+        Invoke-Native "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Write-Error 'expected failure'; exit 7") -ForceArgumentsFallback | Out-Null
+        Fail "TRUST_SELFTEST_FAILED" "Comando com exit code diferente de zero deveria falhar."
+    }
+    catch {
+        if ($_.Exception.Message -notmatch "exit_code=7") {
+            throw
+        }
+    }
     Write-Step "SelfTest OK."
 }
 
-function Invoke-Native([string]$FileName, [string[]]$Arguments, [switch]$Sensitive) {
+function Invoke-Native([string]$FileName, [string[]]$Arguments, [switch]$Sensitive, [int]$TimeoutSeconds = 0, [switch]$ForceArgumentsFallback) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FileName
-    foreach ($arg in $Arguments) { [void]$psi.ArgumentList.Add($arg) }
+    $argumentMode = Set-ProcessStartInfoArguments -ProcessStartInfo $psi -Arguments $Arguments -ForceArgumentsFallback:$ForceArgumentsFallback
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $process = [System.Diagnostics.Process]::Start($psi)
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if ($TimeoutSeconds -gt 0) {
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill() } catch {}
+            $shownArgs = if ($Sensitive) { "<redacted>" } else { ConvertTo-WindowsCommandLine $Arguments }
+            Fail "TRUST_NATIVE_COMMAND_TIMEOUT" "$FileName $shownArgs excedeu timeout de $TimeoutSeconds segundos."
+        }
+    }
+    else {
+        $process.WaitForExit()
+    }
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
     if ($process.ExitCode -ne 0) {
-        $shownArgs = if ($Sensitive) { "<redacted>" } else { ($Arguments -join " ") }
-        Fail "TRUST_NATIVE_COMMAND_FAILED" "$FileName $shownArgs falhou com exit_code=$($process.ExitCode). STDOUT=$stdout STDERR=$stderr"
+        $shownArgs = if ($Sensitive) { "<redacted>" } else { ConvertTo-WindowsCommandLine $Arguments }
+        Fail "TRUST_NATIVE_COMMAND_FAILED" "$FileName $shownArgs falhou com exit_code=$($process.ExitCode), argument_mode=$argumentMode. STDOUT=$stdout STDERR=$stderr"
     }
     return $stdout
 }
