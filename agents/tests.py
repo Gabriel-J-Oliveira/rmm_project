@@ -11,7 +11,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey
+from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
@@ -43,7 +43,7 @@ class AgentOperationalDiagnosticsTests(TestCase):
             content_type='application/json',
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 201)
         self.machine.refresh_from_db()
         self.assertEqual(self.machine.agent_version, '0.1.0.8')
 
@@ -61,7 +61,7 @@ class AgentOperationalDiagnosticsTests(TestCase):
             content_type='application/json',
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 201)
         self.machine.refresh_from_db()
         self.assertEqual(self.machine.agent_version, '0.1.1.0-rc2')
 
@@ -581,6 +581,24 @@ class AgentReleasePolicyTests(TestCase):
         }
         defaults.update(kwargs)
         return AgentRelease.objects.create(version=version, channel=channel, **defaults)
+
+    def trust_bundle(self, bundle_version=1, **kwargs):
+        defaults = {
+            'status': AgentReleaseTrustBundle.STATUS_PUBLISHED,
+            'schema_version': 1,
+            'root_key_id': 'nightowl-trust-root-lab-2026-01',
+            'bundle_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/trust/bundles/{bundle_version}/release-public-keys.json',
+            'signature_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/trust/bundles/{bundle_version}/release-public-keys.sig',
+            'metadata_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/trust/bundles/{bundle_version}/release-public-keys.meta.json',
+            'bundle_sha256': 'd' * 64,
+            'signature_sha256': 'e' * 64,
+            'size': 2048,
+            'published_at': timezone.now(),
+            'active_key_ids': ['nightowl-release-2026-01', 'nightowl-release-2026-02'],
+            'revoked_key_ids': [],
+        }
+        defaults.update(kwargs)
+        return AgentReleaseTrustBundle.objects.create(bundle_version=bundle_version, **defaults)
 
     def test_stable_endpoint_never_receives_development_release(self):
         self.release(version='0.1.0.9', channel=AgentRelease.CHANNEL_DEVELOPMENT)
@@ -1210,6 +1228,61 @@ class AgentReleasePolicyTests(TestCase):
         self.assertNotIn(revoked.version, versions)
         self.assertNotIn(other_channel.version, versions)
         self.assertEqual(options[0]['id'], str(rc10.id))
+
+    def test_endpoint_detail_exposes_latest_published_trust_bundle(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-trust-bundle-option', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.trust_bundle(bundle_version=1, published_at=timezone.now() + timedelta(minutes=1))
+        latest = self.trust_bundle(bundle_version=2, bundle_sha256='f' * 64)
+
+        response = portal.get(reverse('api-endpoint-detail', kwargs={'pk': str(self.machine.id)}))
+
+        self.assertEqual(response.status_code, 200)
+        bundle = response.json()['trusted_release_keys_bundle']
+        self.assertEqual(bundle['id'], str(latest.id))
+        self.assertEqual(bundle['bundle_version'], 2)
+        self.assertEqual(bundle['root_key_id'], 'nightowl-trust-root-lab-2026-01')
+        self.assertNotIn('public_key_xml', bundle)
+
+    def test_manual_trust_key_sync_action_creates_job_for_endpoint(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-trust-sync', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        bundle = self.trust_bundle(bundle_version=1)
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_trusted_release_keys'},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        job = AgentJob.objects.get(id=response.json()['job']['id'])
+        self.assertEqual(job.endpoint, self.machine)
+        self.assertEqual(job.job_type, AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS)
+        self.assertEqual(job.payload['metadata_url'], bundle.metadata_url)
+        self.assertEqual(job.payload['bundle_url'], bundle.bundle_url)
+        self.assertEqual(job.payload['signature_url'], bundle.signature_url)
+        self.assertEqual(job.payload['expected_root_key_id'], bundle.root_key_id)
+        self.assertEqual(job.payload['expected_bundle_version'], bundle.bundle_version)
+        self.assertEqual(job.payload['expected_sha256'], bundle.bundle_sha256)
+        self.assertEqual(job.payload['source'], 'manual_panel')
+
+    def test_manual_trust_key_sync_requires_published_bundle(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-trust-sync-missing', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_trusted_release_keys'},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'trust_bundle_not_found')
 
     def test_endpoint_detail_marks_downgrade_release_as_requires_force(self):
         user_model = get_user_model()

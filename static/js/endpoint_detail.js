@@ -73,6 +73,7 @@
         windows_update_scan: "Windows Update Scan",
         install_software: "Instalar software",
         update_agent: "Atualizar agente",
+        update_trusted_release_keys: "Sincronizar chaves de confianca",
         restart_agent: "Reiniciar agente"
     };
 
@@ -291,6 +292,7 @@
             install_software: "package-plus",
             windows_update_scan: "badge-check",
             update_agent: "download-cloud",
+            update_trusted_release_keys: "key-round",
             restart_agent: "rotate-ccw"
         }[value] || "terminal";
     }
@@ -343,6 +345,7 @@
         const agentDiagnostic = asObject(payload.agent_diagnostic);
         const agentUpdatePolicy = asObject(payload.agent_update_policy);
         const agentUpdateReleases = asArray(payload.agent_update_releases).map(function (item) { return asObject(item); });
+        const trustBundle = maybeObject(payload.trusted_release_keys_bundle);
         const activeJob = maybeObject(payload.active_job);
         const activeUpdateJob = maybeObject(payload.active_update_job);
         const patches = maybeObject(payload.patches);
@@ -410,6 +413,7 @@
                 updatePolicy: agentUpdatePolicy.update_policy || endpoint.update_policy || "manual",
                 updateReason: agentUpdatePolicy.reason_code || "",
                 updateReleases: agentUpdateReleases,
+                trustBundle: trustBundle,
                 rolloutPercentage: agentUpdatePolicy.rollout_percentage,
                 rolloutBucket: agentUpdatePolicy.rollout_bucket,
                 pinnedVersion: agentUpdatePolicy.pinned_version || endpoint.pinned_agent_version || "",
@@ -765,6 +769,7 @@
             ]) +
             actionGroup("Agente", [
                 actionButton("update_agent", "Atualizar agente", "download-cloud"),
+                actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round"),
                 actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
             ]) +
             actionGroup("Avancado", [
@@ -785,6 +790,12 @@
                 return version ? "Atualizado para " + version : "Atualizado com sucesso";
             }
             if (job.status === "failed") return job.errorMessage || result.message || "Falha na atualizacao";
+        }
+        if (job.type === "update_trusted_release_keys") {
+            const version = result.installed_bundle_version || result.bundle_version || result.expected_bundle_version || "";
+            if (job.status === "completed") return version ? "Chaves de confianca sincronizadas para bundle v" + version : "Chaves de confianca sincronizadas";
+            if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha ao sincronizar chaves de confianca";
+            return version ? "Sincronizando bundle v" + version : "Sincronizando chaves de confianca";
         }
         return job.result || job.errorMessage || "-";
     }
@@ -1028,6 +1039,7 @@
             actionButton("collect_software", "Coletar software", "package-search") +
             actionButton("restart_agent", "Reiniciar agente", "rotate-ccw") +
             actionButton("update_agent", "Atualizar agente", "download-cloud") +
+            actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round") +
             "</div>" +
             renderJobs(detail.jobs, 80) +
             "</section>";
@@ -1701,12 +1713,18 @@
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
         }
-        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "restart_agent"];
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "restart_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
             let jobOptions = {};
             if (action === "update_agent") {
                 openUpdateModal(origin);
                 return;
+            } else if (action === "update_trusted_release_keys") {
+                const bundle = endpointDetail.agent && endpointDetail.agent.trustBundle;
+                const suffix = bundle && bundle.bundle_version ? " v" + bundle.bundle_version : "";
+                const confirmed = window.confirm("Deseja sincronizar as chaves de confianca" + suffix + " neste endpoint?");
+                if (!confirmed) return;
+                showToast("Enviando job de sincronizacao das chaves de confianca...");
             } else if (action === "restart_agent") {
                 const confirmed = window.confirm("Deseja enviar um comando para reiniciar o agente neste endpoint?");
                 if (!confirmed) return;
@@ -1718,13 +1736,15 @@
                     ? (isPendingUpdate ? "Ja existe um job de atualizacao pendente para este endpoint." : "Job enviado com sucesso.")
                     : action === "restart_agent"
                         ? "Job enviado com sucesso."
+                    : action === "update_trusted_release_keys"
+                        ? "Job de sincronizacao das chaves de confianca enfileirado."
                     : "Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
                 if (!endpointDetail.jobs) endpointDetail.jobs = [];
                 if (payload.job && !endpointDetail.jobs.some(function (job) { return job.id === payload.job.id; })) {
                     endpointDetail.jobs.unshift(payload.job);
                 }
                 renderActivePanel();
-                activateTab(action === "update_agent" || action === "restart_agent" ? "tasks" : activeTab);
+                activateTab(action === "update_agent" || action === "restart_agent" || action === "update_trusted_release_keys" ? "tasks" : activeTab);
                 schedulePolling();
                 return reloadEndpoint(false);
             }).catch(function (error) {

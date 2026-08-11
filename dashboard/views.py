@@ -2747,6 +2747,30 @@ def _manual_update_release_options(endpoint):
     return rows
 
 
+def _latest_published_trust_bundle():
+    return AgentReleaseTrustBundle.objects.filter(
+        status=AgentReleaseTrustBundle.STATUS_PUBLISHED,
+    ).order_by('-bundle_version', '-published_at', '-created_at').first()
+
+
+def _trust_bundle_payload(trust_bundle):
+    if not trust_bundle:
+        return None
+    return {
+        'id': str(trust_bundle.id),
+        'bundle_version': trust_bundle.bundle_version,
+        'status': trust_bundle.status,
+        'root_key_id': trust_bundle.root_key_id,
+        'bundle_sha256': trust_bundle.bundle_sha256,
+        'signature_sha256': trust_bundle.signature_sha256,
+        'published_at': _iso_or_none(trust_bundle.published_at),
+        'valid_from': _iso_or_none(trust_bundle.valid_from),
+        'valid_until': _iso_or_none(trust_bundle.valid_until),
+        'active_key_ids': trust_bundle.active_key_ids or [],
+        'revoked_key_ids': trust_bundle.revoked_key_ids or [],
+    }
+
+
 def _update_policy_message(reason_code):
     messages_by_reason = {
         'eligible': 'Release autorizada para atualizacao.',
@@ -3014,6 +3038,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         job_type=AgentJob.TYPE_UPDATE_AGENT,
         status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
     ).order_by('-created_at').first()
+    latest_trust_bundle = _latest_published_trust_bundle() if can_view_technical else None
 
     return {
         'data_source': 'real',
@@ -3044,6 +3069,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'recommended_agent_version': recommended_version,
         'agent_update_policy': update_decision.as_panel_payload(),
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
+        'trusted_release_keys_bundle': _trust_bundle_payload(latest_trust_bundle),
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
         'agent_health': agent_health,
@@ -3416,20 +3442,47 @@ def endpoint_job_create(request, pk):
                 'timeout_seconds': 180,
             })
         else:
-            try:
-                expected_bundle_version = int(request.POST.get('expected_bundle_version') or 0)
-            except (TypeError, ValueError):
-                expected_bundle_version = 0
-            payload.update({
-                'metadata_url': (request.POST.get('metadata_url') or '').strip(),
-                'bundle_url': (request.POST.get('bundle_url') or '').strip(),
-                'signature_url': (request.POST.get('signature_url') or '').strip(),
-                'expected_root_key_id': (request.POST.get('expected_root_key_id') or '').strip(),
-                'expected_bundle_version': expected_bundle_version,
-                'expected_sha256': (request.POST.get('expected_sha256') or '').strip(),
-                'source': 'manual_panel',
-                'timeout_seconds': 180,
-            })
+            explicit_trust_fields = any(
+                (request.POST.get(key) or '').strip()
+                for key in ('metadata_url', 'bundle_url', 'signature_url', 'expected_root_key_id', 'expected_sha256', 'expected_bundle_version')
+            )
+            if explicit_trust_fields:
+                try:
+                    expected_bundle_version = int(request.POST.get('expected_bundle_version') or 0)
+                except (TypeError, ValueError):
+                    expected_bundle_version = 0
+                payload.update({
+                    'metadata_url': (request.POST.get('metadata_url') or '').strip(),
+                    'bundle_url': (request.POST.get('bundle_url') or '').strip(),
+                    'signature_url': (request.POST.get('signature_url') or '').strip(),
+                    'expected_root_key_id': (request.POST.get('expected_root_key_id') or '').strip(),
+                    'expected_bundle_version': expected_bundle_version,
+                    'expected_sha256': (request.POST.get('expected_sha256') or '').strip(),
+                    'source': 'manual_panel',
+                    'timeout_seconds': 180,
+                })
+            else:
+                trust_bundle = _latest_published_trust_bundle()
+                if trust_bundle is None:
+                    return JsonResponse(
+                        {
+                            'error': 'trust_bundle_not_found',
+                            'detail': 'Nao ha bundle de confianca publicado para enviar ao endpoint.',
+                            'reason_code': 'trust_bundle_not_found',
+                        },
+                        status=409,
+                    )
+                trust_bundle_id = str(trust_bundle.id)
+                payload.update({
+                    'metadata_url': trust_bundle.metadata_url,
+                    'bundle_url': trust_bundle.bundle_url,
+                    'signature_url': trust_bundle.signature_url,
+                    'expected_root_key_id': trust_bundle.root_key_id,
+                    'expected_bundle_version': trust_bundle.bundle_version,
+                    'expected_sha256': trust_bundle.bundle_sha256,
+                    'source': 'manual_panel',
+                    'timeout_seconds': 180,
+                })
         missing = [key for key in ('metadata_url', 'bundle_url', 'signature_url', 'expected_root_key_id') if not payload.get(key)]
         if missing:
             return JsonResponse(
