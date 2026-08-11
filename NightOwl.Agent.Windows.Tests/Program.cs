@@ -1,5 +1,6 @@
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
+using System.Text.Json;
 
 try
 {
@@ -12,6 +13,10 @@ try
     TestPreservesCustomAllowedJobTypes();
     TestMigratedConfigDoesNotRestoreExplicitRemoval();
     TestMigrationResultDoesNotExposeSecrets();
+    TestMigrationPersistsAndReloads();
+    TestPersistedMigrationIsNotReapplied();
+    TestPersistenceFailureDoesNotCorruptExistingConfig();
+    TestMigrationLogPayloadDoesNotExposeSecrets();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -157,6 +162,100 @@ static void TestMigrationResultDoesNotExposeSecrets()
 
     Require(!text.Contains(config.AgentToken, StringComparison.OrdinalIgnoreCase), "Migration result should not expose agent token.");
     Require(!text.Contains(config.MachineId, StringComparison.OrdinalIgnoreCase), "Migration result should not expose machine id.");
+}
+
+static void TestMigrationPersistsAndReloads()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string path = Path.Combine(dir, "agent.config.json");
+        AgentConfig config = LegacyConfig();
+        ConfigMigrationResult result = ConfigService.ApplyConfigMigrations(config);
+
+        Require(ConfigService.PersistConfigAtomic(path, config, out string error), $"Migrated config should persist atomically: {error}");
+
+        AgentConfig reloaded = JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidOperationException("Persisted config could not be reloaded.");
+        Require(result.Applied, "Legacy config should have been migrated before persistence.");
+        Require(reloaded.ConfigMigrationVersion == ConfigService.CurrentConfigMigrationVersion, "Persisted config should keep migration version v2.");
+        Require(reloaded.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Persisted config should include update_trusted_release_keys.");
+        Require(reloaded.AgentToken == "super-secret-token", "Persisted migration should preserve agent token.");
+        Require(reloaded.MachineId == "machine-taxcel", "Persisted migration should preserve machine id.");
+        Require(reloaded.ServerBaseUrl == "https://nightowl.controlsul.com.br", "Persisted migration should preserve server URL.");
+        Require(reloaded.Intervals.HeartbeatSeconds == 123, "Persisted migration should preserve intervals.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestPersistedMigrationIsNotReapplied()
+{
+    AgentConfig config = LegacyConfig();
+    ConfigService.ApplyConfigMigrations(config);
+
+    ConfigMigrationResult second = ConfigService.ApplyConfigMigrations(config);
+
+    Require(!second.Applied, "Reloaded v2 config should not apply migration again.");
+    Require(!second.AddedAllowedJobTypes.Any(), "Reloaded v2 config should not add job types again.");
+}
+
+static void TestPersistenceFailureDoesNotCorruptExistingConfig()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string path = Path.Combine(dir, "agent.config.json");
+        AgentConfig existing = LegacyConfig();
+        existing.AgentToken = "existing-token";
+        Require(ConfigService.PersistConfigAtomic(path, existing, out string initialError), $"Initial config should persist: {initialError}");
+        string before = File.ReadAllText(path);
+        Directory.CreateDirectory(path + ".tmp");
+
+        AgentConfig migrated = LegacyConfig();
+        ConfigService.ApplyConfigMigrations(migrated);
+        bool persisted = ConfigService.PersistConfigAtomic(path, migrated, out string error);
+
+        Require(!persisted, "Persistence should report failure when temp path cannot be written.");
+        Require(!string.IsNullOrWhiteSpace(error), "Persistence failure should expose a sanitized error code/message.");
+        Require(File.ReadAllText(path) == before, "Persistence failure should not corrupt or partially replace existing config.");
+        AgentConfig reloaded = JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidOperationException("Existing config should remain valid JSON.");
+        Require(reloaded.AgentToken == "existing-token", "Existing config should remain unchanged after failed persistence.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestMigrationLogPayloadDoesNotExposeSecrets()
+{
+    AgentConfig config = LegacyConfig();
+    ConfigMigrationResult result = ConfigService.ApplyConfigMigrations(config);
+    string line = ConfigService.BuildConfigMigrationLogLine(result, "config.migration.persist_failed", $"agentToken={config.AgentToken}");
+
+    Require(!line.Contains(config.AgentToken, StringComparison.OrdinalIgnoreCase), "Migration log line should redact agent token.");
+    Require(line.Contains("config.migration.persist_failed", StringComparison.OrdinalIgnoreCase), "Migration log line should include event type.");
+}
+
+static string CreateTempDir()
+{
+    string path = Path.Combine(Path.GetTempPath(), "NightOwlConfigTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(path);
+    return path;
+}
+
+static void DeleteTempDir(string path)
+{
+    try
+    {
+        Directory.Delete(path, recursive: true);
+    }
+    catch
+    {
+        // Best-effort cleanup for local tests.
+    }
 }
 
 static void Require(bool condition, string message)

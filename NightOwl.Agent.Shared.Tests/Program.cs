@@ -279,6 +279,55 @@ try
         new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
     Require(trustBase64Ok.IsValid, $"Base64 trust signature failed validation: {trustBase64Ok.ErrorCode} {trustBase64Ok.ErrorMessage}");
 
+    string trustSyncRoot = Path.Combine(root, "trust-sync");
+    NightOwlPaths trustSyncPaths = new(trustSyncRoot);
+    ReleaseTrustStore trustStore = new(trustSyncPaths, applyAcl: false);
+    Dictionary<string, byte[]> trustResponses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["https://nightowl.example/trust/bundles/2/release-public-keys.meta.json"] = JsonSerializer.SerializeToUtf8Bytes(trustMetadata, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+        ["https://nightowl.example/trust/bundles/2/release-public-keys.json"] = trustBundleBytes,
+        ["https://nightowl.example/trust/bundles/2/release-public-keys.sig"] = trustSignature
+    };
+    using HttpClient trustHttp = new(new StaticBytesHandler(trustResponses));
+    ReleaseTrustBundleUpdater trustUpdater = new(trustHttp, trustStore, new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
+    ReleaseTrustSyncRequest trustRequest = new()
+    {
+        MetadataUrl = "https://nightowl.example/trust/bundles/2/release-public-keys.meta.json",
+        BundleUrl = "https://nightowl.example/trust/bundles/2/release-public-keys.json",
+        SignatureUrl = "https://nightowl.example/trust/bundles/2/release-public-keys.sig",
+        ExpectedRootKeyId = "nightowl-root-test",
+        ExpectedBundleVersion = 2,
+        ExpectedSha256 = trustMetadata.BundleSha256,
+        JobId = "trust-job-1"
+    };
+    ReleaseTrustSyncResult firstTrustSync = await trustUpdater.SyncAsync(trustRequest, CancellationToken.None);
+    Require(firstTrustSync.Status == "completed", "First trust sync should complete.");
+    Require(firstTrustSync.UpdateStatus == "updated", "First trust sync should install the bundle.");
+    ReleaseTrustState installedTrustState = trustStore.LoadState();
+    DateTimeOffset? firstInstalledAt = installedTrustState.InstalledAt;
+    int firstBackupCount = Directory.Exists(trustSyncPaths.TrustBackupsDir) ? Directory.GetFiles(trustSyncPaths.TrustBackupsDir).Length : 0;
+
+    ReleaseTrustSyncRequest secondTrustRequest = new()
+    {
+        MetadataUrl = trustRequest.MetadataUrl,
+        BundleUrl = trustRequest.BundleUrl,
+        SignatureUrl = trustRequest.SignatureUrl,
+        ExpectedRootKeyId = trustRequest.ExpectedRootKeyId,
+        ExpectedBundleVersion = trustRequest.ExpectedBundleVersion,
+        ExpectedSha256 = trustRequest.ExpectedSha256,
+        JobId = "trust-job-2"
+    };
+    ReleaseTrustSyncResult secondTrustSync = await trustUpdater.SyncAsync(secondTrustRequest, CancellationToken.None);
+    ReleaseTrustState noUpdateTrustState = trustStore.LoadState();
+    int secondBackupCount = Directory.Exists(trustSyncPaths.TrustBackupsDir) ? Directory.GetFiles(trustSyncPaths.TrustBackupsDir).Length : 0;
+    Require(secondTrustSync.Status == "completed", "Second identical trust sync should complete.");
+    Require(secondTrustSync.UpdateStatus == "no_update", "Second identical trust sync should report no_update.");
+    Require(secondBackupCount == firstBackupCount, "No-update trust sync should not create a backup.");
+    Require(noUpdateTrustState.InstalledAt == firstInstalledAt, "No-update trust sync should not change installed_at.");
+    Require(noUpdateTrustState.InstalledBundleVersion == installedTrustState.InstalledBundleVersion, "No-update trust sync should preserve bundle version.");
+    Require(noUpdateTrustState.InstalledBundleSha256 == installedTrustState.InstalledBundleSha256, "No-update trust sync should preserve bundle SHA.");
+    Require(noUpdateTrustState.LastJobId == "trust-job-2", "No-update trust sync should update last job id.");
+
     byte[] tamperedSignature = trustSignature.ToArray();
     tamperedSignature[0] ^= 1;
     ReleaseTrustValidationResult badSignature = ReleaseTrustBundleValidator.Validate(
@@ -303,6 +352,40 @@ try
         new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } },
         new ReleaseTrustState { InstalledBundleVersion = 3, InstalledBundleSha256 = "" });
     Require(!downgrade.IsValid && downgrade.ErrorCode == ReleaseTrustErrorCodes.TrustBundleDowngrade, "Trust bundle downgrade should be blocked.");
+
+    byte[] divergentSameVersionBytes = JsonSerializer.SerializeToUtf8Bytes(new ReleaseTrustBundle
+    {
+        SchemaVersion = 1,
+        BundleVersion = 2,
+        GeneratedAt = DateTimeOffset.UtcNow,
+        ValidUntil = DateTimeOffset.UtcNow.AddDays(7),
+        Keys = new()
+        {
+            new ReleaseTrustKey
+            {
+                KeyId = "nightowl-release-test-02",
+                Algorithm = "RSA-PSS-SHA256",
+                PublicKeyXml = releasePublicXml,
+                Status = "active"
+            }
+        }
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    byte[] divergentSameVersionSig = rootKey.SignData(divergentSameVersionBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    ReleaseTrustValidationResult divergentSameVersion = ReleaseTrustBundleValidator.Validate(
+        divergentSameVersionBytes,
+        divergentSameVersionSig,
+        new ReleaseTrustBundleMetadata
+        {
+            SchemaVersion = 1,
+            BundleVersion = 2,
+            BundleSha256 = ReleaseTrustBundleValidator.Sha256Hex(divergentSameVersionBytes),
+            SignatureSha256 = ReleaseTrustBundleValidator.Sha256Hex(divergentSameVersionSig),
+            RootKeyId = "nightowl-root-test",
+            Size = divergentSameVersionBytes.Length
+        },
+        new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } },
+        installedTrustState);
+    Require(!divergentSameVersion.IsValid && divergentSameVersion.ErrorCode == ReleaseTrustErrorCodes.TrustBundleSameVersionDivergent, "Same trust bundle version with different content should be blocked.");
 
     byte[] duplicateBundleBytes = JsonSerializer.SerializeToUtf8Bytes(new ReleaseTrustBundle
     {
@@ -403,5 +486,32 @@ static void Require(bool condition, string message)
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+sealed class StaticBytesHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyDictionary<string, byte[]> _responses;
+
+    public StaticBytesHandler(IReadOnlyDictionary<string, byte[]> responses)
+    {
+        _responses = responses;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        string key = request.RequestUri?.ToString() ?? "";
+        if (!_responses.TryGetValue(key, out byte[]? body))
+        {
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+            {
+                Content = new ByteArrayContent(Array.Empty<byte>())
+            });
+        }
+
+        return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(body)
+        });
     }
 }

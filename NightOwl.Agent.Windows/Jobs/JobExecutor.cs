@@ -311,9 +311,17 @@ public sealed class JobExecutor
             return BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, syncResult.ErrorCode, syncResult.ErrorMessage, syncResult.ErrorMessage);
         }
 
-        await _logger.LogAsync("trust.install.completed", "Trusted release keys bundle installed.", new
+        string updateStatus = string.IsNullOrWhiteSpace(syncResult.UpdateStatus) ? "updated" : syncResult.UpdateStatus;
+        string eventType = updateStatus.Equals("no_update", StringComparison.OrdinalIgnoreCase)
+            ? "trust.sync.no_update"
+            : "trust.install.completed";
+        string eventMessage = updateStatus.Equals("no_update", StringComparison.OrdinalIgnoreCase)
+            ? "Trusted release keys bundle is already current."
+            : "Trusted release keys bundle installed.";
+        await _logger.LogAsync(eventType, eventMessage, new
         {
             job_id = job.Id,
+            update_status = updateStatus,
             bundle_version = syncResult.InstalledBundleVersion,
             bundle_sha256 = syncResult.InstalledBundleSha256,
             root_key_id = syncResult.RootKeyId,
@@ -330,11 +338,13 @@ public sealed class JobExecutor
             FinishedAt = DateTimeOffset.UtcNow,
             DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
             ExitCode = 0,
-            Stdout = "trusted release keys updated",
+            Stdout = updateStatus.Equals("no_update", StringComparison.OrdinalIgnoreCase)
+                ? "trusted release keys already current"
+                : "trusted release keys updated",
             Result = new
             {
                 type = "update_trusted_release_keys",
-                update_status = "completed",
+                update_status = updateStatus,
                 bundle_version = syncResult.InstalledBundleVersion,
                 bundle_sha256 = syncResult.InstalledBundleSha256,
                 root_key_id = syncResult.RootKeyId,

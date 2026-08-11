@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using System.Reflection;
 using Microsoft.Win32;
 using NightOwl.Agent.Shared;
@@ -33,20 +34,27 @@ public sealed class ConfigService
         {
             config = new AgentConfig();
             Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? ".");
-            File.WriteAllText(configPath, JsonSerializer.Serialize(config, JsonOptions));
+            WriteConfigAtomic(configPath, config);
         }
 
         Normalize(config);
         ConfigMigrationResult migrationResult = ApplyConfigMigrations(config);
-        if (migrationResult.Applied)
-        {
-            WriteConfigMigrationLog(migrationResult);
-        }
         config.AgentVersion = GetRunningAgentVersion(config.AgentVersion);
         MachineIdentity identity = ResolveMachineIdentity(config, configPath);
         config.MachineId = identity.MachineId;
         config.MachineIdSource = identity.Source;
-        PersistCanonicalConfig(configPath, config);
+        bool canonicalPersisted = PersistCanonicalConfig(configPath, config, out string persistError);
+        if (migrationResult.Applied)
+        {
+            if (canonicalPersisted)
+            {
+                WriteConfigMigrationLog(migrationResult);
+            }
+            else
+            {
+                WriteConfigMigrationFailureLog(migrationResult, persistError);
+            }
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(config.LogPath) ?? ".");
         Directory.CreateDirectory(Path.GetDirectoryName(config.StatePath) ?? ".");
         Directory.CreateDirectory(config.InstallPath);
@@ -182,16 +190,7 @@ public sealed class ConfigService
         {
             NightOwlPaths paths = NightOwlPaths.Current;
             Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
-            var payload = new
-            {
-                timestamp = DateTimeOffset.UtcNow,
-                event_type = "config.migration.applied",
-                component = "agent",
-                from_version = result.FromVersion,
-                to_version = result.ToVersion,
-                added_allowed_job_types = result.AddedAllowedJobTypes
-            };
-            File.AppendAllText(paths.AgentLogPath, JsonSerializer.Serialize(payload, JsonOptions) + Environment.NewLine);
+            File.AppendAllText(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.applied") + Environment.NewLine);
         }
         catch
         {
@@ -199,18 +198,101 @@ public sealed class ConfigService
         }
     }
 
-    private static void PersistCanonicalConfig(string configPath, AgentConfig config)
+    private static void WriteConfigMigrationFailureLog(ConfigMigrationResult result, string errorMessage)
     {
         try
         {
-            if (SamePath(configPath, NightOwlPaths.Current.ConfigPath))
-            {
-                File.WriteAllText(configPath, JsonSerializer.Serialize(config, JsonOptions));
-            }
+            NightOwlPaths paths = NightOwlPaths.Current;
+            Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
+            File.AppendAllText(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.persist_failed", SanitizeLogMessage(errorMessage)) + Environment.NewLine);
         }
         catch
         {
-            // Config normalization is retried on next startup.
+            // Persistence failure is retried on next startup; logging is best effort.
+        }
+    }
+
+    internal static string BuildConfigMigrationLogLine(ConfigMigrationResult result, string eventType, string errorMessage = "")
+    {
+        var payload = new
+        {
+            timestamp = DateTimeOffset.UtcNow,
+            event_type = eventType,
+            component = "agent",
+            from_version = result.FromVersion,
+            to_version = result.ToVersion,
+            added_allowed_job_types = result.AddedAllowedJobTypes,
+            error_message = string.IsNullOrWhiteSpace(errorMessage) ? null : SanitizeLogMessage(errorMessage)
+        };
+        return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+
+    private static string SanitizeLogMessage(string value)
+    {
+        string sanitized = NightOwlSanitizer.SanitizeText(value ?? "").Value
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+        return sanitized.Length <= 500 ? sanitized : sanitized[..500];
+    }
+
+    private static bool PersistCanonicalConfig(string configPath, AgentConfig config, out string errorMessage)
+    {
+        errorMessage = "";
+        if (!SamePath(configPath, NightOwlPaths.Current.ConfigPath))
+        {
+            return false;
+        }
+
+        return PersistConfigAtomic(configPath, config, out errorMessage);
+    }
+
+    internal static bool PersistConfigAtomic(string configPath, AgentConfig config, out string errorMessage)
+    {
+        errorMessage = "";
+        try
+        {
+            WriteConfigAtomic(configPath, config);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.GetType().Name;
+            return false;
+        }
+    }
+
+    private static void WriteConfigAtomic(string configPath, AgentConfig config)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? ".");
+        string tempPath = configPath + ".tmp";
+        string json = JsonSerializer.Serialize(config, JsonOptions);
+        Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        try
+        {
+            File.WriteAllText(tempPath, json, encoding);
+            if (File.Exists(configPath))
+            {
+                File.Replace(tempPath, configPath, null);
+            }
+            else
+            {
+                File.Move(tempPath, configPath);
+            }
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch
+            {
+                // Cleanup is best effort; the canonical config remains untouched.
+            }
         }
     }
 

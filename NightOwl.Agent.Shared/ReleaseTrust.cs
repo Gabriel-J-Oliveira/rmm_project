@@ -390,10 +390,12 @@ public sealed class ReleaseTrustStore
     };
 
     private readonly NightOwlPaths _paths;
+    private readonly bool _applyAcl;
 
-    public ReleaseTrustStore(NightOwlPaths paths)
+    public ReleaseTrustStore(NightOwlPaths paths, bool applyAcl = true)
     {
         _paths = paths;
+        _applyAcl = applyAcl;
     }
 
     public ReleaseTrustState LoadState()
@@ -477,8 +479,34 @@ public sealed class ReleaseTrustStore
         return state;
     }
 
+    public async Task<ReleaseTrustState> MarkNoUpdateAsync(
+        ReleaseTrustBundle bundle,
+        string bundleSha256,
+        string rootKeyId,
+        string jobId,
+        CancellationToken ct)
+    {
+        Directory.CreateDirectory(_paths.TrustDir);
+        ReleaseTrustState state = LoadState();
+        state.InstalledBundleVersion = bundle.BundleVersion;
+        state.InstalledBundleSha256 = bundleSha256;
+        state.InstalledRootKeyId = string.IsNullOrWhiteSpace(state.InstalledRootKeyId) ? rootKeyId : state.InstalledRootKeyId;
+        state.LastCheckAt = DateTimeOffset.UtcNow;
+        state.LastSuccessAt = DateTimeOffset.UtcNow;
+        state.LastError = "";
+        state.LastJobId = jobId;
+        if (state.ActiveKeyIds.Count == 0 && state.RevokedKeyIds.Count == 0)
+        {
+            state.ActiveKeyIds = bundle.Keys.Where(item => item.Status.Equals("active", StringComparison.OrdinalIgnoreCase)).Select(item => item.KeyId).Order(StringComparer.OrdinalIgnoreCase).ToList();
+            state.RevokedKeyIds = bundle.Keys.Where(item => item.Status.Equals("revoked", StringComparison.OrdinalIgnoreCase)).Select(item => item.KeyId).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        await WriteJsonAtomicAsync(_paths.TrustStatePath, state, ct);
+        return state;
+    }
+
     public async Task WriteFailureAsync(string errorCode, string message, string jobId, CancellationToken ct)
     {
+        Directory.CreateDirectory(_paths.TrustDir);
         ReleaseTrustState state = LoadState();
         state.LastCheckAt = DateTimeOffset.UtcNow;
         state.LastError = $"{errorCode}: {message}";
@@ -508,6 +536,10 @@ public sealed class ReleaseTrustStore
 
     private void ApplyTrustAcl()
     {
+        if (!_applyAcl)
+        {
+            return;
+        }
         if (!OperatingSystem.IsWindows())
         {
             return;
@@ -547,6 +579,7 @@ public sealed class ReleaseTrustSyncRequest
 public sealed class ReleaseTrustSyncResult
 {
     public string Status { get; init; } = "failed";
+    public string UpdateStatus { get; init; } = "";
     public string ErrorCode { get; init; } = "";
     public string ErrorMessage { get; init; } = "";
     public long InstalledBundleVersion { get; init; }
@@ -603,15 +636,35 @@ public sealed class ReleaseTrustBundleUpdater
             {
                 throw new InvalidOperationException($"{validation.ErrorCode}: {validation.ErrorMessage}");
             }
-            ReleaseTrustState state = await _store.InstallAsync(validation.Bundle, bundleBytes, signatureBytes, metadataBytes, validation.BundleSha256, validation.RootKeyId, request.JobId, ct);
+
+            ReleaseTrustState currentState = _store.LoadState();
+            if (currentState.InstalledBundleVersion == validation.Bundle.BundleVersion
+                && !string.IsNullOrWhiteSpace(currentState.InstalledBundleSha256)
+                && validation.BundleSha256.Equals(currentState.InstalledBundleSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                ReleaseTrustState noUpdateState = await _store.MarkNoUpdateAsync(validation.Bundle, validation.BundleSha256, validation.RootKeyId, request.JobId, ct);
+                return new ReleaseTrustSyncResult
+                {
+                    Status = "completed",
+                    UpdateStatus = "no_update",
+                    InstalledBundleVersion = noUpdateState.InstalledBundleVersion,
+                    InstalledBundleSha256 = noUpdateState.InstalledBundleSha256,
+                    RootKeyId = noUpdateState.InstalledRootKeyId,
+                    ActiveKeyIds = noUpdateState.ActiveKeyIds,
+                    RevokedKeyIds = noUpdateState.RevokedKeyIds
+                };
+            }
+
+            ReleaseTrustState installedState = await _store.InstallAsync(validation.Bundle, bundleBytes, signatureBytes, metadataBytes, validation.BundleSha256, validation.RootKeyId, request.JobId, ct);
             return new ReleaseTrustSyncResult
             {
                 Status = "completed",
-                InstalledBundleVersion = state.InstalledBundleVersion,
-                InstalledBundleSha256 = state.InstalledBundleSha256,
-                RootKeyId = state.InstalledRootKeyId,
-                ActiveKeyIds = state.ActiveKeyIds,
-                RevokedKeyIds = state.RevokedKeyIds
+                UpdateStatus = "updated",
+                InstalledBundleVersion = installedState.InstalledBundleVersion,
+                InstalledBundleSha256 = installedState.InstalledBundleSha256,
+                RootKeyId = installedState.InstalledRootKeyId,
+                ActiveKeyIds = installedState.ActiveKeyIds,
+                RevokedKeyIds = installedState.RevokedKeyIds
             };
         }
         catch (Exception ex)
