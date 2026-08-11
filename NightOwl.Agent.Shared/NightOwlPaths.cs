@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace NightOwl.Agent.Shared;
@@ -8,6 +10,11 @@ public sealed class NightOwlPaths
     public const string ServiceName = "NightOwlAgentDotNet";
     public const string TrayProcessName = "NightOwl.Agent.Tray";
     public const string DefaultServerUrl = "https://nightowl.controlsul.com.br";
+    public const string SystemSid = "S-1-5-18";
+    public const string AdministratorsSid = "S-1-5-32-544";
+    public const string UsersSid = "S-1-5-32-545";
+    public const string EveryoneSid = "S-1-1-0";
+    public const string AuthenticatedUsersSid = "S-1-5-11";
 
     public string Root { get; }
     public string InstallDir { get; }
@@ -410,60 +417,229 @@ public sealed class NightOwlPaths
         }
     }
 
-    private void ProtectPersistentDirectories(string component)
+    public IReadOnlyList<NightOwlAclPolicy> GetAclPolicies() => new[]
     {
-        foreach (string directory in new[] { ConfigDir, IdentityDir, StateDir, TrustDir })
-        {
-            TryRunIcacls(directory, "/inheritance:r", component);
-            TryRunIcacls(directory, "/grant:r", component, "*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(RX)");
-        }
+        NightOwlAclPolicy.UsersRead(Root, "root"),
+        NightOwlAclPolicy.UsersRead(InstallDir, "install", normalizeChildren: true),
+        NightOwlAclPolicy.UsersRead(ConfigDir, "config"),
+        NightOwlAclPolicy.UsersRead(IdentityDir, "identity"),
+        NightOwlAclPolicy.UsersRead(StateDir, "state"),
+        NightOwlAclPolicy.UsersRead(PendingResultsDir, "pending-results"),
+        NightOwlAclPolicy.UsersRead(TrustDir, "trust", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(TrustBackupsDir, "trust-backups", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(TrustDownloadsDir, "trust-downloads", normalizeChildren: true),
+        NightOwlAclPolicy.UsersRead(LogsDir, "logs", systemRights: "M"),
+        NightOwlAclPolicy.AdminOnly(UpdatesDir, "updates", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(UpdatesDownloadsDir, "updates-downloads", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(UpdatesStagingDir, "updates-staging", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(UpdatesBackupDir, "updates-backup", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(UpdatesPendingDir, "updates-pending", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(UpdatesRunnerDir, "updates-runner", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(DiagnosticsDir, "diagnostics"),
+        NightOwlAclPolicy.AdminOnly(PackagesDir, "packages"),
+        NightOwlAclPolicy.AdminOnly(CacheDir, "cache")
+    };
 
-        foreach (string directory in new[] { UpdatesDir, DiagnosticsDir, TrustBackupsDir, TrustDownloadsDir })
-        {
-            TryRunIcacls(directory, "/inheritance:r", component);
-            TryRunIcacls(directory, "/grant:r", component, "*S-1-5-18:(OI)(CI)(F)", "*S-1-5-32-544:(OI)(CI)(F)");
-        }
-
-        foreach (string directory in new[] { LogsDir })
-        {
-            TryRunIcacls(directory, "/grant:r", component, "*S-1-5-18:(OI)(CI)(M)", "*S-1-5-32-544:(OI)(CI)(F)", "*S-1-5-32-545:(OI)(CI)(RX)");
-        }
+    public void ProtectReleaseTrustDirectories(string component)
+    {
+        ProtectAclPolicies(component, policy => policy.Scope.StartsWith("trust", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void TryRunIcacls(string path, string mode, string component, params string[] grants)
+    private void ProtectPersistentDirectories(string component)
+    {
+        ProtectAclPolicies(component, _ => true);
+    }
+
+    private void ProtectAclPolicies(string component, Func<NightOwlAclPolicy, bool> filter)
     {
         if (!OperatingSystem.IsWindows())
         {
             return;
         }
 
+        foreach (NightOwlAclPolicy policy in GetAclPolicies().Where(filter))
+        {
+            ApplyAclPolicyTarget(policy, component);
+            if (policy.NormalizeChildren)
+            {
+                NormalizeExistingChildren(policy, component);
+            }
+        }
+    }
+
+    private void ApplyAclPolicyTarget(NightOwlAclPolicy policy, string component)
+    {
         try
         {
-            List<string> arguments = new() { Quote(path), mode };
-            foreach (string grant in grants)
+            if (Directory.Exists(policy.Path))
             {
-                arguments.Add(grant);
+                ApplyDirectoryAcl(policy.Path, policy);
             }
-
-            using Process process = Process.Start(new ProcessStartInfo
+            else if (File.Exists(policy.Path))
             {
-                FileName = "icacls.exe",
-                Arguments = string.Join(" ", arguments),
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }) ?? throw new InvalidOperationException("icacls.exe did not start.");
-            process.WaitForExit(10000);
-            if (process.ExitCode != 0)
-            {
-                WriteLog(component, "path.acl.failed", "Failed to apply ACL.", new { path, mode, stderr = process.StandardError.ReadToEnd() }, "warning");
+                ApplyFileAcl(policy.Path, policy);
             }
         }
         catch (Exception ex)
         {
-            WriteLog(component, "path.acl.failed", "Failed to apply ACL.", new { path, mode, error = ex.Message }, "warning");
+            WriteLog(component, "acl.apply.failed", "Failed to apply declared ACL policy.", new
+            {
+                path = policy.Path,
+                scope = policy.Scope,
+                error = ex.GetType().Name,
+                message = ex.Message
+            }, "warning");
         }
+    }
+
+    private void NormalizeExistingChildren(NightOwlAclPolicy policy, string component)
+    {
+        if (!Directory.Exists(policy.Path))
+        {
+            return;
+        }
+
+        int filesProcessed = 0;
+        int directoriesProcessed = 0;
+        int reparseSkipped = 0;
+        int failures = 0;
+        List<object> failureSamples = new();
+        Stack<string> pending = new();
+        pending.Push(policy.Path);
+
+        while (pending.Count > 0)
+        {
+            string current = pending.Pop();
+            if (!IsWithinRoot(current))
+            {
+                failures++;
+                AddFailureSample(failureSamples, current, "OutsideRoot", "ACL traversal attempted to leave NightOwl root.");
+                continue;
+            }
+
+            IEnumerable<string> children;
+            try
+            {
+                children = Directory.EnumerateFileSystemEntries(current).ToArray();
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                AddFailureSample(failureSamples, current, ex.GetType().Name, ex.Message);
+                continue;
+            }
+
+            foreach (string child in children)
+            {
+                try
+                {
+                    FileAttributes attributes = File.GetAttributes(child);
+                    if (ShouldSkipAclTraversal(attributes))
+                    {
+                        reparseSkipped++;
+                        WriteLog(component, "acl.recursive.skipped_reparse_point", "Skipped reparse point during ACL normalization.", new
+                        {
+                            path = child,
+                            scope = policy.Scope
+                        }, "warning");
+                        continue;
+                    }
+
+                    if (attributes.HasFlag(FileAttributes.Directory))
+                    {
+                        ApplyDirectoryAcl(child, policy);
+                        directoriesProcessed++;
+                        pending.Push(child);
+                    }
+                    else
+                    {
+                        ApplyFileAcl(child, policy);
+                        filesProcessed++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failures++;
+                    AddFailureSample(failureSamples, child, ex.GetType().Name, ex.Message);
+                }
+            }
+        }
+
+        string level = failures == 0 ? "info" : "warning";
+        WriteLog(component, failures == 0 ? "acl.recursive.completed" : "acl.apply.failed", "ACL recursive normalization completed.", new
+        {
+            path = policy.Path,
+            scope = policy.Scope,
+            files_processed = filesProcessed,
+            directories_processed = directoriesProcessed,
+            reparse_points_skipped = reparseSkipped,
+            failures,
+            failure_samples = failureSamples
+        }, level);
+    }
+
+    public static bool ShouldSkipAclTraversal(FileAttributes attributes) => attributes.HasFlag(FileAttributes.ReparsePoint);
+
+    private static void ApplyDirectoryAcl(string path, NightOwlAclPolicy policy)
+    {
+        DirectorySecurity security = new();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        AddDirectoryRule(security, SystemSid, policy.SystemRights);
+        AddDirectoryRule(security, AdministratorsSid, FileSystemRights.FullControl);
+        if (policy.AllowUsersRead)
+        {
+            AddDirectoryRule(security, UsersSid, FileSystemRights.ReadAndExecute);
+        }
+        new DirectoryInfo(path).SetAccessControl(security);
+    }
+
+    private static void ApplyFileAcl(string path, NightOwlAclPolicy policy)
+    {
+        FileSecurity security = new();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        AddFileRule(security, SystemSid, policy.SystemRights);
+        AddFileRule(security, AdministratorsSid, FileSystemRights.FullControl);
+        if (policy.AllowUsersRead)
+        {
+            AddFileRule(security, UsersSid, FileSystemRights.ReadAndExecute);
+        }
+        new FileInfo(path).SetAccessControl(security);
+    }
+
+    private static void AddDirectoryRule(DirectorySecurity security, string sid, FileSystemRights rights)
+    {
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(sid),
+            rights,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+    }
+
+    private static void AddFileRule(FileSecurity security, string sid, FileSystemRights rights)
+    {
+        security.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(sid),
+            rights,
+            InheritanceFlags.None,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+    }
+
+    private bool IsWithinRoot(string path)
+    {
+        string root = Path.GetFullPath(Root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string candidate = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddFailureSample(List<object> samples, string path, string error, string message)
+    {
+        if (samples.Count >= 10)
+        {
+            return;
+        }
+        samples.Add(new { path, error, message });
     }
 
     private static IEnumerable<string> EnumerateExistingFiles(string directory, string pattern)
@@ -538,10 +714,40 @@ public sealed class NightOwlPaths
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
     }
 
-    private static string Quote(string value) => "\"" + value.Replace("\"", "\\\"") + "\"";
-
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
     };
+}
+
+public sealed record NightOwlAclPolicy(string Path, string Scope, IReadOnlyList<string> Grants, bool AllowUsersRead, FileSystemRights SystemRights, bool NormalizeChildren)
+{
+    public static NightOwlAclPolicy UsersRead(string path, string scope, string systemRights = "F", bool normalizeChildren = false) => new(
+        path,
+        scope,
+        new[]
+        {
+            $"*{NightOwlPaths.SystemSid}:(OI)(CI)({systemRights})",
+            $"*{NightOwlPaths.AdministratorsSid}:(OI)(CI)(F)",
+            $"*{NightOwlPaths.UsersSid}:(OI)(CI)(RX)"
+        },
+        AllowUsersRead: true,
+        ParseRights(systemRights),
+        normalizeChildren);
+
+    public static NightOwlAclPolicy AdminOnly(string path, string scope, string systemRights = "F", bool normalizeChildren = false) => new(
+        path,
+        scope,
+        new[]
+        {
+            $"*{NightOwlPaths.SystemSid}:(OI)(CI)({systemRights})",
+            $"*{NightOwlPaths.AdministratorsSid}:(OI)(CI)(F)"
+        },
+        AllowUsersRead: false,
+        ParseRights(systemRights),
+        normalizeChildren);
+
+    private static FileSystemRights ParseRights(string rights) => rights.Equals("M", StringComparison.OrdinalIgnoreCase)
+        ? FileSystemRights.Modify
+        : FileSystemRights.FullControl;
 }

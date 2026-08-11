@@ -35,6 +35,7 @@ function New-NightOwlPaths([string]$RequestedInstallPath) {
     $stateDir = Join-Path $root "State"
     $logsDir = Join-Path $root "Logs"
     $updatesDir = Join-Path $root "Updates"
+    $trustDir = Join-Path $root "Trust"
     return [ordered]@{
         Root = $root
         Install = $install
@@ -47,6 +48,9 @@ function New-NightOwlPaths([string]$RequestedInstallPath) {
         StatePath = Join-Path $stateDir "agent.state.json"
         LegacyStatePath = Join-Path $install "agent-dotnet.state.json"
         PendingResultsPath = Join-Path $stateDir "pending-results"
+        Trust = $trustDir
+        TrustBackups = Join-Path $trustDir "Backups"
+        TrustDownloads = Join-Path $trustDir "Downloads"
         Logs = $logsDir
         AgentLog = Join-Path $logsDir "agent-dotnet.jsonl"
         InstallLog = Join-Path $logsDir "service-install.log"
@@ -57,6 +61,7 @@ function New-NightOwlPaths([string]$RequestedInstallPath) {
         UpdatesStaging = Join-Path $updatesDir "Staging"
         UpdatesBackup = Join-Path $updatesDir "Backup"
         UpdatesPending = Join-Path $updatesDir "Pending"
+        UpdatesRunner = Join-Path $updatesDir "Runner"
         Diagnostics = Join-Path $root "Diagnostics"
     }
 }
@@ -307,12 +312,16 @@ function Set-NightOwlSecureAcl([string[]]$Paths, [switch]$AllowUsersRead) {
         try {
             if (-not (Test-Path $path)) { continue }
             & icacls.exe $path /inheritance:r | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls /inheritance:r retornou $LASTEXITCODE" }
+            & icacls.exe $path /remove:g "*S-1-1-0" "*S-1-5-11" "*S-1-5-32-545" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls /remove:g retornou $LASTEXITCODE" }
             if ($AllowUsersRead) {
-                & icacls.exe $path /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" "Users:(OI)(CI)(RX)" | Out-Null
+                & icacls.exe $path /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" | Out-Null
             }
             else {
-                & icacls.exe $path /grant:r "SYSTEM:(OI)(CI)(F)" "Administrators:(OI)(CI)(F)" | Out-Null
+                & icacls.exe $path /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" | Out-Null
             }
+            if ($LASTEXITCODE -ne 0) { throw "icacls /grant:r retornou $LASTEXITCODE" }
             Write-InstallLog "path.acl.applied" "ACL segura aplicada." @{ path = $path }
         }
         catch {
@@ -999,7 +1008,10 @@ $directories = @(
     [string]$script:NightOwlPaths.IdentityDir,
     [string]$script:NightOwlPaths.StateDir,
     [string]$script:NightOwlPaths.PendingResultsPath,
+    [string]$script:NightOwlPaths.Trust,
     [string]$script:NightOwlPaths.Logs,
+    [string]$script:NightOwlPaths.TrustBackups,
+    [string]$script:NightOwlPaths.TrustDownloads,
     [string]$script:NightOwlPaths.Packages,
     [string]$script:NightOwlPaths.Cache,
     [string]$script:NightOwlPaths.Updates,
@@ -1007,6 +1019,7 @@ $directories = @(
     [string]$script:NightOwlPaths.UpdatesStaging,
     [string]$script:NightOwlPaths.UpdatesBackup,
     [string]$script:NightOwlPaths.UpdatesPending,
+    [string]$script:NightOwlPaths.UpdatesRunner,
     [string]$script:NightOwlPaths.Diagnostics
 )
 foreach ($dir in $directories) {
@@ -1018,13 +1031,27 @@ foreach ($dir in $directories) {
     }
 }
 Set-NightOwlSecureAcl -Paths @(
+    [string]$script:NightOwlPaths.Root,
+    $InstallPath,
     [string]$script:NightOwlPaths.ConfigDir,
     [string]$script:NightOwlPaths.IdentityDir,
-    [string]$script:NightOwlPaths.StateDir
+    [string]$script:NightOwlPaths.StateDir,
+    [string]$script:NightOwlPaths.PendingResultsPath,
+    [string]$script:NightOwlPaths.Trust,
+    [string]$script:NightOwlPaths.Logs
 ) -AllowUsersRead
 Set-NightOwlSecureAcl -Paths @(
     [string]$script:NightOwlPaths.Updates,
-    [string]$script:NightOwlPaths.Diagnostics
+    [string]$script:NightOwlPaths.UpdatesDownloads,
+    [string]$script:NightOwlPaths.UpdatesStaging,
+    [string]$script:NightOwlPaths.UpdatesBackup,
+    [string]$script:NightOwlPaths.UpdatesPending,
+    [string]$script:NightOwlPaths.UpdatesRunner,
+    [string]$script:NightOwlPaths.Diagnostics,
+    [string]$script:NightOwlPaths.TrustBackups,
+    [string]$script:NightOwlPaths.TrustDownloads,
+    [string]$script:NightOwlPaths.Packages,
+    [string]$script:NightOwlPaths.Cache
 )
 
 $configInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_CONFIG_INVALID" } else { "INSTALL_CONFIG_INVALID" }

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using NightOwl.Agent.Shared;
 
 string root = Path.Combine(Path.GetTempPath(), "NightOwlPathsTests", Guid.NewGuid().ToString("N"));
@@ -9,6 +11,78 @@ Environment.SetEnvironmentVariable("NIGHTOWL_HOME", root);
 try
 {
     NightOwlPaths paths = NightOwlPaths.FromEnvironment();
+    Require(NightOwlPaths.SystemSid == "S-1-5-18", "SYSTEM SID constant mismatch.");
+    Require(NightOwlPaths.AdministratorsSid == "S-1-5-32-544", "Builtin Administrators SID constant mismatch.");
+    Require(NightOwlPaths.UsersSid == "S-1-5-32-545", "Builtin Users SID constant mismatch.");
+    Require(NightOwlPaths.EveryoneSid == "S-1-1-0", "Everyone SID constant mismatch.");
+    Require(NightOwlPaths.AuthenticatedUsersSid == "S-1-5-11", "Authenticated Users SID constant mismatch.");
+    IReadOnlyList<NightOwlAclPolicy> aclPolicies = paths.GetAclPolicies();
+    Require(aclPolicies.Count > 0, "ACL policy list should not be empty.");
+    Require(aclPolicies.Any(policy => SamePath(policy.Path, paths.Root)), "Root directory should have explicit ACL policy.");
+    Require(aclPolicies.Any(policy => SamePath(policy.Path, paths.InstallDir)), "Install directory should have explicit ACL policy.");
+    foreach (string required in paths.RequiredDirectories)
+    {
+        Require(aclPolicies.Any(policy => SamePath(policy.Path, required)), $"Required directory missing ACL policy: {required}");
+    }
+    foreach (NightOwlAclPolicy policy in aclPolicies)
+    {
+        string joined = string.Join("|", policy.Grants);
+        Require(joined.Contains("*S-1-5-18:", StringComparison.Ordinal), $"ACL policy {policy.Scope} missing SYSTEM SID.");
+        Require(joined.Contains("*S-1-5-32-544:", StringComparison.Ordinal), $"ACL policy {policy.Scope} missing Administrators SID.");
+        Require(!joined.Contains("Administrators", StringComparison.OrdinalIgnoreCase), $"ACL policy {policy.Scope} should not use localized Administrators name.");
+        Require(!joined.Contains("Administradores", StringComparison.OrdinalIgnoreCase), $"ACL policy {policy.Scope} should not use Portuguese Administrators name.");
+        Require(!joined.Contains("Users", StringComparison.OrdinalIgnoreCase), $"ACL policy {policy.Scope} should not use localized Users name.");
+        Require(!joined.Contains("Usuários", StringComparison.OrdinalIgnoreCase), $"ACL policy {policy.Scope} should not use Portuguese Users name.");
+    }
+    foreach (string sensitive in new[] { paths.UpdatesDir, paths.UpdatesDownloadsDir, paths.UpdatesStagingDir, paths.UpdatesBackupDir, paths.UpdatesPendingDir, paths.UpdatesRunnerDir, paths.TrustBackupsDir, paths.TrustDownloadsDir, paths.PackagesDir, paths.CacheDir, paths.DiagnosticsDir })
+    {
+        NightOwlAclPolicy policy = aclPolicies.Single(item => SamePath(item.Path, sensitive));
+        Require(!PolicyGrantsUsers(policy), $"Sensitive directory should not grant Users: {sensitive}");
+    }
+    foreach (string usersReadPath in new[] { paths.Root, paths.InstallDir, paths.ConfigDir, paths.IdentityDir, paths.StateDir, paths.PendingResultsDir, paths.TrustDir, paths.LogsDir })
+    {
+        NightOwlAclPolicy policy = aclPolicies.Single(item => SamePath(item.Path, usersReadPath));
+        Require(PolicyGrantsUsersReadOnly(policy), $"Users-read directory should grant Users RX only: {usersReadPath}");
+    }
+    Require(aclPolicies.Single(policy => SamePath(policy.Path, paths.InstallDir)).NormalizeChildren, "AgentDotNet ACL policy should normalize existing children.");
+    Require(aclPolicies.Single(policy => SamePath(policy.Path, paths.UpdatesDir)).NormalizeChildren, "Updates ACL policy should normalize existing children.");
+    Require(aclPolicies.Single(policy => SamePath(policy.Path, paths.TrustDir)).NormalizeChildren, "Trust ACL policy should normalize existing children.");
+    Require(NightOwlPaths.ShouldSkipAclTraversal(FileAttributes.ReparsePoint), "Reparse points should be skipped during ACL traversal.");
+    Require(!NightOwlPaths.ShouldSkipAclTraversal(FileAttributes.Archive), "Normal files should not be skipped during ACL traversal.");
+
+    if (OperatingSystem.IsWindows() && IsProcessElevated())
+    {
+        string aclRoot = Path.Combine(root, "acl-repair");
+        NightOwlPaths aclPaths = new(aclRoot);
+        Directory.CreateDirectory(aclPaths.InstallDir);
+        Directory.CreateDirectory(aclPaths.UpdatesRunnerDir);
+        Directory.CreateDirectory(aclPaths.TrustBackupsDir);
+        string agentDll = Path.Combine(aclPaths.InstallDir, "NightOwl.Agent.Windows.dll");
+        string runnerExe = Path.Combine(aclPaths.UpdatesRunnerDir, "NightOwl.Agent.Updater.exe");
+        string trustBundle = Path.Combine(aclPaths.TrustDir, "release-public-keys.json");
+        string trustBackup = Path.Combine(aclPaths.TrustBackupsDir, "release-public-keys.old.json");
+        File.WriteAllText(agentDll, "agent");
+        File.WriteAllText(runnerExe, "runner");
+        File.WriteAllText(trustBundle, "{}");
+        File.WriteAllText(trustBackup, "{}");
+        AddUsersModify(agentDll);
+        AddUsersModify(runnerExe);
+        AddUsersModify(trustBundle);
+        AddUsersModify(trustBackup);
+
+        aclPaths.Bootstrap("test-acl", applyAcl: true);
+        Require(!FileAllowsUsersWrite(agentDll), "AgentDotNet file should not preserve Users write/modify.");
+        Require(FileAllowsUsersReadExecute(agentDll), "AgentDotNet file should keep Users read/execute.");
+        Require(!FileHasUsersAllow(runnerExe), "Updates runner file should not grant Users.");
+        Require(!FileAllowsUsersWrite(trustBundle), "Trust root file should not preserve Users write/modify.");
+        Require(FileAllowsUsersReadExecute(trustBundle), "Trust root file should keep Users read/execute.");
+        Require(!FileHasUsersAllow(trustBackup), "Trust backup file should not grant Users.");
+
+        aclPaths.Bootstrap("test-acl", applyAcl: true);
+        Require(!FileAllowsUsersWrite(agentDll), "Second ACL repair should remain idempotent for AgentDotNet.");
+        Require(!FileHasUsersAllow(runnerExe), "Second ACL repair should remain idempotent for Updates runner.");
+    }
+
     Directory.CreateDirectory(paths.InstallDir);
     File.WriteAllText(paths.LegacyConfigPath, """
     {
@@ -511,6 +585,93 @@ static void Require(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static bool SamePath(string left, string right)
+{
+    return string.Equals(
+        Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+        StringComparison.OrdinalIgnoreCase);
+}
+
+static bool PolicyGrantsUsers(NightOwlAclPolicy policy)
+{
+    return policy.Grants.Any(grant => grant.Contains("*S-1-5-32-545:", StringComparison.OrdinalIgnoreCase));
+}
+
+static bool PolicyGrantsUsersReadOnly(NightOwlAclPolicy policy)
+{
+    return policy.Grants.Any(grant => grant.Equals("*S-1-5-32-545:(OI)(CI)(RX)", StringComparison.OrdinalIgnoreCase))
+        && !policy.Grants.Any(grant => grant.Contains("*S-1-5-32-545:", StringComparison.OrdinalIgnoreCase)
+            && !grant.EndsWith("(RX)", StringComparison.OrdinalIgnoreCase));
+}
+
+static void AddUsersModify(string path)
+{
+    FileSecurity security = new FileInfo(path).GetAccessControl();
+    security.AddAccessRule(new FileSystemAccessRule(
+        new SecurityIdentifier(NightOwlPaths.UsersSid),
+        FileSystemRights.Modify,
+        AccessControlType.Allow));
+    new FileInfo(path).SetAccessControl(security);
+}
+
+static bool IsProcessElevated()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        return false;
+    }
+    using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+    WindowsPrincipal principal = new(identity);
+    return principal.IsInRole(WindowsBuiltInRole.Administrator);
+}
+
+static bool FileHasUsersAllow(string path)
+{
+    FileSecurity security = new FileInfo(path).GetAccessControl();
+    return security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+        .Cast<FileSystemAccessRule>()
+        .Any(rule => rule.AccessControlType == AccessControlType.Allow
+            && rule.IdentityReference is SecurityIdentifier sid
+            && sid.Value.Equals(NightOwlPaths.UsersSid, StringComparison.OrdinalIgnoreCase));
+}
+
+static bool FileAllowsUsersReadExecute(string path)
+{
+    FileSecurity security = new FileInfo(path).GetAccessControl();
+    return security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+        .Cast<FileSystemAccessRule>()
+        .Any(rule => rule.AccessControlType == AccessControlType.Allow
+            && rule.IdentityReference is SecurityIdentifier sid
+            && sid.Value.Equals(NightOwlPaths.UsersSid, StringComparison.OrdinalIgnoreCase)
+            && (rule.FileSystemRights & FileSystemRights.ReadAndExecute) == FileSystemRights.ReadAndExecute);
+}
+
+static bool FileAllowsUsersWrite(string path)
+{
+    FileSecurity security = new FileInfo(path).GetAccessControl();
+    return security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+        .Cast<FileSystemAccessRule>()
+        .Any(rule => rule.AccessControlType == AccessControlType.Allow
+            && rule.IdentityReference is SecurityIdentifier sid
+            && sid.Value.Equals(NightOwlPaths.UsersSid, StringComparison.OrdinalIgnoreCase)
+            && GrantsWriteLikeAccess(rule.FileSystemRights));
+}
+
+static bool GrantsWriteLikeAccess(FileSystemRights rights)
+{
+    return (rights & FileSystemRights.FullControl) == FileSystemRights.FullControl
+        || (rights & FileSystemRights.Modify) == FileSystemRights.Modify
+        || (rights & FileSystemRights.Write) == FileSystemRights.Write
+        || (rights & FileSystemRights.Delete) == FileSystemRights.Delete
+        || (rights & FileSystemRights.WriteData) == FileSystemRights.WriteData
+        || (rights & FileSystemRights.AppendData) == FileSystemRights.AppendData
+        || (rights & FileSystemRights.WriteExtendedAttributes) == FileSystemRights.WriteExtendedAttributes
+        || (rights & FileSystemRights.WriteAttributes) == FileSystemRights.WriteAttributes
+        || (rights & FileSystemRights.ChangePermissions) == FileSystemRights.ChangePermissions
+        || (rights & FileSystemRights.TakeOwnership) == FileSystemRights.TakeOwnership;
 }
 
 sealed class StaticBytesHandler : HttpMessageHandler

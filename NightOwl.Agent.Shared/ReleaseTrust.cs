@@ -546,21 +546,11 @@ public sealed class ReleaseTrustStore
         }
         try
         {
-            string args = $"\"{_paths.TrustDir}\" /inheritance:r /grant:r \"*S-1-5-18:(OI)(CI)(F)\" \"*S-1-5-32-544:(OI)(CI)(F)\" \"*S-1-5-32-545:(OI)(CI)(RX)\"";
-            using System.Diagnostics.Process? process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "icacls.exe",
-                Arguments = args,
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true
-            });
-            process?.WaitForExit(10000);
+            _paths.ProtectReleaseTrustDirectories("agent");
         }
         catch
         {
-            // ACL failure is logged by callers; the install path must remain atomic.
+            // Trust installation must remain atomic; NightOwlPaths logs ACL failures with path and scope.
         }
     }
 }
