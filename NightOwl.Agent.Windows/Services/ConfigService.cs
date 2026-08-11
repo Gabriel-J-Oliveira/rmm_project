@@ -8,6 +8,9 @@ namespace NightOwl.Agent.Windows.Services;
 
 public sealed class ConfigService
 {
+    internal const int CurrentConfigMigrationVersion = 2;
+    private const string UpdateTrustedReleaseKeysJobType = "update_trusted_release_keys";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -34,6 +37,11 @@ public sealed class ConfigService
         }
 
         Normalize(config);
+        ConfigMigrationResult migrationResult = ApplyConfigMigrations(config);
+        if (migrationResult.Applied)
+        {
+            WriteConfigMigrationLog(migrationResult);
+        }
         config.AgentVersion = GetRunningAgentVersion(config.AgentVersion);
         MachineIdentity identity = ResolveMachineIdentity(config, configPath);
         config.MachineId = identity.MachineId;
@@ -75,6 +83,7 @@ public sealed class ConfigService
     private static void Normalize(AgentConfig config)
     {
         NightOwlPaths paths = NightOwlPaths.Current;
+        config.AllowedJobTypes = NormalizeAllowedJobTypes(config.AllowedJobTypes);
         config.ServerBaseUrl = (config.ServerBaseUrl ?? "").TrimEnd('/');
         if (string.IsNullOrWhiteSpace(config.ServerBaseUrl) && !string.IsNullOrWhiteSpace(config.HeartbeatUrl))
         {
@@ -123,6 +132,70 @@ public sealed class ConfigService
         if (string.IsNullOrWhiteSpace(config.CachePath))
         {
             config.CachePath = paths.CacheDir;
+        }
+    }
+
+    internal static ConfigMigrationResult ApplyConfigMigrations(AgentConfig config)
+    {
+        int fromVersion = config.ConfigMigrationVersion <= 0 ? 1 : config.ConfigMigrationVersion;
+        int workingVersion = fromVersion;
+        List<string> addedAllowedJobTypes = new();
+
+        config.AllowedJobTypes = NormalizeAllowedJobTypes(config.AllowedJobTypes);
+        if (workingVersion < 2)
+        {
+            if (!config.AllowedJobTypes.Contains(UpdateTrustedReleaseKeysJobType, StringComparer.OrdinalIgnoreCase))
+            {
+                config.AllowedJobTypes.Add(UpdateTrustedReleaseKeysJobType);
+                addedAllowedJobTypes.Add(UpdateTrustedReleaseKeysJobType);
+            }
+            workingVersion = 2;
+        }
+
+        config.ConfigMigrationVersion = Math.Max(workingVersion, CurrentConfigMigrationVersion);
+        return new ConfigMigrationResult(
+            Applied: fromVersion < config.ConfigMigrationVersion || addedAllowedJobTypes.Count > 0,
+            FromVersion: fromVersion,
+            ToVersion: config.ConfigMigrationVersion,
+            AddedAllowedJobTypes: addedAllowedJobTypes);
+    }
+
+    private static List<string> NormalizeAllowedJobTypes(List<string>? allowedJobTypes)
+    {
+        List<string> normalized = new();
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string jobType in allowedJobTypes ?? new List<string>())
+        {
+            string value = (jobType ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(value) || !seen.Add(value))
+            {
+                continue;
+            }
+            normalized.Add(value);
+        }
+        return normalized;
+    }
+
+    private static void WriteConfigMigrationLog(ConfigMigrationResult result)
+    {
+        try
+        {
+            NightOwlPaths paths = NightOwlPaths.Current;
+            Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
+            var payload = new
+            {
+                timestamp = DateTimeOffset.UtcNow,
+                event_type = "config.migration.applied",
+                component = "agent",
+                from_version = result.FromVersion,
+                to_version = result.ToVersion,
+                added_allowed_job_types = result.AddedAllowedJobTypes
+            };
+            File.AppendAllText(paths.AgentLogPath, JsonSerializer.Serialize(payload, JsonOptions) + Environment.NewLine);
+        }
+        catch
+        {
+            // Config migration is still persisted; logging is best effort.
         }
     }
 
@@ -277,3 +350,5 @@ public sealed class ConfigService
 
     private sealed record MachineIdentity(string MachineId, string Source);
 }
+
+public sealed record ConfigMigrationResult(bool Applied, int FromVersion, int ToVersion, IReadOnlyList<string> AddedAllowedJobTypes);

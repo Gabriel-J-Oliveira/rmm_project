@@ -14,6 +14,9 @@ public sealed class AgentConfig
     [JsonPropertyName("agentVersion")]
     public string AgentVersion { get; set; } = "0.1.0.7";
 
+    [JsonPropertyName("configMigrationVersion")]
+    public int ConfigMigrationVersion { get; set; } = 1;
+
     [JsonPropertyName("serverBaseUrl")]
     public string ServerBaseUrl { get; set; } = "";
 
