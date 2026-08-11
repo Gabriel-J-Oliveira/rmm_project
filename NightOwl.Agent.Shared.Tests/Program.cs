@@ -279,6 +279,30 @@ try
         new[] { new ReleaseTrustRootKey { KeyId = "nightowl-root-test", PublicKeyXml = rootPublicXml } });
     Require(trustBase64Ok.IsValid, $"Base64 trust signature failed validation: {trustBase64Ok.ErrorCode} {trustBase64Ok.ErrorMessage}");
 
+    ReleaseTrustBundle normalizedDateBundle = JsonSerializer.Deserialize<ReleaseTrustBundle>("""
+    {
+      "schema_version": 1,
+      "bundle_version": 7,
+      "generated_at": "2026-08-11T12:00:00.0000000Z",
+      "valid_from": "2026-08-11T12:00:00.0000000Z",
+      "valid_until": "2027-08-11T12:00:00.0000000Z",
+      "keys": [
+        {
+          "key_id": "nightowl-release-normalized-date",
+          "algorithm": "RSA-PSS-SHA256",
+          "public_key_xml": "<RSAKeyValue><Modulus>AA==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>",
+          "status": "active",
+          "valid_from": null,
+          "valid_until": "2026-01-02T13:04:05.0000000Z",
+          "revoked_at": null
+        }
+      ]
+    }
+    """, new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidOperationException("Normalized trust bundle JSON should deserialize.");
+    Require(normalizedDateBundle.Keys[0].ValidFrom is null, "Null valid_from should deserialize as null.");
+    Require(normalizedDateBundle.Keys[0].RevokedAt is null, "Null revoked_at should deserialize as null.");
+    Require(normalizedDateBundle.Keys[0].ValidUntil?.UtcDateTime == new DateTime(2026, 1, 2, 13, 4, 5, DateTimeKind.Utc), "Normalized valid_until should deserialize as UTC DateTimeOffset.");
+
     string trustSyncRoot = Path.Combine(root, "trust-sync");
     NightOwlPaths trustSyncPaths = new(trustSyncRoot);
     ReleaseTrustStore trustStore = new(trustSyncPaths, applyAcl: false);

@@ -118,6 +118,30 @@ function Assert-PublicXmlSafe([string]$Xml, [string]$KeyId) {
     }
 }
 
+function Convert-OptionalTrustDate([object]$Value, [string]$FieldName, [string]$KeyId) {
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $null
+    }
+
+    $parsed = [System.DateTimeOffset]::MinValue
+    $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+    $ok = [System.DateTimeOffset]::TryParse(
+        $text,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        $styles,
+        [ref]$parsed)
+    if (-not $ok) {
+        throw "TRUST_BUNDLE_DATE_INVALID: $FieldName invalido para key_id $KeyId."
+    }
+
+    return $parsed.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Read-ReleasePublicKeys([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) { throw "TRUST_RELEASE_KEYS_MISSING: release-public-keys.json nao encontrado." }
     $json = Get-Content -Raw -Path $Path | ConvertFrom-Json
@@ -140,9 +164,9 @@ function Read-ReleasePublicKeys([string]$Path) {
             algorithm = $algorithm
             public_key_xml = $xml
             status = $status
-            valid_from = if ($null -eq $item.valid_from) { $null } else { [string]$item.valid_from }
-            valid_until = if ($null -eq $item.valid_until) { $null } else { [string]$item.valid_until }
-            revoked_at = if ($null -eq $item.revoked_at) { $null } else { [string]$item.revoked_at }
+            valid_from = Convert-OptionalTrustDate -Value $item.valid_from -FieldName "valid_from" -KeyId $keyId
+            valid_until = Convert-OptionalTrustDate -Value $item.valid_until -FieldName "valid_until" -KeyId $keyId
+            revoked_at = Convert-OptionalTrustDate -Value $item.revoked_at -FieldName "revoked_at" -KeyId $keyId
         }
     }
     return @($entries | Sort-Object { $_.key_id })
@@ -154,24 +178,52 @@ function Invoke-SelfTest {
     try {
         $root = New-Object System.Security.Cryptography.RSACryptoServiceProvider 3072
         $release = New-Object System.Security.Cryptography.RSACryptoServiceProvider 3072
+        $release2 = New-Object System.Security.Cryptography.RSACryptoServiceProvider 3072
         $rootPrivate = Join-Path $temp "root-private.xml"
         $releasePublic = Join-Path $temp "release-public-keys.json"
         Write-Utf8NoBomText $rootPrivate $root.ToXmlString($true)
         Write-Utf8NoBomText $releasePublic (ConvertTo-CanonicalJson ([ordered]@{
-            keys = @([ordered]@{
-                key_id = "nightowl-release-test"
-                algorithm = "RSA-PSS-SHA256"
-                public_key_xml = $release.ToXmlString($false)
-                status = "active"
-                valid_from = $null
-                valid_until = $null
-                revoked_at = $null
-            })
+            keys = @(
+                [ordered]@{
+                    key_id = "nightowl-release-test"
+                    algorithm = "RSA-PSS-SHA256"
+                    public_key_xml = $release.ToXmlString($false)
+                    status = "active"
+                    valid_from = "   "
+                    valid_until = ""
+                    revoked_at = ""
+                },
+                [ordered]@{
+                    key_id = "nightowl-release-test-offset"
+                    algorithm = "RSA-PSS-SHA256"
+                    public_key_xml = $release2.ToXmlString($false)
+                    status = "active"
+                    valid_from = "2026-01-02T10:04:05-03:00"
+                    valid_until = "2026-02-03T04:05:06+02:00"
+                    revoked_at = $null
+                }
+            )
         }))
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -BundleVersion 1 -ReleasePublicKeysPath $releasePublic -RootSigningKeyPath $rootPrivate -RootKeyId "nightowl-root-test" -OutputDir (Join-Path $temp "out") -PublicBaseUrl "https://example.invalid/downloads/nightowl-agent" | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "SelfTest build child failed." }
         $manifest = Join-Path $temp "out\release-public-keys.json"
         $sig = Join-Path $temp "out\release-public-keys.sig"
+        $meta = Join-Path $temp "out\release-public-keys.meta.json"
+        $bundleJson = Get-Content -Raw -Path $manifest | ConvertFrom-Json
+        $emptyDateKey = @($bundleJson.keys | Where-Object { [string]$_.key_id -eq "nightowl-release-test" })[0]
+        if ($null -ne $emptyDateKey.valid_from -or $null -ne $emptyDateKey.valid_until -or $null -ne $emptyDateKey.revoked_at) {
+            throw "SelfTest date normalization failed: empty date values must become null."
+        }
+        $offsetDateKey = @($bundleJson.keys | Where-Object { [string]$_.key_id -eq "nightowl-release-test-offset" })[0]
+        if ([string]$offsetDateKey.valid_from -ne "2026-01-02T13:04:05.0000000Z") {
+            throw "SelfTest date normalization failed: valid_from offset was not normalized to UTC."
+        }
+        if ([string]$offsetDateKey.valid_until -ne "2026-02-03T02:05:06.0000000Z") {
+            throw "SelfTest date normalization failed: valid_until offset was not normalized to UTC."
+        }
+        $metaJson = Get-Content -Raw -Path $meta | ConvertFrom-Json
+        if ((Get-Sha256Hex $manifest) -ne ([string]$metaJson.bundle_sha256)) { throw "SelfTest metadata bundle hash mismatch." }
+        if ((Get-Sha256Hex $sig) -ne ([string]$metaJson.signature_sha256)) { throw "SelfTest metadata signature hash mismatch." }
         $rsa = New-RsaPssPublicKeyFromXmlText (Export-PublicXmlFromPrivateXml $rootPrivate)
         $ok = $rsa.VerifyData([System.IO.File]::ReadAllBytes($manifest), [Convert]::FromBase64String((Get-Content -Raw -Path $sig).Trim()), [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pss)
         if (-not $ok) { throw "SelfTest signature verification failed." }
@@ -179,6 +231,27 @@ function Invoke-SelfTest {
         $tampered[$tampered.Length - 2] = $tampered[$tampered.Length - 2] -bxor 1
         $tamperedOk = $rsa.VerifyData($tampered, [Convert]::FromBase64String((Get-Content -Raw -Path $sig).Trim()), [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pss)
         if ($tamperedOk) { throw "SelfTest tamper detection failed." }
+        $invalidReleasePublic = Join-Path $temp "release-public-keys-invalid-date.json"
+        Write-Utf8NoBomText $invalidReleasePublic (ConvertTo-CanonicalJson ([ordered]@{
+            keys = @([ordered]@{
+                key_id = "nightowl-release-invalid-date"
+                algorithm = "RSA-PSS-SHA256"
+                public_key_xml = $release.ToXmlString($false)
+                status = "active"
+                valid_from = $null
+                valid_until = "not-a-date"
+                revoked_at = $null
+            })
+        }))
+        $invalidAccepted = $false
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -BundleVersion 2 -ReleasePublicKeysPath $invalidReleasePublic -RootSigningKeyPath $rootPrivate -RootKeyId "nightowl-root-test" -OutputDir (Join-Path $temp "invalid-out") -PublicBaseUrl "https://example.invalid/downloads/nightowl-agent" 2>$null | Out-Null
+            $invalidAccepted = ($LASTEXITCODE -eq 0)
+        }
+        catch {
+            $invalidAccepted = $false
+        }
+        if ($invalidAccepted) { throw "SelfTest invalid date failed: build accepted invalid valid_until." }
         Write-Step "SelfTest OK."
     }
     finally {
