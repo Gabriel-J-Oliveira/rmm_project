@@ -213,6 +213,14 @@ public sealed class Worker : BackgroundService
             return;
         }
 
+        string originalErrorMessage = SanitizeUpdateResultMessage(state.ErrorMessage);
+        string rollbackErrorMessage = SanitizeUpdateResultMessage(state.RollbackErrorMessage);
+        string effectiveErrorMessage = status == "failed"
+            ? SanitizeUpdateResultMessage(message)
+            : status == "rolled_back"
+                ? originalErrorMessage
+                : "";
+
         string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
             ? NightOwlPaths.Current.PendingResultsDir
             : config.PendingResultsPath;
@@ -227,7 +235,7 @@ public sealed class Worker : BackgroundService
             ExitCode = exitCode,
             Stdout = message,
             Stderr = "",
-            ErrorMessage = status == "failed" ? message : "",
+            ErrorMessage = effectiveErrorMessage,
             Result = new
             {
                 type = "update_agent",
@@ -250,17 +258,26 @@ public sealed class Worker : BackgroundService
                 },
                 exit_code = exitCode,
                 failure_stage = state.RollbackReason,
-                original_error_code = state.ErrorCode,
                 rollback_duration = state.RollbackStartedAt is null ? null : (double?)Math.Round((DateTimeOffset.UtcNow - state.RollbackStartedAt.Value).TotalSeconds, 3),
                 rollback_confirmed = status == "rolled_back",
                 error_code = state.ErrorCode,
-                error_message = status == "failed" ? message : "",
+                error_message = effectiveErrorMessage,
+                original_error_code = state.ErrorCode,
+                original_error_message = originalErrorMessage,
+                rollback_error_code = state.RollbackErrorCode,
+                rollback_error_message = rollbackErrorMessage,
                 message,
                 completed_at = DateTimeOffset.UtcNow
             }
         };
         string path = Path.Combine(pendingDir, $"job-result-{state.JobId}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+    }
+
+    private static string SanitizeUpdateResultMessage(string value)
+    {
+        string sanitized = (value ?? "").Replace("\r", " ").Replace("\n", " ");
+        return sanitized.Length <= 1000 ? sanitized : sanitized[..1000];
     }
 
     private static string GetRunningAgentVersion(string fallback)

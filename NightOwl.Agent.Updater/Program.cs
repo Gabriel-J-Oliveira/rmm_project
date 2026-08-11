@@ -27,6 +27,8 @@ internal static class Program
     private static readonly string PendingUpdateResultPath = Path.Combine(PendingJobsRoot, "pending-update-result.json");
     private static readonly UpdateStateStore UpdateStateStore = new(Paths.UpdateStatePath);
     private const int DefaultHealthCheckTimeoutSeconds = 180;
+    private const int DefaultQuiesceTimeoutSeconds = 30;
+    private const int DefaultFileReplaceTimeoutSeconds = 30;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -659,15 +661,31 @@ internal static class Program
             }
             MarkStage(state, UpdateStages.ServiceStopped);
             WriteLog("service.stop.done", "Service stopped for update.");
+            MarkStage(state, UpdateStages.Quiescing);
+            WriteLog("update.quiesce.start", "Waiting for NightOwl processes and install files to become idle.", new { installPath, runnerPath = RunnerRoot });
+            WaitForNightOwlProcessesToExit(
+                new[] { installPath, RunnerRoot },
+                TimeSpan.FromSeconds(GetOptionInt(Environment.GetCommandLineArgs(), "--quiesce-timeout-seconds", DefaultQuiesceTimeoutSeconds)));
+            WaitForInstallFilesReady(
+                stagedPath,
+                installPath,
+                TimeSpan.FromSeconds(GetOptionInt(Environment.GetCommandLineArgs(), "--file-ready-timeout-seconds", DefaultFileReplaceTimeoutSeconds)));
+            WriteLog("update.files.ready", "Install files are ready for replacement.", new { stagedPath, installPath });
             WriteLog("files.copy.start", "Copying staged files to install path.", new { stagedPath, installPath });
             MarkStage(state, UpdateStages.ReplacingFiles);
             try
             {
-                CopyStagedFiles(stagedPath, installPath);
+                CopyStagedFilesWithRetry(
+                    stagedPath,
+                    installPath,
+                    TimeSpan.FromSeconds(GetOptionInt(Environment.GetCommandLineArgs(), "--file-replace-timeout-seconds", DefaultFileReplaceTimeoutSeconds)));
             }
             catch (Exception ex)
             {
-                MarkRollbackRequired(state, state.CurrentStage, UpdateErrorCodes.UpdateFileReplaceFailed, ex.Message);
+                string errorCode = ex is FileReplaceException fileReplaceException
+                    ? fileReplaceException.ErrorCode
+                    : ErrorCodeFromException(ex, UpdateErrorCodes.UpdateFileReplaceFailed);
+                MarkRollbackRequired(state, state.CurrentStage, errorCode, ex.Message);
                 throw;
             }
             MarkStage(state, UpdateStages.FilesReplaced);
@@ -1134,6 +1152,8 @@ internal static class Program
             UpdateErrorCodes.ReleaseChannelMismatch,
             UpdateErrorCodes.ReleaseHashMismatch,
             UpdateErrorCodes.ReleaseSizeMismatch,
+            UpdateErrorCodes.UpdateFileLockTimeout,
+            UpdateErrorCodes.UpdateFileAccessDenied,
         })
         {
             if (message.Contains(code, StringComparison.OrdinalIgnoreCase))
@@ -1360,11 +1380,270 @@ internal static class Program
     private static readonly string[] ProtectedInstallDirectoryNames = { "Config", "Identity", "State", "Logs", "Diagnostics", "Updates", "Packages", "Cache" };
     private const string BackupManifestFileName = "backup-manifest.json";
 
+    internal static void CopyStagedFilesWithRetryForTest(string stagedPath, string installPath, TimeSpan timeout)
+    {
+        CopyStagedFilesWithRetry(stagedPath, installPath, timeout);
+    }
+
+    internal static void WaitForInstallFilesReadyForTest(string stagedPath, string installPath, TimeSpan timeout)
+    {
+        WaitForInstallFilesReady(stagedPath, installPath, timeout);
+    }
+
+    internal static bool IsNightOwlRelatedProcessForTest(Process process, IEnumerable<string> allowedRoots, int currentProcessId)
+    {
+        return IsNightOwlRelatedProcess(process, NormalizeRoots(allowedRoots), currentProcessId, out _);
+    }
+
+    internal static void WaitForNightOwlProcessesToExitForTest(IEnumerable<string> allowedRoots, TimeSpan timeout)
+    {
+        WaitForNightOwlProcessesToExit(allowedRoots, timeout);
+    }
+
     private static void CopyStagedFiles(string stagedPath, string installPath)
     {
         Directory.CreateDirectory(installPath);
         CopyDirectory(stagedPath, installPath, overwrite: true, excludeNames: ProtectedInstallFileNames);
         WriteLog("updater.files.copied", "Arquivos atualizados copiados para instalacao.", new { stagedPath, installPath });
+    }
+
+    private static void CopyStagedFilesWithRetry(string stagedPath, string installPath, TimeSpan timeout)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        int attempts = 0;
+        Exception? lastException = null;
+        while (DateTimeOffset.UtcNow <= deadline)
+        {
+            attempts++;
+            try
+            {
+                WaitForInstallFilesReady(stagedPath, installPath, Remaining(deadline));
+                CopyStagedFiles(stagedPath, installPath);
+                return;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                lastException = ex;
+                string lockedPath = ExtractPathFromException(ex);
+                string message = $"Access denied while replacing NightOwl file '{lockedPath}'. {SanitizeMessage(ex.Message)}";
+                WriteLog("update.file_lock.retry", "Access denied while replacing files; retrying.", new { error_code = UpdateErrorCodes.UpdateFileAccessDenied, file = lockedPath, attempts, error = SanitizeMessage(ex.Message) });
+                if (Remaining(deadline) <= TimeSpan.Zero)
+                {
+                    WriteLog("update.file_lock.timeout", "Access denied persisted until timeout.", new { error_code = UpdateErrorCodes.UpdateFileAccessDenied, file = lockedPath, attempts });
+                    throw new FileReplaceException(UpdateErrorCodes.UpdateFileAccessDenied, message, lockedPath, attempts, timeout, ex);
+                }
+            }
+            catch (IOException ex)
+            {
+                lastException = ex;
+                string lockedPath = ExtractPathFromException(ex);
+                string message = $"Timed out waiting for NightOwl file '{lockedPath}' to be released. {SanitizeMessage(ex.Message)}";
+                WriteLog("update.file_lock.retry", "File appears locked while replacing files; retrying.", new { error_code = UpdateErrorCodes.UpdateFileLockTimeout, file = lockedPath, attempts, error = SanitizeMessage(ex.Message) });
+                if (Remaining(deadline) <= TimeSpan.Zero)
+                {
+                    WriteLog("update.file_lock.timeout", "File lock persisted until timeout.", new { error_code = UpdateErrorCodes.UpdateFileLockTimeout, file = lockedPath, attempts });
+                    throw new FileReplaceException(UpdateErrorCodes.UpdateFileLockTimeout, message, lockedPath, attempts, timeout, ex);
+                }
+            }
+
+            Thread.Sleep(DelayForAttempt(attempts, Remaining(deadline)));
+        }
+
+        string fallbackPath = ExtractPathFromException(lastException);
+        throw new FileReplaceException(
+            UpdateErrorCodes.UpdateFileReplaceFailed,
+            $"Timed out replacing NightOwl files after {attempts} attempts. Last file: '{fallbackPath}'. {SanitizeMessage(lastException?.Message ?? "")}",
+            fallbackPath,
+            attempts,
+            timeout,
+            lastException);
+    }
+
+    private static void WaitForInstallFilesReady(string stagedPath, string installPath, TimeSpan timeout)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        int attempts = 0;
+        while (DateTimeOffset.UtcNow <= deadline)
+        {
+            attempts++;
+            try
+            {
+                foreach (string stagedFile in EnumerateManagedFiles(stagedPath))
+                {
+                    string relative = Path.GetRelativePath(stagedPath, stagedFile);
+                    string target = Path.Combine(installPath, relative);
+                    if (!File.Exists(target))
+                    {
+                        continue;
+                    }
+                    EnsureFileReady(target);
+                }
+                WriteLog("update.files.ready", "Install files passed lock preflight.", new { stagedPath, installPath, attempts });
+                return;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                string path = ExtractPathFromException(ex);
+                WriteLog("update.file_lock.detected", "Access denied during file readiness preflight.", new { error_code = UpdateErrorCodes.UpdateFileAccessDenied, file = path, attempts, error = SanitizeMessage(ex.Message) });
+                if (Remaining(deadline) <= TimeSpan.Zero)
+                {
+                    WriteLog("update.file_lock.timeout", "Access denied during preflight persisted until timeout.", new { error_code = UpdateErrorCodes.UpdateFileAccessDenied, file = path, attempts });
+                    throw new FileReplaceException(UpdateErrorCodes.UpdateFileAccessDenied, $"Access denied before replacing NightOwl file '{path}'. {SanitizeMessage(ex.Message)}", path, attempts, timeout, ex);
+                }
+            }
+            catch (IOException ex)
+            {
+                string path = ExtractPathFromException(ex);
+                WriteLog("update.file_lock.detected", "File lock detected during readiness preflight.", new { error_code = UpdateErrorCodes.UpdateFileLockTimeout, file = path, attempts, error = SanitizeMessage(ex.Message) });
+                if (Remaining(deadline) <= TimeSpan.Zero)
+                {
+                    WriteLog("update.file_lock.timeout", "File lock during preflight persisted until timeout.", new { error_code = UpdateErrorCodes.UpdateFileLockTimeout, file = path, attempts });
+                    throw new FileReplaceException(UpdateErrorCodes.UpdateFileLockTimeout, $"Timed out waiting for NightOwl file '{path}' before replacement. {SanitizeMessage(ex.Message)}", path, attempts, timeout, ex);
+                }
+            }
+
+            Thread.Sleep(DelayForAttempt(attempts, Remaining(deadline)));
+        }
+    }
+
+    private static void EnsureFileReady(string path)
+    {
+        try
+        {
+            using FileStream stream = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            stream.Flush(flushToDisk: false);
+        }
+        catch (IOException ex)
+        {
+            throw new IOException($"File is locked: {path}. {ex.Message}", ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new UnauthorizedAccessException($"Access denied: {path}. {ex.Message}", ex);
+        }
+    }
+
+    private static void WaitForNightOwlProcessesToExit(IEnumerable<string> allowedRoots, TimeSpan timeout)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        string[] roots = NormalizeRoots(allowedRoots);
+        int currentProcessId = Environment.ProcessId;
+        int attempts = 0;
+
+        while (DateTimeOffset.UtcNow <= deadline)
+        {
+            attempts++;
+            List<object> active = new();
+            foreach (Process process in Process.GetProcesses())
+            {
+                try
+                {
+                    if (!IsNightOwlRelatedProcess(process, roots, currentProcessId, out string executablePath))
+                    {
+                        continue;
+                    }
+                    active.Add(new { process_id = process.Id, process_name = process.ProcessName, executable_path = executablePath });
+                }
+                catch
+                {
+                    // Process may exit while being inspected.
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            if (active.Count == 0)
+            {
+                WriteLog("update.quiesce.processes_stopped", "NightOwl processes have exited.", new { attempts });
+                return;
+            }
+
+            WriteLog("update.quiesce.waiting_processes", "Waiting for NightOwl processes to exit.", new { attempts, active_processes = active });
+            Thread.Sleep(DelayForAttempt(attempts, Remaining(deadline)));
+        }
+
+        throw new System.TimeoutException($"Timed out waiting for NightOwl processes to exit after {timeout.TotalSeconds:0}s.");
+    }
+
+    private static bool IsNightOwlRelatedProcess(Process process, IReadOnlyCollection<string> allowedRoots, int currentProcessId, out string executablePath)
+    {
+        executablePath = "";
+        if (process.Id == currentProcessId)
+        {
+            return false;
+        }
+        if (!process.ProcessName.StartsWith("NightOwl.Agent", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            executablePath = process.MainModule?.FileName ?? "";
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            return false;
+        }
+
+        string normalized = NormalizeFullPath(executablePath);
+        return allowedRoots.Any(root => normalized.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals(root, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string[] NormalizeRoots(IEnumerable<string> roots)
+    {
+        return roots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(NormalizeFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string NormalizeFullPath(string path)
+    {
+        return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private static TimeSpan Remaining(DateTimeOffset deadline)
+    {
+        TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
+    private static TimeSpan DelayForAttempt(int attempts, TimeSpan remaining)
+    {
+        int milliseconds = attempts switch
+        {
+            <= 1 => 250,
+            2 => 500,
+            _ => 1000
+        };
+        TimeSpan delay = TimeSpan.FromMilliseconds(milliseconds);
+        return remaining > TimeSpan.Zero && remaining < delay ? remaining : delay;
+    }
+
+    private static string ExtractPathFromException(Exception? exception)
+    {
+        if (exception is null)
+        {
+            return "";
+        }
+        string message = exception.Message;
+        int firstQuote = message.IndexOf('\'');
+        int secondQuote = firstQuote >= 0 ? message.IndexOf('\'', firstQuote + 1) : -1;
+        if (firstQuote >= 0 && secondQuote > firstQuote)
+        {
+            return message.Substring(firstQuote + 1, secondQuote - firstQuote - 1);
+        }
+        return "";
     }
 
     private static IEnumerable<string> EnumerateManagedFiles(string root)
@@ -1434,16 +1713,24 @@ internal static class Program
 
     private static void StopTray()
     {
+        string[] allowedRoots = NormalizeRoots(new[] { Paths.InstallDir, RunnerRoot });
+        int currentProcessId = Environment.ProcessId;
         foreach (Process process in Process.GetProcessesByName(TrayProcessName))
         {
             try
             {
+                if (!IsNightOwlRelatedProcess(process, allowedRoots, currentProcessId, out string executablePath))
+                {
+                    WriteLog("updater.tray.stop_skipped", "Tray-like process ignored because it is outside NightOwl roots.", new { process_id = process.Id, process_name = process.ProcessName });
+                    continue;
+                }
                 process.CloseMainWindow();
                 if (!process.WaitForExit(3000))
                 {
                     process.Kill(entireProcessTree: true);
                     process.WaitForExit(5000);
                 }
+                WriteLog("updater.tray.stopped", "Tray process stopped.", new { process_id = process.Id, executable_path = executablePath });
             }
             catch (Exception ex)
             {
@@ -1716,6 +2003,9 @@ internal static class Program
             return;
         }
 
+        string originalErrorMessage = SanitizeMessage(state.ErrorMessage);
+        string rollbackErrorMessage = SanitizeMessage(state.RollbackErrorMessage);
+        string finalMessage = string.IsNullOrWhiteSpace(rollbackErrorMessage) ? SanitizeMessage(message) : rollbackErrorMessage;
         Directory.CreateDirectory(PendingJobsRoot);
         var payload = new
         {
@@ -1726,8 +2016,8 @@ internal static class Program
             duration_seconds = Math.Round((DateTimeOffset.UtcNow - state.StartedAt).TotalSeconds, 3),
             exit_code = 24,
             stdout = "",
-            stderr = message,
-            error_message = message,
+            stderr = finalMessage,
+            error_message = string.IsNullOrWhiteSpace(originalErrorMessage) ? finalMessage : originalErrorMessage,
             result = new
             {
                 type = "update_agent",
@@ -1738,9 +2028,13 @@ internal static class Program
                 active_version = LoadInstalledVersion(new AgentConfig { InstallPath = installPath }).Version,
                 failure_stage = state.RollbackReason,
                 original_error_code = state.ErrorCode,
+                original_error_message = originalErrorMessage,
+                error_code = state.ErrorCode,
+                error_message = string.IsNullOrWhiteSpace(originalErrorMessage) ? finalMessage : originalErrorMessage,
                 rollback_error_code = state.RollbackErrorCode,
+                rollback_error_message = rollbackErrorMessage,
                 rollback_confirmed = false,
-                message
+                message = finalMessage
             }
         };
         File.WriteAllText(PendingUpdateResultPath, JsonSerializer.Serialize(payload, JsonOptions));
@@ -1821,6 +2115,13 @@ internal static class Program
         {
             return;
         }
+        string originalErrorMessage = SanitizeMessage(state.ErrorMessage);
+        string rollbackErrorMessage = SanitizeMessage(state.RollbackErrorMessage);
+        string effectiveErrorMessage = status == "failed"
+            ? (string.IsNullOrWhiteSpace(originalErrorMessage) ? SanitizeMessage(message) : originalErrorMessage)
+            : status.Equals("rolled_back", StringComparison.OrdinalIgnoreCase)
+                ? originalErrorMessage
+                : "";
         Directory.CreateDirectory(PendingJobsRoot);
         var payload = new
         {
@@ -1832,13 +2133,19 @@ internal static class Program
             exit_code = exitCode,
             stdout = message,
             stderr = Trim(stderr, 8000),
-            error_message = status == "failed" ? message : "",
+            error_message = effectiveErrorMessage,
             result = new
             {
                 type = "update_agent",
                 update_id = state.UpdateId,
                 update_stage = state.CurrentStage,
                 error_code = state.ErrorCode,
+                error_message = effectiveErrorMessage,
+                original_error_code = state.ErrorCode,
+                original_error_message = originalErrorMessage,
+                rollback_error_code = state.RollbackErrorCode,
+                rollback_error_message = rollbackErrorMessage,
+                failure_stage = state.RollbackReason,
                 update_status = exitCode == 10 ? "no_update_available" : status == "completed" ? "success" : "failed",
                 installed_version = installedVersion,
                 previous_version = previousVersion,
@@ -1854,7 +2161,6 @@ internal static class Program
                     stage = state.CurrentStage
                 },
                 exit_code = exitCode,
-                error_message = status == "failed" ? message : "",
                 message,
                 completed_at = DateTimeOffset.UtcNow,
                 details = result
@@ -2183,6 +2489,23 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         MessageBox.Show(message, "NightOwl Agent Updater", MessageBoxButtons.OK, icon);
+    }
+
+    private sealed class FileReplaceException : IOException
+    {
+        public string ErrorCode { get; }
+        public string FilePath { get; }
+        public int Attempts { get; }
+        public TimeSpan Timeout { get; }
+
+        public FileReplaceException(string errorCode, string message, string filePath, int attempts, TimeSpan timeout, Exception? innerException)
+            : base($"{errorCode}: {message}", innerException)
+        {
+            ErrorCode = errorCode;
+            FilePath = filePath;
+            Attempts = attempts;
+            Timeout = timeout;
+        }
     }
 
     private sealed class AgentConfig

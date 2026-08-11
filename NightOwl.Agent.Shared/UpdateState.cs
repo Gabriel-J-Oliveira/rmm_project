@@ -17,6 +17,7 @@ public static class UpdateStages
     public const string ServiceStopped = "service_stopped";
     public const string CreatingBackup = "creating_backup";
     public const string BackupCreated = "backup_created";
+    public const string Quiescing = "quiescing";
     public const string ReplacingFiles = "replacing_files";
     public const string FilesReplaced = "files_replaced";
     public const string StartingService = "starting_service";
@@ -51,6 +52,8 @@ public static class UpdateErrorCodes
     public const string UpdateServiceStopTimeout = "UPDATE_SERVICE_STOP_TIMEOUT";
     public const string UpdateBackupFailed = "UPDATE_BACKUP_FAILED";
     public const string UpdateFileReplaceFailed = "UPDATE_FILE_REPLACE_FAILED";
+    public const string UpdateFileLockTimeout = "UPDATE_FILE_LOCK_TIMEOUT";
+    public const string UpdateFileAccessDenied = "UPDATE_FILE_ACCESS_DENIED";
     public const string UpdateServiceStartFailed = "UPDATE_SERVICE_START_FAILED";
     public const string UpdateInterrupted = "UPDATE_INTERRUPTED";
     public const string UpdateUnexpectedError = "UPDATE_UNEXPECTED_ERROR";
