@@ -70,7 +70,7 @@ from agents.software_catalog import (
     classify_software as classify_software_catalog,
     normalize_key,
 )
-from agents.versioning import agent_version_state, compare_versions, parse_semver
+from agents.versioning import agent_version_state, compare_versions, parse_semver, sort_releases_by_version
 from tickets.models import NotificationOutbox
 from tickets.services.email_outbox import (
     cancel_email,
@@ -140,11 +140,13 @@ EVENT_CATEGORY_PREFIXES = {
 
 
 def latest_agent_version():
-    release = AgentRelease.objects.filter(
+    releases = list(AgentRelease.objects.filter(
         channel=AgentRelease.CHANNEL_STABLE,
         status=AgentRelease.STATUS_AVAILABLE,
         revoked=False,
-    ).order_by('-released_at', '-created_at').first()
+    ))
+    ordered = sort_releases_by_version(releases, reverse=True)
+    release = ordered[0] if ordered else None
     if release:
         return release.version
     candidates = [
@@ -2702,11 +2704,12 @@ def _endpoint_diagnostic(endpoint):
 
 def _manual_update_release_options(endpoint):
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
-    releases = AgentRelease.objects.select_related('replacement_release').filter(
+    releases = list(AgentRelease.objects.select_related('replacement_release').filter(
         channel=channel,
         status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED},
         revoked=False,
-    ).order_by('-released_at', '-created_at')[:20]
+    ))
+    releases = sort_releases_by_version(releases, reverse=True)[:20]
     rows = []
     for release in releases:
         decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=release, record_evaluation=False)
@@ -3728,7 +3731,10 @@ def agent_releases(request):
         messages.success(request, f'Release {release.version} criada.')
         return redirect('agent-releases')
 
-    releases = list(AgentRelease.objects.prefetch_related('allowed_groups').select_related('created_by')[:50])
+    releases = sort_releases_by_version(
+        list(AgentRelease.objects.prefetch_related('allowed_groups').select_related('created_by')),
+        reverse=True,
+    )[:50]
     rows = [{'release': release, 'metrics': _release_metrics(release)} for release in releases]
     return render(
         request,

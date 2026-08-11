@@ -15,7 +15,7 @@ from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, A
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
-from .versioning import compare_versions, normalize_agent_version, parse_semver
+from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
 
 
 class AgentOperationalDiagnosticsTests(TestCase):
@@ -612,6 +612,29 @@ class AgentReleasePolicyTests(TestCase):
         self.assertTrue(decision.eligible)
         self.assertEqual(decision.release, release)
 
+    def test_latest_release_selection_uses_semantic_version(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc8'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        rc9 = self.release(
+            version='0.1.1.0-rc9',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=100,
+            released_at=timezone.now() + timedelta(minutes=2),
+        )
+        rc10 = self.release(
+            version='0.1.1.0-rc10',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=100,
+            released_at=timezone.now(),
+        )
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True)
+
+        self.assertTrue(decision.eligible)
+        self.assertEqual(decision.release, rc10)
+        self.assertNotEqual(decision.release, rc9)
+
     def test_rollout_bucket_is_deterministic(self):
         release = self.release(rollout=10)
 
@@ -1136,6 +1159,58 @@ class AgentReleasePolicyTests(TestCase):
         self.assertIn('release_notes', options[0])
         self.assertTrue(options[0]['metadata_complete'])
 
+    def test_endpoint_detail_orders_manual_releases_by_semantic_version(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(username='tech-release-rc10-option', password='pass', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc8'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        rc9 = self.release(
+            version='0.1.1.0-rc9',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+            released_at=timezone.now() + timedelta(minutes=2),
+        )
+        rc10 = self.release(
+            version='0.1.1.0-rc10',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+            released_at=timezone.now(),
+        )
+        revoked = self.release(
+            version='0.1.1.0-rc11',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            status=AgentRelease.STATUS_REVOKED,
+            revoked=True,
+            minimum_updater_version='0.1.0.7',
+        )
+        other_channel = self.release(
+            version='0.1.2.0-rc1',
+            channel=AgentRelease.CHANNEL_PILOT,
+            rollout=0,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
+
+        response = portal.get(reverse('api-endpoint-detail', kwargs={'pk': str(self.machine.id)}))
+
+        self.assertEqual(response.status_code, 200)
+        options = response.json()['agent_update_releases']
+        versions = [item['version'] for item in options]
+        self.assertEqual(versions[:2], ['0.1.1.0-rc10', '0.1.1.0-rc9'])
+        self.assertIn(rc10.version, versions)
+        self.assertIn(rc9.version, versions)
+        self.assertNotIn(revoked.version, versions)
+        self.assertNotIn(other_channel.version, versions)
+        self.assertEqual(options[0]['id'], str(rc10.id))
+
     def test_endpoint_detail_marks_downgrade_release_as_requires_force(self):
         user_model = get_user_model()
         user = user_model.objects.create_user(username='tech-release-downgrade-option', password='pass', is_staff=True)
@@ -1176,6 +1251,15 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(compare_versions('0.1.1.0-rc1', '0.1.1.0'), -1)
         self.assertEqual(compare_versions('0.1.1.0-rc2', '0.1.1.0-rc1'), 1)
         self.assertEqual(compare_versions('0.1.1.0-rc1', '0.1.0.9'), 1)
+        self.assertEqual(compare_versions('0.1.1.0-rc10', '0.1.1.0-rc9'), 1)
+        self.assertEqual(compare_versions('0.1.1.0-rc11', '0.1.1.0-rc10'), 1)
+        self.assertEqual(compare_versions('0.1.1.0-rc99', '0.1.1.0-rc11'), 1)
+        self.assertEqual(compare_versions('0.1.1.0', '0.1.1.0-rc99'), 1)
+        self.assertEqual(compare_versions('0.1.2.0-rc1', '0.1.1.0-rc99'), 1)
+        self.assertEqual(
+            sort_versions(['0.1.1.0-rc1', '0.1.1.0-rc10', '0.1.1.0-rc2', '0.1.1.0-rc99', '0.1.1.0-rc11', '0.1.1.0-rc9'], reverse=True),
+            ['0.1.1.0-rc99', '0.1.1.0-rc11', '0.1.1.0-rc10', '0.1.1.0-rc9', '0.1.1.0-rc2', '0.1.1.0-rc1'],
+        )
         self.assertEqual(
             normalize_agent_version('0.1.1.0-rc2+4cede41a96bc45baa85d3a30a17d44b1.36c72a1e5ed17b7cbfbb4515a6f9b549cfe1b2f8'),
             '0.1.1.0-rc2',

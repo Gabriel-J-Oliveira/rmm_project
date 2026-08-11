@@ -17,7 +17,7 @@ from .models import AgentOperationalStatus
 from .models import AgentRelease
 from .models import AgentReleaseSigningKey
 from .models import InventorySnapshot
-from .versioning import compare_versions, normalize_agent_version, parse_semver
+from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_releases_by_version
 
 
 AGENT_DIAGNOSTIC_STAGES = {
@@ -790,7 +790,9 @@ def _latest_available_release_for_endpoint(endpoint, channel):
     pinned = (endpoint.pinned_agent_version or '').strip()
     if pinned:
         return _release_query_for_channel(channel).filter(version=pinned).first()
-    return _release_query_for_channel(channel).first()
+    releases = list(_release_query_for_channel(channel))
+    ordered = sort_releases_by_version(releases, reverse=True)
+    return ordered[0] if ordered else None
 
 
 def _endpoint_group_ids(endpoint):

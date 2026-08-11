@@ -165,14 +165,43 @@
         for (let index = 0; index < length; index += 1) {
             if (left[index] == null) return -1;
             if (right[index] == null) return 1;
-            const leftNumeric = /^\d+$/.test(left[index]);
-            const rightNumeric = /^\d+$/.test(right[index]);
-            let leftValue = leftNumeric ? Number(left[index]) : left[index];
-            let rightValue = rightNumeric ? Number(right[index]) : right[index];
-            if (leftNumeric && !rightNumeric) return -1;
-            if (!leftNumeric && rightNumeric) return 1;
-            if (leftValue < rightValue) return -1;
-            if (leftValue > rightValue) return 1;
+            const comparison = comparePrereleaseIdentifier(left[index], right[index]);
+            if (comparison !== 0) return comparison;
+        }
+        return 0;
+    }
+
+    function prereleaseTokens(value) {
+        const matches = String(value || "").match(/\d+|[A-Za-z]+|[^A-Za-z0-9]+/g) || [];
+        return matches.map(function (part) {
+            return /^\d+$/.test(part) ? Number(part) : part.toLowerCase();
+        });
+    }
+
+    function comparePrereleaseIdentifier(left, right) {
+        const leftNumeric = /^\d+$/.test(left);
+        const rightNumeric = /^\d+$/.test(right);
+        if (leftNumeric && rightNumeric) {
+            const leftNumber = Number(left);
+            const rightNumber = Number(right);
+            if (leftNumber < rightNumber) return -1;
+            if (leftNumber > rightNumber) return 1;
+            return 0;
+        }
+        if (leftNumeric) return -1;
+        if (rightNumeric) return 1;
+        const leftTokens = prereleaseTokens(left);
+        const rightTokens = prereleaseTokens(right);
+        const length = Math.max(leftTokens.length, rightTokens.length);
+        for (let index = 0; index < length; index += 1) {
+            if (leftTokens[index] == null) return -1;
+            if (rightTokens[index] == null) return 1;
+            const leftToken = leftTokens[index];
+            const rightToken = rightTokens[index];
+            if (typeof leftToken === "number" && typeof rightToken !== "number") return -1;
+            if (typeof leftToken !== "number" && typeof rightToken === "number") return 1;
+            if (leftToken < rightToken) return -1;
+            if (leftToken > rightToken) return 1;
         }
         return 0;
     }

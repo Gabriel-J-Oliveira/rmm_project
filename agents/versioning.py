@@ -1,4 +1,5 @@
 import re
+from functools import cmp_to_key
 
 
 SEMVER_PATTERN = re.compile(
@@ -44,25 +45,55 @@ def compare_prerelease(left, right):
     if not right:
         return -1
     for left_part, right_part in zip(left, right):
-        left_numeric = left_part.isdigit()
-        right_numeric = right_part.isdigit()
-        if left_numeric and right_numeric:
-            left_value = int(left_part)
-            right_value = int(right_part)
-        elif left_numeric:
-            return -1
-        elif right_numeric:
-            return 1
-        else:
-            left_value = left_part
-            right_value = right_part
-        if left_value < right_value:
-            return -1
-        if left_value > right_value:
-            return 1
+        comparison = compare_prerelease_identifier(left_part, right_part)
+        if comparison != 0:
+            return comparison
     if len(left) < len(right):
         return -1
     if len(left) > len(right):
+        return 1
+    return 0
+
+
+def prerelease_identifier_tokens(value):
+    return tuple(
+        int(part) if part.isdigit() else part.lower()
+        for part in re.findall(r'\d+|[A-Za-z]+|[^A-Za-z0-9]+', str(value or ''))
+    )
+
+
+def compare_prerelease_identifier(left, right):
+    left_numeric = left.isdigit()
+    right_numeric = right.isdigit()
+    if left_numeric and right_numeric:
+        left_tokens = (int(left),)
+        right_tokens = (int(right),)
+    elif left_numeric:
+        return -1
+    elif right_numeric:
+        return 1
+    else:
+        left_tokens = prerelease_identifier_tokens(left)
+        right_tokens = prerelease_identifier_tokens(right)
+
+    for left_token, right_token in zip(left_tokens, right_tokens):
+        if isinstance(left_token, int) and isinstance(right_token, int):
+            if left_token < right_token:
+                return -1
+            if left_token > right_token:
+                return 1
+            continue
+        if isinstance(left_token, int):
+            return -1
+        if isinstance(right_token, int):
+            return 1
+        if left_token < right_token:
+            return -1
+        if left_token > right_token:
+            return 1
+    if len(left_tokens) < len(right_tokens):
+        return -1
+    if len(left_tokens) > len(right_tokens):
         return 1
     return 0
 
@@ -79,6 +110,26 @@ def compare_versions(current, recommended):
     if current_numbers > recommended_numbers:
         return 1
     return compare_prerelease(current_prerelease, recommended_prerelease)
+
+
+def sort_versions(values, *, reverse=False):
+    return sorted(
+        values,
+        key=cmp_to_key(lambda left, right: compare_versions(left, right) if compare_versions(left, right) is not None else 0),
+        reverse=reverse,
+    )
+
+
+def sort_releases_by_version(releases, *, reverse=True):
+    return sorted(
+        releases,
+        key=cmp_to_key(
+            lambda left, right: compare_versions(getattr(left, 'version', ''), getattr(right, 'version', ''))
+            if compare_versions(getattr(left, 'version', ''), getattr(right, 'version', '')) is not None
+            else 0
+        ),
+        reverse=reverse,
+    )
 
 
 def agent_version_state(current, recommended):
