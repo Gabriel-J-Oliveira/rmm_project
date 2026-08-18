@@ -42,7 +42,8 @@ concurrency:
 jobs:
   release:
     name: Release agent
-    runs-on: [self-hosted, Windows]
+    runs-on: windows-2025
+    environment: nightowl-release
     timeout-minutes: 90
 
     steps:
@@ -65,10 +66,195 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Prepare log directory
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path ".\artifacts\ci-release-logs" | Out-Null
+
+      - name: Prepare NightOwl release credentials
+        shell: pwsh
+        env:
+          NIGHTOWL_RELEASE_SIGNING_KEY_XML_B64: ${{ secrets.NIGHTOWL_RELEASE_SIGNING_KEY_XML_B64 }}
+          NIGHTOWL_RELEASE_TRUSTED_PUBLIC_KEYS_JSON_B64: ${{ secrets.NIGHTOWL_RELEASE_TRUSTED_PUBLIC_KEYS_JSON_B64 }}
+          NIGHTOWL_RELEASE_TRUST_ROOTS_JSON_B64: ${{ secrets.NIGHTOWL_RELEASE_TRUST_ROOTS_JSON_B64 }}
+          NIGHTOWL_RELEASE_SSH_PRIVATE_KEY_B64: ${{ secrets.NIGHTOWL_RELEASE_SSH_PRIVATE_KEY_B64 }}
+          NIGHTOWL_RELEASE_SSH_KNOWN_HOSTS_B64: ${{ secrets.NIGHTOWL_RELEASE_SSH_KNOWN_HOSTS_B64 }}
+          NIGHTOWL_RELEASE_SIGNING_KEY_ID: ${{ vars.NIGHTOWL_RELEASE_SIGNING_KEY_ID }}
+          NIGHTOWL_RELEASE_SSH_HOST: ${{ vars.NIGHTOWL_RELEASE_SSH_HOST }}
+          NIGHTOWL_RELEASE_SSH_USER: ${{ vars.NIGHTOWL_RELEASE_SSH_USER }}
+          NIGHTOWL_RELEASE_SSH_PORT: ${{ vars.NIGHTOWL_RELEASE_SSH_PORT }}
+          NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH: ${{ vars.NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH }}
+          NIGHTOWL_RELEASE_PUBLIC_BASE_URL: ${{ vars.NIGHTOWL_RELEASE_PUBLIC_BASE_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Assert-RequiredValue([string]$Name, [string]$Value) {
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+              throw "Missing required release configuration: $Name"
+            }
+          }
+
+          function ConvertFrom-RequiredBase64Secret([string]$Name, [string]$Value) {
+            Assert-RequiredValue $Name $Value
+            try {
+              return [Convert]::FromBase64String(($Value -replace '\s', ''))
+            }
+            catch {
+              throw "Invalid Base64 release configuration: $Name"
+            }
+          }
+
+          function Write-Bytes([string]$Path, [byte[]]$Bytes) {
+            $directory = Split-Path -Parent $Path
+            if (-not [string]::IsNullOrWhiteSpace($directory)) {
+              New-Item -ItemType Directory -Force -Path $directory | Out-Null
+            }
+            [System.IO.File]::WriteAllBytes($Path, $Bytes)
+          }
+
+          function Write-Utf8NoBomText([string]$Path, [string]$Content) {
+            $encoding = [System.Text.UTF8Encoding]::new($false)
+            $directory = Split-Path -Parent $Path
+            if (-not [string]::IsNullOrWhiteSpace($directory)) {
+              New-Item -ItemType Directory -Force -Path $directory | Out-Null
+            }
+            [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+          }
+
+          function Protect-PrivateFile([string]$Path) {
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+            $systemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
+            $acl = Get-Acl -LiteralPath $Path
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($rule in @($acl.Access)) {
+              [void]$acl.RemoveAccessRule($rule)
+            }
+            $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
+            $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
+            $propagation = [System.Security.AccessControl.PropagationFlags]::None
+            $allow = [System.Security.AccessControl.AccessControlType]::Allow
+            $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($currentUser, $rights, $inheritance, $propagation, $allow))
+            $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($systemSid, $rights, $inheritance, $propagation, $allow))
+            Set-Acl -LiteralPath $Path -AclObject $acl
+          }
+
+          function Assert-PrivateFileProtected([string]$Path) {
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $forbiddenSids = @("S-1-1-0", "S-1-5-11", "S-1-5-32-545")
+            $acl = Get-Acl -LiteralPath $Path
+            $currentUserCanRead = $false
+            foreach ($rule in $acl.Access) {
+              try {
+                $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+              }
+              catch {
+                continue
+              }
+              if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $sid -in $forbiddenSids) {
+                throw "Private file ACL is too permissive: $Path"
+              }
+              if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and $sid -eq $currentUser) {
+                if (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Read) -ne 0) {
+                  $currentUserCanRead = $true
+                }
+              }
+            }
+            if (-not $currentUserCanRead) {
+              throw "Private file ACL does not allow the runner account to read: $Path"
+            }
+          }
+
+          $signingKeyBytes = ConvertFrom-RequiredBase64Secret "NIGHTOWL_RELEASE_SIGNING_KEY_XML_B64" $env:NIGHTOWL_RELEASE_SIGNING_KEY_XML_B64
+          $trustedPublicKeysBytes = ConvertFrom-RequiredBase64Secret "NIGHTOWL_RELEASE_TRUSTED_PUBLIC_KEYS_JSON_B64" $env:NIGHTOWL_RELEASE_TRUSTED_PUBLIC_KEYS_JSON_B64
+          $trustRootsBytes = ConvertFrom-RequiredBase64Secret "NIGHTOWL_RELEASE_TRUST_ROOTS_JSON_B64" $env:NIGHTOWL_RELEASE_TRUST_ROOTS_JSON_B64
+          $sshPrivateKeyBytes = ConvertFrom-RequiredBase64Secret "NIGHTOWL_RELEASE_SSH_PRIVATE_KEY_B64" $env:NIGHTOWL_RELEASE_SSH_PRIVATE_KEY_B64
+          $sshKnownHostsBytes = ConvertFrom-RequiredBase64Secret "NIGHTOWL_RELEASE_SSH_KNOWN_HOSTS_B64" $env:NIGHTOWL_RELEASE_SSH_KNOWN_HOSTS_B64
+          Assert-RequiredValue "NIGHTOWL_RELEASE_SIGNING_KEY_ID" $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID
+          Assert-RequiredValue "NIGHTOWL_RELEASE_SSH_HOST" $env:NIGHTOWL_RELEASE_SSH_HOST
+          Assert-RequiredValue "NIGHTOWL_RELEASE_SSH_USER" $env:NIGHTOWL_RELEASE_SSH_USER
+
+          $remoteProjectPath = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH)) { "/opt/nightowl" } else { $env:NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH }
+          $publicBaseUrl = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL)) { "https://nightowl.controlsul.com.br/downloads/nightowl-agent" } else { $env:NIGHTOWL_RELEASE_PUBLIC_BASE_URL }
+          $sshPort = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_RELEASE_SSH_PORT)) { "22" } else { $env:NIGHTOWL_RELEASE_SSH_PORT }
+          if ($sshPort -notmatch '^\d+$') {
+            throw "Invalid release configuration: NIGHTOWL_RELEASE_SSH_PORT"
+          }
+
+          $releaseHome = Join-Path $env:RUNNER_TEMP "nightowl-release"
+          $sshDirectory = Join-Path $env:USERPROFILE ".ssh"
+          if (Test-Path -LiteralPath $releaseHome) {
+            Remove-Item -LiteralPath $releaseHome -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $releaseHome | Out-Null
+          New-Item -ItemType Directory -Force -Path $sshDirectory | Out-Null
+
+          $signingKeyPath = Join-Path $releaseHome "release-signing-key.xml"
+          $trustedPublicKeysPath = Join-Path $releaseHome "release-public-keys.json"
+          $trustRootsPath = Join-Path $releaseHome "release-trust-roots.json"
+          $sshKeyPath = Join-Path $releaseHome "id_ed25519"
+          $knownHostsPath = Join-Path $releaseHome "known_hosts"
+          $sshConfigPath = Join-Path $sshDirectory "config"
+          $sshConfigBackupPath = Join-Path $releaseHome "ssh-config.backup"
+          $sshConfigCreatedMarkerPath = Join-Path $releaseHome "ssh-config.created"
+          $publisherConfigPath = Join-Path $releaseHome "release-publisher.json"
+
+          Write-Bytes -Path $signingKeyPath -Bytes $signingKeyBytes
+          Write-Bytes -Path $trustedPublicKeysPath -Bytes $trustedPublicKeysBytes
+          Write-Bytes -Path $trustRootsPath -Bytes $trustRootsBytes
+          Write-Bytes -Path $sshKeyPath -Bytes $sshPrivateKeyBytes
+          Write-Bytes -Path $knownHostsPath -Bytes $sshKnownHostsBytes
+          Protect-PrivateFile -Path $sshKeyPath
+          Protect-PrivateFile -Path $signingKeyPath
+          Assert-PrivateFileProtected -Path $sshKeyPath
+          Assert-PrivateFileProtected -Path $signingKeyPath
+
+          if (Test-Path -LiteralPath $sshConfigPath) {
+            Copy-Item -LiteralPath $sshConfigPath -Destination $sshConfigBackupPath -Force
+          }
+          else {
+            Write-Utf8NoBomText -Path $sshConfigCreatedMarkerPath -Content "created"
+          }
+
+          $sshConfig = @(
+            "Host nightowl-release"
+            "    HostName $($env:NIGHTOWL_RELEASE_SSH_HOST)"
+            "    User $($env:NIGHTOWL_RELEASE_SSH_USER)"
+            "    Port $sshPort"
+            "    IdentityFile $sshKeyPath"
+            "    UserKnownHostsFile $knownHostsPath"
+            "    IdentitiesOnly yes"
+            "    StrictHostKeyChecking yes"
+            "    ServerAliveInterval 30"
+            "    ServerAliveCountMax 3"
+          ) -join "`n"
+          Write-Utf8NoBomText -Path $sshConfigPath -Content $sshConfig
+
+          $publisherConfig = [ordered]@{
+            signing_key_path = $signingKeyPath
+            signing_key_id = $env:NIGHTOWL_RELEASE_SIGNING_KEY_ID
+            trusted_public_keys_path = $trustedPublicKeysPath
+            trust_roots_path = $trustRootsPath
+            remote_alias = "nightowl-release"
+            remote_project_path = $remoteProjectPath
+            public_base_url = $publicBaseUrl
+          }
+          Write-Utf8NoBomText -Path $publisherConfigPath -Content ($publisherConfig | ConvertTo-Json -Depth 4)
+
+          "NIGHTOWL_RELEASE_PUBLISHER_CONFIG=$publisherConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_SIGNING_KEY_PATH=$signingKeyPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_SIGNING_KEY_ID=$($env:NIGHTOWL_RELEASE_SIGNING_KEY_ID)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_PUBLIC_KEYS_PATH=$trustedPublicKeysPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_TRUST_ROOTS_JSON=$trustRootsPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_SSH_TARGET=nightowl-release" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_REMOTE_PROJECT_PATH=$remoteProjectPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "NIGHTOWL_RELEASE_PUBLIC_BASE_URL=$publicBaseUrl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "NightOwl release credentials prepared in RUNNER_TEMP."
 
       - name: Test release runner
         shell: pwsh
@@ -96,6 +282,25 @@ jobs:
           if ("${{ inputs.dry_run }}" -eq "true") { $publisherArgs += "-DryRun" }
           if ("${{ inputs.skip_tests }}" -eq "true") { $publisherArgs += "-SkipTests" }
           powershell.exe @publisherArgs *>&1 | Tee-Object -FilePath ".\artifacts\ci-release-logs\publisher.log"
+
+      - name: Cleanup NightOwl release credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $releaseHome = Join-Path $env:RUNNER_TEMP "nightowl-release"
+          $sshConfigPath = Join-Path (Join-Path $env:USERPROFILE ".ssh") "config"
+          $sshConfigBackupPath = Join-Path $releaseHome "ssh-config.backup"
+          $sshConfigCreatedMarkerPath = Join-Path $releaseHome "ssh-config.created"
+          if (Test-Path -LiteralPath $sshConfigBackupPath) {
+            Copy-Item -LiteralPath $sshConfigBackupPath -Destination $sshConfigPath -Force
+          }
+          elseif ((Test-Path -LiteralPath $sshConfigCreatedMarkerPath) -and (Test-Path -LiteralPath $sshConfigPath)) {
+            Remove-Item -LiteralPath $sshConfigPath -Force
+          }
+          if (Test-Path -LiteralPath $releaseHome) {
+            Remove-Item -LiteralPath $releaseHome -Recurse -Force
+          }
+          Write-Host "NightOwl ephemeral release credentials removed."
 
       - name: Write summary
         if: always()
