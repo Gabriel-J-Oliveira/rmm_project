@@ -40,6 +40,7 @@ $diagnosticsProject = Join-Path $repoRoot "NightOwl.Agent.Diagnostics\NightOwl.A
 $sharedProject = Join-Path $repoRoot "NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj"
 $testProject = Join-Path $repoRoot "NightOwl.Agent.Shared.Tests\NightOwl.Agent.Shared.Tests.csproj"
 $updaterTestProject = Join-Path $repoRoot "NightOwl.Agent.Updater.Tests\NightOwl.Agent.Updater.Tests.csproj"
+$windowsTestProject = Join-Path $repoRoot "NightOwl.Agent.Windows.Tests\NightOwl.Agent.Windows.Tests.csproj"
 $installScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Install-NightOwlAgentDotNet.ps1"
 $uninstallScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Uninstall-NightOwlAgentDotNet.ps1"
 $iconPath = Join-Path $repoRoot "assets\icons\NightOwl.ico"
@@ -802,14 +803,14 @@ $msbuildVersionArgs = @(
     "-p:FileVersion=$assemblyVersion",
     "-p:InformationalVersion=$Version+$buildId"
 )
-$projects = @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject)
+$projects = @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject)
 
 try {
-    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject)) {
+    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject)) {
         Invoke-Checked "dotnet" @("clean", $project, "-c", "Release")
     }
 
-    foreach ($project in @($sharedProject, $testProject, $updaterTestProject)) {
+    foreach ($project in @($sharedProject, $testProject, $updaterTestProject, $windowsTestProject)) {
         Invoke-Checked "dotnet" @("restore", $project)
     }
 
@@ -817,7 +818,7 @@ try {
         Invoke-Checked "dotnet" @("restore", $project, "-r", $Runtime)
     }
 
-    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject)) {
+    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject)) {
         Invoke-Checked "dotnet" (@("build", $project, "-c", "Release", "--no-restore") + $msbuildVersionArgs)
     }
 
@@ -828,6 +829,7 @@ try {
         Invoke-Checked "dotnet" (@("test", $testProject, "-c", "Release", "--no-restore", "--no-build") + $msbuildVersionArgs)
         Invoke-Checked "dotnet" @("run", "--project", $testProject, "-c", "Release", "--no-restore")
         Invoke-Checked "dotnet" @("run", "--project", $updaterTestProject, "-c", "Release", "--no-restore")
+        Invoke-Checked "dotnet" @("run", "--project", $windowsTestProject, "-c", "Release", "--no-restore")
     }
 
     foreach ($project in @($agentProject, $trayProject, $updaterProject, $diagnosticsProject)) {
