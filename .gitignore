@@ -29,7 +29,6 @@ Desktop.ini
 .idea/
 
 # Night Owl local/runtime
-C:/RMM/
 RMM/
 *.log
 last_payload.json
@@ -55,12 +54,18 @@ secrets.json
 *token*
 *secret*
 
-# Node/build, if ever used
+# Legitimate source files whose names contain "token"
+!agents/management/commands/create_enrollment_token.py
+!agents/management/commands/create_manual_validation_token.py
+!agents/migrations/0009_agentenrollmenttoken_agentenrollmentlog.py
+
+# Build/generated artifacts
 node_modules/
 dist/
 build/
 artifacts/
 bin/
 obj/
+publish/
 tests/e2e/reports/
 *.zip

@@ -1,8 +1,0 @@
-﻿{
-    "agent":  "NightOwl.Agent.Windows",
-    "version":  "0.1.0",
-    "platform":  "windows-x64",
-    "package":  "NightOwl.Agent.Windows.zip",
-    "published_at":  "2026-07-10T16:27:29.4472181Z",
-    "sha256":  "8857b6ef736793e4fe137a8527dca2156b8ec62dbb8f31eebb07a92a9a29526c"
-}
