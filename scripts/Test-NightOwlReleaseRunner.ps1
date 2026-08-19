@@ -71,10 +71,19 @@ function Invoke-NativeCaptured([string]$FileName, [string[]]$Arguments, [string]
     $stdoutFile = [System.IO.Path]::GetTempFileName()
     $stderrFile = [System.IO.Path]::GetTempFileName()
     try {
-        & $FileName @Arguments > $stdoutFile 2> $stderrFile
-        $nativeExitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $FileName @Arguments > $stdoutFile 2> $stderrFile
+            $nativeExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         $stdout = Get-Content -Raw -Path $stdoutFile -ErrorAction SilentlyContinue
         $stderr = Get-Content -Raw -Path $stderrFile -ErrorAction SilentlyContinue
+        if ($null -eq $stdout) { $stdout = "" }
+        if ($null -eq $stderr) { $stderr = "" }
         if ($nativeExitCode -ne 0) {
             Fail $FailureCode ("Comando falhou: {0} {1}`nExit code: {2}`nSTDOUT:`n{3}`nSTDERR:`n{4}" -f $FileName, ($Arguments -join " "), $nativeExitCode, ($stdout -replace '\s+$',''), ($stderr -replace '\s+$',''))
         }
@@ -149,6 +158,31 @@ function Test-RemoteDjangoCommands([hashtable]$Resolved) {
 function Invoke-SelfTest {
     Assert-WindowsPowerShellSupported
     Assert-CommandAvailable "powershell.exe"
+    Invoke-NativeCaptured "powershell.exe" @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", "Write-Error 'native stderr with exit zero' -ErrorAction Continue; exit 0"
+    ) "RUNNER_SELFTEST_NATIVE_STDERR_FAILED" | Out-Null
+
+    $failedAsExpected = $false
+    try {
+        Invoke-NativeCaptured "powershell.exe" @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command", "Write-Output 'native stdout before failure'; Write-Error 'native stderr before failure' -ErrorAction Continue; exit 7"
+        ) "RUNNER_SELFTEST_NATIVE_EXIT_FAILED" | Out-Null
+    }
+    catch {
+        if ($_.Exception.Data.Contains("Code") -and [string]$_.Exception.Data["Code"] -eq "RUNNER_SELFTEST_NATIVE_EXIT_FAILED") {
+            $failedAsExpected = $true
+        }
+        else {
+            throw
+        }
+    }
+    if (-not $failedAsExpected) {
+        Fail "RUNNER_SELFTEST_NATIVE_EXIT_NOT_DETECTED" "Invoke-NativeCaptured nao detectou exit code nativo diferente de zero."
+    }
     Write-Step "SelfTest OK: validacoes estaticas do runner carregadas."
 }
 
