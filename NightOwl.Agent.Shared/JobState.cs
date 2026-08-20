@@ -595,14 +595,24 @@ public sealed class PendingResultQueue
         Directory.CreateDirectory(_directory);
         string path = PathFor(record.ResultId);
         string temp = Path.Combine(_directory, $".{record.ResultId}.{Guid.NewGuid():N}.tmp");
-        File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
-        if (File.Exists(path))
+        try
         {
-            File.Replace(temp, path, null);
+            File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
+            File.Move(temp, path, overwrite: true);
         }
-        else
+        finally
         {
-            File.Move(temp, path);
+            try
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch
+            {
+                // Cleanup is best effort; preserve the original save exception.
+            }
         }
     }
 

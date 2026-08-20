@@ -320,14 +320,24 @@ public sealed class UpdateStateStore
 
         string tempPath = System.IO.Path.Combine(directory ?? ".", $".{System.IO.Path.GetFileName(Path)}.{Guid.NewGuid():N}.tmp");
         string json = JsonSerializer.Serialize(state, JsonOptions);
-        File.WriteAllText(tempPath, json);
-        if (File.Exists(Path))
+        try
         {
-            File.Replace(tempPath, Path, null);
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, Path, overwrite: true);
         }
-        else
+        finally
         {
-            File.Move(tempPath, Path);
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch
+            {
+                // Cleanup is best effort; preserve the original save exception.
+            }
         }
     }
 

@@ -123,6 +123,7 @@ try
     state.ExpectedSha256 = new string('a', 64);
     store.Save(state);
     Require(File.Exists(updateStatePath), "Update state was not written.");
+    RequireNoUpdateStateTemps(updateStatePath, "Initial update state save should not leave temp files.");
 
     UpdateState loaded = store.Load() ?? throw new InvalidOperationException("Update state was not loaded.");
     Require(loaded.UpdateId == "update-test", "Update ID was not preserved.");
@@ -130,12 +131,17 @@ try
     Require(loaded.CurrentStage == UpdateStages.Received, "Initial update stage mismatch.");
     Require(loaded.IsActive, "New update state must be active.");
 
-    loaded.MarkStage(UpdateStages.Downloading);
-    store.Save(loaded);
-    UpdateState downloading = store.Load() ?? throw new InvalidOperationException("Downloading state was not loaded.");
-    Require(downloading.CurrentStage == UpdateStages.Downloading, "Update transition was not persisted.");
-    Require(downloading.UpdateId == "update-test", "Update ID changed after transition.");
-    Require(downloading.JobId == "job-test", "Job ID changed after transition.");
+    foreach (string stage in new[] { UpdateStages.Downloading, UpdateStages.Downloaded, UpdateStages.Validating, UpdateStages.Validated, UpdateStages.Staging })
+    {
+        loaded.MarkStage(stage);
+        store.Save(loaded);
+        RequireNoUpdateStateTemps(updateStatePath, $"Update state transition to {stage} should not leave temp files.");
+        UpdateState reloadedTransition = store.Load() ?? throw new InvalidOperationException($"{stage} state was not loaded.");
+        Require(reloadedTransition.CurrentStage == stage, $"Update transition to {stage} was not persisted.");
+        Require(reloadedTransition.UpdateId == "update-test", $"Update ID changed after {stage} transition.");
+        Require(reloadedTransition.JobId == "job-test", $"Job ID changed after {stage} transition.");
+        loaded = reloadedTransition;
+    }
 
     string rawJson = File.ReadAllText(updateStatePath);
     Require(rawJson.TrimStart().StartsWith("{"), "Atomic write produced invalid JSON prefix.");
@@ -147,12 +153,14 @@ try
 
     state.MarkStage(UpdateStages.WaitingHealthCheck);
     store.Save(state);
+    RequireNoUpdateStateTemps(updateStatePath, "Waiting health check update state save should not leave temp files.");
     UpdateState interrupted = store.Load() ?? throw new InvalidOperationException("Interrupted state was not loaded.");
     Require(interrupted.IsActive, "Waiting health check should be treated as incomplete.");
     Require(interrupted.CurrentStage == UpdateStages.WaitingHealthCheck, "Interrupted stage was not preserved.");
 
     interrupted.MarkStage(UpdateStages.Completed, UpdateStatuses.Completed);
     store.Save(interrupted);
+    RequireNoUpdateStateTemps(updateStatePath, "Completed update state save should not leave temp files.");
     UpdateState completed = store.Load() ?? throw new InvalidOperationException("Completed state was not loaded.");
     Require(!completed.IsActive, "Completed update state should not be active.");
     Require(completed.HealthCheckConfirmed, "Completed update must have health check confirmed.");
@@ -284,11 +292,20 @@ try
     };
     PendingResultRecord pending = resultQueue.Enqueue("ping", resultPayload);
     Require(File.Exists(Path.Combine(resultQueueDir, $"{pending.ResultId}.json")), "Pending result was not persisted.");
+    RequireNoPendingResultTemps(resultQueueDir, "Pending result enqueue should not leave temp files.");
     Require(resultQueue.ListDue(DateTimeOffset.UtcNow).Count == 1, "Pending result should be due immediately.");
     Require(!string.IsNullOrWhiteSpace(pending.PayloadSha256), "Payload hash was not calculated.");
+    PendingResultRecord enqueued = resultQueue.LoadAll().Single(record => record.ResultId == pending.ResultId);
+    Require(enqueued.JobId == pending.JobId, "Reloaded pending result job_id mismatch after enqueue.");
+    Require(enqueued.JobType == "ping", "Reloaded pending result job_type mismatch after enqueue.");
+    Require(enqueued.PayloadSha256 == pending.PayloadSha256, "Reloaded pending result payload hash mismatch after enqueue.");
 
     resultQueue.MarkAttemptFailed(pending, JobErrorCodes.ResultSendFailed, "backend unavailable");
+    RequireNoPendingResultTemps(resultQueueDir, "Pending result resave should not leave temp files.");
     PendingResultRecord retried = resultQueue.LoadAll().Single(record => record.ResultId == pending.ResultId);
+    Require(retried.JobId == pending.JobId, "Reloaded pending result job_id mismatch after resave.");
+    Require(retried.JobType == pending.JobType, "Reloaded pending result job_type mismatch after resave.");
+    Require(retried.PayloadSha256 == pending.PayloadSha256, "Reloaded pending result payload hash mismatch after resave.");
     Require(retried.AttemptCount == 1, "Retry attempt was not recorded.");
     Require(retried.NextAttemptAt > DateTimeOffset.UtcNow, "Retry backoff was not applied.");
     Require(resultQueue.ListDue(DateTimeOffset.UtcNow).Count == 0, "Backoff result should not be due yet.");
@@ -642,6 +659,24 @@ static void RequireNoJobStoreTemps(string jobsDir, string message)
 {
     string[] temps = Directory.Exists(jobsDir)
         ? Directory.GetFiles(jobsDir, ".*.tmp", SearchOption.TopDirectoryOnly)
+        : Array.Empty<string>();
+    Require(temps.Length == 0, $"{message} Found: {string.Join(", ", temps.Select(Path.GetFileName))}");
+}
+
+static void RequireNoUpdateStateTemps(string updateStatePath, string message)
+{
+    string directory = Path.GetDirectoryName(updateStatePath) ?? ".";
+    string fileName = Path.GetFileName(updateStatePath);
+    string[] temps = Directory.Exists(directory)
+        ? Directory.GetFiles(directory, $".{fileName}.*.tmp", SearchOption.TopDirectoryOnly)
+        : Array.Empty<string>();
+    Require(temps.Length == 0, $"{message} Found: {string.Join(", ", temps.Select(Path.GetFileName))}");
+}
+
+static void RequireNoPendingResultTemps(string queueDir, string message)
+{
+    string[] temps = Directory.Exists(queueDir)
+        ? Directory.GetFiles(queueDir, ".*.tmp", SearchOption.TopDirectoryOnly)
         : Array.Empty<string>();
     Require(temps.Length == 0, $"{message} Found: {string.Join(", ", temps.Select(Path.GetFileName))}");
 }
