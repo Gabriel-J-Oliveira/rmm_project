@@ -183,6 +183,20 @@ try
     JobStateRecord received = jobStore.Load(jobId) ?? throw new InvalidOperationException("Job state was not loaded.");
     Require(received.Status == "received", "Job received transition was not persisted.");
     Require(received.CorrelationId == "corr-1", "Job correlation_id was not preserved.");
+    RequireNoJobStoreTemps(jobsDir, "Initial job state save should not leave temp files.");
+
+    string updateJobId = Guid.NewGuid().ToString();
+    jobStore.Mark(updateJobId, "update_agent", "validated", 1, "corr-update");
+    JobStateRecord validatedUpdate = jobStore.Load(updateJobId) ?? throw new InvalidOperationException("Validated update job state was not loaded.");
+    Require(validatedUpdate.Status == "validated", "Validated transition was not persisted.");
+    Require(validatedUpdate.JobType == "update_agent", "Validated job_type was not preserved.");
+    RequireNoJobStoreTemps(jobsDir, "Validated transition should not leave temp files.");
+
+    jobStore.Mark(updateJobId, "update_agent", "running", 1, "corr-update");
+    JobStateRecord runningUpdate = jobStore.Load(updateJobId) ?? throw new InvalidOperationException("Running update job state was not loaded.");
+    Require(runningUpdate.Status == "running", "Running transition was not persisted.");
+    Require(runningUpdate.CorrelationId == "corr-update", "Running correlation_id was not preserved.");
+    RequireNoJobStoreTemps(jobsDir, "Running transition should not leave temp files.");
 
     RemoteJobResult jobResult = new()
     {
@@ -203,6 +217,35 @@ try
     Require(completedJob.Result?.JobId == jobId, "Completed job result was not preserved.");
     Require(JobFinalStatuses.All.Contains(JobFinalStatuses.RolledBack), "rolled_back should be a final job result status.");
     Require(JobFinalStatuses.All.Contains(JobFinalStatuses.RollbackFailed), "rollback_failed should be a final job result status.");
+    RequireNoJobStoreTemps(jobsDir, "Completed transition should not leave temp files.");
+
+    RemoteJobResult failedUpdateResult = new()
+    {
+        JobId = updateJobId,
+        JobType = "update_agent",
+        Status = JobFinalStatuses.Failed,
+        StartedAt = DateTimeOffset.UtcNow.AddSeconds(-2),
+        CompletedAt = DateTimeOffset.UtcNow,
+        DurationMs = 2000,
+        Attempt = 1,
+        AgentVersion = "0.1.0.8",
+        MachineId = "machine-test",
+        ErrorCode = JobErrorCodes.JobExecutionFailed,
+        ErrorMessage = "synthetic failure",
+        Output = new { ok = false }
+    };
+    jobStore.MarkFinal(failedUpdateResult, "corr-update");
+    JobStateRecord failedUpdate = jobStore.Load(updateJobId) ?? throw new InvalidOperationException("Failed update job state was not loaded.");
+    Require(failedUpdate.Status == JobFinalStatuses.Failed, "Failed transition was not persisted.");
+    Require(failedUpdate.IsFinal, "Failed update job should be final.");
+    Require(failedUpdate.ErrorCode == JobErrorCodes.JobExecutionFailed, "Failed update error_code was not preserved.");
+    Require(failedUpdate.Result?.JobId == updateJobId, "Failed update result was not preserved.");
+    RequireNoJobStoreTemps(jobsDir, "Failed transition should not leave temp files.");
+
+    string failedRawJson = File.ReadAllText(Path.Combine(jobsDir, $"{updateJobId}.json"));
+    Require(failedRawJson.TrimStart().StartsWith("{"), "Repeated JobStore writes produced invalid JSON prefix.");
+    using JsonDocument failedDocument = JsonDocument.Parse(failedRawJson);
+    Require(failedDocument.RootElement.ValueKind == JsonValueKind.Object, "Repeated JobStore writes produced non-object JSON.");
 
     File.WriteAllText(Path.Combine(jobsDir, $"{Guid.NewGuid()}.json"), "{ invalid json");
     bool invalidThrown = false;
@@ -593,6 +636,14 @@ static bool SamePath(string left, string right)
         Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
         Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
         StringComparison.OrdinalIgnoreCase);
+}
+
+static void RequireNoJobStoreTemps(string jobsDir, string message)
+{
+    string[] temps = Directory.Exists(jobsDir)
+        ? Directory.GetFiles(jobsDir, ".*.tmp", SearchOption.TopDirectoryOnly)
+        : Array.Empty<string>();
+    Require(temps.Length == 0, $"{message} Found: {string.Join(", ", temps.Select(Path.GetFileName))}");
 }
 
 static bool PolicyGrantsUsers(NightOwlAclPolicy policy)

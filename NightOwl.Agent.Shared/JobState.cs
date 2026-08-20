@@ -219,14 +219,30 @@ public sealed class JobStore
         Directory.CreateDirectory(_directory);
         string path = PathFor(record.JobId);
         string temp = Path.Combine(_directory, $".{record.JobId}.{Guid.NewGuid():N}.tmp");
-        File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
-        if (File.Exists(path))
+        try
         {
-            File.Replace(temp, path, null);
+            File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
+            File.Move(temp, path, overwrite: true);
         }
-        else
+        catch
         {
-            File.Move(temp, path);
+            TryDeleteTemp(temp);
+            throw;
+        }
+    }
+
+    private static void TryDeleteTemp(string temp)
+    {
+        try
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup only; preserve the original persistence exception.
         }
     }
 

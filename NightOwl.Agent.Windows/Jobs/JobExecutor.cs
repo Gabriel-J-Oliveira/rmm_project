@@ -44,7 +44,17 @@ public sealed class JobExecutor
             return final;
         }
 
-        _policy.MarkRunning(job);
+        try
+        {
+            _policy.MarkRunning(job);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            await _logger.LogAsync("job.state.invalid", ex.Message, new { job.Id, job.Type, error_code = JobErrorCodes.JobStateInvalid }, ct, "error");
+            return BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobStateInvalid, ex.Message, ex.ToString());
+        }
+
         await _logger.LogAsync("job.started", "Job started.", BuildJobLog(job, "running", "", 0, decision.TimeoutSeconds), ct);
 
         using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
