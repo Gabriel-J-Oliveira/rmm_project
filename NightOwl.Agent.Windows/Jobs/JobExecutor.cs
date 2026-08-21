@@ -81,6 +81,12 @@ public sealed class JobExecutor
                 _policy.MarkFinal(config, job, trustResult, ExtractErrorCode(trustResult));
                 return trustResult;
             }
+            if (job.Type == "uninstall_agent")
+            {
+                JobExecutionResult uninstallResult = await StartUninstallAgentAsync(config, job, started, stopwatch, jobToken);
+                _policy.MarkFinal(config, job, uninstallResult, ExtractErrorCode(uninstallResult));
+                return uninstallResult;
+            }
 
             object result = job.Type switch
             {
@@ -493,6 +499,100 @@ public sealed class JobExecutor
                 minimum_updater_version = minimumUpdaterVersion,
                 mandatory,
                 force
+            }
+        };
+    }
+
+    private async Task<JobExecutionResult> StartUninstallAgentAsync(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, CancellationToken ct)
+    {
+        string mode = GetPayloadString(job, "mode", "uninstall").ToLowerInvariant();
+        bool purgeAuthorized = GetPayloadBool(job, "purge_authorized", false);
+        if (mode == "purge" && !purgeAuthorized)
+        {
+            stopwatch.Stop();
+            return BuildFailure(config, job, started, stopwatch, JobFinalStatuses.InvalidParameters, JobErrorCodes.JobInvalidParameters, "Remote purge requires explicit backend authorization.", "");
+        }
+
+        string sourceRunner = Path.Combine(config.InstallPath, "NightOwl.Agent.Uninstaller.exe");
+        if (!File.Exists(sourceRunner))
+        {
+            await _logger.LogAsync("job.uninstall_agent.failed", "Uninstaller executable was not found.", new { job.Id, sourceRunner }, ct, "error");
+            throw new FileNotFoundException("Uninstaller nao encontrado no endpoint.", sourceRunner);
+        }
+
+        string runnerDir = Path.Combine(NightOwlPaths.Current.UpdatesRunnerDir, "uninstall-" + job.Id);
+        if (Directory.Exists(runnerDir))
+        {
+            Directory.Delete(runnerDir, recursive: true);
+        }
+        Directory.CreateDirectory(runnerDir);
+        foreach (string file in Directory.EnumerateFiles(config.InstallPath, "NightOwl.Agent.Uninstaller*"))
+        {
+            File.Copy(file, Path.Combine(runnerDir, Path.GetFileName(file)), overwrite: true);
+        }
+        foreach (string file in Directory.EnumerateFiles(config.InstallPath, "NightOwl.Agent.Shared*"))
+        {
+            File.Copy(file, Path.Combine(runnerDir, Path.GetFileName(file)), overwrite: true);
+        }
+
+        string runner = Path.Combine(runnerDir, "NightOwl.Agent.Uninstaller.exe");
+        List<string> args = new()
+        {
+            "uninstall",
+            "--job-id", job.Id,
+            "--mode", mode,
+            "--config-path", Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json"),
+            "--root-path", NightOwlPaths.Current.Root,
+            "--install-path", config.InstallPath,
+            "--service-name", NightOwlPaths.ServiceName,
+            "--quiet",
+            "--json-output"
+        };
+        if (purgeAuthorized)
+        {
+            args.Add("--purge-authorized");
+        }
+
+        await _logger.LogAsync("job.uninstall_agent.started", "Starting uninstaller runner for uninstall_agent job.", new
+        {
+            job.Id,
+            mode,
+            purge_authorized = purgeAuthorized,
+            runner_dir = runnerDir
+        }, ct);
+
+        using Process process = new()
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = runner,
+                Arguments = string.Join(" ", args.Select(QuoteArg)),
+                WorkingDirectory = runnerDir,
+                UseShellExecute = true,
+                CreateNoWindow = true
+            }
+        };
+        process.Start();
+        stopwatch.Stop();
+
+        await _logger.LogAsync("job.uninstall_agent.runner_started", "Uninstaller runner started; final result will be sent by the runner.", new { job.Id, process_id = process.Id }, ct);
+
+        return new JobExecutionResult
+        {
+            JobId = job.Id,
+            Status = "running",
+            StartedAt = started,
+            FinishedAt = DateTimeOffset.MinValue,
+            DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
+            ExitCode = 0,
+            Stdout = "uninstaller runner started",
+            Result = new
+            {
+                type = "uninstall_agent",
+                uninstall_status = "runner_started",
+                mode,
+                purge_authorized = purgeAuthorized,
+                message = "Uninstaller runner started. Final result will be sent by the runner."
             }
         };
     }

@@ -36,11 +36,13 @@ $workRoot = Join-Path $repoRoot "artifacts\nightowl-agent\work"
 $agentProject = Join-Path $repoRoot "NightOwl.Agent.Windows\NightOwl.Agent.Windows.csproj"
 $trayProject = Join-Path $repoRoot "NightOwl.Agent.Tray\NightOwl.Agent.Tray.csproj"
 $updaterProject = Join-Path $repoRoot "NightOwl.Agent.Updater\NightOwl.Agent.Updater.csproj"
+$uninstallerProject = Join-Path $repoRoot "NightOwl.Agent.Uninstaller\NightOwl.Agent.Uninstaller.csproj"
 $diagnosticsProject = Join-Path $repoRoot "NightOwl.Agent.Diagnostics\NightOwl.Agent.Diagnostics.csproj"
 $sharedProject = Join-Path $repoRoot "NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj"
 $testProject = Join-Path $repoRoot "NightOwl.Agent.Shared.Tests\NightOwl.Agent.Shared.Tests.csproj"
 $updaterTestProject = Join-Path $repoRoot "NightOwl.Agent.Updater.Tests\NightOwl.Agent.Updater.Tests.csproj"
 $windowsTestProject = Join-Path $repoRoot "NightOwl.Agent.Windows.Tests\NightOwl.Agent.Windows.Tests.csproj"
+$uninstallerTestProject = Join-Path $repoRoot "NightOwl.Agent.Uninstaller.Tests\NightOwl.Agent.Uninstaller.Tests.csproj"
 $installScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Install-NightOwlAgentDotNet.ps1"
 $uninstallScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Uninstall-NightOwlAgentDotNet.ps1"
 $iconPath = Join-Path $repoRoot "assets\icons\NightOwl.ico"
@@ -628,6 +630,7 @@ function Validate-Release([string]$Path) {
             "NightOwl.Agent.Windows.exe",
             "NightOwl.Agent.Tray.exe",
             "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Uninstaller.exe",
             "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
@@ -806,19 +809,19 @@ $msbuildVersionArgs = @(
 $projects = @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject)
 
 try {
-    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject)) {
+    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject, $uninstallerTestProject)) {
         Invoke-Checked "dotnet" @("clean", $project, "-c", "Release")
     }
 
-    foreach ($project in @($sharedProject, $testProject, $updaterTestProject, $windowsTestProject)) {
+    foreach ($project in @($sharedProject, $testProject, $updaterTestProject, $windowsTestProject, $uninstallerTestProject)) {
         Invoke-Checked "dotnet" @("restore", $project)
     }
 
-    foreach ($project in @($agentProject, $trayProject, $updaterProject, $diagnosticsProject)) {
+    foreach ($project in @($agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject)) {
         Invoke-Checked "dotnet" @("restore", $project, "-r", $Runtime)
     }
 
-    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject)) {
+    foreach ($project in @($sharedProject, $agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject, $testProject, $updaterTestProject, $windowsTestProject, $uninstallerTestProject)) {
         Invoke-Checked "dotnet" (@("build", $project, "-c", "Release", "--no-restore") + $msbuildVersionArgs)
     }
 
@@ -830,9 +833,10 @@ try {
         Invoke-Checked "dotnet" @("run", "--project", $testProject, "-c", "Release", "--no-restore")
         Invoke-Checked "dotnet" @("run", "--project", $updaterTestProject, "-c", "Release", "--no-restore")
         Invoke-Checked "dotnet" @("run", "--project", $windowsTestProject, "-c", "Release", "--no-restore")
+        Invoke-Checked "dotnet" @("run", "--project", $uninstallerTestProject, "-c", "Release", "--no-restore")
     }
 
-    foreach ($project in @($agentProject, $trayProject, $updaterProject, $diagnosticsProject)) {
+    foreach ($project in @($agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject)) {
         Invoke-Checked "dotnet" (@("publish", $project, "-c", "Release", "-r", $Runtime, "--self-contained", "true", "-o", $publishDir, "--no-restore") + $msbuildVersionArgs)
     }
 
@@ -928,6 +932,7 @@ try {
             "NightOwl.Agent.Windows.exe",
             "NightOwl.Agent.Tray.exe",
             "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Uninstaller.exe",
             "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",

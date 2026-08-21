@@ -765,6 +765,40 @@ class AgentJobsResultView(APIView):
                             'health_check_confirmed': bool(job.result.get('health_check_confirmed')) if isinstance(job.result, dict) else False,
                         },
                     )
+            if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT and job.status in RESULT_FINAL_STATUSES:
+                mode = ''
+                if isinstance(job.result, dict):
+                    mode = str(job.result.get('mode') or '')
+                create_audit_event(
+                    event_type='agent.uninstall.result_received',
+                    title='Resultado de uninstall_agent recebido',
+                    description=f'Resultado {job.status} de uninstall_agent recebido para {machine.hostname}.',
+                    severity=AuditEvent.SEVERITY_SUCCESS if job.status == AgentJob.STATUS_COMPLETED else AuditEvent.SEVERITY_WARNING,
+                    actor_type=AuditEvent.ACTOR_AGENT,
+                    actor_name='NightOwlAgent',
+                    endpoint=machine,
+                    metadata={
+                        'job_id': str(job.id),
+                        'result_id': result_id,
+                        'mode': mode,
+                        'status': job.status,
+                        'error_code': job.error_code,
+                    },
+                )
+                if job.status == AgentJob.STATUS_COMPLETED and mode == 'purge':
+                    machine.is_active = False
+                    machine.status = AgentMachine.STATUS_OFFLINE
+                    machine.save(update_fields=['is_active', 'status', 'updated_at'])
+                    create_audit_event(
+                        event_type='agent.purge.confirmed',
+                        title='Purge do agente confirmado',
+                        description=f'Endpoint {machine.hostname} desativado apos confirmacao de purge.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_SYSTEM,
+                        actor_name='Sistema',
+                        endpoint=machine,
+                        metadata={'job_id': str(job.id), 'result_id': result_id},
+                    )
             logger.info(
                 'job.result.received endpoint_id=%s job_id=%s job_type=%s status=%s exit_code=%s',
                 machine.id,

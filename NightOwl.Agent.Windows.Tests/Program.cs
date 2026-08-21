@@ -65,6 +65,7 @@ static void TestNewConfigContainsTrustedReleaseKeys()
     ConfigService.ApplyConfigMigrations(config);
 
     Require(config.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "New config should allow update_trusted_release_keys.");
+    Require(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.OrdinalIgnoreCase), "New config should allow uninstall_agent.");
     Require(config.ConfigMigrationVersion == ConfigService.CurrentConfigMigrationVersion, "New config should persist current migration version.");
 }
 
@@ -79,6 +80,7 @@ static void TestLegacyDefaultConfigReceivesTrustedReleaseKeys()
     Require(result.ToVersion == ConfigService.CurrentConfigMigrationVersion, "Legacy migration should finish at current version.");
     Require(result.AddedAllowedJobTypes.Contains("update_trusted_release_keys"), "Migration result should report added job type.");
     Require(config.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Legacy config should allow update_trusted_release_keys.");
+    Require(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.OrdinalIgnoreCase), "Legacy config should allow uninstall_agent.");
 }
 
 static void TestMigrationIsIdempotent()
@@ -98,10 +100,13 @@ static void TestMigrationDoesNotDuplicateJobTypes()
     AgentConfig config = LegacyConfig();
     config.AllowedJobTypes.Add("update_trusted_release_keys");
     config.AllowedJobTypes.Add("UPDATE_TRUSTED_RELEASE_KEYS");
+    config.AllowedJobTypes.Add("uninstall_agent");
+    config.AllowedJobTypes.Add("UNINSTALL_AGENT");
 
     ConfigService.ApplyConfigMigrations(config);
 
     Require(config.AllowedJobTypes.Count(job => job.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase)) == 1, "Migration should not duplicate update_trusted_release_keys.");
+    Require(config.AllowedJobTypes.Count(job => job.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase)) == 1, "Migration should not duplicate uninstall_agent.");
 }
 
 static void TestPreservesIdentityAndEndpoints()
@@ -139,6 +144,7 @@ static void TestPreservesCustomAllowedJobTypes()
     Require(!config.AllowedJobTypes.Contains("collect_logs", StringComparer.OrdinalIgnoreCase), "Migration should preserve explicit legacy removal of unrelated job types.");
     Require(config.AllowedJobTypes.Contains("custom_local_job", StringComparer.OrdinalIgnoreCase), "Migration should preserve custom allowed job types.");
     Require(config.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Migration should add the new known default to legacy configs.");
+    Require(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.OrdinalIgnoreCase), "Migration should add uninstall_agent to legacy configs.");
 }
 
 static void TestMigratedConfigDoesNotRestoreExplicitRemoval()

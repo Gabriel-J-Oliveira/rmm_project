@@ -189,6 +189,35 @@ class AgentOperationalDiagnosticsTests(TestCase):
         receipt = AgentJobResultReceipt.objects.get(result_id=result_id)
         self.assertEqual(receipt.conflict_count, 1)
 
+    def test_uninstall_agent_purge_result_deactivates_endpoint(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'mode': 'purge', 'purge_authorized': True},
+        )
+        result_id = str(uuid.uuid4())
+        payload = {
+            'job_id': str(job.id),
+            'status': 'completed',
+            'exit_code': 0,
+            'result': {
+                'type': 'uninstall_agent',
+                'mode': 'purge',
+                'uninstall_status': 'completed',
+            },
+        }
+
+        response = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.machine.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        self.assertFalse(self.machine.is_active)
+        self.assertEqual(self.machine.status, AgentMachine.STATUS_OFFLINE)
+        self.assertTrue(AuditEvent.objects.filter(event_type='agent.purge.confirmed', endpoint=self.machine).exists())
+
     def test_update_job_stage_maps_to_progress_and_message(self):
         job = AgentJob.objects.create(
             endpoint=self.machine,

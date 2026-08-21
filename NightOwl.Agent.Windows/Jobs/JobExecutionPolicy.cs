@@ -21,7 +21,8 @@ public sealed class JobExecutionPolicy
         "windows_update_scan",
         "restart_agent",
         "update_agent",
-        "update_trusted_release_keys"
+        "update_trusted_release_keys",
+        "uninstall_agent"
     };
 
     private readonly JobStore _store;
@@ -252,6 +253,21 @@ public sealed class JobExecutionPolicy
                 }
                 break;
             }
+            case "uninstall_agent":
+            {
+                EnsureAllowedFields(p, "mode", "purge_authorized", "source", "timeout_seconds");
+                string mode = GetString(p, "mode", "");
+                if (!mode.Equals("uninstall", StringComparison.OrdinalIgnoreCase)
+                    && !mode.Equals("purge", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("Invalid uninstall mode.");
+                }
+                if (mode.Equals("purge", StringComparison.OrdinalIgnoreCase) && !GetBool(p, "purge_authorized", false))
+                {
+                    throw new InvalidOperationException("Remote purge requires explicit backend authorization.");
+                }
+                break;
+            }
             case "restart_agent":
                 EnsureAllowedFields(p, "reason");
                 if (GetString(p, "reason", "").Length > 256)
@@ -362,6 +378,25 @@ public sealed class JobExecutionPolicy
             return parsedElement;
         }
         return long.TryParse(value.ToString(), out long parsed) ? parsed : fallback;
+    }
+
+    private static bool GetBool(Dictionary<string, object?> parameters, string key, bool fallback)
+    {
+        if (!parameters.TryGetValue(key, out object? value) || value is null)
+        {
+            return fallback;
+        }
+        if (value is JsonElement element)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String => bool.TryParse(element.GetString(), out bool parsedElement) ? parsedElement : fallback,
+                _ => fallback
+            };
+        }
+        return bool.TryParse(value.ToString(), out bool parsed) ? parsed : fallback;
     }
 
     private static bool IsValidHttpsUrl(string value)

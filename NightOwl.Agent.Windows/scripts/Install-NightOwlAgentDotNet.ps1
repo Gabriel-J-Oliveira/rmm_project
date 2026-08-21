@@ -23,6 +23,7 @@ param(
     [switch]$Repair,
     [switch]$Reinstall,
     [switch]$ForceRecovery,
+    [switch]$TrustLocalPackage,
     [switch]$NonInteractive
 )
 
@@ -383,6 +384,9 @@ function Get-ChecksumFromManifest($Manifest, [string]$FileName) {
 
 function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     Enable-InsecureTlsForLab
+    if (-not $AllowInsecureTls -and -not $Url.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "INSTALL_PACKAGE_INSECURE_URL: download de pacote exige HTTPS."
+    }
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
     $zipPath = Join-Path $WorkDir "NightOwl.Agent.Windows.zip"
     Write-Step "OK" ("Baixando pacote: {0}" -f $Url)
@@ -391,36 +395,115 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
         throw "Download do pacote falhou ou retornou arquivo vazio."
     }
 
-    $checksumsUrl = (Get-UrlDirectory $Url) + "/checksums.json"
-    try {
-        $checksumsPath = Join-Path $WorkDir "checksums.json"
-        Invoke-WebRequest -Uri $checksumsUrl -OutFile $checksumsPath -UseBasicParsing -TimeoutSec 30
-        $manifest = Read-JsonFile $checksumsPath
-        $expected = Get-ChecksumFromManifest $manifest "NightOwl.Agent.Windows.zip"
-        if (-not [string]::IsNullOrWhiteSpace($expected)) {
-            $actual = Get-FileSha256 $zipPath
-            if ($actual -ne $expected.ToLowerInvariant()) {
-                throw "Checksum invalido para NightOwl.Agent.Windows.zip. Esperado $expected, obtido $actual."
-            }
-            Write-Step "OK" "Checksum do pacote validado"
-        }
-        else {
-            Write-Step "WARN" "checksums.json encontrado, mas sem SHA256 do ZIP"
-        }
+    $baseUrl = Get-UrlDirectory $Url
+    $checksumsPath = Join-Path $WorkDir "checksums.json"
+    $manifestPath = Join-Path $WorkDir "release-manifest.json"
+    $signaturePath = Join-Path $WorkDir "release-manifest.sig"
+    Invoke-WebRequest -Uri ($baseUrl + "/checksums.json") -OutFile $checksumsPath -UseBasicParsing -TimeoutSec 30
+    Invoke-WebRequest -Uri ($baseUrl + "/release-manifest.json") -OutFile $manifestPath -UseBasicParsing -TimeoutSec 30
+    Invoke-WebRequest -Uri ($baseUrl + "/release-manifest.sig") -OutFile $signaturePath -UseBasicParsing -TimeoutSec 30
+
+    $checksums = Read-JsonFile $checksumsPath
+    $expected = Get-ChecksumFromManifest $checksums "NightOwl.Agent.Windows.zip"
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        throw "INSTALL_CHECKSUM_MISSING: checksums.json sem SHA256 do ZIP."
     }
-    catch {
-        if ($_.Exception.Message -like "Checksum invalido*") { throw }
-        Write-Step "WARN" "Checksum nao validado; checksums.json indisponivel ou incompleto"
+    $actual = Get-FileSha256 $zipPath
+    if ($actual -ne $expected.ToLowerInvariant()) {
+        throw "INSTALL_CHECKSUM_INVALID: Checksum invalido para NightOwl.Agent.Windows.zip. Esperado $expected, obtido $actual."
     }
+    Write-Step "OK" "Checksum do pacote validado"
 
     $extractPath = Join-Path $WorkDir "extracted"
     if (Test-Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+    Assert-RequiredPackageFiles -SourceDir $extractPath -RequireTrust
+    Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath
     $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
     if (-not $exe) {
         throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
     }
     return $exe.DirectoryName
+}
+
+function Assert-RsaPublicXmlHasNoPrivateParameters([string]$Xml, [string]$KeyId) {
+    foreach ($privateElement in @("P", "Q", "DP", "DQ", "InverseQ", "D")) {
+        if ($Xml -match ("<{0}>" -f [regex]::Escape($privateElement))) {
+            throw "INSTALL_SIGNING_KEY_INVALID: chave publica $KeyId contem parametro privado $privateElement."
+        }
+    }
+}
+
+function New-RsaPssPublicKeyFromXmlText([string]$Xml, [string]$KeyId) {
+    Assert-RsaPublicXmlHasNoPrivateParameters -Xml $Xml -KeyId $KeyId
+    $legacyProvider = $null
+    try {
+        $legacyProvider = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+        $legacyProvider.PersistKeyInCsp = $false
+        $legacyProvider.FromXmlString($Xml)
+        $parameters = $legacyProvider.ExportParameters($false)
+    }
+    finally {
+        if ($null -ne $legacyProvider) {
+            $legacyProvider.PersistKeyInCsp = $false
+            $legacyProvider.Clear()
+            $legacyProvider.Dispose()
+        }
+    }
+    $rsa = New-Object System.Security.Cryptography.RSACng
+    $rsa.ImportParameters($parameters)
+    return $rsa
+}
+
+function Get-TrustedReleaseKey([string]$ExtractPath, [string]$KeyId) {
+    $keysPath = Join-Path $ExtractPath "release-public-keys.json"
+    if (-not (Test-Path $keysPath)) {
+        throw "INSTALL_TRUSTED_KEYS_MISSING: release-public-keys.json ausente no pacote."
+    }
+    $trusted = Read-JsonFile $keysPath
+    foreach ($key in @($trusted.keys)) {
+        if ([string]$key.key_id -eq $KeyId) {
+            if ([string]$key.algorithm -ne "RSA-PSS-SHA256") { throw "INSTALL_SIGNING_KEY_INVALID: algoritmo invalido para $KeyId." }
+            if ([string]$key.status -ne "active") { throw "INSTALL_SIGNING_KEY_REVOKED: chave $KeyId nao esta ativa." }
+            return [string]$key.public_key_xml
+        }
+    }
+    throw "INSTALL_SIGNING_KEY_UNKNOWN: chave $KeyId nao encontrada no bundle confiavel."
+}
+
+function Assert-DownloadedPackageTrust([string]$ExtractPath, [string]$ZipPath, [string]$ManifestPath, [string]$SignaturePath) {
+    if (-not (Test-Path $ManifestPath)) { throw "INSTALL_MANIFEST_MISSING: release-manifest.json ausente." }
+    if (-not (Test-Path $SignaturePath)) { throw "INSTALL_SIGNATURE_MISSING: release-manifest.sig ausente." }
+    $manifest = Read-JsonFile $ManifestPath
+    $keyId = [string]$manifest.key_id
+    if ([string]::IsNullOrWhiteSpace($keyId)) { throw "INSTALL_SIGNATURE_KEY_MISSING: manifest sem key_id." }
+    $package = $manifest.package
+    if ($null -eq $package) { throw "INSTALL_MANIFEST_INVALID: manifest sem package." }
+    $zipSha = Get-FileSha256 $ZipPath
+    if ([string]$package.sha256 -ne $zipSha) { throw "INSTALL_MANIFEST_PACKAGE_HASH_INVALID: SHA do pacote diverge do manifesto." }
+    if ([long]$package.size -ne (Get-Item $ZipPath).Length) { throw "INSTALL_MANIFEST_PACKAGE_SIZE_INVALID: tamanho do pacote diverge do manifesto." }
+    foreach ($entry in @($manifest.required_zip_entries)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry) -and -not (Test-Path (Join-Path $ExtractPath ([string]$entry)))) {
+            throw "INSTALL_PACKAGE_INVALID: pacote sem arquivo obrigatorio $entry"
+        }
+    }
+    $publicXml = Get-TrustedReleaseKey -ExtractPath $ExtractPath -KeyId $keyId
+    $rsa = New-RsaPssPublicKeyFromXmlText -Xml $publicXml -KeyId $keyId
+    try {
+        $manifestBytes = [System.IO.File]::ReadAllBytes($ManifestPath)
+        $signatureBytes = [Convert]::FromBase64String((Get-Content -Raw -Path $SignaturePath).Trim())
+        $valid = $rsa.VerifyData(
+            $manifestBytes,
+            $signatureBytes,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pss
+        )
+        if (-not $valid) { throw "INSTALL_SIGNATURE_INVALID: assinatura RSA-PSS invalida." }
+    }
+    finally {
+        $rsa.Dispose()
+    }
+    Write-Step "OK" "Manifesto e assinatura do pacote validados"
 }
 
 function Read-JsonFile([string]$Path) {
@@ -771,15 +854,19 @@ function Read-AgentVersion([string]$InstallDir, $Config) {
     return ""
 }
 
-function Assert-RequiredPackageFiles([string]$SourceDir) {
+function Assert-RequiredPackageFiles([string]$SourceDir, [switch]$RequireTrust) {
     $required = @(
         "NightOwl.Agent.Windows.exe",
         "NightOwl.Agent.Tray.exe",
         "NightOwl.Agent.Updater.exe",
+        "NightOwl.Agent.Uninstaller.exe",
         "NightOwl.Agent.Diagnostics.exe",
         "agent.version.json",
         "assets\icons\NightOwl.ico"
     )
+    if ($RequireTrust) {
+        $required += @("release-public-keys.json", "release-trust-roots.json")
+    }
     foreach ($relative in $required) {
         $path = Join-Path $SourceDir $relative
         if (-not (Test-Path $path)) {
@@ -789,7 +876,7 @@ function Assert-RequiredPackageFiles([string]$SourceDir) {
 }
 
 function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
-    Assert-RequiredPackageFiles -SourceDir $SourceDir
+    Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
     $protectedNames = @(
         "agent.config.json",
         "agent.identity.json",

@@ -1318,6 +1318,7 @@ class AgentJob(models.Model):
     TYPE_WINDOWS_UPDATE_SCAN = 'windows_update_scan'
     TYPE_UPDATE_AGENT = 'update_agent'
     TYPE_UPDATE_TRUSTED_RELEASE_KEYS = 'update_trusted_release_keys'
+    TYPE_UNINSTALL_AGENT = 'uninstall_agent'
     TYPE_RESTART_AGENT = 'restart_agent'
     TYPE_CHOICES = [
         (TYPE_FORCE_INVENTORY, 'Force inventory'),
@@ -1329,6 +1330,7 @@ class AgentJob(models.Model):
         (TYPE_WINDOWS_UPDATE_SCAN, 'Windows Update scan'),
         (TYPE_UPDATE_AGENT, 'Update agent'),
         (TYPE_UPDATE_TRUSTED_RELEASE_KEYS, 'Update trusted release keys'),
+        (TYPE_UNINSTALL_AGENT, 'Uninstall agent'),
         (TYPE_RESTART_AGENT, 'Restart agent'),
     ]
 

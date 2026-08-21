@@ -43,6 +43,12 @@ foreach ($required in @(
     "update-state.json",
     "Copy-AgentBinaries",
     "NightOwl.Agent.Diagnostics.exe",
+    "NightOwl.Agent.Uninstaller.exe",
+    "INSTALL_PACKAGE_INSECURE_URL",
+    "INSTALL_MANIFEST_MISSING",
+    "INSTALL_SIGNATURE_INVALID",
+    "INSTALL_SIGNING_KEY_REVOKED",
+    "TrustLocalPackage",
     "Protect-SecretValue"
 )) {
     Assert-True ($installText.Contains($required)) "Install script missing required lifecycle marker: $required"
