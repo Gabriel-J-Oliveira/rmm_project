@@ -50,8 +50,13 @@ foreach ($required in @(
 
 foreach ($required in @(
     "[switch]`$Purge",
+    "Global\NightOwl.Agent.Update",
+    "UNINSTALL_UPDATE_IN_PROGRESS",
+    "PURGE_UPDATE_IN_PROGRESS",
     "PURGE_CONFIRMATION_REQUIRED",
     "UNINSTALL_SERVICE_REMOVE_FAILED",
+    "update-state.json",
+    "update-state.preserved",
     "persistent.removed",
     "state.marked_uninstalled",
     "Protect-SecretValue"

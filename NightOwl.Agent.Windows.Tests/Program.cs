@@ -211,13 +211,17 @@ static void TestPersistenceFailureDoesNotCorruptExistingConfig()
         existing.AgentToken = "existing-token";
         Require(ConfigService.PersistConfigAtomic(path, existing, out string initialError), $"Initial config should persist: {initialError}");
         string before = File.ReadAllText(path);
-        Directory.CreateDirectory(path + ".tmp");
 
         AgentConfig migrated = LegacyConfig();
         ConfigService.ApplyConfigMigrations(migrated);
-        bool persisted = ConfigService.PersistConfigAtomic(path, migrated, out string error);
+        bool persisted;
+        string error;
+        using (File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            persisted = ConfigService.PersistConfigAtomic(path, migrated, out error);
+        }
 
-        Require(!persisted, "Persistence should report failure when temp path cannot be written.");
+        Require(!persisted, "Persistence should report failure when destination cannot be replaced.");
         Require(!string.IsNullOrWhiteSpace(error), "Persistence failure should expose a sanitized error code/message.");
         Require(File.ReadAllText(path) == before, "Persistence failure should not corrupt or partially replace existing config.");
         AgentConfig reloaded = JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidOperationException("Existing config should remain valid JSON.");

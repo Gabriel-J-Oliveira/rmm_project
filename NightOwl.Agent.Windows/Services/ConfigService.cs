@@ -264,36 +264,9 @@ public sealed class ConfigService
 
     private static void WriteConfigAtomic(string configPath, AgentConfig config)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(configPath) ?? ".");
-        string tempPath = configPath + ".tmp";
         string json = JsonSerializer.Serialize(config, JsonOptions);
         Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        try
-        {
-            File.WriteAllText(tempPath, json, encoding);
-            if (File.Exists(configPath))
-            {
-                File.Replace(tempPath, configPath, null);
-            }
-            else
-            {
-                File.Move(tempPath, configPath);
-            }
-        }
-        finally
-        {
-            try
-            {
-                if (File.Exists(tempPath))
-                {
-                    File.Delete(tempPath);
-                }
-            }
-            catch
-            {
-                // Cleanup is best effort; the canonical config remains untouched.
-            }
-        }
+        NightOwlFileStore.WriteAllText(configPath, json, encoding);
     }
 
     private static bool SamePath(string left, string right)

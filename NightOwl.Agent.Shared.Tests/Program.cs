@@ -116,6 +116,34 @@ try
     using JsonDocument identity = JsonDocument.Parse(firstIdentity);
     Require(identity.RootElement.GetProperty("machine_id").GetString() == "machine-test", "Identity machine_id was not preserved.");
 
+    string safeStorePath = Path.Combine(paths.StateDir, "safe-store-test.json");
+    NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":1}");
+    Require(File.ReadAllText(safeStorePath).Contains("\"value\":1", StringComparison.Ordinal), "Safe file store first write failed.");
+    RequireNoSafeFileTemps(safeStorePath, "Safe file store first write should not leave temp files.");
+    NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":2}");
+    Require(File.ReadAllText(safeStorePath).Contains("\"value\":2", StringComparison.Ordinal), "Safe file store overwrite failed.");
+    RequireNoSafeFileTemps(safeStorePath, "Safe file store overwrite should not leave temp files.");
+    if (OperatingSystem.IsWindows())
+    {
+        File.SetAttributes(safeStorePath, File.GetAttributes(safeStorePath) | FileAttributes.ReadOnly);
+        bool failedOverReadOnly = false;
+        try
+        {
+            NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":3}");
+        }
+        catch
+        {
+            failedOverReadOnly = true;
+        }
+        finally
+        {
+            File.SetAttributes(safeStorePath, File.GetAttributes(safeStorePath) & ~FileAttributes.ReadOnly);
+        }
+        Require(failedOverReadOnly, "Safe file store should report overwrite failure for read-only destination.");
+        Require(File.ReadAllText(safeStorePath).Contains("\"value\":2", StringComparison.Ordinal), "Safe file store failure should preserve previous content.");
+        RequireNoSafeFileTemps(safeStorePath, "Safe file store failure should clean temp files.");
+    }
+
     string updateStatePath = paths.UpdateStatePath;
     UpdateStateStore store = new(updateStatePath);
     UpdateState state = UpdateState.Create("update-test", "job-test", "0.1.0.7", "0.1.0.8");
@@ -677,6 +705,16 @@ static void RequireNoPendingResultTemps(string queueDir, string message)
 {
     string[] temps = Directory.Exists(queueDir)
         ? Directory.GetFiles(queueDir, ".*.tmp", SearchOption.TopDirectoryOnly)
+        : Array.Empty<string>();
+    Require(temps.Length == 0, $"{message} Found: {string.Join(", ", temps.Select(Path.GetFileName))}");
+}
+
+static void RequireNoSafeFileTemps(string path, string message)
+{
+    string directory = Path.GetDirectoryName(path) ?? ".";
+    string fileName = Path.GetFileName(path);
+    string[] temps = Directory.Exists(directory)
+        ? Directory.GetFiles(directory, $".{fileName}.*.tmp", SearchOption.TopDirectoryOnly)
         : Array.Empty<string>();
     Require(temps.Length == 0, $"{message} Found: {string.Join(", ", temps.Select(Path.GetFileName))}");
 }

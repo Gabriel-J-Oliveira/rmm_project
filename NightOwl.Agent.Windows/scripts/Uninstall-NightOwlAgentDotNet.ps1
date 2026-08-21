@@ -45,8 +45,10 @@ $InstallPath = [string]$script:Paths.Install
 $script:Operation = if ($Purge) { "purge" } else { "uninstall" }
 $script:LifecycleErrorCodes = @(
     "UNINSTALL_SERVICE_REMOVE_FAILED",
+    "UNINSTALL_UPDATE_IN_PROGRESS",
     "UNINSTALL_BACKEND_NOTIFY_FAILED",
     "PURGE_CONFIRMATION_REQUIRED",
+    "PURGE_UPDATE_IN_PROGRESS",
     "PURGE_REVOKE_FAILED"
 )
 $script:Report = [ordered]@{
@@ -65,6 +67,8 @@ $script:Report = [ordered]@{
     error_code = ""
     error_message = ""
 }
+$script:UpdateMutex = $null
+$script:UpdateMutexAcquired = $false
 
 function Write-Step($Status, $Message) {
     Write-Host ("[{0}] {1}" -f $Status, $Message)
@@ -168,6 +172,83 @@ function Assert-PurgeConfirmed {
     }
 }
 
+function Get-OperationErrorCode([string]$Suffix) {
+    if ($Purge) { return "PURGE_$Suffix" }
+    return "UNINSTALL_$Suffix"
+}
+
+function Acquire-UpdaterLockOrThrow {
+    try {
+        try {
+            $script:UpdateMutex = New-Object System.Threading.Mutex($false, "Global\NightOwl.Agent.Update")
+        }
+        catch {
+            $script:UpdateMutex = New-Object System.Threading.Mutex($false, "NightOwl.Agent.Update")
+        }
+        $script:UpdateMutexAcquired = $script:UpdateMutex.WaitOne([TimeSpan]::Zero)
+        if (-not $script:UpdateMutexAcquired) {
+            throw (Get-OperationErrorCode "UPDATE_IN_PROGRESS")
+        }
+        Add-Action "updater.lock.acquired"
+        Write-UninstallLog "operation.update_lock.acquired" "Lock global do updater adquirido." @{ operation = $script:Operation }
+    }
+    catch {
+        if ($_.Exception.Message -like "*UPDATE_IN_PROGRESS*") { throw }
+        throw ("{0}: nao foi possivel adquirir lock global do updater. {1}" -f (Get-OperationErrorCode "UPDATE_IN_PROGRESS"), $_.Exception.Message)
+    }
+}
+
+function Release-UpdaterLock {
+    if ($script:UpdateMutexAcquired -and $script:UpdateMutex) {
+        try { $script:UpdateMutex.ReleaseMutex() | Out-Null } catch {}
+        $script:UpdateMutexAcquired = $false
+    }
+    if ($script:UpdateMutex) {
+        try { $script:UpdateMutex.Dispose() } catch {}
+        $script:UpdateMutex = $null
+    }
+}
+
+function Get-UpdateStateInfo {
+    $path = [string]$script:Paths.UpdateStatePath
+    if (-not (Test-Path $path)) { return $null }
+    $state = Read-JsonFile $path
+    if ($null -eq $state) {
+        Add-Warning "UPDATE_STATE_INVALID" "update-state.json existe, mas nao foi possivel ler JSON." @{ path = $path }
+        Write-UninstallLog "operation.update_state.invalid" "update-state.json invalido preservado." @{ operation = $script:Operation; path = $path }
+        return [pscustomobject]@{ status = "invalid"; current_stage = "invalid"; update_id = ""; job_id = "" }
+    }
+    return $state
+}
+
+function Assert-NoActiveUpdate {
+    $runningUpdater = Get-Process -Name "NightOwl.Agent.Updater" -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
+    if ($runningUpdater) {
+        $code = Get-OperationErrorCode "UPDATE_IN_PROGRESS"
+        Write-UninstallLog "operation.blocked.update_process" "Updater em execucao; operacao bloqueada." @{ operation = $script:Operation; process_count = @($runningUpdater).Count; error_code = $code }
+        throw "${code}: NightOwl.Agent.Updater.exe esta em execucao."
+    }
+
+    $state = Get-UpdateStateInfo
+    if ($null -eq $state) { return }
+
+    $stage = [string]$state.current_stage
+    $status = [string]$state.status
+    $activeStages = @(
+        "downloading", "validating", "staging", "creating_backup", "stopping_service",
+        "replacing_files", "starting_service", "waiting_health_check",
+        "rollback_required", "rollback_starting", "rollback_restoring_files",
+        "rollback_stopping_service", "rollback_starting_service", "rollback_waiting_health_check"
+    )
+    if (($status -ieq "running") -or ($activeStages -contains $stage)) {
+        $code = Get-OperationErrorCode "UPDATE_IN_PROGRESS"
+        Write-UninstallLog "operation.blocked.update_active" "Update ou rollback ativo; operacao bloqueada." @{ operation = $script:Operation; update_id = $state.update_id; job_id = $state.job_id; stage = $stage; status = $status; error_code = $code }
+        throw "${code}: update/rollback ativo ($stage). Nao removendo binarios."
+    }
+
+    Add-Action "update-state.preserved" @{ stage = $stage; status = $status; update_id = [string]$state.update_id }
+}
+
 function Stop-AndRemoveService {
     $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($existing) {
@@ -241,6 +322,8 @@ function Write-UninstalledState {
 try {
     Assert-Elevated
     Assert-PurgeConfirmed
+    Acquire-UpdaterLockOrThrow
+    Assert-NoActiveUpdate
 
     $config = Read-JsonFile ([string]$script:Paths.ConfigPath)
     $identity = Read-JsonFile ([string]$script:Paths.IdentityPath)
@@ -295,4 +378,7 @@ catch {
     Write-UninstallLog ("operation.{0}.failed" -f $script:Operation) "Operacao de remocao falhou." @{ operation = $script:Operation; error_code = $code; error = $message }
     Write-Report -Status "failed" -ErrorCode $code -ErrorMessage $message
     throw
+}
+finally {
+    Release-UpdaterLock
 }

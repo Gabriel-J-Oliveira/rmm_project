@@ -449,16 +449,9 @@ public sealed class ReleaseTrustStore
             File.Copy(_paths.TrustBundlePath, backupPath, overwrite: false);
         }
 
-        string bundleTemp = _paths.TrustBundlePath + ".tmp";
-        string signatureTemp = _paths.TrustSignaturePath + ".tmp";
-        string metadataTemp = _paths.TrustMetadataPath + ".tmp";
-        await File.WriteAllBytesAsync(bundleTemp, bundleBytes, ct);
-        await File.WriteAllBytesAsync(signatureTemp, signatureBytes, ct);
-        await File.WriteAllBytesAsync(metadataTemp, metadataBytes, ct);
-
-        ReplaceFile(bundleTemp, _paths.TrustBundlePath);
-        ReplaceFile(signatureTemp, _paths.TrustSignaturePath);
-        ReplaceFile(metadataTemp, _paths.TrustMetadataPath);
+        await NightOwlFileStore.WriteAllBytesAsync(_paths.TrustBundlePath, bundleBytes, ct);
+        await NightOwlFileStore.WriteAllBytesAsync(_paths.TrustSignaturePath, signatureBytes, ct);
+        await NightOwlFileStore.WriteAllBytesAsync(_paths.TrustMetadataPath, metadataBytes, ct);
 
         ReleaseTrustState state = new()
         {
@@ -514,24 +507,10 @@ public sealed class ReleaseTrustStore
         await WriteJsonAtomicAsync(_paths.TrustStatePath, state, ct);
     }
 
-    private static void ReplaceFile(string source, string destination)
-    {
-        if (File.Exists(destination))
-        {
-            File.Replace(source, destination, null);
-        }
-        else
-        {
-            File.Move(source, destination);
-        }
-    }
-
     private static async Task WriteJsonAtomicAsync<T>(string path, T value, CancellationToken ct)
     {
-        string temp = path + ".tmp";
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
-        await File.WriteAllBytesAsync(temp, bytes, ct);
-        ReplaceFile(temp, path);
+        await NightOwlFileStore.WriteAllBytesAsync(path, bytes, ct);
     }
 
     private void ApplyTrustAcl()

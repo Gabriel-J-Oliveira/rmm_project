@@ -218,32 +218,7 @@ public sealed class JobStore
         Validate(record);
         Directory.CreateDirectory(_directory);
         string path = PathFor(record.JobId);
-        string temp = Path.Combine(_directory, $".{record.JobId}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
-            File.Move(temp, path, overwrite: true);
-        }
-        catch
-        {
-            TryDeleteTemp(temp);
-            throw;
-        }
-    }
-
-    private static void TryDeleteTemp(string temp)
-    {
-        try
-        {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
-        }
-        catch
-        {
-            // Best-effort cleanup only; preserve the original persistence exception.
-        }
+        NightOwlFileStore.WriteAllText(path, JsonSerializer.Serialize(record, JsonOptions));
     }
 
     public JobStateRecord Mark(string jobId, string jobType, string status, int attempt, string correlationId = "", string errorCode = "", string errorMessage = "")
@@ -594,26 +569,7 @@ public sealed class PendingResultQueue
         Validate(record);
         Directory.CreateDirectory(_directory);
         string path = PathFor(record.ResultId);
-        string temp = Path.Combine(_directory, $".{record.ResultId}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllText(temp, JsonSerializer.Serialize(record, JsonOptions));
-            File.Move(temp, path, overwrite: true);
-        }
-        finally
-        {
-            try
-            {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
-            }
-            catch
-            {
-                // Cleanup is best effort; preserve the original save exception.
-            }
-        }
+        NightOwlFileStore.WriteAllText(path, JsonSerializer.Serialize(record, JsonOptions));
     }
 
     private void Quarantine(string path, string reason)

@@ -318,27 +318,8 @@ public sealed class UpdateStateStore
             Directory.CreateDirectory(directory);
         }
 
-        string tempPath = System.IO.Path.Combine(directory ?? ".", $".{System.IO.Path.GetFileName(Path)}.{Guid.NewGuid():N}.tmp");
         string json = JsonSerializer.Serialize(state, JsonOptions);
-        try
-        {
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, Path, overwrite: true);
-        }
-        finally
-        {
-            try
-            {
-                if (File.Exists(tempPath))
-                {
-                    File.Delete(tempPath);
-                }
-            }
-            catch
-            {
-                // Cleanup is best effort; preserve the original save exception.
-            }
-        }
+        NightOwlFileStore.WriteAllText(Path, json);
     }
 
     public static void Validate(UpdateState state)
