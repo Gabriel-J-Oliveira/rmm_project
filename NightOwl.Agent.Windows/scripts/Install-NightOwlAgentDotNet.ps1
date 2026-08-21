@@ -5,6 +5,7 @@ param(
     [string]$ManualValidationToken = "",
     [string]$AgentToken = "",
     [string]$PackageUrl = "",
+    [string]$TrustedPublicKeysPath = "",
     [string]$InstallPath = "",
     [string]$ServiceName = "NightOwlAgentDotNet",
     [string]$DisplayName = "NightOwl RMM Agent",
@@ -399,9 +400,16 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     $checksumsPath = Join-Path $WorkDir "checksums.json"
     $manifestPath = Join-Path $WorkDir "release-manifest.json"
     $signaturePath = Join-Path $WorkDir "release-manifest.sig"
+    $trustedKeysPath = Join-Path $WorkDir "release-public-keys.json"
     Invoke-WebRequest -Uri ($baseUrl + "/checksums.json") -OutFile $checksumsPath -UseBasicParsing -TimeoutSec 30
     Invoke-WebRequest -Uri ($baseUrl + "/release-manifest.json") -OutFile $manifestPath -UseBasicParsing -TimeoutSec 30
     Invoke-WebRequest -Uri ($baseUrl + "/release-manifest.sig") -OutFile $signaturePath -UseBasicParsing -TimeoutSec 30
+    if ([string]::IsNullOrWhiteSpace($TrustedPublicKeysPath)) {
+        Invoke-WebRequest -Uri ($baseUrl + "/release-public-keys.json") -OutFile $trustedKeysPath -UseBasicParsing -TimeoutSec 30
+    }
+    else {
+        Copy-Item -Path $TrustedPublicKeysPath -Destination $trustedKeysPath -Force
+    }
 
     $checksums = Read-JsonFile $checksumsPath
     $expected = Get-ChecksumFromManifest $checksums "NightOwl.Agent.Windows.zip"
@@ -418,7 +426,7 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     if (Test-Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
     Assert-RequiredPackageFiles -SourceDir $extractPath -RequireTrust
-    Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath
+    Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath -TrustedKeysPath $trustedKeysPath
     $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
     if (-not $exe) {
         throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
@@ -455,12 +463,11 @@ function New-RsaPssPublicKeyFromXmlText([string]$Xml, [string]$KeyId) {
     return $rsa
 }
 
-function Get-TrustedReleaseKey([string]$ExtractPath, [string]$KeyId) {
-    $keysPath = Join-Path $ExtractPath "release-public-keys.json"
-    if (-not (Test-Path $keysPath)) {
-        throw "INSTALL_TRUSTED_KEYS_MISSING: release-public-keys.json ausente no pacote."
+function Get-TrustedReleaseKey([string]$TrustedKeysPath, [string]$KeyId) {
+    if (-not (Test-Path $TrustedKeysPath)) {
+        throw "INSTALL_TRUSTED_KEYS_MISSING: release-public-keys.json confiavel ausente."
     }
-    $trusted = Read-JsonFile $keysPath
+    $trusted = Read-JsonFile $TrustedKeysPath
     foreach ($key in @($trusted.keys)) {
         if ([string]$key.key_id -eq $KeyId) {
             if ([string]$key.algorithm -ne "RSA-PSS-SHA256") { throw "INSTALL_SIGNING_KEY_INVALID: algoritmo invalido para $KeyId." }
@@ -471,7 +478,7 @@ function Get-TrustedReleaseKey([string]$ExtractPath, [string]$KeyId) {
     throw "INSTALL_SIGNING_KEY_UNKNOWN: chave $KeyId nao encontrada no bundle confiavel."
 }
 
-function Assert-DownloadedPackageTrust([string]$ExtractPath, [string]$ZipPath, [string]$ManifestPath, [string]$SignaturePath) {
+function Assert-DownloadedPackageTrust([string]$ExtractPath, [string]$ZipPath, [string]$ManifestPath, [string]$SignaturePath, [string]$TrustedKeysPath) {
     if (-not (Test-Path $ManifestPath)) { throw "INSTALL_MANIFEST_MISSING: release-manifest.json ausente." }
     if (-not (Test-Path $SignaturePath)) { throw "INSTALL_SIGNATURE_MISSING: release-manifest.sig ausente." }
     $manifest = Read-JsonFile $ManifestPath
@@ -487,7 +494,7 @@ function Assert-DownloadedPackageTrust([string]$ExtractPath, [string]$ZipPath, [
             throw "INSTALL_PACKAGE_INVALID: pacote sem arquivo obrigatorio $entry"
         }
     }
-    $publicXml = Get-TrustedReleaseKey -ExtractPath $ExtractPath -KeyId $keyId
+    $publicXml = Get-TrustedReleaseKey -TrustedKeysPath $TrustedKeysPath -KeyId $keyId
     $rsa = New-RsaPssPublicKeyFromXmlText -Xml $publicXml -KeyId $keyId
     try {
         $manifestBytes = [System.IO.File]::ReadAllBytes($ManifestPath)

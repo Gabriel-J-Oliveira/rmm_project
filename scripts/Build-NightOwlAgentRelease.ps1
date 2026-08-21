@@ -681,6 +681,7 @@ function New-Checksums([string]$ReleasePath) {
         "Install-NightOwlAgentDotNet.ps1",
         "Uninstall-NightOwlAgentDotNet.ps1",
         "NightOwl.ico",
+        "release-public-keys.json",
         "version.json",
         "release-manifest.json",
         "release-manifest.sig"
@@ -714,7 +715,7 @@ function Publish-LocalAtomic([string]$Source, [string]$DestinationRoot) {
         if (Test-Path $releaseStore) { Remove-Item -Path $releaseStore -Recurse -Force }
         Move-Item -Path $temp -Destination $releaseStore
         if ($UpdatePublicLatest -or $Channel -eq "stable") {
-            foreach ($file in @("Install-NightOwlAgentDotNet.ps1", "Uninstall-NightOwlAgentDotNet.ps1", "NightOwl.ico", "NightOwl.Agent.Windows.zip", "checksums.json", "release-manifest.json")) {
+            foreach ($file in @("Install-NightOwlAgentDotNet.ps1", "Uninstall-NightOwlAgentDotNet.ps1", "NightOwl.ico", "NightOwl.Agent.Windows.zip", "checksums.json", "release-manifest.json", "release-public-keys.json")) {
                 Copy-Item -Path (Join-Path $releaseStore $file) -Destination (Join-Path $destination $file) -Force
             }
             Copy-Item -Path (Join-Path $releaseStore "version.json") -Destination (Join-Path $destination "version.json") -Force
@@ -742,7 +743,7 @@ function Publish-RemoteAtomic([string]$Source, [string]$HostName, [string]$Desti
         }
         Invoke-Checked "ssh" @($HostName, "rm -rf '$remoteRelease' && mv '$remoteTemp' '$remoteRelease'")
         if ($UpdatePublicLatest -or $Channel -eq "stable") {
-            Invoke-Checked "ssh" @($HostName, "cp '$remoteRelease/Install-NightOwlAgentDotNet.ps1' '$DestinationRoot/Install-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/Uninstall-NightOwlAgentDotNet.ps1' '$DestinationRoot/Uninstall-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/NightOwl.ico' '$DestinationRoot/NightOwl.ico' && cp '$remoteRelease/NightOwl.Agent.Windows.zip' '$DestinationRoot/NightOwl.Agent.Windows.zip' && cp '$remoteRelease/checksums.json' '$DestinationRoot/checksums.json' && cp '$remoteRelease/release-manifest.json' '$DestinationRoot/release-manifest.json' && cp '$remoteRelease/version.json' '$DestinationRoot/version.json'")
+            Invoke-Checked "ssh" @($HostName, "cp '$remoteRelease/Install-NightOwlAgentDotNet.ps1' '$DestinationRoot/Install-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/Uninstall-NightOwlAgentDotNet.ps1' '$DestinationRoot/Uninstall-NightOwlAgentDotNet.ps1' && cp '$remoteRelease/NightOwl.ico' '$DestinationRoot/NightOwl.ico' && cp '$remoteRelease/NightOwl.Agent.Windows.zip' '$DestinationRoot/NightOwl.Agent.Windows.zip' && cp '$remoteRelease/checksums.json' '$DestinationRoot/checksums.json' && cp '$remoteRelease/release-manifest.json' '$DestinationRoot/release-manifest.json' && cp '$remoteRelease/release-public-keys.json' '$DestinationRoot/release-public-keys.json' && cp '$remoteRelease/version.json' '$DestinationRoot/version.json'")
         }
         else {
             Write-Step "Release $Version publicada apenas em releases/$Version; latest publico preservado."
@@ -858,6 +859,9 @@ try {
     Copy-Item -Path $installScript -Destination (Join-Path $ReleaseDir "Install-NightOwlAgentDotNet.ps1") -Force
     Copy-Item -Path $uninstallScript -Destination (Join-Path $ReleaseDir "Uninstall-NightOwlAgentDotNet.ps1") -Force
     Copy-Item -Path $iconPath -Destination (Join-Path $ReleaseDir "NightOwl.ico") -Force
+    if (Test-Path (Join-Path $packageDir "release-public-keys.json")) {
+        Copy-Item -Path (Join-Path $packageDir "release-public-keys.json") -Destination (Join-Path $ReleaseDir "release-public-keys.json") -Force
+    }
 
     $zipSha = Get-FileSha256 $zipPath
     $zipSize = (Get-Item $zipPath).Length
