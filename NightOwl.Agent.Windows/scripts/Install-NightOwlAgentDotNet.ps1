@@ -25,6 +25,7 @@ param(
     [switch]$Reinstall,
     [switch]$ForceRecovery,
     [switch]$TrustLocalPackage,
+    [switch]$AllowReleaseBundledTrustForLab,
     [switch]$NonInteractive
 )
 
@@ -51,6 +52,7 @@ function New-NightOwlPaths([string]$RequestedInstallPath) {
         LegacyStatePath = Join-Path $install "agent-dotnet.state.json"
         PendingResultsPath = Join-Path $stateDir "pending-results"
         Trust = $trustDir
+        TrustBundlePath = Join-Path $trustDir "release-public-keys.json"
         TrustBackups = Join-Path $trustDir "Backups"
         TrustDownloads = Join-Path $trustDir "Downloads"
         Logs = $logsDir
@@ -400,15 +402,13 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     $checksumsPath = Join-Path $WorkDir "checksums.json"
     $manifestPath = Join-Path $WorkDir "release-manifest.json"
     $signaturePath = Join-Path $WorkDir "release-manifest.sig"
-    $trustedKeysPath = Join-Path $WorkDir "release-public-keys.json"
+    $releaseBundledTrustPath = Join-Path $WorkDir "release-public-keys.downloaded.json"
     Invoke-WebRequest -Uri ($baseUrl + "/checksums.json") -OutFile $checksumsPath -UseBasicParsing -TimeoutSec 30
     Invoke-WebRequest -Uri ($baseUrl + "/release-manifest.json") -OutFile $manifestPath -UseBasicParsing -TimeoutSec 30
     Invoke-WebRequest -Uri ($baseUrl + "/release-manifest.sig") -OutFile $signaturePath -UseBasicParsing -TimeoutSec 30
-    if ([string]::IsNullOrWhiteSpace($TrustedPublicKeysPath)) {
-        Invoke-WebRequest -Uri ($baseUrl + "/release-public-keys.json") -OutFile $trustedKeysPath -UseBasicParsing -TimeoutSec 30
-    }
-    else {
-        Copy-Item -Path $TrustedPublicKeysPath -Destination $trustedKeysPath -Force
+    if ($AllowReleaseBundledTrustForLab) {
+        Invoke-WebRequest -Uri ($baseUrl + "/release-public-keys.json") -OutFile $releaseBundledTrustPath -UseBasicParsing -TimeoutSec 30
+        Write-Step "WARN" "LAB INSEGURO: usando release-public-keys.json baixado da propria release."
     }
 
     $checksums = Read-JsonFile $checksumsPath
@@ -426,12 +426,39 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     if (Test-Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
     Assert-RequiredPackageFiles -SourceDir $extractPath -RequireTrust
+    $trustedKeysPath = Resolve-TrustedPublicKeysForInstaller -ReleaseBundledTrustPath $releaseBundledTrustPath
     Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath -TrustedKeysPath $trustedKeysPath
     $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
     if (-not $exe) {
         throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
     }
     return $exe.DirectoryName
+}
+
+function Resolve-TrustedPublicKeysForInstaller([string]$ReleaseBundledTrustPath) {
+    if (-not [string]::IsNullOrWhiteSpace($TrustedPublicKeysPath)) {
+        if (-not (Test-Path $TrustedPublicKeysPath)) {
+            throw "INSTALL_TRUST_BOOTSTRAP_MISSING: TrustedPublicKeysPath nao encontrado."
+        }
+        Write-Step "OK" "Usando bundle de chaves publicas provisionado explicitamente."
+        return $TrustedPublicKeysPath
+    }
+
+    $localTrust = [string]$script:NightOwlPaths.TrustBundlePath
+    if (Test-Path $localTrust) {
+        Write-Step "OK" "Usando bundle de chaves publicas ja instalado localmente."
+        return $localTrust
+    }
+
+    if ($AllowReleaseBundledTrustForLab) {
+        if (-not (Test-Path $ReleaseBundledTrustPath)) {
+            throw "INSTALL_TRUST_BOOTSTRAP_MISSING: bundle da release nao foi baixado para modo lab."
+        }
+        Write-Step "WARN" "LAB INSEGURO: release-public-keys.json da propria release foi aceito por flag explicita."
+        return $ReleaseBundledTrustPath
+    }
+
+    throw "INSTALL_TRUST_BOOTSTRAP_REQUIRED: instalacao por download exige trust local valido em C:\ProgramData\NightOwl\Trust ou -TrustedPublicKeysPath provisionado por canal confiavel."
 }
 
 function Assert-RsaPublicXmlHasNoPrivateParameters([string]$Xml, [string]$KeyId) {
