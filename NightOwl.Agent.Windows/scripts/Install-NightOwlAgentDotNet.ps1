@@ -1024,16 +1024,18 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
         tray_exe = $TrayExePath
     }
     try {
-        $taskCommand = "`"$TrayExePath`""
-        $result = schtasks.exe /Create /TN $taskName /SC ONLOGON /TR $taskCommand /RU INTERACTIVE /RL LIMITED /F 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "schtasks.exe falhou: $result"
-        }
+        $interactiveSid = "S-1-5-4"
+        $action = New-ScheduledTaskAction -Execute $TrayExePath
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -GroupId $interactiveSid -RunLevel Limited
+        $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal
+        Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
         Write-Step "OK" "Tarefa de bandeja criada: $taskName"
         Write-InstallLog "tray.install.completed" "Tarefa agendada da bandeja criada." @{
             task_name = $taskName
             tray_exe = $TrayExePath
             trigger = "ONLOGON"
+            principal_sid = $interactiveSid
         }
     }
     catch {

@@ -1,4 +1,5 @@
 using NightOwl.Agent.Windows.Models;
+using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Services;
 using System.Text.Json;
 
@@ -17,6 +18,7 @@ try
     TestPersistedMigrationIsNotReapplied();
     TestPersistenceFailureDoesNotCorruptExistingConfig();
     TestMigrationLogPayloadDoesNotExposeSecrets();
+    TestUninstallerRunnerPayloadCopiesSelfContainedFiles();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -247,6 +249,33 @@ static void TestMigrationLogPayloadDoesNotExposeSecrets()
 
     Require(!line.Contains(config.AgentToken, StringComparison.OrdinalIgnoreCase), "Migration log line should redact agent token.");
     Require(line.Contains("config.migration.persist_failed", StringComparison.OrdinalIgnoreCase), "Migration log line should include event type.");
+}
+
+static void TestUninstallerRunnerPayloadCopiesSelfContainedFiles()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string installPath = Path.Combine(dir, "AgentDotNet");
+        string runnerPath = Path.Combine(dir, "Runner", "uninstall-job");
+        Directory.CreateDirectory(Path.Combine(installPath, "runtimes", "win-x64", "native"));
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Uninstaller.exe"), "fake exe");
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Uninstaller.dll"), "fake dll");
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Shared.dll"), "shared");
+        File.WriteAllText(Path.Combine(installPath, "hostfxr.dll"), "runtime");
+        File.WriteAllText(Path.Combine(installPath, "runtimes", "win-x64", "native", "dependency.dll"), "native");
+
+        int copied = JobExecutor.CopyUninstallerRunnerPayload(installPath, runnerPath);
+
+        Require(copied >= 5, "Runner payload copy should include all self-contained files.");
+        Require(File.Exists(Path.Combine(runnerPath, "NightOwl.Agent.Uninstaller.exe")), "Runner payload should include uninstaller exe.");
+        Require(File.Exists(Path.Combine(runnerPath, "hostfxr.dll")), "Runner payload should include runtime dependency.");
+        Require(File.Exists(Path.Combine(runnerPath, "runtimes", "win-x64", "native", "dependency.dll")), "Runner payload should include nested dependencies.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
 }
 
 static string CreateTempDir()

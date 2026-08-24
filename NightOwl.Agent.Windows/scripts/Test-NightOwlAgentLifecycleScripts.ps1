@@ -44,6 +44,8 @@ foreach ($required in @(
     "Copy-AgentBinaries",
     "NightOwl.Agent.Diagnostics.exe",
     "NightOwl.Agent.Uninstaller.exe",
+    "S-1-5-4",
+    "New-ScheduledTaskPrincipal",
     "INSTALL_PACKAGE_INSECURE_URL",
     "INSTALL_MANIFEST_MISSING",
     "INSTALL_SIGNATURE_INVALID",
@@ -53,6 +55,8 @@ foreach ($required in @(
 )) {
     Assert-True ($installText.Contains($required)) "Install script missing required lifecycle marker: $required"
 }
+
+Assert-True (-not $installText.Contains("/RU INTERACTIVE")) "Install script must not depend on localized INTERACTIVE account name."
 
 foreach ($required in @(
     "[switch]`$Purge",

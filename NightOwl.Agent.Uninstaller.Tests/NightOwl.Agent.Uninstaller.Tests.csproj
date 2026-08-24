@@ -8,5 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj" />
+    <ProjectReference Include="..\NightOwl.Agent.Windows\NightOwl.Agent.Windows.csproj" />
+    <ProjectReference Include="..\NightOwl.Agent.Uninstaller\NightOwl.Agent.Uninstaller.csproj" />
   </ItemGroup>
 </Project>

@@ -61,6 +61,7 @@ internal static class Program
             EnsureNoActiveUpdate(rootPath);
             StopTray();
             StopService(options.ServiceName);
+            RemoveServiceRegistration(options.ServiceName);
             RemoveTrayTask();
             RemoveDirectory(installPath);
 
@@ -193,6 +194,55 @@ internal static class Program
         catch (InvalidOperationException)
         {
             // Service absent is idempotent.
+        }
+    }
+
+    private static void RemoveServiceRegistration(string serviceName)
+    {
+        if (!ServiceExists(serviceName))
+        {
+            return;
+        }
+
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "sc.exe",
+            Arguments = $"delete \"{serviceName}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }) ?? throw new InvalidOperationException("UNINSTALL_SERVICE_REMOVE_FAILED");
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit(15000) || process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"UNINSTALL_SERVICE_REMOVE_FAILED: {Sanitize(stdout + " " + stderr).Trim()}");
+        }
+
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (!ServiceExists(serviceName))
+            {
+                return;
+            }
+            Thread.Sleep(500);
+        }
+        throw new InvalidOperationException("UNINSTALL_SERVICE_REMOVE_FAILED: service registration still exists after delete.");
+    }
+
+    private static bool ServiceExists(string serviceName)
+    {
+        try
+        {
+            using ServiceController service = new(serviceName);
+            _ = service.Status;
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 
