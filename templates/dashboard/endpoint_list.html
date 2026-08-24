@@ -20,6 +20,7 @@
         {% if using_mock_rmm_data %}
         <span class="hero-chip module-badge">Preview mockado</span>
         {% endif %}
+        <button class="ghost-button compact" type="button" data-deployment-open><i data-lucide="plus-circle"></i>Adicionar dispositivo</button>
         <button class="ghost-button compact" type="button" data-endpoint-action="force_inventory" data-endpoint="Todos"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
         <button class="ghost-button compact" type="button" data-endpoint-action="export_events" data-endpoint="Endpoints"><i data-lucide="download"></i>Exportar</button>
     </div>
@@ -322,6 +323,65 @@
         <div class="empty-state endpoint-empty">Nenhum endpoint para o mapa de sa&uacute;de.</div>
         {% endfor %}
     </div>
+</section>
+
+{{ deployment_release_options|json_script:"deployment-release-options" }}
+<div class="deployment-modal-backdrop" data-deployment-backdrop hidden></div>
+<section class="deployment-modal" data-deployment-modal hidden role="dialog" aria-modal="true" aria-labelledby="deployment-modal-title">
+    <header>
+        <div>
+            <span class="section-kicker">Novo endpoint</span>
+            <h2 id="deployment-modal-title">Adicionar dispositivo</h2>
+        </div>
+        <button type="button" class="deployment-modal__close" data-deployment-close aria-label="Fechar"><i data-lucide="x"></i></button>
+    </header>
+    <form data-deployment-form data-create-url="{{ deployment_create_url }}">
+        {% csrf_token %}
+        <div class="deployment-modal__body">
+            <div class="agent-form-row">
+                <label class="filter-field">
+                    <span>Plataforma</span>
+                    <select name="platform" data-deployment-platform>
+                        <option value="windows" selected>Windows</option>
+                    </select>
+                </label>
+                <label class="filter-field">
+                    <span>Canal</span>
+                    <select name="channel" data-deployment-channel>
+                        <option value="stable">stable</option>
+                        <option value="development" selected>development</option>
+                    </select>
+                </label>
+            </div>
+            <label class="filter-field" data-deployment-release-field>
+                <span>Release development</span>
+                <select name="release_id" data-deployment-release></select>
+            </label>
+            <dl class="deployment-summary">
+                <div><dt>Vers&atilde;o</dt><dd data-deployment-version>-</dd></div>
+                <div><dt>Canal</dt><dd data-deployment-channel-label>development</dd></div>
+                <div><dt>Validade</dt><dd>30 minutos</dd></div>
+                <div><dt>Uso</dt><dd>Token unico</dd></div>
+            </dl>
+            <div class="note-box">Execute o comando em um PowerShell como Administrador. O token aparece apenas neste comando e expira em 30 minutos.</div>
+            <div class="deployment-error" data-deployment-error hidden></div>
+            <div class="terminal-block deployment-command-block" data-deployment-command-box hidden data-copy-value="">
+                <div class="copy-value-content">
+                    <span>Comando PowerShell</span>
+                    <code data-deployment-command></code>
+                </div>
+                <button class="copy-button" type="button" data-deployment-copy><i data-lucide="copy"></i>Copiar</button>
+            </div>
+            <dl class="deployment-summary" data-deployment-result hidden>
+                <div><dt>Expira em</dt><dd data-deployment-expires>-</dd></div>
+                <div><dt>Status</dt><dd data-deployment-status>Aguardando instala&ccedil;&atilde;o</dd></div>
+            </dl>
+        </div>
+        <footer>
+            <button type="button" class="ghost-button compact" data-deployment-close>Cancelar</button>
+            <button type="submit" data-deployment-submit><i data-lucide="terminal"></i>Gerar comando</button>
+        </footer>
+    </form>
 </section>
 
 <div class="alert-action-toast endpoint-action-toast" data-endpoint-toast hidden></div>

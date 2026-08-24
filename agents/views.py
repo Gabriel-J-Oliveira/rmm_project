@@ -3,6 +3,8 @@ import json
 import logging
 from datetime import timedelta
 
+from django.conf import settings
+from django.http import HttpResponse
 from django.db import models, transaction
 from django.db.models import Q
 from django.urls import reverse
@@ -15,8 +17,10 @@ from rest_framework.views import APIView
 from .audit import create_audit_event, get_client_ip
 from .authentication import authenticate_agent_token
 from .models import (
+    AgentDeploymentToken,
     AgentEnrollmentLog,
     AgentEnrollmentToken,
+    AgentReleaseTrustBundle,
     AgentJob,
     AgentJobResultReceipt,
     AgentMachine,
@@ -53,6 +57,163 @@ RESULT_FINAL_STATUSES = {
     AgentJob.STATUS_ROLLED_BACK,
     AgentJob.STATUS_ROLLBACK_FAILED,
 }
+
+
+def _deployment_token_from_request(request):
+    return (
+        request.headers.get('X-NightOwl-Deployment-Token')
+        or request.META.get('HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN')
+        or ''
+    ).strip()
+
+
+def _public_base_url(request):
+    configured = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/')
+    if configured:
+        return configured
+    return request.build_absolute_uri('/').rstrip('/')
+
+
+def _latest_published_trust_bundle():
+    return AgentReleaseTrustBundle.objects.filter(
+        status=AgentReleaseTrustBundle.STATUS_PUBLISHED,
+    ).order_by('-bundle_version', '-published_at', '-created_at').first()
+
+
+def _find_deployment_by_token(token_value):
+    if not token_value.startswith('deploy_'):
+        return None
+    return AgentDeploymentToken.objects.select_related('release').filter(
+        token_hash=hash_enrollment_token(token_value),
+    ).first()
+
+
+def _deployment_error(request, code, detail, http_status):
+    create_audit_event(
+        event_type='agent.deployment.bootstrap_failed',
+        title='Bootstrap de deployment recusado',
+        description=detail,
+        severity=AuditEvent.SEVERITY_WARNING,
+        actor_type=AuditEvent.ACTOR_SYSTEM,
+        actor_name='deployment-bootstrap',
+        metadata={'reason': code},
+        request=request,
+    )
+    return Response({'error': code, 'detail': detail}, status=http_status)
+
+
+def _validate_deployment_request(request):
+    token_value = _deployment_token_from_request(request)
+    if not token_value:
+        return None, _deployment_error(request, 'deployment_token_required', 'Deployment token ausente.', status.HTTP_401_UNAUTHORIZED)
+    deployment = _find_deployment_by_token(token_value)
+    if deployment is None:
+        return None, _deployment_error(request, 'deployment_token_invalid', 'Deployment token invalido.', status.HTTP_401_UNAUTHORIZED)
+    if deployment.is_expired:
+        if deployment.status != AgentDeploymentToken.STATUS_EXPIRED:
+            deployment.status = AgentDeploymentToken.STATUS_EXPIRED
+            deployment.save(update_fields=['status'])
+        return None, _deployment_error(request, 'deployment_token_expired', 'Deployment token expirado.', status.HTTP_403_FORBIDDEN)
+    if deployment.is_used:
+        return None, _deployment_error(request, 'deployment_token_used', 'Deployment token ja utilizado.', status.HTTP_403_FORBIDDEN)
+    if deployment.platform != AgentDeploymentToken.PLATFORM_WINDOWS:
+        return None, _deployment_error(request, 'deployment_platform_invalid', 'Deployment nao e valido para Windows.', status.HTTP_403_FORBIDDEN)
+    return deployment, None
+
+
+class AgentDeploymentBootstrapScriptView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        deployment, error = _validate_deployment_request(request)
+        if error:
+            return error
+        script_path = settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1'
+        try:
+            script = script_path.read_text(encoding='utf-8')
+        except OSError:
+            logger.exception('Deployment bootstrap script missing')
+            return Response({'error': 'bootstrap_script_missing', 'detail': 'Bootstrap indisponivel.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        metadata_path = reverse('agent-deployment-metadata')
+        public_base = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/')
+        metadata_url = f'{public_base}{metadata_path}' if public_base else request.build_absolute_uri(metadata_path)
+        script = script.replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', metadata_url)
+        response = HttpResponse(script, content_type='text/plain; charset=utf-8')
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response['X-NightOwl-Deployment-Id'] = str(deployment.id)
+        return response
+
+
+class AgentDeploymentMetadataView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    @transaction.atomic
+    def get(self, request):
+        deployment, error = _validate_deployment_request(request)
+        if error:
+            return error
+        release = deployment.release
+        trust_bundle = _latest_published_trust_bundle()
+        if trust_bundle is None:
+            deployment.mark_failed('trust_bundle_missing', 'Nenhum trust bundle publicado.')
+            return Response({'error': 'trust_bundle_missing', 'detail': 'Trust bundle indisponivel.'}, status=status.HTTP_409_CONFLICT)
+        base_url = _public_base_url(request)
+        if not base_url.lower().startswith('https://'):
+            return Response({'error': 'https_required', 'detail': 'Bootstrap exige HTTPS.'}, status=status.HTTP_409_CONFLICT)
+        if not release.package_url or not release.sha256 or not release.signature_url or not release.signature_sha256:
+            deployment.mark_failed('release_metadata_incomplete', 'Release sem metadata assinada completa.')
+            return Response({'error': 'release_metadata_incomplete', 'detail': 'Release sem metadata completa.'}, status=status.HTTP_409_CONFLICT)
+        artifact_base = release.package_url.rsplit('/', 1)[0]
+        installer_url = f'{artifact_base}/Install-NightOwlAgentDotNet.ps1'
+        deployment.mark_installing()
+        create_audit_event(
+            event_type='agent.deployment.bootstrap_metadata',
+            title='Metadata de deployment entregue',
+            description=f'Deployment Windows para release {release.version} iniciado.',
+            severity=AuditEvent.SEVERITY_INFO,
+            actor_type=AuditEvent.ACTOR_SYSTEM,
+            actor_name='deployment-bootstrap',
+            metadata={
+                'deployment_id': str(deployment.id),
+                'release_id': str(release.id),
+                'release_version': release.version,
+                'platform': deployment.platform,
+                'channel': deployment.channel,
+                'token_prefix': deployment.prefix,
+            },
+            request=request,
+        )
+        return Response(
+            {
+                'deployment_id': str(deployment.id),
+                'platform': deployment.platform,
+                'channel': deployment.channel,
+                'expires_at': deployment.expires_at.isoformat(),
+                'server_url': base_url,
+                'release': {
+                    'id': str(release.id),
+                    'version': release.version,
+                    'channel': release.channel,
+                    'package_url': release.package_url,
+                    'sha256': release.sha256,
+                    'size': release.size,
+                    'manifest_url': release.manifest_url,
+                    'manifest_sha256': release.manifest_sha256,
+                    'signature_url': release.signature_url,
+                    'signature_sha256': release.signature_sha256,
+                    'signature_key_id': release.signature_key_id,
+                    'installer_url': installer_url,
+                },
+                'trusted_public_keys': {
+                    'url': trust_bundle.bundle_url,
+                    'sha256': trust_bundle.bundle_sha256,
+                    'bundle_version': trust_bundle.bundle_version,
+                    'root_key_id': trust_bundle.root_key_id,
+                },
+            }
+        )
 
 
 def _payload_sha256(payload):
@@ -966,6 +1127,63 @@ class AgentEnrollView(APIView):
             return None, token_error
         return enrollment_token, None
 
+    def _validate_deployment_token(self, request, payload, token_value):
+        if not token_value.startswith('deploy_'):
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_INVALID_TOKEN,
+                'invalid_deployment_token',
+                'Deployment token invalido.',
+                status.HTTP_401_UNAUTHORIZED,
+            )
+        deployment_token = AgentDeploymentToken.objects.select_for_update().filter(
+            token_hash=hash_enrollment_token(token_value),
+        ).first()
+        if deployment_token is None:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_INVALID_TOKEN,
+                'invalid_deployment_token',
+                'Deployment token invalido.',
+                status.HTTP_401_UNAUTHORIZED,
+            )
+        if deployment_token.is_expired:
+            if deployment_token.status != AgentDeploymentToken.STATUS_EXPIRED:
+                deployment_token.status = AgentDeploymentToken.STATUS_EXPIRED
+                deployment_token.save(update_fields=['status'])
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_EXPIRED,
+                'deployment_token_expired',
+                'Deployment token expirado.',
+                status.HTTP_403_FORBIDDEN,
+                metadata={'deployment_id': str(deployment_token.id), 'token_prefix': deployment_token.prefix},
+            )
+        if deployment_token.is_used:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_USAGE_LIMIT_REACHED,
+                'deployment_token_used',
+                'Deployment token ja utilizado.',
+                status.HTTP_403_FORBIDDEN,
+                metadata={'deployment_id': str(deployment_token.id), 'token_prefix': deployment_token.prefix},
+            )
+        if deployment_token.platform != AgentDeploymentToken.PLATFORM_WINDOWS:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_DENIED,
+                'deployment_platform_invalid',
+                'Deployment token nao autorizado para esta plataforma.',
+                status.HTTP_403_FORBIDDEN,
+                metadata={'deployment_id': str(deployment_token.id), 'platform': deployment_token.platform},
+            )
+        return deployment_token, None
+
     def _validate_enrollment_token_state(self, request, payload, enrollment_token):
         if not enrollment_token.is_active:
             return self._error(
@@ -1109,9 +1327,14 @@ class AgentEnrollView(APIView):
         manual_validation_token = None
         domain_validation = 'not_required'
         enrollment_token = None
+        deployment_token = None
 
         if token_value:
-            enrollment_token, token_error = self._validate_enrollment_token(request, payload, token_value)
+            if token_value.startswith('deploy_'):
+                deployment_token, token_error = self._validate_deployment_token(request, payload, token_value)
+                domain_validation = 'deployment'
+            else:
+                enrollment_token, token_error = self._validate_enrollment_token(request, payload, token_value)
             if token_error:
                 return token_error
         elif manual_token_value:
@@ -1235,6 +1458,8 @@ class AgentEnrollView(APIView):
 
             if enrollment_token is not None:
                 enrollment_token.mark_used()
+            if deployment_token is not None:
+                deployment_token.mark_completed(machine)
             if manual_validation_token is not None:
                 manual_validation_token.mark_used(hostname, domain)
             self._log_enrollment(
@@ -1252,8 +1477,30 @@ class AgentEnrollView(APIView):
                     'manual_validation_used': manual_validation_token is not None,
                     'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
                     'domain_reason': 'domain_not_allowed' if manual_validation_token else 'domain_allowed',
+                    'deployment_id': str(deployment_token.id) if deployment_token else '',
+                    'deployment_release_id': str(deployment_token.release_id) if deployment_token else '',
+                    'deployment_release_version': deployment_token.release.version if deployment_token else '',
                 },
             )
+            if deployment_token is not None:
+                create_audit_event(
+                    event_type='agent.deployment.completed',
+                    title='Deployment de agente concluido',
+                    description=f'Deployment Windows concluido em {hostname}.',
+                    severity=AuditEvent.SEVERITY_SUCCESS,
+                    actor_type=AuditEvent.ACTOR_AGENT,
+                    actor_name='NightOwlAgent installer',
+                    endpoint=machine,
+                    metadata={
+                        'deployment_id': str(deployment_token.id),
+                        'release_id': str(deployment_token.release_id),
+                        'release_version': deployment_token.release.version,
+                        'platform': deployment_token.platform,
+                        'channel': deployment_token.channel,
+                        'token_prefix': deployment_token.prefix,
+                    },
+                    request=request,
+                )
             create_audit_event(
                 event_type='agent.enrolled',
                 title='Agente cadastrado via enrollment',
@@ -1272,11 +1519,15 @@ class AgentEnrollView(APIView):
                     'domain_validation': domain_validation,
                     'manual_validation_used': manual_validation_token is not None,
                     'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                    'deployment_id': str(deployment_token.id) if deployment_token else '',
+                    'deployment_release_version': deployment_token.release.version if deployment_token else '',
                 },
                 request=request,
             )
         except Exception as exc:
             logger.exception('Failed to enroll agent hostname=%s domain=%s', hostname, domain)
+            if deployment_token is not None:
+                deployment_token.mark_failed('enrollment_failed', str(exc))
             return self._error(
                 request,
                 payload,

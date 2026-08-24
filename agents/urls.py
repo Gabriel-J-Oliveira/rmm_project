@@ -2,6 +2,8 @@ from django.urls import path
 
 from .views import (
     AgentEnrollView,
+    AgentDeploymentBootstrapScriptView,
+    AgentDeploymentMetadataView,
     AgentHeartbeatView,
     AgentInventoryCollectionView,
     AgentJobsPullView,
@@ -11,6 +13,8 @@ from .views import (
 )
 
 urlpatterns = [
+    path('deployments/bootstrap.ps1', AgentDeploymentBootstrapScriptView.as_view(), name='agent-deployment-bootstrap'),
+    path('deployments/metadata/', AgentDeploymentMetadataView.as_view(), name='agent-deployment-metadata'),
     path('enroll/', AgentEnrollView.as_view(), name='agent-enroll'),
     path('heartbeat/', AgentHeartbeatView.as_view(), name='agent-heartbeat'),
     path('status/', AgentStatusView.as_view(), name='agent-status'),

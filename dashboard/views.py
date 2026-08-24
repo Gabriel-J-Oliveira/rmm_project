@@ -13,11 +13,13 @@ from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, IntegerField, Q, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from agents.models import (
+    AgentDeploymentToken,
     AgentEnrollmentLog,
     AgentEnrollmentToken,
     AgentJob,
@@ -611,6 +613,23 @@ def build_agent_install_command(enrollment_token='', *, server_url=None, source_
         f'-File "{installer_path}" '
         f'-ServerUrl "{server_base}" '
         f'{flag_text}'
+    )
+
+
+def build_deployment_command(request, deployment_token):
+    token = deployment_token['token']
+    bootstrap_path = reverse('agent-deployment-bootstrap')
+    public_base = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/')
+    bootstrap_url = f'{public_base}{bootstrap_path}' if public_base else request.build_absolute_uri(bootstrap_path)
+    escaped_token = token.replace("'", "''")
+    escaped_url = bootstrap_url.replace("'", "''")
+    return (
+        "PowerShell -NoProfile -ExecutionPolicy Bypass -Command "
+        f"\"$env:NIGHTOWL_DEPLOYMENT_TOKEN='{escaped_token}'; "
+        "try { "
+        f"$script=(Invoke-WebRequest -UseBasicParsing -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
+        "Invoke-Expression $script "
+        "} finally { Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }\""
     )
 
 
@@ -2289,6 +2308,8 @@ def endpoint_list(request):
             'active_nav': 'endpoints',
             'rows': filtered_rows,
             'filters': filters,
+            'deployment_release_options': deployment_release_options(),
+            'deployment_create_url': reverse('api-deployment-create'),
             **endpoint_summary_counts(filtered_rows),
             **endpoint_filter_options(rows),
             'using_mock_rmm_data': True,
@@ -2303,6 +2324,8 @@ def endpoint_list(request):
         'active_nav': 'endpoints',
         'rows': filtered_rows,
         'filters': filters,
+        'deployment_release_options': deployment_release_options(),
+        'deployment_create_url': reverse('api-deployment-create'),
         **endpoint_summary_counts(filtered_rows),
         **endpoint_filter_options(rows),
     }
@@ -2769,6 +2792,125 @@ def _trust_bundle_payload(trust_bundle):
         'active_key_ids': trust_bundle.active_key_ids or [],
         'revoked_key_ids': trust_bundle.revoked_key_ids or [],
     }
+
+
+def deployment_release_options():
+    releases = list(AgentRelease.objects.filter(
+        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED},
+        revoked=False,
+        signature_valid=True,
+        legacy_unsigned=False,
+    ))
+    releases = sort_releases_by_version(releases, reverse=True)
+    return [
+        {
+            'id': str(release.id),
+            'version': release.version,
+            'channel': release.channel,
+            'status': release.status,
+            'rollout': release.rollout_percentage,
+            'paused': release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED,
+        }
+        for release in releases
+    ]
+
+
+def select_deployment_release(channel, release_id=''):
+    if channel == AgentRelease.CHANNEL_DEVELOPMENT:
+        if not release_id:
+            raise ValidationError('Selecione uma release development para pinagem do comando.')
+        release = AgentRelease.objects.filter(pk=release_id, channel=channel, revoked=False).first()
+        if release is None:
+            raise ValidationError('Release development nao encontrada.')
+        if release.status not in set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED}:
+            raise ValidationError('Release development nao esta disponivel para deployment manual.')
+        return release
+    if channel == AgentRelease.CHANNEL_STABLE:
+        releases = list(AgentRelease.objects.filter(
+            channel=channel,
+            status__in=AGENT_RELEASE_AVAILABLE_STATUSES,
+            revoked=False,
+            rollout_paused=False,
+        ))
+        ordered = sort_releases_by_version(releases, reverse=True)
+        if not ordered:
+            raise ValidationError('Nao ha release stable elegivel para deployment.')
+        return ordered[0]
+    raise ValidationError('Canal invalido para deployment.')
+
+
+def serialize_deployment(deployment, *, command=''):
+    return {
+        'id': str(deployment.id),
+        'platform': deployment.platform,
+        'channel': deployment.channel,
+        'release_id': str(deployment.release_id),
+        'release_version': deployment.release.version,
+        'status': deployment.status,
+        'created_at': _iso_or_none(deployment.created_at),
+        'expires_at': _iso_or_none(deployment.expires_at),
+        'used_at': _iso_or_none(deployment.used_at),
+        'completed_at': _iso_or_none(deployment.completed_at),
+        'endpoint_id': str(deployment.endpoint_id) if deployment.endpoint_id else '',
+        'hostname': deployment.endpoint.hostname if deployment.endpoint_id else '',
+        'token_single_use': True,
+        'command': command,
+    }
+
+
+@require_POST
+def deployment_create(request):
+    if not is_nightowl_technical_user(request.user):
+        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para gerar deployment.'}, status=403)
+    platform = (request.POST.get('platform') or AgentDeploymentToken.PLATFORM_WINDOWS).strip().lower()
+    channel = (request.POST.get('channel') or '').strip().lower()
+    release_id = (request.POST.get('release_id') or '').strip()
+    try:
+        ttl_minutes = int(request.POST.get('ttl_minutes') or 30)
+    except ValueError:
+        ttl_minutes = 30
+    ttl_minutes = min(240, max(5, ttl_minutes))
+    if platform != AgentDeploymentToken.PLATFORM_WINDOWS:
+        return JsonResponse({'error': 'unsupported_platform', 'detail': 'Nesta etapa somente Windows e suportado.'}, status=400)
+    try:
+        release = select_deployment_release(channel, release_id)
+    except ValidationError as exc:
+        return JsonResponse({'error': 'invalid_release', 'detail': str(exc)}, status=400)
+    trust_bundle = _latest_published_trust_bundle()
+    if trust_bundle is None:
+        return JsonResponse({'error': 'trust_bundle_missing', 'detail': 'Nenhum trust bundle publicado para bootstrap inicial.'}, status=409)
+    deployment, token = AgentDeploymentToken.create_with_token(
+        platform=platform,
+        channel=channel,
+        release=release,
+        created_by=request.user,
+        expires_at=timezone.now() + timedelta(minutes=ttl_minutes),
+        metadata={
+            'trust_bundle_id': str(trust_bundle.id),
+            'trust_bundle_version': trust_bundle.bundle_version,
+            'release_version': release.version,
+        },
+    )
+    command = build_deployment_command(request, {'token': token})
+    create_audit_event(
+        event_type='agent.deployment.created',
+        title='Deployment de agente criado',
+        description=f'Deployment Windows criado para release {release.version}.',
+        severity=AuditEvent.SEVERITY_INFO,
+        actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(),
+        metadata={
+            'deployment_id': str(deployment.id),
+            'platform': deployment.platform,
+            'channel': deployment.channel,
+            'release_id': str(release.id),
+            'release_version': release.version,
+            'expires_at': deployment.expires_at.isoformat(),
+            'token_prefix': deployment.prefix,
+        },
+        request=request,
+    )
+    return JsonResponse({'status': 'ok', 'deployment': serialize_deployment(deployment, command=command)}, status=201)
 
 
 def _update_policy_message(reason_code):

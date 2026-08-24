@@ -21,6 +21,10 @@ def generate_enrollment_token() -> str:
     return f'enroll_{secrets.token_urlsafe(32)}'
 
 
+def generate_deployment_token() -> str:
+    return f'deploy_{secrets.token_urlsafe(32)}'
+
+
 def hash_enrollment_token(token: str) -> str:
     return hmac.new(
         settings.SECRET_KEY.encode('utf-8'),
@@ -697,6 +701,118 @@ class AgentEnrollmentToken(models.Model):
     @classmethod
     def create_with_token(cls, **kwargs):
         token = generate_enrollment_token()
+        instance = cls(
+            token_hash=hash_enrollment_token(token),
+            prefix=token[:18],
+            **kwargs,
+        )
+        instance.save()
+        return instance, token
+
+
+class AgentDeploymentToken(models.Model):
+    PLATFORM_WINDOWS = 'windows'
+    PLATFORM_CHOICES = [
+        (PLATFORM_WINDOWS, 'Windows'),
+    ]
+
+    STATUS_WAITING = 'waiting'
+    STATUS_INSTALLING = 'installing'
+    STATUS_COMPLETED = 'completed'
+    STATUS_EXPIRED = 'expired'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_WAITING, 'Waiting'),
+        (STATUS_INSTALLING, 'Installing'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, default=PLATFORM_WINDOWS)
+    channel = models.CharField(max_length=20, choices=AgentMachine.UPDATE_CHANNEL_CHOICES)
+    release = models.ForeignKey(
+        AgentRelease,
+        on_delete=models.PROTECT,
+        related_name='deployment_tokens',
+    )
+    token_hash = models.CharField(max_length=128, unique=True)
+    prefix = models.CharField(max_length=30, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_WAITING, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='agent_deployment_tokens',
+    )
+    endpoint = models.ForeignKey(
+        AgentMachine,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='deployment_tokens',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+    installing_at = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    failed_at = models.DateTimeField(null=True, blank=True)
+    failure_code = models.CharField(max_length=80, blank=True)
+    failure_message = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['platform', 'status', '-created_at']),
+            models.Index(fields=['release', '-created_at']),
+            models.Index(fields=['expires_at', 'status']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.platform} {self.release.version} ({self.status})'
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at <= timezone.now()
+
+    @property
+    def is_used(self) -> bool:
+        return self.used_at is not None or self.status == self.STATUS_COMPLETED
+
+    def can_be_used(self) -> bool:
+        return self.status in {self.STATUS_WAITING, self.STATUS_INSTALLING} and not self.is_expired and not self.is_used
+
+    def token_matches(self, token: str) -> bool:
+        return hmac.compare_digest(self.token_hash, hash_enrollment_token(token))
+
+    def mark_installing(self) -> None:
+        if self.status == self.STATUS_WAITING:
+            self.status = self.STATUS_INSTALLING
+            self.installing_at = timezone.now()
+            self.save(update_fields=['status', 'installing_at'])
+
+    def mark_completed(self, endpoint) -> None:
+        now = timezone.now()
+        self.status = self.STATUS_COMPLETED
+        self.endpoint = endpoint
+        self.used_at = now
+        self.completed_at = now
+        self.save(update_fields=['status', 'endpoint', 'used_at', 'completed_at'])
+
+    def mark_failed(self, code: str, message: str = '') -> None:
+        self.status = self.STATUS_FAILED
+        self.failed_at = timezone.now()
+        self.failure_code = (code or '')[:80]
+        self.failure_message = (message or '')[:1000]
+        self.save(update_fields=['status', 'failed_at', 'failure_code', 'failure_message'])
+
+    @classmethod
+    def create_with_token(cls, **kwargs):
+        token = generate_deployment_token()
         instance = cls(
             token_hash=hash_enrollment_token(token),
             prefix=token[:18],

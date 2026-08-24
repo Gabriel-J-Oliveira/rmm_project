@@ -31,6 +31,7 @@ urlpatterns = [
     path('accounts/', include('django.contrib.auth.urls')),
     path('api/agent/', include('agents.urls')),
     path('api/endpoints/<str:pk>/', dashboard_views.endpoint_detail_data, name='api-endpoint-detail'),
+    path('api/deployments/windows/', dashboard_views.deployment_create, name='api-deployment-create'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
     path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
     path('api/endpoints/<str:pk>/update-policy/', dashboard_views.endpoint_update_policy_update, name='api-endpoint-update-policy'),

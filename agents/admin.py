@@ -21,6 +21,7 @@ from .models import (
     SoftwarePolicyException,
     SoftwarePolicyTargetEndpoint,
     SoftwarePolicyViolation,
+    AgentDeploymentToken,
 )
 
 
@@ -362,6 +363,25 @@ class AgentEnrollmentTokenAdmin(admin.ModelAdmin):
     list_filter = ('is_active', 'allowed_domain', 'created_at', 'expires_at')
     search_fields = ('name', 'prefix', 'notes', 'allowed_domain')
     readonly_fields = ('id', 'token_hash', 'prefix', 'used_count', 'last_used_at', 'created_at', 'updated_at')
+
+
+@admin.register(AgentDeploymentToken)
+class AgentDeploymentTokenAdmin(admin.ModelAdmin):
+    list_display = (
+        'created_at',
+        'platform',
+        'channel',
+        'release',
+        'status',
+        'prefix',
+        'expires_at',
+        'used_at',
+        'endpoint',
+        'created_by',
+    )
+    list_filter = ('platform', 'channel', 'status', 'created_at', 'expires_at')
+    search_fields = ('prefix', 'release__version', 'endpoint__hostname', 'created_by__username')
+    readonly_fields = tuple(field.name for field in AgentDeploymentToken._meta.fields)
 
 
 @admin.register(AgentEnrollmentLog)

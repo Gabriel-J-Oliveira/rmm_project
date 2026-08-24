@@ -7,11 +7,11 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle
+from .models import AuditEvent, AgentDeploymentToken, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
@@ -570,6 +570,215 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertEqual(diagnostic['last_error']['code'], 'RESULT_SEND_FAILED')
 
 # Create your tests here.
+
+
+@override_settings(NIGHTOWL_PUBLIC_URL='https://nightowl.test')
+class AgentDeploymentTokenTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.user = user_model.objects.create_user(username='deployer', password='pass', is_staff=True)
+        self.client.login(username='deployer', password='pass')
+        AgentReleaseSigningKey.objects.create(
+            key_id='nightowl-release-2026-02',
+            algorithm='RSA-PSS-SHA256',
+            status=AgentReleaseSigningKey.STATUS_ACTIVE,
+            public_key_xml='<RSAKeyValue><Modulus>AA==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>',
+        )
+        self.release = AgentRelease.objects.create(
+            version='0.1.1.0-rc18',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            status=AgentRelease.STATUS_PAUSED,
+            package_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc18/NightOwl.Agent.Windows.zip',
+            checksum_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc18/checksums.json',
+            sha256='a' * 64,
+            size=1234,
+            manifest_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc18/release-manifest.json',
+            manifest_sha256='b' * 64,
+            signature_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc18/release-manifest.sig',
+            signature_sha256='c' * 64,
+            signature_key_id='nightowl-release-2026-02',
+            signature_valid=True,
+            legacy_unsigned=False,
+            rollout_percentage=0,
+            rollout_paused=True,
+        )
+        self.trust_bundle = AgentReleaseTrustBundle.objects.create(
+            bundle_version=1,
+            status=AgentReleaseTrustBundle.STATUS_PUBLISHED,
+            schema_version=1,
+            root_key_id='nightowl-trust-root-lab-2026-01',
+            bundle_url='https://nightowl.test/downloads/nightowl-agent/trust/release-public-keys.json',
+            signature_url='https://nightowl.test/downloads/nightowl-agent/trust/release-public-keys.sig',
+            metadata_url='https://nightowl.test/downloads/nightowl-agent/trust/release-public-keys.meta.json',
+            bundle_sha256='d' * 64,
+            signature_sha256='e' * 64,
+            generated_at=timezone.now(),
+            published_at=timezone.now(),
+            valid_from=timezone.now(),
+            valid_until=timezone.now() + timedelta(days=30),
+            active_key_ids=['nightowl-release-2026-02'],
+            revoked_key_ids=[],
+        )
+
+    def create_deployment(self, release=None, **extra):
+        release = release or self.release
+        data = {
+            'platform': 'windows',
+            'channel': release.channel,
+            'release_id': str(release.id),
+            'ttl_minutes': '30',
+        }
+        data.update(extra)
+        response = self.client.post(reverse('api-deployment-create'), data)
+        self.assertEqual(response.status_code, 201, response.content)
+        payload = response.json()['deployment']
+        deployment = AgentDeploymentToken.objects.get(pk=payload['id'])
+        command = payload['command']
+        token = command.split("$env:NIGHTOWL_DEPLOYMENT_TOKEN='", 1)[1].split("'", 1)[0]
+        return deployment, token, payload
+
+    def test_deployment_created_with_hashed_single_use_token(self):
+        deployment, token, payload = self.create_deployment()
+
+        self.assertTrue(token.startswith('deploy_'))
+        self.assertEqual(deployment.token_hash, hash_enrollment_token(token))
+        self.assertNotIn(token, deployment.token_hash)
+        self.assertEqual(deployment.release_id, self.release.id)
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_WAITING)
+        self.assertTrue(payload['token_single_use'])
+        self.assertNotIn('agent_token', payload['command'].lower())
+        audit = AuditEvent.objects.get(event_type='agent.deployment.created')
+        self.assertNotIn(token, json.dumps(audit.metadata))
+
+    def test_endpoint_list_renders_add_device_controls(self):
+        response = self.client.get(reverse('endpoint-list'))
+
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('Adicionar dispositivo', content)
+        self.assertIn('data-deployment-release', content)
+        self.assertIn('Copiar', content)
+
+    def test_development_requires_explicit_release(self):
+        response = self.client.post(reverse('api-deployment-create'), {'platform': 'windows', 'channel': 'development'})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(AgentDeploymentToken.objects.count(), 0)
+
+    def test_stable_selects_current_eligible_release(self):
+        stable = AgentRelease.objects.create(
+            version='0.1.2.0',
+            channel=AgentRelease.CHANNEL_STABLE,
+            status=AgentRelease.STATUS_PUBLISHED,
+            package_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.2.0/NightOwl.Agent.Windows.zip',
+            checksum_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.2.0/checksums.json',
+            sha256='1' * 64,
+            size=2222,
+            manifest_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.2.0/release-manifest.json',
+            manifest_sha256='2' * 64,
+            signature_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.2.0/release-manifest.sig',
+            signature_sha256='3' * 64,
+            signature_key_id='nightowl-release-2026-02',
+            signature_valid=True,
+            legacy_unsigned=False,
+            rollout_percentage=100,
+            rollout_paused=False,
+        )
+
+        response = self.client.post(reverse('api-deployment-create'), {'platform': 'windows', 'channel': 'stable'})
+
+        self.assertEqual(response.status_code, 201, response.content)
+        deployment = AgentDeploymentToken.objects.get()
+        self.assertEqual(deployment.release_id, stable.id)
+
+    def test_invalid_expired_and_reused_token_are_rejected(self):
+        deployment, token, _ = self.create_deployment()
+        metadata_url = reverse('agent-deployment-metadata')
+
+        invalid = Client(HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN='deploy_invalid')
+        self.assertEqual(invalid.get(metadata_url).status_code, 401)
+
+        deployment.expires_at = timezone.now() - timedelta(minutes=1)
+        deployment.save(update_fields=['expires_at'])
+        expired = Client(HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN=token)
+        self.assertEqual(expired.get(metadata_url).status_code, 403)
+
+        deployment.expires_at = timezone.now() + timedelta(minutes=30)
+        deployment.status = AgentDeploymentToken.STATUS_COMPLETED
+        deployment.used_at = timezone.now()
+        deployment.save(update_fields=['expires_at', 'status', 'used_at'])
+        reused = Client(HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN=token)
+        self.assertEqual(reused.get(metadata_url).status_code, 403)
+
+    def test_metadata_pins_release_and_trust_bundle(self):
+        deployment, token, _ = self.create_deployment()
+        AgentRelease.objects.create(
+            version='0.1.1.0-rc19',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            status=AgentRelease.STATUS_PAUSED,
+            package_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc19/NightOwl.Agent.Windows.zip',
+            checksum_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc19/checksums.json',
+            sha256='4' * 64,
+            size=3333,
+            manifest_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc19/release-manifest.json',
+            manifest_sha256='5' * 64,
+            signature_url='https://nightowl.test/downloads/nightowl-agent/releases/0.1.1.0-rc19/release-manifest.sig',
+            signature_sha256='6' * 64,
+            signature_key_id='nightowl-release-2026-02',
+            signature_valid=True,
+            legacy_unsigned=False,
+            rollout_percentage=0,
+            rollout_paused=True,
+        )
+
+        response = Client(HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN=token).get(reverse('agent-deployment-metadata'))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data['release']['version'], '0.1.1.0-rc18')
+        self.assertEqual(data['trusted_public_keys']['sha256'], self.trust_bundle.bundle_sha256)
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+
+    def test_bootstrap_script_requires_token_and_never_mentions_agent_token(self):
+        deployment, token, _ = self.create_deployment()
+
+        missing = Client().get(reverse('agent-deployment-bootstrap'))
+        self.assertEqual(missing.status_code, 401)
+        response = Client(HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN=token).get(reverse('agent-deployment-bootstrap'))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        text = response.content.decode('utf-8')
+        self.assertIn('NIGHTOWL_DEPLOYMENT_TOKEN', text)
+        self.assertIn(reverse('agent-deployment-metadata'), text)
+        self.assertNotIn('AgentToken', text)
+
+    def test_enrollment_consumes_deployment_and_links_endpoint(self):
+        deployment, token, _ = self.create_deployment()
+        response = Client().post(
+            reverse('agent-enroll'),
+            data=json.dumps({
+                'enrollment_token': token,
+                'machine_id': 'machine-deploy-001',
+                'hostname': 'CS-DEPLOY-001',
+                'domain': 'CONTROL',
+                'os_name': 'Windows 11',
+                'serial_number': 'SERIAL-DEPLOY',
+                'agent_version': self.release.version,
+                'agent_mode': 'service',
+                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
+                'task_name': 'NightOwlAgentDotNet',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        endpoint = AgentMachine.objects.get(machine_id='machine-deploy-001')
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_COMPLETED)
+        self.assertEqual(deployment.endpoint_id, endpoint.id)
+        self.assertIsNotNone(deployment.used_at)
+        self.assertTrue(AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).exists())
 
 
 class AgentReleasePolicyTests(TestCase):

@@ -23,6 +23,11 @@
         return element ? element.closest("[data-endpoint-row]") : null;
     }
 
+    function csrfToken(form) {
+        const input = form ? form.querySelector("input[name='csrfmiddlewaretoken']") : null;
+        return input ? input.value : "";
+    }
+
     function runEndpointAction(action, row, message) {
         const endpoint = row ? row.dataset.endpoint : "Endpoints";
         if (operational && typeof operational.runAction === "function") {
@@ -206,4 +211,137 @@
             showToast(`${button.textContent.trim()} solicitado.`);
         });
     });
+
+    const deploymentModal = document.querySelector("[data-deployment-modal]");
+    const deploymentBackdrop = document.querySelector("[data-deployment-backdrop]");
+    const deploymentForm = document.querySelector("[data-deployment-form]");
+    if (deploymentModal && deploymentForm) {
+        const releaseOptionsNode = document.getElementById("deployment-release-options");
+        const releaseOptions = releaseOptionsNode ? JSON.parse(releaseOptionsNode.textContent || "[]") : [];
+        const channelSelect = deploymentForm.querySelector("[data-deployment-channel]");
+        const releaseSelect = deploymentForm.querySelector("[data-deployment-release]");
+        const releaseField = deploymentForm.querySelector("[data-deployment-release-field]");
+        const versionLabel = deploymentForm.querySelector("[data-deployment-version]");
+        const channelLabel = deploymentForm.querySelector("[data-deployment-channel-label]");
+        const errorBox = deploymentForm.querySelector("[data-deployment-error]");
+        const commandBox = deploymentForm.querySelector("[data-deployment-command-box]");
+        const commandOutput = deploymentForm.querySelector("[data-deployment-command]");
+        const resultBox = deploymentForm.querySelector("[data-deployment-result]");
+        const expiresOutput = deploymentForm.querySelector("[data-deployment-expires]");
+        const statusOutput = deploymentForm.querySelector("[data-deployment-status]");
+        const submitButton = deploymentForm.querySelector("[data-deployment-submit]");
+
+        function setDeploymentError(message) {
+            if (!errorBox) return;
+            errorBox.textContent = message || "";
+            errorBox.hidden = !message;
+        }
+
+        function openDeploymentModal() {
+            deploymentModal.hidden = false;
+            if (deploymentBackdrop) deploymentBackdrop.hidden = false;
+            setDeploymentError("");
+            if (window.lucide && typeof window.lucide.createIcons === "function") {
+                window.lucide.createIcons();
+            }
+        }
+
+        function closeDeploymentModal() {
+            deploymentModal.hidden = true;
+            if (deploymentBackdrop) deploymentBackdrop.hidden = true;
+        }
+
+        function selectedRelease() {
+            return releaseOptions.find(function (release) {
+                return release.id === releaseSelect.value;
+            }) || null;
+        }
+
+        function updateReleaseChoices() {
+            const channel = channelSelect.value;
+            channelLabel.textContent = channel;
+            releaseSelect.innerHTML = "";
+            if (channel === "development") {
+                const developmentReleases = releaseOptions.filter(function (release) {
+                    return release.channel === "development";
+                });
+                developmentReleases.forEach(function (release) {
+                    const option = document.createElement("option");
+                    option.value = release.id;
+                    option.textContent = `${release.version} (${release.status}${release.paused ? ", paused" : ""})`;
+                    releaseSelect.appendChild(option);
+                });
+                releaseField.hidden = false;
+                versionLabel.textContent = selectedRelease()?.version || "-";
+            } else {
+                releaseField.hidden = true;
+                const stableRelease = releaseOptions.find(function (release) {
+                    return release.channel === "stable" && release.status === "published" && !release.paused;
+                });
+                versionLabel.textContent = stableRelease ? stableRelease.version : "stable elegivel atual";
+            }
+            if (commandBox) {
+                commandBox.hidden = true;
+                commandBox.dataset.copyValue = "";
+            }
+            if (resultBox) resultBox.hidden = true;
+        }
+
+        document.querySelectorAll("[data-deployment-open]").forEach(function (button) {
+            button.addEventListener("click", openDeploymentModal);
+        });
+        document.querySelectorAll("[data-deployment-close]").forEach(function (button) {
+            button.addEventListener("click", closeDeploymentModal);
+        });
+        if (deploymentBackdrop) deploymentBackdrop.addEventListener("click", closeDeploymentModal);
+        channelSelect.addEventListener("change", updateReleaseChoices);
+        releaseSelect.addEventListener("change", function () {
+            versionLabel.textContent = selectedRelease()?.version || "-";
+            if (commandBox) commandBox.hidden = true;
+            if (resultBox) resultBox.hidden = true;
+        });
+
+        deploymentForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            setDeploymentError("");
+            const payload = new FormData(deploymentForm);
+            if (channelSelect.value !== "development") {
+                payload.delete("release_id");
+            }
+            if (submitButton) submitButton.disabled = true;
+            try {
+                const response = await fetch(deploymentForm.dataset.createUrl, {
+                    method: "POST",
+                    headers: { "X-CSRFToken": csrfToken(deploymentForm) },
+                    body: payload,
+                    credentials: "same-origin"
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== "ok") {
+                    throw new Error(data.detail || data.error || "Nao foi possivel gerar o comando.");
+                }
+                const deployment = data.deployment || {};
+                commandOutput.textContent = deployment.command || "";
+                commandBox.dataset.copyValue = deployment.command || "";
+                commandBox.hidden = false;
+                resultBox.hidden = false;
+                expiresOutput.textContent = deployment.expires_at || "-";
+                statusOutput.textContent = "Aguardando instalacao";
+                versionLabel.textContent = deployment.release_version || versionLabel.textContent;
+                showToast("Comando de instalacao gerado.");
+            } catch (error) {
+                setDeploymentError(error.message || "Falha ao gerar comando.");
+            } finally {
+                if (submitButton) submitButton.disabled = false;
+            }
+        });
+
+        deploymentForm.querySelectorAll("[data-deployment-copy]").forEach(function (button) {
+            button.addEventListener("click", function () {
+                copyValue(commandBox?.dataset.copyValue || "", "Comando PowerShell");
+            });
+        });
+
+        updateReleaseChoices();
+    }
 }());
