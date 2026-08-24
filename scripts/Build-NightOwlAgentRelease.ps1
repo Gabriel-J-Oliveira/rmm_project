@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Version,
+    [string]$Version = "",
 
     [switch]$Force,
     [switch]$ValidateOnly,

@@ -751,6 +751,10 @@ class AgentDeploymentTokenTests(TestCase):
         text = response.content.decode('utf-8')
         self.assertIn('NIGHTOWL_DEPLOYMENT_TOKEN', text)
         self.assertIn(reverse('agent-deployment-metadata'), text)
+        self.assertIn('-ExpectedVersion', text)
+        self.assertIn('-ExpectedChannel', text)
+        self.assertIn('-ExpectedPackageSha256', text)
+        self.assertIn('-ExpectedReleaseId', text)
         self.assertNotIn('AgentToken', text)
 
     def test_enrollment_consumes_deployment_and_links_endpoint(self):

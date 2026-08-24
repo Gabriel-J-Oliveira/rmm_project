@@ -90,11 +90,22 @@ try {
         ([string]$metadata.release.package_url),
         "-TrustedPublicKeysPath",
         $trustPath,
+        "-ExpectedVersion",
+        ([string]$metadata.release.version),
+        "-ExpectedChannel",
+        ([string]$metadata.release.channel),
+        "-ExpectedPackageSha256",
+        ([string]$metadata.release.sha256),
+        "-ExpectedReleaseId",
+        ([string]$metadata.release.id),
         "-EnrollmentToken",
         $Token,
         "-RunCheck",
         "-NonInteractive"
     )
+    if (-not [string]::IsNullOrWhiteSpace([string]$metadata.release.git_commit)) {
+        $installArgs += @("-ExpectedGitCommit", ([string]$metadata.release.git_commit))
+    }
     & powershell.exe @installArgs
     $installerExitCode = $LASTEXITCODE
     if ($installerExitCode -ne 0) {

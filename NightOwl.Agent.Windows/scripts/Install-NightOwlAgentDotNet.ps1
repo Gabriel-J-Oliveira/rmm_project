@@ -6,6 +6,11 @@ param(
     [string]$AgentToken = "",
     [string]$PackageUrl = "",
     [string]$TrustedPublicKeysPath = "",
+    [string]$ExpectedVersion = "",
+    [string]$ExpectedChannel = "",
+    [string]$ExpectedPackageSha256 = "",
+    [string]$ExpectedReleaseId = "",
+    [string]$ExpectedGitCommit = "",
     [string]$InstallPath = "",
     [string]$ServiceName = "NightOwlAgentDotNet",
     [string]$DisplayName = "NightOwl RMM Agent",
@@ -76,6 +81,8 @@ $script:UpdateMutex = $null
 $script:UpdateMutexAcquired = $false
 $script:Report = $null
 $script:Operation = "install"
+$script:ValidatedReleaseMetadata = $null
+$script:DownloadedPackageMode = $false
 $script:LifecycleErrorCodes = @(
     "INSTALL_ADMIN_REQUIRED",
     "INSTALL_UPDATE_IN_PROGRESS",
@@ -385,8 +392,90 @@ function Get-ChecksumFromManifest($Manifest, [string]$FileName) {
     return ""
 }
 
+function New-ReleaseMetadataFromPackage($Manifest, $AgentVersionFile, [string]$PackageSha256, [long]$PackageSize) {
+    $version = Get-JsonProperty $Manifest @("version")
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        $version = Get-JsonProperty $AgentVersionFile @("version")
+    }
+    $channel = Get-JsonProperty $Manifest @("channel", "initial_channel")
+    if ([string]::IsNullOrWhiteSpace($channel)) {
+        $channel = Get-JsonProperty $AgentVersionFile @("channel")
+    }
+    $buildId = Get-JsonProperty $Manifest @("build_id", "buildId")
+    if ([string]::IsNullOrWhiteSpace($buildId)) {
+        $buildId = Get-JsonProperty $AgentVersionFile @("build_id", "buildId")
+    }
+    $gitCommit = Get-JsonProperty $Manifest @("git_commit", "gitCommit")
+    if ([string]::IsNullOrWhiteSpace($gitCommit)) {
+        $gitCommit = Get-JsonProperty $AgentVersionFile @("git_commit", "gitCommit")
+    }
+    $releaseId = Get-JsonProperty $Manifest @("release_id", "releaseId")
+    if ([string]::IsNullOrWhiteSpace($releaseId)) {
+        $releaseId = Get-JsonProperty $AgentVersionFile @("release_id", "releaseId")
+    }
+    return [pscustomobject]@{
+        version = [string]$version
+        channel = [string]$channel
+        packageSha256 = [string]$PackageSha256
+        packageSize = [long]$PackageSize
+        releaseId = [string]$releaseId
+        buildId = [string]$buildId
+        gitCommit = [string]$gitCommit
+        source = "validated-release"
+    }
+}
+
+function Assert-ExpectedReleaseMetadata($Metadata) {
+    if ($null -eq $Metadata) {
+        throw "INSTALL_RELEASE_METADATA_MISSING: metadata da release validada ausente."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Metadata.version)) {
+        throw "INSTALL_RELEASE_METADATA_INVALID: versao da release ausente."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Metadata.channel)) {
+        throw "INSTALL_RELEASE_METADATA_INVALID: canal da release ausente."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Metadata.packageSha256)) {
+        throw "INSTALL_RELEASE_METADATA_INVALID: SHA256 do pacote ausente."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and [string]$Metadata.version -ne $ExpectedVersion) {
+        throw "INSTALL_RELEASE_METADATA_MISMATCH: version esperada $ExpectedVersion, obtida $($Metadata.version)."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedChannel) -and [string]$Metadata.channel -ne $ExpectedChannel) {
+        throw "INSTALL_RELEASE_METADATA_MISMATCH: channel esperado $ExpectedChannel, obtido $($Metadata.channel)."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPackageSha256) -and ([string]$Metadata.packageSha256).ToLowerInvariant() -ne $ExpectedPackageSha256.ToLowerInvariant()) {
+        throw "INSTALL_RELEASE_METADATA_MISMATCH: packageSha256 divergente da release pinada."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedReleaseId) -and -not [string]::IsNullOrWhiteSpace([string]$Metadata.releaseId) -and [string]$Metadata.releaseId -ne $ExpectedReleaseId) {
+        throw "INSTALL_RELEASE_METADATA_MISMATCH: release_id divergente da release pinada."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedGitCommit) -and -not [string]::IsNullOrWhiteSpace([string]$Metadata.gitCommit) -and [string]$Metadata.gitCommit -ne $ExpectedGitCommit) {
+        throw "INSTALL_RELEASE_METADATA_MISMATCH: git_commit divergente da release pinada."
+    }
+}
+
+function Resolve-InstallerReleaseMetadata([string]$SourcePath) {
+    if ($null -ne $script:ValidatedReleaseMetadata) {
+        return $script:ValidatedReleaseMetadata
+    }
+    $agentVersionFile = Read-JsonFile (Join-Path $SourcePath "agent.version.json")
+    $packageSha = Get-JsonProperty $agentVersionFile @("packageSha256", "package_sha256", "sha256")
+    if ([string]::IsNullOrWhiteSpace($packageSha) -and -not [string]::IsNullOrWhiteSpace($ExpectedPackageSha256)) {
+        $packageSha = $ExpectedPackageSha256
+    }
+    if ([string]::IsNullOrWhiteSpace($packageSha) -and -not $script:DownloadedPackageMode) {
+        $packageSha = "local-package"
+    }
+    $metadata = New-ReleaseMetadataFromPackage -Manifest $null -AgentVersionFile $agentVersionFile -PackageSha256 $packageSha -PackageSize 0
+    $metadata.source = "package-version-file"
+    Assert-ExpectedReleaseMetadata $metadata
+    return $metadata
+}
+
 function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     Enable-InsecureTlsForLab
+    $script:DownloadedPackageMode = $true
     if (-not $AllowInsecureTls -and -not $Url.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "INSTALL_PACKAGE_INSECURE_URL: download de pacote exige HTTPS."
     }
@@ -427,7 +516,7 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
     Assert-RequiredPackageFiles -SourceDir $extractPath -RequireTrust
     $trustedKeysPath = Resolve-TrustedPublicKeysForInstaller -ReleaseBundledTrustPath $releaseBundledTrustPath
-    Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath -TrustedKeysPath $trustedKeysPath
+    $script:ValidatedReleaseMetadata = Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath -TrustedKeysPath $trustedKeysPath
     $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
     if (-not $exe) {
         throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
@@ -514,8 +603,9 @@ function Assert-DownloadedPackageTrust([string]$ExtractPath, [string]$ZipPath, [
     $package = $manifest.package
     if ($null -eq $package) { throw "INSTALL_MANIFEST_INVALID: manifest sem package." }
     $zipSha = Get-FileSha256 $ZipPath
-    if ([string]$package.sha256 -ne $zipSha) { throw "INSTALL_MANIFEST_PACKAGE_HASH_INVALID: SHA do pacote diverge do manifesto." }
-    if ([long]$package.size -ne (Get-Item $ZipPath).Length) { throw "INSTALL_MANIFEST_PACKAGE_SIZE_INVALID: tamanho do pacote diverge do manifesto." }
+    $zipSize = (Get-Item $ZipPath).Length
+    if (([string]$package.sha256).ToLowerInvariant() -ne $zipSha) { throw "INSTALL_MANIFEST_PACKAGE_HASH_INVALID: SHA do pacote diverge do manifesto." }
+    if ([long]$package.size -ne $zipSize) { throw "INSTALL_MANIFEST_PACKAGE_SIZE_INVALID: tamanho do pacote diverge do manifesto." }
     foreach ($entry in @($manifest.required_zip_entries)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$entry) -and -not (Test-Path (Join-Path $ExtractPath ([string]$entry)))) {
             throw "INSTALL_PACKAGE_INVALID: pacote sem arquivo obrigatorio $entry"
@@ -537,7 +627,11 @@ function Assert-DownloadedPackageTrust([string]$ExtractPath, [string]$ZipPath, [
     finally {
         $rsa.Dispose()
     }
+    $agentVersionFile = Read-JsonFile (Join-Path $ExtractPath "agent.version.json")
+    $metadata = New-ReleaseMetadataFromPackage -Manifest $manifest -AgentVersionFile $agentVersionFile -PackageSha256 $zipSha -PackageSize $zipSize
+    Assert-ExpectedReleaseMetadata $metadata
     Write-Step "OK" "Manifesto e assinatura do pacote validados"
+    return $metadata
 }
 
 function Read-JsonFile([string]$Path) {
@@ -686,7 +780,7 @@ function Get-WebErrorPayload($ErrorRecord) {
     }
 }
 
-function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath) {
+function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [string]$AgentVersion) {
     $info = Get-ComputerInfoLite
     $body = @{
         machine_id = $MachineId
@@ -695,7 +789,7 @@ function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenV
         serial_number = $info.SerialNumber
         fqdn = if ($info.Domain) { "$($info.Hostname).$($info.Domain)" } else { $info.Hostname }
         os_name = $info.OsName
-        agent_version = "0.1.0.7"
+        agent_version = $AgentVersion
         agent_mode = "dotnet-service"
         install_path = $InstallPath
         task_name = "NightOwlAgentDotNet"
@@ -811,7 +905,7 @@ function Show-ManualValidationDialog($ServerBase, $Hostname, $Domain) {
     return $tokenBox.Text.Trim()
 }
 
-function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [switch]$NoGuiMode) {
+function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [string]$AgentVersion, [switch]$NoGuiMode) {
     $info = Get-ComputerInfoLite
     Write-InstallLog "enrollment.auto.start" "Iniciando enrollment do agente." @{
         hostname = $info.Hostname
@@ -820,7 +914,7 @@ function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualToken
         has_manual_validation_token = -not [string]::IsNullOrWhiteSpace($ManualTokenValue)
     }
     try {
-        $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $ManualTokenValue -MachineId $MachineId -InstallPath $InstallPath
+        $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $ManualTokenValue -MachineId $MachineId -InstallPath $InstallPath -AgentVersion $AgentVersion
         Write-InstallLog "enrollment.success" "Enrollment aprovado." @{ hostname = $info.Hostname; domain = $info.Domain }
         return $response
     }
@@ -852,7 +946,7 @@ function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualToken
         }
         Write-InstallLog "enrollment.manual.retry" "Tentando enrollment com token manual." @{ hostname = $info.Hostname; domain = $info.Domain }
         try {
-            $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $tokenToUse -MachineId $MachineId -InstallPath $InstallPath
+            $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $tokenToUse -MachineId $MachineId -InstallPath $InstallPath -AgentVersion $AgentVersion
             Write-InstallLog "enrollment.success" "Enrollment aprovado com validacao manual." @{ hostname = $info.Hostname; domain = $info.Domain; manual_validation_used = $true }
             return $response
         }
@@ -909,25 +1003,47 @@ function Assert-RequiredPackageFiles([string]$SourceDir, [switch]$RequireTrust) 
     }
 }
 
-function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
-    Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
-    $protectedNames = @(
+function Test-ProtectedPayloadRelativePath([string]$RelativePath) {
+    $normalized = $RelativePath.Replace("/", "\").TrimStart("\")
+    $leaf = [System.IO.Path]::GetFileName($normalized)
+    if ($leaf -in @(
         "agent.config.json",
         "agent.identity.json",
         "agent.state.json",
         "agent-dotnet.state.json",
         "update-state.json"
-    )
+    )) {
+        return $true
+    }
+    $firstSegment = $normalized.Split("\")[0]
+    if ($firstSegment -in @("Config", "Identity", "State", "Logs", "Diagnostics", "Updates")) {
+        return $true
+    }
+    if ($normalized -match "\.preserved-") {
+        return $true
+    }
+    return $false
+}
+
+function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
+    Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
-    foreach ($item in Get-ChildItem -Path $SourceDir -Force) {
-        if ($protectedNames -contains $item.Name) {
-            Write-InstallLog "binary.copy.protected_skipped" "Arquivo persistente ignorado durante copia de binarios." @{ name = $item.Name }
+    foreach ($item in Get-ChildItem -Path $SourceDir -Force -Recurse) {
+        $relative = $item.FullName.Substring($SourceDir.Length).TrimStart("\", "/")
+        if (Test-ProtectedPayloadRelativePath $relative) {
+            Write-InstallLog "binary.copy.protected_skipped" "Arquivo persistente ignorado durante copia de binarios." @{ path = $relative }
             continue
         }
-        if ($item.Name -match "\.preserved-" -or $item.Name -in @("Config", "Identity", "State", "Logs", "Diagnostics", "Updates")) {
-            continue
+        $destination = Join-Path $DestinationDir $relative
+        if ($item.PSIsContainer) {
+            New-Item -ItemType Directory -Force -Path $destination | Out-Null
         }
-        Copy-Item -Path $item.FullName -Destination $DestinationDir -Recurse -Force -Exclude @("*.pdb")
+        else {
+            if ($item.Name -like "*.pdb") { continue }
+            $destinationParent = Split-Path -Parent $destination
+            New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
+            Copy-Item -Path $item.FullName -Destination $destination -Force
+        }
     }
     Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir }
 }
@@ -936,7 +1052,7 @@ function Stop-TrayIfExists {
     Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
-function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$IdentityPath, [string]$ExpectedMachineId, [string]$ExePath) {
+function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$IdentityPath, [string]$ExpectedMachineId, [string]$ExePath, [string]$VersionPath, $ExpectedReleaseMetadata, [string]$LegacyConfigPath, [bool]$RequireNoLegacyConfig, [bool]$RequireTrayTask, [string]$TrayTaskName) {
     $errors = @()
     $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if (-not $service) {
@@ -948,10 +1064,22 @@ function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$
     if (-not (Test-Path $ExePath)) { $errors += "agent_exe_missing" }
     if (-not (Test-JsonFile $ConfigPath)) { $errors += "config_invalid" }
     if (-not (Test-JsonFile $IdentityPath)) { $errors += "identity_invalid" }
+    if (-not (Test-JsonFile $VersionPath)) { $errors += "version_invalid" }
+    if ($RequireNoLegacyConfig -and (Test-Path $LegacyConfigPath)) { $errors += "legacy_config_present_on_clean_install" }
     $identity = Read-JsonFile $IdentityPath
     $identityMachineId = Get-JsonProperty $identity @("machine_id", "machineId")
     if ((Test-MachineId $ExpectedMachineId) -and (Test-MachineId $identityMachineId) -and $identityMachineId -ne $ExpectedMachineId) {
         $errors += "machine_id_mismatch"
+    }
+    $versionInfo = Read-JsonFile $VersionPath
+    if ($null -ne $ExpectedReleaseMetadata) {
+        if ((Get-JsonProperty $versionInfo @("version")) -ne [string]$ExpectedReleaseMetadata.version) { $errors += "version_metadata_mismatch" }
+        if ((Get-JsonProperty $versionInfo @("channel")) -ne [string]$ExpectedReleaseMetadata.channel) { $errors += "channel_metadata_mismatch" }
+        if ((Get-JsonProperty $versionInfo @("packageSha256", "package_sha256")).ToLowerInvariant() -ne ([string]$ExpectedReleaseMetadata.packageSha256).ToLowerInvariant()) { $errors += "sha_metadata_mismatch" }
+    }
+    if ($RequireTrayTask) {
+        $trayTask = Get-ScheduledTask -TaskName $TrayTaskName -ErrorAction SilentlyContinue
+        if (-not $trayTask) { $errors += "tray_task_missing" }
     }
     return $errors
 }
@@ -1013,9 +1141,9 @@ function Install-OrUpdateService([string]$Name, [string]$Display, [string]$ExePa
 
 function Install-OrUpdateTrayTask([string]$TrayExePath) {
     if (-not (Test-Path $TrayExePath)) {
-        Write-Step "WARN" "Tray app nao encontrado; tarefa de bandeja nao criada: $TrayExePath"
+        Write-Step "FAIL" "Tray app nao encontrado; tarefa de bandeja nao criada: $TrayExePath"
         Write-InstallLog "tray.install.skipped" "Tray app nao encontrado." @{ tray_exe = $TrayExePath }
-        return
+        throw "INSTALL_TRAY_BINARY_MISSING: NightOwl.Agent.Tray.exe ausente."
     }
 
     $taskName = "NightOwl Agent Tray"
@@ -1025,11 +1153,51 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
     }
     try {
         $interactiveSid = "S-1-5-4"
-        $action = New-ScheduledTaskAction -Execute $TrayExePath
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $principal = New-ScheduledTaskPrincipal -GroupId $interactiveSid -RunLevel Limited
-        $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal
-        Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
+        $escapedExe = [System.Security.SecurityElement]::Escape($TrayExePath)
+        $taskXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>NightOwl Agent Tray</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="InteractiveUsers">
+      <GroupId>$interactiveSid</GroupId>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="InteractiveUsers">
+    <Exec>
+      <Command>$escapedExe</Command>
+    </Exec>
+  </Actions>
+</Task>
+"@
+        Register-ScheduledTask -TaskName $taskName -Xml $taskXml -Force | Out-Null
         Write-Step "OK" "Tarefa de bandeja criada: $taskName"
         Write-InstallLog "tray.install.completed" "Tarefa agendada da bandeja criada." @{
             task_name = $taskName
@@ -1044,7 +1212,8 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
             tray_exe = $TrayExePath
             error = $_.Exception.Message
         }
-        Write-Step "WARN" ("Nao foi possivel criar a tarefa de bandeja: {0}" -f $_.Exception.Message)
+        Write-Step "FAIL" ("Nao foi possivel criar a tarefa de bandeja: {0}" -f $_.Exception.Message)
+        throw "INSTALL_TRAY_TASK_FAILED: $($_.Exception.Message)"
     }
 }
 
@@ -1194,6 +1363,14 @@ else {
     Write-Step "OK" "Modo local/offline ativo"
 }
 
+$releaseMetadata = Resolve-InstallerReleaseMetadata -SourcePath $sourcePath
+Write-InstallLog "release.metadata.resolved" "Metadata da release resolvida para instalacao." @{
+    version = [string]$releaseMetadata.version
+    channel = [string]$releaseMetadata.channel
+    package_sha256 = [string]$releaseMetadata.packageSha256
+    source = [string]$releaseMetadata.source
+}
+
 $preservedConfig = Read-JsonFile $configPath
 if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
     Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
@@ -1246,7 +1423,7 @@ elseif ([string]::IsNullOrWhiteSpace($AgentToken) -and -not [string]::IsNullOrWh
 }
 elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
     Write-Step "OK" "Executando enrollment no servidor NightOwl"
-    $enrollResponse = Invoke-NightOwlEnrollment -BaseUrl $serverBase -EnrollmentTokenValue $EnrollmentToken -ManualTokenValue $ManualValidationToken -MachineId $machineId -InstallPath $InstallPath -NoGuiMode:$NoGui
+    $enrollResponse = Invoke-NightOwlEnrollment -BaseUrl $serverBase -EnrollmentTokenValue $EnrollmentToken -ManualTokenValue $ManualValidationToken -MachineId $machineId -InstallPath $InstallPath -AgentVersion ([string]$releaseMetadata.version) -NoGuiMode:$NoGui
     $script:Report.enrollment_performed = $true
     if ($enrollResponse.agent_token) {
         $AgentToken = [string]$enrollResponse.agent_token
@@ -1286,11 +1463,7 @@ if (-not (Test-Path $iconPath)) {
     Write-InstallLog "tray.icon.missing" "Icone NightOwl nao encontrado no caminho esperado." @{ icon_path = $iconPath }
 }
 
-$packageVersionFile = Read-JsonFile (Join-Path $sourcePath "agent.version.json")
-$packageVersion = Get-JsonProperty $packageVersionFile @("version")
-if ([string]::IsNullOrWhiteSpace($packageVersion)) {
-    $packageVersion = if ($preservedConfig.agentVersion) { [string]$preservedConfig.agentVersion } else { "0.1.0.7" }
-}
+$packageVersion = [string]$releaseMetadata.version
 $script:Report.previous_version = $previousVersion
 $script:Report.installed_version = $packageVersion
 
@@ -1320,9 +1493,13 @@ $config = [ordered]@{
     packagesPath = [string]$script:NightOwlPaths.Packages
     cachePath = [string]$script:NightOwlPaths.Cache
     jobsPath = [string]$script:NightOwlPaths.StateDir
-    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "restart_agent")
+    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "restart_agent", "uninstall_agent")
 }
 Save-AgentConfig -Path $configPath -Config $config
+if (-not $existingInstallation -and (Test-Path $legacyConfigPath)) {
+    Remove-Item -Path $legacyConfigPath -Force
+    Write-InstallLog "path.legacy_config.removed" "Config legado removido durante instalacao limpa; Config canonico e a fonte de verdade." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
+}
 Write-StateMachineId -Path $statePath -MachineId $machineId
 $identityInfo = [ordered]@{
     machine_id = $machineId
@@ -1333,8 +1510,12 @@ $identityInfo | ConvertTo-Json -Depth 5 | Set-Content -Path ([string]$script:Nig
 $versionInfo = [ordered]@{
     version = $packageVersion
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
-    channel = "stable"
-    packageSha256 = ""
+    channel = [string]$releaseMetadata.channel
+    packageSha256 = [string]$releaseMetadata.packageSha256
+    packageSize = [long]$releaseMetadata.packageSize
+    releaseId = [string]$releaseMetadata.releaseId
+    buildId = [string]$releaseMetadata.buildId
+    gitCommit = [string]$releaseMetadata.gitCommit
     updatedBy = "installer"
 }
 $versionInfo | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $InstallPath "agent.version.json") -Encoding UTF8
@@ -1408,7 +1589,18 @@ if ($RunCheck) {
     }
 }
 
-$healthErrors = Test-AgentLifecycleHealth -Name $ServiceName -ConfigPath $configPath -IdentityPath ([string]$script:NightOwlPaths.IdentityPath) -ExpectedMachineId $machineId -ExePath $exePath
+$healthErrors = Test-AgentLifecycleHealth `
+    -Name $ServiceName `
+    -ConfigPath $configPath `
+    -IdentityPath ([string]$script:NightOwlPaths.IdentityPath) `
+    -ExpectedMachineId $machineId `
+    -ExePath $exePath `
+    -VersionPath (Join-Path $InstallPath "agent.version.json") `
+    -ExpectedReleaseMetadata $releaseMetadata `
+    -LegacyConfigPath $legacyConfigPath `
+    -RequireNoLegacyConfig:(-not $existingInstallation -and $script:Operation -eq "install") `
+    -RequireTrayTask:(-not $NoTray) `
+    -TrayTaskName "NightOwl Agent Tray"
 if ($healthErrors.Count -gt 0) {
     $healthCode = switch ($script:Operation) {
         "repair" { "REPAIR_HEALTHCHECK_FAILED" }
@@ -1416,7 +1608,8 @@ if ($healthErrors.Count -gt 0) {
         default { "INSTALL_HEALTHCHECK_FAILED" }
     }
     Add-ReportWarning $healthCode "Health check local encontrou pendencias." @{ errors = $healthErrors }
-    Write-InstallLog "operation.healthcheck.warning" "Health check local encontrou pendencias." @{ operation = $script:Operation; errors = $healthErrors; error_code = $healthCode }
+    Write-InstallLog "operation.healthcheck.failed" "Health check local encontrou pendencias." @{ operation = $script:Operation; errors = $healthErrors; error_code = $healthCode }
+    throw ("{0}: {1}" -f $healthCode, ($healthErrors -join ","))
 }
 else {
     Add-ReportAction "healthcheck.ok" @{ service_name = $ServiceName; version = $packageVersion }

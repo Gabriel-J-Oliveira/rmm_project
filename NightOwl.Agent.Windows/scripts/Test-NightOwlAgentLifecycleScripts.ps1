@@ -45,11 +45,18 @@ foreach ($required in @(
     "NightOwl.Agent.Diagnostics.exe",
     "NightOwl.Agent.Uninstaller.exe",
     "S-1-5-4",
-    "New-ScheduledTaskPrincipal",
+    "Register-ScheduledTask -TaskName `$taskName -Xml",
     "INSTALL_PACKAGE_INSECURE_URL",
     "INSTALL_MANIFEST_MISSING",
     "INSTALL_SIGNATURE_INVALID",
     "INSTALL_SIGNING_KEY_REVOKED",
+    "ExpectedVersion",
+    "ExpectedChannel",
+    "ExpectedPackageSha256",
+    "INSTALL_RELEASE_METADATA_MISMATCH",
+    "legacy_config_present_on_clean_install",
+    "INSTALL_TRAY_TASK_FAILED",
+    "uninstall_agent",
     "TrustLocalPackage",
     "Protect-SecretValue"
 )) {
@@ -57,6 +64,10 @@ foreach ($required in @(
 }
 
 Assert-True (-not $installText.Contains("/RU INTERACTIVE")) "Install script must not depend on localized INTERACTIVE account name."
+Assert-True (-not $installText.Contains('agent_version = "0.1.0.7"')) "Install script must not enroll with a hardcoded legacy version."
+Assert-True (-not $installText.Contains('channel = "stable"')) "Install script must not write a hardcoded stable channel."
+Assert-True (-not $installText.Contains('packageSha256 = ""')) "Install script must not write an empty package SHA."
+Assert-True ($installText.Contains('throw ("{0}: {1}" -f $healthCode')) "Install script must fail closed on lifecycle health errors."
 
 foreach ($required in @(
     "[switch]`$Purge",
