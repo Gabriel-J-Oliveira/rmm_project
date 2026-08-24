@@ -158,6 +158,17 @@ function Test-RemoteDjangoCommands([hashtable]$Resolved) {
 function Invoke-SelfTest {
     Assert-WindowsPowerShellSupported
     Assert-CommandAvailable "powershell.exe"
+    $publisherText = Get-Content -LiteralPath $script:PublisherScript -Raw
+    $requiredFilesMatch = [regex]::Match($publisherText, '(?s)\$script:RequiredFiles\s*=\s*@\((.*?)\)')
+    if (-not $requiredFilesMatch.Success) {
+        Fail "RUNNER_SELFTEST_PUBLISHER_REQUIRED_FILES_MISSING" "Publisher nao contem bloco RequiredFiles reconhecivel."
+    }
+    $requiredFilesBlock = $requiredFilesMatch.Groups[1].Value
+    foreach ($requiredArtifact in @("release-manifest.sig", "release-public-keys.json")) {
+        if ($requiredFilesBlock -notmatch [regex]::Escape($requiredArtifact)) {
+            Fail "RUNNER_SELFTEST_PUBLISHER_ARTIFACT_MISSING" "Publisher nao exige artefato obrigatorio em RequiredFiles: $requiredArtifact"
+        }
+    }
     Invoke-NativeCaptured "powershell.exe" @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",

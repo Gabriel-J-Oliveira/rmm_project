@@ -55,7 +55,9 @@ $script:RequiredFiles = @(
     "NightOwl.ico",
     "checksums.json",
     "version.json",
-    "release-manifest.json"
+    "release-manifest.json",
+    "release-manifest.sig",
+    "release-public-keys.json"
 )
 
 $script:ExitCodes = @{
@@ -535,6 +537,11 @@ function Invoke-SelfTest {
         if ($withForce -contains "-Force:False" -or $withForce -contains "-Force:$false") {
             Fail "validation_failed" "SelfTest falhou: Force true/false gerou sintaxe :False."
         }
+        foreach ($requiredArtifact in @("release-manifest.sig", "release-public-keys.json")) {
+            if ($script:RequiredFiles -notcontains $requiredArtifact) {
+                Fail "validation_failed" "SelfTest falhou: $requiredArtifact deve ser artefato obrigatorio do publisher."
+            }
+        }
 
         $legacyProvider = New-Object System.Security.Cryptography.RSACryptoServiceProvider 3072
         try {
@@ -879,10 +886,6 @@ function Copy-ReleaseToRemote([string]$ReleaseDir, [string]$RemoteTemp) {
     foreach ($file in $script:RequiredFiles) {
         $files += (Join-Path $ReleaseDir $file)
     }
-    $signaturePath = Join-Path $ReleaseDir "release-manifest.sig"
-    if (Test-Path $signaturePath) {
-        $files += $signaturePath
-    }
     $target = "${RemoteAlias}:$RemoteTemp/"
     Invoke-Native "scp.exe" (@("-q") + $files + @($target)) "upload_failed" | Out-Null
 }
@@ -896,6 +899,7 @@ for f in $required; do test -s "`$f"; done
 python3 -m json.tool version.json >/dev/null
 python3 -m json.tool checksums.json >/dev/null
 python3 -m json.tool release-manifest.json >/dev/null
+python3 -m json.tool release-public-keys.json >/dev/null
 legacy=`$(python3 - <<'PY'
 import json
 print('1' if json.load(open('version.json', encoding='utf-8')).get('legacyUnsigned') else '0')
@@ -956,6 +960,10 @@ function Test-PublicUrls($LocalRelease) {
     $releaseBase = "{0}/releases/{1}" -f $PublicBaseUrl.TrimEnd("/"), $Version
     foreach ($url in @(
         "$releaseBase/release-manifest.json",
+        "$releaseBase/release-manifest.sig",
+        "$releaseBase/release-public-keys.json",
+        "$releaseBase/checksums.json",
+        "$releaseBase/version.json",
         "$releaseBase/NightOwl.Agent.Windows.zip"
     )) {
         Write-Step "Validando URL publica: $url"
