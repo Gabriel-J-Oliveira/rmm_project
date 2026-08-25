@@ -799,6 +799,146 @@ Write-Output 'BOOTSTRAP_FAILURE_OK'
         self.assertIn('HOST_STILL_ALIVE', completed.stdout)
         self.assertIn('BOOTSTRAP_FAILURE_OK', completed.stdout)
 
+    def test_bootstrap_accepts_metadata_without_optional_git_commit(self):
+        powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
+        if powershell is None:
+            self.skipTest('PowerShell nao disponivel para validar bootstrap.')
+
+        bootstrap_path = settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1'
+        with tempfile.TemporaryDirectory() as temp_dir:
+            safe_temp = temp_dir.replace("'", "''")
+            safe_script = str(bootstrap_path).replace("'", "''")
+            harness = f"""
+$ErrorActionPreference = 'Stop'
+$env:TEMP = '{safe_temp}'
+$env:NIGHTOWL_DEPLOYMENT_TOKEN = 'deploy_optional_metadata_test'
+$script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
+$script = $script.Replace("    Assert-Administrator`r`n", "    # Assert-Administrator bypassed by regression test`r`n")
+$script = $script.Replace("    Assert-Administrator`n", "    # Assert-Administrator bypassed by regression test`n")
+$script = $script.Replace('& powershell.exe @installArgs', '$global:CapturedInstallArgs = $installArgs; $global:InstallerInvoked = $true; $global:LASTEXITCODE = 0')
+$override = @'
+function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
+    return [pscustomobject]@{{
+        server_url = 'https://nightowl.test'
+        release = [pscustomobject]@{{
+            id = 'release-test-id'
+            version = '0.1.1.0-rc19'
+            channel = 'development'
+            sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            installer_url = 'https://nightowl.test/releases/0.1.1.0-rc19/Install-NightOwlAgentDotNet.ps1'
+            package_url = 'https://nightowl.test/releases/0.1.1.0-rc19/NightOwl.Agent.Windows.zip'
+        }}
+        trusted_public_keys = [pscustomobject]@{{
+            url = 'https://nightowl.test/trust/release-public-keys.json'
+            sha256 = 'trustedsha'
+        }}
+    }}
+}}
+function Invoke-WebRequest {{
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
+    if (-not [string]::IsNullOrWhiteSpace($OutFile)) {{
+        Set-Content -Path $OutFile -Value 'test-content'
+    }}
+    return [pscustomobject]@{{ Content = 'ok' }}
+}}
+function Get-Sha256([string]$Path) {{ return 'trustedsha' }}
+'@
+$marker = "try {{" + "`r`n    `$Stage = `"preflight`""
+$idx = $script.IndexOf($marker)
+if ($idx -lt 0) {{
+    $marker = "try {{" + "`n    `$Stage = `"preflight`""
+    $idx = $script.IndexOf($marker)
+}}
+if ($idx -lt 0) {{ throw 'main try marker nao encontrado' }}
+$script = $script.Substring(0, $idx) + $override + "`r`n" + $script.Substring($idx)
+Invoke-Expression $script
+if (-not $global:InstallerInvoked) {{ throw 'installer nao foi chamado' }}
+if ($global:CapturedInstallArgs -contains '-ExpectedGitCommit') {{ throw 'ExpectedGitCommit nao deveria ser enviado' }}
+foreach ($required in @('-ExpectedVersion','0.1.1.0-rc19','-ExpectedChannel','development','-ExpectedPackageSha256','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','-ExpectedReleaseId','release-test-id')) {{
+    if (-not ($global:CapturedInstallArgs -contains $required)) {{ throw "argumento esperado ausente: $required" }}
+}}
+if ($global:NightOwlDeploymentBootstrapExitCode -ne 0) {{ throw 'bootstrap deveria concluir com sucesso' }}
+if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
+Write-Output 'OPTIONAL_GIT_COMMIT_OK'
+"""
+            completed = subprocess.run(
+                [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        self.assertIn('OPTIONAL_GIT_COMMIT_OK', completed.stdout)
+
+    def test_bootstrap_still_fails_when_required_metadata_is_missing(self):
+        powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
+        if powershell is None:
+            self.skipTest('PowerShell nao disponivel para validar bootstrap.')
+
+        bootstrap_path = settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1'
+        with tempfile.TemporaryDirectory() as temp_dir:
+            safe_temp = temp_dir.replace("'", "''")
+            safe_script = str(bootstrap_path).replace("'", "''")
+            harness = f"""
+$ErrorActionPreference = 'Stop'
+$env:TEMP = '{safe_temp}'
+$env:NIGHTOWL_DEPLOYMENT_TOKEN = 'deploy_required_metadata_test'
+$script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
+$script = $script.Replace("    Assert-Administrator`r`n", "    # Assert-Administrator bypassed by regression test`r`n")
+$script = $script.Replace("    Assert-Administrator`n", "    # Assert-Administrator bypassed by regression test`n")
+$override = @'
+function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
+    return [pscustomobject]@{{
+        server_url = 'https://nightowl.test'
+        release = [pscustomobject]@{{
+            id = 'release-test-id'
+            version = '0.1.1.0-rc19'
+            channel = 'development'
+            installer_url = 'https://nightowl.test/releases/0.1.1.0-rc19/Install-NightOwlAgentDotNet.ps1'
+            package_url = 'https://nightowl.test/releases/0.1.1.0-rc19/NightOwl.Agent.Windows.zip'
+        }}
+        trusted_public_keys = [pscustomobject]@{{
+            url = 'https://nightowl.test/trust/release-public-keys.json'
+            sha256 = 'trustedsha'
+        }}
+    }}
+}}
+function Invoke-WebRequest {{
+    param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
+    if (-not [string]::IsNullOrWhiteSpace($OutFile)) {{
+        Set-Content -Path $OutFile -Value 'test-content'
+    }}
+    return [pscustomobject]@{{ Content = 'ok' }}
+}}
+function Get-Sha256([string]$Path) {{ return 'trustedsha' }}
+'@
+$marker = "try {{" + "`r`n    `$Stage = `"preflight`""
+$idx = $script.IndexOf($marker)
+if ($idx -lt 0) {{
+    $marker = "try {{" + "`n    `$Stage = `"preflight`""
+    $idx = $script.IndexOf($marker)
+}}
+if ($idx -lt 0) {{ throw 'main try marker nao encontrado' }}
+$script = $script.Substring(0, $idx) + $override + "`r`n" + $script.Substring($idx)
+Invoke-Expression $script
+if ($global:NightOwlDeploymentBootstrapExitCode -ne 1) {{ throw 'bootstrap deveria falhar' }}
+$log = Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log'
+if (-not (Test-Path $log)) {{ throw 'bootstrap.log ausente' }}
+$logText = Get-Content -Raw -Path $log
+if ($logText -notmatch 'sha256') {{ throw 'falha esperada de metadata obrigatoria ausente' }}
+Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
+"""
+            completed = subprocess.run(
+                [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        self.assertIn('REQUIRED_METADATA_MISSING_FAILED_OK', completed.stdout)
+
     def test_endpoint_list_renders_add_device_controls(self):
         response = self.client.get(reverse('endpoint-list'))
 

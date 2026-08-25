@@ -76,6 +76,16 @@ function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {
     return Invoke-RestMethod -Method Get -Uri $Url -Headers @{ "X-NightOwl-Deployment-Token" = $DeploymentToken } -UseBasicParsing
 }
 
+function Get-OptionalJsonProperty($Object, [string]$Name) {
+    if ($null -eq $Object) {
+        return ""
+    }
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        return [string]$Object.$Name
+    }
+    return ""
+}
+
 try {
     $Stage = "preflight"
     Assert-Windows
@@ -132,8 +142,9 @@ try {
         "-RunCheck",
         "-NonInteractive"
     )
-    if (-not [string]::IsNullOrWhiteSpace([string]$metadata.release.git_commit)) {
-        $installArgs += @("-ExpectedGitCommit", ([string]$metadata.release.git_commit))
+    $expectedGitCommit = Get-OptionalJsonProperty -Object $metadata.release -Name "git_commit"
+    if (-not [string]::IsNullOrWhiteSpace($expectedGitCommit)) {
+        $installArgs += @("-ExpectedGitCommit", $expectedGitCommit)
     }
     & powershell.exe @installArgs
     $installerExitCode = $LASTEXITCODE
