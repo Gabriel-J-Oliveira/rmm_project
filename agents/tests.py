@@ -6,6 +6,7 @@ import tempfile
 from io import StringIO
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -697,6 +698,106 @@ Write-Output 'DEPLOYMENT_COMMAND_OK'
         )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         self.assertIn('DEPLOYMENT_COMMAND_OK', completed.stdout)
+
+    @override_settings(NIGHTOWL_PUBLIC_URL='https://nightowl.test')
+    def test_generated_deployment_command_failure_keeps_host_alive(self):
+        _, token, payload = self.create_deployment()
+        command = payload['command']
+
+        powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
+        if powershell is None:
+            self.skipTest('PowerShell nao disponivel para validar comando gerado.')
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            safe_temp = temp_dir.replace("'", "''")
+            harness = f"""
+$ErrorActionPreference = 'Stop'
+$env:TEMP = '{safe_temp}'
+$capturedHeader = ''
+function Invoke-WebRequest {{
+    param([switch]$UseBasicParsing, [hashtable]$Headers, [string]$Uri)
+    $script:capturedHeader = [string]$Headers['X-NightOwl-Deployment-Token']
+    [pscustomobject]@{{ Content = @'
+$Stage = 'install'
+$TempRoot = Join-Path $env:TEMP 'NightOwlDeployment'
+$BootstrapLogPath = Join-Path $TempRoot 'bootstrap.log'
+function Write-NightOwlResult([string]$Status, [hashtable]$Fields) {{ Write-Host ('NightOwl installation ' + $Status) }}
+function Write-NightOwlBootstrapLog([string]$Status, [hashtable]$Fields) {{
+    New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+    [pscustomobject]@{{ status=$Status; stage=$Stage; error_code=$Fields.error_code; error_message=$Fields.error_message }} | ConvertTo-Json -Compress | Add-Content -Path $BootstrapLogPath -Encoding UTF8
+}}
+try {{
+    throw 'BOOTSTRAP_SIMULATED_FAILURE'
+}} catch {{
+    Write-NightOwlResult 'failed' @{{ stage=$Stage; error_code='BOOTSTRAP_SIMULATED_FAILURE'; error_message=$_.Exception.Message }}
+    Write-NightOwlBootstrapLog 'failed' @{{ error_code='BOOTSTRAP_SIMULATED_FAILURE'; error_message=$_.Exception.Message }}
+    $global:NightOwlDeploymentBootstrapExitCode = 1
+}} finally {{
+    Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
+}}
+'@ }}
+}}
+{command}
+Write-Output 'HOST_STILL_ALIVE'
+if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
+if ($capturedHeader -ne '{token}') {{ throw 'deployment header divergente' }}
+if ($global:NightOwlDeploymentBootstrapExitCode -ne 1) {{ throw 'exit code simulado divergente' }}
+$log = Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log'
+if (-not (Test-Path $log)) {{ throw 'bootstrap.log ausente' }}
+$logText = Get-Content -Raw -Path $log
+if ($logText -match 'deploy_') {{ throw 'deployment token vazou no log' }}
+Write-Output 'DEPLOYMENT_COMMAND_FAILURE_OK'
+"""
+            completed = subprocess.run(
+                [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        self.assertIn('HOST_STILL_ALIVE', completed.stdout)
+        self.assertIn('DEPLOYMENT_COMMAND_FAILURE_OK', completed.stdout)
+
+    def test_bootstrap_failure_does_not_exit_host_and_writes_log(self):
+        powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
+        if powershell is None:
+            self.skipTest('PowerShell nao disponivel para validar bootstrap.')
+
+        bootstrap_path = settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1'
+        bootstrap = bootstrap_path.read_text(encoding='utf-8')
+        self.assertNotIn('exit 0', bootstrap)
+        self.assertNotIn('exit 1', bootstrap)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            safe_temp = temp_dir.replace("'", "''")
+            safe_script = str(bootstrap_path).replace("'", "''")
+            harness = f"""
+$ErrorActionPreference = 'Stop'
+$env:TEMP = '{safe_temp}'
+Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
+$script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
+Invoke-Expression $script
+Write-Output 'HOST_STILL_ALIVE'
+if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
+if ($global:NightOwlDeploymentBootstrapExitCode -ne 1) {{ throw 'bootstrap exit code divergente' }}
+$log = Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log'
+if (-not (Test-Path $log)) {{ throw 'bootstrap.log ausente' }}
+$logText = Get-Content -Raw -Path $log
+if ($logText -notmatch 'BOOTSTRAP_(TOKEN|ADMIN)_REQUIRED') {{ throw 'erro esperado ausente do log' }}
+if ($logText -match 'deploy_') {{ throw 'deployment token vazou no log' }}
+Write-Output 'BOOTSTRAP_FAILURE_OK'
+"""
+            completed = subprocess.run(
+                [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', harness],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        self.assertIn('HOST_STILL_ALIVE', completed.stdout)
+        self.assertIn('BOOTSTRAP_FAILURE_OK', completed.stdout)
 
     def test_endpoint_list_renders_add_device_controls(self):
         response = self.client.get(reverse('endpoint-list'))

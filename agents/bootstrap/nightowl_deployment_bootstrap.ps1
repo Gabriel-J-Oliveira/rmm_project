@@ -4,7 +4,36 @@ $ErrorActionPreference = "Stop"
 $MetadataUrl = "__NIGHTOWL_DEPLOYMENT_METADATA_URL__"
 $Stage = "start"
 $TempRoot = Join-Path $env:TEMP "NightOwlDeployment"
+$BootstrapLogPath = Join-Path $TempRoot "bootstrap.log"
 $Token = $env:NIGHTOWL_DEPLOYMENT_TOKEN
+
+function Protect-NightOwlLogValue([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+    if ($Value -match "(?i)deploy_|token|secret|password|private") {
+        return "[REDACTED]"
+    }
+    return $Value
+}
+
+function Write-NightOwlBootstrapLog([string]$Status, [hashtable]$Fields) {
+    try {
+        New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+        $record = [ordered]@{
+            timestamp = (Get-Date).ToUniversalTime().ToString("o")
+            stage = $Stage
+            status = $Status
+        }
+        foreach ($key in $Fields.Keys) {
+            $record[$key] = Protect-NightOwlLogValue ([string]$Fields[$key])
+        }
+        $record | ConvertTo-Json -Depth 5 -Compress | Add-Content -Path $BootstrapLogPath -Encoding UTF8
+    }
+    catch {
+        Write-Warning ("NightOwl bootstrap log unavailable: {0}" -f $_.Exception.Message)
+    }
+}
 
 function Write-NightOwlResult([string]$Status, [hashtable]$Fields) {
     $parts = @("NightOwl installation $Status")
@@ -137,15 +166,27 @@ try {
         service_status = $serviceStatus
         enrollment_status = "completed"
     }
-    exit 0
+    Write-NightOwlBootstrapLog "completed" @{
+        hostname = $env:COMPUTERNAME
+        machine_id = $machineId
+        version = $version
+        service_status = $serviceStatus
+    }
+    $global:NightOwlDeploymentBootstrapExitCode = 0
 } catch {
     $message = [string]$_.Exception.Message
+    $errorCode = ($message.Split(":")[0])
     Write-NightOwlResult "failed" @{
         stage = $Stage
-        error_code = ($message.Split(":")[0])
+        error_code = $errorCode
         error_message = $message
     }
-    exit 1
+    Write-NightOwlBootstrapLog "failed" @{
+        error_code = $errorCode
+        error_message = $message
+    }
+    Write-Error ("NightOwl installation failed: {0}" -f $message) -ErrorAction Continue
+    $global:NightOwlDeploymentBootstrapExitCode = 1
 } finally {
     Remove-Item Env:\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
 }
