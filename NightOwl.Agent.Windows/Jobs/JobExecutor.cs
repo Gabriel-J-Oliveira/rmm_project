@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.NetworkInformation;
+using System.Text;
 using System.Text.Json;
 using NightOwl.Agent.Windows.Collectors;
 using NightOwl.Agent.Windows.Models;
@@ -80,6 +81,12 @@ public sealed class JobExecutor
                 JobExecutionResult trustResult = await UpdateTrustedReleaseKeysAsync(config, job, started, stopwatch, jobToken);
                 _policy.MarkFinal(config, job, trustResult, ExtractErrorCode(trustResult));
                 return trustResult;
+            }
+            if (job.Type == "repair_agent")
+            {
+                JobExecutionResult repairResult = await StartRepairAgentAsync(config, job, started, stopwatch, jobToken);
+                _policy.MarkFinal(config, job, repairResult, ExtractErrorCode(repairResult));
+                return repairResult;
             }
             if (job.Type == "uninstall_agent")
             {
@@ -586,6 +593,111 @@ public sealed class JobExecutor
         };
     }
 
+    private async Task<JobExecutionResult> StartRepairAgentAsync(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, CancellationToken ct)
+    {
+        string installer = Path.Combine(config.InstallPath, "Install-NightOwlAgentDotNet.ps1");
+        if (!File.Exists(installer))
+        {
+            await _logger.LogAsync("job.repair_agent.failed", "Installer script was not found.", new { job.Id, installer }, ct, "error");
+            throw new FileNotFoundException("Instalador do agente nao encontrado no endpoint.", installer);
+        }
+
+        string trustBundle = NightOwlPaths.Current.TrustBundlePath;
+        if (!File.Exists(trustBundle))
+        {
+            await _logger.LogAsync("job.repair_agent.failed", "Trusted release keys bundle was not found.", new { job.Id, trustBundle }, ct, "error");
+            throw new FileNotFoundException("Bundle local de chaves confiaveis nao encontrado no endpoint.", trustBundle);
+        }
+
+        string targetVersion = GetPayloadString(job, "target_version", config.AgentVersion);
+        string currentVersion = GetPayloadString(job, "current_version", config.AgentVersion);
+        string channel = GetPayloadString(job, "channel", "stable");
+        string releaseId = GetPayloadString(job, "release_id", "");
+        string packageUrl = GetPayloadString(job, "package_url", "");
+        string sha256 = GetPayloadString(job, "sha256", "");
+        string manifestSha256 = GetPayloadString(job, "manifest_sha256", "");
+        string signatureSha256 = GetPayloadString(job, "signature_sha256", "");
+        string signatureKeyId = GetPayloadString(job, "signature_key_id", "");
+
+        string runnerDir = Path.Combine(NightOwlPaths.Current.UpdatesRunnerDir, "repair-" + job.Id);
+        if (Directory.Exists(runnerDir))
+        {
+            Directory.Delete(runnerDir, recursive: true);
+        }
+        Directory.CreateDirectory(runnerDir);
+        string runnerScript = Path.Combine(runnerDir, "Run-NightOwlAgentRepair.ps1");
+        File.WriteAllText(
+            runnerScript,
+            BuildRepairRunnerScript(
+                job,
+                config,
+                started,
+                installer,
+                trustBundle,
+                targetVersion,
+                currentVersion,
+                channel,
+                releaseId,
+                packageUrl,
+                sha256,
+                manifestSha256,
+                signatureSha256,
+                signatureKeyId),
+            Encoding.UTF8);
+
+        await _logger.LogAsync("job.repair_agent.started", "Starting repair runner for repair_agent job.", new
+        {
+            job.Id,
+            runner_dir = runnerDir,
+            targetVersion,
+            currentVersion,
+            releaseId,
+            signatureKeyId,
+            hasPackageUrl = !string.IsNullOrWhiteSpace(packageUrl),
+            hasSha256 = !string.IsNullOrWhiteSpace(sha256)
+        }, ct);
+
+        using Process process = new()
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(runnerScript),
+                WorkingDirectory = runnerDir,
+                UseShellExecute = true,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            }
+        };
+        process.Start();
+        stopwatch.Stop();
+
+        await _logger.LogAsync("job.repair_agent.runner_started", "Repair runner started; final result will be sent after service health is restored.", new { job.Id, process_id = process.Id }, ct);
+
+        return new JobExecutionResult
+        {
+            JobId = job.Id,
+            Status = "running",
+            StartedAt = started,
+            FinishedAt = DateTimeOffset.MinValue,
+            DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
+            ExitCode = 0,
+            Stdout = "repair runner started",
+            Result = new
+            {
+                type = "repair_agent",
+                repair_status = "runner_started",
+                message = "Repair runner started. Final result will be sent after service restart.",
+                target_version = targetVersion,
+                current_version = currentVersion,
+                release_id = releaseId,
+                channel,
+                package_url = SanitizeUrl(packageUrl),
+                signature_key_id = signatureKeyId
+            }
+        };
+    }
+
     public static int CopyUninstallerRunnerPayload(string installPath, string runnerDir)
     {
         if (string.IsNullOrWhiteSpace(installPath))
@@ -639,6 +751,100 @@ public sealed class JobExecutor
             throw new FileNotFoundException("Payload do runner de desinstalacao sem executavel principal.", Path.Combine(runnerDir, "NightOwl.Agent.Uninstaller.exe"));
         }
         return filesCopied;
+    }
+
+    public static string BuildRepairRunnerScript(
+        AgentJobRequest job,
+        AgentConfig config,
+        DateTimeOffset started,
+        string installerPath,
+        string trustBundlePath,
+        string targetVersion,
+        string previousVersion,
+        string channel,
+        string releaseId,
+        string packageUrl,
+        string sha256,
+        string manifestSha256,
+        string signatureSha256,
+        string signatureKeyId)
+    {
+        string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
+            ? NightOwlPaths.Current.PendingResultsDir
+            : config.PendingResultsPath;
+        string resultPath = Path.Combine(pendingDir, $"job-result-{job.Id}.json");
+        StringBuilder script = new();
+        script.AppendLine("$ErrorActionPreference = 'Stop'");
+        script.AppendLine("$jobId = " + QuotePsSingle(job.Id));
+        script.AppendLine("$startedAt = " + QuotePsSingle(started.UtcDateTime.ToString("o")));
+        script.AppendLine("$pendingDir = " + QuotePsSingle(pendingDir));
+        script.AppendLine("$resultPath = " + QuotePsSingle(resultPath));
+        script.AppendLine("$stdoutPath = Join-Path $PSScriptRoot 'repair.stdout.log'");
+        script.AppendLine("$stderrPath = Join-Path $PSScriptRoot 'repair.stderr.log'");
+        script.AppendLine("$previousVersion = " + QuotePsSingle(previousVersion));
+        script.AppendLine("$targetVersion = " + QuotePsSingle(targetVersion));
+        script.AppendLine("$releaseId = " + QuotePsSingle(releaseId));
+        script.AppendLine("$channel = " + QuotePsSingle(channel));
+        script.AppendLine("$signatureKeyId = " + QuotePsSingle(signatureKeyId));
+        script.AppendLine("function Save-RepairResult([string]$Status, [int]$ExitCode, [string]$Stdout, [string]$Stderr, [string]$ErrorMessage) {");
+        script.AppendLine("    New-Item -ItemType Directory -Force -Path $pendingDir | Out-Null");
+        script.AppendLine("    $finishedAt = (Get-Date).ToUniversalTime()");
+        script.AppendLine("    $startedDate = [datetimeoffset]::Parse($startedAt)");
+        script.AppendLine("    $service = Get-Service -Name " + QuotePsSingle(NightOwlPaths.ServiceName) + " -ErrorAction SilentlyContinue");
+        script.AppendLine("    $versionPath = Join-Path " + QuotePsSingle(config.InstallPath) + " 'agent.version.json'");
+        script.AppendLine("    $installedVersion = $targetVersion");
+        script.AppendLine("    if (Test-Path $versionPath) { try { $installedVersion = [string]((Get-Content -Raw -Path $versionPath | ConvertFrom-Json).version) } catch {} }");
+        script.AppendLine("    $healthOk = $Status -eq 'completed' -and $service -and [string]$service.Status -eq 'Running'");
+        script.AppendLine("    $payload = [ordered]@{");
+        script.AppendLine("        job_id = $jobId");
+        script.AppendLine("        status = $Status");
+        script.AppendLine("        started_at = $startedAt");
+        script.AppendLine("        finished_at = $finishedAt.ToString('o')");
+        script.AppendLine("        duration_seconds = [math]::Round(($finishedAt - $startedDate).TotalSeconds, 3)");
+        script.AppendLine("        exit_code = $ExitCode");
+        script.AppendLine("        stdout = $Stdout");
+        script.AppendLine("        stderr = $Stderr");
+        script.AppendLine("        error_message = $ErrorMessage");
+        script.AppendLine("        result = [ordered]@{");
+        script.AppendLine("            type = 'repair_agent'");
+        script.AppendLine("            operation = 'repair'");
+        script.AppendLine("            repair_status = $(if ($Status -eq 'completed') { 'completed' } else { 'failed' })");
+        script.AppendLine("            installed_version = $installedVersion");
+        script.AppendLine("            previous_version = $previousVersion");
+        script.AppendLine("            target_version = $targetVersion");
+        script.AppendLine("            release_id = $releaseId");
+        script.AppendLine("            channel = $channel");
+        script.AppendLine("            signature_key_id = $signatureKeyId");
+        script.AppendLine("            identity_preserved = $true");
+        script.AppendLine("            enrollment_performed = $false");
+        script.AppendLine("            service_status = $(if ($service) { [string]$service.Status } else { 'NotFound' })");
+        script.AppendLine("            tray_task_status = $(if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' })");
+        script.AppendLine("            canonical_config_ok = [bool](Test-Path " + QuotePsSingle(Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json")) + ")");
+        script.AppendLine("            health_ok = [bool]$healthOk");
+        script.AppendLine("            error_code = $(if ($Status -eq 'completed') { '' } else { 'REPAIR_FAILED' })");
+        script.AppendLine("            error_message = $ErrorMessage");
+        script.AppendLine("        }");
+        script.AppendLine("    }");
+        script.AppendLine("    $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $resultPath -Encoding UTF8");
+        script.AppendLine("}");
+        script.AppendLine("try {");
+        script.AppendLine("    $installArgs = @(");
+        script.AppendLine("        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', " + QuotePsSingle(installerPath) + ",");
+        script.AppendLine("        '-Repair', '-InstallAsService', '-ServerUrl', " + QuotePsSingle(config.ServerBaseUrl) + ",");
+        script.AppendLine("        '-PackageUrl', " + QuotePsSingle(packageUrl) + ", '-TrustedPublicKeysPath', " + QuotePsSingle(trustBundlePath) + ",");
+        script.AppendLine("        '-ExpectedVersion', " + QuotePsSingle(targetVersion) + ", '-ExpectedChannel', " + QuotePsSingle(channel) + ",");
+        script.AppendLine("        '-ExpectedPackageSha256', " + QuotePsSingle(sha256) + ", '-ExpectedReleaseId', " + QuotePsSingle(releaseId) + ",");
+        script.AppendLine("        '-RunCheck', '-NonInteractive'");
+        script.AppendLine("    )");
+        script.AppendLine("    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath");
+        script.AppendLine("    $stdout = if (Test-Path $stdoutPath) { (Get-Content -Raw -Path $stdoutPath) } else { '' }");
+        script.AppendLine("    $stderr = if (Test-Path $stderrPath) { (Get-Content -Raw -Path $stderrPath) } else { '' }");
+        script.AppendLine("    if ($process.ExitCode -eq 0) { Save-RepairResult 'completed' 0 $stdout $stderr '' } else { Save-RepairResult 'failed' $process.ExitCode $stdout $stderr $stderr }");
+        script.AppendLine("}");
+        script.AppendLine("catch {");
+        script.AppendLine("    Save-RepairResult 'failed' 1 '' ([string]$_.Exception.Message) ([string]$_.Exception.Message)");
+        script.AppendLine("}");
+        return script.ToString();
     }
 
     private static void AddOption(List<string> args, string name, string value)
@@ -714,6 +920,11 @@ public sealed class JobExecutor
             return arg;
         }
         return "\"" + arg.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
+    private static string QuotePsSingle(string value)
+    {
+        return "'" + (value ?? "").Replace("'", "''") + "'";
     }
 
     private static string SanitizeUrl(string url)

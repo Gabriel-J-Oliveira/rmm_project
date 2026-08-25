@@ -22,6 +22,7 @@ public sealed class JobExecutionPolicy
         "restart_agent",
         "update_agent",
         "update_trusted_release_keys",
+        "repair_agent",
         "uninstall_agent"
     };
 
@@ -122,6 +123,7 @@ public sealed class JobExecutionPolicy
             job.Type.Equals("collect_logs", StringComparison.OrdinalIgnoreCase) ? 180 :
             job.Type.Equals("restart_agent", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("update_agent", StringComparison.OrdinalIgnoreCase) ? 60 :
             job.Type.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase) ? 180 :
+            job.Type.Equals("repair_agent", StringComparison.OrdinalIgnoreCase) ? 60 :
             120;
         return Math.Clamp(requested, min, max);
     }
@@ -136,6 +138,7 @@ public sealed class JobExecutionPolicy
         "restart_agent" => TimeSpan.FromSeconds(60),
         "update_agent" => TimeSpan.FromSeconds(60),
         "update_trusted_release_keys" => TimeSpan.FromSeconds(180),
+        "repair_agent" => TimeSpan.FromSeconds(60),
         _ => TimeSpan.FromSeconds(120)
     };
 
@@ -265,6 +268,67 @@ public sealed class JobExecutionPolicy
                 if (mode.Equals("purge", StringComparison.OrdinalIgnoreCase) && !GetBool(p, "purge_authorized", false))
                 {
                     throw new InvalidOperationException("Remote purge requires explicit backend authorization.");
+                }
+                break;
+            }
+            case "repair_agent":
+            {
+                EnsureAllowedFields(
+                    p,
+                    "operation",
+                    "target_version",
+                    "current_version",
+                    "release_id",
+                    "package_url",
+                    "checksum_url",
+                    "sha256",
+                    "size",
+                    "manifest_url",
+                    "manifest_sha256",
+                    "signature_url",
+                    "signature_sha256",
+                    "signature_key_id",
+                    "signature_valid",
+                    "legacy_unsigned",
+                    "channel",
+                    "minimum_updater_version",
+                    "mandatory",
+                    "force",
+                    "source",
+                    "identity_preservation_required",
+                    "enrollment_allowed",
+                    "timeout_seconds");
+                string operation = GetString(p, "operation", "");
+                string targetVersion = GetString(p, "target_version", "");
+                string currentVersion = GetString(p, "current_version", "");
+                string channel = GetString(p, "channel", "");
+                string releaseId = GetString(p, "release_id", "");
+                string packageUrl = GetString(p, "package_url", "");
+                string checksumUrl = GetString(p, "checksum_url", "");
+                string manifestUrl = GetString(p, "manifest_url", "");
+                string manifestSha256 = GetString(p, "manifest_sha256", "");
+                string signatureUrl = GetString(p, "signature_url", "");
+                string signatureSha256 = GetString(p, "signature_sha256", "");
+                string signatureKeyId = GetString(p, "signature_key_id", "");
+                string sha256 = GetString(p, "sha256", "");
+                long size = GetLong(p, "size", 0);
+                if (!operation.Equals("repair", StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrWhiteSpace(targetVersion)
+                    || !targetVersion.Equals(currentVersion, StringComparison.OrdinalIgnoreCase)
+                    || targetVersion.Length > 64
+                    || channel.Length > 32
+                    || releaseId.Length > 64
+                    || signatureKeyId.Length > 120
+                    || size <= 0
+                    || !Regex.IsMatch(sha256, "^[0-9a-fA-F]{64}$")
+                    || !Regex.IsMatch(manifestSha256, "^[0-9a-fA-F]{64}$")
+                    || !Regex.IsMatch(signatureSha256, "^[0-9a-fA-F]{64}$")
+                    || !IsValidHttpsUrl(packageUrl)
+                    || !IsValidHttpsUrl(checksumUrl)
+                    || !IsValidHttpsUrl(manifestUrl)
+                    || !IsValidHttpsUrl(signatureUrl))
+                {
+                    throw new InvalidOperationException("Invalid repair parameters.");
                 }
                 break;
             }

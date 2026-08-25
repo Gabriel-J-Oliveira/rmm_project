@@ -244,6 +244,64 @@ def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, f
     return payload
 
 
+def find_repair_agent_release(endpoint):
+    version = (endpoint.agent_version or '').strip()
+    if not version:
+        return None
+    candidates = AgentRelease.objects.filter(
+        version=version,
+        revoked=False,
+        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED},
+    )
+    endpoint_channel = (endpoint.update_channel or '').strip()
+    if endpoint_channel:
+        channel_match = candidates.filter(channel=endpoint_channel).first()
+        if channel_match:
+            return channel_match
+    return candidates.order_by('-released_at', '-created_at').first()
+
+
+def build_repair_agent_job_payload(endpoint, release, *, source='manual_panel') -> dict:
+    if release is None:
+        raise ValueError('Release instalada nao encontrada para repair_agent.')
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        raise ValidationError('REPAIR_RELEASE_REVOKED: release instalada revogada.')
+    if release.status not in set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED}:
+        raise ValidationError('REPAIR_RELEASE_NOT_AVAILABLE: release instalada nao esta disponivel para repair.')
+    if (endpoint.agent_version or '').strip() != release.version:
+        raise ValidationError('REPAIR_RELEASE_VERSION_MISMATCH: release nao corresponde a versao instalada.')
+    if not release.package_url or not release.sha256 or not release.size:
+        raise ValidationError('REPAIR_RELEASE_METADATA_INCOMPLETE: release sem pacote/hash/tamanho.')
+    if not _release_domain_allowed(release.package_url):
+        raise ValidationError('REPAIR_RELEASE_DOMAIN_BLOCKED: dominio de pacote nao permitido.')
+    ensure_release_signature_policy(release)
+    return {
+        'operation': 'repair',
+        'release_id': str(release.id),
+        'target_version': release.version,
+        'current_version': endpoint.agent_version or '',
+        'channel': release.channel,
+        'package_url': release.package_url,
+        'checksum_url': release.checksum_url,
+        'sha256': release.sha256,
+        'size': release.size,
+        'manifest_url': release.manifest_url,
+        'manifest_sha256': release.manifest_sha256,
+        'signature_url': release.signature_url,
+        'signature_sha256': release.signature_sha256,
+        'signature_key_id': release.signature_key_id,
+        'signature_valid': release.signature_valid,
+        'legacy_unsigned': release.legacy_unsigned,
+        'minimum_updater_version': release.minimum_updater_version,
+        'force': False,
+        'mandatory': False,
+        'timeout_seconds': 900,
+        'source': source,
+        'identity_preservation_required': True,
+        'enrollment_allowed': False,
+    }
+
+
 def build_fqdn(hostname: str, domain: str) -> str:
     if hostname and domain:
         return f'{hostname}.{domain}'

@@ -74,6 +74,7 @@
         install_software: "Instalar software",
         update_agent: "Atualizar agente",
         update_trusted_release_keys: "Sincronizar chaves de confianca",
+        repair_agent: "Reparar agente",
         restart_agent: "Reiniciar agente"
     };
 
@@ -293,6 +294,7 @@
             windows_update_scan: "badge-check",
             update_agent: "download-cloud",
             update_trusted_release_keys: "key-round",
+            repair_agent: "wrench",
             restart_agent: "rotate-ccw"
         }[value] || "terminal";
     }
@@ -769,6 +771,7 @@
             ]) +
             actionGroup("Agente", [
                 actionButton("update_agent", "Atualizar agente", "download-cloud"),
+                actionButton("repair_agent", "Reparar agente", "wrench"),
                 actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round"),
                 actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
             ]) +
@@ -796,6 +799,12 @@
             if (job.status === "completed") return version ? "Chaves de confianca sincronizadas para bundle v" + version : "Chaves de confianca sincronizadas";
             if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha ao sincronizar chaves de confianca";
             return version ? "Sincronizando bundle v" + version : "Sincronizando chaves de confianca";
+        }
+        if (job.type === "repair_agent") {
+            const version = result.installed_version || result.target_version || "";
+            if (job.status === "completed") return version ? "Agente reparado em " + version : "Agente reparado com sucesso";
+            if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha no reparo do agente";
+            return version ? "Reparando agente " + version : "Reparando agente";
         }
         return job.result || job.errorMessage || "-";
     }
@@ -1038,6 +1047,7 @@
             actionButton("collect_disks", "Coletar discos", "hard-drive") +
             actionButton("collect_software", "Coletar software", "package-search") +
             actionButton("restart_agent", "Reiniciar agente", "rotate-ccw") +
+            actionButton("repair_agent", "Reparar agente", "wrench") +
             actionButton("update_agent", "Atualizar agente", "download-cloud") +
             actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round") +
             "</div>" +
@@ -1713,7 +1723,7 @@
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
         }
-        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "restart_agent"];
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
             let jobOptions = {};
             if (action === "update_agent") {
@@ -1729,6 +1739,11 @@
                 const confirmed = window.confirm("Deseja enviar um comando para reiniciar o agente neste endpoint?");
                 if (!confirmed) return;
                 showToast("Enviando job de reinicio para o agente...");
+            } else if (action === "repair_agent") {
+                const version = endpointDetail.agent && endpointDetail.agent.version ? endpointDetail.agent.version : "atual";
+                const confirmed = window.confirm("Deseja reparar o agente neste endpoint usando a release instalada " + version + "? O servico pode reiniciar durante o processo.");
+                if (!confirmed) return;
+                showToast("Enviando job de reparo para o agente...");
             }
             createRealJob(action, jobOptions).then(function (payload) {
                 const isPendingUpdate = payload.status === "already_pending";
@@ -1736,6 +1751,8 @@
                     ? (isPendingUpdate ? "Ja existe um job de atualizacao pendente para este endpoint." : "Job enviado com sucesso.")
                     : action === "restart_agent"
                         ? "Job enviado com sucesso."
+                    : action === "repair_agent"
+                        ? "Job de reparo do agente enfileirado."
                     : action === "update_trusted_release_keys"
                         ? "Job de sincronizacao das chaves de confianca enfileirado."
                     : "Job " + (labels[payload.job.type] || payload.job.type) + " enfileirado para o agente.");
@@ -1744,7 +1761,7 @@
                     endpointDetail.jobs.unshift(payload.job);
                 }
                 renderActivePanel();
-                activateTab(action === "update_agent" || action === "restart_agent" || action === "update_trusted_release_keys" ? "tasks" : activeTab);
+                activateTab(action === "update_agent" || action === "restart_agent" || action === "update_trusted_release_keys" || action === "repair_agent" ? "tasks" : activeTab);
                 schedulePolling();
                 return reloadEndpoint(false);
             }).catch(function (error) {

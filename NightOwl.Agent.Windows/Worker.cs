@@ -59,8 +59,8 @@ public sealed class Worker : BackgroundService
         }, stoppingToken);
         await _logger.LogAsync("service.starting", "NightOwl .NET agent starting.", new { config.AgentVersion }, stoppingToken);
         await ConfirmPendingUpdateAsync(config, stoppingToken);
-        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
+        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {

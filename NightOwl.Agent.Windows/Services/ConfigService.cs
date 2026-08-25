@@ -9,9 +9,10 @@ namespace NightOwl.Agent.Windows.Services;
 
 public sealed class ConfigService
 {
-    internal const int CurrentConfigMigrationVersion = 3;
+    internal const int CurrentConfigMigrationVersion = 4;
     private const string UpdateTrustedReleaseKeysJobType = "update_trusted_release_keys";
     private const string UninstallAgentJobType = "uninstall_agent";
+    private const string RepairAgentJobType = "repair_agent";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -168,6 +169,15 @@ public sealed class ConfigService
                 addedAllowedJobTypes.Add(UninstallAgentJobType);
             }
             workingVersion = 3;
+        }
+        if (workingVersion < 4)
+        {
+            if (!config.AllowedJobTypes.Contains(RepairAgentJobType, StringComparer.OrdinalIgnoreCase))
+            {
+                config.AllowedJobTypes.Add(RepairAgentJobType);
+                addedAllowedJobTypes.Add(RepairAgentJobType);
+            }
+            workingVersion = 4;
         }
 
         config.ConfigMigrationVersion = Math.Max(workingVersion, CurrentConfigMigrationVersion);

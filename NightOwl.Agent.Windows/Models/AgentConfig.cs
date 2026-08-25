@@ -68,6 +68,7 @@ public sealed class AgentConfig
         "force_inventory",
         "update_agent",
         "update_trusted_release_keys",
+        "repair_agent",
         "uninstall_agent",
         "restart_agent"
     };

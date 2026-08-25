@@ -19,8 +19,19 @@ public sealed class JobExecutionCoordinator
 
     public async Task RecoverInterruptedJobsAsync(AgentConfig config, PendingResultQueue resultQueue, CancellationToken ct)
     {
+        HashSet<string> pendingResultJobIds = resultQueue.LoadAll().Select(record => record.JobId).Where(id => !string.IsNullOrWhiteSpace(id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (JobStateRecord record in _policy.Store.LoadAll().Where(record => record.Status.Equals("running", StringComparison.OrdinalIgnoreCase)))
         {
+            if (pendingResultJobIds.Contains(record.JobId))
+            {
+                await _logger.LogAsync("job.interrupted.recovery_skipped", "Running job has a pending final result; interrupted recovery skipped.", new
+                {
+                    record.JobId,
+                    record.JobType
+                }, ct);
+                continue;
+            }
+
             DateTimeOffset now = DateTimeOffset.UtcNow;
             JobExecutionResult result = new()
             {
@@ -85,12 +96,12 @@ public sealed class JobExecutionCoordinator
             activeCount = _active.Count;
             heavyCount = _active.Values.Count(active => active.Category.Equals(JobCategories.Heavy, StringComparison.OrdinalIgnoreCase));
             bool activeExclusive = _active.Values.Any(active => active.Category.Equals(JobCategories.Exclusive, StringComparison.OrdinalIgnoreCase));
-            bool activeUpdate = _active.Values.Any(active => active.JobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase));
+            bool activeLifecycle = _active.Values.Any(active => IsLifecycle(active.JobType));
 
-            if (activeUpdate)
+            if (activeLifecycle)
             {
                 errorCode = JobErrorCodes.JobExclusiveConflict;
-                message = "update_agent is active; no other jobs can start.";
+                message = "An agent lifecycle job is active; no other jobs can start.";
             }
             else if (category.Equals(JobCategories.Exclusive, StringComparison.OrdinalIgnoreCase) && _active.Count > 0)
             {
@@ -207,6 +218,8 @@ public sealed class JobExecutionCoordinator
         }
         if (jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase))
         {
             return JobCategories.Exclusive;
@@ -218,7 +231,16 @@ public sealed class JobExecutionCoordinator
     {
         return jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsLifecycle(string jobType)
+    {
+        return jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record ActiveJob(string JobId, string JobType, string Category, DateTimeOffset StartedAt);

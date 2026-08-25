@@ -19,6 +19,7 @@ try
     TestPersistenceFailureDoesNotCorruptExistingConfig();
     TestMigrationLogPayloadDoesNotExposeSecrets();
     TestUninstallerRunnerPayloadCopiesSelfContainedFiles();
+    TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -56,6 +57,7 @@ static AgentConfig LegacyConfig()
             "windows_update_scan",
             "force_inventory",
             "update_agent",
+            "repair_agent",
             "restart_agent"
         }
     };
@@ -68,6 +70,7 @@ static void TestNewConfigContainsTrustedReleaseKeys()
 
     Require(config.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "New config should allow update_trusted_release_keys.");
     Require(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.OrdinalIgnoreCase), "New config should allow uninstall_agent.");
+    Require(config.AllowedJobTypes.Contains("repair_agent", StringComparer.OrdinalIgnoreCase), "New config should allow repair_agent.");
     Require(config.ConfigMigrationVersion == ConfigService.CurrentConfigMigrationVersion, "New config should persist current migration version.");
 }
 
@@ -83,6 +86,7 @@ static void TestLegacyDefaultConfigReceivesTrustedReleaseKeys()
     Require(result.AddedAllowedJobTypes.Contains("update_trusted_release_keys"), "Migration result should report added job type.");
     Require(config.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Legacy config should allow update_trusted_release_keys.");
     Require(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.OrdinalIgnoreCase), "Legacy config should allow uninstall_agent.");
+    Require(config.AllowedJobTypes.Contains("repair_agent", StringComparer.OrdinalIgnoreCase), "Legacy config should allow repair_agent.");
 }
 
 static void TestMigrationIsIdempotent()
@@ -104,11 +108,14 @@ static void TestMigrationDoesNotDuplicateJobTypes()
     config.AllowedJobTypes.Add("UPDATE_TRUSTED_RELEASE_KEYS");
     config.AllowedJobTypes.Add("uninstall_agent");
     config.AllowedJobTypes.Add("UNINSTALL_AGENT");
+    config.AllowedJobTypes.Add("repair_agent");
+    config.AllowedJobTypes.Add("REPAIR_AGENT");
 
     ConfigService.ApplyConfigMigrations(config);
 
     Require(config.AllowedJobTypes.Count(job => job.Equals("update_trusted_release_keys", StringComparison.OrdinalIgnoreCase)) == 1, "Migration should not duplicate update_trusted_release_keys.");
     Require(config.AllowedJobTypes.Count(job => job.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase)) == 1, "Migration should not duplicate uninstall_agent.");
+    Require(config.AllowedJobTypes.Count(job => job.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)) == 1, "Migration should not duplicate repair_agent.");
 }
 
 static void TestPreservesIdentityAndEndpoints()
@@ -147,6 +154,7 @@ static void TestPreservesCustomAllowedJobTypes()
     Require(config.AllowedJobTypes.Contains("custom_local_job", StringComparer.OrdinalIgnoreCase), "Migration should preserve custom allowed job types.");
     Require(config.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Migration should add the new known default to legacy configs.");
     Require(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.OrdinalIgnoreCase), "Migration should add uninstall_agent to legacy configs.");
+    Require(config.AllowedJobTypes.Contains("repair_agent", StringComparer.OrdinalIgnoreCase), "Migration should add repair_agent to legacy configs.");
 }
 
 static void TestMigratedConfigDoesNotRestoreExplicitRemoval()
@@ -186,7 +194,8 @@ static void TestMigrationPersistsAndReloads()
         AgentConfig reloaded = JsonSerializer.Deserialize<AgentConfig>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidOperationException("Persisted config could not be reloaded.");
         Require(result.Applied, "Legacy config should have been migrated before persistence.");
         Require(reloaded.ConfigMigrationVersion == ConfigService.CurrentConfigMigrationVersion, "Persisted config should keep migration version v2.");
-        Require(reloaded.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Persisted config should include update_trusted_release_keys.");
+    Require(reloaded.AllowedJobTypes.Contains("update_trusted_release_keys", StringComparer.OrdinalIgnoreCase), "Persisted config should include update_trusted_release_keys.");
+    Require(reloaded.AllowedJobTypes.Contains("repair_agent", StringComparer.OrdinalIgnoreCase), "Persisted config should include repair_agent.");
         Require(reloaded.AgentToken == "super-secret-token", "Persisted migration should preserve agent token.");
         Require(reloaded.MachineId == "machine-taxcel", "Persisted migration should preserve machine id.");
         Require(reloaded.ServerBaseUrl == "https://nightowl.controlsul.com.br", "Persisted migration should preserve server URL.");
@@ -276,6 +285,51 @@ static void TestUninstallerRunnerPayloadCopiesSelfContainedFiles()
     {
         DeleteTempDir(dir);
     }
+}
+
+static void TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment()
+{
+    AgentConfig config = new()
+    {
+        ServerBaseUrl = "https://nightowl.controlsul.com.br",
+        InstallPath = @"C:\ProgramData\NightOwl\AgentDotNet",
+        PendingResultsPath = @"C:\ProgramData\NightOwl\State\pending-results",
+        AgentVersion = "0.1.1.0-rc19",
+        MachineId = "machine-repair-test",
+        AgentToken = "super-secret-token"
+    };
+    AgentJobRequest job = new()
+    {
+        Id = Guid.NewGuid().ToString(),
+        Type = "repair_agent",
+        CorrelationId = Guid.NewGuid().ToString(),
+    };
+
+    string script = JobExecutor.BuildRepairRunnerScript(
+        job,
+        config,
+        DateTimeOffset.UtcNow,
+        @"C:\ProgramData\NightOwl\AgentDotNet\Install-NightOwlAgentDotNet.ps1",
+        @"C:\ProgramData\NightOwl\Trust\release-public-keys.json",
+        "0.1.1.0-rc19",
+        "0.1.1.0-rc19",
+        "development",
+        "release-id-123",
+        "https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc19/NightOwl.Agent.Windows.zip",
+        new string('a', 64),
+        new string('b', 64),
+        new string('c', 64),
+        "nightowl-release-2026-02");
+
+    Require(script.Contains("'-Repair'", StringComparison.OrdinalIgnoreCase), "Repair runner should call installer with -Repair.");
+    Require(script.Contains("'-InstallAsService'", StringComparison.OrdinalIgnoreCase), "Repair runner should repair service installation.");
+    Require(script.Contains("'-TrustedPublicKeysPath'", StringComparison.OrdinalIgnoreCase), "Repair runner should pass local trust bundle.");
+    Require(script.Contains("'-ExpectedVersion'", StringComparison.OrdinalIgnoreCase), "Repair runner should pin expected version.");
+    Require(script.Contains("0.1.1.0-rc19", StringComparison.OrdinalIgnoreCase), "Repair runner should include pinned version.");
+    Require(script.Contains("release-id-123", StringComparison.OrdinalIgnoreCase), "Repair runner should include release id.");
+    Require(script.Contains("enrollment_performed = $false", StringComparison.OrdinalIgnoreCase), "Repair result should state enrollment was not performed.");
+    Require(!script.Contains("super-secret-token", StringComparison.OrdinalIgnoreCase), "Repair runner script must not contain the agent token.");
+    Require(!script.Contains("-EnrollmentToken", StringComparison.OrdinalIgnoreCase), "Repair runner must not pass enrollment token.");
 }
 
 static string CreateTempDir()

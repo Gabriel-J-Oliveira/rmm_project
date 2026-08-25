@@ -960,6 +960,28 @@ class AgentJobsResultView(APIView):
                         endpoint=machine,
                         metadata={'job_id': str(job.id), 'result_id': result_id},
                     )
+            if job.job_type == AgentJob.TYPE_REPAIR_AGENT and job.status in RESULT_FINAL_STATUSES:
+                result_payload = job.result if isinstance(job.result, dict) else {}
+                create_audit_event(
+                    event_type='agent.repair.result_received',
+                    title='Resultado de repair_agent recebido',
+                    description=f'Resultado {job.status} de repair_agent recebido para {machine.hostname}.',
+                    severity=AuditEvent.SEVERITY_SUCCESS if job.status == AgentJob.STATUS_COMPLETED else AuditEvent.SEVERITY_WARNING,
+                    actor_type=AuditEvent.ACTOR_AGENT,
+                    actor_name='NightOwlAgent',
+                    endpoint=machine,
+                    metadata={
+                        'job_id': str(job.id),
+                        'result_id': result_id,
+                        'status': job.status,
+                        'error_code': job.error_code,
+                        'installed_version': result_payload.get('installed_version', ''),
+                        'previous_version': result_payload.get('previous_version', ''),
+                        'identity_preserved': bool(result_payload.get('identity_preserved')),
+                        'enrollment_performed': bool(result_payload.get('enrollment_performed')),
+                        'health_ok': bool(result_payload.get('health_ok')),
+                    },
+                )
             logger.info(
                 'job.result.received endpoint_id=%s job_id=%s job_type=%s status=%s exit_code=%s',
                 machine.id,

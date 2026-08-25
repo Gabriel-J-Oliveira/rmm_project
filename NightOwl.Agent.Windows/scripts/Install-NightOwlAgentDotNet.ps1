@@ -1493,7 +1493,7 @@ $config = [ordered]@{
     packagesPath = [string]$script:NightOwlPaths.Packages
     cachePath = [string]$script:NightOwlPaths.Cache
     jobsPath = [string]$script:NightOwlPaths.StateDir
-    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "restart_agent", "uninstall_agent")
+    allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent")
 }
 Save-AgentConfig -Path $configPath -Config $config
 if (-not $existingInstallation -and (Test-Path $legacyConfigPath)) {

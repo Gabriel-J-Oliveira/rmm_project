@@ -55,9 +55,11 @@ from config.authz import is_nightowl_technical_user
 from agents.audit import create_audit_event
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
+    build_repair_agent_job_payload,
     build_update_agent_job_payload,
     change_agent_release_rollout,
     evaluate_agent_update_policy,
+    find_repair_agent_release,
     publish_agent_release,
     promote_agent_release,
     revoke_agent_release,
@@ -3390,6 +3392,7 @@ def endpoint_job_create(request, pk):
         'windows_update_scan': AgentJob.TYPE_WINDOWS_UPDATE_SCAN,
         'update_agent': AgentJob.TYPE_UPDATE_AGENT,
         'update_trusted_release_keys': AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS,
+        'repair_agent': AgentJob.TYPE_REPAIR_AGENT,
         'restart_agent': AgentJob.TYPE_RESTART_AGENT,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
@@ -3402,6 +3405,26 @@ def endpoint_job_create(request, pk):
             },
             status=400,
         )
+
+    lifecycle_types = {
+        AgentJob.TYPE_UPDATE_AGENT,
+        AgentJob.TYPE_REPAIR_AGENT,
+        AgentJob.TYPE_UNINSTALL_AGENT,
+    }
+    if selected_type in lifecycle_types:
+        active_lifecycle_job = endpoint.jobs.filter(
+            job_type__in=lifecycle_types,
+            status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+        ).order_by('-created_at').first()
+        if active_lifecycle_job:
+            return JsonResponse(
+                {
+                    'error': 'agent_lifecycle_job_already_pending',
+                    'detail': 'Ja existe um job de lifecycle do agente pendente ou em execucao para este endpoint.',
+                    'job': serialize_agent_job(active_lifecycle_job),
+                },
+                status=409,
+            )
 
     payload = {}
     if selected_type == AgentJob.TYPE_PING:
@@ -3647,6 +3670,44 @@ def endpoint_job_create(request, pk):
                 'bundle_version': payload.get('expected_bundle_version'),
                 'root_key_id': payload.get('expected_root_key_id'),
                 'bundle_sha256': payload.get('expected_sha256'),
+            },
+            request=request,
+        )
+    elif selected_type == AgentJob.TYPE_REPAIR_AGENT:
+        release = find_repair_agent_release(endpoint)
+        if release is None:
+            return JsonResponse(
+                {
+                    'error': 'repair_release_not_found',
+                    'detail': 'Nao ha release confiavel cadastrada para a versao instalada deste endpoint.',
+                    'reason_code': 'repair_release_not_found',
+                },
+                status=409,
+            )
+        try:
+            payload.update(build_repair_agent_job_payload(endpoint, release, source='manual_panel'))
+        except ValidationError as exc:
+            return JsonResponse(
+                {
+                    'error': 'repair_release_not_eligible',
+                    'detail': str(exc),
+                    'reason_code': 'repair_release_not_eligible',
+                },
+                status=409,
+            )
+        create_audit_event(
+            event_type='agent.repair.job_requested',
+            title='Repair do agente solicitado',
+            description=f'Reparo local do agente solicitado para {endpoint.hostname}.',
+            severity=AuditEvent.SEVERITY_INFO,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=request.user.get_username(),
+            endpoint=endpoint,
+            metadata={
+                'release_id': payload.get('release_id'),
+                'target_version': payload.get('target_version'),
+                'channel': payload.get('channel'),
+                'source': payload.get('source'),
             },
             request=request,
         )
