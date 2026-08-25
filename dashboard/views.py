@@ -624,12 +624,11 @@ def build_deployment_command(request, deployment_token):
     escaped_token = token.replace("'", "''")
     escaped_url = bootstrap_url.replace("'", "''")
     return (
-        "PowerShell -NoProfile -ExecutionPolicy Bypass -Command "
-        f"\"$env:NIGHTOWL_DEPLOYMENT_TOKEN='{escaped_token}'; "
+        f"$env:NIGHTOWL_DEPLOYMENT_TOKEN='{escaped_token}'; "
         "try { "
         f"$script=(Invoke-WebRequest -UseBasicParsing -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
         "Invoke-Expression $script "
-        "} finally { Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }\""
+        "} finally { Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }"
     )
 
 

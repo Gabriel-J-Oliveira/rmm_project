@@ -1,5 +1,7 @@
 import uuid
 import json
+import shutil
+import subprocess
 import tempfile
 from io import StringIO
 from datetime import timedelta
@@ -649,6 +651,52 @@ class AgentDeploymentTokenTests(TestCase):
         self.assertNotIn('agent_token', payload['command'].lower())
         audit = AuditEvent.objects.get(event_type='agent.deployment.created')
         self.assertNotIn(token, json.dumps(audit.metadata))
+
+    @override_settings(NIGHTOWL_PUBLIC_URL='https://nightowl.test')
+    def test_generated_deployment_command_runs_without_parent_shell_expansion(self):
+        _, token, payload = self.create_deployment()
+        command = payload['command']
+
+        self.assertFalse(command.lower().startswith('powershell '))
+        self.assertFalse(command.lower().startswith('powershell.exe '))
+        self.assertIn('https://nightowl.test', command)
+        self.assertNotIn('AgentToken', command)
+
+        powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
+        if powershell is None:
+            self.skipTest('PowerShell nao disponivel para validar comando gerado.')
+
+        harness = f"""
+$ErrorActionPreference = 'Stop'
+$capturedHeader = ''
+$capturedUri = ''
+function Invoke-WebRequest {{
+    param(
+        [switch]$UseBasicParsing,
+        [hashtable]$Headers,
+        [string]$Uri
+    )
+    $script:capturedHeader = [string]$Headers['X-NightOwl-Deployment-Token']
+    $script:capturedUri = $Uri
+    if ([string]::IsNullOrWhiteSpace($script:capturedHeader)) {{ throw 'deployment header vazio' }}
+    if (-not $script:capturedUri.StartsWith('https://')) {{ throw 'bootstrap url insegura' }}
+    [pscustomobject]@{{ Content = 'if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_DEPLOYMENT_TOKEN)) {{ throw ''token ausente no bootstrap'' }}' }}
+}}
+{command}
+if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
+if ($capturedHeader -ne '{token}') {{ throw 'deployment header divergente' }}
+if (-not $capturedUri.StartsWith('https://nightowl.test')) {{ throw 'bootstrap url divergente' }}
+Write-Output 'DEPLOYMENT_COMMAND_OK'
+"""
+        completed = subprocess.run(
+            [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', harness],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+        self.assertIn('DEPLOYMENT_COMMAND_OK', completed.stdout)
 
     def test_endpoint_list_renders_add_device_controls(self):
         response = self.client.get(reverse('endpoint-list'))
