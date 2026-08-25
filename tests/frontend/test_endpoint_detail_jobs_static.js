@@ -22,6 +22,8 @@ assert(source.includes("String(endpointDetail.activeJob.id) === String(id)"), "a
 assert(source.includes("repair_agent"), "repair_agent action must be exposed in endpoint detail UI");
 assert(source.includes("Deseja reparar o agente"), "repair_agent must ask for confirmation before creating a job");
 assert(source.includes("Job de reparo do agente enfileirado"), "repair_agent must show a queued job toast");
+assert(source.includes('failed: "Falha"'), "failed jobs must render with the Falha badge");
+assert(source.includes('if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha no reparo do agente";'), "failed repair jobs must show the real error message");
 
 const renderJobItemMatch = source.match(/function renderJobItem\(job, isActive\) \{[\s\S]*?\n    \}/);
 assert(renderJobItemMatch, "renderJobItem body must be parsable");

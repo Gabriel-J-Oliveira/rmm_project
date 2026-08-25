@@ -179,6 +179,43 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
         self.assertEqual(job.result_id, result_id)
 
+    def test_repair_agent_failed_result_remains_failed_in_backend_and_serializer(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_REPAIR_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'operation': 'repair', 'target_version': '0.1.1.0-rc20'},
+        )
+        result_id = str(uuid.uuid4())
+        payload = {
+            'job_id': str(job.id),
+            'status': 'failed',
+            'exit_code': 1,
+            'error_code': 'JOB_EXECUTION_FAILED',
+            'error_message': 'Instalador do agente nao encontrado no endpoint.',
+            'result': {
+                'type': 'repair_agent',
+                'error_code': 'JOB_EXECUTION_FAILED',
+                'error_message': 'Instalador do agente nao encontrado no endpoint.',
+            },
+        }
+
+        response = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_FAILED)
+        self.assertEqual(job.error_code, 'JOB_EXECUTION_FAILED')
+        self.assertEqual(job.error_message, 'Instalador do agente nao encontrado no endpoint.')
+        self.assertEqual(job.result_id, result_id)
+        self.assertEqual(AgentJobResultReceipt.objects.get(result_id=result_id).conflict_count, 0)
+        from dashboard.views import serialize_agent_job
+        serialized = serialize_agent_job(job)
+        self.assertEqual(serialized['status'], 'failed')
+        self.assertEqual(serialized['rawStatus'], AgentJob.STATUS_FAILED)
+        self.assertEqual(serialized['progressMessage'], 'Instalador do agente nao encontrado no endpoint.')
+        self.assertEqual(serialized['errorMessage'], 'Instalador do agente nao encontrado no endpoint.')
+
     def test_job_result_idempotency_conflict(self):
         job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_PING)
         result_id = str(uuid.uuid4())

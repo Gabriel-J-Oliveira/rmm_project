@@ -474,6 +474,13 @@ function Invoke-SelfTest {
         catch { $publicAsPrivateRejected = $true }
         if (-not $publicAsPrivateRejected) { throw "SelfTest RSA-PSS falhou: chave publica foi aceita para assinatura." }
 
+        if (Test-ForbiddenZipEntry "Install-NightOwlAgentDotNet.ps1") {
+            throw "SelfTest ZIP falhou: installer do agente deve ser permitido no pacote assinado."
+        }
+        if (-not (Test-ForbiddenZipEntry "Unexpected-Lab-Script.ps1")) {
+            throw "SelfTest ZIP falhou: scripts PowerShell arbitrarios devem continuar proibidos no pacote."
+        }
+
         $manifestPath = Join-Path $temp "release-manifest.json"
         $signaturePath = Join-Path $temp "release-manifest.sig"
         Write-CanonicalJson -Path $manifestPath -Value ([ordered]@{
@@ -597,6 +604,7 @@ function Read-ZipEntryText([System.IO.Compression.ZipArchive]$Zip, [string]$Entr
 
 function Test-ForbiddenZipEntry([string]$Name) {
     $normalized = $Name.Replace("\", "/").ToLowerInvariant()
+    if ($normalized -eq "install-nightowlagentdotnet.ps1") { return $false }
     if ($normalized -match '(^|/)(bin|obj|logs?|config|identity|state|diagnostics|artifacts|downloads|publish|releases)(/|$)') { return $true }
     if ($normalized -match 'agent\.config\.json$') { return $true }
     if ($normalized -match 'agent\.identity\.json$') { return $true }
@@ -604,6 +612,7 @@ function Test-ForbiddenZipEntry([string]$Name) {
     if ($normalized -match 'agent-dotnet\.state\.json$') { return $true }
     if ($normalized -match 'update-state\.json$') { return $true }
     if ($normalized -match '\.preserved-') { return $true }
+    if ($normalized -match '\.ps1$') { return $true }
     if ($normalized -match '\.log$|\.tmp$|\.pdb$') { return $true }
     if ($normalized -match 'token|machine_id') { return $true }
     return $false
@@ -635,6 +644,7 @@ function Validate-Release([string]$Path) {
             "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
+            "Install-NightOwlAgentDotNet.ps1",
             "agent.version.json",
             "release-trust-roots.json"
         )) {
@@ -853,6 +863,7 @@ try {
         Write-TrustedReleasePublicKeys -Path (Join-Path $packageDir "release-public-keys.json") -PrivateKeyPath $SigningKeyPath -KeyId $SigningKeyId -TrustedPublicKeysPath $TrustedPublicKeysPath
     }
     Copy-ReleaseTrustRoots -SourcePath $TrustRootsPath -PackageDir $packageDir
+    Copy-Item -Path $installScript -Destination (Join-Path $packageDir "Install-NightOwlAgentDotNet.ps1") -Force
 
     $zipPath = Join-Path $ReleaseDir "NightOwl.Agent.Windows.zip"
     Compress-ReleaseZip -PackageDir $packageDir -ZipPath $zipPath
@@ -943,10 +954,11 @@ try {
             "NightOwl.Agent.Diagnostics.exe",
             "NightOwl.Agent.Shared.dll",
             "assets/icons/NightOwl.ico",
+            "Install-NightOwlAgentDotNet.ps1",
             "agent.version.json",
             "release-trust-roots.json"
         )
-        forbidden_patterns = @("agent.config.json", "agent.identity.json", "agent.state.json", "agent-dotnet.state.json", "update-state.json", "*.preserved-*", "*.log", "*.tmp", "*.pdb", "*.ps1", "bin/", "obj/", "publish/", "downloads/", "artifacts/", "releases/")
+        forbidden_patterns = @("agent.config.json", "agent.identity.json", "agent.state.json", "agent-dotnet.state.json", "update-state.json", "*.preserved-*", "*.log", "*.tmp", "*.pdb", "*.ps1 except Install-NightOwlAgentDotNet.ps1", "bin/", "obj/", "publish/", "downloads/", "artifacts/", "releases/")
     }
     Write-CanonicalJson -Path $manifestPath -Value $releaseManifest
     $versionManifest.manifest_sha256 = Get-FileSha256 $manifestPath
