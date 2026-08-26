@@ -2,6 +2,7 @@ using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Services;
 using NightOwl.Agent.Shared;
+using System.Diagnostics;
 using System.Text.Json;
 
 try
@@ -23,6 +24,9 @@ try
     TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
     TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
     TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
+    TestRepairRunnerScriptPersistsCompletedResult();
+    TestRepairRunnerScriptPersistsFailedResult();
+    TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -333,8 +337,10 @@ static void TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment()
     Require(script.Contains("enrollment_performed = $false", StringComparison.OrdinalIgnoreCase), "Repair result should state enrollment was not performed.");
     Require(!script.Contains("super-secret-token", StringComparison.OrdinalIgnoreCase), "Repair runner script must not contain the agent token.");
     Require(!script.Contains("-EnrollmentToken", StringComparison.OrdinalIgnoreCase), "Repair runner must not pass enrollment token.");
-    Require(script.Contains("$resultTemp = $resultPath + '.tmp'", StringComparison.OrdinalIgnoreCase), "Repair runner should persist final result through a temp file.");
+    Require(script.Contains("function Write-JsonAtomic", StringComparison.OrdinalIgnoreCase), "Repair runner should persist JSON through an atomic helper.");
+    Require(script.Contains("[datetimeoffset]::UtcNow", StringComparison.OrdinalIgnoreCase), "Repair runner should use DateTimeOffset for finish timestamps.");
     Require(script.Contains("Complete-RepairJobState", StringComparison.OrdinalIgnoreCase), "Repair runner should finalize the local external-runner marker.");
+    Require(script.Contains("Save-MinimalRepairFailure", StringComparison.OrdinalIgnoreCase), "Repair runner should have a non-recursive minimal failure path.");
 }
 
 static void TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout()
@@ -373,6 +379,170 @@ static void TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery()
         "Expired repair external runner marker should allow JOB_INTERRUPTED recovery.");
 }
 
+static void TestRepairRunnerScriptPersistsCompletedResult()
+{
+    RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Completed);
+}
+
+static void TestRepairRunnerScriptPersistsFailedResult()
+{
+    RunRepairRunnerScriptFunctionalTest(installerExitCode: 7, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Failed);
+}
+
+static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
+{
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: true, expectedStatus: "");
+    string runnerLog = Path.Combine(result.RunnerDir, "repair.runner.log");
+    Require(File.Exists(runnerLog), "Repair runner should write a diagnostic log when result persistence fails.");
+    string log = File.ReadAllText(runnerLog);
+    Require(log.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) || log.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include a failure stage.");
+    Require(log.Contains(result.JobId, StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include job_id.");
+}
+
+static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus)
+{
+    string powershell = GetWindowsPowerShellPath();
+    Require(File.Exists(powershell), "Windows PowerShell 5.1 is required for repair runner functional tests.");
+
+    string root = CreateTempDir();
+    try
+    {
+        string installPath = Path.Combine(root, "AgentDotNet");
+        string pendingDir = Path.Combine(root, "pending-results");
+        string jobsDir = Path.Combine(root, "jobs");
+        string runnerDir = Path.Combine(root, "runner");
+        string trustPath = Path.Combine(root, "Trust", "release-public-keys.json");
+        Directory.CreateDirectory(installPath);
+        Directory.CreateDirectory(pendingDir);
+        Directory.CreateDirectory(jobsDir);
+        Directory.CreateDirectory(runnerDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(trustPath)!);
+        File.WriteAllText(trustPath, "{}");
+        File.WriteAllText(Path.Combine(installPath, "agent.config.json"), "{}");
+
+        string installerPath = Path.Combine(root, "FakeInstall-NightOwlAgentDotNet.ps1");
+        File.WriteAllText(installerPath, @"
+param(
+    [switch]$Repair,
+    [switch]$InstallAsService,
+    [string]$ServerUrl,
+    [string]$PackageUrl,
+    [string]$TrustedPublicKeysPath,
+    [string]$ExpectedVersion,
+    [string]$ExpectedChannel,
+    [string]$ExpectedPackageSha256,
+    [string]$ExpectedReleaseId,
+    [switch]$RunCheck,
+    [switch]$NonInteractive
+)
+Set-Content -Path '" + Path.Combine(installPath, "agent.version.json").Replace("'", "''") + @"' -Value ('{""version"":""' + $ExpectedVersion + '""}') -Encoding UTF8
+Write-Output 'status=completed'
+Write-Output 'operation=repair'
+Write-Output ('installed_version=' + $ExpectedVersion)
+exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + @"
+");
+
+        if (breakPendingDirectory)
+        {
+            Directory.Delete(pendingDir);
+            File.WriteAllText(pendingDir, "not a directory");
+        }
+
+        string jobId = Guid.NewGuid().ToString();
+        JobStore store = new(jobsDir);
+        store.Mark(jobId, "repair_agent", "running", 1, "corr-repair");
+        string jobStatePath = store.PathFor(jobId);
+        store.MarkExternalRunnerStarted(jobId, "repair_agent", Path.Combine(runnerDir, "Run-NightOwlAgentRepair.ps1"), 900);
+
+        AgentConfig config = new()
+        {
+            ServerBaseUrl = "https://nightowl.controlsul.com.br",
+            InstallPath = installPath,
+            PendingResultsPath = pendingDir,
+            AgentVersion = "0.1.1.0-rc23",
+            MachineId = "machine-repair-test",
+            AgentToken = "super-secret-token"
+        };
+        AgentJobRequest job = new()
+        {
+            Id = jobId,
+            Type = "repair_agent",
+            Attempt = 1,
+            CorrelationId = "corr-repair",
+        };
+        string script = JobExecutor.BuildRepairRunnerScript(
+            job,
+            config,
+            DateTimeOffset.UtcNow.AddSeconds(-1),
+            installerPath,
+            trustPath,
+            "0.1.1.0-rc23",
+            "0.1.1.0-rc23",
+            "development",
+            "release-id-123",
+            "https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc23/NightOwl.Agent.Windows.zip",
+            new string('a', 64),
+            new string('b', 64),
+            new string('c', 64),
+            "nightowl-release-2026-02",
+            jobStatePath);
+        string runnerScript = Path.Combine(runnerDir, "Run-NightOwlAgentRepair.ps1");
+        File.WriteAllText(runnerScript, script);
+
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = powershell,
+            Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + QuoteArg(runnerScript),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }) ?? throw new InvalidOperationException("Failed to start repair runner functional test.");
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit(15000);
+        Require(process.HasExited, "Repair runner script did not exit.");
+
+        if (!breakPendingDirectory)
+        {
+            string resultPath = Path.Combine(pendingDir, $"job-result-{jobId}.json");
+            Require(File.Exists(resultPath), "Repair runner should write pending result.");
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(resultPath));
+            JsonElement rootElement = document.RootElement;
+            Require(rootElement.GetProperty("status").GetString() == expectedStatus, $"Repair runner pending result should be {expectedStatus}.");
+            Require(rootElement.GetProperty("duration_seconds").ValueKind == JsonValueKind.Number, "Repair runner duration_seconds should be numeric.");
+            Require(rootElement.GetProperty("duration_seconds").GetDouble() >= 0, "Repair runner duration_seconds should be non-negative.");
+            JsonElement resultElement = rootElement.GetProperty("result");
+            Require(resultElement.GetProperty("type").GetString() == "repair_agent", "Repair runner result type mismatch.");
+            Require(resultElement.GetProperty("installed_version").GetString() == "0.1.1.0-rc23", "Repair runner installed version mismatch.");
+
+            JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Repair job state was not reloaded.");
+            Require(!state.ExternalRunnerActive, "Repair runner should finalize external runner marker.");
+        }
+
+        return new RepairRunnerTestResult(root, runnerDir, jobId, stdout, stderr);
+    }
+    catch
+    {
+        DeleteTempDir(root);
+        throw;
+    }
+}
+
+static string QuoteArg(string value)
+{
+    return "\"" + value.Replace("\"", "\\\"") + "\"";
+}
+
+static string GetWindowsPowerShellPath()
+{
+    string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    if (File.Exists(path))
+    {
+        return path;
+    }
+    return "powershell.exe";
+}
+
 static string CreateTempDir()
 {
     string path = Path.Combine(Path.GetTempPath(), "NightOwlConfigTests", Guid.NewGuid().ToString("N"));
@@ -399,3 +569,5 @@ static void Require(bool condition, string message)
         throw new InvalidOperationException(message);
     }
 }
+
+sealed record RepairRunnerTestResult(string RootDir, string RunnerDir, string JobId, string Stdout, string Stderr);
