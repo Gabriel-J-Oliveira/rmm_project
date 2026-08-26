@@ -29,8 +29,13 @@ public sealed class JobExecutionPolicy
     private readonly JobStore _store;
 
     public JobExecutionPolicy()
+        : this(new JobStore(Path.Combine(NightOwlPaths.Current.StateDir, "jobs")))
     {
-        _store = new JobStore(Path.Combine(NightOwlPaths.Current.StateDir, "jobs"));
+    }
+
+    public JobExecutionPolicy(JobStore store)
+    {
+        _store = store;
     }
 
     public JobStore Store => _store;

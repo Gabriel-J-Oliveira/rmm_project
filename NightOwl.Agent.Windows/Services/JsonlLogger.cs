@@ -5,19 +5,28 @@ namespace NightOwl.Agent.Windows.Services;
 
 public sealed class JsonlLogger
 {
-    private readonly ConfigService _configService;
+    private readonly ConfigService? _configService;
+    private readonly string _fixedLogPath;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public JsonlLogger(ConfigService configService)
     {
         _configService = configService;
+        _fixedLogPath = "";
+    }
+
+    public JsonlLogger(string logPath)
+    {
+        _fixedLogPath = logPath;
     }
 
     public async Task LogAsync(string eventType, string message, object? data = null, CancellationToken ct = default, string level = "info")
     {
-        AgentConfig config = _configService.Current ?? _configService.Load();
-        string? directory = Path.GetDirectoryName(config.LogPath);
+        string logPath = string.IsNullOrWhiteSpace(_fixedLogPath)
+            ? (_configService?.Current ?? _configService?.Load() ?? new AgentConfig()).LogPath
+            : _fixedLogPath;
+        string? directory = Path.GetDirectoryName(logPath);
         if (!string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
@@ -36,7 +45,7 @@ public sealed class JsonlLogger
         await _lock.WaitAsync(ct);
         try
         {
-            await File.AppendAllTextAsync(config.LogPath, line + Environment.NewLine, ct);
+            await File.AppendAllTextAsync(logPath, line + Environment.NewLine, ct);
         }
         finally
         {

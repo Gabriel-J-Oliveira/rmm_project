@@ -1,6 +1,7 @@
 using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
+using System.Text.Json;
 
 namespace NightOwl.Agent.Windows.Jobs;
 
@@ -19,7 +20,29 @@ public sealed class JobExecutionCoordinator
 
     public async Task RecoverInterruptedJobsAsync(AgentConfig config, PendingResultQueue resultQueue, CancellationToken ct)
     {
-        HashSet<string> pendingResultJobIds = resultQueue.LoadAll().Select(record => record.JobId).Where(id => !string.IsNullOrWhiteSpace(id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> pendingResultJobIds = new(StringComparer.OrdinalIgnoreCase);
+        foreach (PendingResultRecord pendingResult in resultQueue.LoadAll())
+        {
+            if (string.IsNullOrWhiteSpace(pendingResult.JobId))
+            {
+                continue;
+            }
+
+            pendingResultJobIds.Add(pendingResult.JobId);
+            if (TryBuildFinalResult(config, pendingResult, out RemoteJobResult? finalResult))
+            {
+                RemoteJobResult recovered = finalResult!;
+                _policy.Store.MarkFinal(recovered);
+                await _logger.LogAsync("job.final_state.recovered", "Local job state finalized from pending result.", new
+                {
+                    recovered.JobId,
+                    recovered.JobType,
+                    recovered.Status,
+                    result_id = pendingResult.ResultId
+                }, ct);
+            }
+        }
+
         foreach (JobStateRecord record in _policy.Store.LoadAll().Where(record => record.Status.Equals("running", StringComparison.OrdinalIgnoreCase)))
         {
             if (pendingResultJobIds.Contains(record.JobId))
@@ -92,6 +115,69 @@ public sealed class JobExecutionCoordinator
                 error_code = JobErrorCodes.JobInterrupted
             }, ct, "warning");
         }
+    }
+
+    private static bool TryBuildFinalResult(AgentConfig config, PendingResultRecord pendingResult, out RemoteJobResult? finalResult)
+    {
+        finalResult = null;
+        try
+        {
+            JobExecutionResult result = pendingResult.Payload.Deserialize<JobExecutionResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                ?? throw new InvalidOperationException(JobErrorCodes.ResultPayloadInvalid);
+            if (!JobFinalStatuses.All.Contains(result.Status))
+            {
+                return false;
+            }
+
+            DateTimeOffset completedAt = result.FinishedAt == default ? DateTimeOffset.UtcNow : result.FinishedAt;
+            DateTimeOffset startedAt = result.StartedAt == default ? completedAt : result.StartedAt;
+            string errorCode = ExtractErrorCode(result.Result);
+            finalResult = new RemoteJobResult
+            {
+                JobId = result.JobId,
+                JobType = pendingResult.JobType,
+                Status = result.Status,
+                StartedAt = startedAt,
+                CompletedAt = completedAt,
+                DurationMs = (long)Math.Round(Math.Max(0, result.DurationSeconds) * 1000),
+                Attempt = 1,
+                ErrorCode = errorCode,
+                ErrorMessage = result.ErrorMessage,
+                Output = result.Result,
+                AgentVersion = config.AgentVersion,
+                MachineId = config.MachineId
+            };
+            return !string.IsNullOrWhiteSpace(finalResult.JobId) && !string.IsNullOrWhiteSpace(finalResult.JobType);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ExtractErrorCode(object? output)
+    {
+        if (output is null)
+        {
+            return "";
+        }
+
+        try
+        {
+            if (output is JsonElement element
+                && element.ValueKind == JsonValueKind.Object
+                && element.TryGetProperty("error_code", out JsonElement errorCode)
+                && errorCode.ValueKind == JsonValueKind.String)
+            {
+                return errorCode.GetString() ?? "";
+            }
+        }
+        catch
+        {
+            return "";
+        }
+
+        return "";
     }
 
     public static bool ShouldSkipInterruptedRecoveryForExternalRunner(JobStateRecord record, DateTimeOffset now)

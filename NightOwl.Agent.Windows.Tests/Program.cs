@@ -27,6 +27,8 @@ try
     TestRepairRunnerScriptPersistsCompletedResult();
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
+    TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
+    TestCompletedUpdateJobIsIgnoredOnLaterRestart();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -397,6 +399,162 @@ static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
     string log = File.ReadAllText(runnerLog);
     Require(log.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) || log.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include a failure stage.");
     Require(log.Contains(result.JobId, StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include job_id.");
+}
+
+static void TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string jobsDir = Path.Combine(dir, "jobs");
+        string pendingDir = Path.Combine(dir, "pending-results");
+        string configPath = Path.Combine(dir, "agent.config.json");
+        string logPath = Path.Combine(dir, "agent.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        File.WriteAllText(configPath, JsonSerializer.Serialize(new AgentConfig
+        {
+            AgentToken = "test-token",
+            MachineId = "machine-update-restart",
+            AgentVersion = "0.1.1.0-rc23",
+            LogPath = logPath,
+            StatePath = Path.Combine(dir, "agent.state.json"),
+            InstallPath = Path.Combine(dir, "AgentDotNet"),
+            JobsPath = jobsDir,
+            PendingResultsPath = pendingDir
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+        string? previousConfig = Environment.GetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG");
+        Environment.SetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG", configPath);
+        try
+        {
+            JobStore store = new(jobsDir);
+            PendingResultQueue queue = new(pendingDir);
+            string jobId = Guid.NewGuid().ToString();
+            store.Mark(jobId, "update_agent", "running", 1, "corr-update");
+            queue.Enqueue("update_agent", NewCompletedUpdateResult(jobId), critical: true, resultId: $"update-{jobId}");
+
+            JobExecutionCoordinator coordinator = new(new JobExecutionPolicy(store), new JsonlLogger(logPath));
+            coordinator.RecoverInterruptedJobsAsync(new AgentConfig
+            {
+                MachineId = "machine-update-restart",
+                AgentVersion = "0.1.1.0-rc23"
+            }, queue, CancellationToken.None).GetAwaiter().GetResult();
+
+            JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Update job state was not reloaded.");
+            Require(state.Status == JobFinalStatuses.Completed, "Pending completed update result should finalize local JobStore state.");
+            Require(state.Result?.Status == JobFinalStatuses.Completed, "Recovered local JobStore state should keep the completed result.");
+            Require(!state.ErrorCode.Equals(JobErrorCodes.JobInterrupted, StringComparison.OrdinalIgnoreCase), "Pending completed update result must not become JOB_INTERRUPTED.");
+            Require(queue.LoadAll().Count == 1, "Recovery should not create an additional interrupted pending result.");
+            JobExecutionResult pending = queue.LoadAll()[0].Payload.Deserialize<JobExecutionResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? throw new InvalidOperationException("Pending result was not deserialized.");
+            Require(pending.Status == JobFinalStatuses.Completed, "Original pending result should remain completed.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG", previousConfig);
+        }
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestCompletedUpdateJobIsIgnoredOnLaterRestart()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string jobsDir = Path.Combine(dir, "jobs");
+        string pendingDir = Path.Combine(dir, "pending-results");
+        string configPath = Path.Combine(dir, "agent.config.json");
+        string logPath = Path.Combine(dir, "agent.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        File.WriteAllText(configPath, JsonSerializer.Serialize(new AgentConfig
+        {
+            AgentToken = "test-token",
+            MachineId = "machine-update-completed",
+            AgentVersion = "0.1.1.0-rc23",
+            LogPath = logPath,
+            StatePath = Path.Combine(dir, "agent.state.json"),
+            InstallPath = Path.Combine(dir, "AgentDotNet"),
+            JobsPath = jobsDir,
+            PendingResultsPath = pendingDir
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+        string? previousConfig = Environment.GetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG");
+        Environment.SetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG", configPath);
+        try
+        {
+            JobStore store = new(jobsDir);
+            PendingResultQueue queue = new(pendingDir);
+            string jobId = Guid.NewGuid().ToString();
+            RemoteJobResult final = NewCompletedRemoteUpdateResult(jobId);
+            store.MarkFinal(final, "corr-update");
+
+            JobExecutionCoordinator coordinator = new(new JobExecutionPolicy(store), new JsonlLogger(logPath));
+            coordinator.RecoverInterruptedJobsAsync(new AgentConfig
+            {
+                MachineId = "machine-update-completed",
+                AgentVersion = "0.1.1.0-rc23"
+            }, queue, CancellationToken.None).GetAwaiter().GetResult();
+
+            JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Completed update job state was not reloaded.");
+            Require(state.Status == JobFinalStatuses.Completed, "Completed update job should remain completed after later restart.");
+            Require(!state.ErrorCode.Equals(JobErrorCodes.JobInterrupted, StringComparison.OrdinalIgnoreCase), "Completed update job must not be reclassified as JOB_INTERRUPTED.");
+            Require(queue.LoadAll().Count == 0, "Completed update restart should not enqueue an interrupted result.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG", previousConfig);
+        }
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static JobExecutionResult NewCompletedUpdateResult(string jobId)
+{
+    DateTimeOffset now = DateTimeOffset.UtcNow;
+    return new JobExecutionResult
+    {
+        JobId = jobId,
+        Status = JobFinalStatuses.Completed,
+        StartedAt = now.AddSeconds(-5),
+        FinishedAt = now,
+        DurationSeconds = 5,
+        ExitCode = 0,
+        Stdout = "Agent updated successfully.",
+        Result = new
+        {
+            type = "update_agent",
+            update_status = "success",
+            installed_version = "0.1.1.0-rc23",
+            previous_version = "0.1.1.0-rc22",
+            target_version = "0.1.1.0-rc23",
+            rollback_performed = false,
+            health_check = new { confirmed = true }
+        }
+    };
+}
+
+static RemoteJobResult NewCompletedRemoteUpdateResult(string jobId)
+{
+    JobExecutionResult result = NewCompletedUpdateResult(jobId);
+    return new RemoteJobResult
+    {
+        JobId = jobId,
+        JobType = "update_agent",
+        Status = result.Status,
+        StartedAt = result.StartedAt,
+        CompletedAt = result.FinishedAt,
+        DurationMs = (long)Math.Round(result.DurationSeconds * 1000),
+        Attempt = 1,
+        Output = result.Result,
+        AgentVersion = "0.1.1.0-rc23",
+        MachineId = "machine-update-completed"
+    };
 }
 
 static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus)
