@@ -234,6 +234,29 @@ try
     Require(runningUpdate.CorrelationId == "corr-update", "Running correlation_id was not preserved.");
     RequireNoJobStoreTemps(jobsDir, "Running transition should not leave temp files.");
 
+    string repairJobId = Guid.NewGuid().ToString();
+    string repairRunnerPath = Path.Combine(paths.UpdatesRunnerDir, "repair-test", "Run-NightOwlAgentRepair.ps1");
+    jobStore.Mark(repairJobId, "repair_agent", "running", 1, "corr-repair");
+    jobStore.MarkExternalRunnerStarted(repairJobId, "repair_agent", repairRunnerPath, 900);
+    RemoteJobResult repairRunningResult = new()
+    {
+        JobId = repairJobId,
+        JobType = "repair_agent",
+        Status = "running",
+        StartedAt = DateTimeOffset.UtcNow,
+        CompletedAt = DateTimeOffset.UtcNow,
+        DurationMs = 1,
+        Attempt = 1,
+        AgentVersion = "0.1.1.0-rc21",
+        MachineId = "machine-test",
+        Output = new { repair_status = "runner_started" }
+    };
+    jobStore.MarkFinal(repairRunningResult, "corr-repair");
+    JobStateRecord runningRepair = jobStore.Load(repairJobId) ?? throw new InvalidOperationException("Running repair job state was not loaded.");
+    Require(runningRepair.Status == "running", "Running external repair state should remain running.");
+    Require(runningRepair.ExternalRunnerActive, "Running external repair marker should remain active.");
+    Require(runningRepair.ExternalRunnerPath == repairRunnerPath, "External repair runner path should be preserved.");
+
     RemoteJobResult jobResult = new()
     {
         JobId = jobId,
@@ -254,6 +277,13 @@ try
     Require(JobFinalStatuses.All.Contains(JobFinalStatuses.RolledBack), "rolled_back should be a final job result status.");
     Require(JobFinalStatuses.All.Contains(JobFinalStatuses.RollbackFailed), "rollback_failed should be a final job result status.");
     RequireNoJobStoreTemps(jobsDir, "Completed transition should not leave temp files.");
+
+    repairRunningResult.Status = JobFinalStatuses.Completed;
+    repairRunningResult.CompletedAt = DateTimeOffset.UtcNow;
+    jobStore.MarkFinal(repairRunningResult, "corr-repair");
+    JobStateRecord completedRepair = jobStore.Load(repairJobId) ?? throw new InvalidOperationException("Completed repair job state was not loaded.");
+    Require(completedRepair.IsFinal, "Completed repair job should be final.");
+    Require(!completedRepair.ExternalRunnerActive, "Completed repair should clear external runner marker.");
 
     RemoteJobResult failedUpdateResult = new()
     {

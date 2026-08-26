@@ -33,6 +33,19 @@ public sealed class JobExecutionCoordinator
             }
 
             DateTimeOffset now = DateTimeOffset.UtcNow;
+            if (ShouldSkipInterruptedRecoveryForExternalRunner(record, now))
+            {
+                await _logger.LogAsync("job.interrupted.recovery_skipped_external_runner", "Running lifecycle job is owned by an external runner; interrupted recovery skipped.", new
+                {
+                    record.JobId,
+                    record.JobType,
+                    record.ExternalRunnerStartedAt,
+                    record.ExternalRunnerTimeoutSeconds,
+                    record.ExternalRunnerPath
+                }, ct);
+                continue;
+            }
+
             JobExecutionResult result = new()
             {
                 JobId = record.JobId,
@@ -79,6 +92,17 @@ public sealed class JobExecutionCoordinator
                 error_code = JobErrorCodes.JobInterrupted
             }, ct, "warning");
         }
+    }
+
+    public static bool ShouldSkipInterruptedRecoveryForExternalRunner(JobStateRecord record, DateTimeOffset now)
+    {
+        if (!record.ExternalRunnerActive || record.ExternalRunnerStartedAt is null)
+        {
+            return false;
+        }
+        int timeoutSeconds = Math.Clamp(record.ExternalRunnerTimeoutSeconds <= 0 ? 900 : record.ExternalRunnerTimeoutSeconds, 60, 3600);
+        DateTimeOffset expiresAt = record.ExternalRunnerStartedAt.Value.AddSeconds(timeoutSeconds);
+        return now <= expiresAt;
     }
 
     public async Task<JobStartDecision> TryStartAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)

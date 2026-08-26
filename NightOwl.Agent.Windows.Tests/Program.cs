@@ -1,6 +1,7 @@
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Services;
+using NightOwl.Agent.Shared;
 using System.Text.Json;
 
 try
@@ -20,6 +21,8 @@ try
     TestMigrationLogPayloadDoesNotExposeSecrets();
     TestUninstallerRunnerPayloadCopiesSelfContainedFiles();
     TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
+    TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
+    TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -330,6 +333,44 @@ static void TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment()
     Require(script.Contains("enrollment_performed = $false", StringComparison.OrdinalIgnoreCase), "Repair result should state enrollment was not performed.");
     Require(!script.Contains("super-secret-token", StringComparison.OrdinalIgnoreCase), "Repair runner script must not contain the agent token.");
     Require(!script.Contains("-EnrollmentToken", StringComparison.OrdinalIgnoreCase), "Repair runner must not pass enrollment token.");
+    Require(script.Contains("$resultTemp = $resultPath + '.tmp'", StringComparison.OrdinalIgnoreCase), "Repair runner should persist final result through a temp file.");
+    Require(script.Contains("Complete-RepairJobState", StringComparison.OrdinalIgnoreCase), "Repair runner should finalize the local external-runner marker.");
+}
+
+static void TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout()
+{
+    JobStateRecord record = new()
+    {
+        JobId = Guid.NewGuid().ToString(),
+        JobType = "repair_agent",
+        Status = "running",
+        ExternalRunnerActive = true,
+        ExternalRunnerStartedAt = DateTimeOffset.UtcNow.AddMinutes(-3),
+        ExternalRunnerTimeoutSeconds = 900,
+        ExternalRunnerPath = @"C:\ProgramData\NightOwl\Updates\Runner\repair-test\Run-NightOwlAgentRepair.ps1",
+    };
+
+    Require(
+        JobExecutionCoordinator.ShouldSkipInterruptedRecoveryForExternalRunner(record, DateTimeOffset.UtcNow),
+        "Active repair external runner should not be marked interrupted during service restart.");
+}
+
+static void TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery()
+{
+    JobStateRecord record = new()
+    {
+        JobId = Guid.NewGuid().ToString(),
+        JobType = "repair_agent",
+        Status = "running",
+        ExternalRunnerActive = true,
+        ExternalRunnerStartedAt = DateTimeOffset.UtcNow.AddMinutes(-30),
+        ExternalRunnerTimeoutSeconds = 900,
+        ExternalRunnerPath = @"C:\ProgramData\NightOwl\Updates\Runner\repair-test\Run-NightOwlAgentRepair.ps1",
+    };
+
+    Require(
+        !JobExecutionCoordinator.ShouldSkipInterruptedRecoveryForExternalRunner(record, DateTimeOffset.UtcNow),
+        "Expired repair external runner marker should allow JOB_INTERRUPTED recovery.");
 }
 
 static string CreateTempDir()

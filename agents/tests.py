@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from .models import AuditEvent, AgentDeploymentToken, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
-from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy
+from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
 
@@ -1911,6 +1911,54 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(job.payload['release_id'], str(release.id))
         self.assertEqual(job.payload['source'], 'manual_panel')
         self.assertEqual(job.timeout_seconds, 900)
+
+    def test_update_completion_updates_endpoint_version_before_repair_selection(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.agent_version = '0.1.1.0-rc20'
+        self.machine.save(update_fields=['update_channel', 'agent_version'])
+        self.release(version='0.1.1.0-rc20', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0, status=AgentRelease.STATUS_PAUSED)
+        rc21 = self.release(
+            version='0.1.1.0-rc21',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
+        update_job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': rc21.version},
+        )
+
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(update_job.id),
+                'status': 'completed',
+                'exit_code': 0,
+                'result': {
+                    'type': 'update_agent',
+                    'update_status': 'success',
+                    'target_version': rc21.version,
+                    'installed_version': rc21.version,
+                    'active_version': rc21.version,
+                    'health_check': {'confirmed': True},
+                    'rollback_performed': False,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.agent_version, rc21.version)
+        release = find_repair_agent_release(self.machine)
+        payload = build_repair_agent_job_payload(self.machine, release)
+        self.assertEqual(payload['target_version'], rc21.version)
+        self.assertEqual(payload['current_version'], rc21.version)
+        self.assertEqual(payload['release_id'], str(rc21.id))
 
     def test_manual_repair_requires_known_installed_release(self):
         user_model = get_user_model()

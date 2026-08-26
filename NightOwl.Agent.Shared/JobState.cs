@@ -169,6 +169,21 @@ public sealed class JobStateRecord
     [JsonPropertyName("result")]
     public RemoteJobResult? Result { get; set; }
 
+    [JsonPropertyName("external_runner_active")]
+    public bool ExternalRunnerActive { get; set; }
+
+    [JsonPropertyName("external_runner_started_at")]
+    public DateTimeOffset? ExternalRunnerStartedAt { get; set; }
+
+    [JsonPropertyName("external_runner_timeout_seconds")]
+    public int ExternalRunnerTimeoutSeconds { get; set; }
+
+    [JsonPropertyName("external_runner_path")]
+    public string ExternalRunnerPath { get; set; } = "";
+
+    [JsonPropertyName("external_runner_completed_at")]
+    public DateTimeOffset? ExternalRunnerCompletedAt { get; set; }
+
     [JsonIgnore]
     public bool IsFinal => JobFinalStatuses.All.Contains(Status);
 }
@@ -261,8 +276,32 @@ public sealed class JobStore
         record.ErrorMessage = result.ErrorMessage;
         record.Result = result;
         record.UpdatedAt = DateTimeOffset.UtcNow;
-        record.FinalAt = record.UpdatedAt;
+        if (JobFinalStatuses.All.Contains(result.Status))
+        {
+            record.ExternalRunnerActive = false;
+            record.ExternalRunnerCompletedAt = DateTimeOffset.UtcNow;
+            record.FinalAt = record.UpdatedAt;
+        }
         Save(record);
+    }
+
+    public JobStateRecord MarkExternalRunnerStarted(string jobId, string jobType, string runnerPath, int timeoutSeconds)
+    {
+        JobStateRecord record = Load(jobId) ?? new JobStateRecord
+        {
+            JobId = jobId,
+            JobType = jobType,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        record.JobType = string.IsNullOrWhiteSpace(record.JobType) ? jobType : record.JobType;
+        record.ExternalRunnerActive = true;
+        record.ExternalRunnerStartedAt = DateTimeOffset.UtcNow;
+        record.ExternalRunnerTimeoutSeconds = Math.Clamp(timeoutSeconds, 60, 3600);
+        record.ExternalRunnerPath = runnerPath;
+        record.ExternalRunnerCompletedAt = null;
+        record.UpdatedAt = DateTimeOffset.UtcNow;
+        Save(record);
+        return record;
     }
 
     public void Prune()
@@ -312,7 +351,7 @@ public sealed class JobStore
         return records;
     }
 
-    private string PathFor(string jobId)
+    public string PathFor(string jobId)
     {
         string safe = jobId.Replace("/", "_").Replace("\\", "_").Replace(":", "_");
         return Path.Combine(_directory, $"{safe}.json");

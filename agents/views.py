@@ -38,7 +38,7 @@ from .services import (
     record_collection,
     record_heartbeat,
 )
-from .versioning import compare_versions
+from .versioning import compare_versions, normalize_agent_version
 
 
 logger = logging.getLogger(__name__)
@@ -332,6 +332,20 @@ def _update_completion_health_confirmed(job, payload):
     if not target_version or not installed_version:
         return False
     return compare_versions(installed_version, target_version) == 0 and health_confirmed
+
+
+def _update_installed_version(payload):
+    result = _payload_result(payload)
+    details = result.get('details') if isinstance(result.get('details'), dict) else {}
+    return normalize_agent_version(
+        result.get('installed_version')
+        or result.get('installedVersion')
+        or result.get('active_version')
+        or result.get('activeVersion')
+        or details.get('installed_version')
+        or details.get('installedVersion')
+        or ''
+    )
 
 
 def _coerce_expected_update_restart_payload(payload):
@@ -893,6 +907,29 @@ class AgentJobsResultView(APIView):
                     job.status,
                     job.exit_code,
                 )
+                if job.status == AgentJob.STATUS_COMPLETED:
+                    installed_version = _update_installed_version(payload)
+                    if installed_version and installed_version != (machine.agent_version or ''):
+                        old_agent_version = machine.agent_version or ''
+                        machine.agent_version = installed_version
+                        if not machine.agent_mode:
+                            machine.agent_mode = 'dotnet-service'
+                        machine.save(update_fields=['agent_version', 'agent_mode', 'updated_at'])
+                        create_audit_event(
+                            event_type='agent.version.updated_from_update_result',
+                            title='Versao do agente atualizada pelo resultado de update',
+                            description=f'Versao do agente em {machine.hostname} mudou de {old_agent_version or "-"} para {installed_version}.',
+                            severity=AuditEvent.SEVERITY_INFO,
+                            actor_type=AuditEvent.ACTOR_AGENT,
+                            actor_name='NightOwlAgent',
+                            endpoint=machine,
+                            metadata={
+                                'job_id': str(job.id),
+                                'result_id': result_id,
+                                'old_version': old_agent_version,
+                                'new_version': installed_version,
+                            },
+                        )
                 if (
                     job.status in {
                         AgentJob.STATUS_COMPLETED,

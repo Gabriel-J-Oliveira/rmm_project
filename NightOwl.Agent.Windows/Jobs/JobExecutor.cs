@@ -626,6 +626,8 @@ public sealed class JobExecutor
         }
         Directory.CreateDirectory(runnerDir);
         string runnerScript = Path.Combine(runnerDir, "Run-NightOwlAgentRepair.ps1");
+        string jobStatePath = _policy.Store.PathFor(job.Id);
+        int runnerTimeoutSeconds = GetPayloadInt(job, "timeout_seconds", 900);
         File.WriteAllText(
             runnerScript,
             BuildRepairRunnerScript(
@@ -642,7 +644,8 @@ public sealed class JobExecutor
                 sha256,
                 manifestSha256,
                 signatureSha256,
-                signatureKeyId),
+                signatureKeyId,
+                jobStatePath),
             Encoding.UTF8);
 
         await _logger.LogAsync("job.repair_agent.started", "Starting repair runner for repair_agent job.", new
@@ -669,6 +672,7 @@ public sealed class JobExecutor
                 WindowStyle = ProcessWindowStyle.Hidden
             }
         };
+        _policy.Store.MarkExternalRunnerStarted(job.Id, job.Type, runnerScript, runnerTimeoutSeconds);
         process.Start();
         stopwatch.Stop();
 
@@ -767,7 +771,8 @@ public sealed class JobExecutor
         string sha256,
         string manifestSha256,
         string signatureSha256,
-        string signatureKeyId)
+        string signatureKeyId,
+        string jobStatePath = "")
     {
         string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
             ? NightOwlPaths.Current.PendingResultsDir
@@ -779,6 +784,7 @@ public sealed class JobExecutor
         script.AppendLine("$startedAt = " + QuotePsSingle(started.UtcDateTime.ToString("o")));
         script.AppendLine("$pendingDir = " + QuotePsSingle(pendingDir));
         script.AppendLine("$resultPath = " + QuotePsSingle(resultPath));
+        script.AppendLine("$jobStatePath = " + QuotePsSingle(jobStatePath));
         script.AppendLine("$stdoutPath = Join-Path $PSScriptRoot 'repair.stdout.log'");
         script.AppendLine("$stderrPath = Join-Path $PSScriptRoot 'repair.stderr.log'");
         script.AppendLine("$previousVersion = " + QuotePsSingle(previousVersion));
@@ -825,7 +831,31 @@ public sealed class JobExecutor
         script.AppendLine("            error_message = $ErrorMessage");
         script.AppendLine("        }");
         script.AppendLine("    }");
-        script.AppendLine("    $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $resultPath -Encoding UTF8");
+        script.AppendLine("    $resultTemp = $resultPath + '.tmp'");
+        script.AppendLine("    try {");
+        script.AppendLine("        $payload | ConvertTo-Json -Depth 8 | Set-Content -Path $resultTemp -Encoding UTF8");
+        script.AppendLine("        Move-Item -Path $resultTemp -Destination $resultPath -Force");
+        script.AppendLine("    }");
+        script.AppendLine("    finally { if (Test-Path $resultTemp) { Remove-Item -Path $resultTemp -Force -ErrorAction SilentlyContinue } }");
+        script.AppendLine("    Complete-RepairJobState $Status $ExitCode $ErrorMessage $finishedAt");
+        script.AppendLine("}");
+        script.AppendLine("function Complete-RepairJobState([string]$Status, [int]$ExitCode, [string]$ErrorMessage, [datetimeoffset]$FinishedAt) {");
+        script.AppendLine("    if ([string]::IsNullOrWhiteSpace($jobStatePath) -or -not (Test-Path $jobStatePath)) { return }");
+        script.AppendLine("    $stateTemp = $jobStatePath + '.tmp'");
+        script.AppendLine("    try {");
+        script.AppendLine("        $state = Get-Content -Raw -Path $jobStatePath | ConvertFrom-Json");
+        script.AppendLine("        $state.status = $Status");
+        script.AppendLine("        $state.updated_at = $FinishedAt.ToString('o')");
+        script.AppendLine("        $state.final_at = $FinishedAt.ToString('o')");
+        script.AppendLine("        $state.error_code = $(if ($Status -eq 'completed') { '' } else { 'REPAIR_FAILED' })");
+        script.AppendLine("        $state.error_message = $ErrorMessage");
+        script.AppendLine("        $state.external_runner_active = $false");
+        script.AppendLine("        $state.external_runner_completed_at = $FinishedAt.ToString('o')");
+        script.AppendLine("        $state | ConvertTo-Json -Depth 12 | Set-Content -Path $stateTemp -Encoding UTF8");
+        script.AppendLine("        Move-Item -Path $stateTemp -Destination $jobStatePath -Force");
+        script.AppendLine("    }");
+        script.AppendLine("    catch { }");
+        script.AppendLine("    finally { if (Test-Path $stateTemp) { Remove-Item -Path $stateTemp -Force -ErrorAction SilentlyContinue } }");
         script.AppendLine("}");
         script.AppendLine("try {");
         script.AppendLine("    $installArgs = @(");
