@@ -1052,7 +1052,7 @@ function Stop-TrayIfExists {
     Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
-function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$IdentityPath, [string]$ExpectedMachineId, [string]$ExePath, [string]$VersionPath, $ExpectedReleaseMetadata, [string]$LegacyConfigPath, [bool]$RequireNoLegacyConfig, [bool]$RequireTrayTask, [string]$TrayTaskName) {
+function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$IdentityPath, [string]$ExpectedMachineId, [string]$ExePath, [string]$VersionPath, $ExpectedReleaseMetadata, [string]$LegacyConfigPath, [bool]$RequireNoLegacyConfig, [bool]$RequireTrayTask, [string]$TrayTaskName, [string]$TrayExePath, [string]$StartMenuShortcutPath) {
     $errors = @()
     $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if (-not $service) {
@@ -1078,8 +1078,15 @@ function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$
         if ((Get-JsonProperty $versionInfo @("packageSha256", "package_sha256")).ToLowerInvariant() -ne ([string]$ExpectedReleaseMetadata.packageSha256).ToLowerInvariant()) { $errors += "sha_metadata_mismatch" }
     }
     if ($RequireTrayTask) {
+        if (-not (Test-Path $TrayExePath)) { $errors += "tray_binary_exists:false" }
         $trayTask = Get-ScheduledTask -TaskName $TrayTaskName -ErrorAction SilentlyContinue
-        if (-not $trayTask) { $errors += "tray_task_missing" }
+        if (-not $trayTask) {
+            $errors += "tray_task_exists:false"
+        }
+        elseif (-not (Test-TrayTaskValid -TaskName $TrayTaskName -TrayExePath $TrayExePath)) {
+            $errors += "tray_task_valid:false"
+        }
+        if (-not (Test-Path $StartMenuShortcutPath)) { $errors += "start_menu_shortcut_exists:false" }
     }
     return $errors
 }
@@ -1147,6 +1154,7 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
     }
 
     $taskName = "NightOwl Agent Tray"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Write-InstallLog "tray.install.started" "Configurando tarefa agendada da bandeja." @{
         task_name = $taskName
         tray_exe = $TrayExePath
@@ -1199,12 +1207,15 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
 "@
         Register-ScheduledTask -TaskName $taskName -Xml $taskXml -Force | Out-Null
         Write-Step "OK" "Tarefa de bandeja criada: $taskName"
-        Write-InstallLog "tray.install.completed" "Tarefa agendada da bandeja criada." @{
+        $eventType = if ($existingTask) { "tray.task.validated" } else { "tray.task.created" }
+        $message = if ($existingTask) { "Tarefa agendada da bandeja validada." } else { "Tarefa agendada da bandeja criada." }
+        Write-InstallLog $eventType $message @{
             task_name = $taskName
             tray_exe = $TrayExePath
             trigger = "ONLOGON"
             principal_sid = $interactiveSid
         }
+        Add-ReportAction $eventType @{ task_name = $taskName; tray_exe = $TrayExePath; principal_sid = $interactiveSid }
     }
     catch {
         Write-InstallLog "tray.install.failed" "Falha ao criar tarefa da bandeja." @{
@@ -1217,29 +1228,87 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
     }
 }
 
-function Start-TrayIfInteractive([string]$TrayExePath, [switch]$ForceStart) {
-    if (-not (Test-Path $TrayExePath)) {
+function Test-InteractiveUserSessionPresent {
+    try {
+        $explorer = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -gt 0 })
+        if ($explorer.Count -gt 0) { return $true }
+    }
+    catch {}
+    try {
+        $quser = & quser.exe 2>$null
+        if ($LASTEXITCODE -eq 0 -and $quser) { return $true }
+    }
+    catch {}
+    return $false
+}
+
+function Start-TrayTaskIfInteractive([string]$TaskName, [switch]$ForceStart) {
+    if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+        Write-InstallLog "tray.start.deferred" "Tray task ausente; inicio imediato adiado." @{ task_name = $TaskName; reason = "task_missing" }
+        Add-ReportWarning "TRAY_START_DEFERRED" "Tray task ausente; inicio imediato adiado." @{ task_name = $TaskName; reason = "task_missing" }
         return
     }
-    if (-not $ForceStart -and [Environment]::UserInteractive -ne $true) {
+    if (-not $ForceStart -and -not (Test-InteractiveUserSessionPresent)) {
         Write-Step "OK" "NightOwl Agent instalado. O icone sera exibido no proximo logon do usuario."
-        Write-InstallLog "tray.start.deferred" "Tray app sera iniciado no proximo logon do usuario." @{ tray_exe = $TrayExePath }
+        Write-InstallLog "tray.start.deferred" "Tray app sera iniciado no proximo logon do usuario." @{ task_name = $TaskName; reason = "no_interactive_session" }
         return
     }
     try {
-        $existing = Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue
-        if ($existing) {
-            Write-Step "OK" "Tray app ja esta em execucao"
-            return
-        }
-        Start-Process -FilePath $TrayExePath -WorkingDirectory (Split-Path -Parent $TrayExePath) | Out-Null
-        Write-Step "OK" "Tray app iniciado"
-        Write-InstallLog "tray.started" "Tray app iniciado pelo instalador." @{ tray_exe = $TrayExePath }
+        Write-InstallLog "tray.start.requested" "Solicitando inicio do Tray pela tarefa agendada." @{ task_name = $TaskName }
+        Start-ScheduledTask -TaskName $TaskName
+        Start-Sleep -Milliseconds 800
+        Write-Step "OK" "Tray task acionada"
+        Write-InstallLog "tray.start.succeeded" "Tray task acionada pelo instalador." @{ task_name = $TaskName }
+        Add-ReportAction "tray.start.succeeded" @{ task_name = $TaskName }
     }
     catch {
         Write-Step "WARN" ("Nao foi possivel iniciar o tray app: {0}" -f $_.Exception.Message)
-        Write-InstallLog "tray.start.failed" "Falha ao iniciar tray app." @{ tray_exe = $TrayExePath; error = $_.Exception.Message }
+        Write-InstallLog "tray.start.failed" "Falha ao iniciar tray task." @{ task_name = $TaskName; error = $_.Exception.Message }
+        Add-ReportWarning "TRAY_START_FAILED" "Falha ao iniciar Tray pela tarefa agendada." @{ task_name = $TaskName; error = $_.Exception.Message }
     }
+}
+
+function Get-StartMenuShortcutPath {
+    $programData = if ([string]::IsNullOrWhiteSpace($env:ProgramData)) { "C:\ProgramData" } else { $env:ProgramData }
+    return (Join-Path $programData "Microsoft\Windows\Start Menu\Programs\NightOwl\NightOwl.lnk")
+}
+
+function Install-OrRepairStartMenuShortcut([string]$TrayExePath, [string]$IconPath) {
+    if (-not (Test-Path $TrayExePath)) {
+        Write-InstallLog "tray.shortcut.skipped" "Atalho do Menu Iniciar nao criado porque o Tray esta ausente." @{ tray_exe = $TrayExePath }
+        Add-ReportWarning "TRAY_SHORTCUT_SKIPPED" "Atalho do Menu Iniciar nao criado porque o Tray esta ausente." @{ tray_exe = $TrayExePath }
+        return
+    }
+    $shortcutPath = Get-StartMenuShortcutPath
+    $existed = Test-Path $shortcutPath
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $shortcutPath) | Out-Null
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $TrayExePath
+        $shortcut.WorkingDirectory = Split-Path -Parent $TrayExePath
+        $shortcut.Description = "NightOwl"
+        if (Test-Path $IconPath) {
+            $shortcut.IconLocation = $IconPath
+        }
+        $shortcut.Save()
+        $eventType = if ($existed) { "tray.shortcut.repaired" } else { "tray.shortcut.created" }
+        Write-InstallLog $eventType "Atalho NightOwl do Menu Iniciar configurado." @{ shortcut = $shortcutPath; target = $TrayExePath; icon = $IconPath }
+        Add-ReportAction $eventType @{ shortcut = $shortcutPath; target = $TrayExePath; icon = $IconPath }
+    }
+    catch {
+        Write-InstallLog "tray.shortcut.failed" "Falha ao criar atalho NightOwl no Menu Iniciar." @{ shortcut = $shortcutPath; error = $_.Exception.Message }
+        Add-ReportWarning "TRAY_SHORTCUT_FAILED" "Falha ao criar atalho NightOwl no Menu Iniciar." @{ shortcut = $shortcutPath; error = $_.Exception.Message }
+    }
+}
+
+function Test-TrayTaskValid([string]$TaskName, [string]$TrayExePath) {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if (-not $task) { return $false }
+    $hasLogonTrigger = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -match "LogonTrigger" -or $_.ToString() -match "LogonTrigger" }).Count -gt 0
+    $hasInteractivePrincipal = @($task.Principal | Where-Object { [string]$_.GroupId -eq "S-1-5-4" }).Count -gt 0
+    $hasTrayAction = @($task.Actions | Where-Object { [string]$_.Execute -eq $TrayExePath }).Count -gt 0
+    return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasTrayAction)
 }
 
 function Test-RecentHeartbeat([string]$LogPath) {
@@ -1545,7 +1614,8 @@ if ($InstallAsService) {
 
 if (-not $NoTray) {
     Install-OrUpdateTrayTask -TrayExePath $trayExePath
-    Start-TrayIfInteractive -TrayExePath $trayExePath -ForceStart:$StartTray
+    Install-OrRepairStartMenuShortcut -TrayExePath $trayExePath -IconPath $iconPath
+    Start-TrayTaskIfInteractive -TaskName "NightOwl Agent Tray" -ForceStart:$StartTray
 }
 else {
     Write-Step "OK" "Tray app nao configurado por opcao -NoTray"
@@ -1567,10 +1637,13 @@ if ($RunCheck) {
     }
     if (Test-Path $configPath) { Write-Step "OK" "Config existe" } else { Write-Step "FAIL" "Config ausente" }
     if (-not $NoTray) {
-        if (Test-Path $trayExePath) { Write-Step "OK" "Tray app existe" } else { Write-Step "WARN" "Tray app ausente" }
+        $shortcutPath = Get-StartMenuShortcutPath
+        if (Test-Path $trayExePath) { Write-Step "OK" "tray_binary_exists=true" } else { Write-Step "WARN" "tray_binary_exists=false" }
         if (Test-Path $iconPath) { Write-Step "OK" "NightOwl.ico existe em assets\\icons" } else { Write-Step "WARN" "NightOwl.ico ausente em assets\\icons" }
         $trayTask = Get-ScheduledTask -TaskName "NightOwl Agent Tray" -ErrorAction SilentlyContinue
-        if ($trayTask) { Write-Step "OK" "Tray task instalada: NightOwl Agent Tray" } else { Write-Step "WARN" "Tray task nao encontrada" }
+        if ($trayTask) { Write-Step "OK" "tray_task_exists=true" } else { Write-Step "WARN" "tray_task_exists=false" }
+        if (Test-TrayTaskValid -TaskName "NightOwl Agent Tray" -TrayExePath $trayExePath) { Write-Step "OK" "tray_task_valid=true" } else { Write-Step "WARN" "tray_task_valid=false" }
+        if (Test-Path $shortcutPath) { Write-Step "OK" "start_menu_shortcut_exists=true" } else { Write-Step "WARN" "start_menu_shortcut_exists=false" }
     }
     if ([string]::IsNullOrWhiteSpace($AgentToken) -or $AgentToken -eq "TOKEN") { Write-Step "FAIL" "Token invalido/placeholder" } else { Write-Step "OK" "Token configurado" }
     if (Test-Path $logPath) { Write-Step "OK" "Log existe" } else { New-Item -ItemType File -Force -Path $logPath | Out-Null; Write-Step "OK" "Log criado" }
@@ -1600,7 +1673,9 @@ $healthErrors = Test-AgentLifecycleHealth `
     -LegacyConfigPath $legacyConfigPath `
     -RequireNoLegacyConfig:(-not $existingInstallation -and $script:Operation -eq "install") `
     -RequireTrayTask:(-not $NoTray) `
-    -TrayTaskName "NightOwl Agent Tray"
+    -TrayTaskName "NightOwl Agent Tray" `
+    -TrayExePath $trayExePath `
+    -StartMenuShortcutPath (Get-StartMenuShortcutPath)
 if ($healthErrors.Count -gt 0) {
     $healthCode = switch ($script:Operation) {
         "repair" { "REPAIR_HEALTHCHECK_FAILED" }

@@ -703,7 +703,7 @@ internal static class Program
             }
             MarkStage(state, UpdateStages.ServiceStarted);
             WriteLog("service.start.done", "Service started after update.");
-            StartTrayIfPossible(installPath);
+            EnsureTrayLifecycleAfterUpdate(installPath);
             try
             {
                 ValidatePostUpdate(installPath, manifest.Version);
@@ -819,7 +819,7 @@ internal static class Program
             StopService();
             RestoreBackup(latest.FullName, installPath);
             StartService();
-            StartTrayIfPossible(installPath);
+            EnsureTrayLifecycleAfterUpdate(installPath);
             WriteLog("updater.rollback.completed", "Rollback concluido.", new { backup = latest.FullName });
             WriteJson(new { ok = true, rollback = true, backup = latest.FullName });
             if (interactive)
@@ -1791,26 +1791,193 @@ internal static class Program
         WriteLog("updater.service.started", "Servico iniciado apos atualizacao.");
     }
 
-    private static void StartTrayIfPossible(string installPath)
+    private static void EnsureTrayLifecycleAfterUpdate(string installPath)
     {
         string tray = Path.Combine(installPath, "NightOwl.Agent.Tray.exe");
-        if (!File.Exists(tray) || !Environment.UserInteractive)
+        string icon = Path.Combine(installPath, "assets", "icons", "NightOwl.ico");
+        if (!File.Exists(tray))
         {
+            WriteLog("tray.start.deferred", "Tray binary absent; lifecycle validation deferred.", new { tray_exe = tray, reason = "tray_binary_missing" });
+            return;
+        }
+        EnsureTrayTask(tray);
+        EnsureStartMenuShortcut(tray, icon);
+        StartTrayTaskIfInteractive();
+    }
+
+    private static void EnsureTrayTask(string trayPath)
+    {
+        const string taskName = "NightOwl Agent Tray";
+        bool existed = ScheduledTaskExists(taskName);
+        try
+        {
+            string escapedTray = System.Security.SecurityElement.Escape(trayPath) ?? trayPath;
+            string script = $@"
+$taskName = 'NightOwl Agent Tray'
+$taskXml = @'
+<?xml version=""1.0"" encoding=""UTF-16""?>
+<Task version=""1.4"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
+  <RegistrationInfo>
+    <Description>NightOwl Agent Tray</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id=""InteractiveUsers"">
+      <GroupId>S-1-5-4</GroupId>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context=""InteractiveUsers"">
+    <Exec>
+      <Command>{escapedTray}</Command>
+    </Exec>
+  </Actions>
+</Task>
+'@
+Register-ScheduledTask -TaskName $taskName -Xml $taskXml -Force | Out-Null
+";
+            RunPowerShellScript(script, TimeSpan.FromSeconds(20));
+            WriteLog(existed ? "tray.task.validated" : "tray.task.created", existed ? "Tray scheduled task validated after update." : "Tray scheduled task created after update.", new { task_name = taskName, tray_exe = trayPath });
+        }
+        catch (Exception ex)
+        {
+            WriteLog("tray.task.failed", "Failed to configure Tray scheduled task after update.", new { task_name = taskName, tray_exe = trayPath, error = ex.Message });
+        }
+    }
+
+    private static void EnsureStartMenuShortcut(string trayPath, string iconPath)
+    {
+        string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        if (string.IsNullOrWhiteSpace(programData))
+        {
+            programData = @"C:\ProgramData";
+        }
+        string shortcutPath = Path.Combine(programData, "Microsoft", "Windows", "Start Menu", "Programs", "NightOwl", "NightOwl.lnk");
+        bool existed = File.Exists(shortcutPath);
+        try
+        {
+            string script = $@"
+$shortcutPath = {QuotePowerShellString(shortcutPath)}
+$trayPath = {QuotePowerShellString(trayPath)}
+$iconPath = {QuotePowerShellString(iconPath)}
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $shortcutPath) | Out-Null
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $trayPath
+$shortcut.WorkingDirectory = Split-Path -Parent $trayPath
+$shortcut.Description = 'NightOwl'
+if (Test-Path $iconPath) {{ $shortcut.IconLocation = $iconPath }}
+$shortcut.Save()
+";
+            RunPowerShellScript(script, TimeSpan.FromSeconds(20));
+            WriteLog(existed ? "tray.shortcut.repaired" : "tray.shortcut.created", "NightOwl Start Menu shortcut configured after update.", new { shortcut = shortcutPath, target = trayPath, icon = iconPath });
+        }
+        catch (Exception ex)
+        {
+            WriteLog("tray.shortcut.failed", "Failed to configure NightOwl Start Menu shortcut after update.", new { shortcut = shortcutPath, target = trayPath, error = ex.Message });
+        }
+    }
+
+    private static void StartTrayTaskIfInteractive()
+    {
+        const string taskName = "NightOwl Agent Tray";
+        if (!HasInteractiveUserSession())
+        {
+            WriteLog("tray.start.deferred", "Tray start deferred until next logon; no interactive user session detected.", new { task_name = taskName, reason = "no_interactive_session" });
             return;
         }
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = tray,
-                WorkingDirectory = installPath,
-                UseShellExecute = true
-            });
+            WriteLog("tray.start.requested", "Requesting Tray start through scheduled task.", new { task_name = taskName });
+            RunPowerShellScript("Start-ScheduledTask -TaskName 'NightOwl Agent Tray'", TimeSpan.FromSeconds(15));
+            WriteLog("tray.start.succeeded", "Tray scheduled task start requested after update.", new { task_name = taskName });
         }
         catch (Exception ex)
         {
-            WriteLog("updater.tray.start_failed", "Falha ao reiniciar tray.", new { error = ex.Message });
+            WriteLog("tray.start.failed", "Failed to start Tray through scheduled task after update.", new { task_name = taskName, error = ex.Message });
         }
+    }
+
+    private static bool HasInteractiveUserSession()
+    {
+        try
+        {
+            return Process.GetProcessesByName("explorer").Any(process =>
+            {
+                try { return process.SessionId > 0; }
+                catch { return false; }
+            });
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool ScheduledTaskExists(string taskName)
+    {
+        try
+        {
+            RunPowerShellScript($"Get-ScheduledTask -TaskName {QuotePowerShellString(taskName)} -ErrorAction Stop | Out-Null", TimeSpan.FromSeconds(10));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void RunPowerShellScript(string script, TimeSpan timeout)
+    {
+        string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        using Process process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encoded,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }) ?? throw new InvalidOperationException("PowerShell process could not be started.");
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        if (!process.WaitForExit((int)Math.Max(1000, timeout.TotalMilliseconds)))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            throw new System.TimeoutException("PowerShell helper timed out.");
+        }
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"PowerShell helper failed with exit code {process.ExitCode}: {SanitizeMessage(stdout + " " + stderr)}");
+        }
+    }
+
+    private static string QuotePowerShellString(string value)
+    {
+        return "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     }
 
     private static void ValidatePostUpdate(string installPath, string expectedVersion)
@@ -2069,7 +2236,7 @@ internal static class Program
             StopServiceSafe();
             RestoreBackup(backupPath, installPath);
             StartService();
-            StartTrayIfPossible(installPath);
+            EnsureTrayLifecycleAfterUpdate(installPath);
             WriteLog("updater.rollback.completed", "Rollback automatico concluido.", new { backupPath });
         }
         catch (Exception rollbackEx)

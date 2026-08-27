@@ -52,6 +52,7 @@ try
     TestUnrelatedProcessIgnored();
     TestCurrentProcessIsIgnored();
     TestRollbackOriginalErrorPreserved();
+    TestTrayLifecycleSourceMarkers();
 
     Console.WriteLine("NightOwl updater version decision tests passed.");
 }
@@ -218,6 +219,36 @@ static void TestRollbackOriginalErrorPreserved()
 
     Require(state.ErrorCode == UpdateErrorCodes.UpdateFileLockTimeout, "Rollback should preserve original error code.");
     Require(state.ErrorMessage.Contains("clrjit.dll", StringComparison.OrdinalIgnoreCase), "Rollback should preserve original error message.");
+}
+
+static void TestTrayLifecycleSourceMarkers()
+{
+    string repo = FindRepoRoot();
+    string sourcePath = Path.Combine(repo, "NightOwl.Agent.Updater", "Program.cs");
+    string source = File.ReadAllText(sourcePath);
+    Require(source.Contains("EnsureTrayLifecycleAfterUpdate(installPath)", StringComparison.Ordinal), "Updater should validate Tray lifecycle after update and rollback.");
+    Require(source.Contains("Start-ScheduledTask -TaskName 'NightOwl Agent Tray'", StringComparison.Ordinal), "Updater should start Tray through the scheduled task bridge.");
+    Require(source.Contains("tray.task.created", StringComparison.Ordinal), "Updater should log Tray task creation.");
+    Require(source.Contains("tray.task.validated", StringComparison.Ordinal), "Updater should log Tray task validation.");
+    Require(source.Contains("tray.shortcut.created", StringComparison.Ordinal), "Updater should create Start Menu shortcut.");
+    Require(source.Contains("tray.shortcut.repaired", StringComparison.Ordinal), "Updater should repair Start Menu shortcut.");
+    Require(source.Contains("tray.start.deferred", StringComparison.Ordinal), "Updater should defer Tray start when no interactive session exists.");
+    Require(source.Contains("no_interactive_session", StringComparison.Ordinal), "Updater should distinguish no interactive session from failure.");
+    Require(!source.Contains("FileName = tray", StringComparison.Ordinal), "Updater must not launch Tray UI directly from service/session 0.");
+}
+
+static string FindRepoRoot()
+{
+    DirectoryInfo? current = new(Environment.CurrentDirectory);
+    while (current is not null)
+    {
+        if (File.Exists(Path.Combine(current.FullName, "NightOwl.Agent.Updater", "Program.cs")))
+        {
+            return current.FullName;
+        }
+        current = current.Parent;
+    }
+    throw new InvalidOperationException("Repository root not found.");
 }
 
 static Exception ExpectThrows(Action action)
