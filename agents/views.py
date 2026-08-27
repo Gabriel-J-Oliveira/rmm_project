@@ -1,9 +1,12 @@
 import hashlib
 import json
 import logging
+import uuid
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth import authenticate
+from django.core.cache import cache
 from django.http import HttpResponse
 from django.db import models, transaction
 from django.db.models import Q
@@ -24,11 +27,14 @@ from .models import (
     AgentJob,
     AgentJobResultReceipt,
     AgentMachine,
+    AgentLocalUninstallAuthorization,
     AgentManualValidationToken,
+    AgentUninstallRequest,
     AuditEvent,
     hash_enrollment_token,
     hash_manual_validation_token,
 )
+from config.authz import can_uninstall_agent
 from .serializers import AgentEnrollmentSerializer, HeartbeatSerializer
 from .services import (
     build_update_agent_job_payload,
@@ -100,6 +106,220 @@ def _deployment_error(request, code, detail, http_status):
         request=request,
     )
     return Response({'error': code, 'detail': detail}, status=http_status)
+
+
+def _generic_uninstall_auth_response(http_status=status.HTTP_403_FORBIDDEN):
+    return Response(
+        {'error': 'uninstall_authorization_failed', 'detail': 'Credenciais invalidas ou usuario sem permissao para desinstalar agentes.'},
+        status=http_status,
+    )
+
+
+def _tray_uninstall_rate_key(request, machine_id, username):
+    ip = get_client_ip(request) or 'unknown'
+    return f'nightowl:tray-uninstall:{machine_id}:{ip}:{str(username or '').strip().casefold()[:120]}'
+
+
+def _request_is_https(request):
+    return (
+        request.is_secure()
+        or str(request.META.get('HTTP_X_FORWARDED_PROTO') or '').split(',')[0].strip().lower() == 'https'
+    )
+
+
+class AgentSelfUninstallAuthorizeView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        machine_id = str(payload.get('machine_id') or '').strip()
+        username = str(payload.get('username') or '').strip()
+        password = str(payload.get('password') or '')
+        if not _request_is_https(request) and not getattr(settings, 'DEBUG', False):
+            return Response({'error': 'https_required', 'detail': 'Autorizacao de uninstall exige HTTPS.'}, status=status.HTTP_403_FORBIDDEN)
+        machine = AgentMachine.objects.filter(machine_id=machine_id).first()
+        if machine is None:
+            create_audit_event(
+                event_type='agent.uninstall.authorization_failed',
+                title='Autorizacao local de uninstall negada',
+                description='Machine ID desconhecido para autorizacao local de uninstall.',
+                severity=AuditEvent.SEVERITY_SECURITY,
+                actor_type=AuditEvent.ACTOR_SYSTEM,
+                actor_name='NightOwl Tray',
+                metadata={'reason': 'machine_not_found'},
+                request=request,
+            )
+            return _generic_uninstall_auth_response()
+
+        key = _tray_uninstall_rate_key(request, machine_id, username)
+        attempts = int(cache.get(key) or 0)
+        if attempts >= 5:
+            return Response({'error': 'rate_limited', 'detail': 'Muitas tentativas. Tente novamente mais tarde.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        user = authenticate(request, username=username, password=password)
+        password = ''
+        if not can_uninstall_agent(user):
+            cache.set(key, attempts + 1, 15 * 60)
+            create_audit_event(
+                event_type='agent.uninstall.authorization_failed',
+                title='Autorizacao local de uninstall negada',
+                description='Credenciais invalidas ou permissao insuficiente para uninstall local.',
+                severity=AuditEvent.SEVERITY_SECURITY,
+                actor_type=AuditEvent.ACTOR_USER,
+                actor_name=username[:150],
+                endpoint=machine,
+                metadata={'source': 'tray', 'reason': 'invalid_credentials_or_permission'},
+                request=request,
+            )
+            return _generic_uninstall_auth_response()
+        cache.delete(key)
+
+        active_request = machine.uninstall_requests.filter(
+            status__in=[
+                AgentUninstallRequest.STATUS_REQUESTED,
+                AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+                AgentUninstallRequest.STATUS_DISPATCHED,
+                AgentUninstallRequest.STATUS_RUNNING,
+            ],
+        ).order_by('-created_at').first()
+        if active_request:
+            return Response(
+                {
+                    'error': 'uninstall_already_active',
+                    'detail': 'Ja existe uma desinstalacao ativa para este endpoint.',
+                    'request_id': str(active_request.id),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        now = timezone.now()
+        uninstall_request = AgentUninstallRequest.objects.create(
+            endpoint=machine,
+            mode=AgentUninstallRequest.MODE_UNINSTALL,
+            source=AgentUninstallRequest.SOURCE_TRAY,
+            status=AgentUninstallRequest.STATUS_RUNNING,
+            requested_by=user.get_username(),
+            authorized_by=user.get_username(),
+            authorized_at=now,
+            expires_at=now + timedelta(minutes=5),
+        )
+        job = AgentJob.objects.create(
+            endpoint=machine,
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={
+                'mode': 'uninstall',
+                'source': 'tray',
+                'uninstall_request_id': str(uninstall_request.id),
+                'timeout_seconds': 900,
+            },
+            created_by=user.get_username(),
+            queued_at=now,
+            dispatched_at=now,
+            started_at=now,
+            correlation_id=str(uuid.uuid4()),
+            attempt=1,
+            timeout_seconds=900,
+            expires_at=uninstall_request.expires_at,
+        )
+        uninstall_request.agent_job = job
+        uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+        authorization, token = AgentLocalUninstallAuthorization.create_with_token(
+            endpoint=machine,
+            uninstall_request=uninstall_request,
+            authorized_by=user.get_username(),
+            ttl=timedelta(minutes=5),
+        )
+        create_audit_event(
+            event_type='agent.uninstall.authorized',
+            title='Uninstall local autorizado',
+            description=f'Desinstalacao local autorizada via Tray para {machine.hostname}.',
+            severity=AuditEvent.SEVERITY_WARNING,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=user.get_username(),
+            endpoint=machine,
+            metadata={
+                'request_id': str(uninstall_request.id),
+                'job_id': str(job.id),
+                'authorization_id': str(authorization.id),
+                'source': 'tray',
+                'ttl_seconds': 300,
+            },
+            request=request,
+        )
+        return Response(
+            {
+                'status': 'ok',
+                'authorization_id': str(authorization.id),
+                'uninstall_request_id': str(uninstall_request.id),
+                'job_id': str(job.id),
+                'authorization_token': token,
+                'expires_at': authorization.expires_at.isoformat(),
+                'consume_url': request.build_absolute_uri(reverse('agent-self-uninstall-consume')),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AgentSelfUninstallConsumeView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        machine_id = str(payload.get('machine_id') or '').strip()
+        token = str(payload.get('authorization_token') or '').strip()
+        authorization = AgentLocalUninstallAuthorization.objects.select_related('endpoint', 'uninstall_request').filter(
+            token_hash=hash_enrollment_token(token),
+        ).first()
+        if (
+            authorization is None
+            or authorization.status != AgentLocalUninstallAuthorization.STATUS_ACTIVE
+            or authorization.endpoint.machine_id != machine_id
+        ):
+            return Response({'error': 'authorization_invalid', 'detail': 'Autorizacao invalida.'}, status=status.HTTP_403_FORBIDDEN)
+        if authorization.is_expired:
+            authorization.status = AgentLocalUninstallAuthorization.STATUS_EXPIRED
+            authorization.save(update_fields=['status'])
+            return Response({'error': 'authorization_expired', 'detail': 'Autorizacao expirada.'}, status=status.HTTP_403_FORBIDDEN)
+        authorization.consume()
+        uninstall_request = authorization.uninstall_request
+        if uninstall_request.status in {
+            AgentUninstallRequest.STATUS_REQUESTED,
+            AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+            AgentUninstallRequest.STATUS_DISPATCHED,
+        }:
+            uninstall_request.status = AgentUninstallRequest.STATUS_RUNNING
+            uninstall_request.dispatched_at = uninstall_request.dispatched_at or timezone.now()
+            uninstall_request.save(update_fields=['status', 'dispatched_at', 'updated_at'])
+        create_audit_event(
+            event_type='agent.uninstall.started',
+            title='Uninstall local iniciado',
+            description=f'Uninstaller local consumiu autorizacao para {authorization.endpoint.hostname}.',
+            severity=AuditEvent.SEVERITY_WARNING,
+            actor_type=AuditEvent.ACTOR_AGENT,
+            actor_name='NightOwl Uninstaller',
+            endpoint=authorization.endpoint,
+            metadata={
+                'request_id': str(authorization.uninstall_request_id),
+                'job_id': str(uninstall_request.agent_job_id or ''),
+                'authorization_id': str(authorization.id),
+                'source': 'tray',
+            },
+            request=request,
+        )
+        return Response(
+            {
+                'status': 'ok',
+                'uninstall_request_id': str(authorization.uninstall_request_id),
+                'job_id': str(uninstall_request.agent_job_id or ''),
+                'endpoint_id': str(authorization.endpoint_id),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 def _validate_deployment_request(request):
@@ -598,6 +818,17 @@ class AgentJobsPullView(APIView):
             job.finished_at = now
             job.error_message = 'Job expirou antes do pull do agente.'
             job.save(update_fields=['status', 'finished_at', 'error_message', 'updated_at'])
+            if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT:
+                uninstall_request = getattr(job, 'uninstall_request', None)
+                if uninstall_request and uninstall_request.status in {
+                    AgentUninstallRequest.STATUS_REQUESTED,
+                    AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+                }:
+                    uninstall_request.mark_completed(
+                        AgentUninstallRequest.STATUS_EXPIRED,
+                        'UNINSTALL_REQUEST_EXPIRED',
+                        'Solicitacao de desinstalacao expirou antes de ser entregue ao agente.',
+                    )
             create_audit_event(
                 event_type='job.expired',
                 title='Job expirado',
@@ -616,6 +847,25 @@ class AgentJobsPullView(APIView):
             job.dispatched_at = now
             job.started_at = now
             job.save(update_fields=['status', 'dispatched_at', 'started_at', 'updated_at'])
+            if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT:
+                uninstall_request = getattr(job, 'uninstall_request', None)
+                if uninstall_request and uninstall_request.status in {
+                    AgentUninstallRequest.STATUS_REQUESTED,
+                    AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+                }:
+                    uninstall_request.status = AgentUninstallRequest.STATUS_DISPATCHED
+                    uninstall_request.dispatched_at = now
+                    uninstall_request.save(update_fields=['status', 'dispatched_at', 'updated_at'])
+                    create_audit_event(
+                        event_type='agent.uninstall.dispatched',
+                        title='Desinstalacao enviada ao agente',
+                        description=f'Desinstalacao enviada para {machine.hostname}.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent',
+                        endpoint=machine,
+                        metadata={'request_id': str(uninstall_request.id), 'job_id': str(job.id), 'source': uninstall_request.source},
+                    )
             response_jobs.append({
                 'id': str(job.id),
                 'job_id': str(job.id),
@@ -965,8 +1215,15 @@ class AgentJobsResultView(APIView):
                     )
             if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT and job.status in RESULT_FINAL_STATUSES:
                 mode = ''
+                result_payload = job.result if isinstance(job.result, dict) else {}
                 if isinstance(job.result, dict):
                     mode = str(job.result.get('mode') or '')
+                uninstall_request = getattr(job, 'uninstall_request', None)
+                if uninstall_request:
+                    if job.status == AgentJob.STATUS_COMPLETED:
+                        uninstall_request.mark_completed(AgentUninstallRequest.STATUS_COMPLETED)
+                    else:
+                        uninstall_request.mark_completed(AgentUninstallRequest.STATUS_FAILED, job.error_code, job.error_message)
                 create_audit_event(
                     event_type='agent.uninstall.result_received',
                     title='Resultado de uninstall_agent recebido',
@@ -981,8 +1238,45 @@ class AgentJobsResultView(APIView):
                         'mode': mode,
                         'status': job.status,
                         'error_code': job.error_code,
+                        'request_id': str(uninstall_request.id) if uninstall_request else '',
                     },
                 )
+                if job.status == AgentJob.STATUS_COMPLETED and mode == 'uninstall':
+                    previous_version = machine.agent_version or ''
+                    machine.last_installed_agent_version = previous_version
+                    machine.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+                    machine.status = AgentMachine.STATUS_UNINSTALLED
+                    machine.agent_uninstalled_at = timezone.now()
+                    machine.agent_uninstalled_by = uninstall_request.authorized_by if uninstall_request else ''
+                    machine.agent_uninstall_source = uninstall_request.source if uninstall_request else 'unknown'
+                    machine.save(update_fields=[
+                        'last_installed_agent_version',
+                        'agent_lifecycle_status',
+                        'status',
+                        'agent_uninstalled_at',
+                        'agent_uninstalled_by',
+                        'agent_uninstall_source',
+                        'updated_at',
+                    ])
+                    create_audit_event(
+                        event_type='agent.uninstall.completed',
+                        title='Agente desinstalado',
+                        description=f'Agente NightOwl desinstalado em {machine.hostname}.',
+                        severity=AuditEvent.SEVERITY_SUCCESS,
+                        actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent',
+                        endpoint=machine,
+                        metadata={
+                            'job_id': str(job.id),
+                            'result_id': result_id,
+                            'request_id': str(uninstall_request.id) if uninstall_request else '',
+                            'source': uninstall_request.source if uninstall_request else '',
+                            'authorized_by': uninstall_request.authorized_by if uninstall_request else '',
+                            'previous_version': previous_version,
+                            'binary_removed': bool(result_payload.get('binary_removed')),
+                            'persistent_data_preserved': bool(result_payload.get('persistent_data_preserved')),
+                        },
+                    )
                 if job.status == AgentJob.STATUS_COMPLETED and mode == 'purge':
                     machine.is_active = False
                     machine.status = AgentMachine.STATUS_OFFLINE

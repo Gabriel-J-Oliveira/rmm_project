@@ -22,6 +22,15 @@ def is_nightowl_technical_user(user):
     return normalized_username(user) in allowed
 
 
+def can_uninstall_agent(user):
+    """Authorize destructive administrative uninstall without relying on is_staff alone."""
+    if not user or not getattr(user, 'is_authenticated', False) or not getattr(user, 'is_active', False):
+        return False
+    if getattr(user, 'is_superuser', False):
+        return True
+    return user.has_perm('agents.uninstall_agent')
+
+
 def _identifier_candidates(user):
     username = str(user.get_username() or '').strip()
     email = str(getattr(user, 'email', '') or '').strip()

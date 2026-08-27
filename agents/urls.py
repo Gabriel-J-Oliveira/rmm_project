@@ -4,6 +4,8 @@ from .views import (
     AgentEnrollView,
     AgentDeploymentBootstrapScriptView,
     AgentDeploymentMetadataView,
+    AgentSelfUninstallAuthorizeView,
+    AgentSelfUninstallConsumeView,
     AgentHeartbeatView,
     AgentInventoryCollectionView,
     AgentJobsPullView,
@@ -15,6 +17,8 @@ from .views import (
 urlpatterns = [
     path('deployments/bootstrap.ps1', AgentDeploymentBootstrapScriptView.as_view(), name='agent-deployment-bootstrap'),
     path('deployments/metadata/', AgentDeploymentMetadataView.as_view(), name='agent-deployment-metadata'),
+    path('self-uninstall/authorize/', AgentSelfUninstallAuthorizeView.as_view(), name='agent-self-uninstall-authorize'),
+    path('self-uninstall/consume/', AgentSelfUninstallConsumeView.as_view(), name='agent-self-uninstall-consume'),
     path('enroll/', AgentEnrollView.as_view(), name='agent-enroll'),
     path('heartbeat/', AgentHeartbeatView.as_view(), name='agent-heartbeat'),
     path('status/', AgentStatusView.as_view(), name='agent-status'),

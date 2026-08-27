@@ -58,6 +58,7 @@ internal static class Program
             Directory.CreateDirectory(diagnosticsDir);
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             WriteLog(logPath, "uninstall.start", new { options.JobId, options.Mode, install_path = installPath });
+            await ConsumeLocalAuthorizationAsync(options.AuthorizationFile);
             EnsureNoActiveUpdate(rootPath);
             StopTray();
             StopService(options.ServiceName);
@@ -304,6 +305,37 @@ internal static class Program
         response.EnsureSuccessStatusCode();
     }
 
+    private static async Task ConsumeLocalAuthorizationAsync(string authorizationFile)
+    {
+        if (string.IsNullOrWhiteSpace(authorizationFile))
+        {
+            return;
+        }
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(authorizationFile));
+            JsonElement root = document.RootElement;
+            string consumeUrl = root.TryGetProperty("consume_url", out JsonElement consumeElement) ? consumeElement.GetString() ?? "" : "";
+            string machineId = root.TryGetProperty("machine_id", out JsonElement machineElement) ? machineElement.GetString() ?? "" : "";
+            string token = root.TryGetProperty("authorization_token", out JsonElement tokenElement) ? tokenElement.GetString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(consumeUrl) || string.IsNullOrWhiteSpace(machineId) || string.IsNullOrWhiteSpace(token))
+            {
+                throw new InvalidOperationException("UNINSTALL_AUTHORIZATION_INVALID");
+            }
+            using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(30) };
+            string body = JsonSerializer.Serialize(new { machine_id = machineId, authorization_token = token });
+            using HttpResponseMessage response = await client.PostAsync(consumeUrl, new StringContent(body, Encoding.UTF8, "application/json"));
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException("UNINSTALL_AUTHORIZATION_REJECTED");
+            }
+        }
+        finally
+        {
+            try { File.Delete(authorizationFile); } catch { }
+        }
+    }
+
     private static void WriteReport(string diagnosticsDir, string mode, UninstallReceipt receipt)
     {
         Directory.CreateDirectory(diagnosticsDir);
@@ -326,6 +358,7 @@ internal static class Program
     {
         string message = ex.Message;
         if (message.Contains("UPDATE_IN_PROGRESS", StringComparison.OrdinalIgnoreCase)) { return "UNINSTALL_UPDATE_IN_PROGRESS"; }
+        if (message.Contains("AUTHORIZATION_INVALID", StringComparison.OrdinalIgnoreCase) || message.Contains("AUTHORIZATION_REJECTED", StringComparison.OrdinalIgnoreCase)) { return "UNINSTALL_AUTHORIZATION_FAILED"; }
         if (message.Contains("AUTHORIZATION_REQUIRED", StringComparison.OrdinalIgnoreCase)) { return "REMOTE_PURGE_AUTHORIZATION_REQUIRED"; }
         if (message.Contains("UPDATE_STATE_INVALID", StringComparison.OrdinalIgnoreCase)) { return "UNINSTALL_UPDATE_STATE_INVALID"; }
         return "UNINSTALL_AGENT_FAILED";
@@ -351,6 +384,7 @@ internal sealed class UninstallOptions
     public string InstallPath { get; set; } = NightOwlPaths.Current.InstallDir;
     public string ServiceName { get; set; } = NightOwlPaths.ServiceName;
     public bool PurgeAuthorized { get; set; }
+    public string AuthorizationFile { get; set; } = "";
 
     public static UninstallOptions Parse(string[] args)
     {
@@ -383,6 +417,9 @@ internal sealed class UninstallOptions
                     break;
                 case "--purge-authorized":
                     options.PurgeAuthorized = true;
+                    break;
+                case "--authorization-file":
+                    options.AuthorizationFile = Next();
                     break;
                 case "--json-output":
                 case "--quiet":

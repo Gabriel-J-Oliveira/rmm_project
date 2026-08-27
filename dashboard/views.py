@@ -7,7 +7,9 @@ import uuid
 from types import SimpleNamespace
 
 from django.contrib import messages
+from django.contrib.auth import authenticate
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, IntegerField, Q, Value, When
@@ -24,6 +26,7 @@ from agents.models import (
     AgentEnrollmentToken,
     AgentJob,
     AgentMachine,
+    AgentUninstallRequest,
     AgentManualValidationToken,
     AgentOperationalStatus,
     AgentRelease,
@@ -51,8 +54,8 @@ from agents.job_progress import (
     public_job_status,
     sanitize_job_value,
 )
-from config.authz import is_nightowl_technical_user
-from agents.audit import create_audit_event
+from config.authz import can_uninstall_agent, is_nightowl_technical_user
+from agents.audit import create_audit_event, get_client_ip
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
     build_repair_agent_job_payload,
@@ -3182,6 +3185,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
     ).order_by('-created_at').first()
     latest_trust_bundle = _latest_published_trust_bundle() if can_view_technical else None
+    uninstall_request = endpoint.uninstall_requests.order_by('-created_at').first()
 
     return {
         'data_source': 'real',
@@ -3200,6 +3204,11 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'last_seen_at': _iso_or_none(endpoint.last_seen_at),
             'agent_mode': endpoint.agent_mode or '',
             'agent_version': endpoint.agent_version or '',
+            'agent_lifecycle_status': endpoint.agent_lifecycle_status or '',
+            'agent_uninstalled_at': _iso_or_none(endpoint.agent_uninstalled_at),
+            'agent_uninstalled_by': endpoint.agent_uninstalled_by or '',
+            'agent_uninstall_source': endpoint.agent_uninstall_source or '',
+            'last_installed_agent_version': endpoint.last_installed_agent_version or '',
             'agent_version_state': agent_version_state(endpoint.agent_version, recommended_version),
             'latest_agent_version': recommended_version,
             'update_channel': endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE,
@@ -3213,6 +3222,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'agent_update_policy': update_decision.as_panel_payload(),
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
         'trusted_release_keys_bundle': _trust_bundle_payload(latest_trust_bundle),
+        'uninstall_request': serialize_uninstall_request(uninstall_request),
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
         'agent_health': agent_health,
@@ -3366,6 +3376,226 @@ def endpoint_detail_data(request, pk):
     response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response['Pragma'] = 'no-cache'
     return response
+
+
+def _generic_uninstall_auth_error():
+    return JsonResponse(
+        {'error': 'uninstall_authorization_failed', 'detail': 'Credenciais invalidas ou usuario sem permissao para desinstalar agentes.'},
+        status=403,
+    )
+
+
+def _uninstall_rate_key(request, endpoint, username):
+    ip = get_client_ip(request) or 'unknown'
+    normalized = str(username or '').strip().casefold()[:120]
+    return f'nightowl:uninstall-auth:{endpoint.id}:{ip}:{normalized}'
+
+
+def _authenticate_uninstall_operator(request, endpoint, username, password):
+    key = _uninstall_rate_key(request, endpoint, username)
+    attempts = int(cache.get(key) or 0)
+    if attempts >= 5:
+        create_audit_event(
+            event_type='agent.uninstall.authorization_failed',
+            title='Reautenticacao de uninstall bloqueada',
+            description='Muitas tentativas de autorizacao de uninstall.',
+            severity=AuditEvent.SEVERITY_SECURITY,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=str(username or '')[:150],
+            endpoint=endpoint,
+            metadata={'reason': 'rate_limited'},
+            request=request,
+        )
+        return None, JsonResponse({'error': 'rate_limited', 'detail': 'Muitas tentativas. Tente novamente mais tarde.'}, status=429)
+
+    user = authenticate(request, username=username, password=password)
+    if not can_uninstall_agent(user):
+        cache.set(key, attempts + 1, 15 * 60)
+        create_audit_event(
+            event_type='agent.uninstall.authorization_failed',
+            title='Reautenticacao de uninstall negada',
+            description='Credenciais invalidas ou permissao insuficiente para uninstall.',
+            severity=AuditEvent.SEVERITY_SECURITY,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=str(username or '')[:150],
+            endpoint=endpoint,
+            metadata={'reason': 'invalid_credentials_or_permission'},
+            request=request,
+        )
+        return None, _generic_uninstall_auth_error()
+
+    cache.delete(key)
+    return user, None
+
+
+def _active_lifecycle_job(endpoint):
+    return endpoint.jobs.filter(
+        job_type__in=[
+            AgentJob.TYPE_UPDATE_AGENT,
+            AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS,
+            AgentJob.TYPE_REPAIR_AGENT,
+            AgentJob.TYPE_UNINSTALL_AGENT,
+        ],
+        status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+    ).order_by('-created_at').first()
+
+
+def _active_uninstall_request(endpoint):
+    return endpoint.uninstall_requests.filter(
+        status__in=[
+            AgentUninstallRequest.STATUS_REQUESTED,
+            AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+            AgentUninstallRequest.STATUS_DISPATCHED,
+            AgentUninstallRequest.STATUS_RUNNING,
+        ],
+    ).order_by('-created_at').first()
+
+
+def serialize_uninstall_request(uninstall_request):
+    if uninstall_request is None:
+        return None
+    return {
+        'id': str(uninstall_request.id),
+        'status': uninstall_request.status,
+        'mode': uninstall_request.mode,
+        'source': uninstall_request.source,
+        'requested_by': uninstall_request.requested_by,
+        'authorized_by': uninstall_request.authorized_by,
+        'requested_at': _iso_or_none(uninstall_request.requested_at),
+        'authorized_at': _iso_or_none(uninstall_request.authorized_at),
+        'expires_at': _iso_or_none(uninstall_request.expires_at),
+        'dispatched_at': _iso_or_none(uninstall_request.dispatched_at),
+        'completed_at': _iso_or_none(uninstall_request.completed_at),
+        'job_id': str(uninstall_request.agent_job_id) if uninstall_request.agent_job_id else '',
+        'error_code': uninstall_request.error_code,
+        'error_message': uninstall_request.error_message,
+    }
+
+
+@require_POST
+@transaction.atomic
+def endpoint_uninstall_request(request, pk):
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
+        raise Http404
+
+    username = (request.POST.get('username') or '').strip()
+    password = request.POST.get('password') or ''
+    operator, error = _authenticate_uninstall_operator(request, endpoint, username, password)
+    password = ''
+    if error:
+        return error
+
+    active_request = _active_uninstall_request(endpoint)
+    if active_request:
+        return JsonResponse(
+            {
+                'error': 'uninstall_already_active',
+                'detail': 'Ja existe uma solicitacao de desinstalacao ativa para este endpoint.',
+                'uninstall_request': serialize_uninstall_request(active_request),
+            },
+            status=409,
+        )
+
+    active_job = _active_lifecycle_job(endpoint)
+    if active_job:
+        return JsonResponse(
+            {
+                'error': 'lifecycle_job_active',
+                'detail': 'Ja existe uma operacao de lifecycle ativa para este endpoint.',
+                'job': serialize_agent_job(active_job),
+            },
+            status=409,
+        )
+
+    now = timezone.now()
+    uninstall_request = AgentUninstallRequest.objects.create(
+        endpoint=endpoint,
+        mode=AgentUninstallRequest.MODE_UNINSTALL,
+        source=AgentUninstallRequest.SOURCE_PANEL,
+        status=AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+        requested_by=request.user.get_username(),
+        authorized_by=operator.get_username(),
+        authorized_at=now,
+        expires_at=now + timedelta(hours=24),
+    )
+    job = AgentJob.objects.create(
+        endpoint=endpoint,
+        job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+        created_by=operator.get_username(),
+        payload={
+            'mode': 'uninstall',
+            'source': 'panel',
+            'uninstall_request_id': str(uninstall_request.id),
+            'timeout_seconds': 900,
+        },
+        correlation_id=str(uuid.uuid4()),
+        attempt=1,
+        timeout_seconds=900,
+        expires_at=uninstall_request.expires_at,
+    )
+    uninstall_request.agent_job = job
+    uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+    create_audit_event(
+        event_type='agent.uninstall.requested',
+        title='Desinstalacao de agente solicitada',
+        description=f'Desinstalacao do agente solicitada para {endpoint.hostname}.',
+        severity=AuditEvent.SEVERITY_WARNING,
+        actor_type=AuditEvent.ACTOR_USER,
+        actor_name=operator.get_username(),
+        endpoint=endpoint,
+        metadata={
+            'request_id': str(uninstall_request.id),
+            'job_id': str(job.id),
+            'source': 'panel',
+            'mode': 'uninstall',
+            'expires_at': uninstall_request.expires_at.isoformat(),
+        },
+        request=request,
+    )
+    return JsonResponse(
+        {
+            'status': 'ok',
+            'message': 'Aguardando endpoint ficar online.' if endpoint.status != AgentMachine.STATUS_ONLINE else 'Desinstalacao enviada ao endpoint.',
+            'uninstall_request': serialize_uninstall_request(uninstall_request),
+            'job': serialize_agent_job(job),
+        },
+        status=201,
+    )
+
+
+@require_POST
+@transaction.atomic
+def endpoint_uninstall_cancel(request, pk, request_id):
+    if not can_uninstall_agent(request.user):
+        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para cancelar desinstalacao.'}, status=403)
+    endpoint = resolve_agent_endpoint(pk)
+    if endpoint is None:
+        raise Http404
+    uninstall_request = get_object_or_404(AgentUninstallRequest, pk=request_id, endpoint=endpoint)
+    if uninstall_request.agent_job and uninstall_request.agent_job.status != AgentJob.STATUS_QUEUED:
+        return JsonResponse({'error': 'uninstall_already_dispatched', 'detail': 'A desinstalacao ja foi entregue ao agente e nao pode ser cancelada.'}, status=409)
+    uninstall_request.status = AgentUninstallRequest.STATUS_CANCELLED
+    uninstall_request.completed_at = timezone.now()
+    uninstall_request.save(update_fields=['status', 'completed_at', 'updated_at'])
+    if uninstall_request.agent_job:
+        job = uninstall_request.agent_job
+        job.status = AgentJob.STATUS_CANCELLED
+        job.finished_at = timezone.now()
+        job.error_message = 'Solicitacao de desinstalacao cancelada pelo painel.'
+        job.save(update_fields=['status', 'finished_at', 'error_message', 'updated_at'])
+    create_audit_event(
+        event_type='agent.uninstall.cancelled',
+        title='Desinstalacao de agente cancelada',
+        description=f'Solicitacao de desinstalacao cancelada para {endpoint.hostname}.',
+        severity=AuditEvent.SEVERITY_INFO,
+        actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(),
+        endpoint=endpoint,
+        metadata={'request_id': str(uninstall_request.id), 'job_id': str(uninstall_request.agent_job_id or '')},
+        request=request,
+    )
+    return JsonResponse({'status': 'ok', 'uninstall_request': serialize_uninstall_request(uninstall_request)})
 
 
 @require_POST

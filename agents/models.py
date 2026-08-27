@@ -25,6 +25,10 @@ def generate_deployment_token() -> str:
     return f'deploy_{secrets.token_urlsafe(32)}'
 
 
+def generate_uninstall_authorization_token() -> str:
+    return f'uninstall_{secrets.token_urlsafe(32)}'
+
+
 def hash_enrollment_token(token: str) -> str:
     return hmac.new(
         settings.SECRET_KEY.encode('utf-8'),
@@ -49,10 +53,12 @@ class AgentMachine(models.Model):
     STATUS_ONLINE = 'online'
     STATUS_OFFLINE = 'offline'
     STATUS_UNKNOWN = 'unknown'
+    STATUS_UNINSTALLED = 'uninstalled'
     STATUS_CHOICES = [
         (STATUS_ONLINE, 'Online'),
         (STATUS_OFFLINE, 'Offline'),
         (STATUS_UNKNOWN, 'Unknown'),
+        (STATUS_UNINSTALLED, 'Uninstalled'),
     ]
 
     UPDATE_CHANNEL_DEVELOPMENT = 'development'
@@ -105,6 +111,11 @@ class AgentMachine(models.Model):
     agent_runtime_version = models.CharField(max_length=80, blank=True)
     agent_update_source = models.CharField(max_length=500, blank=True)
     agent_reported_at = models.DateTimeField(null=True, blank=True)
+    agent_lifecycle_status = models.CharField(max_length=30, blank=True, db_index=True)
+    agent_uninstalled_at = models.DateTimeField(null=True, blank=True)
+    agent_uninstalled_by = models.CharField(max_length=150, blank=True)
+    agent_uninstall_source = models.CharField(max_length=30, blank=True)
+    last_installed_agent_version = models.CharField(max_length=50, blank=True)
     update_channel = models.CharField(
         max_length=20,
         choices=UPDATE_CHANNEL_CHOICES,
@@ -134,6 +145,9 @@ class AgentMachine(models.Model):
 
     class Meta:
         ordering = ['hostname', 'domain']
+        permissions = [
+            ('uninstall_agent', 'Can authorize NightOwl Agent uninstall'),
+        ]
         indexes = [
             models.Index(fields=['hostname', 'domain']),
             models.Index(fields=['last_seen_at']),
@@ -1537,6 +1551,136 @@ class AgentJob(models.Model):
         if self.status != self.STATUS_QUEUED:
             return False
         return not self.expires_at or self.expires_at > timezone.now()
+
+
+class AgentUninstallRequest(models.Model):
+    STATUS_REQUESTED = 'requested'
+    STATUS_WAITING_FOR_AGENT = 'waiting_for_agent'
+    STATUS_DISPATCHED = 'dispatched'
+    STATUS_RUNNING = 'running'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_EXPIRED = 'expired'
+    STATUS_CANCELLED = 'cancelled'
+    STATUS_OUTCOME_UNKNOWN = 'outcome_unknown'
+    STATUS_CHOICES = [
+        (STATUS_REQUESTED, 'Requested'),
+        (STATUS_WAITING_FOR_AGENT, 'Waiting for agent'),
+        (STATUS_DISPATCHED, 'Dispatched'),
+        (STATUS_RUNNING, 'Running'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_CANCELLED, 'Cancelled'),
+        (STATUS_OUTCOME_UNKNOWN, 'Outcome unknown'),
+    ]
+
+    SOURCE_PANEL = 'panel'
+    SOURCE_TRAY = 'tray'
+    SOURCE_CHOICES = [
+        (SOURCE_PANEL, 'Panel'),
+        (SOURCE_TRAY, 'Tray'),
+    ]
+
+    MODE_UNINSTALL = 'uninstall'
+    MODE_PURGE = 'purge'
+    MODE_CHOICES = [
+        (MODE_UNINSTALL, 'Uninstall'),
+        (MODE_PURGE, 'Purge'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE, related_name='uninstall_requests')
+    agent_job = models.OneToOneField(AgentJob, null=True, blank=True, on_delete=models.SET_NULL, related_name='uninstall_request')
+    mode = models.CharField(max_length=20, choices=MODE_CHOICES, default=MODE_UNINSTALL)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES)
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_REQUESTED, db_index=True)
+    requested_by = models.CharField(max_length=150, blank=True)
+    authorized_by = models.CharField(max_length=150, blank=True)
+    requested_at = models.DateTimeField(default=timezone.now)
+    authorized_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error_code = models.CharField(max_length=80, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['endpoint', 'status', '-created_at']),
+            models.Index(fields=['source', 'status']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in {
+            self.STATUS_REQUESTED,
+            self.STATUS_WAITING_FOR_AGENT,
+            self.STATUS_DISPATCHED,
+            self.STATUS_RUNNING,
+        }
+
+    def mark_completed(self, status_value, error_code='', error_message=''):
+        self.status = status_value
+        self.completed_at = timezone.now()
+        self.error_code = error_code or ''
+        self.error_message = (error_message or '')[:1000]
+        self.save(update_fields=['status', 'completed_at', 'error_code', 'error_message', 'updated_at'])
+
+
+class AgentLocalUninstallAuthorization(models.Model):
+    STATUS_ACTIVE = 'active'
+    STATUS_CONSUMED = 'consumed'
+    STATUS_EXPIRED = 'expired'
+    STATUS_REVOKED = 'revoked'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_CONSUMED, 'Consumed'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_REVOKED, 'Revoked'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE, related_name='local_uninstall_authorizations')
+    uninstall_request = models.ForeignKey(AgentUninstallRequest, on_delete=models.CASCADE, related_name='local_authorizations')
+    token_hash = models.CharField(max_length=64, unique=True)
+    authorized_by = models.CharField(max_length=150, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['endpoint', 'status', '-created_at']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    @classmethod
+    def create_with_token(cls, *, endpoint, uninstall_request, authorized_by, ttl):
+        token = generate_uninstall_authorization_token()
+        auth = cls.objects.create(
+            endpoint=endpoint,
+            uninstall_request=uninstall_request,
+            token_hash=hash_enrollment_token(token),
+            authorized_by=authorized_by,
+            expires_at=timezone.now() + ttl,
+        )
+        return auth, token
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at <= timezone.now()
+
+    def consume(self):
+        self.status = self.STATUS_CONSUMED
+        self.consumed_at = timezone.now()
+        self.save(update_fields=['status', 'consumed_at'])
 
 
 class AgentJobResultReceipt(models.Model):

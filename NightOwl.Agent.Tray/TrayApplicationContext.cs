@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Reflection;
 using System.ServiceProcess;
+using System.Text;
+using System.Text.Json;
 using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Tray;
@@ -70,6 +72,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Status do agente", null, (_, _) => ShowStatusWindow());
         menu.Items.Add("Atualizar agente", null, (_, _) => UpdateAgent());
         menu.Items.Add("Reiniciar agente", null, (_, _) => RestartAgentService());
+        menu.Items.Add("Desinstalar NightOwl", null, (_, _) => UninstallAgent());
         menu.Items.Add("Sobre", null, (_, _) => ShowAbout());
         return menu;
     }
@@ -372,6 +375,164 @@ internal sealed class TrayApplicationContext : ApplicationContext
             TrayLog.Write("tray.error", "Falha ao reiniciar o servico.", new { error = ex.Message });
             MessageBox.Show("Falha ao reiniciar o servico: " + ex.Message, "NightOwl Agent", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
+    }
+
+    private void UninstallAgent()
+    {
+        using Form form = new()
+        {
+            Text = "NightOwl - Desinstalar agente",
+            Width = 440,
+            Height = 300,
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            Icon = _icon
+        };
+        TableLayoutPanel layout = new()
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(18),
+            ColumnCount = 1,
+            RowCount = 7
+        };
+        Label title = new() { Text = "Desinstalar agente", Font = new Font("Segoe UI", 12, FontStyle.Bold), Dock = DockStyle.Fill };
+        Label help = new() { Text = "Esta acao requer autorizacao de um administrador NightOwl.", Dock = DockStyle.Fill };
+        TextBox username = new() { PlaceholderText = "Usuario NightOwl", Dock = DockStyle.Fill };
+        TextBox password = new() { PlaceholderText = "Senha NightOwl", UseSystemPasswordChar = true, Dock = DockStyle.Fill };
+        Label error = new() { ForeColor = Color.Firebrick, Dock = DockStyle.Fill, AutoEllipsis = true };
+        FlowLayoutPanel buttons = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
+        Button submit = new() { Text = "Autorizar e desinstalar", Width = 160 };
+        Button cancel = new() { Text = "Cancelar", Width = 90 };
+        buttons.Controls.Add(submit);
+        buttons.Controls.Add(cancel);
+        layout.Controls.Add(title);
+        layout.Controls.Add(help);
+        layout.Controls.Add(username);
+        layout.Controls.Add(password);
+        layout.Controls.Add(error);
+        layout.Controls.Add(buttons);
+        form.Controls.Add(layout);
+        cancel.Click += (_, _) => form.Close();
+        submit.Click += async (_, _) =>
+        {
+            submit.Enabled = false;
+            error.Text = "";
+            try
+            {
+                string authFile = await AuthorizeLocalUninstallAsync(username.Text, password.Text);
+                password.Text = "";
+                StartUninstallerWithAuthorizationFile(authFile);
+                TrayLog.Write("tray.menu.uninstall_agent.started", "Uninstaller iniciado pelo Tray com UAC.");
+                form.Close();
+            }
+            catch (Exception ex)
+            {
+                password.Text = "";
+                TrayLog.Write("tray.menu.uninstall_agent.failed", "Falha ao autorizar desinstalacao local.", new { error = ex.Message });
+                error.Text = ex.Message;
+                submit.Enabled = true;
+            }
+        };
+        form.AcceptButton = submit;
+        form.CancelButton = cancel;
+        form.ShowDialog();
+    }
+
+    private async Task<string> AuthorizeLocalUninstallAsync(string username, string password)
+    {
+        _state = AgentLocalState.Load();
+        if (!Uri.TryCreate(_state.ServerBaseUrl, UriKind.Absolute, out Uri? server) || !server.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A desinstalacao requer servidor NightOwl HTTPS acessivel.");
+        }
+        if (string.IsNullOrWhiteSpace(_state.MachineId))
+        {
+            throw new InvalidOperationException("Machine ID local nao encontrado.");
+        }
+        Uri authorizeUri = new(server, "/api/agent/self-uninstall/authorize/");
+        using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(30) };
+        string body = JsonSerializer.Serialize(new { machine_id = _state.MachineId, username, password });
+        using HttpResponseMessage response = await client.PostAsync(authorizeUri, new StringContent(body, Encoding.UTF8, "application/json"));
+        string text = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException("Credenciais invalidas, permissao insuficiente ou servidor indisponivel.");
+        }
+        using JsonDocument document = JsonDocument.Parse(text);
+        JsonElement root = document.RootElement;
+        string token = root.TryGetProperty("authorization_token", out JsonElement tokenElement) ? tokenElement.GetString() ?? "" : "";
+        string consumeUrl = root.TryGetProperty("consume_url", out JsonElement consumeElement) ? consumeElement.GetString() ?? "" : "";
+        string jobId = root.TryGetProperty("job_id", out JsonElement jobElement) ? jobElement.GetString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(consumeUrl) || !Guid.TryParse(jobId, out _))
+        {
+            throw new InvalidOperationException("Autorizacao de uninstall invalida.");
+        }
+        string directory = Path.Combine(NightOwlPaths.Current.UpdatesRunnerDir, "local-uninstall");
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "authorization-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(
+            path,
+            JsonSerializer.Serialize(new { machine_id = _state.MachineId, authorization_token = token, consume_url = consumeUrl, job_id = jobId }),
+            Encoding.UTF8);
+        ProtectAuthorizationFile(path);
+        return path;
+    }
+
+    private static void ProtectAuthorizationFile(string path)
+    {
+        RunIcacls(path, "/inheritance:r");
+        RunIcacls(path, "/grant:r *" + NightOwlPaths.SystemSid + ":F");
+        RunIcacls(path, "/grant:r *" + NightOwlPaths.AdministratorsSid + ":F");
+        RunIcacls(path, "/remove:g *" + NightOwlPaths.UsersSid + " *" + NightOwlPaths.AuthenticatedUsersSid + " *" + NightOwlPaths.EveryoneSid);
+    }
+
+    private static void RunIcacls(string path, string args)
+    {
+        try
+        {
+            using Process process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "icacls.exe",
+                Arguments = "\"" + path + "\" " + args,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            })!;
+            process.WaitForExit(10000);
+        }
+        catch { }
+    }
+
+    private static void StartUninstallerWithAuthorizationFile(string authorizationFile)
+    {
+        string uninstaller = Path.Combine(AppContext.BaseDirectory, "NightOwl.Agent.Uninstaller.exe");
+        if (!File.Exists(uninstaller))
+        {
+            throw new FileNotFoundException("NightOwl.Agent.Uninstaller.exe nao encontrado.", uninstaller);
+        }
+        string jobId = ReadAuthorizationJobId(authorizationFile);
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = uninstaller,
+            Arguments = "uninstall --job-id " + jobId + " --mode uninstall --authorization-file \"" + authorizationFile + "\" --json-output",
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = true,
+            Verb = "runas"
+        });
+    }
+
+    private static string ReadAuthorizationJobId(string authorizationFile)
+    {
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(authorizationFile, Encoding.UTF8));
+        string jobId = document.RootElement.TryGetProperty("job_id", out JsonElement element)
+            ? element.GetString() ?? ""
+            : "";
+        if (!Guid.TryParse(jobId, out _))
+        {
+            throw new InvalidOperationException("Job de uninstall autorizado nao encontrado.");
+        }
+        return jobId;
     }
 
     private void ShowAbout()

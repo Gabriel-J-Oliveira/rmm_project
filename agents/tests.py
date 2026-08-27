@@ -8,13 +8,14 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, AgentDeploymentToken, AgentJob, AgentJobResultReceipt, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, hash_enrollment_token
+from .models import AuditEvent, AgentDeploymentToken, AgentJob, AgentJobResultReceipt, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
@@ -257,6 +258,198 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertFalse(self.machine.is_active)
         self.assertEqual(self.machine.status, AgentMachine.STATUS_OFFLINE)
         self.assertTrue(AuditEvent.objects.filter(event_type='agent.purge.confirmed', endpoint=self.machine).exists())
+
+
+class AgentAdministrativeUninstallTests(TestCase):
+    def setUp(self):
+        self.agent_token = 'agent-uninstall-token'
+        self.machine = AgentMachine.objects.create(
+            machine_id='machine-uninstall-001',
+            hostname='CS-UNINSTALL-001',
+            domain='CONTROL',
+            agent_version='0.1.1.0-rc24',
+            status=AgentMachine.STATUS_OFFLINE,
+        )
+        self.machine.set_agent_token(self.agent_token)
+        self.machine.save(update_fields=['agent_token_hash'])
+        self.operator = get_user_model().objects.create_user(
+            username='uninstall-admin',
+            password='CorrectHorseBatteryStaple1!',
+            is_staff=True,
+        )
+        self.operator.user_permissions.add(Permission.objects.get(codename='uninstall_agent'))
+        self.portal = Client()
+        self.portal.force_login(self.operator)
+        self.agent = Client(HTTP_AUTHORIZATION=f'Bearer {self.agent_token}')
+
+    def test_panel_uninstall_reauth_creates_offline_queued_job_without_password(self):
+        response = self.portal.post(
+            reverse('api-endpoint-uninstall', kwargs={'pk': str(self.machine.id)}),
+            {
+                'username': 'uninstall-admin',
+                'password': 'CorrectHorseBatteryStaple1!',
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        uninstall_request = AgentUninstallRequest.objects.get(endpoint=self.machine)
+        job = uninstall_request.agent_job
+        self.assertIsNotNone(job)
+        self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_WAITING_FOR_AGENT)
+        self.assertEqual(job.job_type, AgentJob.TYPE_UNINSTALL_AGENT)
+        self.assertEqual(job.status, AgentJob.STATUS_QUEUED)
+        serialized = json.dumps(job.payload)
+        self.assertIn('"source": "panel"', serialized)
+        self.assertNotIn('CorrectHorseBatteryStaple1!', serialized)
+        self.assertFalse(AuditEvent.objects.filter(metadata__icontains='CorrectHorseBatteryStaple1!').exists())
+
+    def test_panel_cancel_before_dispatch_requires_uninstall_permission(self):
+        response = self.portal.post(
+            reverse('api-endpoint-uninstall', kwargs={'pk': str(self.machine.id)}),
+            {'username': 'uninstall-admin', 'password': 'CorrectHorseBatteryStaple1!'},
+        )
+        self.assertEqual(response.status_code, 201)
+        request_id = response.json()['uninstall_request']['id']
+
+        denied_user = get_user_model().objects.create_user(username='staff-only', password='pw', is_staff=True)
+        denied = Client()
+        denied.force_login(denied_user)
+        denied_response = denied.post(reverse('api-endpoint-uninstall-cancel', kwargs={'pk': str(self.machine.id), 'request_id': request_id}))
+        self.assertEqual(denied_response.status_code, 403)
+
+        cancel = self.portal.post(reverse('api-endpoint-uninstall-cancel', kwargs={'pk': str(self.machine.id), 'request_id': request_id}))
+        self.assertEqual(cancel.status_code, 200)
+        uninstall_request = AgentUninstallRequest.objects.get(id=request_id)
+        self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_CANCELLED)
+        self.assertEqual(uninstall_request.agent_job.status, AgentJob.STATUS_CANCELLED)
+
+    def test_tray_authorization_is_hash_only_single_use_and_creates_real_job(self):
+        response = Client().post(
+            reverse('agent-self-uninstall-authorize'),
+            data=json.dumps({
+                'machine_id': self.machine.machine_id,
+                'username': 'uninstall-admin',
+                'password': 'CorrectHorseBatteryStaple1!',
+            }),
+            content_type='application/json',
+            secure=True,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertIn('authorization_token', body)
+        self.assertIn('job_id', body)
+        token = body['authorization_token']
+        authorization = AgentLocalUninstallAuthorization.objects.get(id=body['authorization_id'])
+        self.assertEqual(authorization.token_hash, hash_enrollment_token(token))
+        self.assertNotEqual(authorization.token_hash, token)
+        job = AgentJob.objects.get(id=body['job_id'])
+        self.assertEqual(job.status, AgentJob.STATUS_RUNNING)
+        self.assertEqual(job.job_type, AgentJob.TYPE_UNINSTALL_AGENT)
+        self.assertEqual(job.payload['source'], 'tray')
+        self.assertNotIn(token, json.dumps(job.payload))
+        self.assertNotIn('CorrectHorseBatteryStaple1!', json.dumps(job.payload))
+
+        consume = Client().post(
+            reverse('agent-self-uninstall-consume'),
+            data=json.dumps({'machine_id': self.machine.machine_id, 'authorization_token': token}),
+            content_type='application/json',
+        )
+        self.assertEqual(consume.status_code, 200)
+        replay = Client().post(
+            reverse('agent-self-uninstall-consume'),
+            data=json.dumps({'machine_id': self.machine.machine_id, 'authorization_token': token}),
+            content_type='application/json',
+        )
+        self.assertEqual(replay.status_code, 403)
+
+    def test_uninstall_completed_preserves_endpoint_history_and_marks_lifecycle(self):
+        uninstall_request = AgentUninstallRequest.objects.create(
+            endpoint=self.machine,
+            mode=AgentUninstallRequest.MODE_UNINSTALL,
+            source=AgentUninstallRequest.SOURCE_PANEL,
+            status=AgentUninstallRequest.STATUS_DISPATCHED,
+            requested_by='uninstall-admin',
+            authorized_by='uninstall-admin',
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'mode': 'uninstall', 'source': 'panel', 'uninstall_request_id': str(uninstall_request.id)},
+        )
+        uninstall_request.agent_job = job
+        uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+        result_id = str(uuid.uuid4())
+
+        response = self.agent.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'completed',
+                'exit_code': 0,
+                'result': {
+                    'type': 'uninstall_agent',
+                    'mode': 'uninstall',
+                    'binary_removed': True,
+                    'persistent_data_preserved': True,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=result_id,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        uninstall_request.refresh_from_db()
+        self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_COMPLETED)
+        self.assertEqual(self.machine.status, AgentMachine.STATUS_UNINSTALLED)
+        self.assertEqual(self.machine.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
+        self.assertEqual(self.machine.last_installed_agent_version, '0.1.1.0-rc24')
+        self.assertTrue(AgentJobResultReceipt.objects.filter(result_id=result_id, job=job).exists())
+
+    def test_queued_uninstall_expiry_marks_request_expired(self):
+        uninstall_request = AgentUninstallRequest.objects.create(
+            endpoint=self.machine,
+            mode=AgentUninstallRequest.MODE_UNINSTALL,
+            source=AgentUninstallRequest.SOURCE_PANEL,
+            status=AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
+            requested_by='uninstall-admin',
+            authorized_by='uninstall-admin',
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+            status=AgentJob.STATUS_QUEUED,
+            payload={'mode': 'uninstall', 'source': 'panel'},
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+        uninstall_request.agent_job = job
+        uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+
+        response = self.agent.get('/api/agent/jobs/pull/')
+
+        self.assertEqual(response.status_code, 200)
+        uninstall_request.refresh_from_db()
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_EXPIRED)
+        self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_EXPIRED)
+
+
+class AgentOperationalJobProgressTests(TestCase):
+    def setUp(self):
+        self.token = 'rmm_live_test_token'
+        self.machine = AgentMachine(
+            machine_id='machine-001',
+            hostname='CS-TEST-001',
+            domain='CONTROL',
+            agent_token_hash='',
+        )
+        self.machine.set_agent_token(self.token)
+        self.machine.save()
+        self.client = Client(HTTP_AUTHORIZATION=f'Bearer {self.token}')
 
     def test_update_job_stage_maps_to_progress_and_message(self):
         job = AgentJob.objects.create(
