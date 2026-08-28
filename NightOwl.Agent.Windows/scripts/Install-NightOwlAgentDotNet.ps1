@@ -1302,13 +1302,69 @@ function Install-OrRepairStartMenuShortcut([string]$TrayExePath, [string]$IconPa
     }
 }
 
+function Test-SameWindowsPath([string]$Actual, [string]$Expected) {
+    if ([string]::IsNullOrWhiteSpace($Actual) -or [string]::IsNullOrWhiteSpace($Expected)) { return $false }
+    try {
+        $actualPath = [System.IO.Path]::GetFullPath($Actual.Trim('"'))
+        $expectedPath = [System.IO.Path]::GetFullPath($Expected.Trim('"'))
+        return [string]::Equals($actualPath, $expectedPath, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return [string]::Equals($Actual.Trim('"'), $Expected.Trim('"'), [System.StringComparison]::OrdinalIgnoreCase)
+    }
+}
+
+function Test-InteractiveUsersPrincipal([string]$GroupId) {
+    if ([string]::IsNullOrWhiteSpace($GroupId)) { return $false }
+    if ([string]::Equals($GroupId, "S-1-5-4", [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    try {
+        $sid = (New-Object System.Security.Principal.NTAccount($GroupId)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+        return [string]::Equals($sid, "S-1-5-4", [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-TrayTaskXmlValid([string]$TaskXml, [string]$TrayExePath) {
+    if ([string]::IsNullOrWhiteSpace($TaskXml)) { return $false }
+    try {
+        [xml]$xml = $TaskXml
+        $logonTrigger = Select-Xml -Xml $xml -XPath "//*[local-name()='LogonTrigger']" -ErrorAction Stop
+        $groupId = Select-Xml -Xml $xml -XPath "//*[local-name()='Principals']/*[local-name()='Principal']/*[local-name()='GroupId']" -ErrorAction Stop
+        $commands = Select-Xml -Xml $xml -XPath "//*[local-name()='Actions']/*[local-name()='Exec']/*[local-name()='Command']" -ErrorAction Stop
+
+        $hasLogonTrigger = @($logonTrigger).Count -gt 0
+        $hasInteractivePrincipal = @($groupId | Where-Object { Test-InteractiveUsersPrincipal ([string]$_.Node.InnerText) }).Count -gt 0
+        $hasTrayAction = @($commands | Where-Object { Test-SameWindowsPath ([string]$_.Node.InnerText) $TrayExePath }).Count -gt 0
+        return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasTrayAction)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-TrayTaskCimValid($Task, [string]$TrayExePath) {
+    if (-not $Task) { return $false }
+    $hasLogonTrigger = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -match "LogonTrigger" -or $_.ToString() -match "LogonTrigger" }).Count -gt 0
+    $hasInteractivePrincipal = @($Task.Principal | Where-Object { Test-InteractiveUsersPrincipal ([string]$_.GroupId) }).Count -gt 0
+    $hasTrayAction = @($Task.Actions | Where-Object { Test-SameWindowsPath ([string]$_.Execute) $TrayExePath }).Count -gt 0
+    return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasTrayAction)
+}
+
 function Test-TrayTaskValid([string]$TaskName, [string]$TrayExePath) {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task) { return $false }
-    $hasLogonTrigger = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -match "LogonTrigger" -or $_.ToString() -match "LogonTrigger" }).Count -gt 0
-    $hasInteractivePrincipal = @($task.Principal | Where-Object { [string]$_.GroupId -eq "S-1-5-4" }).Count -gt 0
-    $hasTrayAction = @($task.Actions | Where-Object { [string]$_.Execute -eq $TrayExePath }).Count -gt 0
-    return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasTrayAction)
+    try {
+        $taskXml = Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        if (Test-TrayTaskXmlValid -TaskXml $taskXml -TrayExePath $TrayExePath) {
+            return $true
+        }
+    }
+    catch {
+        Write-InstallLog "tray.task.validation_xml_failed" "Falha ao exportar XML da tarefa Tray; usando validacao CIM como fallback." @{ task = $TaskName; error = $_.Exception.Message }
+    }
+    return (Test-TrayTaskCimValid -Task $task -TrayExePath $TrayExePath)
 }
 
 function Test-RecentHeartbeat([string]$LogPath) {

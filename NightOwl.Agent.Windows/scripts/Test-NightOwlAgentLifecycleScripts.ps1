@@ -18,6 +18,42 @@ function Assert-ParseOk([string]$Path) {
     }
 }
 
+function Test-LocalizedTrayTaskValidationRegression {
+    $localizedCimGroupId = "INTERATIVO"
+    $trayExePath = "C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Tray.exe"
+    $taskXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="InteractiveUsers">
+      <GroupId>S-1-5-4</GroupId>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Actions Context="InteractiveUsers">
+    <Exec>
+      <Command>C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Tray.exe</Command>
+    </Exec>
+  </Actions>
+</Task>
+"@
+
+    [xml]$xml = $taskXml
+    $logonTrigger = Select-Xml -Xml $xml -XPath "//*[local-name()='LogonTrigger']"
+    $groupId = Select-Xml -Xml $xml -XPath "//*[local-name()='Principals']/*[local-name()='Principal']/*[local-name()='GroupId']"
+    $command = Select-Xml -Xml $xml -XPath "//*[local-name()='Actions']/*[local-name()='Exec']/*[local-name()='Command']"
+
+    Assert-True ($localizedCimGroupId -eq "INTERATIVO") "Regression setup should model localized CIM GroupId."
+    Assert-True (@($logonTrigger).Count -gt 0) "Tray task XML should include LogonTrigger."
+    Assert-True (@($groupId | Where-Object { [string]$_.Node.InnerText -eq "S-1-5-4" }).Count -gt 0) "Tray task XML should preserve Interactive Users SID."
+    Assert-True (@($command | Where-Object { [string]$_.Node.InnerText -eq $trayExePath }).Count -gt 0) "Tray task XML should point to Tray executable."
+}
+
 $install = Join-Path $ScriptsPath "Install-NightOwlAgentDotNet.ps1"
 $uninstall = Join-Path $ScriptsPath "Uninstall-NightOwlAgentDotNet.ps1"
 
@@ -25,6 +61,7 @@ Assert-True (Test-Path $install) "Install script not found."
 Assert-True (Test-Path $uninstall) "Uninstall script not found."
 Assert-ParseOk $install
 Assert-ParseOk $uninstall
+Test-LocalizedTrayTaskValidationRegression
 
 $installText = Get-Content -Path $install -Raw
 $uninstallText = Get-Content -Path $uninstall -Raw
@@ -46,6 +83,9 @@ foreach ($required in @(
     "NightOwl.Agent.Uninstaller.exe",
     "S-1-5-4",
     "Register-ScheduledTask -TaskName `$taskName -Xml",
+    "Export-ScheduledTask -TaskName `$TaskName",
+    "Test-TrayTaskXmlValid",
+    "Test-InteractiveUsersPrincipal",
     "Start-ScheduledTask -TaskName `$TaskName",
     "Microsoft\Windows\Start Menu\Programs\NightOwl\NightOwl.lnk",
     "tray_binary_exists:false",
