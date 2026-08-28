@@ -802,11 +802,17 @@
         const result = job.resultJson || {};
         if (job.type === "update_agent") {
             const updateStatus = result.update_status || (result.details && result.details.reason);
-            if (updateStatus === "no_update_available" || result.already_up_to_date || (result.details && result.details.reason === "already_current")) return "Agente ja atualizado";
+            const details = result.details || {};
+            const installedVersion = result.installed_version || result.installedVersion || details.installed_version || details.installedVersion || result.version || "";
+            const targetVersion = job.targetVersion || result.target_version || result.targetVersion || details.target_version || details.targetVersion || "";
+            if (job.errorCode === "UPDATE_TARGET_NOT_INSTALLED" || result.error_code === "UPDATE_TARGET_NOT_INSTALLED") return "Atualizacao nao aplicada";
+            if (updateStatus === "no_update_available" || result.already_up_to_date || (result.details && result.details.reason === "already_current")) {
+                if (targetVersion && installedVersion && targetVersion !== installedVersion) return "Atualizacao nao aplicada";
+                return "Agente ja atualizado";
+            }
             if (updateStatus === "success" || job.status === "completed") {
-                const details = result.details || {};
-                const version = result.installed_version || result.installedVersion || details.installed_version || details.installedVersion || result.version || "";
-                return version ? "Atualizado para " + version : "Atualizado com sucesso";
+                if (targetVersion && installedVersion && targetVersion !== installedVersion) return "Atualizacao nao aplicada";
+                return installedVersion ? "Atualizado para " + installedVersion : "Atualizado com sucesso";
             }
             if (job.status === "failed") return job.errorMessage || result.message || "Falha na atualizacao";
         }

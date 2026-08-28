@@ -17,7 +17,7 @@ from django.utils import timezone
 
 from .models import AuditEvent, AgentDeploymentToken, AgentJob, AgentJobResultReceipt, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
-from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release
+from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
 
@@ -464,6 +464,34 @@ class AgentOperationalJobProgressTests(TestCase):
         self.assertIn('Baixando pacote', job_progress_message(job))
         self.assertIn('0.1.1.0-rc6', job_progress_message(job))
 
+    def test_update_target_not_installed_message_never_claims_updated(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_FAILED,
+            error_code='UPDATE_TARGET_NOT_INSTALLED',
+            payload={'release_id': str(uuid.uuid4()), 'target_version': '0.1.1.0-rc28'},
+            result={
+                'update_status': 'failed',
+                'target_version': '0.1.1.0-rc28',
+                'installed_version': '0.1.0.7',
+                'original_reason': 'already_current',
+            },
+        )
+
+        message = job_progress_message(job)
+
+        self.assertIn('Atualizacao nao aplicada', message)
+        self.assertNotIn('Atualizado para', message)
+
+    def test_endpoint_detail_js_guards_update_target_not_installed_label(self):
+        js_path = settings.BASE_DIR / 'static' / 'js' / 'endpoint_detail.js'
+        text = js_path.read_text(encoding='utf-8')
+
+        self.assertIn('UPDATE_TARGET_NOT_INSTALLED', text)
+        self.assertIn('Atualizacao nao aplicada', text)
+        self.assertIn('targetVersion && installedVersion && targetVersion !== installedVersion', text)
+
     def test_waiting_health_check_stale_after_five_minutes(self):
         now = timezone.now()
         job = AgentJob.objects.create(
@@ -543,6 +571,89 @@ class AgentOperationalJobProgressTests(TestCase):
         self.assertEqual(response.status_code, 200)
         job.refresh_from_db()
         self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def test_explicit_update_completed_without_target_installed_becomes_failed(self):
+        self.machine.agent_version = '0.1.0.7'
+        self.machine.save(update_fields=['agent_version'])
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={
+                'release_id': str(uuid.uuid4()),
+                'target_version': '0.1.1.0-rc28',
+            },
+        )
+
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'completed',
+                'exit_code': 0,
+                'stdout': 'Agent already up to date.',
+                'result': {
+                    'type': 'update_agent',
+                    'target_version': '0.1.1.0-rc28',
+                    'installed_version': '0.1.0.7',
+                    'details': {
+                        'reason': 'already_current',
+                        'updated': False,
+                        'availableVersion': '0.1.0.7',
+                    },
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.machine.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_FAILED)
+        self.assertEqual(job.error_code, 'UPDATE_TARGET_NOT_INSTALLED')
+        self.assertEqual(job.exit_code, 0)
+        self.assertEqual(job.result['target_version'], '0.1.1.0-rc28')
+        self.assertEqual(job.result['installed_version'], '0.1.0.7')
+        self.assertEqual(job.result['original_reason'], 'already_current')
+        self.assertEqual(job.result['available_version'], '0.1.0.7')
+        self.assertEqual(self.machine.agent_version, '0.1.0.7')
+        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='update.target_not_installed').exists())
+
+    def test_explicit_update_completed_with_target_installed_is_accepted(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={
+                'release_id': str(uuid.uuid4()),
+                'target_version': '0.1.1.0-rc28',
+            },
+        )
+
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'completed',
+                'exit_code': 0,
+                'result': {
+                    'type': 'update_agent',
+                    'target_version': '0.1.1.0-rc28',
+                    'installed_version': '0.1.1.0-rc28',
+                    'health_check_confirmed': True,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.machine.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        self.assertEqual(job.error_code, '')
+        self.assertEqual(self.machine.agent_version, '0.1.1.0-rc28')
 
     def test_update_restart_interruption_waits_for_reconciliation_then_completes(self):
         job = AgentJob.objects.create(
@@ -1499,6 +1610,26 @@ class AgentReleasePolicyTests(TestCase):
         self.assertFalse(decision.eligible)
         self.assertEqual(decision.reason_code, 'minimum_updater_incompatible')
 
+    def test_legacy_updater_requires_bootstrap_for_explicit_release_metadata(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.update_policy = AgentMachine.UPDATE_POLICY_MANUAL
+        self.machine.agent_version = '0.1.0.7'
+        self.machine.save(update_fields=['update_channel', 'update_policy', 'agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc28',
+            channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            rollout=0,
+            rollout_paused=True,
+            status=AgentRelease.STATUS_PAUSED,
+            minimum_updater_version='0.1.0.7',
+        )
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'updater_bootstrap_required')
+        self.assertTrue(update_agent_requires_bootstrap(self.machine, release))
+
     def test_group_restriction_blocks_endpoint_outside_group(self):
         group = AgentReleaseGroup.objects.get(slug='pilot')
         release = self.release(rollout=100)
@@ -1691,7 +1822,7 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(job.timeout_seconds, 900)
         self.assertIsNotNone(job.expires_at)
 
-    def test_manual_panel_update_rc5_to_rc6_uses_legacy_bootstrap_payload(self):
+    def test_manual_panel_update_rc5_to_rc6_requires_bootstrap(self):
         user_model = get_user_model()
         user = user_model.objects.create_user(username='tech-rc5-bootstrap', password='pass', is_staff=True)
         portal = Client()
@@ -1717,28 +1848,9 @@ class AgentReleasePolicyTests(TestCase):
 
         response = portal.post(reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}), {'action': 'update_agent', 'release_id': str(release.id)})
 
-        self.assertEqual(response.status_code, 201)
-        job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
-        self.assertEqual(set(job.payload.keys()), {
-            'release_id',
-            'target_version',
-            'channel',
-            'package_url',
-            'checksum_url',
-            'sha256',
-            'size',
-            'minimum_updater_version',
-            'force',
-            'mandatory',
-            'timeout_seconds',
-            'source',
-        })
-        self.assertEqual(job.payload['target_version'], '0.1.1.0-rc6')
-        self.assertNotIn('manifest_url', job.payload)
-        self.assertNotIn('signature_url', job.payload)
-        self.assertNotIn('signature_key_id', job.payload)
-        self.assertNotIn('source_channel', job.payload)
-        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='agent.update_legacy_bootstrap_payload').exists())
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'updater_bootstrap_required')
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
 
     def test_update_payload_rc6_to_rc7_contains_signature_fields(self):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT

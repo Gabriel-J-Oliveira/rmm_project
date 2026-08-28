@@ -103,6 +103,7 @@ UPDATE_MESSAGES = {
     'failed': 'A atualizacao falhou.',
     'rolled_back': 'Falha detectada; versao anterior restaurada.',
     'rollback_failed': 'Falha na atualizacao e no rollback.',
+    'target_not_installed': 'Atualizacao nao aplicada. Versao ativa: {installed_version}; alvo: {target_version}.',
 }
 
 SIMPLE_MESSAGES = {
@@ -186,6 +187,8 @@ def job_stage(job: AgentJob) -> str:
     ).lower()
     if stage in {'success', 'already_current', 'no_update_available'} and job.status == AgentJob.STATUS_COMPLETED:
         return 'completed'
+    if job.error_code == 'UPDATE_TARGET_NOT_INSTALLED':
+        return 'target_not_installed'
     if job.status == AgentJob.STATUS_QUEUED:
         return 'queued'
     if job.status == AgentJob.STATUS_SENT:

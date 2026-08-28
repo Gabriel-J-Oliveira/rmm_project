@@ -2931,6 +2931,7 @@ def _update_policy_message(reason_code):
         'notify_only': 'A politica atual e apenas notificacao.',
         'outside_maintenance_window': 'O endpoint esta fora da janela de manutencao.',
         'minimum_updater_incompatible': 'O updater instalado nao atende a versao minima exigida pela release.',
+        'updater_bootstrap_required': 'Esta versao do agente nao consegue instalar esta release pelo atualizador. Use a reinstalacao/bootstrap seguro para migrar o agente.',
         'group_not_allowed': 'O endpoint nao pertence aos grupos autorizados para esta release.',
         'rollout_not_selected': 'O endpoint nao foi selecionado pelo rollout automatico.',
         'pinned_release_not_found': 'A versao fixada no endpoint nao foi encontrada.',

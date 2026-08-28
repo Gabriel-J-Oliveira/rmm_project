@@ -134,9 +134,10 @@ UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE = 'downgrade_requires_force'
 UPDATE_POLICY_REASON_SIGNATURE_INVALID = 'signature_invalid'
 UPDATE_POLICY_REASON_KEY_UNKNOWN = 'key_unknown'
 UPDATE_POLICY_REASON_KEY_REVOKED = 'key_revoked'
+UPDATE_POLICY_REASON_UPDATER_BOOTSTRAP_REQUIRED = 'updater_bootstrap_required'
 AGENT_RELEASE_AVAILABLE_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
 AGENT_RELEASE_AUTOMATIC_STATUSES = {AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_AVAILABLE, 'active'}
-UPDATE_AGENT_SIGNED_PAYLOAD_MIN_VERSION = '0.1.1.0-rc6'
+UPDATE_AGENT_EXPLICIT_RELEASE_MIN_VERSION = '0.1.1.0-rc6'
 
 
 @dataclass(frozen=True)
@@ -194,13 +195,21 @@ class AgentUpdateDecision:
         }
 
 
+def update_agent_requires_bootstrap(endpoint, release=None) -> bool:
+    if release is not None:
+        release_comparison = compare_versions(release.version or '', UPDATE_AGENT_EXPLICIT_RELEASE_MIN_VERSION)
+        if release_comparison is None or release_comparison < 0:
+            return False
+    updater_comparison = compare_versions(_updater_version(endpoint), UPDATE_AGENT_EXPLICIT_RELEASE_MIN_VERSION)
+    return updater_comparison is None or updater_comparison < 0
+
+
 def update_agent_uses_legacy_bootstrap_payload(endpoint, *, manual_explicit=False, channel='') -> bool:
+    # Kept as a compatibility shim for older callers/tests. The backend no longer
+    # creates update_agent jobs that rely on pre-RC6 updater behavior.
     if not manual_explicit:
         return False
-    if (channel or endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE) != AgentMachine.UPDATE_CHANNEL_DEVELOPMENT:
-        return False
-    comparison = compare_versions(endpoint.agent_version or '', UPDATE_AGENT_SIGNED_PAYLOAD_MIN_VERSION)
-    return comparison is not None and comparison < 0
+    return False
 
 
 def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, force=False, source='manual_panel', manual_explicit=False) -> dict:
@@ -208,11 +217,6 @@ def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, f
     if release is None:
         raise ValueError('AgentUpdateDecision sem release nao pode gerar payload update_agent.')
 
-    legacy_bootstrap = update_agent_uses_legacy_bootstrap_payload(
-        endpoint,
-        manual_explicit=manual_explicit,
-        channel=decision.channel,
-    )
     payload = {
         'release_id': str(release.id),
         'target_version': release.version,
@@ -227,8 +231,6 @@ def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, f
         'timeout_seconds': 900,
         'source': source,
     }
-    if legacy_bootstrap:
-        return payload
 
     payload.update({
         'source_channel': decision.channel,
@@ -943,6 +945,8 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
         return decision(False, UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE, release)
 
     minimum_updater = (release.minimum_updater_version or '').strip()
+    if update_agent_requires_bootstrap(endpoint, release):
+        return decision(False, UPDATE_POLICY_REASON_UPDATER_BOOTSTRAP_REQUIRED, release)
     if minimum_updater:
         updater_version = _updater_version(endpoint)
         updater_comparison = compare_versions(updater_version, minimum_updater)

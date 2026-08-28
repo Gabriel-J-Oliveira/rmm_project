@@ -10,7 +10,7 @@ param(
     [string]$PublishPath = "/opt/nightowl/downloads/agent/windows",
     [string]$PublicBaseUrl = "https://nightowl.controlsul.com.br/downloads/nightowl-agent",
     [string]$Runtime = "win-x64",
-    [string]$MinimumUpdaterVersion = "0.1.0.7",
+    [string]$MinimumUpdaterVersion = "0.1.1.0-rc6",
 
     [ValidateSet("development", "pilot", "stable")]
     [string]$Channel = "",

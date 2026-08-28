@@ -568,6 +568,57 @@ def _update_installed_version(payload):
     )
 
 
+def _explicit_update_target(job):
+    if job is None or job.job_type != AgentJob.TYPE_UPDATE_AGENT:
+        return ''
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    if not (payload.get('release_id') or job.agent_release_id):
+        return ''
+    return str(payload.get('target_version') or (job.agent_release.version if job.agent_release_id else '') or '').strip()
+
+
+def _coerce_update_target_not_installed_payload(job, payload):
+    target_version = _explicit_update_target(job)
+    if not target_version:
+        return payload, False
+    installed_version = _update_installed_version(payload)
+    if installed_version and compare_versions(installed_version, target_version) == 0:
+        return payload, False
+
+    result = dict(_payload_result(payload))
+    details = result.get('details') if isinstance(result.get('details'), dict) else {}
+    original_reason = str(
+        result.get('reason')
+        or result.get('update_status')
+        or details.get('reason')
+        or details.get('update_status')
+        or ''
+    ).strip()
+    available_version = str(
+        result.get('available_version')
+        or result.get('availableVersion')
+        or details.get('available_version')
+        or details.get('availableVersion')
+        or ''
+    ).strip()
+    result.update({
+        'update_status': 'failed',
+        'error_code': 'UPDATE_TARGET_NOT_INSTALLED',
+        'error_message': 'Updater terminou sem instalar a versao solicitada.',
+        'target_version': target_version,
+        'installed_version': installed_version,
+        'original_reason': original_reason,
+        'available_version': available_version,
+    })
+    coerced = dict(payload)
+    coerced['status'] = AgentJob.STATUS_FAILED
+    coerced['exit_code'] = payload.get('exit_code') if payload.get('exit_code') not in (None, '') else 1
+    coerced['error_code'] = 'UPDATE_TARGET_NOT_INSTALLED'
+    coerced['error_message'] = 'Updater terminou sem instalar a versao solicitada.'
+    coerced['result'] = result
+    return coerced, True
+
+
 def _coerce_expected_update_restart_payload(payload):
     coerced = dict(payload)
     result = dict(_payload_result(payload))
@@ -1071,6 +1122,7 @@ class AgentJobsResultView(APIView):
                     status=status.HTTP_200_OK,
                 )
             previous_status = job.status
+            previous_error_code = str(job.error_code or '').upper()
             previous_stage = _result_stage(job.result if isinstance(job.result, dict) else {})
             if (
                 job.job_type == AgentJob.TYPE_UPDATE_AGENT
@@ -1100,6 +1152,28 @@ class AgentJobsResultView(APIView):
                         'previous_stage': previous_stage,
                     },
                 )
+            if job.job_type == AgentJob.TYPE_UPDATE_AGENT and incoming_status == AgentJob.STATUS_COMPLETED:
+                payload, target_not_installed = _coerce_update_target_not_installed_payload(job, payload)
+                if target_not_installed:
+                    job_status = AgentJob.STATUS_FAILED
+                    incoming_status = AgentJob.STATUS_FAILED
+                    create_audit_event(
+                        event_type='update.target_not_installed',
+                        title='Update finalizado sem instalar versao solicitada',
+                        description=f'Updater terminou sem instalar a versao solicitada em {machine.hostname}.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent',
+                        endpoint=machine,
+                        metadata={
+                            'job_id': str(job.id),
+                            'result_id': result_id,
+                            'target_version': _explicit_update_target(job),
+                            'installed_version': _update_installed_version(payload),
+                            'reason': (_payload_result(payload) or {}).get('original_reason', ''),
+                            'available_version': (_payload_result(payload) or {}).get('available_version', ''),
+                        },
+                    )
             job.status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             job.started_at = _parse_agent_datetime(payload.get('started_at'), job.started_at)
             if job.status in RESULT_FINAL_STATUSES:
@@ -1189,7 +1263,7 @@ class AgentJobsResultView(APIView):
                     }
                     and (
                         previous_status == AgentJob.STATUS_INTERRUPTED
-                        or (previous_status == AgentJob.STATUS_FAILED and str(job.error_code or '').upper() == 'JOB_INTERRUPTED')
+                        or (previous_status == AgentJob.STATUS_FAILED and previous_error_code == 'JOB_INTERRUPTED')
                         or previous_stage in {'awaiting_reconciliation', 'restarting'}
                     )
                 ):
