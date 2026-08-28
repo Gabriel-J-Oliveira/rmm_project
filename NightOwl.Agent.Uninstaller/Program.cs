@@ -8,9 +8,12 @@ using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Uninstaller;
 
-internal static class Program
+public static class Program
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly TimeSpan TrayStopTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan AgentProcessStopTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan BinaryRemoveTimeout = TimeSpan.FromSeconds(25);
 
     public static async Task<int> Main(string[] args)
     {
@@ -60,17 +63,21 @@ internal static class Program
             WriteLog(logPath, "uninstall.start", new { options.JobId, options.Mode, install_path = installPath });
             await ConsumeLocalAuthorizationAsync(options.AuthorizationFile);
             EnsureNoActiveUpdate(rootPath);
-            StopTray();
-            StopService(options.ServiceName);
+            StopTray(logPath);
+            StopService(options.ServiceName, installPath, logPath);
             RemoveServiceRegistration(options.ServiceName);
             RemoveTrayTask();
-            RemoveDirectory(installPath);
+            RemoveDirectoryWithRetry(installPath, installPath, logPath, BinaryRemoveTimeout);
+            if (Directory.Exists(installPath))
+            {
+                throw new InvalidOperationException("UNINSTALL_BINARY_REMOVE_FAILED: install path still exists after delete.");
+            }
 
             if (options.Mode.Equals("purge", StringComparison.OrdinalIgnoreCase))
             {
                 foreach (string relative in new[] { "Config", "Identity", "State", "Trust", "Packages", "Cache" })
                 {
-                    RemoveDirectory(Path.Combine(rootPath, relative));
+                    RemoveDirectoryWithRetry(Path.Combine(rootPath, relative), installPath, logPath, BinaryRemoveTimeout);
                 }
             }
             else
@@ -173,15 +180,50 @@ internal static class Program
         }
     }
 
-    private static void StopTray()
+    private static void StopTray(string logPath)
     {
-        foreach (Process process in Process.GetProcessesByName("NightOwl.Agent.Tray"))
+        Process[] processes = Process.GetProcessesByName("NightOwl.Agent.Tray");
+        foreach (Process process in processes)
         {
-            try { process.Kill(entireProcessTree: true); } catch { }
+            try
+            {
+                WriteLog(logPath, "uninstall.tray.stop_requested", new { pid = process.Id });
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteLog(logPath, "uninstall.tray.stop_timeout", new { pid = SafeProcessId(process), error = Sanitize(ex.Message) });
+            }
+        }
+
+        foreach (Process process in processes)
+        {
+            try
+            {
+                if (process.WaitForExit((int)TrayStopTimeout.TotalMilliseconds))
+                {
+                    WriteLog(logPath, "uninstall.tray.stopped", new { pid = process.Id });
+                }
+                else
+                {
+                    WriteLog(logPath, "uninstall.tray.stop_timeout", new { pid = process.Id, timeout_seconds = TrayStopTimeout.TotalSeconds });
+                }
+            }
+            catch (Exception ex)
+            {
+                WriteLog(logPath, "uninstall.tray.stop_timeout", new { pid = SafeProcessId(process), error = Sanitize(ex.Message) });
+            }
+            finally
+            {
+                process.Dispose();
+            }
         }
     }
 
-    private static void StopService(string serviceName)
+    private static void StopService(string serviceName, string installPath, string logPath)
     {
         try
         {
@@ -196,6 +238,7 @@ internal static class Program
         {
             // Service absent is idempotent.
         }
+        WaitForNightOwlProcessesToExit(installPath, logPath, AgentProcessStopTimeout);
     }
 
     private static void RemoveServiceRegistration(string serviceName)
@@ -259,6 +302,167 @@ internal static class Program
             return;
         }
         Directory.Delete(path, recursive: true);
+    }
+
+    private static int RemoveDirectoryWithRetry(
+        string path,
+        string installPath,
+        string logPath,
+        TimeSpan timeout,
+        Action<string>? deleteDirectory = null,
+        Action? waitForProcesses = null)
+    {
+        if (!Directory.Exists(path))
+        {
+            return 0;
+        }
+
+        WriteLog(logPath, "uninstall.binary_remove.started", new { path });
+        DateTimeOffset started = DateTimeOffset.UtcNow;
+        DateTimeOffset deadline = started.Add(timeout);
+        int attempt = 0;
+        Exception? lastError = null;
+        deleteDirectory ??= RemoveDirectory;
+        waitForProcesses ??= () => WaitForNightOwlProcessesToExit(installPath, logPath, TimeSpan.FromSeconds(3));
+
+        while (DateTimeOffset.UtcNow <= deadline)
+        {
+            attempt++;
+            try
+            {
+                deleteDirectory(path);
+                if (!Directory.Exists(path))
+                {
+                    WriteLog(logPath, "uninstall.binary_remove.completed", new
+                    {
+                        path,
+                        attempts = attempt,
+                        elapsed_ms = (int)(DateTimeOffset.UtcNow - started).TotalMilliseconds
+                    });
+                    return attempt;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastError = ex;
+                WriteLog(logPath, "uninstall.binary_remove.retry", new
+                {
+                    path,
+                    attempt,
+                    error = Sanitize(ex.Message),
+                    active_processes = GetNightOwlProcessSummary(installPath)
+                });
+                waitForProcesses();
+                Thread.Sleep(attempt == 1 ? 500 : 1000);
+                continue;
+            }
+
+            Thread.Sleep(250);
+        }
+
+        WriteLog(logPath, "uninstall.binary_remove.failed", new
+        {
+            path,
+            attempts = attempt,
+            error = Sanitize(lastError?.Message ?? "install path still exists after retry timeout"),
+            active_processes = GetNightOwlProcessSummary(installPath)
+        });
+        throw new InvalidOperationException($"UNINSTALL_BINARY_REMOVE_FAILED: {Sanitize(lastError?.Message ?? "install path still exists after retry timeout")}");
+    }
+
+    public static int RemoveDirectoryWithRetryForTest(
+        string path,
+        TimeSpan timeout,
+        Action<string> deleteDirectory,
+        Action? waitForProcesses = null)
+    {
+        string logPath = Path.Combine(Path.GetTempPath(), "NightOwlUninstallerTests", "agent-uninstaller-test.jsonl");
+        return RemoveDirectoryWithRetry(path, path, logPath, timeout, deleteDirectory, waitForProcesses);
+    }
+
+    private static void WaitForNightOwlProcessesToExit(string installPath, string logPath, TimeSpan timeout)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            Process[] processes = GetNightOwlProcessesUnderInstallPath(installPath);
+            if (processes.Length == 0)
+            {
+                return;
+            }
+            foreach (Process process in processes)
+            {
+                try { process.WaitForExit(500); } catch { }
+                finally { process.Dispose(); }
+            }
+        }
+
+        WriteLog(logPath, "uninstall.service.process_stop_timeout", new
+        {
+            install_path = installPath,
+            active_processes = GetNightOwlProcessSummary(installPath)
+        });
+    }
+
+    private static Process[] GetNightOwlProcessesUnderInstallPath(string installPath)
+    {
+        int currentPid = Environment.ProcessId;
+        return Process.GetProcesses()
+            .Where(process =>
+            {
+                try
+                {
+                    if (process.Id == currentPid || process.HasExited) { return false; }
+                    string name = process.ProcessName;
+                    if (!name.StartsWith("NightOwl.Agent.", StringComparison.OrdinalIgnoreCase)) { return false; }
+                    string path = process.MainModule?.FileName ?? "";
+                    return IsPathUnder(path, installPath);
+                }
+                catch
+                {
+                    return false;
+                }
+            })
+            .ToArray();
+    }
+
+    private static object[] GetNightOwlProcessSummary(string installPath)
+    {
+        return GetNightOwlProcessesUnderInstallPath(installPath)
+            .Select(process =>
+            {
+                try
+                {
+                    return new { pid = process.Id, name = process.ProcessName } as object;
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            })
+            .ToArray();
+    }
+
+    private static bool IsPathUnder(string path, string root)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(root)) { return false; }
+        try
+        {
+            string fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase)
+                || fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int SafeProcessId(Process process)
+    {
+        try { return process.Id; } catch { return 0; }
     }
 
     private static void WriteUninstalledState(string rootPath)
@@ -361,6 +565,7 @@ internal static class Program
         if (message.Contains("AUTHORIZATION_INVALID", StringComparison.OrdinalIgnoreCase) || message.Contains("AUTHORIZATION_REJECTED", StringComparison.OrdinalIgnoreCase)) { return "UNINSTALL_AUTHORIZATION_FAILED"; }
         if (message.Contains("AUTHORIZATION_REQUIRED", StringComparison.OrdinalIgnoreCase)) { return "REMOTE_PURGE_AUTHORIZATION_REQUIRED"; }
         if (message.Contains("UPDATE_STATE_INVALID", StringComparison.OrdinalIgnoreCase)) { return "UNINSTALL_UPDATE_STATE_INVALID"; }
+        if (message.Contains("BINARY_REMOVE_FAILED", StringComparison.OrdinalIgnoreCase)) { return "UNINSTALL_BINARY_REMOVE_FAILED"; }
         return "UNINSTALL_AGENT_FAILED";
     }
 
