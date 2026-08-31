@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     AgentEnrollView,
     AgentDeploymentBootstrapScriptView,
+    AgentDeploymentCompleteView,
     AgentDeploymentMetadataView,
     AgentSelfUninstallAuthorizeView,
     AgentSelfUninstallConsumeView,
@@ -17,6 +18,7 @@ from .views import (
 urlpatterns = [
     path('deployments/bootstrap.ps1', AgentDeploymentBootstrapScriptView.as_view(), name='agent-deployment-bootstrap'),
     path('deployments/metadata/', AgentDeploymentMetadataView.as_view(), name='agent-deployment-metadata'),
+    path('deployments/complete/', AgentDeploymentCompleteView.as_view(), name='agent-deployment-complete'),
     path('self-uninstall/authorize/', AgentSelfUninstallAuthorizeView.as_view(), name='agent-self-uninstall-authorize'),
     path('self-uninstall/consume/', AgentSelfUninstallConsumeView.as_view(), name='agent-self-uninstall-consume'),
     path('enroll/', AgentEnrollView.as_view(), name='agent-enroll'),

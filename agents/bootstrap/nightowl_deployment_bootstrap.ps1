@@ -76,6 +76,11 @@ function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {
     return Invoke-RestMethod -Method Get -Uri $Url -Headers @{ "X-NightOwl-Deployment-Token" = $DeploymentToken } -UseBasicParsing
 }
 
+function Invoke-JsonPost([string]$Url, [hashtable]$Headers, [hashtable]$Body) {
+    $json = $Body | ConvertTo-Json -Depth 8
+    return Invoke-RestMethod -Method Post -Uri $Url -Headers $Headers -Body $json -ContentType "application/json" -UseBasicParsing
+}
+
 function Get-OptionalJsonProperty($Object, [string]$Name) {
     if ($null -eq $Object) {
         return ""
@@ -84,6 +89,57 @@ function Get-OptionalJsonProperty($Object, [string]$Name) {
         return [string]$Object.$Name
     }
     return ""
+}
+
+function Read-AgentConfig {
+    $configPath = "C:\ProgramData\NightOwl\Config\agent.config.json"
+    if (-not (Test-Path $configPath)) {
+        return $null
+    }
+    try {
+        return Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+}
+
+function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCode, [string]$ErrorMessage) {
+    $completionUrl = Get-OptionalJsonProperty -Object $Metadata -Name "completion_url"
+    if ([string]::IsNullOrWhiteSpace($completionUrl)) {
+        return
+    }
+    $config = Read-AgentConfig
+    $agentToken = Get-OptionalJsonProperty -Object $config -Name "agentToken"
+    $machineId = Get-OptionalJsonProperty -Object $config -Name "machineId"
+    if ([string]::IsNullOrWhiteSpace($machineId)) {
+        $machineId = Get-OptionalJsonProperty -Object $config -Name "machine_id"
+    }
+    $headers = @{}
+    if (-not [string]::IsNullOrWhiteSpace($agentToken)) {
+        $headers["Authorization"] = "Bearer $agentToken"
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($Token)) {
+        $headers["X-NightOwl-Deployment-Token"] = $Token
+    }
+    else {
+        return
+    }
+    $serviceStatus = "Unknown"
+    try {
+        $serviceStatus = (Get-Service -Name "NightOwlAgentDotNet" -ErrorAction Stop).Status.ToString()
+    } catch {}
+    $body = @{
+        deployment_id = [string]$Metadata.deployment_id
+        status = $Status
+        machine_id = $machineId
+        version = [string]$Metadata.release.version
+        service_status = $serviceStatus
+        health_check_confirmed = ($Status -eq "completed" -and $serviceStatus -eq "Running")
+        error_code = $ErrorCode
+        error_message = $ErrorMessage
+    }
+    Invoke-JsonPost -Url $completionUrl -Headers $headers -Body $body | Out-Null
 }
 
 try {
@@ -155,13 +211,11 @@ try {
     $Stage = "completed"
     $machineId = ""
     $version = [string]$metadata.release.version
-    $configPath = "C:\ProgramData\NightOwl\Config\agent.config.json"
-    if (Test-Path $configPath) {
-        try {
-            $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-            $machineId = [string]$config.machineId
-        } catch {
-            $machineId = ""
+    $config = Read-AgentConfig
+    if ($null -ne $config) {
+        $machineId = Get-OptionalJsonProperty -Object $config -Name "machineId"
+        if ([string]::IsNullOrWhiteSpace($machineId)) {
+            $machineId = Get-OptionalJsonProperty -Object $config -Name "machine_id"
         }
     }
     $serviceStatus = ""
@@ -170,6 +224,7 @@ try {
     } catch {
         $serviceStatus = "Unknown"
     }
+    Send-DeploymentCompletion -Metadata $metadata -Status "completed" -ErrorCode "" -ErrorMessage ""
     Write-NightOwlResult "completed" @{
         hostname = $env:COMPUTERNAME
         machine_id = $machineId
@@ -187,6 +242,18 @@ try {
 } catch {
     $message = [string]$_.Exception.Message
     $errorCode = ($message.Split(":")[0])
+    $metadataVar = Get-Variable -Name metadata -Scope Local -ErrorAction SilentlyContinue
+    if ($null -ne $metadataVar -and $null -ne $metadataVar.Value) {
+        try {
+            Send-DeploymentCompletion -Metadata $metadata -Status "failed" -ErrorCode $errorCode -ErrorMessage $message
+        }
+        catch {
+            Write-NightOwlBootstrapLog "failed" @{
+                error_code = "BOOTSTRAP_STATUS_REPORT_FAILED"
+                error_message = $_.Exception.Message
+            }
+        }
+    }
     Write-NightOwlResult "failed" @{
         stage = $Stage
         error_code = $errorCode

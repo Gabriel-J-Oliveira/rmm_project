@@ -780,7 +780,7 @@ function Get-WebErrorPayload($ErrorRecord) {
     }
 }
 
-function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [string]$AgentVersion) {
+function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [string]$AgentVersion, [string]$CurrentAgentToken = "") {
     $info = Get-ComputerInfoLite
     $body = @{
         machine_id = $MachineId
@@ -802,8 +802,12 @@ function Invoke-EnrollmentRequest($BaseUrl, $EnrollmentTokenValue, $ManualTokenV
     }
     $url = Join-AgentUrl $BaseUrl "/api/agent/enroll/"
     $json = $body | ConvertTo-Json -Depth 5
+    $headers = @{}
+    if (-not [string]::IsNullOrWhiteSpace($CurrentAgentToken)) {
+        $headers["Authorization"] = "Bearer $CurrentAgentToken"
+    }
     try {
-        return Invoke-RestMethod -Method Post -Uri $url -Body $json -ContentType "application/json" -TimeoutSec 30
+        return Invoke-RestMethod -Method Post -Uri $url -Headers $headers -Body $json -ContentType "application/json" -TimeoutSec 30
     }
     catch {
         $payload = Get-WebErrorPayload $_
@@ -905,7 +909,7 @@ function Show-ManualValidationDialog($ServerBase, $Hostname, $Domain) {
     return $tokenBox.Text.Trim()
 }
 
-function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [string]$AgentVersion, [switch]$NoGuiMode) {
+function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualTokenValue, $MachineId, $InstallPath, [string]$AgentVersion, [switch]$NoGuiMode, [string]$CurrentAgentToken = "") {
     $info = Get-ComputerInfoLite
     Write-InstallLog "enrollment.auto.start" "Iniciando enrollment do agente." @{
         hostname = $info.Hostname
@@ -914,7 +918,7 @@ function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualToken
         has_manual_validation_token = -not [string]::IsNullOrWhiteSpace($ManualTokenValue)
     }
     try {
-        $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $ManualTokenValue -MachineId $MachineId -InstallPath $InstallPath -AgentVersion $AgentVersion
+        $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $ManualTokenValue -MachineId $MachineId -InstallPath $InstallPath -AgentVersion $AgentVersion -CurrentAgentToken $CurrentAgentToken
         Write-InstallLog "enrollment.success" "Enrollment aprovado." @{ hostname = $info.Hostname; domain = $info.Domain }
         return $response
     }
@@ -946,7 +950,7 @@ function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualToken
         }
         Write-InstallLog "enrollment.manual.retry" "Tentando enrollment com token manual." @{ hostname = $info.Hostname; domain = $info.Domain }
         try {
-            $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $tokenToUse -MachineId $MachineId -InstallPath $InstallPath -AgentVersion $AgentVersion
+            $response = Invoke-EnrollmentRequest -BaseUrl $BaseUrl -EnrollmentTokenValue $EnrollmentTokenValue -ManualTokenValue $tokenToUse -MachineId $MachineId -InstallPath $InstallPath -AgentVersion $AgentVersion -CurrentAgentToken $CurrentAgentToken
             Write-InstallLog "enrollment.success" "Enrollment aprovado com validacao manual." @{ hostname = $info.Hostname; domain = $info.Domain; manual_validation_used = $true }
             return $response
         }
@@ -963,6 +967,40 @@ function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualToken
 
 function Save-AgentConfig($Path, $Config) {
     $Config | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTokenValue, [string]$MachineIdValue, [string]$ServerBaseValue, [string]$VersionValue) {
+    $checkpoint = [ordered]@{
+        agentToken = $AgentTokenValue
+        machineId = $MachineIdValue
+        agentVersion = $VersionValue
+        serverBaseUrl = $ServerBaseValue
+        heartbeatUrl = Join-AgentUrl $ServerBaseValue "/api/agent/heartbeat/"
+        collectUrl = Join-AgentUrl $ServerBaseValue "/api/agent/collect/"
+        jobsPullUrl = Join-AgentUrl $ServerBaseValue "/api/agent/jobs/pull/"
+        jobsResultUrl = Join-AgentUrl $ServerBaseValue "/api/agent/jobs/result/"
+        intervals = [ordered]@{
+            heartbeatSeconds = 300
+            collectSeconds = 3600
+            jobsSeconds = 10
+        }
+    }
+    if ($null -ne $ExistingConfig) {
+        if ($ExistingConfig.PSObject.Properties.Name -contains "intervals" -and $null -ne $ExistingConfig.intervals) {
+            $checkpoint.intervals = $ExistingConfig.intervals
+        }
+        $existingVersion = Get-JsonProperty $ExistingConfig @("agentVersion", "agent_version")
+        if (-not [string]::IsNullOrWhiteSpace($existingVersion)) {
+            $checkpoint.agentVersion = $existingVersion
+        }
+    }
+    Save-AgentConfig -Path $Path -Config $checkpoint
+    $reloaded = Read-JsonFile $Path
+    $reloadedToken = Get-ConfigAgentToken $reloaded
+    $reloadedMachineId = Get-JsonProperty $reloaded @("machineId", "machine_id")
+    if ($reloadedToken -ne $AgentTokenValue -or $reloadedMachineId -ne $MachineIdValue) {
+        throw "INSTALL_CREDENTIAL_PERSIST_FAILED"
+    }
 }
 
 function Get-ConfigAgentToken($Config) {
@@ -1533,11 +1571,13 @@ if ((Test-MachineId $machineId) -and (Test-MachineId $existingIdentityMachineId)
 $script:Report.machine_id = Protect-SecretValue $machineId
 $script:Report.identity_preserved = Test-MachineId $machineId
 
+$isDeploymentEnrollment = (-not [string]::IsNullOrWhiteSpace($EnrollmentToken) -and $EnrollmentToken.StartsWith("deploy_"))
+
 if (-not [string]::IsNullOrWhiteSpace($EnrollmentToken) -and $EnrollmentToken.StartsWith("rmm_live_")) {
     Write-Step "WARN" "EnrollmentToken parece ser agent token legado/dev; usando como AgentToken."
     $AgentToken = $EnrollmentToken
 }
-elseif ([string]::IsNullOrWhiteSpace($AgentToken) -and -not [string]::IsNullOrWhiteSpace($existingToken) -and (Test-MachineId $machineId)) {
+elseif ((-not $isDeploymentEnrollment) -and [string]::IsNullOrWhiteSpace($AgentToken) -and -not [string]::IsNullOrWhiteSpace($existingToken) -and (Test-MachineId $machineId)) {
     $AgentToken = $existingToken
     Write-Step "OK" "Identidade existente preservada; enrollment nao sera executado"
     Write-InstallLog "identity.preserved" "Token e machine_id existentes preservados." @{
@@ -1548,7 +1588,7 @@ elseif ([string]::IsNullOrWhiteSpace($AgentToken) -and -not [string]::IsNullOrWh
 }
 elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
     Write-Step "OK" "Executando enrollment no servidor NightOwl"
-    $enrollResponse = Invoke-NightOwlEnrollment -BaseUrl $serverBase -EnrollmentTokenValue $EnrollmentToken -ManualTokenValue $ManualValidationToken -MachineId $machineId -InstallPath $InstallPath -AgentVersion ([string]$releaseMetadata.version) -NoGuiMode:$NoGui
+    $enrollResponse = Invoke-NightOwlEnrollment -BaseUrl $serverBase -EnrollmentTokenValue $EnrollmentToken -ManualTokenValue $ManualValidationToken -MachineId $machineId -InstallPath $InstallPath -AgentVersion ([string]$releaseMetadata.version) -NoGuiMode:$NoGui -CurrentAgentToken $existingToken
     $script:Report.enrollment_performed = $true
     if ($enrollResponse.agent_token) {
         $AgentToken = [string]$enrollResponse.agent_token
@@ -1559,6 +1599,14 @@ elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
     }
     if ($enrollResponse.config) {
         Write-Step "OK" "Config de intervalos recebida do servidor"
+    }
+    if ($isDeploymentEnrollment) {
+        Save-AgentCredentialCheckpoint -Path $configPath -ExistingConfig $preservedConfig -AgentTokenValue $AgentToken -MachineIdValue $machineId -ServerBaseValue $serverBase -VersionValue (Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig)
+        Write-InstallLog "credential.persisted" "Credencial de deployment persistida antes da instalacao." @{
+            machine_id = (Protect-SecretValue $machineId)
+            credential_source = if ($existingToken -eq $AgentToken) { "preserved" } else { "recovered" }
+        }
+        Add-ReportAction "credential.persisted" @{ source = "deployment"; recovered = ($existingToken -ne $AgentToken) }
     }
 }
 

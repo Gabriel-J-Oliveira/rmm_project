@@ -32,6 +32,7 @@ from .models import (
     AgentUninstallRequest,
     AuditEvent,
     hash_enrollment_token,
+    hash_agent_token,
     hash_manual_validation_token,
 )
 from config.authz import can_uninstall_agent
@@ -71,6 +72,24 @@ def _deployment_token_from_request(request):
         or request.META.get('HTTP_X_NIGHTOWL_DEPLOYMENT_TOKEN')
         or ''
     ).strip()
+
+
+def _bearer_token_from_request(request):
+    authorization = request.headers.get('Authorization', '')
+    parts = authorization.split()
+    if len(parts) == 2 and parts[0] == 'Bearer':
+        return parts[1]
+    return ''
+
+
+def _authenticated_bearer_machine(request):
+    token = _bearer_token_from_request(request)
+    if not token:
+        return None, ''
+    machine = AgentMachine.objects.filter(agent_token_hash=hash_agent_token(token), is_active=True).first()
+    if machine is None:
+        return None, ''
+    return machine, token
 
 
 def _public_base_url(request):
@@ -334,6 +353,8 @@ def _validate_deployment_request(request):
             deployment.status = AgentDeploymentToken.STATUS_EXPIRED
             deployment.save(update_fields=['status'])
         return None, _deployment_error(request, 'deployment_token_expired', 'Deployment token expirado.', status.HTTP_403_FORBIDDEN)
+    if deployment.status not in {AgentDeploymentToken.STATUS_WAITING, AgentDeploymentToken.STATUS_INSTALLING}:
+        return None, _deployment_error(request, 'deployment_token_used', 'Deployment token ja utilizado.', status.HTTP_403_FORBIDDEN)
     if deployment.is_used:
         return None, _deployment_error(request, 'deployment_token_used', 'Deployment token ja utilizado.', status.HTTP_403_FORBIDDEN)
     if deployment.platform != AgentDeploymentToken.PLATFORM_WINDOWS:
@@ -412,6 +433,7 @@ class AgentDeploymentMetadataView(APIView):
                 'channel': deployment.channel,
                 'expires_at': deployment.expires_at.isoformat(),
                 'server_url': base_url,
+                'completion_url': request.build_absolute_uri(reverse('agent-deployment-complete')),
                 'release': {
                     'id': str(release.id),
                     'version': release.version,
@@ -434,6 +456,98 @@ class AgentDeploymentMetadataView(APIView):
                 },
             }
         )
+
+
+class AgentDeploymentCompleteView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        deployment_id = str(payload.get('deployment_id') or '').strip()
+        machine_id = str(payload.get('machine_id') or '').strip()
+        status_value = str(payload.get('status') or '').strip().lower()
+        release_version = str(payload.get('version') or '').strip()
+        service_status = str(payload.get('service_status') or '').strip()
+        health_check = bool(payload.get('health_check_confirmed') or payload.get('health_check'))
+
+        deployment = AgentDeploymentToken.objects.select_for_update().select_related('release', 'endpoint').filter(pk=deployment_id).first()
+        if deployment is None:
+            return Response({'error': 'deployment_not_found', 'detail': 'Deployment nao encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+        machine = None
+        try:
+            machine = authenticate_agent_token(request)
+        except Exception:
+            token_value = _deployment_token_from_request(request)
+            if token_value and deployment.token_matches(token_value) and not deployment.is_expired and deployment.status == AgentDeploymentToken.STATUS_INSTALLING:
+                machine = deployment.endpoint
+        if machine is None:
+            create_audit_event(
+                event_type='agent.deployment.confirmation_failed',
+                title='Confirmacao de deployment negada',
+                description='Deployment tentou finalizar sem credencial valida do agente.',
+                severity=AuditEvent.SEVERITY_WARNING,
+                actor_type=AuditEvent.ACTOR_SYSTEM,
+                actor_name='deployment-bootstrap',
+                metadata={'deployment_id': str(deployment.id), 'reason': 'invalid_agent_token'},
+                request=request,
+            )
+            return Response({'error': 'invalid_agent_token', 'detail': 'Credencial do agente invalida.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if deployment.endpoint_id and deployment.endpoint_id != machine.id:
+            return Response({'error': 'deployment_machine_mismatch', 'detail': 'Deployment vinculado a outro endpoint.'}, status=status.HTTP_409_CONFLICT)
+        if machine_id and machine.machine_id and machine.machine_id != machine_id:
+            return Response({'error': 'deployment_machine_mismatch', 'detail': 'Machine ID divergente.'}, status=status.HTTP_409_CONFLICT)
+
+        if status_value == 'failed':
+            deployment.endpoint = machine
+            deployment.mark_failed(str(payload.get('error_code') or 'bootstrap_failed'), str(payload.get('error_message') or 'Bootstrap falhou.'))
+            create_audit_event(
+                event_type='agent.deployment.failed',
+                title='Deployment de agente falhou',
+                description=f'Deployment Windows falhou em {machine.hostname}.',
+                severity=AuditEvent.SEVERITY_WARNING,
+                actor_type=AuditEvent.ACTOR_AGENT,
+                actor_name='NightOwl deployment bootstrap',
+                endpoint=machine,
+                metadata={
+                    'deployment_id': str(deployment.id),
+                    'release_id': str(deployment.release_id),
+                    'release_version': deployment.release.version,
+                    'error_code': deployment.failure_code,
+                },
+                request=request,
+            )
+            return Response({'status': 'failed', 'deployment_id': str(deployment.id)})
+
+        if status_value != 'completed':
+            return Response({'error': 'invalid_status', 'detail': 'Status de deployment invalido.'}, status=status.HTTP_400_BAD_REQUEST)
+        if release_version != deployment.release.version:
+            return Response({'error': 'release_mismatch', 'detail': 'Release confirmada diverge do deployment.'}, status=status.HTTP_409_CONFLICT)
+        if service_status.lower() != 'running' or not health_check:
+            return Response({'error': 'health_not_confirmed', 'detail': 'Servico/health check nao confirmados.'}, status=status.HTTP_409_CONFLICT)
+
+        deployment.mark_completed(machine)
+        create_audit_event(
+            event_type='agent.deployment.completed',
+            title='Deployment de agente concluido',
+            description=f'Deployment Windows concluido em {machine.hostname}.',
+            severity=AuditEvent.SEVERITY_SUCCESS,
+            actor_type=AuditEvent.ACTOR_AGENT,
+            actor_name='NightOwl deployment bootstrap',
+            endpoint=machine,
+            metadata={
+                'deployment_id': str(deployment.id),
+                'release_id': str(deployment.release_id),
+                'release_version': deployment.release.version,
+                'platform': deployment.platform,
+                'channel': deployment.channel,
+            },
+            request=request,
+        )
+        return Response({'status': 'completed', 'deployment_id': str(deployment.id)})
 
 
 def _payload_sha256(payload):
@@ -1589,6 +1703,16 @@ class AgentEnrollView(APIView):
                 status.HTTP_403_FORBIDDEN,
                 metadata={'deployment_id': str(deployment_token.id), 'token_prefix': deployment_token.prefix},
             )
+        if deployment_token.status not in {AgentDeploymentToken.STATUS_WAITING, AgentDeploymentToken.STATUS_INSTALLING}:
+            return None, self._error(
+                request,
+                payload,
+                AgentEnrollmentLog.STATUS_USAGE_LIMIT_REACHED,
+                'deployment_token_used',
+                'Deployment token ja utilizado.',
+                status.HTTP_403_FORBIDDEN,
+                metadata={'deployment_id': str(deployment_token.id), 'token_prefix': deployment_token.prefix},
+            )
         if deployment_token.is_used:
             return None, self._error(
                 request,
@@ -1831,9 +1955,33 @@ class AgentEnrollView(APIView):
 
         try:
             machine, should_create, identity_source = self._find_machine(machine_id, hostname, domain, serial_number)
-            agent_token = AgentMachine.generate_token()
+            bearer_machine, bearer_token = _authenticated_bearer_machine(request)
+            agent_token = ''
             now = timezone.now()
+            if deployment_token is not None and deployment_token.endpoint_id and machine is not None and deployment_token.endpoint_id != machine.id:
+                return self._error(
+                    request,
+                    payload,
+                    AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_machine_mismatch',
+                    'Deployment token ja esta vinculado a outro endpoint.',
+                    status.HTTP_409_CONFLICT,
+                    endpoint=machine,
+                    metadata={'deployment_id': str(deployment_token.id)},
+                )
+            if deployment_token is not None and bearer_machine is not None and machine is not None and bearer_machine.id != machine.id:
+                return self._error(
+                    request,
+                    payload,
+                    AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_bearer_mismatch',
+                    'Bearer token pertence a outro endpoint.',
+                    status.HTTP_409_CONFLICT,
+                    endpoint=machine,
+                    metadata={'deployment_id': str(deployment_token.id)},
+                )
             if should_create:
+                agent_token = AgentMachine.generate_token()
                 machine = AgentMachine(
                     machine_id=machine_id,
                     hostname=hostname,
@@ -1848,8 +1996,17 @@ class AgentEnrollView(APIView):
             else:
                 if machine_id and not machine.machine_id:
                     machine.machine_id = machine_id
-                machine.set_agent_token(agent_token)
-                created_or_existing = 'existing_rotated'
+                if deployment_token is not None and bearer_machine is not None and bearer_machine.id == machine.id:
+                    agent_token = bearer_token
+                    created_or_existing = 'existing_preserved'
+                elif deployment_token is not None:
+                    agent_token = AgentMachine.generate_token()
+                    machine.set_agent_token(agent_token)
+                    created_or_existing = 'existing_recovered'
+                else:
+                    agent_token = AgentMachine.generate_token()
+                    machine.set_agent_token(agent_token)
+                    created_or_existing = 'existing_rotated'
                 if machine_id and machine.machine_id and machine.machine_id != machine_id:
                     create_audit_event(
                         event_type='endpoint.identity_conflict',
@@ -1886,7 +2043,7 @@ class AgentEnrollView(APIView):
             if enrollment_token is not None:
                 enrollment_token.mark_used()
             if deployment_token is not None:
-                deployment_token.mark_completed(machine)
+                deployment_token.mark_enrolled(machine)
             if manual_validation_token is not None:
                 manual_validation_token.mark_used(hostname, domain)
             self._log_enrollment(
@@ -1911,10 +2068,10 @@ class AgentEnrollView(APIView):
             )
             if deployment_token is not None:
                 create_audit_event(
-                    event_type='agent.deployment.completed',
-                    title='Deployment de agente concluido',
-                    description=f'Deployment Windows concluido em {hostname}.',
-                    severity=AuditEvent.SEVERITY_SUCCESS,
+                    event_type='agent.deployment.enrolled',
+                    title='Deployment de agente vinculado',
+                    description=f'Deployment Windows iniciou enrollment em {hostname}.',
+                    severity=AuditEvent.SEVERITY_INFO,
                     actor_type=AuditEvent.ACTOR_AGENT,
                     actor_name='NightOwlAgent installer',
                     endpoint=machine,
@@ -1925,6 +2082,7 @@ class AgentEnrollView(APIView):
                         'platform': deployment_token.platform,
                         'channel': deployment_token.channel,
                         'token_prefix': deployment_token.prefix,
+                        'credential_handoff': created_or_existing,
                     },
                     request=request,
                 )

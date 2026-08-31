@@ -15,7 +15,7 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, AgentDeploymentToken, AgentJob, AgentJobResultReceipt, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
+from .models import AuditEvent, AgentDeploymentToken, AgentEnrollmentLog, AgentJob, AgentJobResultReceipt, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
 from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
@@ -1385,9 +1385,9 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertIn('-ExpectedChannel', text)
         self.assertIn('-ExpectedPackageSha256', text)
         self.assertIn('-ExpectedReleaseId', text)
-        self.assertNotIn('AgentToken', text)
+        self.assertNotIn(token, text)
 
-    def test_enrollment_consumes_deployment_and_links_endpoint(self):
+    def test_deployment_enrollment_links_endpoint_but_does_not_complete(self):
         deployment, token, _ = self.create_deployment()
         response = Client().post(
             reverse('agent-enroll'),
@@ -1409,10 +1409,194 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(response.status_code, 200, response.content)
         endpoint = AgentMachine.objects.get(machine_id='machine-deploy-001')
         deployment.refresh_from_db()
-        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_COMPLETED)
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
         self.assertEqual(deployment.endpoint_id, endpoint.id)
         self.assertIsNotNone(deployment.used_at)
+        self.assertIsNone(deployment.completed_at)
+        self.assertTrue(AuditEvent.objects.filter(event_type='agent.deployment.enrolled', endpoint=endpoint).exists())
+        self.assertFalse(AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).exists())
+
+    def test_existing_valid_bearer_is_preserved_for_deployment_reinstall(self):
+        machine = AgentMachine.objects.create(
+            machine_id='machine-existing-token',
+            hostname='CS-EXISTING',
+            domain='CONTROL',
+            agent_version='0.1.0.7',
+            agent_token_hash='',
+        )
+        existing_token = 'rmm_live_existing_valid_token'
+        machine.set_agent_token(existing_token)
+        machine.save(update_fields=['agent_token_hash'])
+        original_hash = machine.agent_token_hash
+        deployment, token, _ = self.create_deployment()
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {existing_token}').post(
+            reverse('agent-enroll'),
+            data=json.dumps({
+                'enrollment_token': token,
+                'machine_id': machine.machine_id,
+                'hostname': machine.hostname,
+                'domain': machine.domain,
+                'os_name': 'Windows Server',
+                'agent_version': self.release.version,
+                'agent_mode': 'service',
+                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
+                'task_name': 'NightOwlAgentDotNet',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        machine.refresh_from_db()
+        deployment.refresh_from_db()
+        self.assertEqual(machine.agent_token_hash, original_hash)
+        self.assertEqual(response.json()['agent_token'], existing_token)
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+        self.assertEqual(deployment.endpoint_id, machine.id)
+        self.assertEqual(AgentMachine.objects.filter(machine_id=machine.machine_id).count(), 1)
+        enrollment = AgentEnrollmentLog.objects.latest('created_at')
+        self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_preserved')
+
+    def test_existing_invalid_bearer_can_recover_credential_with_deployment_token(self):
+        machine = AgentMachine.objects.create(
+            machine_id='machine-broken-token',
+            hostname='CS-BROKEN',
+            domain='CONTROL',
+            agent_version='0.1.0.7',
+            agent_token_hash='',
+        )
+        old_valid_token = 'rmm_live_previous_token'
+        machine.set_agent_token(old_valid_token)
+        machine.save(update_fields=['agent_token_hash'])
+        original_hash = machine.agent_token_hash
+        deployment, token, _ = self.create_deployment()
+
+        response = Client(HTTP_AUTHORIZATION='Bearer rmm_live_stale_local_token').post(
+            reverse('agent-enroll'),
+            data=json.dumps({
+                'enrollment_token': token,
+                'machine_id': machine.machine_id,
+                'hostname': machine.hostname,
+                'domain': machine.domain,
+                'os_name': 'Windows Server',
+                'agent_version': self.release.version,
+                'agent_mode': 'service',
+                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
+                'task_name': 'NightOwlAgentDotNet',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        recovered_token = response.json()['agent_token']
+        self.assertTrue(recovered_token.startswith('rmm_live_'))
+        self.assertNotEqual(recovered_token, old_valid_token)
+        machine.refresh_from_db()
+        deployment.refresh_from_db()
+        self.assertNotEqual(machine.agent_token_hash, original_hash)
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+        self.assertEqual(deployment.endpoint_id, machine.id)
+        self.assertEqual(AgentMachine.objects.filter(machine_id=machine.machine_id).count(), 1)
+        self.assertNotIn(recovered_token, json.dumps(list(AuditEvent.objects.values_list('metadata', flat=True))))
+        enrollment = AgentEnrollmentLog.objects.latest('created_at')
+        self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_recovered')
+
+    def test_deployment_completion_requires_target_release_health_and_bearer(self):
+        deployment, token, _ = self.create_deployment()
+        enroll = Client().post(
+            reverse('agent-enroll'),
+            data=json.dumps({
+                'enrollment_token': token,
+                'machine_id': 'machine-complete-001',
+                'hostname': 'CS-COMPLETE-001',
+                'domain': 'CONTROL',
+                'os_name': 'Windows 11',
+                'agent_version': self.release.version,
+                'agent_mode': 'service',
+                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
+                'task_name': 'NightOwlAgentDotNet',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(enroll.status_code, 200, enroll.content)
+        agent_token = enroll.json()['agent_token']
+        endpoint = AgentMachine.objects.get(machine_id='machine-complete-001')
+
+        mismatch = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': '0.1.1.0-rc17',
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(mismatch.status_code, 409)
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+
+        completed = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(completed.status_code, 200, completed.content)
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_COMPLETED)
+        self.assertEqual(deployment.endpoint_id, endpoint.id)
+        self.assertIsNotNone(deployment.completed_at)
         self.assertTrue(AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).exists())
+
+    def test_deployment_failure_after_enrollment_marks_failed_not_completed(self):
+        deployment, token, _ = self.create_deployment()
+        enroll = Client().post(
+            reverse('agent-enroll'),
+            data=json.dumps({
+                'enrollment_token': token,
+                'machine_id': 'machine-failed-install',
+                'hostname': 'CS-FAIL-INSTALL',
+                'domain': 'CONTROL',
+                'os_name': 'Windows 11',
+                'agent_version': self.release.version,
+                'agent_mode': 'service',
+                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
+                'task_name': 'NightOwlAgentDotNet',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(enroll.status_code, 200, enroll.content)
+        agent_token = enroll.json()['agent_token']
+        endpoint = AgentMachine.objects.get(machine_id='machine-failed-install')
+
+        failed = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'failed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Stopped',
+                'error_code': 'BOOTSTRAP_INSTALLER_FAILED',
+                'error_message': 'Installer failed after enrollment.',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(failed.status_code, 200, failed.content)
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_FAILED)
+        self.assertEqual(deployment.endpoint_id, endpoint.id)
+        self.assertEqual(deployment.failure_code, 'BOOTSTRAP_INSTALLER_FAILED')
+        self.assertIsNone(deployment.completed_at)
 
 
 class AgentReleasePolicyTests(TestCase):

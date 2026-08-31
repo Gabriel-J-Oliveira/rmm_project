@@ -809,6 +809,14 @@ class AgentDeploymentToken(models.Model):
             self.installing_at = timezone.now()
             self.save(update_fields=['status', 'installing_at'])
 
+    def mark_enrolled(self, endpoint) -> None:
+        now = timezone.now()
+        self.status = self.STATUS_INSTALLING
+        self.endpoint = endpoint
+        self.used_at = self.used_at or now
+        self.installing_at = self.installing_at or now
+        self.save(update_fields=['status', 'endpoint', 'used_at', 'installing_at'])
+
     def mark_completed(self, endpoint) -> None:
         now = timezone.now()
         self.status = self.STATUS_COMPLETED
@@ -822,7 +830,7 @@ class AgentDeploymentToken(models.Model):
         self.failed_at = timezone.now()
         self.failure_code = (code or '')[:80]
         self.failure_message = (message or '')[:1000]
-        self.save(update_fields=['status', 'failed_at', 'failure_code', 'failure_message'])
+        self.save(update_fields=['status', 'endpoint', 'failed_at', 'failure_code', 'failure_message'])
 
     @classmethod
     def create_with_token(cls, **kwargs):
