@@ -472,7 +472,7 @@ class AgentDeploymentCompleteView(APIView):
         service_status = str(payload.get('service_status') or '').strip()
         health_check = bool(payload.get('health_check_confirmed') or payload.get('health_check'))
 
-        deployment = AgentDeploymentToken.objects.select_for_update().select_related('release', 'endpoint').filter(pk=deployment_id).first()
+        deployment = AgentDeploymentToken.objects.select_for_update().select_related('release').filter(pk=deployment_id).first()
         if deployment is None:
             return Response({'error': 'deployment_not_found', 'detail': 'Deployment nao encontrado.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -528,6 +528,11 @@ class AgentDeploymentCompleteView(APIView):
             return Response({'error': 'release_mismatch', 'detail': 'Release confirmada diverge do deployment.'}, status=status.HTTP_409_CONFLICT)
         if service_status.lower() != 'running' or not health_check:
             return Response({'error': 'health_not_confirmed', 'detail': 'Servico/health check nao confirmados.'}, status=status.HTTP_409_CONFLICT)
+
+        if deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
+            if deployment.endpoint_id == machine.id:
+                return Response({'status': 'completed', 'deployment_id': str(deployment.id), 'idempotent': True})
+            return Response({'error': 'deployment_machine_mismatch', 'detail': 'Deployment concluido para outro endpoint.'}, status=status.HTTP_409_CONFLICT)
 
         deployment.mark_completed(machine)
         create_audit_event(

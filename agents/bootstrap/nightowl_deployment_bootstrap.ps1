@@ -107,7 +107,7 @@ function Read-AgentConfig {
 function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCode, [string]$ErrorMessage) {
     $completionUrl = Get-OptionalJsonProperty -Object $Metadata -Name "completion_url"
     if ([string]::IsNullOrWhiteSpace($completionUrl)) {
-        return
+        return [pscustomobject]@{ ok = $false; error = "completion_url_missing" }
     }
     $config = Read-AgentConfig
     $agentToken = Get-OptionalJsonProperty -Object $config -Name "agentToken"
@@ -123,7 +123,7 @@ function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCod
         $headers["X-NightOwl-Deployment-Token"] = $Token
     }
     else {
-        return
+        return [pscustomobject]@{ ok = $false; error = "completion_credentials_missing" }
     }
     $serviceStatus = "Unknown"
     try {
@@ -139,7 +139,13 @@ function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCod
         error_code = $ErrorCode
         error_message = $ErrorMessage
     }
-    Invoke-JsonPost -Url $completionUrl -Headers $headers -Body $body | Out-Null
+    try {
+        Invoke-JsonPost -Url $completionUrl -Headers $headers -Body $body | Out-Null
+        return [pscustomobject]@{ ok = $true; error = "" }
+    }
+    catch {
+        return [pscustomobject]@{ ok = $false; error = $_.Exception.Message }
+    }
 }
 
 try {
@@ -224,19 +230,31 @@ try {
     } catch {
         $serviceStatus = "Unknown"
     }
-    Send-DeploymentCompletion -Metadata $metadata -Status "completed" -ErrorCode "" -ErrorMessage ""
+    $confirmation = Send-DeploymentCompletion -Metadata $metadata -Status "completed" -ErrorCode "" -ErrorMessage ""
+    $confirmationStatus = if ($confirmation.ok) { "completed" } else { "failed" }
+    if (-not $confirmation.ok) {
+        Write-NightOwlBootstrapLog "warning" @{
+            warning_code = "BOOTSTRAP_COMPLETION_CALLBACK_FAILED"
+            warning_message = $confirmation.error
+            installation_status = "completed"
+            deployment_confirmation_status = "failed"
+        }
+    }
     Write-NightOwlResult "completed" @{
         hostname = $env:COMPUTERNAME
         machine_id = $machineId
         version = $version
         service_status = $serviceStatus
         enrollment_status = "completed"
+        installation_status = "completed"
+        deployment_confirmation_status = $confirmationStatus
     }
     Write-NightOwlBootstrapLog "completed" @{
         hostname = $env:COMPUTERNAME
         machine_id = $machineId
         version = $version
         service_status = $serviceStatus
+        deployment_confirmation_status = $confirmationStatus
     }
     $global:NightOwlDeploymentBootstrapExitCode = 0
 } catch {

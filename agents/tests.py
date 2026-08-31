@@ -1160,7 +1160,9 @@ $script = $script.Replace('& powershell.exe @installArgs', '$global:CapturedInst
 $override = @'
 function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
     return [pscustomobject]@{{
+        deployment_id = 'deployment-test-id'
         server_url = 'https://nightowl.test'
+        completion_url = 'https://nightowl.test/api/agent/deployments/complete/'
         release = [pscustomobject]@{{
             id = 'release-test-id'
             version = '0.1.1.0-rc19'
@@ -1174,6 +1176,9 @@ function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
             sha256 = 'trustedsha'
         }}
     }}
+}}
+function Invoke-JsonPost([string]$Url, [hashtable]$Headers, [hashtable]$Body) {{
+    throw 'simulated completion callback failure'
 }}
 function Invoke-WebRequest {{
     param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
@@ -1211,6 +1216,8 @@ Write-Output 'OPTIONAL_GIT_COMMIT_OK'
             )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         self.assertIn('OPTIONAL_GIT_COMMIT_OK', completed.stdout)
+        self.assertIn('NightOwl installation completed', completed.stdout)
+        self.assertIn('deployment_confirmation_status=failed', completed.stdout)
 
     def test_bootstrap_still_fails_when_required_metadata_is_missing(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
@@ -1556,6 +1563,51 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(deployment.endpoint_id, endpoint.id)
         self.assertIsNotNone(deployment.completed_at)
         self.assertTrue(AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).exists())
+
+        replay = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertTrue(replay.json()['idempotent'])
+
+    def test_deployment_completion_with_nullable_endpoint_does_not_raise_sql_lock_error(self):
+        deployment, _, _ = self.create_deployment()
+        deployment.status = AgentDeploymentToken.STATUS_INSTALLING
+        deployment.save(update_fields=['status'])
+
+        response = Client().post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': 'machine-not-bound',
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 403, response.content)
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+
+    def test_deployment_completion_query_does_not_lock_nullable_endpoint_join(self):
+        source = (settings.BASE_DIR / 'agents' / 'views.py').read_text(encoding='utf-8')
+        start = source.index('class AgentDeploymentCompleteView')
+        section = source[start:source.index('def _payload_sha256', start)]
+
+        self.assertIn("select_for_update().select_related('release')", section)
+        self.assertNotIn("select_related('release', 'endpoint')", section)
 
     def test_deployment_failure_after_enrollment_marks_failed_not_completed(self):
         deployment, token, _ = self.create_deployment()
