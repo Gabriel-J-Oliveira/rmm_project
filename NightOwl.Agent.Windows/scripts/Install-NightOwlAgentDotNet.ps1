@@ -1264,6 +1264,37 @@ function Write-StateMachineId($Path, $MachineId) {
     $state | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
 }
 
+function Write-InstalledState($Path, $MachineId) {
+    $state = Read-JsonFile $Path
+    if ($null -eq $state) {
+        $state = [pscustomobject]@{}
+    }
+    if ($state.PSObject.Properties.Name -notcontains "machine_id") {
+        $state | Add-Member -NotePropertyName "machine_id" -NotePropertyValue $MachineId
+    }
+    else {
+        $state.machine_id = $MachineId
+    }
+    if ($state.PSObject.Properties.Name -notcontains "install_status") {
+        $state | Add-Member -NotePropertyName "install_status" -NotePropertyValue "installed"
+    }
+    else {
+        $state.install_status = "installed"
+    }
+    if ($state.PSObject.Properties.Name -contains "uninstalled_at") {
+        $state.PSObject.Properties.Remove("uninstalled_at")
+    }
+    if ($state.PSObject.Properties.Name -notcontains "installed_at") {
+        $state | Add-Member -NotePropertyName "installed_at" -NotePropertyValue (Get-Date).ToUniversalTime().ToString("o")
+    }
+    else {
+        $state.installed_at = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    $state | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
+    Write-InstallLog "state.marked_installed" "Estado local marcado como instalado apos healthcheck." @{ path = $Path; machine_id = (Protect-SecretValue $MachineId) }
+    Add-ReportAction "state.marked_installed" @{ path = $Path }
+}
+
 function Stop-ServiceIfExists([string]$Name) {
     $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if ($service -and $service.Status -ne "Stopped") {
@@ -1953,6 +1984,8 @@ else {
     Add-ReportAction "healthcheck.ok" @{ service_name = $ServiceName; version = $packageVersion }
     Write-InstallLog "operation.healthcheck.ok" "Health check local concluido." @{ operation = $script:Operation; service_name = $ServiceName; version = $packageVersion }
 }
+
+Write-InstalledState -Path $statePath -MachineId $machineId
 
 if ($tempPackageDir -and (Test-Path $tempPackageDir)) {
     Remove-Item -Path $tempPackageDir -Recurse -Force -ErrorAction SilentlyContinue

@@ -472,11 +472,11 @@ public static class Program
         string stateDir = Path.Combine(rootPath, "State");
         Directory.CreateDirectory(stateDir);
         string statePath = Path.Combine(stateDir, "agent.state.json");
-        Dictionary<string, object?> state = new()
-        {
-            ["install_status"] = "uninstalled",
-            ["uninstalled_at"] = DateTimeOffset.UtcNow
-        };
+        Dictionary<string, object?> state = File.Exists(statePath)
+            ? JsonSerializer.Deserialize<Dictionary<string, object?>>(File.ReadAllText(statePath), JsonOptions) ?? new Dictionary<string, object?>()
+            : new Dictionary<string, object?>();
+        state["install_status"] = "uninstalled";
+        state["uninstalled_at"] = DateTimeOffset.UtcNow;
         NightOwlFileStore.WriteAllText(statePath, JsonSerializer.Serialize(state, JsonOptions));
     }
 

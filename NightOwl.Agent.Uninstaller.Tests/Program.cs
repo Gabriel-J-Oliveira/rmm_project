@@ -44,11 +44,14 @@ static void TestIsolatedUninstallerRunnerRemovesBinariesAndPreservesPersistentDa
         string runnerPath = Path.Combine(dir, "runner");
         string installPath = Path.Combine(rootPath, "AgentDotNet");
         string configDir = Path.Combine(rootPath, "Config");
+        string stateDir = Path.Combine(rootPath, "State");
         Directory.CreateDirectory(sourcePayload);
         Directory.CreateDirectory(installPath);
         Directory.CreateDirectory(configDir);
+        Directory.CreateDirectory(stateDir);
         File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Windows.exe"), "installed binary");
         File.WriteAllText(Path.Combine(configDir, "agent.config.json"), "{\"machineId\":\"test-machine\",\"agentToken\":\"\",\"jobsResultUrl\":\"\"}");
+        File.WriteAllText(Path.Combine(stateDir, "agent.state.json"), "{\"machine_id\":\"test-machine\",\"install_status\":\"installed\"}");
 
         CopyUninstallerBuildOutput(sourcePayload);
         int copied = JobExecutor.CopyUninstallerRunnerPayload(sourcePayload, runnerPath);
@@ -86,6 +89,10 @@ static void TestIsolatedUninstallerRunnerRemovesBinariesAndPreservesPersistentDa
         Require(!Directory.Exists(installPath), "Uninstall mode should remove binary install path.");
         Require(File.Exists(Path.Combine(configDir, "agent.config.json")), "Uninstall mode should preserve config.");
         Require(File.Exists(Path.Combine(rootPath, "State", "agent.state.json")), "Uninstall mode should mark persistent state.");
+        string state = File.ReadAllText(Path.Combine(rootPath, "State", "agent.state.json"));
+        Require(state.Contains("\"machine_id\": \"test-machine\"", StringComparison.OrdinalIgnoreCase) || state.Contains("\"machine_id\":\"test-machine\"", StringComparison.OrdinalIgnoreCase), "Uninstall state should preserve machine_id.");
+        Require(state.Contains("\"install_status\": \"uninstalled\"", StringComparison.OrdinalIgnoreCase) || state.Contains("\"install_status\":\"uninstalled\"", StringComparison.OrdinalIgnoreCase), "Uninstall state should be uninstalled.");
+        Require(state.Contains("uninstalled_at", StringComparison.OrdinalIgnoreCase), "Uninstall state should include uninstalled_at.");
         string[] reports = Directory.GetFiles(Path.Combine(rootPath, "Diagnostics"), "uninstall-job-*.json");
         Require(reports.Length == 1, "Uninstaller should write diagnostics report.");
         string report = File.ReadAllText(reports[0]);

@@ -91,6 +91,10 @@ foreach ($required in @(
     "reinstall.backup.created",
     "reinstall.rollback.completed",
     "reinstall.rollback.service_restored",
+    "Write-InstalledState",
+    "state.marked_installed",
+    'install_status = "installed"',
+    'PSObject.Properties.Remove("uninstalled_at")',
     "rollback_performed",
     "rollback_success",
     "NightOwl.Agent.Diagnostics.exe",
@@ -134,6 +138,8 @@ Assert-True (-not $installText.Contains('agent_version = "0.1.0.7"')) "Install s
 Assert-True (-not $installText.Contains('channel = "stable"')) "Install script must not write a hardcoded stable channel."
 Assert-True (-not $installText.Contains('packageSha256 = ""')) "Install script must not write an empty package SHA."
 Assert-True ($installText.Contains('throw ("{0}: {1}" -f $healthCode')) "Install script must fail closed on lifecycle health errors."
+Assert-True ($installText.IndexOf('Write-InstallLog "operation.healthcheck.ok"', [System.StringComparison]::Ordinal) -lt $installText.IndexOf('Write-InstalledState -Path $statePath', [System.StringComparison]::Ordinal)) "Install script must mark installed only after healthcheck OK."
+Assert-True ($installText.IndexOf('Write-InstalledState -Path $statePath', [System.StringComparison]::Ordinal) -lt $installText.IndexOf('Write-OperationReport -Status "completed"', [System.StringComparison]::Ordinal)) "Install script must write installed state before completed report."
 
 foreach ($required in @(
     "[switch]`$Purge",
