@@ -83,6 +83,9 @@ $script:Report = $null
 $script:Operation = "install"
 $script:ValidatedReleaseMetadata = $null
 $script:DownloadedPackageMode = $false
+$script:BinaryBackupPath = ""
+$script:BinaryReplacementStarted = $false
+$script:BinaryRollbackAttempted = $false
 $script:LifecycleErrorCodes = @(
     "INSTALL_ADMIN_REQUIRED",
     "INSTALL_UPDATE_IN_PROGRESS",
@@ -92,6 +95,7 @@ $script:LifecycleErrorCodes = @(
     "INSTALL_SERVICE_CREATE_FAILED",
     "INSTALL_ENROLLMENT_FAILED",
     "INSTALL_HEALTHCHECK_FAILED",
+    "INSTALL_BINARY_REPLACE_FAILED",
     "REPAIR_UPDATE_IN_PROGRESS",
     "REPAIR_CONFIG_INVALID",
     "REPAIR_IDENTITY_INVALID",
@@ -141,6 +145,8 @@ function New-OperationReport([string]$Operation) {
         service_status = ""
         actions = New-Object System.Collections.ArrayList
         warnings = New-Object System.Collections.ArrayList
+        rollback_performed = $false
+        rollback_success = $false
         error_code = ""
         error_message = ""
     }
@@ -1066,6 +1072,8 @@ function Test-ProtectedPayloadRelativePath([string]$RelativePath) {
 function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
     Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+    $started = Get-Date
+    $deadline = $started.AddSeconds(30)
     foreach ($item in Get-ChildItem -Path $SourceDir -Force -Recurse) {
         $relative = $item.FullName.Substring($SourceDir.Length).TrimStart("\", "/")
         if (Test-ProtectedPayloadRelativePath $relative) {
@@ -1080,14 +1088,127 @@ function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
             if ($item.Name -like "*.pdb") { continue }
             $destinationParent = Split-Path -Parent $destination
             New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
-            Copy-Item -Path $item.FullName -Destination $destination -Force
+            $attempt = 0
+            while ($true) {
+                $attempt++
+                try {
+                    Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
+                    break
+                }
+                catch [System.UnauthorizedAccessException] {
+                    if ((Get-Date) -ge $deadline) {
+                        Write-InstallLog "binary.replace.failed" "Falha persistente ao substituir arquivo do agente." @{ path = $relative; attempts = $attempt; error = $_.Exception.Message; error_type = "access_denied" }
+                        throw "INSTALL_BINARY_REPLACE_FAILED: acesso negado ao substituir $relative. $($_.Exception.Message)"
+                    }
+                    Write-InstallLog "binary.replace.retry" "Retry de substituicao de arquivo do agente apos acesso negado." @{ path = $relative; attempt = $attempt; error = $_.Exception.Message; error_type = "access_denied" }
+                    Wait-NightOwlProcessesToExit -RootPath $DestinationDir -TimeoutSeconds 3 | Out-Null
+                    Start-Sleep -Milliseconds (Get-CopyRetryDelayMilliseconds -Attempt $attempt)
+                }
+                catch [System.IO.IOException] {
+                    if ((Get-Date) -ge $deadline) {
+                        Write-InstallLog "binary.replace.failed" "Falha persistente ao substituir arquivo do agente." @{ path = $relative; attempts = $attempt; error = $_.Exception.Message; error_type = "io" }
+                        throw "INSTALL_BINARY_REPLACE_FAILED: falha de IO ao substituir $relative. $($_.Exception.Message)"
+                    }
+                    Write-InstallLog "binary.replace.retry" "Retry de substituicao de arquivo do agente apos falha de IO." @{ path = $relative; attempt = $attempt; error = $_.Exception.Message; error_type = "io" }
+                    Wait-NightOwlProcessesToExit -RootPath $DestinationDir -TimeoutSeconds 3 | Out-Null
+                    Start-Sleep -Milliseconds (Get-CopyRetryDelayMilliseconds -Attempt $attempt)
+                }
+            }
         }
     }
     Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir }
 }
 
-function Stop-TrayIfExists {
-    Get-Process -Name "NightOwl.Agent.Tray" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+function Get-CopyRetryDelayMilliseconds([int]$Attempt) {
+    if ($Attempt -le 1) { return 250 }
+    if ($Attempt -le 2) { return 500 }
+    return 1000
+}
+
+function Get-NormalizedPathPrefix([string]$Path) {
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path)
+        if (-not $full.EndsWith("\")) { $full = "$full\" }
+        return $full
+    }
+    catch {
+        if (-not $Path.EndsWith("\")) { return "$Path\" }
+        return $Path
+    }
+}
+
+function Get-NightOwlProcessesUnderPath([string]$RootPath) {
+    $prefix = Get-NormalizedPathPrefix $RootPath
+    $items = New-Object System.Collections.ArrayList
+    try {
+        $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like "NightOwl.Agent*.exe" -and
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath)).StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        foreach ($process in $processes) {
+            [void]$items.Add([ordered]@{
+                pid = [int]$process.ProcessId
+                name = [string]$process.Name
+                path = [string]$process.ExecutablePath
+            })
+        }
+    }
+    catch {
+        Write-InstallLog "process.enumeration.failed" "Falha ao enumerar processos NightOwl." @{ root = $RootPath; error = $_.Exception.Message }
+    }
+    return @($items)
+}
+
+function Wait-NightOwlProcessesToExit([string]$RootPath, [int]$TimeoutSeconds = 30) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastProcesses = @()
+    while ((Get-Date) -lt $deadline) {
+        $lastProcesses = @(Get-NightOwlProcessesUnderPath -RootPath $RootPath)
+        if ($lastProcesses.Count -eq 0) {
+            Write-InstallLog "process.wait.completed" "Processos NightOwl encerrados." @{ root = $RootPath }
+            return $true
+        }
+        Write-InstallLog "reinstall.quiesce.waiting_processes" "Aguardando processos NightOwl encerrarem." @{ root = $RootPath; processes = @($lastProcesses | ForEach-Object { @{ pid = $_.pid; name = $_.name } }) }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-InstallLog "process.wait.timeout" "Timeout aguardando processos NightOwl encerrarem." @{ root = $RootPath; timeout_seconds = $TimeoutSeconds; processes = @($lastProcesses | ForEach-Object { @{ pid = $_.pid; name = $_.name } }) }
+    return $false
+}
+
+function Stop-TrayIfExists([string]$RootPath = $InstallPath) {
+    $trayProcesses = @(Get-NightOwlProcessesUnderPath -RootPath $RootPath | Where-Object { $_.name -eq "NightOwl.Agent.Tray.exe" })
+    foreach ($process in $trayProcesses) {
+        Write-InstallLog "tray.stop.requested" "Solicitando parada do Tray antes de substituir binarios." @{ pid = $process.pid }
+        try {
+            Stop-Process -Id $process.pid -Force -ErrorAction Stop
+        }
+        catch {
+            Write-InstallLog "tray.stop.failed" "Falha ao solicitar parada do Tray." @{ pid = $process.pid; error = $_.Exception.Message }
+        }
+    }
+    foreach ($process in $trayProcesses) {
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline) {
+            if (-not (Get-Process -Id $process.pid -ErrorAction SilentlyContinue)) {
+                Write-InstallLog "tray.stop.completed" "Tray encerrado antes da substituicao de binarios." @{ pid = $process.pid }
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        }
+        if (Get-Process -Id $process.pid -ErrorAction SilentlyContinue) {
+            Write-InstallLog "process.wait.timeout" "Timeout aguardando Tray encerrar." @{ pid = $process.pid; name = $process.name; timeout_seconds = 10 }
+        }
+    }
+}
+
+function Invoke-ReinstallQuiesce([string]$RootPath, [string]$Name) {
+    Write-InstallLog "reinstall.quiesce.started" "Iniciando quiesce antes da substituicao de binarios." @{ install_path = $RootPath; service_name = $Name }
+    Stop-TrayIfExists -RootPath $RootPath
+    Stop-ServiceIfExists $Name
+    if (-not (Wait-NightOwlProcessesToExit -RootPath $RootPath -TimeoutSeconds 30)) {
+        Add-ReportWarning "REINSTALL_PROCESS_WAIT_TIMEOUT" "Alguns processos NightOwl ainda estavam ativos apos timeout de quiesce." @{ install_path = $RootPath }
+    }
 }
 
 function Test-AgentLifecycleHealth([string]$Name, [string]$ConfigPath, [string]$IdentityPath, [string]$ExpectedMachineId, [string]$ExePath, [string]$VersionPath, $ExpectedReleaseMetadata, [string]$LegacyConfigPath, [bool]$RequireNoLegacyConfig, [bool]$RequireTrayTask, [string]$TrayTaskName, [string]$TrayExePath, [string]$StartMenuShortcutPath) {
@@ -1149,6 +1270,41 @@ function Stop-ServiceIfExists([string]$Name) {
         Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
         $service.WaitForStatus("Stopped", "00:00:20")
     }
+    $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq "Stopped") {
+        Write-InstallLog "service.stop.completed" "Servico parado antes da substituicao de binarios." @{ service_name = $Name }
+    }
+}
+
+function New-InstallBinaryBackup([string]$Path) {
+    if (-not (Test-Path $Path)) { return "" }
+    $backupRoot = Join-Path ([string]$script:NightOwlPaths.UpdatesBackup) ("installer-reinstall-{0}-{1}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss"), [guid]::NewGuid().ToString("N"))
+    $backupPath = Join-Path $backupRoot "AgentDotNet"
+    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+    Copy-Item -LiteralPath $Path -Destination $backupPath -Recurse -Force
+    Write-InstallLog "reinstall.backup.created" "Backup dos binarios existentes criado antes do reinstall." @{ backup_path = $backupPath; install_path = $Path }
+    Add-ReportAction "reinstall.backup.created" @{ backup_path = $backupPath; install_path = $Path }
+    return $backupPath
+}
+
+function Restore-InstallBinaryBackup([string]$BackupPath, [string]$Path, [string]$Name) {
+    if ([string]::IsNullOrWhiteSpace($BackupPath) -or -not (Test-Path $BackupPath)) {
+        throw "backup de binarios ausente."
+    }
+    $script:BinaryRollbackAttempted = $true
+    if ($null -ne $script:Report) { $script:Report.rollback_performed = $true }
+    Write-InstallLog "reinstall.rollback.started" "Iniciando rollback dos binarios apos falha de substituicao." @{ backup_path = $BackupPath; install_path = $Path }
+    Stop-TrayIfExists -RootPath $Path
+    Stop-ServiceIfExists $Name
+    Wait-NightOwlProcessesToExit -RootPath $Path -TimeoutSeconds 10 | Out-Null
+    if (Test-Path $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    Copy-Item -Path (Join-Path $BackupPath "*") -Destination $Path -Recurse -Force
+    if ($null -ne $script:Report) { $script:Report.rollback_success = $true }
+    Write-InstallLog "reinstall.rollback.completed" "Rollback dos binarios concluido." @{ backup_path = $BackupPath; install_path = $Path }
+    Add-ReportAction "reinstall.rollback.completed" @{ backup_path = $BackupPath; install_path = $Path }
 }
 
 function Install-OrUpdateService([string]$Name, [string]$Display, [string]$ExePath) {
@@ -1614,12 +1770,15 @@ if ([string]::IsNullOrWhiteSpace($AgentToken)) {
     throw "AgentToken nao configurado. Verifique o enrollment token ou informe -AgentToken em modo legado/dev."
 }
 
+$previousVersion = Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig
+if ($existingInstallation) {
+    $script:BinaryBackupPath = New-InstallBinaryBackup -Path $InstallPath
+}
 if ($InstallAsService) {
-    Stop-ServiceIfExists $ServiceName
-    Stop-TrayIfExists
+    Invoke-ReinstallQuiesce -RootPath $InstallPath -Name $ServiceName
 }
 
-$previousVersion = Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig
+$script:BinaryReplacementStarted = $existingInstallation
 Copy-AgentBinaries -SourceDir $sourcePath -DestinationDir $InstallPath
 $exePath = Join-Path $InstallPath "NightOwl.Agent.Windows.exe"
 if (-not (Test-Path $exePath)) {
@@ -1806,6 +1965,21 @@ Write-Step "OK" ("Operacao concluida: {0}" -f $script:Operation)
 catch {
     $message = $_.Exception.Message
     $code = if ($message -match "^([A-Z0-9_]+):") { $matches[1] } else { Get-OperationErrorCode "UNEXPECTED_ERROR" }
+    if ($script:BinaryReplacementStarted -and $code -eq "INSTALL_BINARY_REPLACE_FAILED" -and -not $script:BinaryRollbackAttempted) {
+        try {
+            Restore-InstallBinaryBackup -BackupPath $script:BinaryBackupPath -Path $InstallPath -Name $ServiceName
+            if ($StartService -and (Test-Path (Join-Path $InstallPath "NightOwl.Agent.Windows.exe"))) {
+                Install-OrUpdateService -Name $ServiceName -Display $DisplayName -ExePath (Join-Path $InstallPath "NightOwl.Agent.Windows.exe")
+                Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
+                Write-InstallLog "reinstall.rollback.service_restored" "Servico restaurado apos rollback dos binarios." @{ service_name = $ServiceName }
+            }
+        }
+        catch {
+            if ($null -ne $script:Report) { $script:Report.rollback_success = $false }
+            Write-InstallLog "reinstall.rollback.failed" "Falha ao restaurar binarios apos erro de substituicao." @{ error = $_.Exception.Message; backup_path = $script:BinaryBackupPath; install_path = $InstallPath }
+            Add-ReportWarning "REINSTALL_ROLLBACK_FAILED" "Falha ao restaurar binarios apos erro de substituicao." @{ error = $_.Exception.Message }
+        }
+    }
     Write-InstallLog ("operation.{0}.failed" -f $script:Operation) "Operacao do agente falhou." @{ operation = $script:Operation; error_code = $code; error = $message }
     Write-OperationReport -Status "failed" -ErrorCode $code -ErrorMessage $message
     throw
