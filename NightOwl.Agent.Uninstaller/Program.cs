@@ -190,7 +190,7 @@ public static class Program
                 WriteLog(logPath, "uninstall.tray.stop_requested", new { pid = process.Id });
                 if (!process.HasExited)
                 {
-                    process.Kill(entireProcessTree: true);
+                    process.Kill(entireProcessTree: false);
                 }
             }
             catch (Exception ex)

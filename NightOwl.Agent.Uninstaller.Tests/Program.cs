@@ -187,6 +187,8 @@ static void TestUninstallerSourceMarkers()
     }
 
     Require(text.IndexOf("RemoveDirectoryWithRetry(installPath", StringComparison.Ordinal) < text.IndexOf("WriteUninstalledState(rootPath)", StringComparison.Ordinal), "Uninstaller should remove AgentDotNet before writing uninstalled state.");
+    Require(text.Contains("process.Kill(entireProcessTree: false)", StringComparison.Ordinal), "Uninstaller should stop only the Tray process, not the process tree containing the uninstaller.");
+    Require(!text.Contains("process.Kill(entireProcessTree: true)", StringComparison.Ordinal), "Uninstaller must not kill the Tray process tree because it may contain the uninstaller itself.");
 }
 
 static void CopyUninstallerBuildOutput(string destination)
