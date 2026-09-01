@@ -528,9 +528,9 @@ public sealed class JobExecutor
         }
 
         string runnerDir = Path.Combine(NightOwlPaths.Current.UpdatesRunnerDir, "uninstall-" + job.Id);
-        int filesCopied = CopyUninstallerRunnerPayload(config.InstallPath, runnerDir);
+        UninstallerRunnerPayloadResult runnerPayload = UninstallerRunnerPayload.Prepare(config.InstallPath, runnerDir);
 
-        string runner = Path.Combine(runnerDir, "NightOwl.Agent.Uninstaller.exe");
+        string runner = runnerPayload.RunnerExecutable;
         List<string> args = new()
         {
             "uninstall",
@@ -554,7 +554,8 @@ public sealed class JobExecutor
             mode,
             purge_authorized = purgeAuthorized,
             runner_dir = runnerDir,
-            files_copied = filesCopied
+            files_copied = runnerPayload.FilesCopied,
+            reparse_points_skipped = runnerPayload.ReparsePointsSkipped
         }, ct);
 
         using Process process = new()
@@ -704,57 +705,7 @@ public sealed class JobExecutor
 
     public static int CopyUninstallerRunnerPayload(string installPath, string runnerDir)
     {
-        if (string.IsNullOrWhiteSpace(installPath))
-        {
-            throw new ArgumentException("Install path is required.", nameof(installPath));
-        }
-        if (string.IsNullOrWhiteSpace(runnerDir))
-        {
-            throw new ArgumentException("Runner path is required.", nameof(runnerDir));
-        }
-        if (!Directory.Exists(installPath))
-        {
-            throw new DirectoryNotFoundException(installPath);
-        }
-        string sourceRunner = Path.Combine(installPath, "NightOwl.Agent.Uninstaller.exe");
-        if (!File.Exists(sourceRunner))
-        {
-            throw new FileNotFoundException("Uninstaller nao encontrado no endpoint.", sourceRunner);
-        }
-
-        if (Directory.Exists(runnerDir))
-        {
-            Directory.Delete(runnerDir, recursive: true);
-        }
-        Directory.CreateDirectory(runnerDir);
-
-        int filesCopied = 0;
-        foreach (string source in Directory.EnumerateFileSystemEntries(installPath, "*", SearchOption.AllDirectories))
-        {
-            FileAttributes attributes = File.GetAttributes(source);
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                continue;
-            }
-
-            string relative = Path.GetRelativePath(installPath, source);
-            string destination = Path.Combine(runnerDir, relative);
-            if ((attributes & FileAttributes.Directory) != 0)
-            {
-                Directory.CreateDirectory(destination);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(source, destination, overwrite: true);
-            filesCopied++;
-        }
-
-        if (!File.Exists(Path.Combine(runnerDir, "NightOwl.Agent.Uninstaller.exe")))
-        {
-            throw new FileNotFoundException("Payload do runner de desinstalacao sem executavel principal.", Path.Combine(runnerDir, "NightOwl.Agent.Uninstaller.exe"));
-        }
-        return filesCopied;
+        return UninstallerRunnerPayload.Prepare(installPath, runnerDir).FilesCopied;
     }
 
     public static string BuildRepairRunnerScript(

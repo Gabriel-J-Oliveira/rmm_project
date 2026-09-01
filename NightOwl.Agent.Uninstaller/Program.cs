@@ -350,6 +350,7 @@ public static class Program
                     path,
                     attempt,
                     error = Sanitize(ex.Message),
+                    active_process_scope = "install_path_only",
                     active_processes = GetNightOwlProcessSummary(installPath)
                 });
                 waitForProcesses();
@@ -365,6 +366,7 @@ public static class Program
             path,
             attempts = attempt,
             error = Sanitize(lastError?.Message ?? "install path still exists after retry timeout"),
+            active_process_scope = "install_path_only",
             active_processes = GetNightOwlProcessSummary(installPath)
         });
         throw new InvalidOperationException($"UNINSTALL_BINARY_REMOVE_FAILED: {Sanitize(lastError?.Message ?? "install path still exists after retry timeout")}");

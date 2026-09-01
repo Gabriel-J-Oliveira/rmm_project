@@ -21,6 +21,8 @@ try
     TestPersistenceFailureDoesNotCorruptExistingConfig();
     TestMigrationLogPayloadDoesNotExposeSecrets();
     TestUninstallerRunnerPayloadCopiesSelfContainedFiles();
+    TestUninstallerRunnerPayloadRunsOutsideInstallPath();
+    TestLoadedRuntimeFromRunnerDoesNotBlockInstallPathRemoval();
     TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
     TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
     TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
@@ -292,6 +294,60 @@ static void TestUninstallerRunnerPayloadCopiesSelfContainedFiles()
     }
     finally
     {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestUninstallerRunnerPayloadRunsOutsideInstallPath()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string installPath = Path.Combine(dir, "AgentDotNet");
+        string runnerPath = Path.Combine(dir, "Updates", "Runner", "uninstall-job");
+        Directory.CreateDirectory(installPath);
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Uninstaller.exe"), "fake exe");
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Uninstaller.dll"), "fake dll");
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Shared.dll"), "shared");
+
+        UninstallerRunnerPayloadResult result = UninstallerRunnerPayload.Prepare(installPath, runnerPath);
+
+        Require(File.Exists(result.RunnerExecutable), "Runner executable should exist.");
+        Require(!result.RunnerExecutable.StartsWith(installPath, StringComparison.OrdinalIgnoreCase), "Tray uninstall runner must execute outside AgentDotNet.");
+        Require(result.RunnerExecutable.StartsWith(runnerPath, StringComparison.OrdinalIgnoreCase), "Runner executable should be inside Updates Runner.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestLoadedRuntimeFromRunnerDoesNotBlockInstallPathRemoval()
+{
+    string dir = CreateTempDir();
+    FileStream? runnerRuntimeLock = null;
+    try
+    {
+        string installPath = Path.Combine(dir, "AgentDotNet");
+        string runnerPath = Path.Combine(dir, "Updates", "Runner", "uninstall-job");
+        Directory.CreateDirectory(installPath);
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Uninstaller.exe"), "fake exe");
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Uninstaller.dll"), "fake dll");
+        File.WriteAllText(Path.Combine(installPath, "NightOwl.Agent.Shared.dll"), "shared");
+        File.WriteAllText(Path.Combine(installPath, "clrjit.dll"), "runtime");
+
+        UninstallerRunnerPayloadResult result = UninstallerRunnerPayload.Prepare(installPath, runnerPath);
+        string runnerRuntime = Path.Combine(runnerPath, "clrjit.dll");
+        runnerRuntimeLock = File.Open(runnerRuntime, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        Directory.Delete(installPath, recursive: true);
+
+        Require(!Directory.Exists(installPath), "AgentDotNet should be removable while runtime files are loaded from external runner.");
+        Require(File.Exists(result.RunnerExecutable), "Temporary runner may remain without failing uninstall.");
+    }
+    finally
+    {
+        runnerRuntimeLock?.Dispose();
         DeleteTempDir(dir);
     }
 }

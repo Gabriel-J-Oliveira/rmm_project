@@ -506,20 +506,32 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private static void StartUninstallerWithAuthorizationFile(string authorizationFile)
     {
-        string uninstaller = Path.Combine(AppContext.BaseDirectory, "NightOwl.Agent.Uninstaller.exe");
-        if (!File.Exists(uninstaller))
-        {
-            throw new FileNotFoundException("NightOwl.Agent.Uninstaller.exe nao encontrado.", uninstaller);
-        }
         string jobId = ReadAuthorizationJobId(authorizationFile);
+        string runnerDir = Path.Combine(NightOwlPaths.Current.UpdatesRunnerDir, "uninstall-" + jobId);
+        UninstallerRunnerPayloadResult runnerPayload = UninstallerRunnerPayload.Prepare(AppContext.BaseDirectory, runnerDir);
+        ProtectRunnerDirectory(runnerDir);
+        TrayLog.Write("tray.menu.uninstall_agent.runner_prepared", "Runner externo de uninstall preparado pelo Tray.", new
+        {
+            runner_dir = runnerDir,
+            files_copied = runnerPayload.FilesCopied,
+            reparse_points_skipped = runnerPayload.ReparsePointsSkipped
+        });
         Process.Start(new ProcessStartInfo
         {
-            FileName = uninstaller,
+            FileName = runnerPayload.RunnerExecutable,
             Arguments = "uninstall --job-id " + jobId + " --mode uninstall --authorization-file \"" + authorizationFile + "\" --json-output",
-            WorkingDirectory = AppContext.BaseDirectory,
+            WorkingDirectory = runnerDir,
             UseShellExecute = true,
             Verb = "runas"
         });
+    }
+
+    private static void ProtectRunnerDirectory(string path)
+    {
+        RunIcacls(path, "/inheritance:r");
+        RunIcacls(path, "/grant:r *" + NightOwlPaths.SystemSid + ":(OI)(CI)F");
+        RunIcacls(path, "/grant:r *" + NightOwlPaths.AdministratorsSid + ":(OI)(CI)F");
+        RunIcacls(path, "/remove:g *" + NightOwlPaths.UsersSid + " *" + NightOwlPaths.AuthenticatedUsersSid + " *" + NightOwlPaths.EveryoneSid);
     }
 
     private static string ReadAuthorizationJobId(string authorizationFile)
