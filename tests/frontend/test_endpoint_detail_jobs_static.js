@@ -22,6 +22,17 @@ assert(source.includes("String(endpointDetail.activeJob.id) === String(id)"), "a
 assert(source.includes("repair_agent"), "repair_agent action must be exposed in endpoint detail UI");
 assert(source.includes("Deseja reparar o agente"), "repair_agent must ask for confirmation before creating a job");
 assert(source.includes("Job de reparo do agente enfileirado"), "repair_agent must show a queued job toast");
+assert(source.includes('uninstall_agent: "trash-2"'), "uninstall_agent jobs must render with the trash icon");
+assert(source.includes("function agentLifecycleActionButtons(detail)"), "uninstall lifecycle buttons must be shared by quick actions and tasks");
+assert(source.includes("const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);"), "quick actions must use shared lifecycle buttons");
+assert(source.includes("const lifecycleButtons = agentLifecycleActionButtons(detail);"), "tasks tab must use shared lifecycle buttons");
+assert(source.includes('actionButton("uninstall_agent", "Desinstalar agente", "trash-2")'), "tasks catalog must expose the uninstall action for installed endpoints");
+assert(source.includes('if (isEndpointUninstalled(detail)) return [];'), "uninstalled endpoints must not offer a new uninstall action");
+assert(source.includes('if (uninstallRequest) return [cancelUninstallButton(uninstallRequest)];'), "waiting uninstall requests must expose cancellation instead of duplicate submission");
+assert(source.includes('data-cancel-uninstall'), "cancel uninstall action must reuse the existing cancel handler");
+assert(source.includes("openUninstallModal();"), "uninstall action must reuse the existing uninstall modal");
+assert(source.includes('fetch("/api/endpoints/" + encodeURIComponent(id) + "/uninstall/"'), "uninstall flow must post to the existing backend endpoint");
+assert(source.includes('if (job.status === "completed") return "Agente desinstalado";'), "completed uninstall jobs must show the uninstall-specific result label");
 assert(source.includes('failed: "Falha"'), "failed jobs must render with the Falha badge");
 assert(source.includes('if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha no reparo do agente";'), "failed repair jobs must show the real error message");
 

@@ -297,6 +297,7 @@
             update_agent: "download-cloud",
             update_trusted_release_keys: "key-round",
             repair_agent: "wrench",
+            uninstall_agent: "trash-2",
             restart_agent: "rotate-ccw"
         }[value] || "terminal";
     }
@@ -523,6 +524,27 @@
 
     function actionButton(action, label, iconName) {
         return '<button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '">' + icon(iconName || "play") + '<span>' + escapeHtml(label) + "</span></button>";
+    }
+
+    function isEndpointUninstalled(detail) {
+        const lifecycle = detail && detail.agent && detail.agent.lifecycleStatus ? String(detail.agent.lifecycleStatus).toLowerCase() : "";
+        return lifecycle === "uninstalled";
+    }
+
+    function pendingUninstallRequest(detail) {
+        const uninstallRequest = detail && detail.uninstallRequest;
+        return uninstallRequest && uninstallRequest.id && uninstallRequest.status === "waiting_for_agent" ? uninstallRequest : null;
+    }
+
+    function cancelUninstallButton(uninstallRequest) {
+        return '<button type="button" class="endpoint-quick-action-button" data-cancel-uninstall="' + escapeHtml(uninstallRequest.id) + '">' + icon("ban") + '<span>Cancelar desinstalacao</span></button>';
+    }
+
+    function agentLifecycleActionButtons(detail) {
+        if (isEndpointUninstalled(detail)) return [];
+        const uninstallRequest = pendingUninstallRequest(detail);
+        if (uninstallRequest) return [cancelUninstallButton(uninstallRequest)];
+        return [actionButton("uninstall_agent", "Desinstalar agente", "trash-2")];
     }
 
     function healthClass(score) {
@@ -763,14 +785,7 @@
     }
 
     function renderQuickActions() {
-        const uninstallRequest = endpointDetail && endpointDetail.uninstallRequest;
-        const canCancelUninstall = uninstallRequest && uninstallRequest.id && uninstallRequest.status === "waiting_for_agent";
-        const uninstallButtons = [
-            actionButton("uninstall_agent", "Desinstalar agente", "trash-2")
-        ];
-        if (canCancelUninstall) {
-            uninstallButtons.push('<button type="button" class="endpoint-quick-action-button" data-cancel-uninstall="' + escapeHtml(uninstallRequest.id) + '">' + icon("ban") + '<span>Cancelar desinstalacao</span></button>');
-        }
+        const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);
         return '<div class="endpoint-action-groups">' +
             actionGroup("Inventario", [
                 actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
@@ -790,7 +805,7 @@
                 actionButton("repair_agent", "Reparar agente", "wrench"),
                 actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round"),
                 actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
-            ].concat(uninstallButtons)) +
+            ].concat(lifecycleButtons)) +
             actionGroup("Avancado", [
                 '<button type="button" class="endpoint-quick-action-button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + '<span>Script futuro</span></button>'
             ]) +
@@ -827,6 +842,11 @@
             if (job.status === "completed") return version ? "Agente reparado em " + version : "Agente reparado com sucesso";
             if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha no reparo do agente";
             return version ? "Reparando agente " + version : "Reparando agente";
+        }
+        if (job.type === "uninstall_agent") {
+            if (job.status === "completed") return "Agente desinstalado";
+            if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha na desinstalacao do agente";
+            return "Desinstalando agente";
         }
         return job.result || job.errorMessage || "-";
     }
@@ -1063,6 +1083,7 @@
     }
 
     function renderTasks(detail) {
+        const lifecycleButtons = agentLifecycleActionButtons(detail);
         return '<section class="panel endpoint-dense-card"><header><h2>' + icon("list-checks") + 'Acoes e Jobs</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar lista</button></header>' +
             '<div class="endpoint-remote-actions-grid">' +
             actionButton("ping", "Ping", "activity") +
@@ -1073,6 +1094,7 @@
             actionButton("repair_agent", "Reparar agente", "wrench") +
             actionButton("update_agent", "Atualizar agente", "download-cloud") +
             actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round") +
+            lifecycleButtons.join("") +
             "</div>" +
             renderJobs(detail.jobs, 80) +
             "</section>";
@@ -1852,6 +1874,14 @@
                 openUpdateModal(origin);
                 return;
             } else if (action === "uninstall_agent") {
+                if (isEndpointUninstalled(endpointDetail)) {
+                    showToast("Endpoint ja esta marcado como desinstalado.");
+                    return;
+                }
+                if (pendingUninstallRequest(endpointDetail)) {
+                    showToast("Ja existe uma desinstalacao aguardando o agente.");
+                    return;
+                }
                 openUninstallModal();
                 return;
             } else if (action === "update_trusted_release_keys") {
