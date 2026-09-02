@@ -33,6 +33,7 @@
         online: "Online",
         offline: "Offline",
         uninstalled: "Desinstalado",
+        purged: "Purgado",
         unknown: "Unknown",
         critical: "Critico",
         success: "OK",
@@ -276,8 +277,16 @@
         return job && job.progress != null ? job.progress : 0;
     }
 
-    function jobType(value) {
-        return '<span class="job-type-chip">' + icon(jobTypeIcon(value)) + escapeHtml(labels[value] || value || "Tarefa") + "</span>";
+    function jobType(value, job) {
+        return '<span class="job-type-chip">' + icon(jobTypeIcon(value)) + escapeHtml(jobTypeLabel(value, job) || labels[value] || value || "Tarefa") + "</span>";
+    }
+
+    function jobTypeLabel(value, job) {
+        const payload = job && job.payload && typeof job.payload === "object" ? job.payload : {};
+        const result = job && job.resultJson && typeof job.resultJson === "object" ? job.resultJson : {};
+        const mode = String(payload.mode || result.mode || "").toLowerCase();
+        if (value === "uninstall_agent" && mode === "purge") return "Purge do agente";
+        return labels[value] || value || "Tarefa";
     }
 
     function jobTypeIcon(value) {
@@ -528,7 +537,7 @@
 
     function isEndpointUninstalled(detail) {
         const lifecycle = detail && detail.agent && detail.agent.lifecycleStatus ? String(detail.agent.lifecycleStatus).toLowerCase() : "";
-        return lifecycle === "uninstalled";
+        return lifecycle === "uninstalled" || lifecycle === "purged";
     }
 
     function pendingUninstallRequest(detail) {
@@ -545,6 +554,22 @@
         const uninstallRequest = pendingUninstallRequest(detail);
         if (uninstallRequest) return [cancelUninstallButton(uninstallRequest)];
         return [actionButton("uninstall_agent", "Desinstalar agente", "trash-2")];
+    }
+
+    function purgeActionButtons(detail) {
+        if (isEndpointUninstalled(detail)) return [];
+        if (pendingUninstallRequest(detail)) return [];
+        return [actionButton("purge_agent", "Purgar agente e dados locais", "trash")];
+    }
+
+    function agentManagementActionButtons(detail) {
+        if (isEndpointUninstalled(detail)) return [];
+        return [
+            actionButton("update_agent", "Atualizar agente", "download-cloud"),
+            actionButton("repair_agent", "Reparar agente", "wrench"),
+            actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round"),
+            actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
+        ];
     }
 
     function healthClass(score) {
@@ -751,7 +776,7 @@
             const versionLine = job.targetVersion || job.previousVersion ? '<small class="endpoint-job-version">' + escapeHtml([job.previousVersion, job.targetVersion].filter(Boolean).join(" -> ")) + '</small>' : "";
             return '<article class="endpoint-job-item ' + (isActive ? "is-active " : "") + 'endpoint-job-item-' + escapeHtml(job.status || "pending") + (stale ? " is-stale" : "") + '">' +
                 '<div class="endpoint-job-identity">' +
-                    jobBadge(job.status) + jobType(job.type) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' + versionLine +
+                    jobBadge(job.status) + jobType(job.type, job) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' + versionLine +
                 '</div>' +
                 '<div class="endpoint-job-output">' +
                     '<div class="endpoint-job-progressline"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' +
@@ -786,6 +811,7 @@
 
     function renderQuickActions() {
         const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);
+        const agentManagementButtons = agentManagementActionButtons(endpointDetail);
         return '<div class="endpoint-action-groups">' +
             actionGroup("Inventario", [
                 actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
@@ -800,12 +826,7 @@
                 actionButton("collect_logs", "Coletar logs", "file-search"),
                 actionButton("ping", "Ping", "activity")
             ]) +
-            actionGroup("Agente", [
-                actionButton("update_agent", "Atualizar agente", "download-cloud"),
-                actionButton("repair_agent", "Reparar agente", "wrench"),
-                actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round"),
-                actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
-            ].concat(lifecycleButtons)) +
+            actionGroup("Agente", agentManagementButtons.concat(lifecycleButtons)) +
             actionGroup("Avancado", [
                 '<button type="button" class="endpoint-quick-action-button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + '<span>Script futuro</span></button>'
             ]) +
@@ -844,8 +865,19 @@
             return version ? "Reparando agente " + version : "Reparando agente";
         }
         if (job.type === "uninstall_agent") {
+            const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+            const mode = String(result.mode || payload.mode || "").toLowerCase();
+            if (mode === "purge") {
+                if (job.status === "completed") return "Agente purgado";
+                if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha no purge do agente";
+                if (job.status === "expired") return "Purge do agente expirado";
+                if (job.status === "cancelled") return "Purge do agente cancelado";
+                return "Purgando agente";
+            }
             if (job.status === "completed") return "Agente desinstalado";
             if (job.status === "failed") return job.errorMessage || result.error_message || result.message || "Falha na desinstalacao do agente";
+            if (job.status === "expired") return "Desinstalacao expirada";
+            if (job.status === "cancelled") return "Desinstalacao cancelada";
             return "Desinstalando agente";
         }
         return job.result || job.errorMessage || "-";
@@ -900,7 +932,7 @@
                 { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
                 { label: "Ultima comunicacao", value: agent.lastRun },
                 { label: "Canal/politica", value: (agent.updateChannel || "stable") + " / " + (agent.updatePolicy || "manual") },
-                { label: "Lifecycle", value: agent.lifecycleStatus === "uninstalled" ? "Desinstalado por " + (agent.uninstalledBy || "-") + " em " + formatDate(agent.uninstalledAt) : "Instalado" },
+                { label: "Lifecycle", value: agent.lifecycleStatus === "purged" ? "Purgado por " + (agent.uninstalledBy || "-") + " em " + formatDate(agent.uninstalledAt) : agent.lifecycleStatus === "uninstalled" ? "Desinstalado por " + (agent.uninstalledBy || "-") + " em " + formatDate(agent.uninstalledAt) : "Instalado" },
                 { label: "Ultimo job update", value: lastUpdateJobLabel(detail), className: "endpoint-fact-wide" },
                 { label: "Proximo heartbeat", value: agent.nextHeartbeat },
                 { label: "Rollout/motivo", value: (agent.rolloutPercentage == null ? "-" : agent.rolloutPercentage + "%") + " / " + (agent.updateReason || "-") },
@@ -1084,17 +1116,17 @@
 
     function renderTasks(detail) {
         const lifecycleButtons = agentLifecycleActionButtons(detail);
+        const purgeButtons = purgeActionButtons(detail);
+        const agentManagementButtons = agentManagementActionButtons(detail);
         return '<section class="panel endpoint-dense-card"><header><h2>' + icon("list-checks") + 'Acoes e Jobs</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar lista</button></header>' +
             '<div class="endpoint-remote-actions-grid">' +
             actionButton("ping", "Ping", "activity") +
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
             actionButton("collect_disks", "Coletar discos", "hard-drive") +
             actionButton("collect_software", "Coletar software", "package-search") +
-            actionButton("restart_agent", "Reiniciar agente", "rotate-ccw") +
-            actionButton("repair_agent", "Reparar agente", "wrench") +
-            actionButton("update_agent", "Atualizar agente", "download-cloud") +
-            actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round") +
+            agentManagementButtons.join("") +
             lifecycleButtons.join("") +
+            purgeButtons.join("") +
             "</div>" +
             renderJobs(detail.jobs, 80) +
             "</section>";
@@ -1348,11 +1380,14 @@
         });
     }
 
-    function createUninstallRequest(username, password) {
+    function createUninstallRequest(username, password, options) {
+        options = options || {};
         const id = root.dataset.endpointId || "";
         const body = new URLSearchParams();
         body.set("username", username || "");
         body.set("password", password || "");
+        if (options.mode) body.set("mode", options.mode);
+        if (options.hostnameConfirmation) body.set("hostname_confirmation", options.hostnameConfirmation);
         return fetch("/api/endpoints/" + encodeURIComponent(id) + "/uninstall/", {
             method: "POST",
             credentials: "same-origin",
@@ -1427,7 +1462,7 @@
             submit.disabled = true;
             submit.textContent = "Autorizando...";
             setError("");
-            createUninstallRequest(username.value, password.value).then(function (payload) {
+            createUninstallRequest(username.value, password.value, { mode: "uninstall" }).then(function (payload) {
                 password.value = "";
                 showToast(payload.message || "Desinstalacao solicitada.");
                 close();
@@ -1437,6 +1472,64 @@
                 password.value = "";
                 submit.disabled = false;
                 submit.textContent = "Autorizar e desinstalar";
+                setError(error.message || "Nao foi possivel autorizar.");
+            });
+        });
+        backdrop.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") close();
+            if (event.key === "Enter") submit.click();
+        });
+        username.focus();
+    }
+
+    function openPurgeModal() {
+        const endpoint = endpointDetail && endpointDetail.hostname || root.dataset.endpoint || "Endpoint";
+        const backdrop = document.createElement("div");
+        backdrop.className = "endpoint-update-modal";
+        backdrop.innerHTML = '<div class="endpoint-update-modal__dialog" role="dialog" aria-modal="true">' +
+            '<header><h2>Purgar agente e dados locais</h2><button type="button" data-purge-close>&times;</button></header>' +
+            '<div class="endpoint-update-modal__body">' +
+                '<p><strong>Endpoint:</strong> ' + escapeHtml(endpoint) + '</p>' +
+                '<p>Esta operacao removera o agente e os dados locais persistentes do NightOwl neste dispositivo.</p>' +
+                '<label>Usuario NightOwl<input type="text" autocomplete="username" data-purge-username></label>' +
+                '<label>Senha NightOwl<input type="password" autocomplete="current-password" data-purge-password></label>' +
+                '<label>Digite ' + escapeHtml(endpoint) + ' para confirmar<input type="text" autocomplete="off" data-purge-confirmation></label>' +
+                '<div class="endpoint-update-modal__error" data-purge-error hidden></div>' +
+            '</div>' +
+            '<footer><button type="button" data-purge-close>Cancelar</button><button type="button" class="danger" data-purge-submit>Purgar agente e dados locais</button></footer>' +
+        '</div>';
+        document.body.appendChild(backdrop);
+        const username = backdrop.querySelector("[data-purge-username]");
+        const password = backdrop.querySelector("[data-purge-password]");
+        const confirmation = backdrop.querySelector("[data-purge-confirmation]");
+        const errorBox = backdrop.querySelector("[data-purge-error]");
+        const submit = backdrop.querySelector("[data-purge-submit]");
+        function close() {
+            if (password) password.value = "";
+            backdrop.remove();
+        }
+        function setError(message) {
+            errorBox.textContent = message || "";
+            errorBox.hidden = !message;
+        }
+        backdrop.querySelectorAll("[data-purge-close]").forEach(function (button) {
+            button.addEventListener("click", close);
+        });
+        submit.addEventListener("click", function () {
+            if (submit.disabled) return;
+            submit.disabled = true;
+            submit.textContent = "Autorizando...";
+            setError("");
+            createUninstallRequest(username.value, password.value, { mode: "purge", hostnameConfirmation: confirmation.value }).then(function (payload) {
+                password.value = "";
+                showToast(payload.message || "Purge solicitado.");
+                close();
+                schedulePolling();
+                return reloadEndpoint(false);
+            }).catch(function (error) {
+                password.value = "";
+                submit.disabled = false;
+                submit.textContent = "Purgar agente e dados locais";
                 setError(error.message || "Nao foi possivel autorizar.");
             });
         });
@@ -1867,9 +1960,13 @@
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
         }
-        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent"];
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent", "purge_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
             let jobOptions = {};
+            if (isEndpointUninstalled(endpointDetail) && ["update_agent", "repair_agent", "uninstall_agent", "purge_agent"].indexOf(action) >= 0) {
+                showToast("Endpoint ja esta marcado como desinstalado.");
+                return;
+            }
             if (action === "update_agent") {
                 openUpdateModal(origin);
                 return;
@@ -1883,6 +1980,17 @@
                     return;
                 }
                 openUninstallModal();
+                return;
+            } else if (action === "purge_agent") {
+                if (isEndpointUninstalled(endpointDetail)) {
+                    showToast("Endpoint ja esta marcado como desinstalado.");
+                    return;
+                }
+                if (pendingUninstallRequest(endpointDetail)) {
+                    showToast("Ja existe uma operacao de lifecycle aguardando o agente.");
+                    return;
+                }
+                openPurgeModal();
                 return;
             } else if (action === "update_trusted_release_keys") {
                 const bundle = endpointDetail.agent && endpointDetail.agent.trustBundle;

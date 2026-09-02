@@ -147,6 +147,7 @@ class AgentMachine(models.Model):
         ordering = ['hostname', 'domain']
         permissions = [
             ('uninstall_agent', 'Can authorize NightOwl Agent uninstall'),
+            ('purge_agent', 'Can authorize NightOwl Agent purge'),
         ]
         indexes = [
             models.Index(fields=['hostname', 'domain']),

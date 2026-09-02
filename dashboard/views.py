@@ -54,7 +54,7 @@ from agents.job_progress import (
     public_job_status,
     sanitize_job_value,
 )
-from config.authz import can_uninstall_agent, is_nightowl_technical_user
+from config.authz import can_purge_agent, can_uninstall_agent, is_nightowl_technical_user
 from agents.audit import create_audit_event, get_client_ip
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
@@ -3386,6 +3386,13 @@ def _generic_uninstall_auth_error():
     )
 
 
+def _generic_purge_auth_error():
+    return JsonResponse(
+        {'error': 'purge_authorization_failed', 'detail': 'Credenciais invalidas ou usuario sem permissao para purgar agentes.'},
+        status=403,
+    )
+
+
 def _uninstall_rate_key(request, endpoint, username):
     ip = get_client_ip(request) or 'unknown'
     normalized = str(username or '').strip().casefold()[:120]
@@ -3424,6 +3431,43 @@ def _authenticate_uninstall_operator(request, endpoint, username, password):
             request=request,
         )
         return None, _generic_uninstall_auth_error()
+
+    cache.delete(key)
+    return user, None
+
+
+def _authenticate_purge_operator(request, endpoint, username, password):
+    key = _uninstall_rate_key(request, endpoint, f'purge:{username}')
+    attempts = int(cache.get(key) or 0)
+    if attempts >= 5:
+        create_audit_event(
+            event_type='agent.purge.authorization_failed',
+            title='Reautenticacao de purge bloqueada',
+            description='Muitas tentativas de autorizacao de purge.',
+            severity=AuditEvent.SEVERITY_SECURITY,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=str(username or '')[:150],
+            endpoint=endpoint,
+            metadata={'reason': 'rate_limited'},
+            request=request,
+        )
+        return None, JsonResponse({'error': 'rate_limited', 'detail': 'Muitas tentativas. Tente novamente mais tarde.'}, status=429)
+
+    user = authenticate(request, username=username, password=password)
+    if not can_purge_agent(user):
+        cache.set(key, attempts + 1, 15 * 60)
+        create_audit_event(
+            event_type='agent.purge.authorization_failed',
+            title='Reautenticacao de purge negada',
+            description='Credenciais invalidas ou permissao insuficiente para purge.',
+            severity=AuditEvent.SEVERITY_SECURITY,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=str(username or '')[:150],
+            endpoint=endpoint,
+            metadata={'reason': 'invalid_credentials_or_permission'},
+            request=request,
+        )
+        return None, _generic_purge_auth_error()
 
     cache.delete(key)
     return user, None
@@ -3480,19 +3524,43 @@ def endpoint_uninstall_request(request, pk):
     if endpoint is None:
         raise Http404
 
+    mode = (request.POST.get('mode') or AgentUninstallRequest.MODE_UNINSTALL).strip().lower()
+    if mode not in {AgentUninstallRequest.MODE_UNINSTALL, AgentUninstallRequest.MODE_PURGE}:
+        return JsonResponse({'error': 'invalid_uninstall_mode', 'detail': 'Modo de lifecycle invalido.'}, status=400)
+
     username = (request.POST.get('username') or '').strip()
     password = request.POST.get('password') or ''
-    operator, error = _authenticate_uninstall_operator(request, endpoint, username, password)
+    operator, error = (
+        _authenticate_purge_operator(request, endpoint, username, password)
+        if mode == AgentUninstallRequest.MODE_PURGE
+        else _authenticate_uninstall_operator(request, endpoint, username, password)
+    )
     password = ''
     if error:
         return error
+
+    if mode == AgentUninstallRequest.MODE_PURGE:
+        confirmation = (request.POST.get('hostname_confirmation') or request.POST.get('confirmation') or '').strip()
+        if confirmation != endpoint.hostname:
+            create_audit_event(
+                event_type='agent.purge.confirmation_failed',
+                title='Confirmacao de purge invalida',
+                description=f'Confirmacao textual de purge invalida para {endpoint.hostname}.',
+                severity=AuditEvent.SEVERITY_SECURITY,
+                actor_type=AuditEvent.ACTOR_USER,
+                actor_name=operator.get_username(),
+                endpoint=endpoint,
+                metadata={'reason': 'hostname_mismatch'},
+                request=request,
+            )
+            return JsonResponse({'error': 'purge_confirmation_failed', 'detail': 'Digite exatamente o hostname do endpoint para confirmar o purge.'}, status=400)
 
     active_request = _active_uninstall_request(endpoint)
     if active_request:
         return JsonResponse(
             {
                 'error': 'uninstall_already_active',
-                'detail': 'Ja existe uma solicitacao de desinstalacao ativa para este endpoint.',
+                'detail': 'Ja existe uma solicitacao de lifecycle ativa para este endpoint.',
                 'uninstall_request': serialize_uninstall_request(active_request),
             },
             status=409,
@@ -3512,7 +3580,7 @@ def endpoint_uninstall_request(request, pk):
     now = timezone.now()
     uninstall_request = AgentUninstallRequest.objects.create(
         endpoint=endpoint,
-        mode=AgentUninstallRequest.MODE_UNINSTALL,
+        mode=mode,
         source=AgentUninstallRequest.SOURCE_PANEL,
         status=AgentUninstallRequest.STATUS_WAITING_FOR_AGENT,
         requested_by=request.user.get_username(),
@@ -3520,15 +3588,18 @@ def endpoint_uninstall_request(request, pk):
         authorized_at=now,
         expires_at=now + timedelta(hours=24),
     )
+    job_payload = {
+        'mode': mode,
+        'source': 'panel',
+        'timeout_seconds': 900,
+    }
+    if mode == AgentUninstallRequest.MODE_PURGE:
+        job_payload['purge_authorized'] = True
     job = AgentJob.objects.create(
         endpoint=endpoint,
         job_type=AgentJob.TYPE_UNINSTALL_AGENT,
         created_by=operator.get_username(),
-        payload={
-            'mode': 'uninstall',
-            'source': 'panel',
-            'timeout_seconds': 900,
-        },
+        payload=job_payload,
         correlation_id=str(uuid.uuid4()),
         attempt=1,
         timeout_seconds=900,
@@ -3537,9 +3608,13 @@ def endpoint_uninstall_request(request, pk):
     uninstall_request.agent_job = job
     uninstall_request.save(update_fields=['agent_job', 'updated_at'])
     create_audit_event(
-        event_type='agent.uninstall.requested',
-        title='Desinstalacao de agente solicitada',
-        description=f'Desinstalacao do agente solicitada para {endpoint.hostname}.',
+        event_type='agent.purge.requested' if mode == AgentUninstallRequest.MODE_PURGE else 'agent.uninstall.requested',
+        title='Purge de agente solicitado' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao de agente solicitada',
+        description=(
+            f'Purge do agente e dados locais solicitado para {endpoint.hostname}.'
+            if mode == AgentUninstallRequest.MODE_PURGE
+            else f'Desinstalacao do agente solicitada para {endpoint.hostname}.'
+        ),
         severity=AuditEvent.SEVERITY_WARNING,
         actor_type=AuditEvent.ACTOR_USER,
         actor_name=operator.get_username(),
@@ -3548,7 +3623,7 @@ def endpoint_uninstall_request(request, pk):
             'request_id': str(uninstall_request.id),
             'job_id': str(job.id),
             'source': 'panel',
-            'mode': 'uninstall',
+            'mode': mode,
             'expires_at': uninstall_request.expires_at.isoformat(),
         },
         request=request,
@@ -3556,7 +3631,11 @@ def endpoint_uninstall_request(request, pk):
     return JsonResponse(
         {
             'status': 'ok',
-            'message': 'Aguardando endpoint ficar online.' if endpoint.status != AgentMachine.STATUS_ONLINE else 'Desinstalacao enviada ao endpoint.',
+            'message': (
+                'Aguardando endpoint ficar online.'
+                if endpoint.status != AgentMachine.STATUS_ONLINE
+                else ('Purge enviado ao endpoint.' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao enviada ao endpoint.')
+            ),
             'uninstall_request': serialize_uninstall_request(uninstall_request),
             'job': serialize_agent_job(job),
         },
@@ -3567,12 +3646,17 @@ def endpoint_uninstall_request(request, pk):
 @require_POST
 @transaction.atomic
 def endpoint_uninstall_cancel(request, pk, request_id):
-    if not can_uninstall_agent(request.user):
-        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para cancelar desinstalacao.'}, status=403)
     endpoint = resolve_agent_endpoint(pk)
     if endpoint is None:
         raise Http404
     uninstall_request = get_object_or_404(AgentUninstallRequest, pk=request_id, endpoint=endpoint)
+    if uninstall_request.mode == AgentUninstallRequest.MODE_PURGE:
+        if not can_purge_agent(request.user):
+            return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para cancelar purge.'}, status=403)
+    elif not can_uninstall_agent(request.user):
+        return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para cancelar desinstalacao.'}, status=403)
+    if uninstall_request.status == AgentUninstallRequest.STATUS_CANCELLED:
+        return JsonResponse({'status': 'ok', 'uninstall_request': serialize_uninstall_request(uninstall_request)})
     if uninstall_request.agent_job and uninstall_request.agent_job.status != AgentJob.STATUS_QUEUED:
         return JsonResponse({'error': 'uninstall_already_dispatched', 'detail': 'A desinstalacao ja foi entregue ao agente e nao pode ser cancelada.'}, status=409)
     uninstall_request.status = AgentUninstallRequest.STATUS_CANCELLED

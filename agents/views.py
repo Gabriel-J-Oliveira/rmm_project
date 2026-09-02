@@ -998,6 +998,21 @@ class AgentJobsPullView(APIView):
                         'UNINSTALL_REQUEST_EXPIRED',
                         'Solicitacao de desinstalacao expirou antes de ser entregue ao agente.',
                     )
+                    create_audit_event(
+                        event_type='agent.uninstall.expired',
+                        title='Solicitacao de lifecycle expirada',
+                        description=f'Solicitacao {uninstall_request.mode} expirou antes de ser enviada para {machine.hostname}.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_SYSTEM,
+                        actor_name='Sistema',
+                        endpoint=machine,
+                        metadata={
+                            'request_id': str(uninstall_request.id),
+                            'job_id': str(job.id),
+                            'mode': uninstall_request.mode,
+                            'source': uninstall_request.source,
+                        },
+                    )
             create_audit_event(
                 event_type='job.expired',
                 title='Job expirado',
@@ -1470,18 +1485,40 @@ class AgentJobsResultView(APIView):
                         },
                     )
                 if job.status == AgentJob.STATUS_COMPLETED and mode == 'purge':
-                    machine.is_active = False
-                    machine.status = AgentMachine.STATUS_OFFLINE
-                    machine.save(update_fields=['is_active', 'status', 'updated_at'])
+                    previous_version = machine.agent_version or ''
+                    machine.last_installed_agent_version = previous_version
+                    machine.status = AgentMachine.STATUS_UNINSTALLED
+                    machine.agent_lifecycle_status = 'purged'
+                    machine.agent_uninstalled_at = timezone.now()
+                    machine.agent_uninstalled_by = uninstall_request.authorized_by if uninstall_request else ''
+                    machine.agent_uninstall_source = uninstall_request.source if uninstall_request else 'unknown'
+                    machine.save(update_fields=[
+                        'last_installed_agent_version',
+                        'status',
+                        'agent_lifecycle_status',
+                        'agent_uninstalled_at',
+                        'agent_uninstalled_by',
+                        'agent_uninstall_source',
+                        'updated_at',
+                    ])
                     create_audit_event(
                         event_type='agent.purge.confirmed',
                         title='Purge do agente confirmado',
-                        description=f'Endpoint {machine.hostname} desativado apos confirmacao de purge.',
+                        description=f'Endpoint {machine.hostname} marcado como purgado apos confirmacao do agente.',
                         severity=AuditEvent.SEVERITY_WARNING,
                         actor_type=AuditEvent.ACTOR_SYSTEM,
                         actor_name='Sistema',
                         endpoint=machine,
-                        metadata={'job_id': str(job.id), 'result_id': result_id},
+                        metadata={
+                            'job_id': str(job.id),
+                            'result_id': result_id,
+                            'request_id': str(uninstall_request.id) if uninstall_request else '',
+                            'source': uninstall_request.source if uninstall_request else '',
+                            'authorized_by': uninstall_request.authorized_by if uninstall_request else '',
+                            'previous_version': previous_version,
+                            'binary_removed': bool(result_payload.get('binary_removed')),
+                            'persistent_data_preserved': bool(result_payload.get('persistent_data_preserved')),
+                        },
                     )
             if job.job_type == AgentJob.TYPE_REPAIR_AGENT and job.status in RESULT_FINAL_STATUSES:
                 result_payload = job.result if isinstance(job.result, dict) else {}

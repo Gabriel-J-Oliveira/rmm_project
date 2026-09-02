@@ -31,6 +31,15 @@ def can_uninstall_agent(user):
     return user.has_perm('agents.uninstall_agent')
 
 
+def can_purge_agent(user):
+    """Authorize destructive agent purge without treating staff or uninstall permission as sufficient."""
+    if not user or not getattr(user, 'is_authenticated', False) or not getattr(user, 'is_active', False):
+        return False
+    if getattr(user, 'is_superuser', False):
+        return True
+    return user.has_perm('agents.purge_agent')
+
+
 def _identifier_candidates(user):
     username = str(user.get_username() or '').strip()
     email = str(getattr(user, 'email', '') or '').strip()
