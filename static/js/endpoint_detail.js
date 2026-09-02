@@ -546,7 +546,9 @@
     }
 
     function cancelUninstallButton(uninstallRequest) {
-        return '<button type="button" class="endpoint-quick-action-button" data-cancel-uninstall="' + escapeHtml(uninstallRequest.id) + '">' + icon("ban") + '<span>Cancelar desinstalacao</span></button>';
+        const mode = String(uninstallRequest.mode || "uninstall").toLowerCase();
+        const label = mode === "purge" ? "Cancelar purge" : "Cancelar desinstalacao";
+        return '<button type="button" class="endpoint-quick-action-button" data-cancel-uninstall="' + escapeHtml(uninstallRequest.id) + '" data-cancel-uninstall-mode="' + escapeHtml(mode) + '">' + icon("ban") + '<span>' + escapeHtml(label) + "</span></button>";
     }
 
     function agentLifecycleActionButtons(detail) {
@@ -570,6 +572,17 @@
             actionButton("update_trusted_release_keys", "Sincronizar chaves de confianca", "key-round"),
             actionButton("restart_agent", "Reiniciar agente", "rotate-ccw")
         ];
+    }
+
+    function cancelUninstallJobButton(job) {
+        const uninstallRequest = pendingUninstallRequest(endpointDetail);
+        if (!uninstallRequest || !job || job.type !== "uninstall_agent") return "";
+        const jobStatus = String(job.status || "").toLowerCase();
+        if (jobStatus !== "queued" && jobStatus !== "pending") return "";
+        if (uninstallRequest.job_id && String(uninstallRequest.job_id) !== String(job.id)) return "";
+        const mode = String(uninstallRequest.mode || (job.payload && job.payload.mode) || "uninstall").toLowerCase();
+        const label = mode === "purge" ? "Cancelar purge" : "Cancelar desinstalacao";
+        return '<button class="endpoint-job-action-button endpoint-job-action-danger" type="button" data-cancel-uninstall="' + escapeHtml(uninstallRequest.id) + '" data-cancel-uninstall-mode="' + escapeHtml(mode) + '">' + escapeHtml(label) + "</button>";
     }
 
     function healthClass(score) {
@@ -790,6 +803,7 @@
                 '<div class="endpoint-job-actions">' +
                     '<button class="endpoint-job-action-button" type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
                     '<button class="endpoint-job-action-button" type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
+                    cancelUninstallJobButton(job) +
                     (stale ? '<button class="endpoint-job-action-button endpoint-job-action-danger" type="button" data-mark-job-failed="' + escapeHtml(job.id) + '">Marcar falha</button>' : "") +
                 '</div>' +
             '</article>';
@@ -2304,8 +2318,15 @@
         const cancelUninstall = event.target.closest("[data-cancel-uninstall]");
         if (cancelUninstall) {
             event.preventDefault();
+            const cancelMode = String(cancelUninstall.dataset.cancelUninstallMode || "uninstall").toLowerCase();
+            const confirmed = window.confirm(
+                cancelMode === "purge"
+                    ? "Cancelar esta solicitacao de purge?\nA operacao nao sera executada quando o endpoint voltar a ficar online."
+                    : "Cancelar esta solicitacao de desinstalacao?\nO agente nao sera removido quando voltar a ficar online."
+            );
+            if (!confirmed) return;
             cancelUninstallRequest(cancelUninstall.dataset.cancelUninstall).then(function () {
-                showToast("Desinstalacao cancelada.");
+                showToast(cancelMode === "purge" ? "Purge cancelado." : "Desinstalacao cancelada.");
                 return reloadEndpoint(false);
             }).catch(function (error) {
                 showToast(error.message || "Nao foi possivel cancelar a desinstalacao.");

@@ -34,6 +34,13 @@ assert(source.includes('if (isEndpointUninstalled(detail)) return [];'), "uninst
 assert(source.includes('if (isEndpointUninstalled(endpointDetail) && ["update_agent", "repair_agent", "uninstall_agent", "purge_agent"].indexOf(action) >= 0)'), "stale clicks must not run lifecycle actions for uninstalled endpoints");
 assert(source.includes('if (uninstallRequest) return [cancelUninstallButton(uninstallRequest)];'), "waiting uninstall requests must expose cancellation instead of duplicate submission");
 assert(source.includes('data-cancel-uninstall'), "cancel uninstall action must reuse the existing cancel handler");
+assert(source.includes("function cancelUninstallJobButton(job)"), "queued uninstall jobs must expose contextual cancellation");
+assert(source.includes('if (jobStatus !== "queued" && jobStatus !== "pending") return "";'), "post-dispatch uninstall jobs must not expose cancellation");
+assert(source.includes('if (uninstallRequest.job_id && String(uninstallRequest.job_id) !== String(job.id)) return "";'), "job card cancellation must match the request by job_id");
+assert(source.includes('data-cancel-uninstall="\' + escapeHtml(uninstallRequest.id)'), "job card cancellation must use the uninstall request id");
+assert(source.includes('const label = mode === "purge" ? "Cancelar purge" : "Cancelar desinstalacao";'), "purge and uninstall cancellation labels must be distinct");
+assert(source.includes('Cancelar esta solicitacao de desinstalacao?'), "uninstall cancellation must ask for confirmation");
+assert(source.includes('Cancelar esta solicitacao de purge?'), "purge cancellation must ask for confirmation");
 assert(source.includes("openUninstallModal();"), "uninstall action must reuse the existing uninstall modal");
 assert(source.includes('fetch("/api/endpoints/" + encodeURIComponent(id) + "/uninstall/"'), "uninstall flow must post to the existing backend endpoint");
 assert(source.includes('if (job.status === "completed") return "Agente desinstalado";'), "completed uninstall jobs must show the uninstall-specific result label");
