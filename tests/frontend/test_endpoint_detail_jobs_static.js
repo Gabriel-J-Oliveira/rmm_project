@@ -44,6 +44,11 @@ assert(source.includes('body.set("mode", options.mode);'), "lifecycle modal must
 assert(source.includes('body.set("hostname_confirmation", options.hostnameConfirmation);'), "purge must require hostname confirmation");
 assert(source.includes('createUninstallRequest(username.value, password.value, { mode: "purge", hostnameConfirmation: confirmation.value })'), "purge modal must use reauth plus hostname confirmation");
 assert(source.includes('return lifecycle === "uninstalled" || lifecycle === "purged";'), "uninstalled and purged endpoints must hide lifecycle actions");
+const lifecycleGuardStart = source.indexOf("function isEndpointUninstalled(detail)");
+const lifecycleGuardEnd = source.indexOf("function pendingUninstallRequest(detail)");
+assert(lifecycleGuardStart >= 0 && lifecycleGuardEnd > lifecycleGuardStart, "endpoint lifecycle guard must be locatable");
+const lifecycleGuardBody = source.slice(lifecycleGuardStart, lifecycleGuardEnd);
+assert(!lifecycleGuardBody.includes("status"), "offline installed endpoints must still expose uninstall lifecycle actions");
 assert(source.includes('if (value === "uninstall_agent" && mode === "purge") return "Purge do agente";'), "purge jobs must be labeled distinctly in history");
 const quickActionsStart = source.indexOf("function renderQuickActions()");
 const quickActionsEnd = source.indexOf("function jobResultLabel(job)");

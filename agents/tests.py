@@ -1209,6 +1209,27 @@ class AgentDeploymentTokenTests(TestCase):
         token = command.split("$env:NIGHTOWL_DEPLOYMENT_TOKEN='", 1)[1].split("'", 1)[0]
         return deployment, token, payload
 
+    def create_enrolled_deployment(self, machine_id='machine-complete-001', hostname='CS-COMPLETE-001'):
+        deployment, token, _ = self.create_deployment()
+        enroll = Client().post(
+            reverse('agent-enroll'),
+            data=json.dumps({
+                'enrollment_token': token,
+                'machine_id': machine_id,
+                'hostname': hostname,
+                'domain': 'CONTROL',
+                'os_name': 'Windows 11',
+                'agent_version': self.release.version,
+                'agent_mode': 'service',
+                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
+                'task_name': 'NightOwlAgentDotNet',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(enroll.status_code, 200, enroll.content)
+        endpoint = AgentMachine.objects.get(machine_id=machine_id)
+        return deployment, endpoint, enroll.json()['agent_token']
+
     def test_deployment_created_with_hashed_single_use_token(self):
         deployment, token, payload = self.create_deployment()
 
@@ -1737,25 +1758,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_recovered')
 
     def test_deployment_completion_requires_target_release_health_and_bearer(self):
-        deployment, token, _ = self.create_deployment()
-        enroll = Client().post(
-            reverse('agent-enroll'),
-            data=json.dumps({
-                'enrollment_token': token,
-                'machine_id': 'machine-complete-001',
-                'hostname': 'CS-COMPLETE-001',
-                'domain': 'CONTROL',
-                'os_name': 'Windows 11',
-                'agent_version': self.release.version,
-                'agent_mode': 'service',
-                'install_path': r'C:\ProgramData\NightOwl\AgentDotNet',
-                'task_name': 'NightOwlAgentDotNet',
-            }),
-            content_type='application/json',
-        )
-        self.assertEqual(enroll.status_code, 200, enroll.content)
-        agent_token = enroll.json()['agent_token']
-        endpoint = AgentMachine.objects.get(machine_id='machine-complete-001')
+        deployment, endpoint, agent_token = self.create_enrolled_deployment()
 
         mismatch = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
             reverse('agent-deployment-complete'),
@@ -1806,6 +1809,154 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         )
         self.assertEqual(replay.status_code, 200, replay.content)
         self.assertTrue(replay.json()['idempotent'])
+
+    def test_deployment_completion_resets_uninstalled_lifecycle_after_health(self):
+        deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-reinstall-001', 'CS-REINSTALL-001')
+        endpoint.status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
+        endpoint.agent_uninstalled_by = 'operator'
+        endpoint.agent_uninstall_source = 'panel'
+        endpoint.save(update_fields=['status', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        endpoint.refresh_from_db()
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.agent_version, self.release.version)
+        self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
+        self.assertIsNone(endpoint.agent_uninstalled_at)
+        self.assertEqual(endpoint.agent_uninstalled_by, '')
+        self.assertEqual(endpoint.agent_uninstall_source, '')
+
+    def test_deployment_completion_resets_purged_lifecycle_after_health(self):
+        deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-repurge-001', 'CS-REPURGE-001')
+        endpoint.status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_lifecycle_status = 'purged'
+        endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
+        endpoint.agent_uninstalled_by = 'operator'
+        endpoint.agent_uninstall_source = 'panel'
+        endpoint.save(update_fields=['status', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        endpoint.refresh_from_db()
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
+        self.assertIsNone(endpoint.agent_uninstalled_at)
+        self.assertEqual(endpoint.agent_uninstalled_by, '')
+        self.assertEqual(endpoint.agent_uninstall_source, '')
+
+    def test_deployment_failed_does_not_mark_installed(self):
+        deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-failed-lifecycle', 'CS-FAILED-LIFECYCLE')
+        endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
+        endpoint.agent_uninstalled_by = 'operator'
+        endpoint.agent_uninstall_source = 'panel'
+        endpoint.save(update_fields=['agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'failed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Stopped',
+                'error_code': 'BOOTSTRAP_INSTALLER_FAILED',
+                'error_message': 'Installer failed.',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        endpoint.refresh_from_db()
+        self.assertEqual(endpoint.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
+        self.assertIsNotNone(endpoint.agent_uninstalled_at)
+        self.assertEqual(endpoint.agent_uninstalled_by, 'operator')
+        self.assertEqual(endpoint.agent_uninstall_source, 'panel')
+
+    def test_deployment_unhealthy_completion_does_not_mark_installed(self):
+        deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-unhealthy-lifecycle', 'CS-UNHEALTHY-LIFECYCLE')
+        endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
+        endpoint.agent_uninstalled_by = 'operator'
+        endpoint.agent_uninstall_source = 'panel'
+        endpoint.save(update_fields=['agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+
+        for service_status, health_check in [('Running', False), ('Stopped', True)]:
+            response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+                reverse('agent-deployment-complete'),
+                data=json.dumps({
+                    'deployment_id': str(deployment.id),
+                    'status': 'completed',
+                    'machine_id': endpoint.machine_id,
+                    'version': self.release.version,
+                    'service_status': service_status,
+                    'health_check_confirmed': health_check,
+                }),
+                content_type='application/json',
+            )
+            self.assertEqual(response.status_code, 409)
+            endpoint.refresh_from_db()
+            self.assertEqual(endpoint.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
+            self.assertIsNotNone(endpoint.agent_uninstalled_at)
+
+    def test_idempotent_deployment_completion_reconciles_stale_lifecycle(self):
+        deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-idempotent-lifecycle', 'CS-IDEMPOTENT-LIFECYCLE')
+        deployment.mark_completed(endpoint)
+        endpoint.status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
+        endpoint.agent_uninstalled_by = 'operator'
+        endpoint.agent_uninstall_source = 'panel'
+        endpoint.save(update_fields=['status', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+        completed_audits = AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).count()
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['idempotent'])
+        endpoint.refresh_from_db()
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
+        self.assertIsNone(endpoint.agent_uninstalled_at)
+        self.assertEqual(AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).count(), completed_audits)
 
     def test_deployment_completion_with_nullable_endpoint_does_not_raise_sql_lock_error(self):
         deployment, _, _ = self.create_deployment()

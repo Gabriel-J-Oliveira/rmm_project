@@ -530,10 +530,12 @@ class AgentDeploymentCompleteView(APIView):
 
         if deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
             if deployment.endpoint_id == machine.id:
+                mark_machine_installed_from_deployment(machine, deployment)
                 return Response({'status': 'completed', 'deployment_id': str(deployment.id), 'idempotent': True})
             return Response({'error': 'deployment_machine_mismatch', 'detail': 'Deployment concluido para outro endpoint.'}, status=status.HTTP_409_CONFLICT)
 
         deployment.mark_completed(machine)
+        mark_machine_installed_from_deployment(machine, deployment)
         create_audit_event(
             event_type='agent.deployment.completed',
             title='Deployment de agente concluido',
@@ -552,6 +554,26 @@ class AgentDeploymentCompleteView(APIView):
             request=request,
         )
         return Response({'status': 'completed', 'deployment_id': str(deployment.id)})
+
+
+def mark_machine_installed_from_deployment(machine, deployment):
+    if not machine or not deployment or not deployment.release:
+        return
+    machine.status = AgentMachine.STATUS_ONLINE
+    machine.agent_version = deployment.release.version
+    machine.agent_lifecycle_status = 'installed'
+    machine.agent_uninstalled_at = None
+    machine.agent_uninstalled_by = ''
+    machine.agent_uninstall_source = ''
+    machine.save(update_fields=[
+        'status',
+        'agent_version',
+        'agent_lifecycle_status',
+        'agent_uninstalled_at',
+        'agent_uninstalled_by',
+        'agent_uninstall_source',
+        'updated_at',
+    ])
 
 
 def _payload_sha256(payload):
