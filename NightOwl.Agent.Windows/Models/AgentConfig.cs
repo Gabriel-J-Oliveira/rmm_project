@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Windows.Models;
@@ -125,6 +126,20 @@ public sealed class AgentState
 
     [JsonPropertyName("recentJobIds")]
     public List<string> RecentJobIds { get; set; } = new();
+
+    [JsonPropertyName("install_status")]
+    public string InstallStatus { get; set; } = "";
+
+    [JsonPropertyName("installed_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? InstalledAt { get; set; }
+
+    [JsonPropertyName("uninstalled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? UninstalledAt { get; set; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
 
     public void RememberJob(string jobId)
     {

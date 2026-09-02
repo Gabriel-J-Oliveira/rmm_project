@@ -20,6 +20,20 @@ public static class NightOwlFileStore
         }
     }
 
+    public static async Task WriteAllTextAsync(string path, string content, Encoding? encoding = null, CancellationToken ct = default)
+    {
+        string tempPath = CreateTempPath(path);
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, encoding ?? Utf8NoBom, ct);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            DeleteTempBestEffort(tempPath);
+        }
+    }
+
     public static void WriteAllBytes(string path, byte[] bytes)
     {
         string tempPath = CreateTempPath(path);

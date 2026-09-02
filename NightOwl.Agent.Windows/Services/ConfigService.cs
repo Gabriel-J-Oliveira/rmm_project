@@ -406,15 +406,11 @@ public sealed class ConfigService
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(config.StatePath) ?? ".");
-            AgentState state = new();
-            if (File.Exists(config.StatePath))
-            {
-                state = JsonSerializer.Deserialize<AgentState>(File.ReadAllText(config.StatePath), JsonOptions) ?? new AgentState();
-            }
+            AgentState state = StateService.Load(config.StatePath, machineId);
             if (string.IsNullOrWhiteSpace(state.MachineId))
             {
                 state.MachineId = machineId;
-                File.WriteAllText(config.StatePath, JsonSerializer.Serialize(state, JsonOptions));
+                StateService.Save(config.StatePath, state, machineId);
             }
         }
         catch

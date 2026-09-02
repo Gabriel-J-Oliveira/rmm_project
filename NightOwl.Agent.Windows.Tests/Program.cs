@@ -31,6 +31,10 @@ try
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
     TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
     TestCompletedUpdateJobIsIgnoredOnLaterRestart();
+    TestAgentStateHeartbeatPreservesInstalledLifecycle();
+    TestAgentStateJobPullAndCollectionPreserveLifecycle();
+    TestAgentStateRuntimeDoesNotRewriteUninstalledLifecycle();
+    TestAgentStateRuntimePreservesUnknownPropertiesAndRecentJobs();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -568,6 +572,158 @@ static void TestCompletedUpdateJobIsIgnoredOnLaterRestart()
     {
         DeleteTempDir(dir);
     }
+}
+
+static void TestAgentStateHeartbeatPreservesInstalledLifecycle()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string statePath = Path.Combine(dir, "agent.state.json");
+        string installedAt = "2026-01-15T10:20:30Z";
+        File.WriteAllText(statePath, $$"""
+        {
+          "machine_id": "machine-lifecycle",
+          "install_status": "installed",
+          "installed_at": "{{installedAt}}",
+          "custom_persistent": "keep"
+        }
+        """);
+
+        AgentConfig config = NewStateTestConfig(statePath);
+        StateService service = new();
+        AgentState state = service.Load(config);
+        state.LastHeartbeatAt = DateTimeOffset.Parse("2026-01-15T10:25:00Z");
+        service.SaveAsync(config, state, CancellationToken.None).GetAwaiter().GetResult();
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath));
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("install_status").GetString() == "installed", "Heartbeat save should preserve installed lifecycle status.");
+        Require(DateTimeOffset.Parse(root.GetProperty("installed_at").GetString() ?? "") == DateTimeOffset.Parse(installedAt), "Heartbeat save should preserve installed_at.");
+        Require(!root.TryGetProperty("uninstalled_at", out _), "Heartbeat save should not create uninstalled_at for installed lifecycle.");
+        Require(root.GetProperty("lastHeartbeatAt").GetString() == "2026-01-15T10:25:00+00:00", "Heartbeat save should persist lastHeartbeatAt.");
+        Require(root.GetProperty("custom_persistent").GetString() == "keep", "Heartbeat save should preserve unknown persistent fields.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestAgentStateJobPullAndCollectionPreserveLifecycle()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string statePath = Path.Combine(dir, "agent.state.json");
+        string installedAt = "2026-01-15T11:00:00Z";
+        File.WriteAllText(statePath, $$"""
+        {
+          "machine_id": "machine-lifecycle",
+          "install_status": "installed",
+          "installed_at": "{{installedAt}}"
+        }
+        """);
+
+        AgentConfig config = NewStateTestConfig(statePath);
+        StateService service = new();
+        AgentState state = service.Load(config);
+        state.LastJobPullAt = DateTimeOffset.Parse("2026-01-15T11:05:00Z");
+        state.LastCollectionAt = DateTimeOffset.Parse("2026-01-15T11:06:00Z");
+        service.SaveAsync(config, state, CancellationToken.None).GetAwaiter().GetResult();
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath));
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("install_status").GetString() == "installed", "Job pull save should preserve installed lifecycle status.");
+        Require(DateTimeOffset.Parse(root.GetProperty("installed_at").GetString() ?? "") == DateTimeOffset.Parse(installedAt), "Job pull save should preserve installed_at.");
+        Require(root.GetProperty("lastJobPullAt").GetString() == "2026-01-15T11:05:00+00:00", "Job pull save should persist lastJobPullAt.");
+        Require(root.GetProperty("lastCollectionAt").GetString() == "2026-01-15T11:06:00+00:00", "Collection save should persist lastCollectionAt.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestAgentStateRuntimeDoesNotRewriteUninstalledLifecycle()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string statePath = Path.Combine(dir, "agent.state.json");
+        string uninstalledAt = "2026-01-15T12:00:00Z";
+        File.WriteAllText(statePath, $$"""
+        {
+          "machine_id": "machine-lifecycle",
+          "install_status": "uninstalled",
+          "uninstalled_at": "{{uninstalledAt}}"
+        }
+        """);
+
+        AgentConfig config = NewStateTestConfig(statePath);
+        StateService service = new();
+        AgentState state = service.Load(config);
+        state.LastHeartbeatAt = DateTimeOffset.Parse("2026-01-15T12:05:00Z");
+        service.SaveAsync(config, state, CancellationToken.None).GetAwaiter().GetResult();
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath));
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("install_status").GetString() == "uninstalled", "Runtime save must not rewrite uninstalled lifecycle status.");
+        Require(DateTimeOffset.Parse(root.GetProperty("uninstalled_at").GetString() ?? "") == DateTimeOffset.Parse(uninstalledAt), "Runtime save should preserve uninstalled_at.");
+        Require(!root.TryGetProperty("installed_at", out _), "Runtime save should not create installed_at for uninstalled lifecycle.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestAgentStateRuntimePreservesUnknownPropertiesAndRecentJobs()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string statePath = Path.Combine(dir, "agent.state.json");
+        File.WriteAllText(statePath, """
+        {
+          "machine_id": "machine-lifecycle",
+          "install_status": "installed",
+          "installed_at": "2026-01-15T13:00:00Z",
+          "recentJobIds": ["job-old"],
+          "future_field": {
+            "nested": true
+          }
+        }
+        """);
+
+        AgentConfig config = NewStateTestConfig(statePath);
+        StateService service = new();
+        AgentState state = service.Load(config);
+        state.RememberJob("job-new");
+        service.SaveAsync(config, state, CancellationToken.None).GetAwaiter().GetResult();
+
+        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath));
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("install_status").GetString() == "installed", "Recent job save should preserve installed lifecycle status.");
+        Require(root.GetProperty("future_field").GetProperty("nested").GetBoolean(), "Runtime save should preserve unknown JSON objects.");
+        string[] recentJobIds = root.GetProperty("recentJobIds").EnumerateArray().Select(item => item.GetString() ?? "").ToArray();
+        Require(recentJobIds.Contains("job-old"), "Runtime save should preserve existing recentJobIds.");
+        Require(recentJobIds.Contains("job-new"), "Runtime save should persist new recentJobIds.");
+        Require(!Directory.EnumerateFiles(dir, "*.tmp").Any(), "Successful state save should not leave temp files.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static AgentConfig NewStateTestConfig(string statePath)
+{
+    return new AgentConfig
+    {
+        MachineId = "machine-lifecycle",
+        StatePath = statePath
+    };
 }
 
 static JobExecutionResult NewCompletedUpdateResult(string jobId)
