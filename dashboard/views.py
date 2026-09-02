@@ -3527,7 +3527,6 @@ def endpoint_uninstall_request(request, pk):
         payload={
             'mode': 'uninstall',
             'source': 'panel',
-            'uninstall_request_id': str(uninstall_request.id),
             'timeout_seconds': 900,
         },
         correlation_id=str(uuid.uuid4()),

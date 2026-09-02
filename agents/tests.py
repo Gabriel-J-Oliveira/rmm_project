@@ -298,8 +298,10 @@ class AgentAdministrativeUninstallTests(TestCase):
         self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_WAITING_FOR_AGENT)
         self.assertEqual(job.job_type, AgentJob.TYPE_UNINSTALL_AGENT)
         self.assertEqual(job.status, AgentJob.STATUS_QUEUED)
+        self.assertEqual(job.payload, {'mode': 'uninstall', 'source': 'panel', 'timeout_seconds': 900})
+        self.assertEqual(uninstall_request.agent_job_id, job.id)
         serialized = json.dumps(job.payload)
-        self.assertIn('"source": "panel"', serialized)
+        self.assertNotIn('uninstall_request_id', serialized)
         self.assertNotIn('CorrectHorseBatteryStaple1!', serialized)
         self.assertFalse(AuditEvent.objects.filter(metadata__icontains='CorrectHorseBatteryStaple1!').exists())
 
@@ -346,8 +348,10 @@ class AgentAdministrativeUninstallTests(TestCase):
         job = AgentJob.objects.get(id=body['job_id'])
         self.assertEqual(job.status, AgentJob.STATUS_RUNNING)
         self.assertEqual(job.job_type, AgentJob.TYPE_UNINSTALL_AGENT)
-        self.assertEqual(job.payload['source'], 'tray')
+        self.assertEqual(job.payload, {'mode': 'uninstall', 'source': 'tray', 'timeout_seconds': 900})
+        self.assertEqual(AgentUninstallRequest.objects.get(agent_job=job).id, authorization.uninstall_request_id)
         self.assertNotIn(token, json.dumps(job.payload))
+        self.assertNotIn('uninstall_request_id', json.dumps(job.payload))
         self.assertNotIn('CorrectHorseBatteryStaple1!', json.dumps(job.payload))
 
         consume = Client().post(
@@ -377,7 +381,7 @@ class AgentAdministrativeUninstallTests(TestCase):
             endpoint=self.machine,
             job_type=AgentJob.TYPE_UNINSTALL_AGENT,
             status=AgentJob.STATUS_RUNNING,
-            payload={'mode': 'uninstall', 'source': 'panel', 'uninstall_request_id': str(uninstall_request.id)},
+            payload={'mode': 'uninstall', 'source': 'panel', 'timeout_seconds': 900},
         )
         uninstall_request.agent_job = job
         uninstall_request.save(update_fields=['agent_job', 'updated_at'])
@@ -407,6 +411,54 @@ class AgentAdministrativeUninstallTests(TestCase):
         self.assertEqual(self.machine.status, AgentMachine.STATUS_UNINSTALLED)
         self.assertEqual(self.machine.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
         self.assertEqual(self.machine.last_installed_agent_version, '0.1.1.0-rc24')
+        self.assertTrue(AgentJobResultReceipt.objects.filter(result_id=result_id, job=job).exists())
+
+    def test_uninstall_failed_result_marks_request_by_agent_job_relation(self):
+        uninstall_request = AgentUninstallRequest.objects.create(
+            endpoint=self.machine,
+            mode=AgentUninstallRequest.MODE_UNINSTALL,
+            source=AgentUninstallRequest.SOURCE_PANEL,
+            status=AgentUninstallRequest.STATUS_RUNNING,
+            requested_by='uninstall-admin',
+            authorized_by='uninstall-admin',
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'mode': 'uninstall', 'source': 'panel', 'timeout_seconds': 900},
+        )
+        uninstall_request.agent_job = job
+        uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+        result_id = str(uuid.uuid4())
+
+        response = self.agent.post(
+            '/api/agent/jobs/result/',
+            data={
+                'job_id': str(job.id),
+                'status': 'failed',
+                'exit_code': 1,
+                'error_code': 'UNINSTALL_BINARY_REMOVE_FAILED',
+                'error_message': 'Access to the path is denied.',
+                'result': {
+                    'type': 'uninstall_agent',
+                    'mode': 'uninstall',
+                    'binary_removed': False,
+                    'persistent_data_preserved': True,
+                },
+            },
+            content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=result_id,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        uninstall_request.refresh_from_db()
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_FAILED)
+        self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_FAILED)
+        self.assertEqual(uninstall_request.error_code, 'UNINSTALL_BINARY_REMOVE_FAILED')
+        self.assertEqual(uninstall_request.error_message, 'Access to the path is denied.')
         self.assertTrue(AgentJobResultReceipt.objects.filter(result_id=result_id, job=job).exists())
 
     def test_queued_uninstall_expiry_marks_request_expired(self):

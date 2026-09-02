@@ -231,7 +231,6 @@ class AgentSelfUninstallAuthorizeView(APIView):
             payload={
                 'mode': 'uninstall',
                 'source': 'tray',
-                'uninstall_request_id': str(uninstall_request.id),
                 'timeout_seconds': 900,
             },
             created_by=user.get_username(),
