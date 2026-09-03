@@ -200,6 +200,10 @@ def job_stage(job: AgentJob) -> str:
             return 'rollback_failed'
         if job.status == AgentJob.STATUS_COMPLETED:
             return 'completed'
+        if job.status == AgentJob.STATUS_CANCELLED:
+            return 'cancelled'
+        if job.status in {AgentJob.STATUS_EXPIRED, AgentJob.STATUS_TIMED_OUT}:
+            return 'timed_out'
         return 'failed'
     return stage or 'running'
 

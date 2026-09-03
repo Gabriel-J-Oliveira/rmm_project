@@ -16,7 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import AuditEvent, AgentDeploymentToken, AgentEnrollmentLog, AgentJob, AgentJobResultReceipt, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
-from .job_progress import job_progress_message, job_progress_percentage, job_stale_info, sanitize_job_value
+from .job_progress import job_progress_message, job_progress_percentage, job_stage, job_stale_info, sanitize_job_value
 from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
@@ -711,6 +711,45 @@ class AgentOperationalJobProgressTests(TestCase):
 
         self.assertIn('Atualizacao nao aplicada', message)
         self.assertNotIn('Atualizado para', message)
+
+    def test_cancelled_job_has_cancelled_stage_and_message(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+            status=AgentJob.STATUS_CANCELLED,
+        )
+
+        self.assertEqual(job_stage(job), 'cancelled')
+        self.assertEqual(job_progress_percentage(job), 100)
+        self.assertEqual(job_progress_message(job), 'Job cancelado.')
+
+    def test_expired_and_timed_out_jobs_use_timeout_stage(self):
+        for status_value in [AgentJob.STATUS_EXPIRED, AgentJob.STATUS_TIMED_OUT]:
+            job = AgentJob.objects.create(
+                endpoint=self.machine,
+                job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+                status=status_value,
+            )
+            with self.subTest(status=status_value):
+                self.assertEqual(job_stage(job), 'timed_out')
+                self.assertEqual(job_progress_percentage(job), 100)
+                self.assertEqual(job_progress_message(job), 'Job expirou ou excedeu o tempo limite.')
+
+    def test_failed_model_statuses_keep_failed_stage(self):
+        failed_statuses = [
+            AgentJob.STATUS_FAILED,
+            AgentJob.STATUS_UNSUPPORTED,
+            AgentJob.STATUS_INVALID_PARAMETERS,
+            AgentJob.STATUS_INTERRUPTED,
+        ]
+        for status_value in failed_statuses:
+            job = AgentJob.objects.create(
+                endpoint=self.machine,
+                job_type=AgentJob.TYPE_UNINSTALL_AGENT,
+                status=status_value,
+            )
+            with self.subTest(status=status_value):
+                self.assertEqual(job_stage(job), 'failed')
 
     def test_endpoint_detail_js_guards_update_target_not_installed_label(self):
         js_path = settings.BASE_DIR / 'static' / 'js' / 'endpoint_detail.js'
