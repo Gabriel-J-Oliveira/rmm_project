@@ -174,7 +174,7 @@ Ainda ficam para uma prÃ³xima etapa:
 Versao candidata atual:
 
 ```text
-0.1.1.0-rc1
+0.1.1.0-rc36
 ```
 
 Esta release deve nascer em `development`, com `rollout_paused=true` e `rollout_percentage=0`. Ela nao deve sobrescrever a release publica `stable/latest` nem criar jobs automaticamente.
@@ -662,3 +662,315 @@ Regras:
 - logs sao limitados e sanitizados linha a linha;
 - falha em uma fonte vira warning e nao cancela o pacote;
 - exit code `0` significa pacote sem erro critico; `1` significa pacote criado com warnings.
+
+## 14. NightOwl Agent - roadmap e contexto atual
+
+Este bloco registra o estado canonico apos o fechamento dos canarios da Fase 4.
+
+Roadmap atual:
+
+| Fase | Escopo | Status |
+| --- | --- | --- |
+| 0A | CI / publishing independente da maquina do desenvolvedor | CLOSED |
+| 0B | Automatic secure trusted-key bundle sync | CLOSED |
+| 1 | ACLs por SID | CLOSED |
+| 2 | Git hygiene / build reproducibility | CLOSED |
+| 3 | Internal release pipeline | CLOSED |
+| 4 | Updater / rollback / observability local / lifecycle resilience | CLOSED |
+| 5 | Secrets / configuration hardening | NEXT |
+| 6 | Fleet rollout / policies | PENDING |
+| 7 | Central observability | PENDING |
+| 8 | Wider RMM / Desk | PENDING |
+
+`PHASE_4_LIFECYCLE_HARDENING = CLOSED`
+
+Baseline atual do agente:
+
+```text
+Agent baseline: 0.1.1.0-rc36
+Agent baseline commit: 7bf20ba3cefda76731abd97204fa918e4e37bdbc
+```
+
+RC36 permanece a release do agente usada nos canarios finais. Os fixes posteriores de backend/frontend nao exigiram nova release do agente.
+
+Capacidades de lifecycle validadas em canario real:
+
+- clean deployment
+- update
+- repair
+- reinstall
+- lifecycle state persistence
+- Tray uninstall
+- panel uninstall
+- offline uninstall queue
+- pre-dispatch cancellation
+- cancelled job never dispatched
+- offline -> online delivery
+- uninstall execution after endpoint returns
+- uninstall expiry
+- expired job never dispatched
+- panel-only purge
+- purge local persistent-data removal
+- central history preservation after purge
+
+Modelo de lifecycle consolidado:
+
+```text
+Install -> Installed
+Installed -> Update -> Installed
+Installed -> Repair -> Installed
+Installed -> Reinstall -> Installed
+Installed -> Uninstall -> Uninstalled
+Installed -> Purge -> Purged
+```
+
+Principios consolidados:
+
+- Operational status e lifecycle sao conceitos independentes; por exemplo, `status=offline` com `lifecycle=purged` e valido.
+- Heartbeat/status operacional tardio nao pode reativar endpoint `uninstalled` ou `purged`; somente deployment/reinstall saudavel normaliza para `installed`.
+- Uninstall normal preserva identidade/configuracao persistente suficiente para reinstall controlado.
+- Purge e destrutivo localmente, mas nao apaga endpoint nem historico central.
+- Credenciais administrativas nao sao persistidas em jobs.
+- Purge exige autorizacao explicita distinta e confirmacao do hostname.
+- Jobs cancelados ou expirados antes do dispatch nunca podem ser entregues posteriormente.
+
+### Canario: cancelamento offline
+
+Endpoint: `CS-SRV-CST`
+
+```text
+endpoint_id=476f5039-5e7e-4b0f-b24c-849ee6551434
+```
+
+Fluxo validado:
+
+```text
+offline
+-> uninstall solicitado
+-> waiting_for_agent / queued
+-> cancelado no painel
+-> endpoint voltou online
+-> uninstall nao foi entregue
+```
+
+Resultado:
+
+```text
+request_status=cancelled
+job_status=cancelled
+dispatched_at=None
+started_at=None
+```
+
+O agente permaneceu instalado e operacional.
+
+Flags:
+
+```text
+OFFLINE_UNINSTALL_WAITING=PASS
+PRE_DISPATCH_CANCEL=PASS
+CANCELLED_JOB_NOT_DISPATCHED=PASS
+ENDPOINT_SURVIVES_CANCEL=PASS
+```
+
+### Canario: offline -> online -> uninstall
+
+Endpoint offline recebeu uma solicitacao de uninstall. Ao retornar online:
+
+```text
+queued -> dispatched -> running -> completed
+```
+
+Resultado local:
+
+```text
+ServiceExists=False
+AgentProcess=False
+TrayTask=False
+AgentDotNet=False
+```
+
+Dados de uninstall normal preservados:
+
+```text
+Config=True
+Identity=True
+State=True
+Trust=True
+Logs=True
+```
+
+`agent.state.json`:
+
+```text
+install_status=uninstalled
+uninstalled_at=<timestamp preenchido>
+```
+
+Uninstaller:
+
+```text
+uninstall.start
+-> uninstall.binary_remove.started
+-> uninstall.binary_remove.completed
+-> uninstall.completed
+```
+
+Flags:
+
+```text
+OFFLINE_UNINSTALL_DISPATCH=PASS
+OFFLINE_TO_ONLINE_DELIVERY=PASS
+UNINSTALL_EXECUTED_ON_RETURN=PASS
+PERSISTENT_DATA_PRESERVED=PASS
+```
+
+### Canario: expiry
+
+```text
+request_id=0e57bf4f-dfbe-43bb-890e-fac52be847e1
+job_id=954ca925-c2d4-4fe7-884e-de64589353f7
+```
+
+Foi alterado `expires_at` somente no canario para simular TTL expirado.
+
+Resultado:
+
+```text
+endpoint_status=online
+request_status=expired
+request_error_code=UNINSTALL_REQUEST_EXPIRED
+job_status=expired
+dispatched_at=None
+started_at=None
+finished_at=<preenchido>
+job_error=Job expirou antes do pull do agente.
+```
+
+O agente permaneceu instalado e operacional.
+
+Flags:
+
+```text
+UNINSTALL_EXPIRY=PASS
+EXPIRED_JOB_NOT_DISPATCHED=PASS
+ENDPOINT_SURVIVES_EXPIRY=PASS
+```
+
+### Canario: purge
+
+```text
+job_id=df58aa85-abe7-4a42-b244-44a52e734eef
+request_id=461c050a-ebd7-4024-9f75-0e1939ed56b9
+```
+
+Resultado do job:
+
+```text
+status=completed
+stage=completed
+progress=100
+```
+
+Payload:
+
+```json
+{
+  "mode": "purge",
+  "source": "panel",
+  "timeout_seconds": 900,
+  "purge_authorized": true
+}
+```
+
+Result:
+
+```text
+mode=purge
+type=uninstall_agent
+machine_id=c4e59106-035a-455f-bdeb-3e8287718dd6
+binary_removed=true
+uninstall_status=completed
+persistent_data_preserved=false
+```
+
+Backend final:
+
+```text
+status=offline
+agent_lifecycle_status=purged
+request_status=completed
+job_status=completed
+```
+
+Historico central apos purge:
+
+```text
+jobs_count=31
+inventory_count=1844
+audit_count=47550
+uninstall_requests=10
+```
+
+Conclusao: purge remove o agente/estado local previsto, mas nao apaga o endpoint nem seu historico central.
+
+Flags:
+
+```text
+PANEL_PURGE=PASS
+PURGE_COMPLETED=PASS
+PURGE_BINARY_REMOVED=PASS
+PURGE_PERSISTENT_DATA_REMOVED=PASS
+PURGE_HISTORY_PRESERVED=PASS
+```
+
+### Fixes importantes do fechamento
+
+1. Backend lifecycle permanecia `uninstalled` apos reinstall antigo.
+
+   Fix: deployment saudavel normaliza lifecycle para `installed` e limpa metadata antiga de uninstall. Inclui reconciliacao idempotente.
+
+   Commit: `ddb1cfe019e349992d58d5acfcf62ab7acb5b8f4`
+
+2. Cancelamento de uninstall offline existia no backend, mas estava pouco descobrivel na UX.
+
+   Fix: cancelamento contextual diretamente no card do job pendente.
+
+   Commit: `f45bf153c9564b7f0e7ca19ddf2efc3291c8c704`
+
+3. Jobs `cancelled`/`expired` eram representados semanticamente com `stage=failed`.
+
+   Fix: stage dedicado para `cancelled` e `timed_out`.
+
+   Commit: `6c7200f594294a10846827b5d8d0ffb052aa0616`
+
+4. Edge cases finais de offline/cancel/expiry/purge foram consolidados no backend.
+
+   Commit relevante: `ccfefb8808946c0aec7580ed2234ae070fba8ca9`
+
+5. Heartbeat/status operacional tardio podia deixar `machine.status=online` com `agent_lifecycle_status=purged`.
+
+   Fix: lifecycle terminal (`uninstalled`/`purged`) nao pode ser promovido por heartbeat/status normal; somente deployment saudavel pode reativar.
+
+   Commit: `1c095558e62a22b457ca9bf0a6190a2a917982bb`
+
+### Proximo passo
+
+```text
+NEXT PHASE: PHASE 5 - SECRETS / CONFIGURATION HARDENING
+```
+
+Antes de implementar funcionalidades de frota, revisar:
+
+- armazenamento de secrets;
+- tokens e credenciais locais;
+- ACLs de arquivos/configs;
+- runner files temporarios;
+- configuracoes sensiveis;
+- permissao de leitura/escrita em ProgramData;
+- logs que possam carregar informacao sensivel;
+- configuracao de backend/server;
+- secrets de deployment/publishing;
+- principio de least privilege.
+
+Nao iniciar Fase 6 ainda.
