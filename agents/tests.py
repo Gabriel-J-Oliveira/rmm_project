@@ -3,6 +3,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 from io import StringIO
 from datetime import timedelta
 
@@ -11,7 +12,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import Client, TestCase, override_settings
+from django.core.management.base import CommandError
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -20,6 +22,108 @@ from .job_progress import job_progress_message, job_progress_percentage, job_sta
 from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
+from .management.commands.security_preflight import INSECURE_SECRET_KEY_FALLBACK
+
+
+class SecurityPreflightCommandTests(SimpleTestCase):
+    def run_preflight(self, *args):
+        output = StringIO()
+        call_command('security_preflight', *args, stdout=output)
+        return output.getvalue()
+
+    @override_settings(
+        DEBUG=False,
+        SECRET_KEY='production-secret-value-not-printed',
+        ALLOWED_HOSTS=['nightowl.test'],
+        CSRF_TRUSTED_ORIGINS=['https://nightowl.test'],
+        SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https'),
+        SESSION_COOKIE_SECURE=True,
+        CSRF_COOKIE_SECURE=True,
+        SECURE_SSL_REDIRECT=True,
+        SECURE_HSTS_SECONDS=31536000,
+        DATABASES={'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'nightowl'}},
+        NIGHTOWL_PUBLIC_URL='https://nightowl.test',
+        NIGHTOWL_AGENT_PUBLIC_SERVER_URL='https://nightowl.test',
+        NIGHTOWL_AGENT_INSTALLER_URL='https://nightowl.test/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
+        NIGHTOWL_AGENT_HEARTBEAT_URL='https://nightowl.test/api/agent/heartbeat/',
+        NIGHTOWL_TECHNICAL_USERNAMES={'nightowl.tech'},
+        AD_AUTH_CONFIG={
+            'ENABLED': True,
+            'SERVER_URI': 'ldaps://ad.example.local',
+            'BIND_DN': 'CN=NightOwl,OU=Service,DC=example,DC=local',
+            'BIND_PASSWORD': 'ad-secret-value-not-printed',
+            'REQUIRE_TLS': True,
+        },
+        EMAIL_HOST='smtp.example.local',
+        EMAIL_HOST_PASSWORD='smtp-secret-value-not-printed',
+        EMAIL_USE_TLS=True,
+        EMAIL_USE_SSL=False,
+    )
+    def test_security_preflight_does_not_print_secret_values(self):
+        output = self.run_preflight()
+
+        self.assertNotIn('production-secret-value-not-printed', output)
+        self.assertNotIn('ad-secret-value-not-printed', output)
+        self.assertNotIn('smtp-secret-value-not-printed', output)
+        self.assertNotIn('CN=NightOwl', output)
+        self.assertIn('[PASS] DATABASE engine=postgresql', output)
+
+    @override_settings(DEBUG=True)
+    def test_security_preflight_detects_debug(self):
+        output = self.run_preflight()
+
+        self.assertIn('[WARN] DEBUG=true', output)
+
+    @override_settings(SECRET_KEY=INSECURE_SECRET_KEY_FALLBACK)
+    def test_security_preflight_detects_fallback_secret_key(self):
+        output = self.run_preflight()
+
+        self.assertIn('[FAIL] SECRET_KEY fallback in use', output)
+
+    @override_settings(ALLOWED_HOSTS=['*'])
+    def test_security_preflight_detects_wildcard_allowed_hosts(self):
+        output = self.run_preflight()
+
+        self.assertIn('[WARN] ALLOWED_HOSTS wildcard enabled', output)
+
+    @override_settings(DEBUG=False, DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}})
+    def test_security_preflight_detects_sqlite_in_production(self):
+        output = self.run_preflight()
+
+        self.assertIn('[WARN] DATABASE engine=sqlite with DEBUG=false', output)
+
+    @override_settings(DATABASES={'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'nightowl'}})
+    def test_security_preflight_recognizes_postgresql(self):
+        output = self.run_preflight()
+
+        self.assertIn('[PASS] DATABASE engine=postgresql', output)
+
+    @override_settings(AD_AUTH_CONFIG={'ENABLED': True, 'SERVER_URI': 'ldap://ad.example.local', 'BIND_DN': 'hidden', 'BIND_PASSWORD': 'hidden', 'REQUIRE_TLS': False})
+    def test_security_preflight_warns_when_ad_tls_is_not_required(self):
+        output = self.run_preflight()
+
+        self.assertIn('[WARN] AD TLS not required', output)
+
+    @override_settings(DEBUG=True)
+    def test_security_preflight_strict_returns_nonzero_for_fail(self):
+        output = StringIO()
+
+        with self.assertRaises(CommandError):
+            call_command('security_preflight', '--strict', stdout=output)
+
+        self.assertIn('[FAIL] DEBUG=true', output.getvalue())
+
+    def test_security_preflight_git_hygiene_detects_tracked_dotenv_without_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            subprocess.run(['git', 'init'], cwd=temp_dir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            dotenv = Path(temp_dir) / '.env'
+            dotenv.write_text('DJANGO_SECRET_KEY=must-not-print\n', encoding='utf-8')
+            subprocess.run(['git', 'add', '.env'], cwd=temp_dir, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            with override_settings(BASE_DIR=Path(temp_dir)):
+                output = self.run_preflight()
+
+        self.assertIn('[FAIL] .env tracked', output)
+        self.assertNotIn('must-not-print', output)
 
 
 class AgentOperationalDiagnosticsTests(TestCase):
