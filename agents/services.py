@@ -1494,7 +1494,7 @@ def record_agent_operational_status(machine, payload: dict):
 
     indicator = AgentOperationalStatus.HEALTH_HEALTHY
     heartbeat_at = _safe_datetime(agent.get('last_heartbeat_at') or payload.get('last_heartbeat_at')) or machine.last_seen_at
-    if machine.status == machine.STATUS_OFFLINE:
+    if machine.has_terminal_lifecycle or machine.status in {machine.STATUS_OFFLINE, machine.STATUS_UNINSTALLED}:
         indicator = AgentOperationalStatus.HEALTH_OFFLINE
     if service_status and service_status.lower() not in {'running', 'started'}:
         indicator = AgentOperationalStatus.HEALTH_CRITICAL

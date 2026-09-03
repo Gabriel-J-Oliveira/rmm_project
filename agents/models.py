@@ -182,6 +182,10 @@ class AgentMachine(models.Model):
             self.first_seen_at = now
         self.last_seen_at = now
 
+    @property
+    def has_terminal_lifecycle(self) -> bool:
+        return str(self.agent_lifecycle_status or '').lower() in {self.STATUS_UNINSTALLED, 'purged'}
+
 
 class AgentReleaseGroup(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

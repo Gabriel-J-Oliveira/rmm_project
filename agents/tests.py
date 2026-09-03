@@ -47,7 +47,7 @@ class AgentOperationalDiagnosticsTests(TestCase):
             content_type='application/json',
         )
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         self.machine.refresh_from_db()
         self.assertEqual(self.machine.agent_version, '0.1.0.8')
 
@@ -65,9 +65,77 @@ class AgentOperationalDiagnosticsTests(TestCase):
             content_type='application/json',
         )
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 200)
         self.machine.refresh_from_db()
         self.assertEqual(self.machine.agent_version, '0.1.1.0-rc2')
+
+    def test_purged_heartbeat_cannot_reactivate_endpoint(self):
+        self.machine.status = AgentMachine.STATUS_UNINSTALLED
+        self.machine.agent_lifecycle_status = 'purged'
+        self.machine.save(update_fields=['status', 'agent_lifecycle_status', 'updated_at'])
+
+        response = self.client.post(
+            '/api/agent/heartbeat/',
+            data={
+                'machine_id': 'machine-001',
+                'hostname': 'CS-TEST-001',
+                'agent_version': '0.1.1.0-rc36',
+                'timestamp': timezone.now().isoformat(),
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+        call_command('mark_offline_agents', threshold_minutes=15, stdout=StringIO())
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.agent_lifecycle_status, 'purged')
+        self.assertEqual(self.machine.status, AgentMachine.STATUS_UNINSTALLED)
+
+    def test_uninstalled_heartbeat_cannot_reactivate_endpoint(self):
+        self.machine.status = AgentMachine.STATUS_UNINSTALLED
+        self.machine.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        self.machine.save(update_fields=['status', 'agent_lifecycle_status', 'updated_at'])
+
+        response = self.client.post(
+            '/api/agent/heartbeat/',
+            data={
+                'machine_id': 'machine-001',
+                'hostname': 'CS-TEST-001',
+                'agent_version': '0.1.1.0-rc36',
+                'timestamp': timezone.now().isoformat(),
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+        call_command('mark_offline_agents', threshold_minutes=15, stdout=StringIO())
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
+        self.assertEqual(self.machine.status, AgentMachine.STATUS_UNINSTALLED)
+
+    def test_terminal_lifecycle_operational_status_does_not_become_healthy(self):
+        self.machine.status = AgentMachine.STATUS_UNINSTALLED
+        self.machine.agent_lifecycle_status = 'purged'
+        self.machine.save(update_fields=['status', 'agent_lifecycle_status', 'updated_at'])
+
+        response = self.client.post(
+            '/api/agent/status/',
+            data={
+                'machine_id': 'machine-001',
+                'agent': {
+                    'installed_version': '0.1.1.0-rc36',
+                    'service_status': 'Running',
+                },
+            },
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        status = AgentOperationalStatus.objects.get(endpoint=self.machine)
+        self.assertEqual(self.machine.status, AgentMachine.STATUS_UNINSTALLED)
+        self.assertEqual(self.machine.agent_lifecycle_status, 'purged')
+        self.assertEqual(status.health_indicator, AgentOperationalStatus.HEALTH_OFFLINE)
 
     def test_heartbeat_normalizes_long_product_versions(self):
         product_version = '0.1.1.0-rc2+4cede41a96bc45baa85d3a30a17d44b1.36c72a1e5ed17b7cbfbb4515a6f9b549cfe1b2f8'

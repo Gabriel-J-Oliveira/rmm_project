@@ -29,11 +29,14 @@ class Command(BaseCommand):
             AgentMachine.STATUS_ONLINE: 0,
             AgentMachine.STATUS_OFFLINE: 0,
             AgentMachine.STATUS_UNKNOWN: 0,
+            AgentMachine.STATUS_UNINSTALLED: 0,
         }
 
         machines = AgentMachine.objects.all()
         for machine in machines:
-            if not machine.is_active:
+            if machine.has_terminal_lifecycle:
+                new_status = AgentMachine.STATUS_UNINSTALLED
+            elif not machine.is_active:
                 new_status = AgentMachine.STATUS_UNKNOWN
             elif machine.last_seen_at is None:
                 new_status = AgentMachine.STATUS_UNKNOWN
@@ -73,3 +76,4 @@ class Command(BaseCommand):
         self.stdout.write(f'online: {counts[AgentMachine.STATUS_ONLINE]}')
         self.stdout.write(f'offline: {counts[AgentMachine.STATUS_OFFLINE]}')
         self.stdout.write(f'unknown: {counts[AgentMachine.STATUS_UNKNOWN]}')
+        self.stdout.write(f'uninstalled: {counts[AgentMachine.STATUS_UNINSTALLED]}')
