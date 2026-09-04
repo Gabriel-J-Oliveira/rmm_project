@@ -1,8 +1,10 @@
 import uuid
 import csv
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from io import StringIO
@@ -31,6 +33,63 @@ class SecurityPreflightCommandTests(SimpleTestCase):
         output = StringIO()
         call_command('security_preflight', *args, stdout=output)
         return output.getvalue()
+
+    def load_https_settings(self, extra_env, remove_env=None):
+        env = os.environ.copy()
+        for name in remove_env or []:
+            env.pop(name, None)
+        env.update(extra_env)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                '-c',
+                (
+                    'import json; '
+                    'import config.settings as s; '
+                    'print(json.dumps({'
+                    '"session": s.SESSION_COOKIE_SECURE, '
+                    '"csrf": s.CSRF_COOKIE_SECURE, '
+                    '"redirect": s.SECURE_SSL_REDIRECT, '
+                    '"proxy": s.SECURE_PROXY_SSL_HEADER'
+                    '}))'
+                ),
+            ],
+            cwd=settings.BASE_DIR,
+            env=env,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+
+    def test_https_cookie_and_redirect_defaults_are_secure_when_debug_false(self):
+        values = self.load_https_settings(
+            {'DJANGO_DEBUG': 'False', 'DJANGO_SECRET_KEY': 'test-secret'},
+            remove_env=[
+                'DJANGO_SESSION_COOKIE_SECURE',
+                'DJANGO_CSRF_COOKIE_SECURE',
+                'DJANGO_SECURE_SSL_REDIRECT',
+            ],
+        )
+
+        self.assertTrue(values['session'])
+        self.assertTrue(values['csrf'])
+        self.assertTrue(values['redirect'])
+        self.assertEqual(values['proxy'], ['HTTP_X_FORWARDED_PROTO', 'https'])
+
+    def test_https_cookie_and_redirect_can_be_disabled_explicitly_for_development(self):
+        values = self.load_https_settings({
+            'DJANGO_DEBUG': 'True',
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DJANGO_SESSION_COOKIE_SECURE': 'False',
+            'DJANGO_CSRF_COOKIE_SECURE': 'False',
+            'DJANGO_SECURE_SSL_REDIRECT': 'False',
+        })
+
+        self.assertFalse(values['session'])
+        self.assertFalse(values['csrf'])
+        self.assertFalse(values['redirect'])
 
     @override_settings(
         DEBUG=False,
