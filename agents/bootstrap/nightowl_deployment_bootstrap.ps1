@@ -199,8 +199,6 @@ try {
         ([string]$metadata.release.sha256),
         "-ExpectedReleaseId",
         ([string]$metadata.release.id),
-        "-EnrollmentToken",
-        $Token,
         "-RunCheck",
         "-NonInteractive"
     )
@@ -208,8 +206,14 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($expectedGitCommit)) {
         $installArgs += @("-ExpectedGitCommit", $expectedGitCommit)
     }
-    & powershell.exe @installArgs
-    $installerExitCode = $LASTEXITCODE
+    $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN = $Token
+    try {
+        & powershell.exe @installArgs
+        $installerExitCode = $LASTEXITCODE
+    }
+    finally {
+        Remove-Item Env:\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
+    }
     if ($installerExitCode -ne 0) {
         throw "BOOTSTRAP_INSTALLER_FAILED:$installerExitCode"
     }
@@ -284,5 +288,6 @@ try {
     Write-Error ("NightOwl installation failed: {0}" -f $message) -ErrorAction Continue
     $global:NightOwlDeploymentBootstrapExitCode = 1
 } finally {
+    Remove-Item Env:\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
 }

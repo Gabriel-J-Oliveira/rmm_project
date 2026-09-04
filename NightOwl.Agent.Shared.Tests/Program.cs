@@ -34,12 +34,13 @@ try
         Require(!joined.Contains("Users", StringComparison.OrdinalIgnoreCase), $"ACL policy {policy.Scope} should not use localized Users name.");
         Require(!joined.Contains("Usuários", StringComparison.OrdinalIgnoreCase), $"ACL policy {policy.Scope} should not use Portuguese Users name.");
     }
-    foreach (string sensitive in new[] { paths.UpdatesDir, paths.UpdatesDownloadsDir, paths.UpdatesStagingDir, paths.UpdatesBackupDir, paths.UpdatesPendingDir, paths.UpdatesRunnerDir, paths.TrustBackupsDir, paths.TrustDownloadsDir, paths.PackagesDir, paths.CacheDir, paths.DiagnosticsDir })
+    foreach (string sensitive in new[] { paths.ConfigDir, paths.IdentityDir, paths.StateDir, paths.PendingResultsDir, paths.TrustDir, paths.UpdatesDir, paths.UpdatesDownloadsDir, paths.UpdatesStagingDir, paths.UpdatesBackupDir, paths.UpdatesPendingDir, paths.UpdatesRunnerDir, paths.TrustBackupsDir, paths.TrustDownloadsDir, paths.PackagesDir, paths.CacheDir, paths.DiagnosticsDir })
     {
         NightOwlAclPolicy policy = aclPolicies.Single(item => SamePath(item.Path, sensitive));
         Require(!PolicyGrantsUsers(policy), $"Sensitive directory should not grant Users: {sensitive}");
+        Require(policy.FailClosed, $"Sensitive directory ACL failures must fail closed: {sensitive}");
     }
-    foreach (string usersReadPath in new[] { paths.Root, paths.InstallDir, paths.ConfigDir, paths.IdentityDir, paths.StateDir, paths.PendingResultsDir, paths.TrustDir, paths.LogsDir })
+    foreach (string usersReadPath in new[] { paths.Root, paths.InstallDir, paths.LogsDir })
     {
         NightOwlAclPolicy policy = aclPolicies.Single(item => SamePath(item.Path, usersReadPath));
         Require(PolicyGrantsUsersReadOnly(policy), $"Users-read directory should grant Users RX only: {usersReadPath}");
@@ -55,6 +56,9 @@ try
         string aclRoot = Path.Combine(root, "acl-repair");
         NightOwlPaths aclPaths = new(aclRoot);
         Directory.CreateDirectory(aclPaths.InstallDir);
+        Directory.CreateDirectory(aclPaths.ConfigDir);
+        Directory.CreateDirectory(aclPaths.IdentityDir);
+        Directory.CreateDirectory(aclPaths.StateDir);
         Directory.CreateDirectory(aclPaths.UpdatesRunnerDir);
         Directory.CreateDirectory(aclPaths.TrustBackupsDir);
         string agentDll = Path.Combine(aclPaths.InstallDir, "NightOwl.Agent.Windows.dll");
@@ -65,22 +69,37 @@ try
         File.WriteAllText(runnerExe, "runner");
         File.WriteAllText(trustBundle, "{}");
         File.WriteAllText(trustBackup, "{}");
+        File.WriteAllText(aclPaths.ConfigPath, "{\"agentToken\":\"SUPER_SECRET_TOKEN_123\"}");
+        File.WriteAllText(aclPaths.IdentityPath, "{\"machine_id\":\"machine\"}");
+        File.WriteAllText(aclPaths.StatePath, "{\"machine_id\":\"machine\"}");
         AddUsersModify(agentDll);
         AddUsersModify(runnerExe);
         AddUsersModify(trustBundle);
         AddUsersModify(trustBackup);
+        AddUsersModify(aclPaths.ConfigPath);
+        AddUsersModify(aclPaths.IdentityPath);
+        AddUsersModify(aclPaths.StatePath);
 
         aclPaths.Bootstrap("test-acl", applyAcl: true);
         Require(!FileAllowsUsersWrite(agentDll), "AgentDotNet file should not preserve Users write/modify.");
         Require(FileAllowsUsersReadExecute(agentDll), "AgentDotNet file should keep Users read/execute.");
         Require(!FileHasUsersAllow(runnerExe), "Updates runner file should not grant Users.");
-        Require(!FileAllowsUsersWrite(trustBundle), "Trust root file should not preserve Users write/modify.");
-        Require(FileAllowsUsersReadExecute(trustBundle), "Trust root file should keep Users read/execute.");
+        Require(!FileHasUsersAllow(trustBundle), "Trust root file should not grant Users.");
         Require(!FileHasUsersAllow(trustBackup), "Trust backup file should not grant Users.");
+        Require(!FileHasUsersAllow(aclPaths.ConfigPath), "Config file should not grant Users.");
+        Require(!FileHasUsersAllow(aclPaths.IdentityPath), "Identity file should not grant Users.");
+        Require(!FileHasUsersAllow(aclPaths.StatePath), "State file should not grant Users.");
+
+        string authFile = Path.Combine(aclPaths.UpdatesRunnerDir, "authorization-test.json");
+        File.WriteAllText(authFile, "{\"authorization_token\":\"SUPER_SECRET_TOKEN_123\"}");
+        AddUsersModify(authFile);
+        aclPaths.ProtectAdminOnlyFile(authFile, "test-acl", "authorization-test");
+        Require(!FileHasUsersAllow(authFile), "Authorization file should not grant Users after central ACL hardening.");
 
         aclPaths.Bootstrap("test-acl", applyAcl: true);
         Require(!FileAllowsUsersWrite(agentDll), "Second ACL repair should remain idempotent for AgentDotNet.");
         Require(!FileHasUsersAllow(runnerExe), "Second ACL repair should remain idempotent for Updates runner.");
+        Require(!FileHasUsersAllow(authFile), "Second ACL repair should keep authorization file admin-only.");
     }
 
     Directory.CreateDirectory(paths.InstallDir);

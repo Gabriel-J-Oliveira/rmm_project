@@ -482,26 +482,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private static void ProtectAuthorizationFile(string path)
     {
-        RunIcacls(path, "/inheritance:r");
-        RunIcacls(path, "/grant:r *" + NightOwlPaths.SystemSid + ":F");
-        RunIcacls(path, "/grant:r *" + NightOwlPaths.AdministratorsSid + ":F");
-        RunIcacls(path, "/remove:g *" + NightOwlPaths.UsersSid + " *" + NightOwlPaths.AuthenticatedUsersSid + " *" + NightOwlPaths.EveryoneSid);
-    }
-
-    private static void RunIcacls(string path, string args)
-    {
-        try
-        {
-            using Process process = Process.Start(new ProcessStartInfo
-            {
-                FileName = "icacls.exe",
-                Arguments = "\"" + path + "\" " + args,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            })!;
-            process.WaitForExit(10000);
-        }
-        catch { }
+        NightOwlPaths.Current.ProtectAdminOnlyFile(path, "tray", "local-uninstall-authorization");
     }
 
     private static void StartUninstallerWithAuthorizationFile(string authorizationFile)
@@ -528,10 +509,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private static void ProtectRunnerDirectory(string path)
     {
-        RunIcacls(path, "/inheritance:r");
-        RunIcacls(path, "/grant:r *" + NightOwlPaths.SystemSid + ":(OI)(CI)F");
-        RunIcacls(path, "/grant:r *" + NightOwlPaths.AdministratorsSid + ":(OI)(CI)F");
-        RunIcacls(path, "/remove:g *" + NightOwlPaths.UsersSid + " *" + NightOwlPaths.AuthenticatedUsersSid + " *" + NightOwlPaths.EveryoneSid);
+        NightOwlPaths.Current.ProtectAdminOnlyTree(path, "tray", "local-uninstall-runner");
     }
 
     private static string ReadAuthorizationJobId(string authorizationFile)

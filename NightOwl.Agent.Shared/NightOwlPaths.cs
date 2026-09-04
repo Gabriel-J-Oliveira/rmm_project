@@ -420,12 +420,12 @@ public sealed class NightOwlPaths
     public IReadOnlyList<NightOwlAclPolicy> GetAclPolicies() => new[]
     {
         NightOwlAclPolicy.UsersRead(Root, "root"),
-        NightOwlAclPolicy.UsersRead(InstallDir, "install", normalizeChildren: true),
-        NightOwlAclPolicy.UsersRead(ConfigDir, "config"),
-        NightOwlAclPolicy.UsersRead(IdentityDir, "identity"),
-        NightOwlAclPolicy.UsersRead(StateDir, "state"),
-        NightOwlAclPolicy.UsersRead(PendingResultsDir, "pending-results"),
-        NightOwlAclPolicy.UsersRead(TrustDir, "trust", normalizeChildren: true),
+        NightOwlAclPolicy.UsersRead(InstallDir, "install", normalizeChildren: true, failClosed: true),
+        NightOwlAclPolicy.AdminOnly(ConfigDir, "config", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(IdentityDir, "identity", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(StateDir, "state", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(PendingResultsDir, "pending-results", normalizeChildren: true),
+        NightOwlAclPolicy.AdminOnly(TrustDir, "trust", normalizeChildren: true),
         NightOwlAclPolicy.AdminOnly(TrustBackupsDir, "trust-backups", normalizeChildren: true),
         NightOwlAclPolicy.AdminOnly(TrustDownloadsDir, "trust-downloads", normalizeChildren: true),
         NightOwlAclPolicy.UsersRead(LogsDir, "logs", systemRights: "M"),
@@ -443,6 +443,38 @@ public sealed class NightOwlPaths
     public void ProtectReleaseTrustDirectories(string component)
     {
         ProtectAclPolicies(component, policy => policy.Scope.StartsWith("trust", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public void ProtectAdminOnlyTree(string path, string component, string scope)
+    {
+        NightOwlAclPolicy policy = NightOwlAclPolicy.AdminOnly(FullPath(path), scope, normalizeChildren: true);
+        if (!IsWithinRoot(policy.Path))
+        {
+            WriteLog(component, "acl.apply.failed", "Refusing to apply admin-only ACL outside NightOwl root.", new
+            {
+                path = policy.Path,
+                scope = policy.Scope
+            }, "error");
+            throw new InvalidOperationException("ACL target is outside NightOwl root.");
+        }
+        EnsureDirectory(policy.Path, component);
+        ApplyAclPolicyTarget(policy, component);
+        NormalizeExistingChildren(policy, component);
+    }
+
+    public void ProtectAdminOnlyFile(string path, string component, string scope)
+    {
+        NightOwlAclPolicy policy = NightOwlAclPolicy.AdminOnly(FullPath(path), scope);
+        if (!IsWithinRoot(policy.Path))
+        {
+            WriteLog(component, "acl.apply.failed", "Refusing to apply admin-only file ACL outside NightOwl root.", new
+            {
+                path = policy.Path,
+                scope = policy.Scope
+            }, "error");
+            throw new InvalidOperationException("ACL target is outside NightOwl root.");
+        }
+        ApplyAclPolicyTarget(policy, component);
     }
 
     private void ProtectPersistentDirectories(string component)
@@ -482,13 +514,18 @@ public sealed class NightOwlPaths
         }
         catch (Exception ex)
         {
+            string level = policy.FailClosed ? "error" : "warning";
             WriteLog(component, "acl.apply.failed", "Failed to apply declared ACL policy.", new
             {
                 path = policy.Path,
                 scope = policy.Scope,
                 error = ex.GetType().Name,
                 message = ex.Message
-            }, "warning");
+            }, level);
+            if (policy.FailClosed)
+            {
+                throw;
+            }
         }
     }
 
@@ -720,9 +757,9 @@ public sealed class NightOwlPaths
     };
 }
 
-public sealed record NightOwlAclPolicy(string Path, string Scope, IReadOnlyList<string> Grants, bool AllowUsersRead, FileSystemRights SystemRights, bool NormalizeChildren)
+public sealed record NightOwlAclPolicy(string Path, string Scope, IReadOnlyList<string> Grants, bool AllowUsersRead, FileSystemRights SystemRights, bool NormalizeChildren, bool FailClosed)
 {
-    public static NightOwlAclPolicy UsersRead(string path, string scope, string systemRights = "F", bool normalizeChildren = false) => new(
+    public static NightOwlAclPolicy UsersRead(string path, string scope, string systemRights = "F", bool normalizeChildren = false, bool failClosed = false) => new(
         path,
         scope,
         new[]
@@ -733,9 +770,10 @@ public sealed record NightOwlAclPolicy(string Path, string Scope, IReadOnlyList<
         },
         AllowUsersRead: true,
         ParseRights(systemRights),
-        normalizeChildren);
+        normalizeChildren,
+        failClosed);
 
-    public static NightOwlAclPolicy AdminOnly(string path, string scope, string systemRights = "F", bool normalizeChildren = false) => new(
+    public static NightOwlAclPolicy AdminOnly(string path, string scope, string systemRights = "F", bool normalizeChildren = false, bool failClosed = true) => new(
         path,
         scope,
         new[]
@@ -745,7 +783,8 @@ public sealed record NightOwlAclPolicy(string Path, string Scope, IReadOnlyList<
         },
         AllowUsersRead: false,
         ParseRights(systemRights),
-        normalizeChildren);
+        normalizeChildren,
+        failClosed);
 
     private static FileSystemRights ParseRights(string rights) => rights.Equals("M", StringComparison.OrdinalIgnoreCase)
         ? FileSystemRights.Modify

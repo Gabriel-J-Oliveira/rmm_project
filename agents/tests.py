@@ -1807,7 +1807,7 @@ $env:NIGHTOWL_DEPLOYMENT_TOKEN = 'deploy_optional_metadata_test'
 $script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
 $script = $script.Replace("    Assert-Administrator`r`n", "    # Assert-Administrator bypassed by regression test`r`n")
 $script = $script.Replace("    Assert-Administrator`n", "    # Assert-Administrator bypassed by regression test`n")
-$script = $script.Replace('& powershell.exe @installArgs', '$global:CapturedInstallArgs = $installArgs; $global:InstallerInvoked = $true; $global:LASTEXITCODE = 0')
+$script = $script.Replace('& powershell.exe @installArgs', '$global:CapturedInstallArgs = $installArgs; $global:CapturedInstallerEnrollmentToken = $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN; $global:InstallerInvoked = $true; $global:LASTEXITCODE = 0')
 $override = @'
 function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
     return [pscustomobject]@{{
@@ -1850,12 +1850,15 @@ if ($idx -lt 0) {{ throw 'main try marker nao encontrado' }}
 $script = $script.Substring(0, $idx) + $override + "`r`n" + $script.Substring($idx)
 Invoke-Expression $script
 if (-not $global:InstallerInvoked) {{ throw 'installer nao foi chamado' }}
+if ($global:CapturedInstallArgs -contains '-EnrollmentToken') {{ throw 'EnrollmentToken nao deve ser enviado por argumento' }}
+if ($global:CapturedInstallerEnrollmentToken -ne 'deploy_optional_metadata_test') {{ throw 'EnrollmentToken nao chegou por ambiente ao installer' }}
 if ($global:CapturedInstallArgs -contains '-ExpectedGitCommit') {{ throw 'ExpectedGitCommit nao deveria ser enviado' }}
 foreach ($required in @('-ExpectedVersion','0.1.1.0-rc19','-ExpectedChannel','development','-ExpectedPackageSha256','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','-ExpectedReleaseId','release-test-id')) {{
     if (-not ($global:CapturedInstallArgs -contains $required)) {{ throw "argumento esperado ausente: $required" }}
 }}
 if ($global:NightOwlDeploymentBootstrapExitCode -ne 0) {{ throw 'bootstrap deveria concluir com sucesso' }}
 if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
+if (Test-Path Env:\\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN) {{ throw 'installer enrollment token nao foi removido' }}
 Write-Output 'OPTIONAL_GIT_COMMIT_OK'
 """
             completed = subprocess.run(

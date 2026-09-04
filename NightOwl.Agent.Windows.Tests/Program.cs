@@ -23,6 +23,8 @@ try
     TestUninstallerRunnerPayloadCopiesSelfContainedFiles();
     TestUninstallerRunnerPayloadRunsOutsideInstallPath();
     TestLoadedRuntimeFromRunnerDoesNotBlockInstallPathRemoval();
+    TestTrayLocalUninstallUsesCentralAclAndAuthorizationFile();
+    TestAgentProcessArgumentsDoNotCarrySecrets();
     TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
     TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
     TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
@@ -353,6 +355,35 @@ static void TestLoadedRuntimeFromRunnerDoesNotBlockInstallPathRemoval()
     {
         runnerRuntimeLock?.Dispose();
         DeleteTempDir(dir);
+    }
+}
+
+static void TestTrayLocalUninstallUsesCentralAclAndAuthorizationFile()
+{
+    string source = FindRepoRootFile("NightOwl.Agent.Tray", "TrayApplicationContext.cs");
+    string text = File.ReadAllText(source);
+    Require(text.Contains("ProtectAdminOnlyFile(path, \"tray\", \"local-uninstall-authorization\")", StringComparison.Ordinal), "Tray authorization file should use central admin-only ACL.");
+    Require(text.Contains("ProtectAdminOnlyTree(path, \"tray\", \"local-uninstall-runner\")", StringComparison.Ordinal), "Tray uninstall runner should use central admin-only ACL.");
+    Require(!text.Contains("RunIcacls(", StringComparison.Ordinal), "Tray should not use best-effort icacls for secret authorization files.");
+    Require(text.Contains("--authorization-file", StringComparison.Ordinal), "Tray should pass only an authorization file to the uninstaller.");
+    Require(!text.Contains("--authorization-token", StringComparison.Ordinal), "Tray must not pass authorization token in process arguments.");
+}
+
+static void TestAgentProcessArgumentsDoNotCarrySecrets()
+{
+    foreach (string source in new[]
+    {
+        FindRepoRootFile("NightOwl.Agent.Windows", "Jobs", "JobExecutor.cs"),
+        FindRepoRootFile("NightOwl.Agent.Tray", "TrayApplicationContext.cs"),
+        FindRepoRootFile("NightOwl.Agent.Updater", "Program.cs"),
+        FindRepoRootFile("NightOwl.Agent.Uninstaller", "Program.cs")
+    })
+    {
+        string text = File.ReadAllText(source);
+        foreach (string forbidden in new[] { "--agent-token", "--enrollment-token", "--authorization-token", "AgentToken = " })
+        {
+            Require(!text.Contains(forbidden, StringComparison.OrdinalIgnoreCase), $"Process argument source should not contain secret argument marker {forbidden}: {source}");
+        }
     }
 }
 
@@ -911,6 +942,22 @@ static string GetWindowsPowerShellPath()
         return path;
     }
     return "powershell.exe";
+}
+
+static string FindRepoRootFile(params string[] relativeParts)
+{
+    DirectoryInfo? dir = new(AppContext.BaseDirectory);
+    while (dir is not null)
+    {
+        string candidate = Path.Combine(new[] { dir.FullName }.Concat(relativeParts).ToArray());
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+        dir = dir.Parent;
+    }
+
+    throw new FileNotFoundException("Could not find repository file.", Path.Combine(relativeParts));
 }
 
 static string CreateTempDir()

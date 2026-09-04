@@ -36,6 +36,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ([string]::IsNullOrWhiteSpace($EnrollmentToken) -and -not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
+    $EnrollmentToken = [string]$env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN
+}
+
 function New-NightOwlPaths([string]$RequestedInstallPath) {
     $root = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_HOME)) { "C:\ProgramData\NightOwl" } else { $env:NIGHTOWL_HOME }
     $install = if ([string]::IsNullOrWhiteSpace($RequestedInstallPath)) { Join-Path $root "AgentDotNet" } else { $RequestedInstallPath }
