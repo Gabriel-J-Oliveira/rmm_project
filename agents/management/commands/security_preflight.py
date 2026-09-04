@@ -10,9 +10,14 @@ from django.core.management.base import BaseCommand, CommandError
 
 INSECURE_SECRET_KEY_FALLBACK = 'django-insecure-rf)kc(p+3jf71*prhdcwpa7u&xdbzy%f%zaz8g=xr5e(i_-tmz'
 DEFAULT_TECHNICAL_USERNAMES = {'gabriel.oliveira'}
-SECRET_TOKEN_PATTERN = re.compile(
-    r'(rmm_live_[A-Za-z0-9_\-]{8,}|deploy_[A-Za-z0-9_\-]{8,}|enroll_[A-Za-z0-9_\-]{8,}|BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY|<D>[^<]+</D>)'
+SECRET_LIKE_PATTERNS = (
+    ('TOKEN_RMM_LIVE', re.compile(r'rmm_live_[A-Za-z0-9_\-]{8,}')),
+    ('TOKEN_DEPLOY', re.compile(r'deploy_[A-Za-z0-9_\-]{8,}')),
+    ('TOKEN_ENROLL', re.compile(r'enroll_[A-Za-z0-9_\-]{8,}')),
+    ('PRIVATE_KEY_PEM', re.compile(r'BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY')),
+    ('PRIVATE_KEY_XML_D', re.compile(r'<D>[^<]+</D>')),
 )
+SECRET_PREFLIGHT_COMMAND_PATH = 'agents/management/commands/security_preflight.py'
 
 
 class Command(BaseCommand):
@@ -20,6 +25,11 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--strict', action='store_true', help='Retorna erro quando houver qualquer FAIL.')
+        parser.add_argument(
+            '--show-secret-paths',
+            action='store_true',
+            help='Mostra caminhos e categorias de matches secret-like sem exibir valores.',
+        )
 
     def handle(self, *args, **options):
         strict = bool(options['strict'])
@@ -30,7 +40,7 @@ class Command(BaseCommand):
         self._check_active_directory(strict)
         self._check_email()
         self._check_nightowl_urls(strict)
-        self._check_git_hygiene(strict)
+        self._check_git_hygiene(strict, bool(options['show_secret_paths']))
 
         final = self._final_status()
         self.stdout.write(f'SECURITY_PREFLIGHT={final}')
@@ -132,7 +142,7 @@ class Command(BaseCommand):
             https = urlparse(value).scheme == 'https'
             self._record('PASS' if https else 'WARN', f'{setting_name} uses HTTPS' if https else f'{setting_name} is not HTTPS', strict_severity='FAIL' if setting_name == 'NIGHTOWL_PUBLIC_URL' else None, strict=strict)
 
-    def _check_git_hygiene(self, strict):
+    def _check_git_hygiene(self, strict, show_secret_paths=False):
         root = Path(getattr(settings, 'BASE_DIR', Path.cwd()))
         tracked_files = self._git_lines(root, ['ls-files'])
         if tracked_files is None:
@@ -149,8 +159,11 @@ class Command(BaseCommand):
         ]
         self._record('FAIL' if key_files else 'PASS', 'tracked private key/certificate files absent' if not key_files else f'tracked private key/certificate files found count={len(key_files)}', strict=strict)
 
-        secret_matches = self._count_tracked_secret_like_files(root, normalized)
-        self._record('FAIL' if secret_matches else 'PASS', 'tracked token/private key patterns absent' if not secret_matches else f'tracked token/private key patterns found count={secret_matches}', strict=strict)
+        secret_matches = self._find_tracked_secret_like_files(root, normalized)
+        self._record('FAIL' if secret_matches else 'PASS', 'tracked token/private key patterns absent' if not secret_matches else f'tracked token/private key patterns found count={len(secret_matches)}', strict=strict)
+        if secret_matches and show_secret_paths:
+            for relative, category in secret_matches:
+                self.stdout.write(f'[FAIL] tracked secret-like file: path={relative}; category={category}')
 
     def _git_lines(self, root, args):
         try:
@@ -170,8 +183,8 @@ class Command(BaseCommand):
             return None
         return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
 
-    def _count_tracked_secret_like_files(self, root, tracked_files):
-        count = 0
+    def _find_tracked_secret_like_files(self, root, tracked_files):
+        matches = []
         for relative in tracked_files:
             if self._is_safe_to_skip_secret_scan(relative):
                 continue
@@ -180,9 +193,11 @@ class Command(BaseCommand):
                 content = path.read_text(encoding='utf-8', errors='ignore')
             except OSError:
                 continue
-            if SECRET_TOKEN_PATTERN.search(content):
-                count += 1
-        return count
+            for category, pattern in SECRET_LIKE_PATTERNS:
+                if pattern.search(content):
+                    matches.append((relative, category))
+                    break
+        return matches
 
     def _is_allowed_public_or_test_fixture(self, path):
         lowered = path.lower()
@@ -190,6 +205,8 @@ class Command(BaseCommand):
 
     def _is_safe_to_skip_secret_scan(self, path):
         lowered = path.lower()
+        if lowered == SECRET_PREFLIGHT_COMMAND_PATH:
+            return True
         return (
             lowered.startswith(('agents/migrations/', 'static/', 'staticfiles/'))
             or '/tests' in lowered

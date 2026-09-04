@@ -125,6 +125,27 @@ class SecurityPreflightCommandTests(SimpleTestCase):
         self.assertIn('[FAIL] .env tracked', output)
         self.assertNotIn('must-not-print', output)
 
+    def test_security_preflight_secret_path_diagnostics_excludes_itself_and_redacts_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            command_path = root / 'agents' / 'management' / 'commands'
+            command_path.mkdir(parents=True)
+            (command_path / 'security_preflight.py').write_text("PATTERN = r'<D>self-match-not-a-real-secret</D>'\n", encoding='utf-8')
+            scripts_path = root / 'scripts'
+            scripts_path.mkdir()
+            (scripts_path / 'fixture.py').write_text("TOKEN = 'deploy_ABC123456789'\n", encoding='utf-8')
+            subprocess.run(['git', 'init'], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(['git', 'add', '.'], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            with override_settings(BASE_DIR=root):
+                output = self.run_preflight('--show-secret-paths')
+
+        self.assertIn('tracked token/private key patterns found count=1', output)
+        self.assertIn('path=scripts/fixture.py; category=TOKEN_DEPLOY', output)
+        self.assertNotIn('deploy_ABC123456789', output)
+        self.assertNotIn('self-match-not-a-real-secret', output)
+        self.assertNotIn('security_preflight.py; category=', output)
+
 
 class AgentOperationalDiagnosticsTests(TestCase):
     def setUp(self):
