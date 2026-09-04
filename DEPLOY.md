@@ -711,6 +711,33 @@ Blocos de Phase 5 ja implementados:
 
 O commit `f151f2218028fc2547b1338e96e980fa434d57ae` e posterior a RC36 e exige nova release do agente antes do canario real de ACL/secrets.
 
+Baseline Linux validado para o servico em producao:
+
+```text
+User=nightowl
+Group=nightowl
+UMask=0027
+/opt/nightowl/.env=0640 root:nightowl
+/opt/nightowl/logs=0750 nightowl:nightowl
+/opt/nightowl/media=0750 nightowl:nightowl
+Gunicorn nao executa como root
+```
+
+Validacoes reais registradas:
+
+```text
+ENV_READABLE_BY_NIGHTOWL=PASS
+ENV_BLOCKED_FOR_WWW_DATA=PASS
+LOG_WRITE_AS_NIGHTOWL=PASS
+MEDIA_WRITE_AS_NIGHTOWL=PASS
+DJANGO_AS_NIGHTOWL=PASS
+SERVICE_LEAST_PRIVILEGE=PASS
+GUNICORN_NOT_RUNNING_AS_ROOT=PASS
+LOCAL_HTTP_STATUS=301
+PUBLIC_HTTPS_STATUS=200
+POST_MIGRATION_ERRORS=NONE
+```
+
 Capacidades de lifecycle validadas em canario real:
 
 - clean deployment

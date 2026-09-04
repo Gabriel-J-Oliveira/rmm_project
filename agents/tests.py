@@ -3,9 +3,11 @@ import csv
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 from pathlib import Path
 from io import StringIO
 from datetime import timedelta
@@ -263,6 +265,101 @@ class SecurityPreflightCommandTests(SimpleTestCase):
         self.assertFalse(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o644))
         self.assertFalse(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o620))
         self.assertFalse(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o606))
+
+    def run_runtime_env_file_preflight(self, root, *args, mode=None, file_type=stat.S_IFREG, expect_error=False):
+        output = StringIO()
+
+        def fake_lstat(path):
+            if Path(path).name == '.env' and mode is not None:
+                return os.stat_result((file_type | mode, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+            return original_lstat(path)
+
+        original_lstat = Path.lstat
+        with mock.patch.object(SecurityPreflightCommand, '_runtime_secret_file_posix_checks_supported', return_value=True):
+            with override_settings(BASE_DIR=Path(root)):
+                with mock.patch.object(Path, 'lstat', fake_lstat):
+                    if expect_error:
+                        with self.assertRaises(CommandError):
+                            call_command('security_preflight', *args, stdout=output)
+                    else:
+                        call_command('security_preflight', *args, stdout=output)
+        return output.getvalue()
+
+    def test_security_preflight_missing_env_file_does_not_fail(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = self.run_runtime_env_file_preflight(temp_dir)
+
+        self.assertIn('[PASS] .env not present; environment/systemd supported', output)
+
+    def test_security_preflight_env_file_0600_passes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / '.env'
+            env_path.write_text('DJANGO_SECRET_KEY=super-secret-value', encoding='utf-8')
+            output = self.run_runtime_env_file_preflight(temp_dir, mode=0o600)
+
+        self.assertIn('[PASS] .env permissions restricted', output)
+        self.assertIn('mode=0600', output)
+        self.assertNotIn('super-secret-value', output)
+
+    def test_security_preflight_env_file_0640_passes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / '.env'
+            env_path.write_text('DJANGO_SECRET_KEY=super-secret-value', encoding='utf-8')
+            output = self.run_runtime_env_file_preflight(temp_dir, mode=0o640)
+
+        self.assertIn('[PASS] .env permissions restricted', output)
+        self.assertIn('mode=0640', output)
+        self.assertNotIn('super-secret-value', output)
+
+    def test_security_preflight_env_file_0644_warns_without_secret_content(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / '.env'
+            env_path.write_text('DJANGO_SECRET_KEY=super-secret-value', encoding='utf-8')
+            output = self.run_runtime_env_file_preflight(temp_dir, mode=0o644)
+
+        self.assertIn('[WARN] .env permissions too broad', output)
+        self.assertIn('mode=0644', output)
+        self.assertNotIn('super-secret-value', output)
+
+    def test_security_preflight_env_file_0644_fails_in_strict_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / '.env'
+            env_path.write_text('DJANGO_SECRET_KEY=super-secret-value', encoding='utf-8')
+            output = self.run_runtime_env_file_preflight(temp_dir, '--strict', mode=0o644, expect_error=True)
+
+        self.assertIn('[FAIL] .env permissions too broad', output)
+        self.assertNotIn('super-secret-value', output)
+
+    def test_security_preflight_rejects_env_symlink(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / '.env'
+            env_path.write_text('DJANGO_SECRET_KEY=super-secret-value', encoding='utf-8')
+            output = self.run_runtime_env_file_preflight(temp_dir, mode=0o777, file_type=stat.S_IFLNK)
+
+        self.assertIn('[WARN] .env is symbolic link', output)
+        self.assertNotIn('super-secret-value', output)
+
+    @override_settings(NIGHTOWL_TECHNICAL_USERNAMES={'gabriel.oliveira'})
+    def test_security_preflight_explicit_default_technical_username_passes(self):
+        with mock.patch.dict(os.environ, {'NIGHTOWL_TECHNICAL_USERNAMES': 'gabriel.oliveira'}):
+            output = self.run_preflight()
+
+        self.assertIn('[PASS] technical usernames configured', output)
+        self.assertNotIn('gabriel.oliveira', output)
+
+    @override_settings(NIGHTOWL_TECHNICAL_USERNAMES={'gabriel.oliveira'})
+    def test_security_preflight_missing_technical_username_env_warns(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            output = self.run_preflight()
+
+        self.assertIn('[WARN] technical usernames not configured', output)
+
+    @override_settings(NIGHTOWL_TECHNICAL_USERNAMES=set())
+    def test_security_preflight_empty_technical_username_env_warns(self):
+        with mock.patch.dict(os.environ, {'NIGHTOWL_TECHNICAL_USERNAMES': ''}):
+            output = self.run_preflight()
+
+        self.assertIn('[WARN] technical usernames not configured', output)
 
     @override_settings(DEBUG=True)
     def test_security_preflight_strict_returns_nonzero_for_fail(self):

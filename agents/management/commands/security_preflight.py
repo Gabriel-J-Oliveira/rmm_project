@@ -147,9 +147,10 @@ class Command(BaseCommand):
 
     def _check_nightowl_urls(self, strict):
         tech_users = {str(item).casefold() for item in getattr(settings, 'NIGHTOWL_TECHNICAL_USERNAMES', set()) or set()}
+        explicit_tech_users = os.environ.get('NIGHTOWL_TECHNICAL_USERNAMES') is not None
         self._record(
-            'WARN' if tech_users == DEFAULT_TECHNICAL_USERNAMES else 'PASS',
-            'technical usernames externalized' if tech_users != DEFAULT_TECHNICAL_USERNAMES else 'technical usernames use default',
+            'PASS' if explicit_tech_users and tech_users else 'WARN',
+            'technical usernames configured' if explicit_tech_users and tech_users else 'technical usernames not configured',
             strict_severity='WARN',
             strict=strict,
         )
@@ -179,24 +180,36 @@ class Command(BaseCommand):
         root = Path(getattr(settings, 'BASE_DIR', Path.cwd()))
         env_path = root / '.env'
         if not env_path.exists():
-            self._record('PASS', 'runtime secret file .env not present; environment/systemd supported')
+            self._record('PASS', '.env not present; environment/systemd supported')
             return
-        if os.name != 'posix':
-            self._record('PASS', 'runtime secret file .env POSIX permission check not applicable on this platform')
+        if not self._runtime_secret_file_posix_checks_supported():
+            self._record('PASS', '.env POSIX permission check not applicable on this platform')
             return
 
-        mode = stat.S_IMODE(env_path.stat().st_mode)
+        info = env_path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        if stat.S_ISLNK(info.st_mode):
+            self._record('WARN', '.env is symbolic link', strict_severity='FAIL', strict=strict)
+            return
+        if not stat.S_ISREG(info.st_mode):
+            self._record('WARN', f'.env is not a regular file mode={mode:04o}', strict_severity='FAIL', strict=strict)
+            return
         owner = self._owner_label(env_path)
         ok = self._runtime_secret_file_mode_is_safe(mode)
         self._record(
-            'PASS' if ok else 'FAIL',
-            f'runtime secret file .env permissions {"acceptable" if ok else "unsafe"} path=.env owner={owner} mode={oct(mode)}',
+            'PASS' if ok else 'WARN',
+            f'.env permissions {"restricted" if ok else "too broad"} owner={owner} mode={mode:04o}',
+            strict_severity='FAIL',
             strict=strict,
         )
 
     @staticmethod
+    def _runtime_secret_file_posix_checks_supported():
+        return os.name == 'posix'
+
+    @staticmethod
     def _runtime_secret_file_mode_is_safe(mode):
-        return (mode & 0o026) == 0
+        return mode in {0o600, 0o640}
 
     @staticmethod
     def _owner_label(path):
