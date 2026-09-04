@@ -25,7 +25,7 @@ from .job_progress import job_progress_message, job_progress_percentage, job_sta
 from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
-from .management.commands.security_preflight import INSECURE_SECRET_KEY_FALLBACK
+from .management.commands.security_preflight import Command as SecurityPreflightCommand, INSECURE_SECRET_KEY_FALLBACK
 
 
 class SecurityPreflightCommandTests(SimpleTestCase):
@@ -50,7 +50,10 @@ class SecurityPreflightCommandTests(SimpleTestCase):
                     '"session": s.SESSION_COOKIE_SECURE, '
                     '"csrf": s.CSRF_COOKIE_SECURE, '
                     '"redirect": s.SECURE_SSL_REDIRECT, '
-                    '"proxy": s.SECURE_PROXY_SSL_HEADER'
+                    '"proxy": s.SECURE_PROXY_SSL_HEADER, '
+                    '"hsts": s.SECURE_HSTS_SECONDS, '
+                    '"hsts_subdomains": s.SECURE_HSTS_INCLUDE_SUBDOMAINS, '
+                    '"hsts_preload": s.SECURE_HSTS_PRELOAD'
                     '}))'
                 ),
             ],
@@ -77,6 +80,9 @@ class SecurityPreflightCommandTests(SimpleTestCase):
         self.assertTrue(values['csrf'])
         self.assertTrue(values['redirect'])
         self.assertEqual(values['proxy'], ['HTTP_X_FORWARDED_PROTO', 'https'])
+        self.assertEqual(values['hsts'], 0)
+        self.assertFalse(values['hsts_subdomains'])
+        self.assertFalse(values['hsts_preload'])
 
     def test_https_cookie_and_redirect_can_be_disabled_explicitly_for_development(self):
         values = self.load_https_settings({
@@ -85,11 +91,27 @@ class SecurityPreflightCommandTests(SimpleTestCase):
             'DJANGO_SESSION_COOKIE_SECURE': 'False',
             'DJANGO_CSRF_COOKIE_SECURE': 'False',
             'DJANGO_SECURE_SSL_REDIRECT': 'False',
+            'DJANGO_SECURE_HSTS_SECONDS': '0',
+            'DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS': 'False',
+            'DJANGO_SECURE_HSTS_PRELOAD': 'False',
         })
 
         self.assertFalse(values['session'])
         self.assertFalse(values['csrf'])
         self.assertFalse(values['redirect'])
+
+    def test_hsts_can_be_configured_by_environment(self):
+        values = self.load_https_settings({
+            'DJANGO_DEBUG': 'False',
+            'DJANGO_SECRET_KEY': 'test-secret',
+            'DJANGO_SECURE_HSTS_SECONDS': '31536000',
+            'DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS': 'True',
+            'DJANGO_SECURE_HSTS_PRELOAD': 'False',
+        })
+
+        self.assertEqual(values['hsts'], 31536000)
+        self.assertTrue(values['hsts_subdomains'])
+        self.assertFalse(values['hsts_preload'])
 
     @override_settings(
         DEBUG=False,
@@ -163,6 +185,84 @@ class SecurityPreflightCommandTests(SimpleTestCase):
         output = self.run_preflight()
 
         self.assertIn('[WARN] AD TLS not required', output)
+        self.assertIn('[WARN] AD transport not protected', output)
+
+    @override_settings(
+        DEBUG=False,
+        SECRET_KEY='production-secret',
+        ALLOWED_HOSTS=['nightowl.test'],
+        CSRF_TRUSTED_ORIGINS=['https://nightowl.test'],
+        SESSION_COOKIE_SECURE=True,
+        CSRF_COOKIE_SECURE=True,
+        SECURE_SSL_REDIRECT=True,
+        SECURE_HSTS_SECONDS=0,
+        DATABASES={'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'nightowl'}},
+        NIGHTOWL_PUBLIC_URL='https://nightowl.test',
+        NIGHTOWL_AGENT_PUBLIC_SERVER_URL='https://nightowl.test',
+        NIGHTOWL_AGENT_INSTALLER_URL='https://nightowl.test/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
+        NIGHTOWL_AGENT_HEARTBEAT_URL='https://nightowl.test/api/agent/heartbeat/',
+        NIGHTOWL_TECHNICAL_USERNAMES={'nightowl.tech'},
+        AD_AUTH_CONFIG={'ENABLED': False},
+        EMAIL_HOST='smtp.example.local',
+        EMAIL_HOST_PASSWORD='smtp-secret-value-not-printed',
+        EMAIL_USE_TLS=True,
+    )
+    def test_security_preflight_strict_fails_when_production_hsts_is_zero(self):
+        output = StringIO()
+
+        with self.assertRaises(CommandError):
+            call_command('security_preflight', '--strict', stdout=output)
+
+        self.assertIn('[FAIL] SECURE_HSTS_SECONDS=0', output.getvalue())
+
+    @override_settings(AD_AUTH_CONFIG={'ENABLED': True, 'SERVER_URI': 'ldap://ad.example.local', 'BIND_DN': 'hidden', 'BIND_PASSWORD': 'hidden', 'REQUIRE_TLS': False})
+    def test_security_preflight_strict_fails_when_ad_transport_is_unprotected(self):
+        output = StringIO()
+
+        with self.assertRaises(CommandError):
+            call_command('security_preflight', '--strict', stdout=output)
+
+        self.assertIn('[FAIL] AD TLS not required', output.getvalue())
+        self.assertIn('[FAIL] AD transport not protected', output.getvalue())
+
+    @override_settings(
+        DEBUG=False,
+        NIGHTOWL_PUBLIC_URL='http://nightowl.test',
+        NIGHTOWL_AGENT_PUBLIC_SERVER_URL='http://nightowl.test',
+        NIGHTOWL_AGENT_INSTALLER_URL='http://nightowl.test/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
+        NIGHTOWL_AGENT_HEARTBEAT_URL='http://nightowl.test/api/agent/heartbeat/',
+    )
+    def test_security_preflight_strict_fails_for_production_http_urls(self):
+        output = StringIO()
+
+        with self.assertRaises(CommandError):
+            call_command('security_preflight', '--strict', stdout=output)
+
+        text = output.getvalue()
+        self.assertIn('[FAIL] NIGHTOWL_PUBLIC_URL is not HTTPS', text)
+        self.assertIn('[FAIL] NIGHTOWL_AGENT_PUBLIC_SERVER_URL is not HTTPS', text)
+        self.assertIn('[FAIL] NIGHTOWL_AGENT_INSTALLER_URL is not HTTPS', text)
+        self.assertIn('[FAIL] NIGHTOWL_AGENT_HEARTBEAT_URL is not HTTPS', text)
+
+    @override_settings(
+        DEBUG=True,
+        NIGHTOWL_PUBLIC_URL='http://localhost:8000',
+        NIGHTOWL_AGENT_PUBLIC_SERVER_URL='http://127.0.0.1:8000',
+        NIGHTOWL_AGENT_INSTALLER_URL='http://localhost:8000/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
+        NIGHTOWL_AGENT_HEARTBEAT_URL='http://localhost:8000/api/agent/heartbeat/',
+    )
+    def test_security_preflight_allows_localhost_http_in_debug(self):
+        output = self.run_preflight()
+
+        self.assertIn('[PASS] NIGHTOWL_PUBLIC_URL uses DEBUG localhost HTTP', output)
+        self.assertIn('[PASS] NIGHTOWL_AGENT_HEARTBEAT_URL uses DEBUG localhost HTTP', output)
+
+    def test_runtime_secret_file_mode_policy(self):
+        self.assertTrue(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o600))
+        self.assertTrue(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o640))
+        self.assertFalse(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o644))
+        self.assertFalse(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o620))
+        self.assertFalse(SecurityPreflightCommand._runtime_secret_file_mode_is_safe(0o606))
 
     @override_settings(DEBUG=True)
     def test_security_preflight_strict_returns_nonzero_for_fail(self):

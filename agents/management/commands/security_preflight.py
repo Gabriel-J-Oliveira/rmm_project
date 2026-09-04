@@ -1,5 +1,6 @@
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
@@ -40,6 +41,7 @@ class Command(BaseCommand):
         self._check_active_directory(strict)
         self._check_email()
         self._check_nightowl_urls(strict)
+        self._check_runtime_secret_files(strict)
         self._check_git_hygiene(strict, bool(options['show_secret_paths']))
 
         final = self._final_status()
@@ -85,7 +87,16 @@ class Command(BaseCommand):
         self._record('PASS' if bool(getattr(settings, 'CSRF_COOKIE_SECURE', False)) else 'WARN', 'CSRF_COOKIE_SECURE=true' if bool(getattr(settings, 'CSRF_COOKIE_SECURE', False)) else 'CSRF_COOKIE_SECURE=false')
         self._record('PASS' if bool(getattr(settings, 'SECURE_SSL_REDIRECT', False)) else 'WARN', 'SECURE_SSL_REDIRECT=true' if bool(getattr(settings, 'SECURE_SSL_REDIRECT', False)) else 'SECURE_SSL_REDIRECT=false')
         hsts_seconds = int(getattr(settings, 'SECURE_HSTS_SECONDS', 0) or 0)
-        self._record('PASS' if hsts_seconds > 0 else 'WARN', 'SECURE_HSTS_SECONDS configured' if hsts_seconds > 0 else 'SECURE_HSTS_SECONDS=0')
+        self._record(
+            'PASS' if hsts_seconds > 0 else 'WARN',
+            'SECURE_HSTS_SECONDS configured' if hsts_seconds > 0 else 'SECURE_HSTS_SECONDS=0',
+            strict_severity='FAIL' if not debug else None,
+            strict=strict,
+        )
+        include_subdomains = bool(getattr(settings, 'SECURE_HSTS_INCLUDE_SUBDOMAINS', False))
+        preload = bool(getattr(settings, 'SECURE_HSTS_PRELOAD', False))
+        self._record('PASS', 'SECURE_HSTS_INCLUDE_SUBDOMAINS=' + str(include_subdomains).lower())
+        self._record('PASS', 'SECURE_HSTS_PRELOAD=' + str(preload).lower())
 
     def _check_database(self, strict):
         database = (getattr(settings, 'DATABASES', {}) or {}).get('default', {}) or {}
@@ -106,15 +117,25 @@ class Command(BaseCommand):
         has_bind_dn = bool(str(config.get('BIND_DN') or '').strip())
         has_bind_password = bool(str(config.get('BIND_PASSWORD') or '').strip())
         require_tls = bool(config.get('REQUIRE_TLS'))
+        server_uri = str(config.get('SERVER_URI') or '').strip()
+        server_scheme = urlparse(server_uri).scheme.lower()
+        secure_transport = (server_scheme == 'ldaps') or require_tls
 
         self._record('PASS' if enabled else 'WARN', 'AD enabled' if enabled else 'AD disabled')
         self._record('PASS' if has_server else ('WARN' if enabled else 'PASS'), 'AD server configured' if has_server else 'AD server not configured')
         self._record('PASS' if has_bind_dn else ('WARN' if enabled else 'PASS'), 'AD bind DN configured' if has_bind_dn else 'AD bind DN not configured')
         self._record('PASS' if has_bind_password else ('WARN' if enabled else 'PASS'), 'AD bind password configured' if has_bind_password else 'AD bind password not configured')
         if enabled and not require_tls:
-            self._record('WARN', 'AD TLS not required', strict_severity='WARN', strict=strict)
+            self._record('WARN', 'AD TLS not required', strict_severity='FAIL', strict=strict)
         else:
             self._record('PASS', 'AD TLS required' if enabled else 'AD TLS not applicable')
+        if enabled:
+            self._record(
+                'PASS' if secure_transport else 'WARN',
+                'AD transport protected' if secure_transport else 'AD transport not protected',
+                strict_severity='FAIL',
+                strict=strict,
+            )
 
     def _check_email(self):
         smtp_configured = bool(str(getattr(settings, 'EMAIL_HOST', '') or '').strip())
@@ -139,8 +160,61 @@ class Command(BaseCommand):
             'NIGHTOWL_AGENT_HEARTBEAT_URL',
         ):
             value = str(getattr(settings, setting_name, '') or '').strip()
-            https = urlparse(value).scheme == 'https'
-            self._record('PASS' if https else 'WARN', f'{setting_name} uses HTTPS' if https else f'{setting_name} is not HTTPS', strict_severity='FAIL' if setting_name == 'NIGHTOWL_PUBLIC_URL' else None, strict=strict)
+            safe = self._url_is_https_or_debug_local(value)
+            scheme = urlparse(value).scheme
+            if scheme == 'https':
+                label = f'{setting_name} uses HTTPS'
+            elif safe:
+                label = f'{setting_name} uses DEBUG localhost HTTP'
+            else:
+                label = f'{setting_name} is not HTTPS'
+            self._record(
+                'PASS' if safe else 'WARN',
+                label,
+                strict_severity='FAIL' if not bool(getattr(settings, 'DEBUG', False)) else None,
+                strict=strict,
+            )
+
+    def _check_runtime_secret_files(self, strict):
+        root = Path(getattr(settings, 'BASE_DIR', Path.cwd()))
+        env_path = root / '.env'
+        if not env_path.exists():
+            self._record('PASS', 'runtime secret file .env not present; environment/systemd supported')
+            return
+        if os.name != 'posix':
+            self._record('PASS', 'runtime secret file .env POSIX permission check not applicable on this platform')
+            return
+
+        mode = stat.S_IMODE(env_path.stat().st_mode)
+        owner = self._owner_label(env_path)
+        ok = self._runtime_secret_file_mode_is_safe(mode)
+        self._record(
+            'PASS' if ok else 'FAIL',
+            f'runtime secret file .env permissions {"acceptable" if ok else "unsafe"} path=.env owner={owner} mode={oct(mode)}',
+            strict=strict,
+        )
+
+    @staticmethod
+    def _runtime_secret_file_mode_is_safe(mode):
+        return (mode & 0o026) == 0
+
+    @staticmethod
+    def _owner_label(path):
+        try:
+            import pwd
+            return pwd.getpwuid(path.stat().st_uid).pw_name
+        except Exception:
+            return str(path.stat().st_uid)
+
+    @staticmethod
+    def _url_is_https_or_debug_local(value):
+        parsed = urlparse(str(value or '').strip())
+        if parsed.scheme == 'https':
+            return True
+        if bool(getattr(settings, 'DEBUG', False)) and parsed.scheme == 'http':
+            host = (parsed.hostname or '').lower()
+            return host in {'localhost', '127.0.0.1', '::1'} or host.endswith('.localhost')
+        return False
 
     def _check_git_hygiene(self, strict, show_secret_paths=False):
         root = Path(getattr(settings, 'BASE_DIR', Path.cwd()))

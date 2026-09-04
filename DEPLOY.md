@@ -677,7 +677,7 @@ Roadmap atual:
 | 2 | Git hygiene / build reproducibility | CLOSED |
 | 3 | Internal release pipeline | CLOSED |
 | 4 | Updater / rollback / observability local / lifecycle resilience | CLOSED |
-| 5 | Secrets / configuration hardening | NEXT |
+| 5 | Secrets / configuration hardening | IN PROGRESS |
 | 6 | Fleet rollout / policies | PENDING |
 | 7 | Central observability | PENDING |
 | 8 | Wider RMM / Desk | PENDING |
@@ -692,6 +692,24 @@ Agent baseline commit: 7bf20ba3cefda76731abd97204fa918e4e37bdbc
 ```
 
 RC36 permanece a release do agente usada nos canarios finais. Os fixes posteriores de backend/frontend nao exigiram nova release do agente.
+
+Phase 5 status:
+
+```text
+PHASE_5_STATUS = IN_PROGRESS
+READY_FOR_PHASE6 = false
+```
+
+Blocos de Phase 5 ja implementados:
+
+- `fd2173817caddca0bb895ff80ff9696291db8af8`: `security_preflight` inicial para configuracao de seguranca.
+- `1dd474d`: ajuste de preflight estrito.
+- `937d6a`: diagnostico seguro de matches de segredo sem expor valores.
+- `712ec42a9d511b846435c9c017c41cf4dd9dc9a8`: remocao de segredos versionados e bloqueio de export plaintext de agent tokens.
+- `507c89031dd74a1d73b6e1616e214e5f9e2114a7`: hardening configuravel de cookies HTTPS e redirect SSL no Django.
+- `f151f2218028fc2547b1338e96e980fa434d57ae`: hardening local do agente Windows, incluindo ACLs sensiveis, runner/autorizacao AdminOnly e redaction.
+
+O commit `f151f2218028fc2547b1338e96e980fa434d57ae` e posterior a RC36 e exige nova release do agente antes do canario real de ACL/secrets.
 
 Capacidades de lifecycle validadas em canario real:
 
@@ -954,23 +972,25 @@ PURGE_HISTORY_PRESERVED=PASS
 
    Commit: `1c095558e62a22b457ca9bf0a6190a2a917982bb`
 
-### Proximo passo
+### Phase 5 - remaining closure gates
 
 ```text
-NEXT PHASE: PHASE 5 - SECRETS / CONFIGURATION HARDENING
+CURRENT PHASE: PHASE 5 - SECRETS / CONFIGURATION HARDENING
+PHASE_5_STATUS: IN_PROGRESS
+READY_FOR_PHASE6: false
 ```
 
-Antes de implementar funcionalidades de frota, revisar:
+Antes de iniciar Fase 6, fechar os gates:
 
-- armazenamento de secrets;
-- tokens e credenciais locais;
-- ACLs de arquivos/configs;
-- runner files temporarios;
-- configuracoes sensiveis;
-- permissao de leitura/escrita em ProgramData;
-- logs que possam carregar informacao sensivel;
-- configuracao de backend/server;
-- secrets de deployment/publishing;
-- principio de least privilege.
+- `security_preflight --strict` PASS em producao.
+- zero segredos literais versionados.
+- arquivos runtime de segredo protegidos por permissoes seguras no servidor.
+- HTTPS/HSTS de producao validado, mantendo desenvolvimento/testes funcionais.
+- AD com transporte seguro quando AD estiver habilitado.
+- regressoes de redaction de logs/stdout/exceptions PASS.
+- publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior.
+- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs.
+- upgrade sem regressao de heartbeat, jobs, update, repair e uninstall.
+- pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos.
 
 Nao iniciar Fase 6 ainda.
