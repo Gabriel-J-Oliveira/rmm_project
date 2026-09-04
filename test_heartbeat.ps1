@@ -1,4 +1,7 @@
-$token = "rmm_live_NV9vWm0GsgiiHFrCG-ORZpoAJ1XKc3TyWtZtemYvn_0"
+$token = $env:NIGHTOWL_AGENT_TOKEN
+if ([string]::IsNullOrWhiteSpace($token)) {
+    throw "NIGHTOWL_AGENT_TOKEN is required."
+}
 $baseUrl = "http://127.0.0.1:8000"
 
 $body = @{

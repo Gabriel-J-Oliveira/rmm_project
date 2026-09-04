@@ -1,3 +1,0 @@
-hostname,domain,machine_id,agent_token,server_url,source_path,install_path,created_or_existing
-NO-DEMO-001,control.local,adf7ea7b-a772-4e01-b78e-5b7225f1892c,rmm_live_EJxlYWyOMgOpsdggJz8MeRvuPOoXRehT24N-bREAmng,http://127.0.0.1:8000/api/agent/heartbeat/,\\192.168.104.120\controlsul\Comum\_Agents,C:\RMM,created
-NO-DEMO-002,control.local,ad5e935d-2608-4fe8-9d8e-3b731188e9b0,rmm_live_o1VnCnI4lwYU-EKsESUlGVew3nsm7iMHhzjXmLr0uL4,http://127.0.0.1:8000/api/agent/heartbeat/,\\192.168.104.120\controlsul\Comum\_Agents,C:\RMM,created

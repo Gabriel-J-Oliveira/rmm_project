@@ -54,9 +54,14 @@ secrets.json
 *token*
 *secret*
 
+# Sensitive legacy deployment CSVs can contain agent credentials.
+deploy_agents.csv
+deploy_agents_*.csv
+
 # Legitimate source files whose names contain "token"
 !agents/management/commands/create_enrollment_token.py
 !agents/management/commands/create_manual_validation_token.py
+!agents/management/commands/rotate_compromised_agent_tokens.py
 !agents/migrations/0009_agentenrollmenttoken_agentenrollmentlog.py
 
 # Build/generated artifacts

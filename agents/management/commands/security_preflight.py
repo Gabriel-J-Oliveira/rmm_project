@@ -11,9 +11,9 @@ from django.core.management.base import BaseCommand, CommandError
 INSECURE_SECRET_KEY_FALLBACK = 'django-insecure-rf)kc(p+3jf71*prhdcwpa7u&xdbzy%f%zaz8g=xr5e(i_-tmz'
 DEFAULT_TECHNICAL_USERNAMES = {'gabriel.oliveira'}
 SECRET_LIKE_PATTERNS = (
-    ('TOKEN_RMM_LIVE', re.compile(r'rmm_live_[A-Za-z0-9_\-]{8,}')),
-    ('TOKEN_DEPLOY', re.compile(r'deploy_[A-Za-z0-9_\-]{8,}')),
-    ('TOKEN_ENROLL', re.compile(r'enroll_[A-Za-z0-9_\-]{8,}')),
+    ('TOKEN_RMM_LIVE', re.compile(r'rmm_live_[A-Za-z0-9_\-]{20,}')),
+    ('TOKEN_DEPLOY', re.compile(r'deploy_[A-Za-z0-9_\-]{20,}')),
+    ('TOKEN_ENROLL', re.compile(r'enroll_[A-Za-z0-9_\-]{20,}')),
     ('PRIVATE_KEY_PEM', re.compile(r'BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY')),
     ('PRIVATE_KEY_XML_D', re.compile(r'<D>[^<]+</D>')),
 )

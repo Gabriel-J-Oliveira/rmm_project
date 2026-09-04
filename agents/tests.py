@@ -1,4 +1,5 @@
 import uuid
+import csv
 import json
 import shutil
 import subprocess
@@ -133,7 +134,7 @@ class SecurityPreflightCommandTests(SimpleTestCase):
             (command_path / 'security_preflight.py').write_text("PATTERN = r'<D>self-match-not-a-real-secret</D>'\n", encoding='utf-8')
             scripts_path = root / 'scripts'
             scripts_path.mkdir()
-            (scripts_path / 'fixture.py').write_text("TOKEN = 'deploy_ABC123456789'\n", encoding='utf-8')
+            (scripts_path / 'fixture.py').write_text("TOKEN = 'deploy_ABC123456789ABC123456789'\n", encoding='utf-8')
             subprocess.run(['git', 'init'], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             subprocess.run(['git', 'add', '.'], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -142,9 +143,119 @@ class SecurityPreflightCommandTests(SimpleTestCase):
 
         self.assertIn('tracked token/private key patterns found count=1', output)
         self.assertIn('path=scripts/fixture.py; category=TOKEN_DEPLOY', output)
-        self.assertNotIn('deploy_ABC123456789', output)
+        self.assertNotIn('deploy_ABC123456789ABC123456789', output)
         self.assertNotIn('self-match-not-a-real-secret', output)
         self.assertNotIn('security_preflight.py; category=', output)
+
+    def test_heartbeat_script_requires_environment_token(self):
+        script = (settings.BASE_DIR / 'test_heartbeat.ps1').read_text(encoding='utf-8-sig')
+
+        self.assertIn('$env:NIGHTOWL_AGENT_TOKEN', script)
+        self.assertIn('NIGHTOWL_AGENT_TOKEN is required', script)
+        self.assertNotRegex(script, r'rmm_live_[A-Za-z0-9_\-]{8,}')
+
+    def test_sensitive_deploy_csv_is_not_tracked_and_gitignore_covers_it(self):
+        tracked = subprocess.run(
+            ['git', 'ls-files', '--error-unmatch', 'deploy_agents.csv'],
+            cwd=settings.BASE_DIR,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        gitignore = (settings.BASE_DIR / '.gitignore').read_text(encoding='utf-8')
+
+        self.assertNotEqual(tracked.returncode, 0)
+        self.assertIn('deploy_agents.csv', gitignore)
+        self.assertIn('deploy_agents_*.csv', gitignore)
+
+
+class AgentSecretRemediationTests(TestCase):
+    def test_prepare_agent_deploy_blocks_plaintext_tokens_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / 'hosts.txt'
+            output_path = Path(temp_dir) / 'deploy_agents.csv'
+            input_path.write_text('CS-NEW-001\n', encoding='utf-8')
+            stdout = StringIO()
+
+            call_command(
+                'prepare_agent_deploy',
+                '--input',
+                str(input_path),
+                '--output',
+                str(output_path),
+                '--domain',
+                'control.local',
+                '--server-url',
+                'https://nightowl.test',
+                stdout=stdout,
+            )
+            rows = list(csv.DictReader(output_path.open('r', encoding='utf-8')))
+
+        self.assertEqual(rows[0]['agent_token'], '')
+        self.assertNotIn('rmm_live_', stdout.getvalue())
+        self.assertIn('Plaintext agent token export blocked by default', stdout.getvalue())
+
+    def test_prepare_agent_deploy_requires_explicit_flag_for_plaintext_export(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / 'hosts.txt'
+            output_path = Path(temp_dir) / 'deploy_agents.csv'
+            input_path.write_text('CS-LEGACY-001\n', encoding='utf-8')
+            stdout = StringIO()
+
+            call_command(
+                'prepare_agent_deploy',
+                '--input',
+                str(input_path),
+                '--output',
+                str(output_path),
+                '--domain',
+                'control.local',
+                '--server-url',
+                'https://nightowl.test',
+                '--allow-plaintext-agent-token-export',
+                stdout=stdout,
+            )
+            rows = list(csv.DictReader(output_path.open('r', encoding='utf-8')))
+
+        self.assertRegex(rows[0]['agent_token'], r'^rmm_live_')
+        self.assertNotIn(rows[0]['agent_token'], stdout.getvalue())
+        self.assertIn('SECURITY WARNING', stdout.getvalue())
+
+    def test_rotate_compromised_agent_tokens_rotates_only_matching_hashes(self):
+        compromised_token = AgentMachine.generate_token()
+        unrelated_token = AgentMachine.generate_token()
+        compromised = AgentMachine(hostname='CS-COMPROMISED', domain='control.local')
+        compromised.set_agent_token(compromised_token)
+        compromised.save()
+        unrelated = AgentMachine(hostname='CS-UNRELATED', domain='control.local')
+        unrelated.set_agent_token(unrelated_token)
+        unrelated.save()
+        old_hash = compromised.agent_token_hash
+        unrelated_hash = unrelated.agent_token_hash
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / 'deploy_agents.csv'
+            csv_path.write_text(f'hostname,agent_token\nCS-COMPROMISED,{compromised_token}\n', encoding='utf-8')
+            stdout = StringIO()
+            call_command('rotate_compromised_agent_tokens', '--token-csv', str(csv_path), '--apply', stdout=stdout)
+
+        compromised.refresh_from_db()
+        unrelated.refresh_from_db()
+        output = stdout.getvalue()
+
+        self.assertNotEqual(compromised.agent_token_hash, old_hash)
+        self.assertEqual(unrelated.agent_token_hash, unrelated_hash)
+        self.assertNotIn(compromised_token, output)
+        self.assertNotIn(unrelated_token, output)
+        self.assertIn(f'endpoint_id={compromised.id}; hostname=CS-COMPROMISED; matched=true; rotated=true', output)
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {compromised_token}').post(
+            '/api/agent/heartbeat/',
+            data={'machine_id': str(compromised.id), 'hostname': 'CS-COMPROMISED'},
+            content_type='application/json',
+        )
+        self.assertIn(response.status_code, {401, 403})
 
 
 class AgentOperationalDiagnosticsTests(TestCase):

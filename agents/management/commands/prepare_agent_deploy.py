@@ -1,4 +1,5 @@
 import csv
+import os
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
@@ -19,6 +20,11 @@ class Command(BaseCommand):
         parser.add_argument('--source-path', default=r'\\192.168.104.120\controlsul\Comum\_Agents')
         parser.add_argument('--install-path', default=r'C:\RMM')
         parser.add_argument('--force-rotate-token', action='store_true')
+        parser.add_argument(
+            '--allow-plaintext-agent-token-export',
+            action='store_true',
+            help='Allow high-risk plaintext agent token export for legacy deployments.',
+        )
         parser.add_argument('--dry-run', action='store_true')
 
     def handle(self, *args, **options):
@@ -63,6 +69,16 @@ class Command(BaseCommand):
         existing = 0
         rotated = 0
         token_unavailable = 0
+        plaintext_export = bool(options['allow_plaintext_agent_token_export'])
+
+        if plaintext_export:
+            self.stdout.write(self.style.WARNING(
+                'SECURITY WARNING: plaintext agent token export enabled for legacy deployment CSV.'
+            ))
+        else:
+            self.stdout.write(self.style.WARNING(
+                'Plaintext agent token export blocked by default; agent_token column will be empty.'
+            ))
 
         for row in unique_rows:
             machine = AgentMachine.objects.filter(
@@ -74,24 +90,28 @@ class Command(BaseCommand):
             if machine:
                 existing += 1
                 if options['force_rotate_token']:
-                    token = AgentMachine.generate_token()
-                    machine.set_agent_token(token)
+                    generated_token = AgentMachine.generate_token()
+                    machine.set_agent_token(generated_token)
                     machine.save(update_fields=['agent_token_hash', 'updated_at'])
                     status = 'existing_rotated'
                     rotated += 1
+                    if plaintext_export:
+                        token = generated_token
                 else:
                     token_unavailable += 1
             else:
-                token = AgentMachine.generate_token()
+                generated_token = AgentMachine.generate_token()
                 machine = AgentMachine(
                     hostname=row['hostname'],
                     domain=row['domain'],
                     fqdn=build_fqdn(row['hostname'], row['domain']),
                 )
-                machine.set_agent_token(token)
+                machine.set_agent_token(generated_token)
                 machine.save()
                 status = 'created'
                 created += 1
+                if plaintext_export:
+                    token = generated_token
 
             create_audit_event(
                 event_type='agent.deploy_prepared',
@@ -107,6 +127,7 @@ class Command(BaseCommand):
                     'output': str(output_path),
                     'created_or_existing': status,
                     'token_included': bool(token),
+                    'plaintext_token_export_allowed': plaintext_export,
                 },
             )
 
@@ -135,8 +156,14 @@ class Command(BaseCommand):
             ])
             writer.writeheader()
             writer.writerows(output_rows)
+        if plaintext_export:
+            self.restrict_output_file(output_path)
 
-        self.stdout.write(self.style.SUCCESS('Agent deploy CSV prepared. Tokens were written only to the CSV.'))
+        self.stdout.write(self.style.SUCCESS('Agent deploy CSV prepared.'))
+        if plaintext_export:
+            self.stdout.write(self.style.WARNING('Plaintext tokens were written only to the CSV. Protect and delete this file after use.'))
+        else:
+            self.stdout.write('Plaintext tokens were not exported.')
         self.stdout.write(f'output: {output_path}')
         self.stdout.write(f'total processed: {len(unique_rows)}')
         self.stdout.write(f'created: {created}')
@@ -146,7 +173,7 @@ class Command(BaseCommand):
         self.stdout.write(f'existing rows without token: {token_unavailable}')
         if token_unavailable:
             self.stdout.write(self.style.WARNING(
-                'Existing endpoints keep token hashes only; use --force-rotate-token if this CSV must include fresh tokens.'
+                'Existing endpoints keep token hashes only; use --force-rotate-token with --allow-plaintext-agent-token-export only for legacy deployments that require fresh plaintext tokens.'
             ))
 
     def read_input(self, path, default_domain):
@@ -171,3 +198,11 @@ class Command(BaseCommand):
                 if hostname and not hostname.startswith('#'):
                     rows.append({'hostname': hostname, 'domain': default_domain})
         return rows
+
+    def restrict_output_file(self, path):
+        try:
+            if os.name == 'nt':
+                return
+            path.chmod(0o600)
+        except OSError:
+            self.stdout.write(self.style.WARNING('Could not restrict output CSV permissions automatically.'))
