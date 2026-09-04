@@ -2241,6 +2241,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         endpoint.refresh_from_db()
         self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
         self.assertEqual(endpoint.agent_version, self.release.version)
+        self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
         self.assertIsNone(endpoint.agent_uninstalled_at)
         self.assertEqual(endpoint.agent_uninstalled_by, '')
@@ -2272,6 +2273,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         endpoint.refresh_from_db()
         self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
+        self.assertEqual(endpoint.agent_version, self.release.version)
+        self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertIsNone(endpoint.agent_uninstalled_at)
         self.assertEqual(endpoint.agent_uninstalled_by, '')
         self.assertEqual(endpoint.agent_uninstall_source, '')
@@ -2279,10 +2282,11 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
     def test_deployment_failed_does_not_mark_installed(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-failed-lifecycle', 'CS-FAILED-LIFECYCLE')
         endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.last_installed_agent_version = '0.1.1.0-rc36'
         endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
         endpoint.agent_uninstalled_by = 'operator'
         endpoint.agent_uninstall_source = 'panel'
-        endpoint.save(update_fields=['agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+        endpoint.save(update_fields=['agent_lifecycle_status', 'last_installed_agent_version', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
 
         response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
             reverse('agent-deployment-complete'),
@@ -2301,6 +2305,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(response.status_code, 200, response.content)
         endpoint.refresh_from_db()
         self.assertEqual(endpoint.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
+        self.assertEqual(endpoint.last_installed_agent_version, '0.1.1.0-rc36')
         self.assertIsNotNone(endpoint.agent_uninstalled_at)
         self.assertEqual(endpoint.agent_uninstalled_by, 'operator')
         self.assertEqual(endpoint.agent_uninstall_source, 'panel')
@@ -2308,10 +2313,11 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
     def test_deployment_unhealthy_completion_does_not_mark_installed(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-unhealthy-lifecycle', 'CS-UNHEALTHY-LIFECYCLE')
         endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.last_installed_agent_version = '0.1.1.0-rc36'
         endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
         endpoint.agent_uninstalled_by = 'operator'
         endpoint.agent_uninstall_source = 'panel'
-        endpoint.save(update_fields=['agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+        endpoint.save(update_fields=['agent_lifecycle_status', 'last_installed_agent_version', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
 
         for service_status, health_check in [('Running', False), ('Stopped', True)]:
             response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
@@ -2329,17 +2335,20 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
             self.assertEqual(response.status_code, 409)
             endpoint.refresh_from_db()
             self.assertEqual(endpoint.agent_lifecycle_status, AgentMachine.STATUS_UNINSTALLED)
+            self.assertEqual(endpoint.last_installed_agent_version, '0.1.1.0-rc36')
             self.assertIsNotNone(endpoint.agent_uninstalled_at)
 
     def test_idempotent_deployment_completion_reconciles_stale_lifecycle(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-idempotent-lifecycle', 'CS-IDEMPOTENT-LIFECYCLE')
         deployment.mark_completed(endpoint)
         endpoint.status = AgentMachine.STATUS_UNINSTALLED
+        endpoint.agent_version = self.release.version
+        endpoint.last_installed_agent_version = '0.1.1.0-rc36'
         endpoint.agent_lifecycle_status = AgentMachine.STATUS_UNINSTALLED
         endpoint.agent_uninstalled_at = timezone.now() - timedelta(hours=1)
         endpoint.agent_uninstalled_by = 'operator'
         endpoint.agent_uninstall_source = 'panel'
-        endpoint.save(update_fields=['status', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+        endpoint.save(update_fields=['status', 'agent_version', 'last_installed_agent_version', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
         completed_audits = AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).count()
 
         response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
@@ -2359,6 +2368,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertTrue(response.json()['idempotent'])
         endpoint.refresh_from_db()
         self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.agent_version, self.release.version)
+        self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
         self.assertIsNone(endpoint.agent_uninstalled_at)
         self.assertEqual(AuditEvent.objects.filter(event_type='agent.deployment.completed', endpoint=endpoint).count(), completed_audits)

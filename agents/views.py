@@ -561,6 +561,7 @@ def mark_machine_installed_from_deployment(machine, deployment):
         return
     machine.status = AgentMachine.STATUS_ONLINE
     machine.agent_version = deployment.release.version
+    machine.last_installed_agent_version = deployment.release.version
     machine.agent_lifecycle_status = 'installed'
     machine.agent_uninstalled_at = None
     machine.agent_uninstalled_by = ''
@@ -568,6 +569,7 @@ def mark_machine_installed_from_deployment(machine, deployment):
     machine.save(update_fields=[
         'status',
         'agent_version',
+        'last_installed_agent_version',
         'agent_lifecycle_status',
         'agent_uninstalled_at',
         'agent_uninstalled_by',
