@@ -38,7 +38,7 @@ class Command(BaseCommand):
             raise CommandError('Security preflight failed.')
 
     def _record(self, severity, label, *, strict_severity=None, strict=False):
-        effective = strict_severity if strict and strict_severity else severity
+        effective = strict_severity if strict and strict_severity and severity != 'PASS' else severity
         self.results.append(effective)
         self.stdout.write(f'[{effective}] {label}')
 
