@@ -45,19 +45,23 @@ class SecurityPreflightCommandTests(SimpleTestCase):
             [
                 sys.executable,
                 '-c',
-                (
-                    'import json; '
-                    'import config.settings as s; '
-                    'print(json.dumps({'
-                    '"session": s.SESSION_COOKIE_SECURE, '
-                    '"csrf": s.CSRF_COOKIE_SECURE, '
-                    '"redirect": s.SECURE_SSL_REDIRECT, '
-                    '"proxy": s.SECURE_PROXY_SSL_HEADER, '
-                    '"hsts": s.SECURE_HSTS_SECONDS, '
-                    '"hsts_subdomains": s.SECURE_HSTS_INCLUDE_SUBDOMAINS, '
-                    '"hsts_preload": s.SECURE_HSTS_PRELOAD'
-                    '}))'
-                ),
+                """
+import json
+import environ
+from unittest import mock
+
+with mock.patch.object(environ.Env, "read_env", return_value=None):
+    import config.settings as s
+    print(json.dumps({
+        "session": s.SESSION_COOKIE_SECURE,
+        "csrf": s.CSRF_COOKIE_SECURE,
+        "redirect": s.SECURE_SSL_REDIRECT,
+        "proxy": s.SECURE_PROXY_SSL_HEADER,
+        "hsts": s.SECURE_HSTS_SECONDS,
+        "hsts_subdomains": s.SECURE_HSTS_INCLUDE_SUBDOMAINS,
+        "hsts_preload": s.SECURE_HSTS_PRELOAD,
+    }))
+""",
             ],
             cwd=settings.BASE_DIR,
             env=env,
@@ -75,6 +79,9 @@ class SecurityPreflightCommandTests(SimpleTestCase):
                 'DJANGO_SESSION_COOKIE_SECURE',
                 'DJANGO_CSRF_COOKIE_SECURE',
                 'DJANGO_SECURE_SSL_REDIRECT',
+                'DJANGO_SECURE_HSTS_SECONDS',
+                'DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS',
+                'DJANGO_SECURE_HSTS_PRELOAD',
             ],
         )
 
