@@ -134,6 +134,11 @@ def _start_tls_if_required(connection):
             raise ActiveDirectoryUnavailable('Nao foi possivel iniciar TLS com o servidor AD.')
 
 
+def _open_connection(connection):
+    connection.open()
+    return not bool(getattr(connection, 'closed', True))
+
+
 def service_connection():
     validate_ad_config(require_bind=True)
     conn = Connection(
@@ -144,7 +149,7 @@ def service_connection():
         receive_timeout=int(ad_config().get('TIMEOUT') or 8),
     )
     try:
-        if not conn.open():
+        if not _open_connection(conn):
             raise ActiveDirectoryUnavailable('Nao foi possivel abrir conexao AD.')
         _start_tls_if_required(conn)
         if not conn.bind():
@@ -255,7 +260,7 @@ def authenticate_ad_user(username, password):
         receive_timeout=int(ad_config().get('TIMEOUT') or 8),
     )
     try:
-        if not user_conn.open():
+        if not _open_connection(user_conn):
             return None
         _start_tls_if_required(user_conn)
         if not user_conn.bind():

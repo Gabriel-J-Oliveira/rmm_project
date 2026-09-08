@@ -39,12 +39,18 @@ class FakeConnection:
         self.receive_timeout = kwargs.get('receive_timeout', 8)
         self.events = []
         self.open_result = True
+        self.closed = True
+        self.open_exception = None
         self.start_tls_result = True
         self.bind_result = True
 
     def open(self):
         self.events.append('open')
-        return self.open_result
+        if self.open_exception:
+            raise self.open_exception
+        if self.open_result:
+            self.closed = False
+        return None
 
     def start_tls(self):
         self.events.append('start_tls')
@@ -53,6 +59,10 @@ class FakeConnection:
     def bind(self):
         self.events.append('bind')
         return self.bind_result
+
+    def unbind(self):
+        self.events.append('unbind')
+        self.closed = True
 
 
 class ActiveDirectoryTransportTests(SimpleTestCase):
@@ -158,6 +168,16 @@ class ActiveDirectoryTransportTests(SimpleTestCase):
         self.assertIs(conn, fake)
         self.assertEqual(fake.events, ['open', 'bind'])
 
+    @override_settings(AD_AUTH_CONFIG=ad_settings('ldaps://ad.example.local', require_tls=False))
+    def test_service_connection_accepts_open_none_when_connection_is_open(self):
+        fake = FakeConnection(server='server')
+        with mock.patch('config.ad_ldap.Connection', return_value=fake), mock.patch('config.ad_ldap.Server'), mock.patch('config.ad_ldap.Tls'):
+            conn = ad_ldap.service_connection()
+
+        self.assertIs(conn, fake)
+        self.assertFalse(fake.closed)
+        self.assertEqual(fake.events, ['open', 'bind'])
+
     @override_settings(AD_AUTH_CONFIG=ad_settings('ldap://ad.example.local', require_tls=True))
     def test_starttls_is_called_before_bind(self):
         fake = FakeConnection(server='server')
@@ -171,6 +191,16 @@ class ActiveDirectoryTransportTests(SimpleTestCase):
     def test_open_failure_is_fail_closed(self):
         fake = FakeConnection(server='server')
         fake.open_result = False
+        with mock.patch('config.ad_ldap.Connection', return_value=fake), mock.patch('config.ad_ldap.Server'), mock.patch('config.ad_ldap.Tls'):
+            with self.assertRaises(ActiveDirectoryUnavailable):
+                ad_ldap.service_connection()
+
+        self.assertEqual(fake.events, ['open'])
+
+    @override_settings(AD_AUTH_CONFIG=ad_settings('ldap://ad.example.local', require_tls=True))
+    def test_open_exception_is_fail_closed(self):
+        fake = FakeConnection(server='server')
+        fake.open_exception = ad_ldap.LDAPException('socket unavailable')
         with mock.patch('config.ad_ldap.Connection', return_value=fake), mock.patch('config.ad_ldap.Server'), mock.patch('config.ad_ldap.Tls'):
             with self.assertRaises(ActiveDirectoryUnavailable):
                 ad_ldap.service_connection()
@@ -196,6 +226,56 @@ class ActiveDirectoryTransportTests(SimpleTestCase):
                 ad_ldap.service_connection()
 
         self.assertEqual(fake.events, ['open', 'start_tls', 'bind'])
+
+    @override_settings(AD_AUTH_CONFIG=ad_settings('ldap://ad.example.local', require_tls=True))
+    def test_authenticate_ad_user_accepts_open_none_when_connection_is_open(self):
+        service_conn = mock.Mock()
+        user_info = ad_ldap.ADUserInfo(username='sample.user', distinguished_name='CN=Sample User,DC=example,DC=local')
+        user_conn = FakeConnection(server='server')
+
+        with mock.patch('config.ad_ldap.service_connection', return_value=service_conn), \
+                mock.patch('config.ad_ldap.find_user', return_value=user_info), \
+                mock.patch('config.ad_ldap.Connection', return_value=user_conn), \
+                mock.patch('config.ad_ldap.Server'), \
+                mock.patch('config.ad_ldap.Tls'):
+            result = ad_ldap.authenticate_ad_user('sample.user', 'password')
+
+        self.assertIs(result, user_info)
+        self.assertEqual(user_conn.events, ['open', 'start_tls', 'bind', 'unbind'])
+
+    @override_settings(AD_AUTH_CONFIG=ad_settings('ldap://ad.example.local', require_tls=True))
+    def test_authenticate_ad_user_returns_none_when_open_leaves_connection_closed(self):
+        service_conn = mock.Mock()
+        user_info = ad_ldap.ADUserInfo(username='sample.user', distinguished_name='CN=Sample User,DC=example,DC=local')
+        user_conn = FakeConnection(server='server')
+        user_conn.open_result = False
+
+        with mock.patch('config.ad_ldap.service_connection', return_value=service_conn), \
+                mock.patch('config.ad_ldap.find_user', return_value=user_info), \
+                mock.patch('config.ad_ldap.Connection', return_value=user_conn), \
+                mock.patch('config.ad_ldap.Server'), \
+                mock.patch('config.ad_ldap.Tls'):
+            result = ad_ldap.authenticate_ad_user('sample.user', 'password')
+
+        self.assertIsNone(result)
+        self.assertEqual(user_conn.events, ['open', 'unbind'])
+
+    @override_settings(AD_AUTH_CONFIG=ad_settings('ldap://ad.example.local', require_tls=True))
+    def test_authenticate_ad_user_open_exception_returns_none(self):
+        service_conn = mock.Mock()
+        user_info = ad_ldap.ADUserInfo(username='sample.user', distinguished_name='CN=Sample User,DC=example,DC=local')
+        user_conn = FakeConnection(server='server')
+        user_conn.open_exception = ad_ldap.LDAPException('socket unavailable')
+
+        with mock.patch('config.ad_ldap.service_connection', return_value=service_conn), \
+                mock.patch('config.ad_ldap.find_user', return_value=user_info), \
+                mock.patch('config.ad_ldap.Connection', return_value=user_conn), \
+                mock.patch('config.ad_ldap.Server'), \
+                mock.patch('config.ad_ldap.Tls'):
+            result = ad_ldap.authenticate_ad_user('sample.user', 'password')
+
+        self.assertIsNone(result)
+        self.assertEqual(user_conn.events, ['open', 'unbind'])
 
 
 class TestAdAuthCommandTransportDiagnosticsTests(SimpleTestCase):
