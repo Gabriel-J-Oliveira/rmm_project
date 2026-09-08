@@ -1,14 +1,16 @@
 import logging
+import ssl
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from django.conf import settings
 
 try:
-    from ldap3 import ALL, BASE, SUBTREE, Connection, Server
+    from ldap3 import ALL, BASE, SUBTREE, Connection, Server, Tls
     from ldap3.core.exceptions import LDAPException
     from ldap3.utils.conv import escape_filter_chars
 except ImportError:  # pragma: no cover - exercised when dependency is not installed.
-    ALL = BASE = SUBTREE = Connection = Server = LDAPException = None
+    ALL = BASE = SUBTREE = Connection = Server = Tls = LDAPException = None
 
     def escape_filter_chars(value):
         return value
@@ -41,6 +43,15 @@ class ADUserInfo:
     raw_attributes: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ADServerEndpoint:
+    host: str
+    port: int
+    use_ssl: bool
+    require_start_tls: bool
+    secure_transport: bool
+
+
 def ad_config():
     return getattr(settings, 'AD_AUTH_CONFIG', {})
 
@@ -50,7 +61,7 @@ def ad_enabled():
 
 
 def _require_dependency():
-    if Connection is None or Server is None:
+    if Connection is None or Server is None or Tls is None:
         raise ActiveDirectoryConfigError('Dependencia ldap3 nao instalada.')
 
 
@@ -70,15 +81,55 @@ def validate_ad_config(require_bind=True):
         missing.extend(['BIND_DN', 'BIND_PASSWORD'])
     if missing:
         raise ActiveDirectoryConfigError(f'Configuracao AD incompleta: {", ".join(missing)}.')
+    parse_ad_server_uri(_config_value('SERVER_URI'), bool(ad_config().get('REQUIRE_TLS')))
+
+
+def parse_ad_server_uri(server_uri, require_tls=False):
+    parsed = urlparse(str(server_uri or '').strip())
+    scheme = parsed.scheme.lower()
+    if scheme not in {'ldap', 'ldaps'}:
+        raise ActiveDirectoryConfigError('AD_SERVER_URI deve usar ldap:// ou ldaps://.')
+    if not parsed.hostname:
+        raise ActiveDirectoryConfigError('AD_SERVER_URI deve informar hostname.')
+    if parsed.username or parsed.password:
+        raise ActiveDirectoryConfigError('AD_SERVER_URI nao deve conter credenciais.')
+    if parsed.path:
+        raise ActiveDirectoryConfigError('AD_SERVER_URI nao deve conter path.')
+    if parsed.query or parsed.fragment:
+        raise ActiveDirectoryConfigError('AD_SERVER_URI nao deve conter query ou fragment.')
+
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ActiveDirectoryConfigError('AD_SERVER_URI deve informar porta valida.') from exc
+
+    use_ssl = scheme == 'ldaps'
+    return ADServerEndpoint(
+        host=parsed.hostname,
+        port=port or (636 if use_ssl else 389),
+        use_ssl=use_ssl,
+        require_start_tls=(scheme == 'ldap' and bool(require_tls)),
+        secure_transport=(use_ssl or bool(require_tls)),
+    )
 
 
 def _server():
     validate_ad_config(require_bind=False)
-    return Server(_config_value('SERVER_URI'), get_info=ALL, connect_timeout=int(ad_config().get('TIMEOUT') or 8))
+    endpoint = parse_ad_server_uri(_config_value('SERVER_URI'), bool(ad_config().get('REQUIRE_TLS')))
+    tls = Tls(validate=ssl.CERT_REQUIRED) if endpoint.secure_transport else None
+    return Server(
+        endpoint.host,
+        port=endpoint.port,
+        use_ssl=endpoint.use_ssl,
+        tls=tls,
+        get_info=ALL,
+        connect_timeout=int(ad_config().get('TIMEOUT') or 8),
+    )
 
 
 def _start_tls_if_required(connection):
-    if bool(ad_config().get('REQUIRE_TLS')):
+    endpoint = parse_ad_server_uri(_config_value('SERVER_URI'), bool(ad_config().get('REQUIRE_TLS')))
+    if endpoint.require_start_tls:
         if not connection.start_tls():
             raise ActiveDirectoryUnavailable('Nao foi possivel iniciar TLS com o servidor AD.')
 
@@ -93,7 +144,8 @@ def service_connection():
         receive_timeout=int(ad_config().get('TIMEOUT') or 8),
     )
     try:
-        conn.open()
+        if not conn.open():
+            raise ActiveDirectoryUnavailable('Nao foi possivel abrir conexao AD.')
         _start_tls_if_required(conn)
         if not conn.bind():
             raise ActiveDirectoryUnavailable('Bind de servico AD falhou.')
@@ -203,7 +255,8 @@ def authenticate_ad_user(username, password):
         receive_timeout=int(ad_config().get('TIMEOUT') or 8),
     )
     try:
-        user_conn.open()
+        if not user_conn.open():
+            return None
         _start_tls_if_required(user_conn)
         if not user_conn.bind():
             return None

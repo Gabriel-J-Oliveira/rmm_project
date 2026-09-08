@@ -227,6 +227,58 @@ class SecurityPreflightCommandTests(SimpleTestCase):
         self.assertIn('[FAIL] AD TLS not required', output.getvalue())
         self.assertIn('[FAIL] AD transport not protected', output.getvalue())
 
+    def secure_strict_settings(self, ad_config):
+        return override_settings(
+            DEBUG=False,
+            SECRET_KEY='production-secret',
+            ALLOWED_HOSTS=['nightowl.test'],
+            CSRF_TRUSTED_ORIGINS=['https://nightowl.test'],
+            SESSION_COOKIE_SECURE=True,
+            CSRF_COOKIE_SECURE=True,
+            SECURE_SSL_REDIRECT=True,
+            SECURE_HSTS_SECONDS=31536000,
+            DATABASES={'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'nightowl'}},
+            NIGHTOWL_PUBLIC_URL='https://nightowl.test',
+            NIGHTOWL_AGENT_PUBLIC_SERVER_URL='https://nightowl.test',
+            NIGHTOWL_AGENT_INSTALLER_URL='https://nightowl.test/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
+            NIGHTOWL_AGENT_HEARTBEAT_URL='https://nightowl.test/api/agent/heartbeat/',
+            NIGHTOWL_TECHNICAL_USERNAMES={'nightowl.tech'},
+            AD_AUTH_CONFIG=ad_config,
+            EMAIL_HOST='smtp.example.local',
+            EMAIL_USE_TLS=True,
+            **{'EMAIL_HOST_PASSWORD': ''},
+        )
+
+    def test_security_preflight_strict_passes_for_ldaps(self):
+        ad_config = {'ENABLED': True, 'SERVER_URI': 'ldaps://ad.example.local', 'BIND_DN': 'hidden', 'BIND_PASSWORD': 'hidden', 'REQUIRE_TLS': False}
+        with self.secure_strict_settings(ad_config), mock.patch.dict(os.environ, {'NIGHTOWL_TECHNICAL_USERNAMES': 'nightowl.tech'}):
+            output = self.run_preflight('--strict')
+
+        self.assertIn('[PASS] AD TLS provided by LDAPS', output)
+        self.assertIn('[PASS] AD transport protected', output)
+        self.assertNotIn('hidden', output)
+
+    def test_security_preflight_strict_passes_for_ldap_starttls(self):
+        ad_config = {'ENABLED': True, 'SERVER_URI': 'ldap://ad.example.local', 'BIND_DN': 'hidden', 'BIND_PASSWORD': 'hidden', 'REQUIRE_TLS': True}
+        with self.secure_strict_settings(ad_config), mock.patch.dict(os.environ, {'NIGHTOWL_TECHNICAL_USERNAMES': 'nightowl.tech'}):
+            output = self.run_preflight('--strict')
+
+        self.assertIn('[PASS] AD TLS required', output)
+        self.assertIn('[PASS] AD transport protected', output)
+        self.assertNotIn('hidden', output)
+
+    def test_security_preflight_strict_fails_for_invalid_ad_uri(self):
+        ad_config = {'ENABLED': True, 'SERVER_URI': 'ldap://', 'BIND_DN': 'hidden', 'BIND_PASSWORD': 'hidden', 'REQUIRE_TLS': True}
+        output = StringIO()
+        with self.secure_strict_settings(ad_config), mock.patch.dict(os.environ, {'NIGHTOWL_TECHNICAL_USERNAMES': 'nightowl.tech'}):
+            with self.assertRaises(CommandError):
+                call_command('security_preflight', '--strict', stdout=output)
+
+        text = output.getvalue()
+        self.assertIn('[FAIL] AD server URI invalid', text)
+        self.assertIn('[FAIL] AD transport not protected', text)
+        self.assertNotIn('hidden', text)
+
     @override_settings(
         DEBUG=False,
         NIGHTOWL_PUBLIC_URL='http://nightowl.test',

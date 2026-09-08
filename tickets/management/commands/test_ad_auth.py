@@ -7,6 +7,7 @@ from config.ad_ldap import (
     ad_config,
     ad_enabled,
     find_user,
+    parse_ad_server_uri,
     service_connection,
     user_is_member_of,
 )
@@ -25,9 +26,20 @@ class Command(BaseCommand):
         self.stdout.write(f'Servidor LDAP: {config.get("SERVER_URI") or "-"}')
         self.stdout.write(f'Base de usuarios: {config.get("USER_SEARCH_BASE") or "-"}')
         self.stdout.write(f'Atributo de login: {config.get("USER_ATTR") or "-"}')
-        self.stdout.write(f'TLS requerido: {"sim" if config.get("REQUIRE_TLS") else "nao"}')
         if not ad_enabled():
             raise CommandError('AD_AUTH_ENABLED=False. Ative a autenticacao AD no .env para testar o dominio.')
+        try:
+            endpoint = parse_ad_server_uri(config.get('SERVER_URI'), bool(config.get('REQUIRE_TLS')))
+        except ActiveDirectoryConfigError as exc:
+            raise CommandError(f'Configuracao AD invalida: {exc}') from exc
+        if endpoint.use_ssl:
+            transport = 'LDAPS (TLS implicito)'
+        elif endpoint.require_start_tls:
+            transport = 'StartTLS'
+        else:
+            transport = 'LDAP plaintext'
+        self.stdout.write(f'Transporte LDAP: {transport}')
+        self.stdout.write(f'Transporte protegido: {"sim" if endpoint.secure_transport else "nao"}')
 
         conn = None
         try:

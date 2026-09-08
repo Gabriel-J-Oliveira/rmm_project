@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from config.ad_ldap import ActiveDirectoryConfigError, parse_ad_server_uri
+
 
 INSECURE_SECRET_KEY_FALLBACK = 'django-insecure-rf)kc(p+3jf71*prhdcwpa7u&xdbzy%f%zaz8g=xr5e(i_-tmz'
 DEFAULT_TECHNICAL_USERNAMES = {'gabriel.oliveira'}
@@ -118,21 +120,31 @@ class Command(BaseCommand):
         has_bind_password = bool(str(config.get('BIND_PASSWORD') or '').strip())
         require_tls = bool(config.get('REQUIRE_TLS'))
         server_uri = str(config.get('SERVER_URI') or '').strip()
-        server_scheme = urlparse(server_uri).scheme.lower()
-        secure_transport = (server_scheme == 'ldaps') or require_tls
+        endpoint = None
+        uri_error = ''
+        if server_uri:
+            try:
+                endpoint = parse_ad_server_uri(server_uri, require_tls)
+            except ActiveDirectoryConfigError as exc:
+                uri_error = exc.__class__.__name__
 
         self._record('PASS' if enabled else 'WARN', 'AD enabled' if enabled else 'AD disabled')
-        self._record('PASS' if has_server else ('WARN' if enabled else 'PASS'), 'AD server configured' if has_server else 'AD server not configured')
+        if uri_error:
+            self._record('WARN', f'AD server URI invalid ({uri_error})', strict_severity='FAIL', strict=strict)
+        else:
+            self._record('PASS' if has_server else ('WARN' if enabled else 'PASS'), 'AD server configured' if has_server else 'AD server not configured')
         self._record('PASS' if has_bind_dn else ('WARN' if enabled else 'PASS'), 'AD bind DN configured' if has_bind_dn else 'AD bind DN not configured')
         self._record('PASS' if has_bind_password else ('WARN' if enabled else 'PASS'), 'AD bind password configured' if has_bind_password else 'AD bind password not configured')
-        if enabled and not require_tls:
+        if enabled and endpoint and endpoint.use_ssl:
+            self._record('PASS', 'AD TLS provided by LDAPS')
+        elif enabled and not require_tls:
             self._record('WARN', 'AD TLS not required', strict_severity='FAIL', strict=strict)
         else:
             self._record('PASS', 'AD TLS required' if enabled else 'AD TLS not applicable')
         if enabled:
             self._record(
-                'PASS' if secure_transport else 'WARN',
-                'AD transport protected' if secure_transport else 'AD transport not protected',
+                'PASS' if endpoint and endpoint.secure_transport else 'WARN',
+                'AD transport protected' if endpoint and endpoint.secure_transport else 'AD transport not protected',
                 strict_severity='FAIL',
                 strict=strict,
             )

@@ -738,6 +738,17 @@ PUBLIC_HTTPS_STATUS=200
 POST_MIGRATION_ERRORS=NONE
 ```
 
+AD TLS canary de infraestrutura:
+
+```text
+domain_controller=dc01.control.local
+domain_controller_ip=192.168.104.2
+StartTLS_389=PASS TLSv1.3 TLS_AES_256_GCM_SHA384 hostname_validated=true chain_trusted=true
+LDAPS_636=PASS TLSv1.3 TLS_AES_256_GCM_SHA384 hostname_validated=true chain_trusted=true
+```
+
+O backend suporta explicitamente `ldap://` com StartTLS e `ldaps://` com TLS implicito, ambos com validacao de certificado pelo trust store do sistema. A configuracao recomendada para producao sera `AD_SERVER_URI=ldaps://dc01.control.local` com `AD_REQUIRE_TLS=True`, mas essa troca ainda depende de push, deploy e canario real de autenticacao AD.
+
 Capacidades de lifecycle validadas em canario real:
 
 - clean deployment
