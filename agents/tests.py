@@ -799,6 +799,48 @@ class AgentOperationalDiagnosticsTests(TestCase):
         self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
         self.assertEqual(job.result_id, result_id)
 
+    def test_job_result_persistence_redacts_secret_like_output(self):
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_PING)
+        result_id = str(uuid.uuid4())
+        fake_bearer = 'FAKE_BEARER_SECRET_VALUE_1234567890'
+        fake_token = 'SYNTHETIC_TOKEN_VALUE_1234567890'
+        fake_password = 'CorrectHorseBatteryStapleSynthetic!'
+        payload = {
+            'job_id': str(job.id),
+            'status': 'failed',
+            'exit_code': 1,
+            'stdout': f'Authorization: Bearer {fake_bearer}',
+            'stderr': f'https://nightowl.test/api?token={fake_token}',
+            'error_message': f'password={fake_password}',
+            'result': {
+                'type': 'ping',
+                'success': False,
+                'agent_token': fake_token,
+                'details': {
+                    'message': f'Bearer {fake_bearer}',
+                    'url': f'https://nightowl.test/download?token={fake_token}',
+                },
+            },
+        }
+
+        response = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        receipt = AgentJobResultReceipt.objects.get(result_id=result_id)
+        persisted = json.dumps({
+            'stdout': job.stdout,
+            'stderr': job.stderr,
+            'error_message': job.error_message,
+            'result': job.result,
+            'receipt': receipt.first_payload,
+            'audit': list(AuditEvent.objects.filter(endpoint=self.machine).values_list('metadata', flat=True)),
+        })
+        self.assertIn('[REDACTED]', persisted)
+        self.assertNotIn(fake_bearer, persisted)
+        self.assertNotIn(fake_token, persisted)
+        self.assertNotIn(fake_password, persisted)
+
     def test_repair_agent_failed_result_remains_failed_in_backend_and_serializer(self):
         job = AgentJob.objects.create(
             endpoint=self.machine,

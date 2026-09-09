@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 
 from .audit import create_audit_event, get_client_ip
 from .authentication import authenticate_agent_token
+from .job_progress import sanitize_job_value
 from .models import (
     AgentDeploymentToken,
     AgentEnrollmentLog,
@@ -64,6 +65,16 @@ RESULT_FINAL_STATUSES = {
     AgentJob.STATUS_ROLLED_BACK,
     AgentJob.STATUS_ROLLBACK_FAILED,
 }
+
+
+def _sanitize_agent_payload(payload):
+    sanitized = sanitize_job_value(payload)
+    return sanitized if isinstance(sanitized, dict) else {}
+
+
+def _sanitize_agent_text(value):
+    sanitized = sanitize_job_value(value or '')
+    return sanitized if isinstance(sanitized, str) else ''
 
 
 def _deployment_token_from_request(request):
@@ -1210,7 +1221,7 @@ class AgentJobsResultView(APIView):
                     )
                     if same_job_progression:
                         receipt.payload_sha256 = payload_hash
-                        receipt.first_payload = payload
+                        receipt.first_payload = _sanitize_agent_payload(payload)
                         receipt.save(update_fields=['last_seen_at', 'payload_sha256', 'first_payload'])
                     else:
                         receipt.conflict_count += 1
@@ -1265,7 +1276,7 @@ class AgentJobsResultView(APIView):
                         job=job,
                         endpoint=machine,
                         payload_sha256=payload_hash,
-                        first_payload=payload,
+                        first_payload=_sanitize_agent_payload(payload),
                     )
                 return Response(
                     {
@@ -1337,10 +1348,11 @@ class AgentJobsResultView(APIView):
                 job.finished_at = _parse_agent_datetime(payload.get('finished_at'), timezone.now())
             job.duration_seconds = payload.get('duration_seconds')
             job.exit_code = payload.get('exit_code')
-            job.stdout = payload.get('stdout') or ''
-            job.stderr = payload.get('stderr') or ''
-            job.result = payload.get('result') or {}
-            job.error_message = payload.get('error_message') or ''
+            sanitized_payload = _sanitize_agent_payload(payload)
+            job.stdout = _sanitize_agent_text(payload.get('stdout'))
+            job.stderr = _sanitize_agent_text(payload.get('stderr'))
+            job.result = sanitized_payload.get('result') or {}
+            job.error_message = _sanitize_agent_text(payload.get('error_message'))
             job.result_id = result_id or job.result_id
             job.correlation_id = payload.get('correlation_id') or job.correlation_id
             job.attempt = payload.get('attempt') or job.attempt or 1
@@ -1588,7 +1600,7 @@ class AgentJobsResultView(APIView):
                 job=job,
                 endpoint=machine,
                 payload_sha256=payload_hash,
-                first_payload=payload,
+                first_payload=_sanitize_agent_payload(payload),
             )
         event_type = (
             'job.completed' if job_status == 'completed'
@@ -1624,8 +1636,8 @@ class AgentJobsResultView(APIView):
                 'exit_code': payload.get('exit_code'),
                 'error_code': payload.get('error_code') or '',
                 'output_truncated': bool(payload.get('output_truncated')),
-                'result': payload.get('result') or {},
-                'error_message': payload.get('error_message') or '',
+                'result': (_sanitize_agent_payload(payload).get('result') or {}),
+                'error_message': _sanitize_agent_text(payload.get('error_message')),
             },
         )
         return Response(
