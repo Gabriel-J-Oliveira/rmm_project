@@ -742,12 +742,32 @@ AD TLS canary de infraestrutura:
 
 ```text
 domain_controller=dc01.control.local
-domain_controller_ip=192.168.104.2
-StartTLS_389=PASS TLSv1.3 TLS_AES_256_GCM_SHA384 hostname_validated=true chain_trusted=true
-LDAPS_636=PASS TLSv1.3 TLS_AES_256_GCM_SHA384 hostname_validated=true chain_trusted=true
+LDAPS_636=PASS hostname_validated=true chain_trusted=true
 ```
 
-O backend suporta explicitamente `ldap://` com StartTLS e `ldaps://` com TLS implicito, ambos com validacao de certificado pelo trust store do sistema. A configuracao recomendada para producao sera `AD_SERVER_URI=ldaps://dc01.control.local` com `AD_REQUIRE_TLS=True`, mas essa troca ainda depende de push, deploy e canario real de autenticacao AD.
+Implementacao, push e deploy do hardening de transporte AD foram concluidos. A producao utiliza `AD_SERVER_URI=ldaps://dc01.control.local` com `AD_REQUIRE_TLS=True`; o certificado LDAPS foi validado por hostname e trust store. O backend continua suportando `ldap://` com StartTLS e `ldaps://` com TLS implicito, ambos com validacao de certificado pelo trust store do sistema.
+
+Validacoes AD reais registradas:
+
+```text
+security_preflight --strict=PASS
+service_bind=PASS
+user_search=PASS
+interactive_login_valid_credentials=PASS
+interactive_login_invalid_password_rejected=PASS
+```
+
+HSTS/HTTPS canary de infraestrutura:
+
+```text
+PUBLIC_HTTPS_STATUS=PASS
+SECURE_HSTS_SECONDS=300
+SECURE_HSTS_INCLUDE_SUBDOMAINS=false
+SECURE_HSTS_PRELOAD=false
+PUBLIC_CERT_RENEWAL_SIMULATION=PASS
+```
+
+O canario atual valida HSTS curto em producao. HSTS longo, preload e autenticacao TLS do origin permanecem fora deste fechamento e nao devem ser considerados concluidos por este registro.
 
 Capacidades de lifecycle validadas em canario real:
 
@@ -1020,11 +1040,11 @@ READY_FOR_PHASE6: false
 
 Antes de iniciar Fase 6, fechar os gates:
 
-- `security_preflight --strict` PASS em producao.
-- zero segredos literais versionados.
-- arquivos runtime de segredo protegidos por permissoes seguras no servidor.
-- HTTPS/HSTS de producao validado, mantendo desenvolvimento/testes funcionais.
-- AD com transporte seguro quando AD estiver habilitado.
+- `security_preflight --strict` PASS em producao. Concluido.
+- zero segredos literais versionados. Concluido.
+- arquivos runtime de segredo protegidos por permissoes seguras no servidor. Concluido.
+- HTTPS/HSTS canario de producao validado, com `max-age=300`, `includeSubDomains=false` e `preload=false`. Concluido.
+- AD com transporte seguro via LDAPS e validacao de certificado. Concluido.
 - regressoes de redaction de logs/stdout/exceptions PASS.
 - publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior.
 - canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs.
