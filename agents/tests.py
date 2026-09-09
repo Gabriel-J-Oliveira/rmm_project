@@ -122,6 +122,34 @@ with mock.patch.object(environ.Env, "read_env", return_value=None):
         self.assertTrue(values['hsts_subdomains'])
         self.assertFalse(values['hsts_preload'])
 
+    def test_settings_test_disables_ssl_redirect_from_runtime_environment(self):
+        env = os.environ.copy()
+        env['DJANGO_SECURE_SSL_REDIRECT'] = 'True'
+        completed = subprocess.run(
+            [
+                sys.executable,
+                '-c',
+                """
+import json
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings_test")
+from django.conf import settings
+
+print(json.dumps({"redirect": settings.SECURE_SSL_REDIRECT}))
+""",
+            ],
+            cwd=settings.BASE_DIR,
+            env=env,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        values = json.loads(completed.stdout)
+        self.assertFalse(values['redirect'])
+
     @override_settings(
         DEBUG=False,
         SECRET_KEY='production-secret-value-not-printed',

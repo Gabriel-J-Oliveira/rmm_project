@@ -1,6 +1,10 @@
 from .settings import *  # noqa: F401,F403
 
 
+# Django's test client issues internal HTTP requests; test settings must not
+# inherit production HTTPS redirects from the host environment.
+SECURE_SSL_REDIRECT = False
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
