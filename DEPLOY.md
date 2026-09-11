@@ -691,7 +691,29 @@ Agent baseline: 0.1.1.0-rc36
 Agent baseline commit: 7bf20ba3cefda76731abd97204fa918e4e37bdbc
 ```
 
-RC36 permanece a release do agente usada nos canarios finais. Os fixes posteriores de backend/frontend nao exigiram nova release do agente.
+RC36 permanece a release de referencia dos canarios finais da Fase 4.
+A Fase 5 introduziu hardening local do agente Windows em commit posterior a RC36 e,
+por isso, exigiu uma nova release para chegar aos endpoints.
+
+Release de agente publicada para canario da Fase 5:
+
+```text
+Agent release: 0.1.1.0-rc38
+Agent release id: 50ddcb17-e579-498d-8ada-8b89e693cc6d
+Agent release commit: 1e8f24571a6a180804670db4a7fe603cfd956d1d
+Channel: development
+Status: paused
+Rollout percentage: 0
+Rollout paused: true
+ZIP SHA256: 9d74cdf77b10a4a6764863dbd44d54daf076f74ecb04d865192a8284f80e90c2
+ZIP size: 71932696
+Signature: RSA-PSS-SHA256 valid
+Legacy unsigned: false
+```
+
+RC38 foi publicada pelo publisher oficial usando artefato local previamente validado.
+O upload versionado, URLs publicas, import Django e `verify_agent_release` passaram.
+`stable/latest` nao foi alterado, nenhum job foi criado e nenhum rollout foi iniciado.
 
 Phase 5 status:
 
@@ -708,8 +730,11 @@ Blocos de Phase 5 ja implementados:
 - `712ec42a9d511b846435c9c017c41cf4dd9dc9a8`: remocao de segredos versionados e bloqueio de export plaintext de agent tokens.
 - `507c89031dd74a1d73b6e1616e214e5f9e2114a7`: hardening configuravel de cookies HTTPS e redirect SSL no Django.
 - `f151f2218028fc2547b1338e96e980fa434d57ae`: hardening local do agente Windows, incluindo ACLs sensiveis, runner/autorizacao AdminOnly e redaction.
+- `57e46edd2b8d4ed38d760beb71630c5af56f8a89`: redaction de resultados de AgentJob antes de persistir job, receipt e audit metadata.
+- `1e8f24571a6a180804670db4a7fe603cfd956d1d`: isolamento de `SECURE_SSL_REDIRECT` nos settings de teste para reproduzibilidade no servidor.
 
-O commit `f151f2218028fc2547b1338e96e980fa434d57ae` e posterior a RC36 e exige nova release do agente antes do canario real de ACL/secrets.
+O commit `f151f2218028fc2547b1338e96e980fa434d57ae` e posterior a RC36 e esta contido na RC38.
+O proximo passo da Fase 5 e validar RC38 em canario controlado antes de qualquer rollout.
 
 Baseline Linux validado para o servico em producao:
 
@@ -768,6 +793,30 @@ PUBLIC_CERT_RENEWAL_SIMULATION=PASS
 ```
 
 O canario atual valida HSTS curto em producao. HSTS longo, preload e autenticacao TLS do origin permanecem fora deste fechamento e nao devem ser considerados concluidos por este registro.
+
+Canario de agente da Fase 5:
+
+```text
+Target endpoint: CS-SRV-CST
+Endpoint id: 476f5039-5e7e-4b0f-b24c-849ee6551434
+Machine id: c4e59106-035a-455f-bdeb-3e8287718dd6
+Central agent version observed before canary: 0.1.1.0-rc37
+Local service binary observed later: 0.1.1.0-rc38
+Target release: 0.1.1.0-rc38
+Decision: blocked before update
+```
+
+A inspecao central pre-canario confirmou que o endpoint esta em lifecycle
+`installed`, sem jobs ativos de lifecycle, sem uninstall pendente, sem
+rollback_failed e com identidade central/local coerente. A release RC38 esta
+integra e selecionavel manualmente. Uma triagem Windows posterior observou
+binario local RC38, mas o servico `NightOwlAgentDotNet` permanece parado; isso
+nao valida o canario nem libera rollout. Houve evidencia recente de
+`System.UnauthorizedAccessException` seguida de `HostOptions.BackgroundServiceException`.
+A ocorrencia suspeita de `Bearer` em logs foi reclassificada como falso positivo,
+sem segredo plaintext confirmado. Antes de retomar o canario, a causa sanitizada
+da excecao de acesso deve ser localizada e o servico deve voltar de forma
+controlada.
 
 Capacidades de lifecycle validadas em canario real:
 
@@ -1045,10 +1094,10 @@ Antes de iniciar Fase 6, fechar os gates:
 - arquivos runtime de segredo protegidos por permissoes seguras no servidor. Concluido.
 - HTTPS/HSTS canario de producao validado, com `max-age=300`, `includeSubDomains=false` e `preload=false`. Concluido.
 - AD com transporte seguro via LDAPS e validacao de certificado. Concluido.
-- regressoes de redaction de logs/stdout/exceptions PASS.
-- publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior.
-- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs.
+- regressoes de redaction de logs/stdout/exceptions PASS. Concluido no backend em `57e46edd2b8d4ed38d760beb71630c5af56f8a89`.
+- publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior. Concluido com RC38.
+- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs. Bloqueado: CS-SRV-CST esta com servico parado apos `UnauthorizedAccessException`; houve observacao posterior de binario local RC38, mas sem canario concluido.
 - upgrade sem regressao de heartbeat, jobs, update, repair e uninstall.
-- pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos.
+- pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos. Concluido para RC38; validar novamente em qualquer publicacao futura.
 
 Nao iniciar Fase 6 ainda.
