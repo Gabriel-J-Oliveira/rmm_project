@@ -787,6 +787,30 @@ static void TestStateSaveFailureDoesNotEscapeWorkerBoundary()
         Require(log.Contains("state.save.failed", StringComparison.Ordinal), "State save failure should be logged as a structured event.");
         Require(log.Contains("STATE_SAVE_UNAUTHORIZED", StringComparison.Ordinal), "Unauthorized state save failure should get a specific error code.");
         Require(!log.Contains("agentToken", StringComparison.OrdinalIgnoreCase), "State save failure log should not contain agent token material.");
+
+        StateSaveOutcome ioOutcome = Worker.SaveStateWithBoundaryAsync(
+            _ => throw new IOException("Synthetic IO failure while saving state."),
+            logger,
+            TimeSpan.FromSeconds(10),
+            CancellationToken.None,
+            (_, _) => Task.CompletedTask).GetAwaiter().GetResult();
+        Require(!ioOutcome.Saved, "Worker state save boundary should contain IOException.");
+
+        bool unexpectedEscaped = false;
+        try
+        {
+            Worker.SaveStateWithBoundaryAsync(
+                _ => throw new InvalidOperationException("Synthetic unexpected state save failure."),
+                logger,
+                TimeSpan.FromSeconds(10),
+                CancellationToken.None,
+                (_, _) => Task.CompletedTask).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException)
+        {
+            unexpectedEscaped = true;
+        }
+        Require(unexpectedEscaped, "Unexpected state save exceptions should escape to normal BackgroundService failure handling.");
     }
     finally
     {

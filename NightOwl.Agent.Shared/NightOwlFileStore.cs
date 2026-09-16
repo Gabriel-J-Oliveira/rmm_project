@@ -56,7 +56,14 @@ public static class NightOwlFileStore
             {
                 DeleteTempBestEffort(tempPath);
                 hooks?.OnRetry?.Invoke(attempt, ex, delay);
-                hooks?.Delay?.Invoke(delay);
+                if (hooks?.Delay is not null)
+                {
+                    hooks.Delay(delay);
+                }
+                else
+                {
+                    Thread.Sleep(delay);
+                }
                 delay = NextDelay(delay);
             }
             finally

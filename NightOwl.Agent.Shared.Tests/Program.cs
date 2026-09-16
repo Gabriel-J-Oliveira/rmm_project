@@ -161,6 +161,32 @@ try
     Require(File.ReadAllText(safeStorePath).Contains("\"value\":3", StringComparison.Ordinal), "Safe file store retry should eventually persist content.");
     RequireNoSafeFileTemps(safeStorePath, "Safe file store retry success should not leave temp files.");
 
+    List<TimeSpan> syncRetryDelays = new();
+    bool delayedFailure = false;
+    try
+    {
+        NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":4}", null, new NightOwlFileStoreTestHooks
+        {
+            MaxAttempts = 4,
+            InitialRetryDelay = TimeSpan.FromMilliseconds(100),
+            BeforeMove = (_, _, _) => throw new IOException("Synthetic persistent retry delay failure."),
+            Delay = delay => syncRetryDelays.Add(delay)
+        });
+    }
+    catch (IOException)
+    {
+        delayedFailure = true;
+    }
+    Require(delayedFailure, "Safe file store delay test should exhaust retries.");
+    Require(syncRetryDelays.SequenceEqual(new[]
+    {
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+        TimeSpan.FromMilliseconds(400)
+    }), "Synchronous safe file store retry delays should be 100, 200 and 400 ms.");
+    Require(File.ReadAllText(safeStorePath).Contains("\"value\":3", StringComparison.Ordinal), "Safe file store delay exhaustion should preserve previous content.");
+    RequireNoSafeFileTemps(safeStorePath, "Safe file store delay exhaustion should clean temp files.");
+
     bool exhausted = false;
     try
     {

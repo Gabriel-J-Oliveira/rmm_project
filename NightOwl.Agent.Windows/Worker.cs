@@ -595,7 +595,7 @@ public sealed class Worker : BackgroundService
             await saveAsync(ct);
             return new StateSaveOutcome(DefaultLoopDelay, InitialStateSaveBackoff, Saved: true);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
             TimeSpan delay = currentBackoff <= TimeSpan.Zero ? InitialStateSaveBackoff : currentBackoff;
             string errorCode = ex switch
