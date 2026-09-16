@@ -11,9 +11,20 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{% static 'css/nightowl.css' %}">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script>
+        (function () {
+            try {
+                if (window.localStorage.getItem("nightowl.sidebarCollapsed") === "true") {
+                    document.documentElement.classList.add("sidebar-collapsed-preload");
+                }
+            } catch (error) {
+                /* Ignore storage restrictions and keep the default expanded layout. */
+            }
+        })();
+    </script>
 </head>
 <body class="{% block body_class %}page-dashboard{% endblock %}">
-    <div class="app-shell">
+    <div class="app-shell{% if active_nav != 'access_inventory' and active_nav != 'ticket_portal' and request.resolver_match.url_name != 'login' %} has-sidebar{% endif %}">
         {% if active_nav != 'access_inventory' and active_nav != 'ticket_portal' and request.resolver_match.url_name != 'login' %}
         <aside class="sidebar">
             <div class="brand">
@@ -21,33 +32,36 @@
                     <img src="/media/logo/logo.png" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';">
                     <span>NO</span>
                 </div>
-                <div>
+                <div class="brand-copy">
                     <div class="brand-name">{% if active_nav == 'tickets' or active_nav == 'ticket_portal' %}Night Owl Desk{% else %}Night Owl{% endif %}</div>
                     <div class="brand-subtitle">{% if active_nav == 'tickets' %}Chamados internos{% elif active_nav == 'ticket_portal' %}Portal de chamados{% else %}RMM interno{% endif %}</div>
                 </div>
+                <button class="sidebar-toggle" type="button" data-sidebar-toggle aria-label="Recolher menu lateral" aria-expanded="true" title="Recolher menu lateral">
+                    <i data-lucide="panel-left-close"></i>
+                </button>
             </div>
 
             <nav class="nav-menu" aria-label="Menu principal">
                 <div class="nav-group">
                     <span class="nav-group-label">Opera&ccedil;&atilde;o</span>
-                    <a class="nav-item {% if active_nav|default:'dashboard' == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}"><i data-lucide="layout-dashboard"></i>Dashboard</a>
-                    <a class="nav-item {% if active_nav == 'noc' %}active{% endif %}" href="{% url 'noc' %}"><i data-lucide="activity"></i>NOC</a>
-                    <a class="nav-item {% if active_nav == 'alerts' %}active{% endif %}" href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i>Alertas</a>
-                    <a class="nav-item {% if active_nav == 'events' %}active{% endif %}" href="{% url 'events-list' %}"><i data-lucide="history"></i>Eventos</a>
-                    <a class="nav-item {% if active_nav == 'jobs' %}active{% endif %}" href="{% url 'jobs-list' %}"><i data-lucide="list-checks"></i>Tarefas</a>
-                    <a class="nav-item {% if active_nav == 'maintenance' %}active{% endif %}" href="{% url 'maintenance-list' %}"><i data-lucide="wrench"></i>Manuten&ccedil;&atilde;o</a>
-                    <a class="nav-item {% if active_nav == 'tickets' %}active{% endif %}" href="{% url 'tickets:central' %}"><i data-lucide="inbox"></i>Chamados</a>
+                    <a class="nav-item {% if active_nav|default:'dashboard' == 'dashboard' %}active{% endif %}" href="{% url 'dashboard:index' %}" title="Dashboard"><i data-lucide="layout-dashboard"></i><span class="nav-label">Dashboard</span></a>
+                    <a class="nav-item {% if active_nav == 'noc' %}active{% endif %}" href="{% url 'noc' %}" title="NOC"><i data-lucide="activity"></i><span class="nav-label">NOC</span></a>
+                    <a class="nav-item {% if active_nav == 'alerts' %}active{% endif %}" href="{% url 'alerts-list' %}" title="Alertas"><i data-lucide="alert-triangle"></i><span class="nav-label">Alertas</span></a>
+                    <a class="nav-item {% if active_nav == 'events' %}active{% endif %}" href="{% url 'events-list' %}" title="Eventos"><i data-lucide="history"></i><span class="nav-label">Eventos</span></a>
+                    <a class="nav-item {% if active_nav == 'jobs' %}active{% endif %}" href="{% url 'jobs-list' %}" title="Tarefas"><i data-lucide="list-checks"></i><span class="nav-label">Tarefas</span></a>
+                    <a class="nav-item {% if active_nav == 'maintenance' %}active{% endif %}" href="{% url 'maintenance-list' %}" title="Manuten&ccedil;&atilde;o"><i data-lucide="wrench"></i><span class="nav-label">Manuten&ccedil;&atilde;o</span></a>
+                    <a class="nav-item {% if active_nav == 'tickets' %}active{% endif %}" href="{% url 'tickets:central' %}" title="Chamados"><i data-lucide="inbox"></i><span class="nav-label">Chamados</span></a>
                 </div>
                 <div class="nav-group">
                     <span class="nav-group-label">Parque</span>
-                    <a class="nav-item {% if active_nav == 'endpoints' %}active{% endif %}" href="{% url 'endpoint-list' %}"><i data-lucide="monitor"></i>Endpoints</a>
-                    <a class="nav-item {% if active_nav == 'software' %}active{% endif %}" href="{% url 'software-inventory' %}"><i data-lucide="package"></i>Softwares</a>
-                    <a class="nav-item {% if active_nav == 'software_policies' %}active{% endif %}" href="{% url 'software-policies' %}"><i data-lucide="shield-check"></i>Pol&iacute;ticas</a>
-                    <a class="nav-item {% if active_nav == 'access_inventory' %}active{% endif %}" href="{% url 'access_inventory:dashboard' %}"><i data-lucide="folder-key"></i>Acessos</a>
+                    <a class="nav-item {% if active_nav == 'endpoints' %}active{% endif %}" href="{% url 'endpoint-list' %}" title="Endpoints"><i data-lucide="monitor"></i><span class="nav-label">Endpoints</span></a>
+                    <a class="nav-item {% if active_nav == 'software' %}active{% endif %}" href="{% url 'software-inventory' %}" title="Softwares"><i data-lucide="package"></i><span class="nav-label">Softwares</span></a>
+                    <a class="nav-item {% if active_nav == 'software_policies' %}active{% endif %}" href="{% url 'software-policies' %}" title="Pol&iacute;ticas"><i data-lucide="shield-check"></i><span class="nav-label">Pol&iacute;ticas</span></a>
+                    <a class="nav-item {% if active_nav == 'access_inventory' %}active{% endif %}" href="{% url 'access_inventory:dashboard' %}" title="Acessos"><i data-lucide="folder-key"></i><span class="nav-label">Acessos</span></a>
                 </div>
                 <div class="nav-group">
                     <span class="nav-group-label">Agentes</span>
-                    <a class="nav-item {% if active_nav == 'agents' %}active{% endif %}" href="{% url 'agent-install' %}"><i data-lucide="key-round"></i>Instala&ccedil;&atilde;o</a>
+                    <a class="nav-item {% if active_nav == 'agents' %}active{% endif %}" href="{% url 'agent-install' %}" title="Instala&ccedil;&atilde;o"><i data-lucide="key-round"></i><span class="nav-label">Instala&ccedil;&atilde;o</span></a>
                 </div>
             </nav>
         </aside>
@@ -109,6 +123,41 @@
                     }
                 }, 5900 + (index * 700));
             });
+            var sidebarToggle = document.querySelector("[data-sidebar-toggle]");
+            var root = document.documentElement;
+            var body = document.body;
+
+            function setSidebarState(collapsed) {
+                body.classList.toggle("sidebar-collapsed", collapsed);
+                root.classList.toggle("sidebar-collapsed-preload", collapsed);
+                if (!sidebarToggle) {
+                    return;
+                }
+                sidebarToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+                sidebarToggle.setAttribute("aria-label", collapsed ? "Expandir menu lateral" : "Recolher menu lateral");
+                sidebarToggle.setAttribute("title", collapsed ? "Expandir menu lateral" : "Recolher menu lateral");
+                var icon = sidebarToggle.querySelector("[data-lucide]");
+                if (icon) {
+                    icon.setAttribute("data-lucide", collapsed ? "panel-left-open" : "panel-left-close");
+                    if (window.lucide && typeof window.lucide.createIcons === "function") {
+                        window.lucide.createIcons();
+                    }
+                }
+            }
+
+            var sidebarCollapsed = root.classList.contains("sidebar-collapsed-preload");
+            setSidebarState(sidebarCollapsed);
+            if (sidebarToggle) {
+                sidebarToggle.addEventListener("click", function () {
+                    sidebarCollapsed = !body.classList.contains("sidebar-collapsed");
+                    setSidebarState(sidebarCollapsed);
+                    try {
+                        window.localStorage.setItem("nightowl.sidebarCollapsed", sidebarCollapsed ? "true" : "false");
+                    } catch (error) {
+                        /* Ignore storage restrictions; the current view still updates. */
+                    }
+                });
+            }
         });
     </script>
 </body>
