@@ -1,5 +1,6 @@
 <nav class="desk-module-nav">
     <a class="{% if desk_active_section == 'central' or desk_active_section == 'my' %}active{% endif %}" href="{% url 'tickets:central' %}"><i data-lucide="radio"></i>Central de Atendimento</a>
+    <a class="{% if desk_active_section == 'users' %}active{% endif %}" href="{% url 'tickets:users' %}"><i data-lucide="users"></i>Usuários</a>
     <a class="{% if desk_active_section == 'settings' and request.GET.tab == 'queues' %}active{% endif %}" href="{% url 'tickets:settings' %}?tab=queues"><i data-lucide="inbox"></i>Filas</a>
     <a class="{% if desk_active_section == 'settings' and request.GET.tab == 'gmud' %}active{% endif %}" href="{% url 'tickets:settings' %}?tab=gmud"><i data-lucide="git-pull-request"></i>GMUD</a>
     <a class="{% if desk_active_section == 'dashboard' %}active{% endif %}" href="{% url 'tickets:dashboard' %}"><i data-lucide="bar-chart-3"></i>Dashboard</a>

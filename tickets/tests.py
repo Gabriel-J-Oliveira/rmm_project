@@ -72,6 +72,167 @@ class TicketCentralTests(TestCase):
         self.assertNotContains(response, '>Fila</a>')
 
 
+class TicketUserDirectoryTests(TestCase):
+    host = '127.0.0.1'
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from access_inventory.models import ADOrganizationalUnit, ADUser
+        from tickets.models import TicketCategory
+
+        self.tech = get_user_model().objects.create_user('gabriel', password='x', is_staff=True)
+        self.client.force_login(self.tech)
+        self.ou = ADOrganizationalUnit.objects.create(
+            distinguished_name='OU=Financeiro,OU=USUARIOS,DC=nalen,DC=local',
+            name='Financeiro',
+        )
+        self.ad_user = ADUser.objects.create(
+            sid='S-1-5-21-1000',
+            sam_account_name='mariana.souza',
+            display_name='Mariana Souza',
+            user_principal_name='mariana.souza@nalen.local',
+            email='mariana.souza@nalen.local',
+            distinguished_name='CN=Mariana Souza,OU=Financeiro,OU=USUARIOS,DC=nalen,DC=local',
+            ou=self.ou,
+            enabled=True,
+        )
+        self.category = TicketCategory.objects.create(name='Acesso', description='Acesso')
+
+    def test_identity_matching_ignores_display_name_and_uses_username_or_email(self):
+        from tickets.models import Ticket
+        from tickets.services.user_directory import find_ad_user_for_ticket
+
+        by_name = Ticket.objects.create(number=9001, title='Nome igual', description='x', requester_name='Mariana Souza')
+        by_username = Ticket.objects.create(
+            number=9002,
+            title='Usuario de rede',
+            description='x',
+            requester_name='Solicitante',
+            requester_username='NALEN\\Mariana.Souza',
+        )
+        by_email = Ticket.objects.create(
+            number=9003,
+            title='E-mail',
+            description='x',
+            requester_name='Solicitante',
+            requester_email='MARIANA.SOUZA@nalen.local',
+        )
+
+        self.assertEqual(find_ad_user_for_ticket(by_name).status, 'no_identity')
+        self.assertEqual(find_ad_user_for_ticket(by_username).user, self.ad_user)
+        self.assertEqual(find_ad_user_for_ticket(by_email).user, self.ad_user)
+
+    def test_users_list_and_profile_render_real_ad_data(self):
+        from tickets.models import Ticket
+
+        Ticket.objects.create(
+            number=9010,
+            title='Acesso ao ERP',
+            description='Validar acesso',
+            requester_ad_user=self.ad_user,
+            requester_name='Mariana Souza',
+            requester_email='mariana.souza@nalen.local',
+            requester_username='mariana.souza',
+            category=self.category,
+        )
+
+        list_response = self.client.get(reverse('tickets:users'), HTTP_HOST=self.host)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertContains(list_response, 'Mariana Souza')
+        self.assertContains(list_response, 'mariana.souza')
+
+        detail_response = self.client.get(reverse('tickets:user-detail', args=[self.ad_user.pk]), HTTP_HOST=self.host)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertContains(detail_response, 'Abrir chamado')
+        self.assertContains(detail_response, 'requester_ad_user')
+        self.assertContains(detail_response, '#9010')
+
+    def test_profile_prefills_quick_ticket_drawer_and_api_persists_ad_user(self):
+        from tickets.models import Ticket
+
+        response = self.client.get(
+            reverse('tickets:central'),
+            {'new': '1', 'requester_ad_user': str(self.ad_user.pk)},
+            HTTP_HOST=self.host,
+        )
+        self.assertContains(response, 'quick-ticket-prefill')
+        self.assertContains(response, 'Mariana Souza')
+
+        payload = {
+            'requester_ad_user_id': str(self.ad_user.pk),
+            'requester': 'Browser value',
+            'title': 'Novo acesso',
+            'description': 'Linha 1\n\nLinha 2',
+            'category': 'Acesso',
+            'priority': 'normal',
+        }
+        api_response = self.client.post(
+            reverse('tickets:api-create'),
+            data=payload,
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(api_response.status_code, 201)
+        ticket = Ticket.objects.get(title='Novo acesso')
+        self.assertEqual(ticket.requester_ad_user, self.ad_user)
+        self.assertEqual(ticket.requester_name, 'Mariana Souza')
+        self.assertEqual(ticket.requester_username, 'mariana.souza')
+        self.assertIn('\n\n', ticket.description)
+
+    def test_endpoint_context_prefers_online_recent_endpoint(self):
+        from agents.models import AgentMachine, InventorySnapshot
+        from tickets.services.user_directory import endpoint_context_for_ad_user
+
+        offline, _ = AgentMachine.create_with_token(
+            hostname='OLD-NOTE',
+            domain='nalen.local',
+            status=AgentMachine.STATUS_OFFLINE,
+            last_seen_at=timezone.now() - timezone.timedelta(days=2),
+            last_logged_user='mariana.souza',
+        )
+        online, _ = AgentMachine.create_with_token(
+            hostname='FIN-012',
+            domain='nalen.local',
+            status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now(),
+            last_logged_user='NALEN\\mariana.souza',
+        )
+        InventorySnapshot.objects.create(
+            machine=offline,
+            collected_at=timezone.now() - timezone.timedelta(days=3),
+            received_at=timezone.now() - timezone.timedelta(days=3),
+            hostname='OLD-NOTE',
+            logged_user='mariana.souza@nalen.local',
+        )
+
+        context = endpoint_context_for_ad_user(self.ad_user)
+        self.assertEqual(context['current']['hostname'], online.hostname)
+        self.assertEqual(context['history_count'], 2)
+
+    def test_backfill_command_dry_run_and_apply(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.create(
+            number=9020,
+            title='Backfill',
+            description='x',
+            requester_username='mariana.souza',
+        )
+        dry_output = StringIO()
+        call_command('link_ticket_requesters', stdout=dry_output)
+        ticket.refresh_from_db()
+        self.assertIsNone(ticket.requester_ad_user)
+        self.assertIn('DRY-RUN', dry_output.getvalue())
+
+        apply_output = StringIO()
+        call_command('link_ticket_requesters', '--apply', stdout=apply_output)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.requester_ad_user, self.ad_user)
+        self.assertIn('APPLY', apply_output.getvalue())
+
+
 class TicketDetailLayoutTests(TestCase):
     host = '127.0.0.1'
 

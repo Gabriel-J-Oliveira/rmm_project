@@ -126,7 +126,7 @@ def adapt_ticket(ticket):
 
 
 def ticket_queryset():
-    return Ticket.objects.select_related('category', 'endpoint', 'sla').prefetch_related('comments', 'attachments', 'audit_events')
+    return Ticket.objects.select_related('category', 'endpoint', 'sla', 'requester_ad_user').prefetch_related('comments', 'attachments', 'audit_events')
 
 
 def get_ticket_view(number):

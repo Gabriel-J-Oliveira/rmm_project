@@ -17,6 +17,8 @@
 
         <form class="nw-ticket-drawer-body nw-quick-ticket-form" data-quick-ticket-form>
             {% csrf_token %}
+            <input type="hidden" name="requester_ad_user_id" data-quick-requester-ad-user-id>
+            <input type="hidden" name="requester_username" data-quick-requester-username>
             <label class="nw-quick-ticket-field nw-quick-ticket-field--wide">
                 <span>Solicitante</span>
                 <input name="requester" autocomplete="off" placeholder="Buscar por nome, e-mail ou setor" data-quick-required="Solicitante" data-quick-requester-search>

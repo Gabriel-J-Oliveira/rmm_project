@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ad_user.display_name|default:ad_user.sam_account_name }} - NightOwl Desk{% endblock %}
+{% block body_class %}page-tickets{% endblock %}
+
+{% block content %}
+<section class="desk-shell nw-users-shell">
+    <header class="nw-user-profile-header">
+        <a class="desk-btn" href="{% url 'tickets:users' %}"><i data-lucide="arrow-left"></i>Voltar</a>
+        <div class="nw-user-avatar">{{ ad_user.display_name|default:ad_user.sam_account_name|first|upper }}</div>
+        <div class="nw-user-profile-title">
+            <span class="desk-eyebrow">Usuário do AD</span>
+            <h1>{{ ad_user.display_name|default:ad_user.sam_account_name }}</h1>
+            <p>{{ ad_user.sam_account_name }}{% if ad_user.user_principal_name %} · {{ ad_user.user_principal_name }}{% endif %}</p>
+            <div class="nw-user-profile-badges">
+                <span class="nw-users-status {% if ad_user.enabled %}is-active{% else %}is-inactive{% endif %}">{% if ad_user.enabled %}Ativo{% else %}Inativo{% endif %}</span>
+                {% if ad_user.email %}<span>{{ ad_user.email }}</span>{% endif %}
+                {% if ou_name %}<span>{{ ou_name }}</span>{% endif %}
+            </div>
+        </div>
+        <div class="nw-user-profile-actions">
+            <a class="desk-btn desk-btn-primary" href="{% url 'tickets:central' %}?new=1&requester_ad_user={{ ad_user.pk }}"><i data-lucide="ticket-plus"></i>Abrir chamado</a>
+            {% if ad_user.email %}<button class="desk-btn" type="button" data-copy-text="{{ ad_user.email }}"><i data-lucide="copy"></i>Copiar e-mail</button>{% endif %}
+        </div>
+    </header>
+
+    {% include "tickets/_desk_nav.html" %}
+
+    <section class="nw-user-metrics">
+        <article><span>Abertos</span><strong>{{ open_count }}</strong></article>
+        <article><span>Resolvidos</span><strong>{{ resolved_count }}</strong></article>
+        <article><span>Endpoints usados</span><strong>{{ endpoints.history_count }}</strong></article>
+        <article><span>Última atividade</span><strong>{% if last_activity %}{{ last_activity|timesince }} atrás{% else %}—{% endif %}</strong></article>
+    </section>
+
+    <section class="nw-user-tabs" data-user-tabs>
+        <nav>
+            <button type="button" class="is-active" data-user-tab="overview">Visão geral</button>
+            <button type="button" data-user-tab="tickets">Chamados</button>
+            <button type="button" data-user-tab="devices">Dispositivos</button>
+        </nav>
+
+        <div data-user-tab-panel="overview">
+            {% if endpoints.multiple_online %}
+                <div class="nw-users-alert"><i data-lucide="alert-triangle"></i>Mais de um endpoint online associado a este usuário. Valide antes de executar ações remotas.</div>
+            {% endif %}
+            <div class="nw-user-overview-grid">
+                <article class="nw-users-card">
+                    <h2><i data-lucide="monitor"></i>Endpoint atual</h2>
+                    {% if endpoints.current %}
+                        <div class="nw-user-endpoint-current">
+                            <strong>{{ endpoints.current.hostname }}</strong>
+                            <span>{{ endpoints.current.status }} · {{ endpoints.current.os|default:"SO não informado" }}</span>
+                            <small>Último uso: {% if endpoints.current.last_usage_at %}{{ endpoints.current.last_usage_at|timesince }} atrás{% else %}—{% endif %}</small>
+                            <a href="{% url 'endpoint-detail' endpoints.current.id %}">Abrir no RMM</a>
+                        </div>
+                    {% else %}
+                        <p class="nw-users-muted">Nenhum endpoint associado por usuário logado ou inventário.</p>
+                    {% endif %}
+                </article>
+
+                <article class="nw-users-card">
+                    <h2><i data-lucide="ticket"></i>Chamados recentes</h2>
+                    {% for ticket in recent_tickets %}
+                        <a class="nw-user-mini-row" href="{% url 'tickets:detail' ticket.number %}">
+                            <strong>#{{ ticket.number }} {{ ticket.title }}</strong>
+                            <span>{{ ticket.get_status_display }} · {{ ticket.get_priority_display }}</span>
+                        </a>
+                    {% empty %}
+                        <p class="nw-users-muted">Nenhum chamado associado por usuário de rede, UPN ou e-mail.</p>
+                    {% endfor %}
+                </article>
+
+                <article class="nw-users-card">
+                    <h2><i data-lucide="users"></i>Grupos AD</h2>
+                    <details open>
+                        <summary>{{ ad_groups|length }} grupos exibidos</summary>
+                        <div class="nw-user-groups">
+                            {% for group in ad_groups %}
+                                <span>{{ group.name|default:group.sam_account_name }}</span>
+                            {% empty %}
+                                <p class="nw-users-muted">Nenhum grupo importado para este usuário.</p>
+                            {% endfor %}
+                        </div>
+                    </details>
+                </article>
+            </div>
+        </div>
+
+        <div data-user-tab-panel="tickets" hidden>
+            <form class="nw-users-toolbar" method="get">
+                <select name="status">
+                    <option value="">Todos os status</option>
+                    {% for value, label in status_labels.items %}
+                        <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <select name="priority">
+                    <option value="">Todas as prioridades</option>
+                    {% for value, label in priority_labels.items %}
+                        <option value="{{ value }}" {% if priority_filter == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <button class="desk-btn" type="submit">Filtrar</button>
+            </form>
+            <section class="nw-users-card">
+                <table class="nw-users-table">
+                    <thead><tr><th>Chamado</th><th>Status</th><th>Prioridade</th><th>Categoria</th><th>Responsável</th><th>Atualizado</th></tr></thead>
+                    <tbody>
+                        {% for ticket in ticket_rows %}
+                            <tr onclick="window.location.href='{% url 'tickets:detail' ticket.number %}'">
+                                <td><strong>#{{ ticket.number }} {{ ticket.title }}</strong></td>
+                                <td>{{ ticket.get_status_display }}</td>
+                                <td>{{ ticket.get_priority_display }}</td>
+                                <td>{{ ticket.category.name|default:"—" }}</td>
+                                <td>{{ ticket.assigned_to|default:"Sem responsável" }}</td>
+                                <td>{{ ticket.updated_at|timesince }} atrás</td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="6" class="nw-users-empty-cell">Nenhum chamado encontrado para este filtro.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        </div>
+
+        <div data-user-tab-panel="devices" hidden>
+            <section class="nw-users-card">
+                <table class="nw-users-table">
+                    <thead><tr><th>Endpoint</th><th>Status</th><th>Sistema</th><th>Primeiro uso</th><th>Último uso</th><th>Usos</th><th></th></tr></thead>
+                    <tbody>
+                        {% for endpoint in endpoints.history %}
+                            <tr>
+                                <td><strong>{{ endpoint.hostname }}</strong><small>{{ endpoint.ip|default:"IP não informado" }}</small></td>
+                                <td>{{ endpoint.status }}</td>
+                                <td>{{ endpoint.os|default:"—" }}</td>
+                                <td>{% if endpoint.first_seen_at %}{{ endpoint.first_seen_at|timesince }} atrás{% else %}—{% endif %}</td>
+                                <td>{% if endpoint.last_usage_at %}{{ endpoint.last_usage_at|timesince }} atrás{% else %}—{% endif %}</td>
+                                <td>{{ endpoint.usage_count }}</td>
+                                <td><a class="desk-btn" href="{% url 'endpoint-detail' endpoint.id %}">RMM</a></td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="7" class="nw-users-empty-cell">Nenhum endpoint associado por inventário ou último usuário logado.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        </div>
+    </section>
+</section>
+
+{{ quick_ticket_prefill|json_script:"quick-ticket-prefill" }}
+<script>
+document.querySelectorAll('[data-user-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+        document.querySelectorAll('[data-user-tab]').forEach((item) => item.classList.toggle('is-active', item === button));
+        document.querySelectorAll('[data-user-tab-panel]').forEach((panel) => { panel.hidden = panel.dataset.userTabPanel !== button.dataset.userTab; });
+    });
+});
+document.querySelectorAll('[data-copy-text]').forEach((button) => {
+    button.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(button.dataset.copyText || '');
+            button.textContent = 'E-mail copiado';
+        } catch (error) {
+            button.textContent = 'Copie manualmente';
+        }
+    });
+});
+window.lucide?.createIcons?.();
+</script>
+{% endblock %}
