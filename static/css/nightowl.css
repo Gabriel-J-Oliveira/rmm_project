@@ -6552,10 +6552,11 @@ a {
 }
 
 .brand {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 6px 6px 24px;
+    padding: 6px 44px 24px 6px;
 }
 
 .brand-copy {
@@ -6610,18 +6611,20 @@ a {
 }
 
 .sidebar-toggle {
+    position: absolute;
+    top: 7px;
+    right: 0;
     display: inline-grid;
     place-items: center;
-    flex: 0 0 auto;
     width: 34px;
     height: 34px;
-    margin-left: auto;
-    border: 1px solid var(--border);
+    border: 1px solid rgba(var(--module-accent-rgb), 0.34);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.035);
-    color: var(--text-secondary);
+    background: rgba(var(--module-accent-rgb), 0.12);
+    color: var(--text-primary);
     cursor: pointer;
     transition: background-color 170ms ease, border-color 170ms ease, color 170ms ease, transform 170ms ease;
+    z-index: 2;
 }
 
 .sidebar-toggle:hover {
@@ -6732,6 +6735,7 @@ a {
         gap: 0;
         padding-left: 0;
         padding-right: 0;
+        padding-top: 6px;
     }
 
     html.sidebar-collapsed-preload .brand-logo,
@@ -6758,7 +6762,8 @@ a {
 
     html.sidebar-collapsed-preload .sidebar-toggle,
     body.sidebar-collapsed .sidebar-toggle {
-        margin-left: 0;
+        position: static;
+        margin: 0 auto;
     }
 
     html.sidebar-collapsed-preload .nav-menu,
