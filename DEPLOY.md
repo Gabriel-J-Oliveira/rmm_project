@@ -803,20 +803,30 @@ Machine id: c4e59106-035a-455f-bdeb-3e8287718dd6
 Central agent version observed before canary: 0.1.1.0-rc37
 Local service binary observed later: 0.1.1.0-rc38
 Target release: 0.1.1.0-rc38
-Decision: blocked before update
+Update job: defb294b-8188-45a8-b425-42090bf72dc0
+Update result: completed
+Decision: RC39 candidate required before final Phase 5 canary closure
 ```
 
 A inspecao central pre-canario confirmou que o endpoint esta em lifecycle
 `installed`, sem jobs ativos de lifecycle, sem uninstall pendente, sem
 rollback_failed e com identidade central/local coerente. A release RC38 esta
-integra e selecionavel manualmente. Uma triagem Windows posterior observou
-binario local RC38, mas o servico `NightOwlAgentDotNet` permanece parado; isso
-nao valida o canario nem libera rollout. Houve evidencia recente de
-`System.UnauthorizedAccessException` seguida de `HostOptions.BackgroundServiceException`.
-A ocorrencia suspeita de `Bearer` em logs foi reclassificada como falso positivo,
-sem segredo plaintext confirmado. Antes de retomar o canario, a causa sanitizada
-da excecao de acesso deve ser localizada e o servico deve voltar de forma
-controlada.
+integra e selecionavel manualmente. O update RC37 -> RC38 foi executado por
+`update_agent` normal, via painel/manual, e o backend registrou `completed`,
+`updated=true`, `installed_version=0.1.1.0-rc38`, health check confirmado e
+rollback falso. Apos a coleta local de diagnostico, o endpoint voltou a aparecer
+online no backend, com `last_seen` em `2026-09-15T20:42:36Z`, inventarios
+recebidos e consultas de jobs recorrentes.
+
+A evidencia original do Windows mostrou `System.UnauthorizedAccessException`
+seguida de `HostOptions.BackgroundServiceException` durante gravacao de estado.
+A causa consolidada para a RC39 e que uma falha transitoria em
+`StateService.SaveAsync` podia escapar da fronteira do loop e encerrar o
+`BackgroundService`. A correcao candidata deve manter o servico vivo, registrar
+`state.save.failed` sanitizado, aplicar backoff entre tentativas e adicionar
+retentativa limitada no `NightOwlFileStore` para falhas transitorias de
+gravacao/substituicao atomica. A ocorrencia suspeita de `Bearer` em logs foi
+reclassificada como falso positivo, sem segredo plaintext confirmado.
 
 Capacidades de lifecycle validadas em canario real:
 
@@ -1096,8 +1106,8 @@ Antes de iniciar Fase 6, fechar os gates:
 - AD com transporte seguro via LDAPS e validacao de certificado. Concluido.
 - regressoes de redaction de logs/stdout/exceptions PASS. Concluido no backend em `57e46edd2b8d4ed38d760beb71630c5af56f8a89`.
 - publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior. Concluido com RC38.
-- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs. Bloqueado: CS-SRV-CST esta com servico parado apos `UnauthorizedAccessException`; houve observacao posterior de binario local RC38, mas sem canario concluido.
-- upgrade sem regressao de heartbeat, jobs, update, repair e uninstall.
+- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs. Parcial: ACLs e varreduras de segredo passaram; RC38 chegou ao CS-SRV-CST e voltou a reportar, mas a correcao RC39 de resiliencia do state save deve ser publicada antes do fechamento.
+- upgrade sem regressao de heartbeat, jobs, update, repair e uninstall. Pendente: repetir canario minimo apos RC39.
 - pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos. Concluido para RC38; validar novamente em qualquer publicacao futura.
 
 Nao iniciar Fase 6 ainda.

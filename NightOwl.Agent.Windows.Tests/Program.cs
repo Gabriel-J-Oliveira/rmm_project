@@ -1,6 +1,7 @@
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Services;
+using NightOwl.Agent.Windows;
 using NightOwl.Agent.Shared;
 using System.Diagnostics;
 using System.Text.Json;
@@ -37,6 +38,8 @@ try
     TestAgentStateJobPullAndCollectionPreserveLifecycle();
     TestAgentStateRuntimeDoesNotRewriteUninstalledLifecycle();
     TestAgentStateRuntimePreservesUnknownPropertiesAndRecentJobs();
+    TestStateSaveFailureDoesNotEscapeWorkerBoundary();
+    TestStateSaveFailureBackoffPreventsAcceleratedLoop();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -755,6 +758,94 @@ static AgentConfig NewStateTestConfig(string statePath)
         MachineId = "machine-lifecycle",
         StatePath = statePath
     };
+}
+
+static void TestStateSaveFailureDoesNotEscapeWorkerBoundary()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string logPath = Path.Combine(dir, "agent.log");
+        JsonlLogger logger = new(logPath);
+        bool saveAttempted = false;
+
+        StateSaveOutcome outcome = Worker.SaveStateWithBoundaryAsync(
+            _ =>
+            {
+                saveAttempted = true;
+                throw new UnauthorizedAccessException("Synthetic access denied while saving state.");
+            },
+            logger,
+            TimeSpan.FromSeconds(10),
+            CancellationToken.None,
+            (_, _) => Task.CompletedTask).GetAwaiter().GetResult();
+
+        Require(saveAttempted, "Worker state save boundary should attempt persistence.");
+        Require(!outcome.Saved, "Worker state save boundary should report failed save.");
+        Require(outcome.NextBackoff == TimeSpan.FromSeconds(20), "Worker state save boundary should increase backoff after failure.");
+        string log = File.ReadAllText(logPath);
+        Require(log.Contains("state.save.failed", StringComparison.Ordinal), "State save failure should be logged as a structured event.");
+        Require(log.Contains("STATE_SAVE_UNAUTHORIZED", StringComparison.Ordinal), "Unauthorized state save failure should get a specific error code.");
+        Require(!log.Contains("agentToken", StringComparison.OrdinalIgnoreCase), "State save failure log should not contain agent token material.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestStateSaveFailureBackoffPreventsAcceleratedLoop()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string logPath = Path.Combine(dir, "agent.log");
+        JsonlLogger logger = new(logPath);
+        List<TimeSpan> delays = new();
+
+        StateSaveOutcome first = Worker.SaveStateWithBoundaryAsync(
+            _ => throw new IOException("Synthetic transient IO failure."),
+            logger,
+            TimeSpan.FromSeconds(10),
+            CancellationToken.None,
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            }).GetAwaiter().GetResult();
+        StateSaveOutcome second = Worker.SaveStateWithBoundaryAsync(
+            _ => throw new IOException("Synthetic transient IO failure."),
+            logger,
+            first.NextBackoff,
+            CancellationToken.None,
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            }).GetAwaiter().GetResult();
+        StateSaveOutcome success = Worker.SaveStateWithBoundaryAsync(
+            _ => Task.CompletedTask,
+            logger,
+            second.NextBackoff,
+            CancellationToken.None,
+            (delay, _) =>
+            {
+                delays.Add(delay);
+                return Task.CompletedTask;
+            }).GetAwaiter().GetResult();
+
+        Require(delays.SequenceEqual(new[] { TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20) }), "Worker should delay between repeated state save failures.");
+        Require(first.NextBackoff == TimeSpan.FromSeconds(20), "First failed state save should double backoff.");
+        Require(second.NextBackoff == TimeSpan.FromSeconds(40), "Second failed state save should continue bounded backoff.");
+        Require(success.Saved, "Successful state save should report success.");
+        Require(success.NextBackoff == TimeSpan.FromSeconds(10), "Successful state save should reset backoff.");
+        string log = File.ReadAllText(logPath);
+        Require(log.Contains("STATE_SAVE_IO_FAILED", StringComparison.Ordinal), "IO state save failure should get a specific error code.");
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
 }
 
 static JobExecutionResult NewCompletedUpdateResult(string jobId)

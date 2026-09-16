@@ -10,6 +10,9 @@ namespace NightOwl.Agent.Windows;
 
 public sealed class Worker : BackgroundService
 {
+    private static readonly TimeSpan DefaultLoopDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan InitialStateSaveBackoff = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MaxStateSaveBackoff = TimeSpan.FromSeconds(60);
     private readonly ConfigService _configService;
     private readonly StateService _stateService;
     private readonly JsonlLogger _logger;
@@ -61,6 +64,7 @@ public sealed class Worker : BackgroundService
         await ConfirmPendingUpdateAsync(config, stoppingToken);
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
         await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
+        TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -102,8 +106,13 @@ public sealed class Worker : BackgroundService
             await _logger.LogAsync("service.loop.failed", ex.Message, BuildErrorData(ex), stoppingToken, "error");
         }
 
-            await _stateService.SaveAsync(config, state, stoppingToken);
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            StateSaveOutcome saveOutcome = await SaveStateWithBoundaryAsync(
+                token => _stateService.SaveAsync(config, state, token),
+                _logger,
+                stateSaveBackoff,
+                stoppingToken);
+            stateSaveBackoff = saveOutcome.NextBackoff;
+            await Task.Delay(saveOutcome.LoopDelay, stoppingToken);
         }
 
         await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None);
@@ -573,4 +582,52 @@ public sealed class Worker : BackgroundService
             exception = ex.ToString()
         };
     }
+
+    internal static async Task<StateSaveOutcome> SaveStateWithBoundaryAsync(
+        Func<CancellationToken, Task> saveAsync,
+        JsonlLogger logger,
+        TimeSpan currentBackoff,
+        CancellationToken ct,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+    {
+        try
+        {
+            await saveAsync(ct);
+            return new StateSaveOutcome(DefaultLoopDelay, InitialStateSaveBackoff, Saved: true);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            TimeSpan delay = currentBackoff <= TimeSpan.Zero ? InitialStateSaveBackoff : currentBackoff;
+            string errorCode = ex switch
+            {
+                UnauthorizedAccessException => "STATE_SAVE_UNAUTHORIZED",
+                IOException => "STATE_SAVE_IO_FAILED",
+                _ => "STATE_SAVE_FAILED"
+            };
+            try
+            {
+                await logger.LogAsync("state.save.failed", "Agent state persistence failed; worker will retry.", new
+                {
+                    error_code = errorCode,
+                    exception_type = ex.GetType().FullName,
+                    error_message = NightOwlSanitizer.SanitizeText(ex.Message).Value,
+                    retry_delay_seconds = Math.Round(delay.TotalSeconds, 3)
+                }, ct, "error");
+            }
+            catch (Exception logEx) when (logEx is not OperationCanceledException)
+            {
+                // State persistence failures must not terminate the worker if diagnostics cannot be written.
+            }
+
+            if (delayAsync is not null)
+            {
+                await delayAsync(delay, ct);
+            }
+
+            TimeSpan next = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, MaxStateSaveBackoff.TotalSeconds));
+            return new StateSaveOutcome(delayAsync is null ? delay : TimeSpan.Zero, next, Saved: false);
+        }
+    }
 }
+
+internal sealed record StateSaveOutcome(TimeSpan LoopDelay, TimeSpan NextBackoff, bool Saved);

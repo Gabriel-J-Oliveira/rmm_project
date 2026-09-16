@@ -142,6 +142,57 @@ try
     NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":2}");
     Require(File.ReadAllText(safeStorePath).Contains("\"value\":2", StringComparison.Ordinal), "Safe file store overwrite failed.");
     RequireNoSafeFileTemps(safeStorePath, "Safe file store overwrite should not leave temp files.");
+    int retryCount = 0;
+    NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":3}", null, new NightOwlFileStoreTestHooks
+    {
+        MaxAttempts = 3,
+        InitialRetryDelay = TimeSpan.Zero,
+        BeforeMove = (_, _, attempt) =>
+        {
+            if (attempt == 1)
+            {
+                throw new IOException("Synthetic transient replacement failure.");
+            }
+        },
+        OnRetry = (_, _, _) => retryCount++,
+        Delay = _ => { }
+    });
+    Require(retryCount == 1, "Safe file store should retry transient replacement failures.");
+    Require(File.ReadAllText(safeStorePath).Contains("\"value\":3", StringComparison.Ordinal), "Safe file store retry should eventually persist content.");
+    RequireNoSafeFileTemps(safeStorePath, "Safe file store retry success should not leave temp files.");
+
+    bool exhausted = false;
+    try
+    {
+        NightOwlFileStore.WriteAllText(safeStorePath, "{\"value\":4}", null, new NightOwlFileStoreTestHooks
+        {
+            MaxAttempts = 2,
+            InitialRetryDelay = TimeSpan.Zero,
+            BeforeMove = (_, _, _) => throw new UnauthorizedAccessException("Synthetic persistent access failure."),
+            Delay = _ => { }
+        });
+    }
+    catch (UnauthorizedAccessException)
+    {
+        exhausted = true;
+    }
+    Require(exhausted, "Safe file store should surface persistent transient failures after retries are exhausted.");
+    Require(File.ReadAllText(safeStorePath).Contains("\"value\":3", StringComparison.Ordinal), "Safe file store exhausted retry should preserve previous content.");
+    RequireNoSafeFileTemps(safeStorePath, "Safe file store exhausted retry should clean temp files.");
+
+    using CancellationTokenSource cancelled = new();
+    cancelled.Cancel();
+    bool cancelledWrite = false;
+    try
+    {
+        await NightOwlFileStore.WriteAllTextAsync(safeStorePath, "{\"value\":5}", null, cancelled.Token, new NightOwlFileStoreTestHooks());
+    }
+    catch (OperationCanceledException)
+    {
+        cancelledWrite = true;
+    }
+    Require(cancelledWrite, "Safe file store should respect cancellation before retrying writes.");
+    Require(File.ReadAllText(safeStorePath).Contains("\"value\":3", StringComparison.Ordinal), "Cancelled safe file store write should preserve previous content.");
     if (OperatingSystem.IsWindows())
     {
         File.SetAttributes(safeStorePath, File.GetAttributes(safeStorePath) | FileAttributes.ReadOnly);
@@ -159,7 +210,7 @@ try
             File.SetAttributes(safeStorePath, File.GetAttributes(safeStorePath) & ~FileAttributes.ReadOnly);
         }
         Require(failedOverReadOnly, "Safe file store should report overwrite failure for read-only destination.");
-        Require(File.ReadAllText(safeStorePath).Contains("\"value\":2", StringComparison.Ordinal), "Safe file store failure should preserve previous content.");
+        Require(File.ReadAllText(safeStorePath).Contains("\"value\":3", StringComparison.Ordinal), "Safe file store failure should preserve previous content.");
         RequireNoSafeFileTemps(safeStorePath, "Safe file store failure should clean temp files.");
     }
 
