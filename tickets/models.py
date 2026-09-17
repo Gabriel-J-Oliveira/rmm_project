@@ -160,6 +160,13 @@ class Ticket(models.Model):
     requester_department = models.CharField(max_length=150, blank=True)
     requester_role = models.CharField(max_length=150, blank=True)
     requester_is_partner = models.BooleanField(default=False)
+    requester_ad_user = models.ForeignKey(
+        'access_inventory.ADUser',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='desk_tickets',
+    )
     queue = models.CharField(max_length=150, blank=True, default='N1 - Atendimento')
     assigned_to = models.CharField(max_length=150, blank=True)
     endpoint = models.ForeignKey(AgentMachine, null=True, blank=True, on_delete=models.SET_NULL, related_name='tickets')

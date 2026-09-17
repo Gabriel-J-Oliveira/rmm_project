@@ -24,6 +24,7 @@
     const mergeDialog = document.querySelector('[data-merge-dialog]');
     const bulkDialog = document.querySelector('[data-bulk-confirm-dialog]');
     const ticketData = JSON.parse(document.getElementById('central-ticket-data')?.textContent || '[]');
+    const quickTicketPrefill = JSON.parse(document.getElementById('quick-ticket-prefill')?.textContent || 'null');
     const ticketById = new Map(ticketData.map((ticket) => [String(ticket.number), ticket]));
     let focusedTicketId = document.querySelector(`${rowSelector}.is-selected`)?.dataset.ticket || null;
     let selectedTicketId = focusedTicketId;
@@ -278,6 +279,7 @@
         quickTicketDrawer.classList.add('is-open');
         document.body.classList.add('drawer-open');
         restoreQuickDraft();
+        if (quickTicketPrefill?.requester_ad_user_id) applyQuickRequesterPrefill(quickTicketPrefill);
         updateQuickCritical();
         updateQuickRelated();
         quickTicketForm?.querySelector('[data-quick-requester-search]')?.focus();
@@ -373,10 +375,36 @@
         showToast('Solicitante adicionado ao rascunho.', 'success');
     }
 
+    function applyQuickRequesterPrefill(prefill) {
+        if (!prefill || !quickTicketDrawer) return;
+        selectedQuickRequester = {
+            name: prefill.name || '',
+            email: prefill.email || '',
+            sector: prefill.department || 'Triagem',
+            client: 'Active Directory',
+            vip: Boolean(prefill.is_partner),
+            adUserId: prefill.requester_ad_user_id || '',
+            username: prefill.username || '',
+        };
+        setQuickValue('requester_ad_user_id', selectedQuickRequester.adUserId);
+        setQuickValue('requester_username', selectedQuickRequester.username);
+        setQuickValue('requester', selectedQuickRequester.name);
+        if (prefill.endpoint_name) setQuickValue('endpoint', prefill.endpoint_name);
+        const summary = quickTicketDrawer.querySelector('[data-quick-requester-summary]');
+        if (summary) summary.hidden = false;
+        quickTicketDrawer.querySelector('[data-quick-requester-name]').textContent = selectedQuickRequester.name || '-';
+        quickTicketDrawer.querySelector('[data-quick-requester-meta]').textContent = `${selectedQuickRequester.email || 'Sem e-mail'} · ${selectedQuickRequester.sector} · Active Directory`;
+        const vip = quickTicketDrawer.querySelector('[data-quick-requester-vip]');
+        if (vip) vip.hidden = !selectedQuickRequester.vip;
+        updateQuickRelated();
+    }
+
     function pickQuickRequester(name) {
         const requester = QUICK_REQUESTERS.find((item) => item.name === name);
         if (!requester) return;
         selectedQuickRequester = requester;
+        setQuickValue('requester_ad_user_id', '');
+        setQuickValue('requester_username', requester.username || '');
         setQuickValue('requester', requester.name);
         const summary = quickTicketDrawer?.querySelector('[data-quick-requester-summary]');
         if (summary) summary.hidden = false;
@@ -766,6 +794,8 @@
                     ...localPayload,
                     mode,
                     requester_email: selectedQuickRequester?.email || '',
+                    requester_username: selectedQuickRequester?.username || quickValue('requester_username'),
+                    requester_ad_user_id: selectedQuickRequester?.adUserId || quickValue('requester_ad_user_id'),
                     requester_department: selectedQuickRequester?.sector || localPayload.sector,
                     requester_is_partner: Boolean(selectedQuickRequester?.vip),
                     endpoint_name: selectedQuickEndpoint?.hostname || quickValue('endpoint'),
@@ -2371,6 +2401,9 @@
     if (focusedTicketId) {
         focusTicketRow(focusedTicketId, { scroll: false, select: false });
         selectTicketForPreview(focusedTicketId);
+    }
+    if (new URLSearchParams(window.location.search).get('new') === '1' && quickTicketPrefill?.requester_ad_user_id) {
+        setTimeout(() => openQuickTicketDrawer(), 120);
     }
     setTimeout(() => {
         const liveRow = rows().find((row) => row.classList.contains('is-rmm')) || rows()[0];

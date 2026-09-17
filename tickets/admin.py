@@ -98,6 +98,7 @@ class TicketAdmin(admin.ModelAdmin):
         'priority',
         'category',
         'requester_name',
+        'requester_ad_user',
         'queue',
         'sla',
         'due_at',
@@ -113,6 +114,7 @@ class TicketAdmin(admin.ModelAdmin):
         'requester_name',
         'requester_email',
         'requester_username',
+        'requester_ad_user__sam_account_name',
         'assigned_to',
         'endpoint__hostname',
     )

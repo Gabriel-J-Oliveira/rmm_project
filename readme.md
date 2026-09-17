@@ -42,6 +42,8 @@ As rotas do módulo estão em `tickets/urls.py`.
 Principais telas:
 
 - `/tickets/` e `/tickets/central/`: Central de Atendimento.
+- `/tickets/users/`: área de usuários do Desk baseada em identidades do AD.
+- `/tickets/users/<id>/`: perfil operacional do usuário, chamados e endpoints associados.
 - `/tickets/new/`: Novo registro avançado.
 - `/tickets/<numero>/`: Detalhe do chamado.
 - `/tickets/dashboard/`: Dashboard do Desk.
@@ -74,6 +76,7 @@ Campos importantes:
 - prioridade;
 - categoria;
 - solicitante;
+- vínculo opcional com `access_inventory.ADUser` em `requester_ad_user`;
 - fila;
 - responsável;
 - endpoint/RMM relacionado;
@@ -87,6 +90,39 @@ O `save()` do Ticket:
 - eleva prioridade para crítica quando o solicitante é sócio/VIP;
 - preenche timestamps operacionais;
 - calcula `due_at` quando há SLA.
+
+## Área de usuários do Desk
+
+O primeiro MVP da área de usuários conecta a Desk ao inventário de identidades do `access_inventory`.
+
+Fonte primária:
+
+- `access_inventory.ADUser`
+
+Funcionalidades atuais:
+
+- lista real de usuários importados do AD;
+- busca por nome, usuário de rede, UPN ou e-mail;
+- filtros por ativo/inativo, chamados abertos, endpoint associado e OU;
+- perfil do usuário com resumo, chamados reais e histórico de endpoints;
+- abertura de chamado a partir do perfil usando o drawer rápido da Central;
+- persistência de `requester_ad_user` em chamados criados para usuário AD conhecido;
+- comando de backfill `python manage.py link_ticket_requesters` com `--apply` opcional.
+
+Regras de associação:
+
+1. Usa `Ticket.requester_ad_user` quando já existir.
+2. Usa `requester_username` contra `ADUser.sam_account_name` ou UPN.
+3. Usa `requester_email` contra `ADUser.email`.
+4. Nunca associa automaticamente por nome de exibição.
+
+Associação de endpoints:
+
+- compara identidades normalizadas com `AgentMachine.last_logged_user`;
+- compara identidades normalizadas com `InventorySnapshot.logged_user`;
+- prefere endpoint online;
+- entre equivalentes, usa o mais recente por `last_seen_at`/inventário;
+- quando há múltiplos endpoints online, o perfil sinaliza o risco operacional.
 
 ### TicketComment
 
@@ -456,4 +492,3 @@ Próximas fases naturais:
 4. Consolidar GMUD real.
 5. Implementar automações reais por evento/SLA/template.
 6. Integrar ações RMM reais com agente/endpoints.
-

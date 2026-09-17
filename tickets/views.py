@@ -2,9 +2,10 @@ import json
 from urllib.parse import urlencode
 
 from django.contrib import messages
+from django.core.paginator import Paginator
 from django.core.exceptions import PermissionDenied
 from django.db import OperationalError, ProgrammingError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -12,6 +13,8 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from config.authz import is_nightowl_technical_user
+
+from access_inventory.models import ADUser
 
 from .mock_data import CATEGORIES, MOCK_TICKETS, PRIORITY_LABELS, STATUS_LABELS, filter_tickets, get_ticket, summary_for
 from .models import DeskQueue, DeskSLA, DeskTemplate, Ticket, TicketAttachment, TicketCategory, TicketComment
@@ -48,6 +51,17 @@ from .services.ticket_workflow import (
     requester_reopen,
     requester_reply,
     transition_ticket,
+)
+from .services.user_directory import (
+    OPEN_TICKET_STATUSES,
+    build_recent_ticket_rows,
+    endpoint_context_for_ad_user,
+    endpoint_context_for_ad_users,
+    find_ad_user_for_ticket,
+    requester_prefill_from_ad_user,
+    summarize_ticket_counts,
+    ticket_queryset_for_ad_user,
+    user_groups_for_profile,
 )
 
 
@@ -384,6 +398,12 @@ def _central_context(request, active_section='central', assigned_to=None):
     current_summary = ticket_summary(tickets) if using_persisted_data else summary_for(tickets)
     global_summary = ticket_summary(all_tickets) if using_persisted_data else summary_for(all_tickets)
     unassigned_count = len([ticket for ticket in all_tickets if not ticket.assigned_to])
+    quick_prefill_user = None
+    prefill_user_id = str(request.GET.get('requester_ad_user') or '').strip()
+    if prefill_user_id:
+        ad_user = ADUser.objects.select_related('ou').filter(pk=prefill_user_id).first()
+        if ad_user:
+            quick_prefill_user = requester_prefill_from_ad_user(ad_user)
     rmm_count = len([
         ticket for ticket in all_tickets
         if getattr(ticket, 'source', '') in {Ticket.SOURCE_RMM_ALERT, Ticket.SOURCE_MONITORING}
@@ -441,6 +461,7 @@ def _central_context(request, active_section='central', assigned_to=None):
         'current_user_aliases': current_user_aliases,
         'page_title': 'Central de Atendimento',
         'page_subtitle': 'Trabalhe a fila, acompanhe o kanban e abra detalhes sem perder o contexto.',
+        'quick_ticket_prefill': quick_prefill_user,
     }
     return context
 
@@ -457,6 +478,123 @@ def ticket_my(request):
     context['page_subtitle'] = 'Atendimentos atribuidos ao usuario atual dentro da Central.'
     context['is_my_queue'] = True
     return render(request, 'tickets/central.html', context)
+
+
+def _users_queryset_from_request(request):
+    queryset = ADUser.objects.select_related('ou').order_by('display_name', 'sam_account_name')
+    query = str(request.GET.get('q') or '').strip()
+    if query:
+        queryset = queryset.filter(
+            Q(display_name__icontains=query)
+            | Q(sam_account_name__icontains=query)
+            | Q(user_principal_name__icontains=query)
+            | Q(email__icontains=query)
+        )
+    state = str(request.GET.get('state') or 'all').strip()
+    if state == 'active':
+        queryset = queryset.filter(enabled=True)
+    elif state == 'inactive':
+        queryset = queryset.filter(enabled=False)
+    ou = str(request.GET.get('ou') or '').strip()
+    if ou:
+        queryset = queryset.filter(ou__name=ou)
+    return queryset
+
+
+def ticket_users(request):
+    _require_technical_access(request)
+    base_queryset = _users_queryset_from_request(request)
+    users = list(base_queryset)
+    directory_users = list(ADUser.objects.only(
+        'id', 'sam_account_name', 'user_principal_name', 'email'
+    ))
+    counts = summarize_ticket_counts(users, directory_users=directory_users)
+    endpoint_map = endpoint_context_for_ad_users(users, directory_users=directory_users)
+    rows = []
+    filter_state = str(request.GET.get('state') or 'all').strip()
+    for user in users:
+        count = counts.get(user.pk, {})
+        endpoints = endpoint_map.get(user.pk, {})
+        current_endpoint = endpoints.get('current')
+        row = {
+            'user': user,
+            'ou_name': user.ou.name if user.ou else '',
+            'open_count': count.get('open', 0),
+            'total_count': count.get('total', 0),
+            'current_endpoint': current_endpoint,
+            'last_activity': count.get('last_activity') or (current_endpoint or {}).get('last_usage_at'),
+        }
+        if filter_state == 'with-open-tickets' and not row['open_count']:
+            continue
+        if filter_state == 'with-endpoint' and not row['current_endpoint']:
+            continue
+        rows.append(row)
+
+    page = Paginator(rows, 25).get_page(request.GET.get('page'))
+
+    ou_options = (
+        ADUser.objects.select_related('ou')
+        .filter(ou__isnull=False)
+        .values_list('ou__name', flat=True)
+        .distinct()
+        .order_by('ou__name')
+    )
+    context = {
+        **_base_context('users'),
+        'page_title': 'Usuários',
+        'page_subtitle': 'Identidades do AD, chamados e endpoints usados no NightOwl Desk.',
+        'user_rows': page.object_list,
+        'page_obj': page,
+        'query': request.GET.get('q', ''),
+        'state': filter_state,
+        'ou_filter': request.GET.get('ou', ''),
+        'ou_options': ou_options,
+        'total_users_count': ADUser.objects.count(),
+        'active_users_count': ADUser.objects.filter(enabled=True).count(),
+    }
+    return render(request, 'tickets/users.html', context)
+
+
+def ticket_user_detail(request, pk):
+    _require_technical_access(request)
+    ad_user = get_object_or_404(ADUser.objects.select_related('ou'), pk=pk)
+    tickets = ticket_queryset_for_ad_user(ad_user).order_by('-updated_at')
+    status_filter = str(request.GET.get('status') or '').strip()
+    priority_filter = str(request.GET.get('priority') or '').strip()
+    if status_filter:
+        tickets = tickets.filter(status=status_filter)
+    if priority_filter:
+        tickets = tickets.filter(priority=priority_filter)
+
+    ticket_rows = list(tickets[:50])
+    ticket_counts = ticket_queryset_for_ad_user(ad_user).aggregate(
+        total_count=Count('id'),
+        open_count=Count('id', filter=Q(status__in=OPEN_TICKET_STATUSES)),
+        resolved_count=Count('id', filter=Q(status=Ticket.STATUS_RESOLVED)),
+    )
+    all_tickets = list(ticket_queryset_for_ad_user(ad_user).order_by('-updated_at')[:50])
+    endpoints = endpoint_context_for_ad_user(ad_user)
+    prefill = requester_prefill_from_ad_user(ad_user)
+    current_endpoint = endpoints['current']
+    if current_endpoint:
+        prefill['endpoint_name'] = current_endpoint['hostname']
+    context = {
+        **_base_context('users'),
+        'ad_user': ad_user,
+        'ou_name': ad_user.ou.name if ad_user.ou else '',
+        'open_count': ticket_counts['open_count'],
+        'resolved_count': ticket_counts['resolved_count'],
+        'total_count': ticket_counts['total_count'],
+        'last_activity': all_tickets[0].updated_at if all_tickets else (current_endpoint or {}).get('last_usage_at'),
+        'endpoints': endpoints,
+        'recent_tickets': all_tickets[:5],
+        'ticket_rows': ticket_rows,
+        'ad_groups': user_groups_for_profile(ad_user),
+        'status_filter': status_filter,
+        'priority_filter': priority_filter,
+        'quick_ticket_prefill': prefill,
+    }
+    return render(request, 'tickets/user_detail.html', context)
 
 
 def ticket_create(request):
@@ -656,6 +794,13 @@ def ticket_api_create(request):
     if errors:
         return JsonResponse({'ok': False, 'errors': errors}, status=400)
 
+    requester_ad_user = None
+    requester_ad_user_id = str(payload.get('requester_ad_user_id') or '').strip()
+    if requester_ad_user_id:
+        requester_ad_user = ADUser.objects.select_related('ou').filter(pk=requester_ad_user_id).first()
+        if not requester_ad_user:
+            return JsonResponse({'ok': False, 'errors': {'requester': 'Solicitante AD invalido.'}}, status=400)
+
     category, _ = TicketCategory.objects.select_related('default_queue', 'default_sla').get_or_create(
         name=str(payload['category']).strip(),
         defaults={'description': 'Categoria criada pelo Backend MVP 1.', 'is_active': True},
@@ -668,14 +813,32 @@ def ticket_api_create(request):
         queue = category.default_queue.name if category.default_queue else 'N1 - Atendimento'
     mode = payload.get('mode') or 'create'
     actor = _request_actor(request)
+    requester_snapshot = {
+        'name': str(payload['requester']).strip(),
+        'email': str(payload.get('requester_email') or '').strip(),
+        'username': str(payload.get('requester_username') or '').strip(),
+        'department': str(payload.get('requester_department') or 'Triagem').strip(),
+        'is_partner': bool(payload.get('requester_is_partner')),
+    }
+    if requester_ad_user:
+        # A linked directory identity is authoritative; never trust this flag from the browser.
+        requester_snapshot['is_partner'] = requester_prefill_from_ad_user(requester_ad_user)['is_partner']
+        requester_snapshot.update({
+            'name': requester_ad_user.display_name or requester_ad_user.sam_account_name,
+            'email': requester_ad_user.email or '',
+            'username': requester_ad_user.sam_account_name or '',
+            'department': requester_ad_user.ou.name if requester_ad_user.ou else requester_snapshot['department'],
+        })
     with transaction.atomic():
         ticket = Ticket.objects.create(
             title=str(payload['title']).strip(),
             description=str(payload['description']).strip(),
-            requester_name=str(payload['requester']).strip(),
-            requester_email=str(payload.get('requester_email') or '').strip(),
-            requester_department=str(payload.get('requester_department') or 'Triagem').strip(),
-            requester_is_partner=bool(payload.get('requester_is_partner')),
+            requester_name=requester_snapshot['name'],
+            requester_email=requester_snapshot['email'],
+            requester_username=requester_snapshot['username'],
+            requester_department=requester_snapshot['department'],
+            requester_is_partner=requester_snapshot['is_partner'],
+            requester_ad_user=requester_ad_user,
             status=Ticket.STATUS_NEW,
             priority=priority,
             category=category,

@@ -42,6 +42,7 @@
     {% include "tickets/_central_bulk_modals.html" %}
     {% include "tickets/_central_toasts.html" %}
     {{ central_ticket_payloads|json_script:"central-ticket-data" }}
+    {{ quick_ticket_prefill|json_script:"quick-ticket-prefill" }}
     {% include "tickets/_central_scripts.html" %}
 </section>
 {% endblock %}

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Usuários - NightOwl Desk{% endblock %}
+{% block body_class %}page-tickets{% endblock %}
+
+{% block content %}
+<section class="desk-shell nw-users-shell">
+    <header class="desk-central-header">
+        <div>
+            <span class="desk-eyebrow">NightOwl Desk</span>
+            <h1>Usuários</h1>
+            <p>Identidades do AD, chamados e endpoints associados por usuário de rede, UPN ou e-mail.</p>
+        </div>
+        <div class="desk-header-actions">
+            <span class="nw-users-chip">{{ total_users_count }} usuários</span>
+            <span class="nw-users-chip">{{ active_users_count }} ativos</span>
+        </div>
+    </header>
+
+    {% include "tickets/_desk_nav.html" %}
+
+    <section class="nw-users-toolbar" aria-label="Filtros de usuários">
+        <form method="get" class="nw-users-search">
+            <input type="search" name="q" value="{{ query }}" placeholder="Buscar por nome, usuário, UPN ou e-mail...">
+            <select name="ou" aria-label="Filtrar por OU">
+                <option value="">Todas as OUs</option>
+                {% for ou in ou_options %}
+                    <option value="{{ ou }}" {% if ou_filter == ou %}selected{% endif %}>{{ ou }}</option>
+                {% endfor %}
+            </select>
+            <button class="desk-btn desk-btn-primary" type="submit"><i data-lucide="search"></i>Buscar</button>
+        </form>
+        <nav class="nw-users-filter-chips" aria-label="Estados">
+            <a class="{% if state == 'all' %}is-active{% endif %}" href="?{% if query %}q={{ query|urlencode }}&{% endif %}{% if ou_filter %}ou={{ ou_filter|urlencode }}&{% endif %}state=all">Todos</a>
+            <a class="{% if state == 'active' %}is-active{% endif %}" href="?{% if query %}q={{ query|urlencode }}&{% endif %}{% if ou_filter %}ou={{ ou_filter|urlencode }}&{% endif %}state=active">Ativos</a>
+            <a class="{% if state == 'inactive' %}is-active{% endif %}" href="?{% if query %}q={{ query|urlencode }}&{% endif %}{% if ou_filter %}ou={{ ou_filter|urlencode }}&{% endif %}state=inactive">Inativos</a>
+            <a class="{% if state == 'with-open-tickets' %}is-active{% endif %}" href="?{% if query %}q={{ query|urlencode }}&{% endif %}{% if ou_filter %}ou={{ ou_filter|urlencode }}&{% endif %}state=with-open-tickets">Com chamados abertos</a>
+            <a class="{% if state == 'with-endpoint' %}is-active{% endif %}" href="?{% if query %}q={{ query|urlencode }}&{% endif %}{% if ou_filter %}ou={{ ou_filter|urlencode }}&{% endif %}state=with-endpoint">Com endpoint</a>
+        </nav>
+    </section>
+
+    <section class="nw-users-card">
+        {% if user_rows %}
+            <div class="nw-users-table-wrap">
+                <table class="nw-users-table">
+                    <thead>
+                        <tr>
+                            <th>Usuário</th>
+                            <th>Rede</th>
+                            <th>E-mail</th>
+                            <th>OU / Setor</th>
+                            <th>AD</th>
+                            <th>Abertos</th>
+                            <th>Total</th>
+                            <th>Endpoint atual / último</th>
+                            <th>Última atividade</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in user_rows %}
+                            <tr onclick="window.location.href='{% url 'tickets:user-detail' row.user.pk %}'">
+                                <td>
+                                    <strong>{{ row.user.display_name|default:row.user.sam_account_name }}</strong>
+                                    <small>{{ row.user.user_principal_name|default:"UPN não informado" }}</small>
+                                </td>
+                                <td>{{ row.user.sam_account_name }}</td>
+                                <td>{{ row.user.email|default:"—" }}</td>
+                                <td>{{ row.ou_name|default:"—" }}</td>
+                                <td><span class="nw-users-status {% if row.user.enabled %}is-active{% else %}is-inactive{% endif %}">{% if row.user.enabled %}Ativo{% else %}Inativo{% endif %}</span></td>
+                                <td>{{ row.open_count }}</td>
+                                <td>{{ row.total_count }}</td>
+                                <td>
+                                    {% if row.current_endpoint %}
+                                        <strong>{{ row.current_endpoint.hostname }}</strong>
+                                        <small>{{ row.current_endpoint.status }}{% if row.current_endpoint.os %} · {{ row.current_endpoint.os }}{% endif %}</small>
+                                    {% else %}
+                                        <span class="nw-users-muted">Sem endpoint associado</span>
+                                    {% endif %}
+                                </td>
+                                <td>{% if row.last_activity %}{{ row.last_activity|timesince }} atrás{% else %}—{% endif %}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <article class="nw-users-empty">
+                <i data-lucide="search-x"></i>
+                <strong>Nenhum usuário encontrado.</strong>
+                <p>Ajuste a busca, OU ou filtros para consultar identidades importadas do AD.</p>
+            </article>
+        {% endif %}
+    </section>
+
+    {% if page_obj.paginator.num_pages > 1 %}
+        <nav class="nw-users-pagination" aria-label="Paginação de usuários">
+            {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}">Anterior</a>{% endif %}
+            <span>Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</span>
+            {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}">Próxima</a>{% endif %}
+        </nav>
+    {% endif %}
+</section>
+{% endblock %}
