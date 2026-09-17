@@ -212,6 +212,158 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertIsNone(match.user)
         self.assertEqual(len(match.candidates), 2)
 
+    def test_linked_fk_is_authoritative_over_conflicting_textual_identity(self):
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket
+        from tickets.services.user_directory import summarize_ticket_counts, ticket_queryset_for_ad_user
+
+        other = ADUser.objects.create(
+            sid='S-1-5-21-FK-OTHER',
+            sam_account_name='other.user',
+            display_name='Other User',
+            user_principal_name='other.user@nalen.local',
+            email='other.user@nalen.local',
+            distinguished_name='CN=Other User,OU=Financeiro,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        ticket = Ticket.objects.create(
+            title='FK autoritativa',
+            description='x',
+            requester_ad_user=self.ad_user,
+            requester_username=other.sam_account_name,
+            requester_email=other.email,
+        )
+
+        counts = summarize_ticket_counts([self.ad_user, other])
+
+        self.assertEqual(counts[self.ad_user.pk]['total'], 1)
+        self.assertEqual(counts[other.pk]['total'], 0)
+        self.assertIn(ticket, ticket_queryset_for_ad_user(self.ad_user))
+        self.assertNotIn(ticket, ticket_queryset_for_ad_user(other))
+
+    def test_linked_fk_outside_filtered_users_has_no_historical_fallback(self):
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket
+        from tickets.services.user_directory import summarize_ticket_counts
+
+        other = ADUser.objects.create(
+            sid='S-1-5-21-FK-FILTERED',
+            sam_account_name='filtered.user',
+            display_name='Filtered User',
+            user_principal_name='filtered.user@nalen.local',
+            email='filtered.user@nalen.local',
+            distinguished_name='CN=Filtered User,OU=Financeiro,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        Ticket.objects.create(
+            title='FK fora do filtro',
+            description='x',
+            requester_ad_user=other,
+            requester_username=self.ad_user.sam_account_name,
+        )
+
+        counts = summarize_ticket_counts([self.ad_user])
+
+        self.assertEqual(counts[self.ad_user.pk]['total'], 0)
+
+    def test_ambiguity_is_global_even_when_search_returns_one_user(self):
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket
+
+        ADUser.objects.create(
+            sid='S-1-5-21-AMBIG-SEARCH',
+            sam_account_name='ambiguous.search',
+            display_name='Hidden Ambiguous User',
+            user_principal_name='ambiguous.search@other.local',
+            email='ambiguous.search@other.local',
+            distinguished_name='CN=Hidden Ambiguous User,OU=Financeiro,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        visible = ADUser.objects.create(
+            sid='S-1-5-21-AMBIG-VISIBLE',
+            sam_account_name='ambiguous.search',
+            display_name='Visible Ambiguous User',
+            user_principal_name='ambiguous.search@nalen.local',
+            email='ambiguous.search@nalen.local',
+            distinguished_name='CN=Visible Ambiguous User,OU=Financeiro,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        Ticket.objects.create(
+            title='Chamado ambíguo global',
+            description='x',
+            requester_username='ambiguous.search',
+            status=Ticket.STATUS_NEW,
+        )
+
+        response = self.client.get(
+            reverse('tickets:users'),
+            {'q': 'Visible Ambiguous User', 'state': 'with-open-tickets'},
+            HTTP_HOST=self.host,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].paginator.count, 0)
+        self.assertEqual(response.context['user_rows'], [])
+
+    def test_historical_snapshot_keeps_machine_without_current_logged_user(self):
+        from agents.models import AgentMachine, InventorySnapshot
+        from tickets.services.user_directory import endpoint_context_for_ad_user
+
+        machine, _ = AgentMachine.create_with_token(
+            hostname='HISTORICAL-ENDPOINT',
+            domain='nalen.local',
+            status=AgentMachine.STATUS_OFFLINE,
+            last_seen_at=timezone.now() - timezone.timedelta(days=2),
+            last_logged_user='',
+        )
+        InventorySnapshot.objects.create(
+            machine=machine,
+            collected_at=timezone.now() - timezone.timedelta(days=2),
+            received_at=timezone.now() - timezone.timedelta(days=2),
+            hostname=machine.hostname,
+            logged_user=self.ad_user.user_principal_name,
+        )
+
+        context = endpoint_context_for_ad_user(self.ad_user)
+
+        self.assertEqual(context['history_count'], 1)
+        self.assertEqual(context['current']['hostname'], machine.hostname)
+
+    def test_exact_upn_wins_when_local_name_is_ambiguous(self):
+        from access_inventory.models import ADUser
+        from agents.models import AgentMachine
+        from tickets.services.user_directory import endpoint_context_for_ad_user
+
+        other = ADUser.objects.create(
+            sid='S-1-5-21-UPN-OTHER',
+            sam_account_name=self.ad_user.sam_account_name,
+            display_name='Mariana Outro Dominio',
+            user_principal_name='mariana.souza@other.local',
+            email='mariana.souza@other.local',
+            distinguished_name='CN=Mariana Outro,OU=Financeiro,DC=other,DC=local',
+            ou=self.ou,
+        )
+        exact, _ = AgentMachine.create_with_token(
+            hostname='UPN-EXACT',
+            domain='nalen.local',
+            status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now(),
+            last_logged_user=self.ad_user.user_principal_name,
+        )
+        local, _ = AgentMachine.create_with_token(
+            hostname='UPN-LOCAL-AMBIGUOUS',
+            domain='other.local',
+            status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now(),
+            last_logged_user='mariana.souza',
+        )
+
+        context = endpoint_context_for_ad_user(self.ad_user)
+
+        self.assertEqual(context['current']['hostname'], exact.hostname)
+        self.assertEqual([item['hostname'] for item in context['history']], [exact.hostname])
+        self.assertNotEqual(context['current']['hostname'], local.hostname)
+
     def test_users_list_and_profile_render_real_ad_data(self):
         from tickets.models import Ticket
 

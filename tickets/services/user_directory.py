@@ -96,49 +96,90 @@ def find_ad_user_for_ticket(ticket: Ticket) -> DirectoryMatch:
     return DirectoryMatch(None, 'no_match')
 
 
+def _identity_owner_maps(users):
+    local_owners = defaultdict(set)
+    full_owners = defaultdict(set)
+    for user in users:
+        for value in ad_user_identity_keys(user):
+            local_owners[normalize_identity(value)].add(user.pk)
+        for value in (user.user_principal_name, user.email):
+            key = str(value or '').strip().casefold()
+            if key and ('@' in key or '\\' in key):
+                full_owners[key].add(user.pk)
+    return (
+        {key: next(iter(ids)) for key, ids in local_owners.items() if key and len(ids) == 1},
+        {key: next(iter(ids)) for key, ids in full_owners.items() if len(ids) == 1},
+    )
+
+
+def _directory_users():
+    return list(ADUser.objects.only('id', 'sam_account_name', 'user_principal_name', 'email'))
+
+
+def _resolve_identity_owner(values, local_owners, full_owners):
+    full_matches = {
+        full_owners.get(str(value or '').strip().casefold())
+        for value in values
+        if '@' in str(value or '') or '\\' in str(value or '')
+    }
+    full_matches.discard(None)
+    if len(full_matches) == 1:
+        return next(iter(full_matches))
+    if full_matches:
+        return None
+    local_matches = {local_owners.get(normalize_identity(value)) for value in values}
+    local_matches.discard(None)
+    return next(iter(local_matches)) if len(local_matches) == 1 else None
+
+
 def ticket_queryset_for_ad_user(user: ADUser):
+    local_owners, full_owners = _identity_owner_maps(_directory_users())
+    local_keys = {
+        normalize_identity(value)
+        for value in ad_user_identity_keys(user)
+        if local_owners.get(normalize_identity(value)) == user.pk
+    }
+    full_keys = {
+        str(value or '').strip().casefold()
+        for value in (user.user_principal_name, user.email)
+        if full_owners.get(str(value or '').strip().casefold()) == user.pk
+    }
+    historical = Q()
+    for key in full_keys:
+        historical |= Q(requester_username__iexact=key) | Q(requester_email__iexact=key)
+    for key in local_keys:
+        historical |= Q(requester_username__iexact=key) | Q(requester_username__iendswith=f'\\{key}')
+        historical |= Q(requester_email__iexact=key)
     query = Q(requester_ad_user=user)
-    keys = ad_user_identity_keys(user)
-    email = normalized_email(user.email)
-    username_query = Q()
-    for key in keys:
-        username_query |= Q(requester_username__iexact=key)
-    if email:
-        username_query |= Q(requester_email__iexact=email)
-    if username_query:
-        query |= username_query
+    if historical:
+        query |= Q(requester_ad_user__isnull=True) & historical
     return Ticket.objects.select_related('category', 'endpoint', 'sla', 'requester_ad_user').filter(query).distinct()
 
 
-def _unique_identity_owner_map(users):
-    owners = defaultdict(set)
-    for user in users:
-        for key in ad_user_identity_keys(user):
-            owners[key].add(user.pk)
-    return {key: next(iter(user_ids)) for key, user_ids in owners.items() if len(user_ids) == 1}
-
-
-def summarize_ticket_counts(users):
+def summarize_ticket_counts(users, directory_users=None):
     """Resolve ticket totals for a user collection with one ticket query."""
     users = list(users)
     counters = {user.pk: {'total': 0, 'open': 0, 'last_activity': None} for user in users}
     if not users:
         return counters
 
-    owner_by_key = _unique_identity_owner_map(users)
+    directory_users = list(directory_users) if directory_users is not None else _directory_users()
+    local_owners, full_owners = _identity_owner_maps(directory_users)
     # The normalized identity may be embedded in DOMAIN\\user or a UPN, so the
     # batch query intentionally fetches only the small projection needed below.
     for ticket in Ticket.objects.values(
         'requester_ad_user_id', 'requester_username', 'requester_email', 'status', 'updated_at'
     ):
         user_id = ticket['requester_ad_user_id']
-        if user_id not in counters:
-            candidates = {
-                owner_by_key.get(key)
-                for key in ticket_identity_keys_from_values(ticket)
-                if owner_by_key.get(key)
-            }
-            user_id = next(iter(candidates)) if len(candidates) == 1 else None
+        if user_id is not None:
+            if user_id not in counters:
+                continue
+        elif user_id not in counters:
+            user_id = _resolve_identity_owner(
+                {ticket.get('requester_username'), ticket.get('requester_email')},
+                local_owners,
+                full_owners,
+            )
         if user_id not in counters:
             continue
         counters[user_id]['total'] += 1
@@ -181,22 +222,25 @@ def _empty_endpoint_context():
     return {'current': None, 'online': [], 'multiple_online': False, 'history': [], 'history_count': 0}
 
 
-def endpoint_context_for_ad_users(users):
+def endpoint_context_for_ad_users(users, directory_users=None):
     """Build endpoint context for many AD users with bounded query count."""
     users = list(users)
     contexts = {user.pk: _empty_endpoint_context() for user in users}
     if not users:
         return contexts
 
-    owner_by_key = _unique_identity_owner_map(users)
+    directory_users = list(directory_users) if directory_users is not None else _directory_users()
+    local_owners, full_owners = _identity_owner_maps(directory_users)
     machines = list(
-        AgentMachine.objects.exclude(last_logged_user='').only(
+        AgentMachine.objects.only(
             'id', 'hostname', 'status', 'os_name', 'last_ip', 'last_seen_at', 'last_logged_user'
         )
     )
     machine_owners = {}
     for machine in machines:
-        owner_id = owner_by_key.get(normalize_identity(machine.last_logged_user))
+        owner_id = _resolve_identity_owner(
+            {machine.last_logged_user}, local_owners, full_owners
+        )
         if owner_id:
             machine_owners[machine.pk] = owner_id
 
@@ -206,7 +250,9 @@ def endpoint_context_for_ad_users(users):
     first_seen = {}
     last_seen = {}
     for snapshot in InventorySnapshot.objects.exclude(logged_user='').values('machine_id', 'logged_user', 'received_at'):
-        owner_id = owner_by_key.get(normalize_identity(snapshot['logged_user']))
+        owner_id = _resolve_identity_owner(
+            {snapshot['logged_user']}, local_owners, full_owners
+        )
         if not owner_id:
             continue
         machine_id = snapshot['machine_id']

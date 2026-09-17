@@ -505,8 +505,11 @@ def ticket_users(request):
     _require_technical_access(request)
     base_queryset = _users_queryset_from_request(request)
     users = list(base_queryset)
-    counts = summarize_ticket_counts(users)
-    endpoint_map = endpoint_context_for_ad_users(users)
+    directory_users = list(ADUser.objects.only(
+        'id', 'sam_account_name', 'user_principal_name', 'email'
+    ))
+    counts = summarize_ticket_counts(users, directory_users=directory_users)
+    endpoint_map = endpoint_context_for_ad_users(users, directory_users=directory_users)
     rows = []
     filter_state = str(request.GET.get('state') or 'all').strip()
     for user in users:
