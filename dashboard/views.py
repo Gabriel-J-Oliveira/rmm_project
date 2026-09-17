@@ -2305,11 +2305,15 @@ def alert_comment(request, pk):
 
 
 def endpoint_list(request):
+    from .fleet_views import authorized
+    fleet_context = {'can_bulk_policy': authorized(request, 'agents.change_agentmachine'),
+                     'fleet_groups': AgentReleaseGroup.objects.all()}
     if request.GET.get('mock') == '1' or not AgentMachine.objects.exists():
         rows = mock_endpoint_rows()
         filters = endpoint_filters_from_request(request)
         filtered_rows = filter_endpoint_rows(rows, filters)
         context = {
+            **fleet_context,
             'active_nav': 'endpoints',
             'rows': filtered_rows,
             'filters': filters,
@@ -2326,6 +2330,7 @@ def endpoint_list(request):
     filtered_rows = filter_endpoint_rows(rows, filters)
 
     context = {
+        **fleet_context,
         'active_nav': 'endpoints',
         'rows': filtered_rows,
         'filters': filters,
@@ -4134,12 +4139,15 @@ def endpoint_job_mark_failed(request, pk, job_id):
 
 
 @require_POST
+@transaction.atomic
 def endpoint_update_policy_update(request, pk):
     if not is_nightowl_technical_user(request.user):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para alterar politica de update.'}, status=403)
     endpoint = resolve_agent_endpoint(pk)
     if endpoint is None:
         raise Http404
+
+    endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint.pk)
 
     channel_before = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     rollout_before = None
@@ -4317,6 +4325,7 @@ def agent_releases(request):
         'dashboard/agent_releases.html',
         {
             'active_nav': 'agent_releases',
+            'can_rollout_preview': request.user.is_active and request.user.has_perm('agents.view_agent_release_rollout'),
             'releases': rows,
             'groups': groups,
             'channel_choices': AgentRelease.CHANNEL_CHOICES,

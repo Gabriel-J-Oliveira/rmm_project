@@ -1,0 +1,17 @@
+<link rel="stylesheet" href="/static/css/fleet_policy.css">
+<section class="fleet-preview" data-fleet-preview>
+    <header class="panel-header"><h2><i data-lucide="scan-search"></i>Rollout Preview</h2></header>
+    <form class="release-grid-form" data-fleet-preview-form>
+        {% csrf_token %}
+        <label>Release<select name="release_id" required>{% for row in releases %}<option value="{{ row.release.id }}">{{ row.release.version }} · {{ row.release.channel }} · {{ row.release.status }}</option>{% endfor %}</select></label>
+        <label>Grupos-alvo<select name="target_group_ids" multiple>{% for group in groups %}<option value="{{ group.id }}">{{ group.name }}</option>{% endfor %}</select></label>
+        <label>Heartbeat recente (segundos)<input type="number" name="freshness_seconds" value="900" min="60" max="3600" required></label>
+        <button type="submit"><i data-lucide="refresh-cw"></i>Atualizar preview</button>
+        <button type="button" data-fleet-validate disabled><i data-lucide="check-check"></i>Validar preview</button>
+    </form>
+    <p role="status" data-fleet-status></p>
+    <dl data-fleet-release></dl>
+    <p data-fleet-summary></p>
+    <ul data-fleet-reasons></ul>
+    <div class="table-wrap"><table class="endpoint-table"><thead><tr><th>Hostname</th><th>Agent</th><th>Updater</th><th>Canal</th><th>Politica</th><th>Grupos</th><th>Bucket</th><th>Elegivel</th><th>Motivo</th></tr></thead><tbody data-fleet-targets></tbody></table></div>
+</section>

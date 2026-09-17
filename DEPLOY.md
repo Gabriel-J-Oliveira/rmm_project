@@ -1557,3 +1557,86 @@ de consultas e validacao PostgreSQL das migrations. Dados legados com versoes
 Os sent antigos do TAXCEL continuam preservados. Dispatch concorrente legado
 nao ganhou garantia transacional neste incremento; campanha/orquestrador e
 reconciliacao ficam para 6C/6D. RC39 e stable/latest permanecem inalterados.
+
+### 6B.2 - Preview administrativo e politicas em massa (2026-09-17)
+
+Implementacao sobre `3a94f936c8c0625513e0cc5eb6685aaa106e0487`, sem deploy.
+6B permanece IN PROGRESS; PHASE_6_ACTIVE_SUBPHASE = 6B. 6C permanece PENDING.
+PHASE_6_ORCHESTRATOR_ENABLED = false; PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false;
+AUTO_PAUSE_IMPLEMENTED = false. Nenhum Campaign/Wave/Target, scheduler,
+dispatch, reconciliacao ou aprovacao persistente foi criado.
+
+APIs administrativas POST/JSON, com CSRF, usuario ativo/autenticado, acesso
+tecnico e permissao explicita:
+
+- `/api/agent/releases/<release_id>/rollout-preview/`:
+  `agents.view_agent_release_rollout`; entrada `target_group_ids` (IDs explicitos,
+  vazio significa sem filtro), `freshness_seconds` inteiro de 60 a 3600,
+  default 900. Instante unico por request. Retorna release/version/channel,
+  metadata administrativa, generated_at, mode automatic, cohort_schema=1,
+  cohort_hash, total_candidates/eligible_count/excluded_count, targets,
+  reason_counts e eligible_percentage. Somente SELECT; nao chama dispatch legado.
+- `/api/agent/releases/<release_id>/rollout-preview/validate/`:
+  mesma permissao/filtros, `expected_cohort_hash` e `cohort_schema=1` obrigatorios.
+  Recalcula sem persistir; 200 matches=true, ou 409 preview_changed com hashes
+  esperado/atual e preview atualizado. Hash nao e aprovacao ou autorizacao.
+- `/api/endpoints/bulk-policy/`: `agents.change_agentmachine`;
+  `endpoint_ids` explicitos, 1-500 IDs, `reason` obrigatorio, `changes` nao vazio.
+  Campos omitidos preservados: update_channel, update_policy, auto_update_enabled,
+  update_paused, pinned_agent_version, maintenance_window_start/end/timezone.
+  Horarios locais, timezone IANA; pin SemVer ou string vazia para remover.
+  Grupos: `changes.groups = {action: add|remove|replace|clear, ids: [...]}`;
+  clear exige ids vazio. add/remove exigem IDs; replace vazio remove todos.
+  Grupo omitido preserva. Nenhuma lista vazia seleciona implicitamente a frota.
+  `apply=false`/omitido produz dry-run com before/after, warnings/rejections e
+  bulk_change_hash separado do cohort_hash, sem writes/auditoria/jobs.
+  Aplicar exige `apply=true`, `confirmed_count` igual ao escopo e
+  `expected_bulk_change_hash` do dry-run. Mudanca de estado retorna 409
+  bulk_preview_changed; qualquer rejeicao bloqueia a operacao inteira.
+
+Concorrencia: transaction.atomic, select_for_update nos endpoints em ordem de
+PK, releitura/revalidacao do plano e fingerprint dentro da transacao. Writer
+individual de politica participa do mesmo lock. Saves somente dos campos
+alterados; M2M explicito. Auditoria agregada obrigatoria na mesma transacao;
+falha de auditoria desfaz alteracoes. Registra ator, motivo sanitizado, timestamp,
+quantidades, campos, IDs e diff dos grupos. Sem tokens ou hashes de autenticacao.
+Fingerprint bulk protege before/after e rejeicoes, nao e fingerprint de rollout.
+
+Critical/Servers: bloqueia habilitar auto_update_enabled=true/politica automatic
+e remover protecao. Nao ha override nesta entrega. Offline, lifecycle desconhecido,
+identidade invalida e updates ativos/stale aparecem como warnings no dry-run;
+editar politica nunca cria job. Configurar politica automatic continua podendo
+habilitar o comportamento do GET legado numa avaliacao futura, nao uma campanha
+6C; administradores devem considerar esse impacto ao confirmar o plano.
+
+UI: Releases possui Rollout Preview, filtros, metadata, contagens, hash/data,
+breakdown e tabela dos targets; refresh/validacao somente, sem iniciar campanha.
+Listagem de endpoints usa selecao existente para editar politicas, grupos e
+janela/pin; dry-run, motivo, confirmacao de quantidade e aplicar. Sem double
+submit; 409 exige novo preview. Reason codes desconhecidos possuem fallback
+textual seguro; respostas sao inseridas como texto, nao HTML. Mock nao permite bulk.
+
+Performance: contexto de leitura pre-carrega grupos/jobs ativos, chaves e allowed
+groups, agrega identidades duplicadas uma vez. 250 endpoints sinteticos:
+1.501 SELECTs no caminho individual, 6 SELECTs em lote; mesma coorte
+sob repeticao. Sem jobs no teste de performance. Eligibility individual continua
+disponivel sem contexto; preview usa exatamente as mesmas regras.
+
+Validacao local: suite agents/config (243 testes) PASS; check/py_compile/
+makemigrations --check --dry-run PASS, nenhuma nova migration. Testes adicionais
+cobrem autorizacao/CSRF, zero writes, 409 sob mudancas materiais, grupos,
+omissoes, pin/timezone, rollback, auditoria obrigatoria e protecao Critical/Servers.
+Regressoes de GET legado/update manual permanecem cobertas. Migration 0030 tem
+backfill repetivel testado em SQLite, snapshots malformados e M2M preservada.
+Rodada final focada: 104 testes PASS; UI Playwright/Edge com fixtures sinteticas:
+preview, hash/409, fallback seguro, dry-run/apply, unica submissao e desktop/mobile
+PASS. Capturas locais ignoradas em artifacts/fleet-ui. Nenhum POST real foi usado
+no teste de browser; APIs reais foram testadas somente no banco de teste SQLite.
+Suite completa final agents/config com browser habilitado: 247 testes PASS.
+
+Gate restante material: PostgreSQL local/teste nao disponivel (sem psql, Docker
+ou servico PostgreSQL local). Nao foi usada producao para experimentacao.
+Antes de fechar 6B, validar forward/reaplicacao da migration 0030 em banco
+PostgreSQL com dados, Pilot/backfill/campos vazios/snapshots malformados/M2M,
+e concorrencia real de row locks/bulk edits. SQLite nao comprova esses gates.
+RC39, stable/latest, CS-SRV-CST, TAXCEL e jobs reais permaneceram inalterados.

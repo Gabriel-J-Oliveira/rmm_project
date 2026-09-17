@@ -20,6 +20,7 @@ from django.conf.urls.static import static
 from django.urls import include, path
 
 from dashboard import views as dashboard_views
+from dashboard import fleet_views
 from config import views as config_views
 from tickets import views as ticket_views
 
@@ -30,6 +31,9 @@ urlpatterns = [
     path('accounts/logout/', config_views.nightowl_logout, name='logout'),
     path('accounts/', include('django.contrib.auth.urls')),
     path('api/agent/', include('agents.urls')),
+    path('api/agent/releases/<uuid:pk>/rollout-preview/', fleet_views.rollout_preview, name='api-rollout-preview'),
+    path('api/agent/releases/<uuid:pk>/rollout-preview/validate/', fleet_views.rollout_preview, {'validate': True}, name='api-rollout-preview-validate'),
+    path('api/endpoints/bulk-policy/', fleet_views.bulk_policy, name='api-endpoints-bulk-policy'),
     path('api/endpoints/<str:pk>/', dashboard_views.endpoint_detail_data, name='api-endpoint-detail'),
     path('api/deployments/windows/', dashboard_views.deployment_create, name='api-deployment-create'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),

@@ -184,6 +184,7 @@
     </div>
 
     <div class="endpoint-bulk-bar" data-endpoint-bulk-bar hidden>
+        {% if can_bulk_policy and not using_mock_rmm_data %}<button type="button" data-fleet-open><i data-lucide="sliders-horizontal"></i>Editar politicas</button>{% endif %}
         <strong><span data-endpoint-selected-count>0</span> selecionado(s)</strong>
         <button type="button" data-bulk-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
         <button type="button" data-bulk-endpoint-action="check_defender"><i data-lucide="shield-check"></i>Verificar Defender</button>
@@ -220,7 +221,7 @@
                         data-alerts-url="{% url 'alerts-list' %}?q={{ row.hostname|urlencode }}"
                         data-events-url="{% url 'events-list' %}?endpoint={{ row.endpoint.id }}"
                         data-ticket-url="{% url 'tickets:create' %}?endpoint={{ row.endpoint.id }}">
-                        <td class="select-col"><input type="checkbox" data-endpoint-select aria-label="Selecionar {{ row.hostname|default:'endpoint' }}"></td>
+                        <td class="select-col"><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="{{ row.endpoint.id }}" aria-label="Selecionar {{ row.hostname|default:'endpoint' }}"></td>
                         <td><span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span></td>
                         <td>
                             <a class="endpoint-name table-link mono" href="{% url 'endpoint-detail' row.endpoint.id %}">{{ row.hostname|default:"&mdash;" }}</a>
@@ -385,9 +386,11 @@
 </section>
 
 <div class="alert-action-toast endpoint-action-toast" data-endpoint-toast hidden></div>
+{% if can_bulk_policy and not using_mock_rmm_data %}{% include 'dashboard/fleet_bulk_policy.html' %}{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/js/nightowl_operational.js"></script>
 <script src="/static/js/endpoint_list.js"></script>
+<script src="/static/js/fleet_policy.js"></script>
 {% endblock %}

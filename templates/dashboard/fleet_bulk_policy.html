@@ -1,0 +1,25 @@
+<link rel="stylesheet" href="/static/css/fleet_policy.css">
+<dialog class="fleet-policy-dialog" data-fleet-bulk>
+    <header class="panel-header"><h2>Politicas dos endpoints</h2><button type="button" data-fleet-close aria-label="Fechar"><i data-lucide="x"></i></button></header>
+    <form class="release-grid-form" data-fleet-bulk-form>
+        {% csrf_token %}
+        <label>Canal<select name="update_channel"><option value="">Preservar</option><option>development</option><option>pilot</option><option>stable</option></select></label>
+        <label>Politica<select name="update_policy"><option value="">Preservar</option><option>manual</option><option>notify_only</option><option>automatic</option><option>maintenance_window</option></select></label>
+        <label>Update automatico<select name="auto_update_enabled"><option value="">Preservar</option><option value="true">Habilitar</option><option value="false">Desabilitar</option></select></label>
+        <label>Pause<select name="update_paused"><option value="">Preservar</option><option value="true">Pausar</option><option value="false">Retomar</option></select></label>
+        <label><input type="checkbox" name="edit_pin"> Alterar pin<input name="pinned_agent_version" placeholder="Sem pin"></label>
+        <label><input type="checkbox" name="edit_window"> Alterar janela</label>
+        <label>Inicio<input type="time" name="maintenance_window_start"></label>
+        <label>Fim<input type="time" name="maintenance_window_end"></label>
+        <label>Timezone<input name="maintenance_window_timezone" placeholder="America/Sao_Paulo"></label>
+        <label>Operacao de grupos<select name="group_action"><option value="">Preservar</option><option value="add">Adicionar</option><option value="remove">Remover</option><option value="replace">Substituir</option><option value="clear">Limpar</option></select></label>
+        <label>Grupos<select name="group_ids" multiple>{% for group in fleet_groups %}<option value="{{ group.id }}">{{ group.name }}</option>{% endfor %}</select></label>
+        <label>Motivo administrativo<textarea name="reason" maxlength="1000" required></textarea></label>
+        <button type="submit"><i data-lucide="scan-search"></i>Visualizar impacto</button>
+    </form>
+    <p role="status" data-fleet-status></p>
+    <p data-fleet-summary></p>
+    <div class="table-wrap"><table class="endpoint-table"><thead><tr><th>Endpoint</th><th>Antes</th><th>Depois</th><th>Avisos</th></tr></thead><tbody data-fleet-targets></tbody></table></div>
+    <label><input type="checkbox" data-fleet-confirm> Confirmo a quantidade e as alteracoes acima</label>
+    <button type="button" data-fleet-apply disabled><i data-lucide="save"></i>Aplicar politicas</button>
+</dialog>

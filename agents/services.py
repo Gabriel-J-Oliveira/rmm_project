@@ -16,6 +16,7 @@ from django.utils import timezone
 from .audit import create_audit_event
 from .models import AuditEvent
 from .models import AgentMachine
+from .models import AgentJob
 from .models import AgentOperationalStatus
 from .models import AgentRelease
 from .models import AgentReleaseSigningKey
@@ -605,7 +606,7 @@ def _release_signing_key(release):
     return AgentReleaseSigningKey.objects.filter(key_id=key_id).first()
 
 
-def ensure_release_signature_policy(release, *, now=None):
+def ensure_release_signature_policy(release, *, now=None, key_context=None):
     if release.legacy_unsigned:
         if release.channel == AgentRelease.CHANNEL_STABLE:
             raise ValidationError('Release stable nao pode ser legacy_unsigned.')
@@ -615,7 +616,7 @@ def ensure_release_signature_policy(release, *, now=None):
     for field in ('manifest_url', 'manifest_sha256', 'signature_url', 'signature_sha256', 'signature_key_id'):
         if not getattr(release, field):
             raise ValidationError(f'Release assinada sem {field}.')
-    key = _release_signing_key(release)
+    key = key_context.get(release.signature_key_id) if key_context is not None else _release_signing_key(release)
     if key is None:
         raise ValidationError(f'RELEASE_KEY_UNKNOWN: key_id {release.signature_key_id} nao cadastrado.')
     if key.revoked:
@@ -891,7 +892,7 @@ def _updater_version(endpoint):
 
 def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_agent=False,
                                       explicit_release=None, allow_downgrade=False,
-                                      automatic_rollout=False, freshness_seconds=900):
+                                      automatic_rollout=False, freshness_seconds=900, context=None):
     """Read-only decision. The rollout contract is stricter than legacy delivery."""
     if automatic_rollout and (manual or allow_downgrade or freshness_seconds <= 0):
         raise ValueError('Automatic rollout cannot use manual overrides')
@@ -934,13 +935,15 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
                 raise ValueError('empty identity')
         except (ValueError, TypeError, AttributeError):
             return decision(False, 'machine_identity_invalid')
-        if AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).exclude(pk=endpoint.pk).exists():
+        ambiguous = endpoint.machine_id.lower() in context['duplicates'] if context is not None else AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).exclude(pk=endpoint.pk).exists()
+        if ambiguous:
             return decision(False, 'machine_identity_ambiguous')
-        if endpoint.rollout_groups.filter(slug__in=['critical', 'servers']).exists():
+        slugs = context['slugs'][endpoint.pk] if context is not None else set(endpoint.rollout_groups.values_list('slug', flat=True))
+        if slugs & {'critical', 'servers'}:
             return decision(False, 'protected_endpoint_group')
-        active_jobs = endpoint.jobs.filter(job_type='update_agent', status__in=['queued', 'sent', 'running'])
-        if active_jobs.exists():
-            if active_jobs.filter(expires_at__lte=now).exists() or active_jobs.filter(created_at__lt=now - timedelta(seconds=900)).exists():
+        active_jobs = context['jobs'][endpoint.pk] if context is not None else list(endpoint.jobs.filter(job_type='update_agent', status__in=['queued', 'sent', 'running']))
+        if active_jobs:
+            if any((job.expires_at and job.expires_at <= now) or job.created_at < now - timedelta(seconds=900) for job in active_jobs):
                 return decision(False, 'update_job_stale')
             return decision(False, 'update_job_active')
 
@@ -958,8 +961,10 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
     if automatic_rollout and endpoint.pinned_agent_version and endpoint.pinned_agent_version != release.version:
         return decision(False, 'pinned_release_mismatch', release)
 
-    if release.channel == AgentRelease.CHANNEL_PILOT and not endpoint.rollout_groups.filter(slug='pilot').exists():
-        return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
+    if release.channel == AgentRelease.CHANNEL_PILOT:
+        pilot_member = 'pilot' in context['slugs'][endpoint.pk] if context is not None else endpoint.rollout_groups.filter(slug='pilot').exists()
+        if not pilot_member:
+            return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
 
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
@@ -977,7 +982,7 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
     if automatic_rollout and release.legacy_unsigned:
         return decision(False, UPDATE_POLICY_REASON_SIGNATURE_INVALID, release)
     try:
-        ensure_release_signature_policy(release, now=now)
+        ensure_release_signature_policy(release, now=now, key_context=context['keys'] if context is not None else None)
     except ValidationError as exc:
         text = str(exc)
         if 'RELEASE_KEY_REVOKED' in text:
@@ -1005,7 +1010,8 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
         if updater_comparison is None or updater_comparison < 0:
             return decision(False, UPDATE_POLICY_REASON_MINIMUM_UPDATER_INCOMPATIBLE, release)
 
-    if not _release_group_allowed(endpoint, release):
+    group_allowed = (not context['allowed'] or bool(context['allowed'] & context['groups'][endpoint.pk])) if context is not None else _release_group_allowed(endpoint, release)
+    if not group_allowed:
         return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
 
     bucket = deterministic_rollout_bucket(endpoint, release)
@@ -1061,11 +1067,29 @@ def build_agent_rollout_preview(release, *, endpoints=None, target_group_ids=Non
     candidates = endpoints if endpoints is not None else AgentMachine.objects.all()
     if group_ids:
         candidates = candidates.filter(rollout_groups__id__in=group_ids).distinct()
+    from django.db.models import Count, Prefetch, prefetch_related_objects
+    from django.db.models.functions import Lower
+    prefetches = ('rollout_groups', Prefetch(
+        'jobs', queryset=AgentJob.objects.filter(job_type='update_agent', status__in=['queued', 'sent', 'running']),
+        to_attr='_rollout_active_jobs'))
+    if hasattr(candidates, 'prefetch_related'):
+        candidates = list(candidates.prefetch_related(*prefetches))
+    else:
+        candidates = list(candidates)
+        prefetch_related_objects(candidates, *prefetches)
+    context = {
+        'duplicates': set(AgentMachine.objects.annotate(identity=Lower('machine_id')).values('identity').annotate(total=Count('id')).filter(total__gt=1).values_list('identity', flat=True)),
+        'keys': {key.key_id: key for key in AgentReleaseSigningKey.objects.filter(key_id=release.signature_key_id)},
+        'allowed': set(release.allowed_groups.values_list('id', flat=True)),
+        'groups': {item.pk: {group.pk for group in item.rollout_groups.all()} for item in candidates},
+        'slugs': {item.pk: {group.slug for group in item.rollout_groups.all()} for item in candidates},
+        'jobs': {item.pk: item._rollout_active_jobs for item in candidates},
+    }
     targets, canonical_targets = [], []
     for endpoint in sorted(candidates, key=lambda item: str(item.pk)):
         decision = evaluate_agent_update_eligibility(endpoint, now=now, explicit_release=release,
-                                                    automatic_rollout=True, freshness_seconds=freshness_seconds)
-        groups = sorted(str(value) for value in endpoint.rollout_groups.values_list('id', flat=True))
+                                                    automatic_rollout=True, freshness_seconds=freshness_seconds, context=context)
+        groups = sorted(str(value) for value in context['groups'][endpoint.pk])
         target = dict(endpoint_id=str(endpoint.pk), machine_id=endpoint.machine_id,
                       current_version=endpoint.agent_version, updater_version=_updater_version(endpoint),
                       bucket=deterministic_rollout_bucket(endpoint, release), eligible=decision.eligible,
@@ -1087,15 +1111,18 @@ def build_agent_rollout_preview(release, *, endpoints=None, target_group_ids=Non
     # URLs influence domain eligibility and artifact identity, but are not emitted as target data.
     release_state['artifact_urls'] = [release.package_url, release.checksum_url, release.manifest_url, release.signature_url]
     release_state['id'] = str(release.pk)
-    release_state['groups'] = sorted(str(value) for value in release.allowed_groups.values_list('id', flat=True))
+    release_state['groups'] = sorted(str(value) for value in context['allowed'])
     canonical = dict(schema=1, mode=mode, freshness_seconds=freshness_seconds,
                      target_groups=group_ids, release=release_state, targets=canonical_targets)
     cohort_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
     eligible = sum(target['eligible'] for target in targets)
+    from collections import Counter
     return dict(release_id=str(release.pk), version=release.version, channel=release.channel,
                 generated_at=now.isoformat(), mode=mode, total_candidates=len(targets),
                 eligible_count=eligible, excluded_count=len(targets)-eligible,
-                targets=targets, cohort_hash=cohort_hash, cohort_schema=1)
+                targets=targets, cohort_hash=cohort_hash, cohort_schema=1,
+                reason_counts=dict(sorted(Counter(target['reason_code'] for target in targets).items())),
+                eligible_percentage=round(100 * eligible / len(targets), 2) if targets else 0)
 
 
 def _safe_ip(value):

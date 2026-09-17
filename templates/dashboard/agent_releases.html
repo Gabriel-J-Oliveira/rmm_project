@@ -20,6 +20,7 @@
         </div>
     </header>
 
+    {% if can_rollout_preview %}{% include 'dashboard/fleet_preview.html' %}{% endif %}
     <section class="panel agent-release-form">
         <header><h2><i data-lucide="package-plus"></i>Criar ou importar release</h2></header>
         <form method="post" class="release-grid-form">
@@ -154,3 +155,5 @@
     </section>
 </section>
 {% endblock %}
+
+{% block scripts %}<script src="{% static 'js/fleet_policy.js' %}"></script>{% endblock %}
