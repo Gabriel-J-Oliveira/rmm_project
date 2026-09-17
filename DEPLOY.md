@@ -1796,3 +1796,83 @@ regressivas existe somente no banco sintetico. Targets aceitam somente
 eligible/excluded e agent_job NULL nesta entrega, com CHECK real no banco.
 Nao houve deploy/migration em producao, restart, rollout, canario ou nova release.
 RC39/stable/latest/CS-SRV-CST/TAXCEL permanecem fora do escopo operacional.
+
+### 6C.2 - Orchestration planning e dispatch revalidation (2026-09-17)
+
+6C = IN PROGRESS; 6A/6B = CLOSED; 6D/6E = PENDING.
+PHASE_6_ORCHESTRATOR_ENABLED = false;
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false; AUTO_PAUSE_IMPLEMENTED = false.
+Agora existem flags runtime reais, ambos default false:
+`NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED` e
+`NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED`. O helper central
+`rollout_orchestration_enabled()` exige os dois para futura execucao automatica.
+Planner funciona com flags OFF; mesmo ON nao existe executor/dispatch nesta entrega.
+
+- 6B preview decide quem seria selecionado; 6C.1 congela quem foi aprovado;
+  6C.2 revalida somente os Targets aprovados da Wave operacional existente.
+  Nunca recalcula percentual/bucket, substitui bloqueados ou toma Targets da Wave 2.
+  Campaign precisa estar running; Wave ready/running, predecessoras completed e
+  current_wave coerente. Nenhuma transicao de estado e automatizada pelo planner.
+- `agents/rollout_planning.py`: contexto em lote, avaliador individual com now aware,
+  comparador central do contrato da release e plano deterministico por bucket/UUID.
+  Seguranca atual verifica pausa/revogacao/status, assinatura, chave ativa/validade,
+  algoritmo RSA-PSS-SHA256, URLs HTTPS no dominio permitido e hashes/tamanho completos.
+  Usa validacao persistida da assinatura; nao baixa artefatos nem revalida RSA offline.
+- Drift material: version, channel, sha256, size, manifest_sha256, signature_sha256,
+  signature_key_id, minimum_updater_version, legacy_unsigned, mandatory,
+  hashes das quatro URLs e allowed_groups. URLs completas nao entram no resultado.
+  Percentual/status administrativo nao reescreve snapshot; pausa/revogacao/assinatura
+  sao gates atuais independentes. Alteracao apenas de percentual/hostname nao reseleciona.
+- Endpoints: identidade UUID igual ao snapshot e nao duplicada, ativo/installed/online,
+  last_seen nao futuro dentro do freshness aprovado, sem pause/Critical/Servers,
+  canal/politica/grupos/pin/consentimento e janela compatveis com aprovacao.
+  Updater real persistido, sem fallback de agent_version; bootstrap/minimo incompativel,
+  versao desconhecida/igual/maior bloqueiam. target_already_current nao prova sucesso.
+- Novas aprovacoes enriquecem o JSON existente exclusion_metadata com
+  dispatch_policy_snapshot (pin, auto_update_enabled e janela/timezone), sem migration.
+  Campanhas antigas sem esse snapshot bloqueiam com target_policy_snapshot_incomplete:
+  nao inferimos valores historicos nem alteramos Targets congelados. Exigem abort/recreate
+  administrativo com novo preview aprovado antes de futura execucao.
+- Jobs update_agent/repair_agent/uninstall_agent queued/sent/running bloqueiam;
+  expirados ou criados ha mais de 900 segundos distinguem stale, sem reconciliacao.
+  Capacidade = max(0, concurrency_limit - endpoints aprovados ocupados por esses jobs),
+  contando cada endpoint uma vez em toda a Campaign, inclusive ocupacao stale.
+  selected_for_dispatch contem no maximo essa capacidade; todos os resultados e razoes
+  continuam no plano. Nao reserva, cria lease ou garante exclusao concorrente:
+  duas chamadas podem selecionar os mesmos IDs. Idempotencia executora pertence a 6C.3.
+- Command `python manage.py process_agent_rollouts --plan-only [--campaign <uuid>]`
+  imprime JSON seguro, sem auditoria/writes/jobs. Sem --plan-only sempre recusa com
+  ROLLOUT_DISPATCH_NOT_IMPLEMENTED, qualquer que seja a combinacao dos flags.
+  Nenhuma API/botao Start adicional foi criado.
+
+Reason codes explicitos: campaign_not_running, wave_not_dispatchable,
+target_not_approved, release_revoked, release_paused, release_not_available,
+release_contract_changed, signature_invalid, key_unknown, key_revoked,
+key_not_yet_valid, key_expired, release_domain_invalid, release_metadata_incomplete,
+endpoint_identity_changed, machine_identity_ambiguous, endpoint_inactive,
+endpoint_lifecycle_terminal, endpoint_lifecycle_unknown, endpoint_offline,
+endpoint_stale, endpoint_paused, protected_endpoint_group, endpoint_channel_changed,
+endpoint_policy_changed, endpoint_groups_changed, pinned_release_mismatch,
+target_policy_snapshot_incomplete, maintenance_window_invalid,
+maintenance_timezone_invalid, outside_maintenance_window, update_job_active,
+update_job_stale, updater_version_unknown, updater_bootstrap_required,
+minimum_updater_incompatible, agent_version_unknown, target_already_current,
+downgrade_requires_force, eligible_for_dispatch. Nao usamos texto de UI como decisao.
+
+Validacao: agents/config SQLite 299 testes, 295 PASS e 4 skips (browser opt-in e
+tres testes PostgreSQL), zero falhas. PostgreSQL isolado 156 PASS, zero skips/falhas.
+Planner com 1 e 250 Targets: 8 SELECTs nos dois casos, ordem/now deterministas,
+input invertido identico, capacity coberta e todas as sete superficies persistidas
+(Campaign/Wave/Target/endpoint/release/job/audit) identicas antes/depois.
+Drift individual, flags OFF/ON, command seguro, janela, snapshot legado fail-closed,
+URL com query sintetica nao exposta e restart em nova conexao cobertos.
+PostgreSQL 17.10: forward vazio, reverse/forward com dados sinteticos preservados,
+14 guards e indexes intactos; banco/role temporarios removidos apos testes.
+
+Migration 0031 e seus 14 guards NAO foram alterados. Target continua snapshot-only:
+eligible/excluded, agent_job/started_at/completed_at NULL por CHECK.
+6C.3 devera abrir execucao/AgentJob com nova migration e revisao deliberada dos
+CHECKs/guards, nunca editando migration publicada. Nenhum scheduler/reconcile/auto-pause.
+Zero AgentJob criado pelo planner/command; fixtures regressivas somente em bancos
+descartaveis. Sem Campaign/job real, migration/deploy em producao ou restart.
+RC39, stable/latest, CS-SRV-CST, TAXCEL e politicas reais nao foram alterados.

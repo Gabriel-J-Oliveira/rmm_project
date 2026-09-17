@@ -71,6 +71,10 @@ SECURE_HSTS_SECONDS = env.int('DJANGO_SECURE_HSTS_SECONDS', default=0)
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', default=False)
 SECURE_HSTS_PRELOAD = env.bool('DJANGO_SECURE_HSTS_PRELOAD', default=False)
 
+# Independent future execution switches; read-only rollout planning ignores them.
+NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED = env.bool('NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED', default=False)
+NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED = env.bool('NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED', default=False)
+
 
 # Application definition
 

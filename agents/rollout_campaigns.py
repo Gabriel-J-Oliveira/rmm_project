@@ -1,5 +1,4 @@
 """Creation and administrative state transitions, never job dispatch."""
-import hashlib
 import re
 import uuid
 
@@ -9,8 +8,9 @@ from django.utils import timezone
 from config.authz import is_nightowl_technical_user
 from .fleet_policy import PolicyContractError
 from .job_progress import sanitize_job_value
-from .models import AgentRelease, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
+from .models import AgentMachine, AgentRelease, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
 from .services import build_agent_rollout_preview
+from .rollout_planning import campaign_release_snapshot
 
 
 def authorize(actor):
@@ -92,10 +92,13 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
             plan, used = wave_contract(data.get('wave_plan', []), preview['eligible_count'], minimum)
             if ready and (not preview['eligible_count'] or used != preview['eligible_count']):
                 raise PolicyContractError('ready_requires_complete_plan')
-            snapshot = {field: getattr(release, field) for field in ('version', 'channel', 'status', 'rollout_percentage', 'rollout_paused', 'mandatory', 'revoked', 'signature_valid', 'legacy_unsigned', 'signature_key_id', 'minimum_updater_version', 'sha256', 'size', 'manifest_sha256', 'signature_sha256')}
-            snapshot['allowed_groups'] = sorted(str(value) for value in release.allowed_groups.values_list('pk', flat=True))
-            snapshot['artifact_url_hashes'] = [hashlib.sha256((url or '').encode()).hexdigest() for url in
-                (release.package_url, release.checksum_url, release.manifest_url, release.signature_url)]
+            policies = {}
+            for row in AgentMachine.objects.filter(pk__in=[t['endpoint_id'] for t in preview['targets']]).values(
+                    'id', 'pinned_agent_version', 'auto_update_enabled', 'maintenance_window_start',
+                    'maintenance_window_end', 'maintenance_window_timezone'):
+                pk = str(row.pop('id'))
+                policies[pk] = {key: value.isoformat() if hasattr(value, 'isoformat') else value for key, value in row.items()}
+            snapshot = campaign_release_snapshot(release)
             campaign = AgentRolloutCampaign.objects.create(release=release, release_snapshot=snapshot,
                 channel_snapshot=release.channel, cohort_schema=preview['cohort_schema'], cohort_hash=preview['cohort_hash'],
                 preview_generated_at=now, freshness_seconds=freshness, target_group_ids_snapshot=groups,
@@ -119,7 +122,8 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
                 update_channel_snapshot=t['channel'], update_policy_snapshot=t['policy'], group_ids_snapshot=t['groups'],
                 rollout_bucket=t['bucket'], eligibility_at_selection=t['eligible'], reason_code=t['reason_code'],
                 state='eligible' if t['eligible'] else 'excluded', selected_at=now,
-                exclusion_metadata={'reason_code': t['reason_code']} if not t['eligible'] else {}) for t in preview['targets']])
+                exclusion_metadata={'dispatch_policy_snapshot': policies[t['endpoint_id']],
+                    **({'reason_code': t['reason_code']} if not t['eligible'] else {})}) for t in preview['targets']])
             if campaign.targets.count() != campaign.total_candidates or campaign.targets.filter(state='eligible').count() != campaign.eligible_count:
                 raise PolicyContractError('snapshot_count_mismatch', status=409)
             if ready:
