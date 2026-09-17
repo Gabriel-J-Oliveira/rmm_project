@@ -1212,7 +1212,7 @@ As Fases 0A-5 continuam CLOSED; Fases 7 e 8 continuam PENDING.
 PHASE_5_STATUS = CLOSED
 READY_FOR_PHASE6 = true
 PHASE_6_STATUS = IN_PROGRESS
-PHASE_6_ACTIVE_SUBPHASE = 6B
+PHASE_6_ACTIVE_SUBPHASE = 6C
 PHASE_6_ORCHESTRATOR_ENABLED = false
 PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false
 AUTO_PAUSE_IMPLEMENTED = false
@@ -1368,7 +1368,7 @@ Critical/Servers sao grupos/politica de protecao, nao novos release channels.
 | Subfase | Escopo | Status |
 | --- | --- | --- |
 | 6A | Inventario e contrato operacional | CLOSED |
-| 6B | Preview e politicas em massa | IN PROGRESS |
+| 6B | Preview e politicas em massa | CLOSED |
 | 6C | Campanha e orquestrador | PENDING |
 | 6D | Metricas, reconciliacao e auto-pause | PENDING |
 | 6E | Canario real e encerramento | PENDING |
@@ -1386,7 +1386,8 @@ alteracao operacional involuntaria. O levantamento nao fecha esses gates sozinho
 
 #### 6B - Preview e politicas em massa
 
-`IN_PROGRESS`: evaluate separado de dispatch, preview somente leitura e deterministico,
+`CLOSED` em 2026-09-17 apos validacao isolada PostgreSQL descrita abaixo:
+evaluate separado de dispatch, preview somente leitura e deterministico,
 razoes, cohort_hash, grupos consistentes/limpeza completa, operacoes em massa,
 timezone de maintenance window e auditoria. Gate:
 `preview must be deterministic and reproducible`; preview nunca cria job automatico.
@@ -1640,3 +1641,94 @@ Antes de fechar 6B, validar forward/reaplicacao da migration 0030 em banco
 PostgreSQL com dados, Pilot/backfill/campos vazios/snapshots malformados/M2M,
 e concorrencia real de row locks/bulk edits. SQLite nao comprova esses gates.
 RC39, stable/latest, CS-SRV-CST, TAXCEL e jobs reais permaneceram inalterados.
+
+### Encerramento 6B - PostgreSQL e concorrencia real (2026-09-17)
+
+6B = CLOSED; PHASE_6_ACTIVE_SUBPHASE = 6C; 6C = PENDING.
+PHASE_6_STATUS = IN_PROGRESS. Nenhuma implementacao de 6C foi iniciada.
+PHASE_6_ORCHESTRATOR_ENABLED = false;
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false; AUTO_PAUSE_IMPLEMENTED = false.
+Este registro encerra o gate PostgreSQL pendente nos registros historicos 6B.1/6B.2;
+os estados IN PROGRESS desses registros descrevem o momento de suas entregas.
+
+Codigo validado exatamente: `8205715a6993d2ece5df53e0becd9dcf8aae40ae`.
+Engine: PostgreSQL 17.10, Debian 17.10-0+deb13u1, UTF8, timezone UTC.
+Validacao via SSH, sem deploy, restart ou migration no database de producao.
+Preflight: checkout de producao detached em
+`a0f0f8d659a70b828af408406ed4f2e0826be770`, limpo, origin/main no mesmo SHA.
+Database da aplicacao: nightowl; role nightowl_user, sem SUPERUSER/CREATEDB/CREATEROLE.
+Migration agents.0030 ja estava aplicada antes desta tarefa; lista aplicada
+0001-0030 permaneceu identica. Servico active/running antes e depois, mesmo PID
+1560194 e mesmo inicio 2026-09-17T16:13:53Z. Disco: 2,9 GB livres no preflight.
+
+Isolamento: dois bancos vazios descartaveis, sem clone de dados reais:
+`nightowl_phase6b_validation_20260917171226` e
+`nightowl_phase6b_validation_20260917171329`.
+Cada rodada utilizou role temporaria propria, LOGIN sem privilegios administrativos,
+senha aleatoria apenas em memoria e worktree detached temporario no commit validado.
+Settings de teste foram configurados em memoria para o database temporario;
+current_database foi verificado antes dos testes e em cada conexao concorrente.
+O servico continuou usando seu checkout/ambiente originais. Nao foi lido .env
+de producao para copiar credenciais ao ambiente de teste.
+
+MigrationExecutor: schema completo isolado, reverse ate agents.0029, criacao de
+dados pelos models historicos 0029 e forward 0030. Matriz sintetica:
+
+| Endpoint | Entrada | Resultado 0030 |
+| --- | --- | --- |
+| A | Flag Pilot true, sem associacao, updater rc38+build e Tray rc37 reportados | Pilot associado; updater rc38 normalizado e Tray rc37 |
+| B | Flag Pilot false, membro Pilot existente | Associacao Pilot preservada; versoes desconhecidas vazias |
+| C | Agent rc39, snapshot sem componentes | updater/tray vazios, sem copiar agent_version |
+| D | Payload vazio/lista, collections incompleta, versoes invalidas | Sem excecao; updater/tray vazios |
+| E | Snapshots validos antigos/novos e snapshot mais recente invalido | Ultima versao valida por componente: updater rc38, Tray rc37 |
+| F | Membros Workstations e Remote | Ambos os relacionamentos M2M preservados |
+
+maintenance_window_timezone inicialmente vazio em todos os seis casos.
+Forward/check PASS. Ciclo 0030 -> 0029 -> 0030 PASS: reverse remove colunas
+updater_version/tray_version/maintenance_window_timezone; RunPython reverse e
+no-op, nao remove associacoes Pilot ou M2M preexistente. Reaplicacao repopula
+componentes reportados, sem duplicar associacoes e sem inventar valores.
+
+Concorrencia comprovada com conexoes PostgreSQL independentes:
+
+- Row lock: T1 adquiriu SELECT FOR UPDATE, T2 aguardou; pg_stat_activity confirmou
+  wait_event_type=Lock. T2 so adquiriu depois de T1 liberar, espera de 0,760 s.
+  Ordem monotonic: T1 lock 672571,631968; T2 tentativa 672571,632330;
+  T1 liberacao 672572,391038; T2 aquisicao 672572,392699.
+- Bulk simultaneo: dois dry-runs do mesmo estado inicial. Apply A manteve seu
+  lock aberto; apply B ficou em Lock. A confirmou pause=true; B retornou 409
+  bulk_preview_changed, sem sobrescrever estado. Novo dry-run B/aplicacao confirmou
+  notify_only preservando pause=true. Auditoria: uma alteracao A e uma B valida,
+  nenhum evento de alteracao para o plano rejeitado.
+- Writer independente: mudou politica em outra transacao entre preview e apply;
+  plano antigo retornou 409, sem aplicar seu pause obsoleto.
+- Auditoria indisponivel simulada depois do save/M2M: rollback preservou politica,
+  grupos e quantidade anterior de auditorias. Nenhuma alteracao parcial.
+- M2M add/remove/replace/clear PASS, no mesmo contrato transacional; protecoes
+  Critical/Servers e escopo explicito cobertos pela suite PostgreSQL.
+
+Suite PostgreSQL em ambas as rodadas: 104 testes PASS, zero falhas:
+agents.test_rollout_preview, agents.test_fleet_policy,
+agents.tests.AgentReleasePolicyTests e agents.tests.AgentReleaseGovernanceTests.
+Inclui preview/API/hash, autorizacao, auditoria/rollback, protecoes, GET legado
+e update manual regressivo. Segunda rodada: 5,536 s. Preview de 250 sinteticos
+permaneceu deterministico: 1.501 consultas individuais versus 6 em lote.
+Warnings de staticfiles temporario ausente nao afetaram checks ou testes;
+nenhum collectstatic/deploy foi feito no servidor de producao.
+
+Zero AgentJob criado pelos testes dedicados de migration/bulk/concorrencia.
+Fixtures regressivas criaram jobs exclusivamente sinteticos no database descartavel;
+nenhum job real criado. Producao manteve 6 endpoints e 76 jobs. Fingerprint dos
+identificadores/politicas permaneceu igual antes/depois da rodada confirmatoria.
+RC39 permaneceu development/paused/rollout=0, assinatura valida; stable/latest
+permaneceu 0.1.0.7, ZIP SHA256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+Hashes de version.json e checksums.json publicos permaneceram identicos.
+CS-SRV-CST, TAXCEL, releases e politicas nao receberam writes desta validacao.
+
+Cleanup PASS: DROP apenas dos bancos/roles temporarios, remocao dos worktrees
+temporarios e script remoto. Consultas finais confirmaram zero databases/roles/
+conexoes de validacao restantes e nenhum processo de teste ativo. Checkout de
+producao permaneceu no mesmo HEAD, limpo, servico sem restart.
+Todos os gates materiais 6B PASS; campanha/orquestrador/reconcile/auto-pause
+continuam ausentes. Nenhuma nova migration, funcionalidade ou release criada.
