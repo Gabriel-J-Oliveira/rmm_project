@@ -1212,7 +1212,7 @@ As Fases 0A-5 continuam CLOSED; Fases 7 e 8 continuam PENDING.
 PHASE_5_STATUS = CLOSED
 READY_FOR_PHASE6 = true
 PHASE_6_STATUS = IN_PROGRESS
-PHASE_6_ACTIVE_SUBPHASE = 6A
+PHASE_6_ACTIVE_SUBPHASE = 6B
 PHASE_6_ORCHESTRATOR_ENABLED = false
 PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false
 AUTO_PAUSE_IMPLEMENTED = false
@@ -1367,15 +1367,15 @@ Critical/Servers sao grupos/politica de protecao, nao novos release channels.
 
 | Subfase | Escopo | Status |
 | --- | --- | --- |
-| 6A | Inventario e contrato operacional | IN PROGRESS |
-| 6B | Preview e politicas em massa | PENDING |
+| 6A | Inventario e contrato operacional | CLOSED |
+| 6B | Preview e politicas em massa | IN PROGRESS |
 | 6C | Campanha e orquestrador | PENDING |
 | 6D | Metricas, reconciliacao e auto-pause | PENDING |
 | 6E | Canario real e encerramento | PENDING |
 
 #### 6A - Inventario e contrato operacional
 
-`IN_PROGRESS`: levantar frota, versoes, canais, politicas, grupos, updater,
+`CLOSED` em 2026-09-17 apos inventario e aprovacao do contrato 6B.1. Escopo: frota, versoes, canais, politicas, grupos, updater,
 jobs e releases; validar F6-GAP; estabelecer baseline CS-SRV-CST; definir
 estados, gates, sucesso/falha, matriz de testes e estrategia Pilot.
 Restricoes do levantamento: somente leitura, sem rollout automatico, sem novo
@@ -1386,7 +1386,7 @@ alteracao operacional involuntaria. O levantamento nao fecha esses gates sozinho
 
 #### 6B - Preview e politicas em massa
 
-`PENDING`: evaluate separado de dispatch, preview somente leitura e deterministico,
+`IN_PROGRESS`: evaluate separado de dispatch, preview somente leitura e deterministico,
 razoes, cohort_hash, grupos consistentes/limpeza completa, operacoes em massa,
 timezone de maintenance window e auditoria. Gate:
 `preview must be deterministic and reproducible`; preview nunca cria job automatico.
@@ -1466,3 +1466,94 @@ e validacoes operacionais. Ao finalizar cada subfase:
 3. Preservar o historico de cada subfase concluida.
 4. Adicionar mudancas de decisao como registro posterior, explicando a substituicao.
 5. Alterar `PHASE_6_STATUS = CLOSED` somente com todos os gates finais comprovados.
+
+### 6B.1 - Eligibility core e preview somente leitura (2026-09-17)
+
+Entrega de dominio implementada; 6B continua IN PROGRESS. O contrato aprovado
+fecha a 6A. Orquestrador, rollout automatico e auto-pause permanecem desabilitados;
+6C-6E permanecem PENDING. Nenhum deploy ou migration em producao nesta entrega.
+
+Decisoes aprovadas e implementadas:
+
+- Pilot: grupo com slug `pilot` e a unica autoridade da avaliacao. A flag antiga
+  permanece fisicamente para compatibilidade, mas nao concede elegibilidade.
+  A migration associa flags antigas ao grupo sem remover membros existentes;
+  futuras mudancas de pertencimento devem usar o grupo.
+- Updater/Tray: campos persistidos no AgentMachine, alimentados por heartbeat,
+  inventario e status quando reportados. Payload parcial preserva ultima versao
+  valida. Backfill usa somente valores reportados nos inventarios historicos;
+  nunca copia agent_version para preencher updater_version.
+- Avaliacao pura: `evaluate_agent_update_eligibility` retorna uma decisao sem
+  salvar endpoint, release, grupos, job ou auditoria. Recebe instante aware
+  explicito; validade temporal da chave tambem usa esse instante.
+- Telemetria: `record_agent_update_policy_evaluation` e separada. O adapter
+  `evaluate_agent_update_policy` preserva o parametro record_evaluation legado.
+- GET legado: AgentUpdatePolicyView separa evaluate, record e
+  `_dispatch_legacy_policy_update`; esse caminho ainda pode criar job como antes.
+  O preview nao usa esse adapter nem o dispatch.
+- Preview automatico: exclui endpoint inativo, lifecycle vazio/nao installed,
+  lifecycle terminal, offline, last_seen ausente/stale/futuro, identidade nao UUID
+  ou duplicada, grupos Critical/Servers e update queued/sent/running.
+  Freshness default: 900 segundos, configuravel na chamada; nao altera identidade
+  ou lifecycle. Update com expires_at vencido ou created_at anterior a 900 segundos
+  e classificado stale, sem reconciliar status ou resultado.
+- Mandatory: preview respeita percentual, consentimento automatico e todos os
+  gates; nao equivale a 100%. No caminho legado permanece o comportamento anterior
+  de percentual/auto_update_enabled, explicitamente coberto por teste.
+- Janela: diaria, timezone IANA por endpoint; vazio usa settings.TIME_ZONE.
+  Limites inclusivos e travessia de meia-noite; start=end, metade ausente ou
+  timezone invalido bloqueiam. API de politica valida antes de salvar.
+- Grupos: campo omitido preserva associacoes; chave rollout_groups explicitamente
+  vazia (valor vazio no formulario) remove todas. Nao cria job.
+
+Servico implementado: `build_agent_rollout_preview(release, endpoints=...,
+target_group_ids=..., now=..., freshness_seconds=900, mode='automatic')`.
+Sem API publica/UI de campanha neste incremento. Retorna release_id, version,
+channel, generated_at, mode, total_candidates, eligible_count, excluded_count,
+targets ordenados por endpoint UUID, cohort_schema e cohort_hash.
+Target: endpoint_id, machine_id, hostname, current_version, updater_version,
+bucket, eligible, reason_code, groups (IDs), policy e channel. Nao inclui secrets
+ou hashes de autenticacao. Candidatos excluidos nao sao substituidos.
+
+Fingerprint schema 1: SHA-256 de JSON ASCII com chaves ordenadas e separadores
+compactos, incluindo contrato, grupos/filtros, configuracao e identidade dos
+artefatos da release, politica/identidade/versoes/bucket/decisao dos targets,
+pause/pin/lifecycle/status e janela efetiva. Targets/grupos sao ordenados.
+Nao inclui hostname, labels, generated_at nem last_seen exato; freshness altera
+o hash quando muda a decisao. O hash nao constitui aprovacao persistida.
+
+Novos reason codes: `agent_version_unknown`, `endpoint_inactive`,
+`endpoint_lifecycle_terminal`, `endpoint_lifecycle_unknown`, `endpoint_offline`,
+`endpoint_stale`, `machine_identity_invalid`, `machine_identity_ambiguous`,
+`protected_endpoint_group`, `update_job_active`, `update_job_stale`,
+`pinned_release_mismatch`, `updater_version_unknown`, `update_policy_invalid`,
+`maintenance_window_invalid`, `maintenance_timezone_invalid`.
+Permanecem os motivos de assinatura/chave, revogacao, pausa, bootstrap/minimum
+updater, canal/grupos, percentual, politica, janela e downgrade.
+
+Migration local: `agents/0030_rollout_eligibility_contract` adiciona updater_version,
+tray_version e maintenance_window_timezone, associa Pilot legado e faz backfill
+de componentes reportados. Reverse de dados e no-op para nao apagar associacoes
+ou historico; a remocao dos novos campos segue o reverse normal de schema.
+
+Arquivos: agents/models.py, services.py, views.py, tests.py,
+test_rollout_preview.py, migrations/0030_rollout_eligibility_contract.py,
+dashboard/views.py e DEPLOY.md. Nenhum componente .NET alterado.
+
+Validacao: testes locais SQLite com config.settings_test; avaliacao/preview
+instrumentados para permitir somente SELECT, zero jobs/audits novos, hash
+repetivel/independente da ordem e labels, exclusoes operacionais, updater real,
+Pilot/backfill, mandatory, assinatura, downgrade, grupos e janelas/timezone.
+Suite completa agents: 202 testes PASS antes das duas regressoes adicionais de
+filtro duplicado/timezone herdado; rodada focada: 86 testes PASS, incluindo essas
+duas (21 testes de preview e 65 de Policy/Governance).
+py_compile e manage.py check PASS; makemigrations --check --dry-run sem mudancas
+pendentes alem da migration 0030 criada. git diff --check PASS.
+
+Restantes 6B.2: exposicao administrativa/autorizada do preview e operacoes em
+massa, UI, contrato de aprovacao/fingerprint sob mudanca concorrente, otimizacao
+de consultas e validacao PostgreSQL das migrations. Dados legados com versoes
+1.0.0 reportadas nao provam capacidade de updater: nao inventar compatibilidade.
+Os sent antigos do TAXCEL continuam preservados. Dispatch concorrente legado
+nao ganhou garantia transacional neste incremento; campanha/orquestrador e
+reconciliacao ficam para 6C/6D. RC39 e stable/latest permanecem inalterados.

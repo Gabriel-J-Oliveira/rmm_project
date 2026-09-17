@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib import messages
 from django.contrib.auth import authenticate
@@ -4156,11 +4157,16 @@ def endpoint_update_policy_update(request, pk):
     endpoint.pinned_agent_version = (request.POST.get('pinned_agent_version') or '').strip()[:50]
     start = (request.POST.get('maintenance_window_start') or '').strip()
     end = (request.POST.get('maintenance_window_end') or '').strip()
+    window_timezone = (request.POST.get('maintenance_window_timezone') or endpoint.maintenance_window_timezone or settings.TIME_ZONE).strip()
     try:
         endpoint.maintenance_window_start = time.fromisoformat(start) if start else None
         endpoint.maintenance_window_end = time.fromisoformat(end) if end else None
-    except ValueError:
+        ZoneInfo(window_timezone)
+        if bool(start) != bool(end) or (start and endpoint.maintenance_window_start == endpoint.maintenance_window_end):
+            raise ValueError('Invalid daily window')
+    except (ValueError, ZoneInfoNotFoundError):
         return JsonResponse({'error': 'invalid_maintenance_window', 'detail': 'Janela de manutencao invalida.'}, status=400)
+    endpoint.maintenance_window_timezone = window_timezone
     endpoint.save(update_fields=[
         'update_channel',
         'update_policy',
@@ -4169,12 +4175,13 @@ def endpoint_update_policy_update(request, pk):
         'pinned_agent_version',
         'maintenance_window_start',
         'maintenance_window_end',
+        'maintenance_window_timezone',
         'updated_at',
     ])
 
     group_ids = request.POST.getlist('rollout_groups')
-    if group_ids:
-        endpoint.rollout_groups.set(AgentReleaseGroup.objects.filter(id__in=group_ids))
+    if 'rollout_groups' in request.POST:
+        endpoint.rollout_groups.set(AgentReleaseGroup.objects.filter(id__in=[value for value in group_ids if value]))
 
     AgentReleaseAudit.objects.create(
         user=request.user,

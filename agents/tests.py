@@ -2792,6 +2792,9 @@ class AgentReleasePolicyTests(TestCase):
         )
 
     def release(self, version='0.1.0.7', channel=AgentRelease.CHANNEL_STABLE, rollout=100, **kwargs):
+        # Legacy fixtures represent a bundle with matching reported components.
+        self.machine.updater_version = self.machine.agent_version
+        self.machine.save(update_fields=['updater_version'])
         defaults = {
             'status': AgentRelease.STATUS_AVAILABLE,
             'package_url': f'https://nightowl.controlsul.com.br/downloads/nightowl-agent/{version}/NightOwl.Agent.Windows.zip',
@@ -2842,6 +2845,7 @@ class AgentReleasePolicyTests(TestCase):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
         self.machine.is_pilot_endpoint = True
         self.machine.save(update_fields=['update_channel', 'is_pilot_endpoint'])
+        self.machine.rollout_groups.add(AgentReleaseGroup.objects.get(slug='pilot'))
         release = self.release(version='0.1.0.8', channel=AgentRelease.CHANNEL_PILOT)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True)
@@ -3246,6 +3250,7 @@ class AgentReleasePolicyTests(TestCase):
         self.machine.is_pilot_endpoint = True
         self.machine.agent_version = '0.1.1.0-rc5'
         self.machine.save(update_fields=['update_channel', 'is_pilot_endpoint', 'agent_version'])
+        self.machine.rollout_groups.add(AgentReleaseGroup.objects.get(slug='pilot'))
         release = self.release(
             version='0.1.1.0-rc6',
             channel=AgentRelease.CHANNEL_PILOT,
@@ -3943,6 +3948,7 @@ class AgentReleaseGovernanceTests(TestCase):
         self.assertFalse(blocked.eligible)
         self.machine.is_pilot_endpoint = True
         self.machine.save(update_fields=['is_pilot_endpoint'])
+        self.machine.rollout_groups.add(AgentReleaseGroup.objects.get(slug='pilot'))
         allowed = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
         self.assertNotEqual(allowed.reason_code, 'group_not_allowed')
 

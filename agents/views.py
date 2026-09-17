@@ -42,6 +42,8 @@ from .services import (
     build_update_agent_job_payload,
     build_fqdn,
     evaluate_agent_update_policy,
+    evaluate_agent_update_eligibility,
+    record_agent_update_policy_evaluation,
     record_agent_operational_status,
     record_collection,
     record_heartbeat,
@@ -902,7 +904,35 @@ class AgentUpdatePolicyView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        decision = evaluate_agent_update_policy(machine, for_agent=True)
+        now = timezone.now()
+        decision = evaluate_agent_update_eligibility(machine, now=now, for_agent=True)
+        record_agent_update_policy_evaluation(machine, now)
+        auto_job_id = self._dispatch_legacy_policy_update(machine, decision)
+        create_audit_event(
+            event_type='agent.update_policy_evaluated',
+            title='Politica de update avaliada',
+            description=f'Politica de update avaliada para {machine.hostname}.',
+            severity=AuditEvent.SEVERITY_DEBUG,
+            actor_type=AuditEvent.ACTOR_AGENT,
+            actor_name='NightOwlAgent',
+            endpoint=machine,
+            metadata={
+                'eligible': decision.eligible,
+                'reason_code': decision.reason_code,
+                'release_id': decision.selected_release_id,
+                'target_version': decision.target_version,
+                'channel': decision.channel,
+                'rollout_bucket': decision.rollout_bucket,
+            },
+        )
+        payload = decision.as_agent_payload()
+        if auto_job_id:
+            payload['job_id'] = auto_job_id
+        return Response(payload, status=status.HTTP_200_OK)
+
+    @staticmethod
+    def _dispatch_legacy_policy_update(machine, decision):
+        """Compatibility path only. Rollout preview never invokes this dispatch."""
         auto_job_id = ''
         if decision.eligible and decision.release:
             pending_update = machine.jobs.filter(
@@ -941,27 +971,7 @@ class AgentUpdatePolicyView(APIView):
                     endpoint=machine,
                     metadata={'job_id': auto_job_id, 'release_id': str(release.id), 'target_version': release.version},
                 )
-        create_audit_event(
-            event_type='agent.update_policy_evaluated',
-            title='Politica de update avaliada',
-            description=f'Politica de update avaliada para {machine.hostname}.',
-            severity=AuditEvent.SEVERITY_DEBUG,
-            actor_type=AuditEvent.ACTOR_AGENT,
-            actor_name='NightOwlAgent',
-            endpoint=machine,
-            metadata={
-                'eligible': decision.eligible,
-                'reason_code': decision.reason_code,
-                'release_id': decision.selected_release_id,
-                'target_version': decision.target_version,
-                'channel': decision.channel,
-                'rollout_bucket': decision.rollout_bucket,
-            },
-        )
-        payload = decision.as_agent_payload()
-        if auto_job_id:
-            payload['job_id'] = auto_job_id
-        return Response(payload, status=status.HTTP_200_OK)
+        return auto_job_id
 
 
 class AgentInventoryCollectionView(APIView):

@@ -1,4 +1,7 @@
 import hashlib
+import json
+import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dataclasses import dataclass
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -352,6 +355,17 @@ def _heartbeat_agent(payload: dict) -> dict:
     return merged
 
 
+def _record_component_versions(machine, payload):
+    agent = _heartbeat_agent(payload)
+    fields = []
+    for field in ('updater_version', 'tray_version'):
+        version = normalize_agent_version(agent.get(field))
+        if version:
+            setattr(machine, field, version)
+            fields.append(field)
+    return fields
+
+
 def _parse_agent_datetime(value):
     if value is None:
         return timezone.now()
@@ -591,7 +605,7 @@ def _release_signing_key(release):
     return AgentReleaseSigningKey.objects.filter(key_id=key_id).first()
 
 
-def ensure_release_signature_policy(release):
+def ensure_release_signature_policy(release, *, now=None):
     if release.legacy_unsigned:
         if release.channel == AgentRelease.CHANNEL_STABLE:
             raise ValidationError('Release stable nao pode ser legacy_unsigned.')
@@ -606,7 +620,7 @@ def ensure_release_signature_policy(release):
         raise ValidationError(f'RELEASE_KEY_UNKNOWN: key_id {release.signature_key_id} nao cadastrado.')
     if key.revoked:
         raise ValidationError(f'RELEASE_KEY_REVOKED: key_id {release.signature_key_id} revogado.')
-    now = timezone.now()
+    now = now or timezone.now()
     if key.valid_from and key.valid_from > now:
         raise ValidationError(f'RELEASE_KEY_NOT_YET_VALID: key_id {release.signature_key_id}.')
     if key.valid_until and key.valid_until < now:
@@ -829,10 +843,13 @@ def deterministic_rollout_bucket(endpoint, release):
     return int(digest[:8], 16) % 100
 
 
-def _is_now_inside_window(start, end, now):
-    if not start or not end:
+def _is_now_inside_window(start, end, now, timezone_name=''):
+    if not start or not end or start == end:
         return False
-    local_time = timezone.localtime(now).time()
+    try:
+        local_time = now.astimezone(ZoneInfo(timezone_name or settings.TIME_ZONE)).time()
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
     if start <= end:
         return start <= local_time <= end
     return local_time >= start or local_time <= end
@@ -869,21 +886,21 @@ def _release_group_allowed(endpoint, release):
 
 
 def _updater_version(endpoint):
-    try:
-        diagnostic = endpoint.operational_status
-    except AgentOperationalStatus.DoesNotExist:
-        return endpoint.agent_version or ''
-    return getattr(diagnostic, 'updater_version', '') or endpoint.agent_version or ''
+    return endpoint.updater_version or ''
 
 
-def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=False, explicit_release=None, record_evaluation=True, allow_downgrade=False):
+def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_agent=False,
+                                      explicit_release=None, allow_downgrade=False,
+                                      automatic_rollout=False, freshness_seconds=900):
+    """Read-only decision. The rollout contract is stricter than legacy delivery."""
+    if automatic_rollout and (manual or allow_downgrade or freshness_seconds <= 0):
+        raise ValueError('Automatic rollout cannot use manual overrides')
     now = now or timezone.now()
+    if timezone.is_naive(now):
+        raise ValueError('Eligibility requires an aware timestamp')
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     current_version = endpoint.agent_version or ''
     release = explicit_release or _latest_available_release_for_endpoint(endpoint, channel)
-    if record_evaluation:
-        endpoint.last_update_policy_evaluation_at = now
-        endpoint.save(update_fields=['last_update_policy_evaluation_at', 'updated_at'])
 
     def decision(eligible, reason_code, selected_release=release, bucket=None):
         return AgentUpdateDecision(
@@ -898,6 +915,35 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
             rollout_bucket=bucket,
         )
 
+    if automatic_rollout:
+        if not current_version:
+            return decision(False, 'agent_version_unknown')
+        if not endpoint.is_active:
+            return decision(False, 'endpoint_inactive')
+        if endpoint.has_terminal_lifecycle:
+            return decision(False, 'endpoint_lifecycle_terminal')
+        if endpoint.agent_lifecycle_status != 'installed':
+            return decision(False, 'endpoint_lifecycle_unknown')
+        if endpoint.status != AgentMachine.STATUS_ONLINE:
+            return decision(False, 'endpoint_offline')
+        if not endpoint.last_seen_at or not timedelta(0) <= now - endpoint.last_seen_at <= timedelta(seconds=freshness_seconds):
+            return decision(False, 'endpoint_stale')
+        try:
+            identity = uuid.UUID(endpoint.machine_id)
+            if identity.int == 0:
+                raise ValueError('empty identity')
+        except (ValueError, TypeError, AttributeError):
+            return decision(False, 'machine_identity_invalid')
+        if AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).exclude(pk=endpoint.pk).exists():
+            return decision(False, 'machine_identity_ambiguous')
+        if endpoint.rollout_groups.filter(slug__in=['critical', 'servers']).exists():
+            return decision(False, 'protected_endpoint_group')
+        active_jobs = endpoint.jobs.filter(job_type='update_agent', status__in=['queued', 'sent', 'running'])
+        if active_jobs.exists():
+            if active_jobs.filter(expires_at__lte=now).exists() or active_jobs.filter(created_at__lt=now - timedelta(seconds=900)).exists():
+                return decision(False, 'update_job_stale')
+            return decision(False, 'update_job_active')
+
     if endpoint.update_paused:
         return decision(False, UPDATE_POLICY_REASON_ENDPOINT_PAUSED, release)
 
@@ -909,25 +955,29 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
 
     if explicit_release is not None and explicit_release.channel != channel:
         return decision(False, UPDATE_POLICY_REASON_CHANNEL_NO_RELEASE, release)
+    if automatic_rollout and endpoint.pinned_agent_version and endpoint.pinned_agent_version != release.version:
+        return decision(False, 'pinned_release_mismatch', release)
 
-    if release.channel == AgentRelease.CHANNEL_PILOT and not getattr(endpoint, 'is_pilot_endpoint', False):
+    if release.channel == AgentRelease.CHANNEL_PILOT and not endpoint.rollout_groups.filter(slug='pilot').exists():
         return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
 
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
     manual_explicit_release = manual and explicit_release is not None
+    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and not manual_explicit_release:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
     if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not (
         manual_explicit_release and release.status in {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED}
     ):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     if not release.package_url or not release.sha256:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
-    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and not manual_explicit_release:
-        return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
     if not _release_domain_allowed(release.package_url):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
+    if automatic_rollout and release.legacy_unsigned:
+        return decision(False, UPDATE_POLICY_REASON_SIGNATURE_INVALID, release)
     try:
-        ensure_release_signature_policy(release)
+        ensure_release_signature_policy(release, now=now)
     except ValidationError as exc:
         text = str(exc)
         if 'RELEASE_KEY_REVOKED' in text:
@@ -945,6 +995,8 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
         return decision(False, UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE, release)
 
     minimum_updater = (release.minimum_updater_version or '').strip()
+    if (minimum_updater or automatic_rollout or compare_versions(release.version, UPDATE_AGENT_EXPLICIT_RELEASE_MIN_VERSION) in (0, 1)) and not _updater_version(endpoint):
+        return decision(False, 'updater_version_unknown', release)
     if update_agent_requires_bootstrap(endpoint, release):
         return decision(False, UPDATE_POLICY_REASON_UPDATER_BOOTSTRAP_REQUIRED, release)
     if minimum_updater:
@@ -957,22 +1009,93 @@ def evaluate_agent_update_policy(endpoint, *, now=None, manual=False, for_agent=
         return decision(False, UPDATE_POLICY_REASON_GROUP_NOT_ALLOWED, release)
 
     bucket = deterministic_rollout_bucket(endpoint, release)
-    rollout_percentage = 100 if release.mandatory else min(100, max(0, release.rollout_percentage or 0))
+    rollout_percentage = 100 if release.mandatory and not automatic_rollout else min(100, max(0, release.rollout_percentage or 0))
     if not manual and bucket >= rollout_percentage:
         return decision(False, UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED, release, bucket)
 
     policy = endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL
+    if automatic_rollout and policy not in dict(AgentMachine.UPDATE_POLICY_CHOICES):
+        return decision(False, 'update_policy_invalid', release, bucket)
     if policy == AgentMachine.UPDATE_POLICY_MANUAL and not manual:
         return decision(False, UPDATE_POLICY_REASON_MANUAL_POLICY, release, bucket)
     if policy == AgentMachine.UPDATE_POLICY_NOTIFY_ONLY and not manual:
         return decision(False, UPDATE_POLICY_REASON_NOTIFY_ONLY, release, bucket)
     if policy == AgentMachine.UPDATE_POLICY_MAINTENANCE_WINDOW and not manual:
-        if not _is_now_inside_window(endpoint.maintenance_window_start, endpoint.maintenance_window_end, now):
+        if not endpoint.maintenance_window_start or not endpoint.maintenance_window_end or endpoint.maintenance_window_start == endpoint.maintenance_window_end:
+            return decision(False, 'maintenance_window_invalid', release, bucket)
+        try:
+            ZoneInfo(endpoint.maintenance_window_timezone or settings.TIME_ZONE)
+        except (ZoneInfoNotFoundError, ValueError):
+            return decision(False, 'maintenance_timezone_invalid', release, bucket)
+        if not _is_now_inside_window(endpoint.maintenance_window_start, endpoint.maintenance_window_end, now, endpoint.maintenance_window_timezone):
             return decision(False, UPDATE_POLICY_REASON_OUTSIDE_MAINTENANCE_WINDOW, release, bucket)
-    if policy == AgentMachine.UPDATE_POLICY_AUTOMATIC and not endpoint.auto_update_enabled and not release.mandatory and not manual:
+    if policy == AgentMachine.UPDATE_POLICY_AUTOMATIC and not endpoint.auto_update_enabled and (automatic_rollout or not release.mandatory) and not manual:
         return decision(False, UPDATE_POLICY_REASON_MANUAL_POLICY, release, bucket)
 
     return decision(True, UPDATE_POLICY_REASON_ELIGIBLE, release, bucket)
+
+
+def record_agent_update_policy_evaluation(endpoint, now):
+    endpoint.last_update_policy_evaluation_at = now
+    endpoint.save(update_fields=['last_update_policy_evaluation_at', 'updated_at'])
+
+
+def evaluate_agent_update_policy(endpoint, *, now=None, record_evaluation=True, **kwargs):
+    """Legacy adapter: callers explicitly opt out of timestamp telemetry."""
+    now = now or timezone.now()
+    result = evaluate_agent_update_eligibility(endpoint, now=now, **kwargs)
+    if record_evaluation:
+        record_agent_update_policy_evaluation(endpoint, now)
+    return result
+
+
+def build_agent_rollout_preview(release, *, endpoints=None, target_group_ids=None,
+                                now=None, freshness_seconds=900, mode='automatic'):
+    """No dispatch, writes, replacement candidates or approval persistence."""
+    if mode != 'automatic' or freshness_seconds <= 0:
+        raise ValueError('Invalid preview contract')
+    now = now or timezone.now()
+    if timezone.is_naive(now):
+        raise ValueError('Preview requires an aware timestamp')
+    group_ids = sorted({str(value) for value in (target_group_ids or [])})
+    candidates = endpoints if endpoints is not None else AgentMachine.objects.all()
+    if group_ids:
+        candidates = candidates.filter(rollout_groups__id__in=group_ids).distinct()
+    targets, canonical_targets = [], []
+    for endpoint in sorted(candidates, key=lambda item: str(item.pk)):
+        decision = evaluate_agent_update_eligibility(endpoint, now=now, explicit_release=release,
+                                                    automatic_rollout=True, freshness_seconds=freshness_seconds)
+        groups = sorted(str(value) for value in endpoint.rollout_groups.values_list('id', flat=True))
+        target = dict(endpoint_id=str(endpoint.pk), machine_id=endpoint.machine_id,
+                      current_version=endpoint.agent_version, updater_version=_updater_version(endpoint),
+                      bucket=deterministic_rollout_bucket(endpoint, release), eligible=decision.eligible,
+                      reason_code=decision.reason_code, groups=groups,
+                      policy=endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL,
+                      channel=endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE)
+        canonical_targets.append({**target, 'active': endpoint.is_active,
+                                  'lifecycle': endpoint.agent_lifecycle_status, 'status': endpoint.status,
+                                  'paused': endpoint.update_paused, 'pinned': endpoint.pinned_agent_version,
+                                  'auto': endpoint.auto_update_enabled,
+                                  'window_start': endpoint.maintenance_window_start.isoformat() if endpoint.maintenance_window_start else '',
+                                  'window_end': endpoint.maintenance_window_end.isoformat() if endpoint.maintenance_window_end else '',
+                                  'window_timezone': endpoint.maintenance_window_timezone or settings.TIME_ZONE})
+        targets.append({**target, 'hostname': endpoint.hostname})
+    release_state = {field: getattr(release, field) for field in (
+        'version', 'channel', 'status', 'rollout_percentage', 'rollout_paused', 'mandatory',
+        'revoked', 'signature_valid', 'legacy_unsigned', 'signature_key_id', 'minimum_updater_version',
+        'sha256', 'size', 'manifest_sha256', 'signature_sha256')}
+    # URLs influence domain eligibility and artifact identity, but are not emitted as target data.
+    release_state['artifact_urls'] = [release.package_url, release.checksum_url, release.manifest_url, release.signature_url]
+    release_state['id'] = str(release.pk)
+    release_state['groups'] = sorted(str(value) for value in release.allowed_groups.values_list('id', flat=True))
+    canonical = dict(schema=1, mode=mode, freshness_seconds=freshness_seconds,
+                     target_groups=group_ids, release=release_state, targets=canonical_targets)
+    cohort_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+    eligible = sum(target['eligible'] for target in targets)
+    return dict(release_id=str(release.pk), version=release.version, channel=release.channel,
+                generated_at=now.isoformat(), mode=mode, total_candidates=len(targets),
+                eligible_count=eligible, excluded_count=len(targets)-eligible,
+                targets=targets, cohort_hash=cohort_hash, cohort_schema=1)
 
 
 def _safe_ip(value):
@@ -1206,6 +1329,7 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
             'agent_reported_at',
         ]
     machine.mark_seen(received_at)
+    agent_update_fields.extend(_record_component_versions(machine, payload))
     machine.save(
         update_fields=[
             'hostname',
@@ -1359,6 +1483,7 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
     elif payload.get('agent_version') and not machine.agent_mode:
         machine.agent_mode = 'dotnet-service'
     machine.mark_seen()
+    component_fields = _record_component_versions(machine, payload)
     machine.save(update_fields=[
         'hostname',
         'domain',
@@ -1376,6 +1501,7 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
         *identity_update_fields,
         'agent_version',
         'agent_mode',
+        *component_fields,
         'updated_at',
     ])
 
@@ -1467,6 +1593,10 @@ def record_agent_operational_status(machine, payload: dict):
     machine_id = _normalize_machine_id(payload.get('machine_id') or payload.get('agent_id'))
     if machine_id and machine.machine_id and machine_id != machine.machine_id:
         raise ValueError('machine_id does not match authenticated endpoint.')
+
+    component_fields = _record_component_versions(machine, payload)
+    if component_fields:
+        machine.save(update_fields=[*component_fields, 'updated_at'])
 
     agent = _as_dict(payload.get('agent') or payload.get('agent_status') or payload)
     updater = _as_dict(payload.get('updater') or payload.get('update_state'))
