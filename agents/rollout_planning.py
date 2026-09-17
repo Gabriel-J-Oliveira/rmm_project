@@ -133,6 +133,10 @@ def evaluate_rollout_target_dispatch_safety(campaign, target, *, now, context=No
         return blocked('campaign_not_running')
     if target.campaign_id != campaign.pk or not wave or target.wave_id != wave.pk or not context['wave_valid']:
         return blocked('wave_not_dispatchable')
+    if target.state in {'succeeded', 'failed', 'rolled_back', 'cancelled'}:
+        return blocked('target_runtime_terminal')
+    if target.agent_job_id or target.state in {'queued', 'running'}:
+        return blocked('target_already_dispatched')
     if target.state != 'eligible' or not target.eligibility_at_selection:
         return blocked('target_not_approved')
     safety = release_safety(release, context['key'], now)

@@ -92,6 +92,8 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
             plan, used = wave_contract(data.get('wave_plan', []), preview['eligible_count'], minimum)
             if ready and (not preview['eligible_count'] or used != preview['eligible_count']):
                 raise PolicyContractError('ready_requires_complete_plan')
+            if used != preview['eligible_count']:
+                raise PolicyContractError('wave_assignment_required')
             policies = {}
             for row in AgentMachine.objects.filter(pk__in=[t['endpoint_id'] for t in preview['targets']]).values(
                     'id', 'pinned_agent_version', 'auto_update_enabled', 'maintenance_window_start',

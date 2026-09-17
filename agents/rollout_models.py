@@ -73,6 +73,7 @@ class AgentRolloutWave(models.Model):
 
 
 class AgentRolloutTarget(models.Model):
+    STATES = ('excluded', 'eligible', 'queued', 'running', 'succeeded', 'failed', 'rolled_back', 'cancelled')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     campaign = models.ForeignKey(AgentRolloutCampaign, on_delete=models.PROTECT, related_name='targets')
     wave = models.ForeignKey(AgentRolloutWave, null=True, on_delete=models.PROTECT, related_name='targets')
@@ -87,7 +88,7 @@ class AgentRolloutTarget(models.Model):
     rollout_bucket = models.PositiveIntegerField()
     eligibility_at_selection = models.BooleanField()
     reason_code = models.CharField(max_length=100, blank=True)
-    state = models.CharField(max_length=20, choices=[('excluded', 'excluded'), ('eligible', 'eligible')])
+    state = models.CharField(max_length=20, choices=[(s, s) for s in STATES])
     selected_at = models.DateTimeField()
     started_at = models.DateTimeField(null=True)
     completed_at = models.DateTimeField(null=True)
@@ -101,5 +102,12 @@ class AgentRolloutTarget(models.Model):
         constraints = [
             models.UniqueConstraint(fields=['campaign', 'endpoint'], name='rollout_target_endpoint'),
             models.CheckConstraint(condition=models.Q(rollout_bucket__lte=99), name='rollout_target_bucket'),
-            models.CheckConstraint(condition=models.Q(agent_job__isnull=True, started_at__isnull=True, completed_at__isnull=True) & (models.Q(state='eligible', eligibility_at_selection=True) | models.Q(state='excluded', eligibility_at_selection=False, wave__isnull=True)), name='rollout_target_snapshot_only'),
+            models.UniqueConstraint(fields=['agent_job'], condition=models.Q(agent_job__isnull=False), name='rollout_target_unique_job'),
+            models.CheckConstraint(condition=(
+                models.Q(state='excluded', eligibility_at_selection=False, wave__isnull=True, agent_job__isnull=True, started_at__isnull=True, completed_at__isnull=True)
+                | models.Q(state='eligible', eligibility_at_selection=True, wave__isnull=False, agent_job__isnull=True, started_at__isnull=True, completed_at__isnull=True)
+                | (models.Q(eligibility_at_selection=True, wave__isnull=False, agent_job__isnull=False, started_at__isnull=False)
+                   & (models.Q(state__in=['queued', 'running'], completed_at__isnull=True)
+                      | models.Q(state__in=['succeeded', 'failed', 'rolled_back', 'cancelled'], completed_at__isnull=False)))
+            ), name='rollout_target_runtime'),
         ]

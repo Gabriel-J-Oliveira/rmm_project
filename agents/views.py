@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from .audit import create_audit_event, get_client_ip
 from .authentication import authenticate_agent_token
 from .job_progress import sanitize_job_value
+from .lifecycle_jobs import agent_job_parameters
 from .models import (
     AgentDeploymentToken,
     AgentEnrollmentLog,
@@ -208,6 +209,8 @@ class AgentSelfUninstallAuthorizeView(APIView):
             return _generic_uninstall_auth_response()
         cache.delete(key)
 
+        from .lifecycle_jobs import active_lifecycle_job, lock_lifecycle_endpoint
+        machine = lock_lifecycle_endpoint(machine)
         active_request = machine.uninstall_requests.filter(
             status__in=[
                 AgentUninstallRequest.STATUS_REQUESTED,
@@ -226,6 +229,8 @@ class AgentSelfUninstallAuthorizeView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        if active_lifecycle_job(machine):
+            return Response({'error': 'lifecycle_job_active'}, status=status.HTTP_409_CONFLICT)
         now = timezone.now()
         uninstall_request = AgentUninstallRequest.objects.create(
             endpoint=machine,
@@ -931,10 +936,16 @@ class AgentUpdatePolicyView(APIView):
         return Response(payload, status=status.HTTP_200_OK)
 
     @staticmethod
+    @transaction.atomic
     def _dispatch_legacy_policy_update(machine, decision):
         """Compatibility path only. Rollout preview never invokes this dispatch."""
         auto_job_id = ''
         if decision.eligible and decision.release:
+            from .lifecycle_jobs import active_lifecycle_job, lock_lifecycle_endpoint
+            machine = lock_lifecycle_endpoint(machine)
+            conflict = active_lifecycle_job(machine)
+            if conflict:
+                return str(conflict.pk) if conflict.job_type == AgentJob.TYPE_UPDATE_AGENT else ''
             pending_update = machine.jobs.filter(
                 job_type=AgentJob.TYPE_UPDATE_AGENT,
                 status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
@@ -1100,8 +1111,8 @@ class AgentJobsPullView(APIView):
                 'job_id': str(job.id),
                 'type': job.job_type,
                 'job_type': job.job_type,
-                'payload': job.payload,
-                'parameters': job.payload,
+                'payload': agent_job_parameters(job),
+                'parameters': agent_job_parameters(job),
                 'created_at': job.created_at.isoformat(),
                 'timeout_seconds': job.payload.get('timeout_seconds') or 300,
                 'attempt': job.attempt or 1,

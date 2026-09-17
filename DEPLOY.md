@@ -1876,3 +1876,90 @@ CHECKs/guards, nunca editando migration publicada. Nenhum scheduler/reconcile/au
 Zero AgentJob criado pelo planner/command; fixtures regressivas somente em bancos
 descartaveis. Sem Campaign/job real, migration/deploy em producao ou restart.
 RC39, stable/latest, CS-SRV-CST, TAXCEL e politicas reais nao foram alterados.
+
+### 6C.3 - Dispatch idempotente e vinculo Target/AgentJob (2026-09-17)
+
+6C = IN PROGRESS; 6D/6E = PENDING. PHASE_6_ORCHESTRATOR_ENABLED = false;
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false; AUTO_PAUSE_IMPLEMENTED = false.
+Executor agora existe, mas continua desabilitado por default pelos dois flags runtime.
+Nao existe scheduler/timer/cron, controle administrativo novo ou reconcile nesta entrega.
+
+- `dispatch_rollout_campaign(campaign, now=aware)` exige ambos os flags ON,
+  Campaign running e Wave operacional explicitamente running/current_wave correta.
+  Wave ready permanece somente planejavel. Nao inicia/avanca/completa Campaign/Wave.
+- Uma transacao adquire locks na ordem Campaign, Wave, Targets da Wave por PK,
+  AgentMachines aprovados por PK, release e signing key. O lock inclui TODOS os
+  endpoints aprovados da Campaign para estabilizar tambem a ocupacao da capacidade,
+  nao somente os candidatos. Recarrega o contexto e revalida safety dentro dos locks;
+  plano externo nao autoriza dispatch. Nenhuma substituicao ou uso da Wave seguinte.
+- Protocolo comum `agents/lifecycle_jobs.py`: atomic + AgentMachine FOR UPDATE
+  ordenado por PK + verificar lifecycle update/repair/uninstall queued/sent/running.
+  Writers inventariados/adaptados: endpoint_job_create (update/repair/manual),
+  endpoint_uninstall_request (painel), AgentSelfUninstallAuthorizeView (Tray),
+  AgentUpdatePolicyView._dispatch_legacy_policy_update (GET legado), executor.
+  GET continua legado, nao vira Campaign. Update existente pode ser reutilizado
+  pelo GET; repair/uninstall existente bloqueia novo update. Historico duplicado
+  ativo/stale apenas bloqueia: nao e reconciliado/cancelado/deduplicado.
+- Payload reutiliza build_update_agent_job_payload/AgentUpdateDecision sem chamar
+  evaluate_agent_update_policy nem selecao 6B. source=rollout_campaign, force=false,
+  timeout=900, attempt=1, expires_at=now+30min, created_by=rollout_orchestrator,
+  correlation_id=Target UUID. AgentJob.payload.rollout_metadata guarda Campaign/Wave/
+  sequence/Target/cohort_hash/schema. Pull retira SOMENTE essa metadata administrativa
+  de payload/parameters enviados ao agente; evita ampliar o contrato estrito RC39.
+  URLs/hashes/assinatura/minimum updater mantem exatamente o builder comum existente.
+- Job bulk_create, Target bulk_update eligible->queued com agent_job/started_at,
+  e AuditEvent agregado rollout.dispatch_created pertencem ao mesmo lote atomico.
+  Auditoria guarda IDs/contagem/release/hash, nao payload/URL/token. Qualquer falha
+  desfaz jobs, links e auditoria. Repeticao/restart nunca troca job de Target runtime,
+  mesmo se Job completed; Target permanece queued ate reconcile futuro da 6D.
+- Capacidade preserva 6C.2: limite menos endpoints aprovados ocupados por lifecycle
+  ativo/stale, contando endpoint uma vez. Jobs da propria Campaign ocupam o limite.
+  Planner retorna target_already_dispatched para queued/running com job e
+  target_runtime_terminal para succeeded/failed/rolled_back/cancelled;
+  selected_for_dispatch continua contendo somente eligible + safety PASS.
+- Command: --plan-only continua read-only com flags OFF; --execute exige --campaign
+  UUID explicita e flags ON. Modos conflitantes/sem Campaign sao recusados. Nao executa
+  todas as Campaigns implicitamente. Nenhum comando execute foi usado contra dados reais.
+
+Migration nova `0032_rollout_target_execution`, sem editar 0031:
+- Target states excluded/eligible/queued/running/succeeded/failed/rolled_back/cancelled.
+  CHECK exige excluded sem wave/job/timestamps; eligible com wave e sem execucao;
+  queued/running com wave/job/started_at e sem completed_at; terminais com esses
+  campos mais completed_at. Todos runtime sao eligibility_at_selection=true.
+- Unique condicional agent_job nao NULL; sem unique global por endpoint/lifecycle.
+  16 guards: preserva os anteriores, troca target_freeze para congelar todos os
+  snapshots exceto os cinco campos de execucao, acrescenta transicao e binding.
+  eligible->queued; queued->running/terminal; running->terminal. Sem reabertura,
+  troca/remocao de job associado ou alteracao dos timestamps finais persistidos.
+- Forward recusa explicitamente drafts antigos com eligible sem Wave:
+  ROLLOUT_WAVE_ASSIGNMENT_REQUIRED. Nao inventa distribuicao nem altera snapshots.
+  Novas Campaigns exigem plano cobrindo todos os elegiveis inclusive em draft;
+  zero elegiveis continua permitido somente em draft. Preparacao administrativa
+  dos drafts preexistentes e pre-condicao antes de futura migration em producao.
+- Reverse verifica PRIMEIRO ausencia de runtime/agent_job. Havendo qualquer um,
+  ROLLBACK_UNSAFE e nenhuma remocao de vinculo/historico. Sem runtime, retorna ao
+  CHECK/guards snapshot-only 0031; forward novamente preserva endpoints/releases.
+
+Validacao sintetica: PostgreSQL 17.10 com database/role descartaveis, sem clone
+nem uso do database de producao. Forward vazio/dados existentes, reverse antes
+do dispatch e reverse recusado depois, 16 guards e unique/indexes PASS.
+Concorrencia repetida (duas conexoes) com 250 Targets e limite 3: somente 3 jobs,
+zero duplicacao; nova conexao/restart nao redespacha. Writer manual REAL do painel
+versus Campaign testado nas duas ordens, incluindo espera comprovada pelo lock.
+Rollback forcado em criacao de job, save do Target e audit preserva estado anterior.
+Cenario 250 Targets, primeira Wave com 5 e duas ocupacoes preexistentes: 22 queries,
+somente 1 novo job, capacidade esgotada, Wave seguinte intacta; sem N+1 material.
+Regressoes de update/repair/uninstall/GET legado/pull/result incluidas na suite.
+
+Nenhum deploy/migration de producao, .env/flag real alterado, restart, Campaign/job
+real ou update real. RC39/stable/latest/CS-SRV-CST/TAXCEL permanecem intocados.
+
+Resultado final: agents/config SQLite 312 testes, 305 PASS e 7 skips (browser
+opt-in e seis testes PostgreSQL), zero falhas. PostgreSQL isolado 169 PASS,
+zero skips/falhas; rodada confirmatoria 15,318 s. Django check, py_compile,
+makemigrations --check --dry-run e git diff --check PASS; nenhuma migration
+adicional alem de 0032 esperada. Scan do diff sem segredo literal novo.
+Cleanup dos bancos/roles/arquivos temporarios confirmado antes do commit.
+Rodada PostgreSQL ampliada: 217 testes PASS, zero skips/falhas, 17,033 s,
+incluindo uninstall administrativo, diagnostics e job progress/pull/result.
+Uninstall administrativo SQLite repetido apos revisao final: 13 PASS.

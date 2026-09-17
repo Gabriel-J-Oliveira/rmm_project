@@ -3561,6 +3561,8 @@ def endpoint_uninstall_request(request, pk):
             )
             return JsonResponse({'error': 'purge_confirmation_failed', 'detail': 'Digite exatamente o hostname do endpoint para confirmar o purge.'}, status=400)
 
+    from agents.lifecycle_jobs import lock_lifecycle_endpoint
+    endpoint = lock_lifecycle_endpoint(endpoint)
     active_request = _active_uninstall_request(endpoint)
     if active_request:
         return JsonResponse(
@@ -3689,6 +3691,7 @@ def endpoint_uninstall_cancel(request, pk, request_id):
 
 
 @require_POST
+@transaction.atomic
 def endpoint_job_create(request, pk):
     if not is_nightowl_technical_user(request.user):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para criar jobs tecnicos.'}, status=403)
@@ -3732,6 +3735,8 @@ def endpoint_job_create(request, pk):
         AgentJob.TYPE_UNINSTALL_AGENT,
     }
     if selected_type in lifecycle_types:
+        from agents.lifecycle_jobs import lock_lifecycle_endpoint
+        endpoint = lock_lifecycle_endpoint(endpoint)
         active_lifecycle_job = endpoint.jobs.filter(
             job_type__in=lifecycle_types,
             status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
