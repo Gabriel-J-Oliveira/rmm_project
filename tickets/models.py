@@ -147,6 +147,17 @@ class Ticket(models.Model):
         (SOURCE_MONITORING, 'Monitoramento'),
     ]
 
+    REQUESTER_LINK_CREATION = 'creation'
+    REQUESTER_LINK_BACKFILL = 'backfill'
+    REQUESTER_LINK_MANUAL = 'manual'
+    REQUESTER_LINK_LEGACY = 'legacy'
+    REQUESTER_LINK_ORIGIN_CHOICES = [
+        (REQUESTER_LINK_CREATION, 'Criacao do chamado'),
+        (REQUESTER_LINK_BACKFILL, 'Backfill'),
+        (REQUESTER_LINK_MANUAL, 'Manual'),
+        (REQUESTER_LINK_LEGACY, 'Legado'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     number = models.PositiveIntegerField(unique=True, editable=False)
     title = models.CharField(max_length=200)
@@ -167,6 +178,13 @@ class Ticket(models.Model):
         on_delete=models.SET_NULL,
         related_name='desk_tickets',
     )
+    requester_link_origin = models.CharField(
+        max_length=30,
+        choices=REQUESTER_LINK_ORIGIN_CHOICES,
+        blank=True,
+        default='',
+    )
+    requester_linked_at = models.DateTimeField(null=True, blank=True)
     queue = models.CharField(max_length=150, blank=True, default='N1 - Atendimento')
     assigned_to = models.CharField(max_length=150, blank=True)
     endpoint = models.ForeignKey(AgentMachine, null=True, blank=True, on_delete=models.SET_NULL, related_name='tickets')
