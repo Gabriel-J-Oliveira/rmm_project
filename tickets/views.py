@@ -63,6 +63,12 @@ from .services.user_directory import (
     ticket_queryset_for_ad_user,
     user_groups_for_profile,
 )
+from .services.requester_linking import (
+    RequesterLinkConflict,
+    RequesterLinkError,
+    change_requester_link,
+    requester_identity_snapshot,
+)
 
 
 def _base_context(active_section='queue'):
@@ -839,6 +845,8 @@ def ticket_api_create(request):
             requester_department=requester_snapshot['department'],
             requester_is_partner=requester_snapshot['is_partner'],
             requester_ad_user=requester_ad_user,
+            requester_link_origin=(Ticket.REQUESTER_LINK_CREATION if requester_ad_user else ''),
+            requester_linked_at=timezone.now() if requester_ad_user else None,
             status=Ticket.STATUS_NEW,
             priority=priority,
             category=category,
@@ -869,6 +877,77 @@ def ticket_api_create(request):
         if mode == 'assign':
             assign_ticket(ticket, actor=actor, assignee=actor, source='Web')
     return JsonResponse({'ok': True, 'ticket': _api_ticket_payload(ticket)}, status=201)
+
+
+def ticket_api_ad_users(request):
+    _require_technical_access(request)
+    query = str(request.GET.get('q') or '').strip()
+    if not query:
+        return JsonResponse({'ok': True, 'results': []})
+    users = (
+        ADUser.objects.select_related('ou')
+        .filter(
+            Q(display_name__icontains=query)
+            | Q(sam_account_name__icontains=query)
+            | Q(user_principal_name__icontains=query)
+            | Q(email__icontains=query)
+        )
+        .order_by('sam_account_name')[:25]
+    )
+    return JsonResponse({
+        'ok': True,
+        'results': [
+            {
+                **requester_identity_snapshot(user),
+                'ou': user.ou.name if user.ou else '',
+                'enabled': user.enabled,
+            }
+            for user in users
+        ],
+    })
+
+
+@require_POST
+def ticket_api_requester_link(request, number):
+    _require_technical_access(request)
+    payload = _json_payload(request)
+    if payload is None:
+        return JsonResponse({'ok': False, 'error': 'JSON invalido.'}, status=400)
+    if 'expected_requester_ad_user_id' not in payload:
+        return JsonResponse({'ok': False, 'error': 'Informe o vinculo esperado atual.'}, status=400)
+    if 'requester_ad_user_id' not in payload:
+        return JsonResponse({'ok': False, 'error': 'Informe o novo solicitante ou null para remover.'}, status=400)
+
+    new_user = None
+    new_user_id = payload.get('requester_ad_user_id')
+    if new_user_id not in (None, ''):
+        new_user = ADUser.objects.select_related('ou').filter(pk=new_user_id).first()
+        if not new_user:
+            return JsonResponse({'ok': False, 'error': 'Solicitante AD invalido.'}, status=400)
+
+    ticket = get_object_or_404(Ticket, number=number)
+    actor_name = _request_actor(request)
+    try:
+        ticket, event = change_requester_link(
+            ticket,
+            new_user=new_user,
+            expected_requester_ad_user_id=payload.get('expected_requester_ad_user_id'),
+            actor_name=actor_name,
+            actor_user=request.user,
+            reason=payload.get('reason'),
+        )
+    except RequesterLinkConflict as exc:
+        return JsonResponse({'ok': False, 'error': str(exc)}, status=409)
+    except RequesterLinkError as exc:
+        return JsonResponse({'ok': False, 'error': str(exc)}, status=400)
+
+    return JsonResponse({
+        'ok': True,
+        'event_id': str(event.pk),
+        'requester': requester_identity_snapshot(ticket.requester_ad_user),
+        'origin': ticket.requester_link_origin,
+        'linked_at': ticket.requester_linked_at.isoformat() if ticket.requester_linked_at else None,
+    })
 
 
 @require_POST

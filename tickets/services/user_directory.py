@@ -70,6 +70,7 @@ class DirectoryMatch:
     user: ADUser | None
     status: str
     candidates: tuple[ADUser, ...] = ()
+    match_method: str = ''
 
 
 def find_ad_user_for_ticket(ticket: Ticket) -> DirectoryMatch:
@@ -90,7 +91,22 @@ def find_ad_user_for_ticket(ticket: Ticket) -> DirectoryMatch:
 
     candidates = tuple(ADUser.objects.select_related('ou').filter(query).order_by('sam_account_name'))
     if len(candidates) == 1:
-        return DirectoryMatch(candidates[0], 'matched')
+        candidate = candidates[0]
+        username_match = any(
+            str(value or '').strip().casefold() in {
+                str(candidate.sam_account_name or '').strip().casefold(),
+                str(candidate.user_principal_name or '').strip().casefold(),
+            }
+            for value in username_keys
+        )
+        email_match = bool(email and email == normalized_email(candidate.email))
+        match_method = (
+            'username_email' if username_match and email_match
+            else 'username' if username_match
+            else 'email' if email_match
+            else ''
+        )
+        return DirectoryMatch(candidate, 'matched', match_method=match_method)
     if len(candidates) > 1:
         return DirectoryMatch(None, 'ambiguous', candidates)
     return DirectoryMatch(None, 'no_match')
