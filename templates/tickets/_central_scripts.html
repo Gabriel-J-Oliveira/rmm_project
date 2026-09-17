@@ -2402,7 +2402,7 @@
         focusTicketRow(focusedTicketId, { scroll: false, select: false });
         selectTicketForPreview(focusedTicketId);
     }
-    if (new URLSearchParams(window.location.search).get('new') === '1' && quickTicketPrefill?.requester_ad_user_id) {
+    if (new URLSearchParams(window.location.search).get('new') === '1') {
         setTimeout(() => openQuickTicketDrawer(), 120);
     }
     setTimeout(() => {
