@@ -32,6 +32,11 @@
     const relatedLinkModal = document.querySelector('[data-related-link-modal]');
     const relatedMergeModal = document.querySelector('[data-related-merge-modal]');
     const relatedReferenceModal = document.querySelector('[data-related-reference-modal]');
+    const requesterLinkDrawer = document.querySelector('[data-requester-link-drawer]');
+    const requesterLinkSearch = document.querySelector('[data-requester-link-search]');
+    const requesterLinkResults = document.querySelector('[data-requester-link-results]');
+    const requesterLinkUrl = "{% url 'tickets:api-requester-link' ticket.number %}";
+    const adUsersSearchUrl = "{% url 'tickets:api-ad-users' %}";
     let toastUndo = null;
     let activeActivityFilter = 'all';
     let serviceChecklistComplete = false;
@@ -42,6 +47,9 @@
     let pendingAttachmentDelete = null;
     let currentReferenceCard = null;
     let selectedComposerTemplateId = '';
+    let requesterLinkMode = 'link';
+    let requesterLinkSelected = null;
+    let requesterLinkSearchTimer = null;
 
     function all(selector, root = document) {
         return Array.from(root.querySelectorAll(selector));
@@ -119,6 +127,128 @@
         toast.hidden = false;
         clearTimeout(showToast.timer);
         showToast.timer = setTimeout(() => { toast.hidden = true; }, 5200);
+    }
+
+    function syncRequesterLinkSummary(user, origin = '', linkedAt = null) {
+        const summary = document.querySelector('[data-requester-link-summary]');
+        const associate = document.querySelector('[data-detail-action="open-requester-link"]');
+        const replace = document.querySelector('[data-detail-action="replace-requester-link"]');
+        const remove = document.querySelector('[data-detail-action="remove-requester-link"]');
+        if (summary) {
+            summary.dataset.requesterId = user?.id || '';
+            summary.innerHTML = user
+                ? `<strong data-requester-link-name>${escapeHtml(user.display_name || user.sam_account_name)}</strong>
+                   <span data-requester-link-username>${escapeHtml(user.sam_account_name || '')}</span>
+                   <small data-requester-link-provenance>Vínculo: ${escapeHtml(origin === 'manual' ? 'Manual' : origin || 'Sem vínculo')}${linkedAt ? ` · ${escapeHtml(new Date(linkedAt).toLocaleString('pt-BR'))}` : ''}</small>`
+                : '<span data-requester-link-empty>Sem vínculo com usuário do AD</span>';
+        }
+        if (associate) associate.hidden = Boolean(user);
+        if (replace) replace.hidden = !user;
+        if (remove) remove.hidden = !user;
+    }
+
+    function closeRequesterLinkDrawer() {
+        if (!requesterLinkDrawer) return;
+        requesterLinkDrawer.hidden = true;
+        requesterLinkDrawer.classList.remove('is-open');
+        document.body.classList.remove('drawer-open');
+        requesterLinkSelected = null;
+    }
+
+    function renderRequesterLinkResults(users) {
+        if (!requesterLinkResults) return;
+        requesterLinkResults.innerHTML = users.length
+            ? users.map((user) => `<button type="button" class="nw-requester-link-result" data-requester-link-pick="${escapeHtml(user.id)}" data-requester-link-user="${escapeHtml(JSON.stringify(user))}">
+                <strong>${escapeHtml(user.display_name || user.sam_account_name)}</strong>
+                <span>${escapeHtml(user.sam_account_name)}${user.user_principal_name ? ` · ${escapeHtml(user.user_principal_name)}` : ''}</span>
+                <small>${escapeHtml(user.email || 'Sem e-mail')} · ${escapeHtml(user.ou || 'Sem OU')}${user.enabled ? '' : ' · Inativo'}</small>
+            </button>`).join('')
+            : '<p>Nenhum usuário encontrado.</p>';
+    }
+
+    function openRequesterLinkDrawer(mode = 'link') {
+        if (!requesterLinkDrawer) return;
+        closeDrawers();
+        requesterLinkMode = mode;
+        requesterLinkSelected = null;
+        const current = document.querySelector('[data-requester-link-summary]')?.dataset.requesterId || '';
+        requesterLinkDrawer.dataset.currentUserId = current;
+        const title = requesterLinkDrawer.querySelector('[data-requester-link-title]');
+        const subtitle = requesterLinkDrawer.querySelector('[data-requester-link-subtitle]');
+        const reasonLabel = requesterLinkDrawer.querySelector('[data-requester-link-reason-label]');
+        const confirm = requesterLinkDrawer.querySelector('[data-requester-link-confirm]');
+        const currentBox = requesterLinkDrawer.querySelector('[data-requester-link-current]');
+        const currentUser = current ? state.requesterAdUser : null;
+        if (title) title.textContent = mode === 'remove' ? 'Remover vínculo' : mode === 'replace' ? 'Trocar vínculo' : 'Associar solicitante';
+        if (subtitle) subtitle.textContent = mode === 'remove' ? 'Esta ação não altera os dados históricos do chamado.' : 'Escolha explicitamente o usuário do Active Directory.';
+        if (reasonLabel) reasonLabel.textContent = mode === 'link' ? 'Motivo (opcional)' : 'Motivo (obrigatório)';
+        if (confirm) confirm.textContent = mode === 'remove' ? 'Remover vínculo' : mode === 'replace' ? 'Trocar vínculo' : 'Associar solicitante';
+        if (currentBox) currentBox.hidden = !current;
+        if (current && currentUser) {
+            currentBox.querySelector('[data-requester-link-current-name]').textContent = currentUser.display_name || currentUser.sam_account_name;
+            currentBox.querySelector('[data-requester-link-current-meta]').textContent = currentUser.sam_account_name || '';
+        }
+        requesterLinkDrawer.querySelector('[data-requester-link-search-wrap]').hidden = mode === 'remove';
+        requesterLinkDrawer.querySelector('[data-requester-link-selected]').hidden = true;
+        requesterLinkDrawer.querySelector('[data-requester-link-reason]').value = '';
+        requesterLinkResults.innerHTML = mode === 'remove' ? '<p>Confirme a remoção do vínculo atual.</p>' : '<p>Digite ao menos dois caracteres para buscar no diretório.</p>';
+        requesterLinkDrawer.hidden = false;
+        requesterLinkDrawer.classList.add('is-open');
+        document.body.classList.add('drawer-open');
+        requesterLinkSearch?.focus();
+        window.lucide?.createIcons?.();
+    }
+
+    async function searchRequesterLinkUsers(query) {
+        if (!requesterLinkResults) return;
+        if (query.length < 2) {
+            requesterLinkResults.innerHTML = '<p>Digite ao menos dois caracteres para buscar no diretório.</p>';
+            return;
+        }
+        requesterLinkResults.innerHTML = '<p>Buscando no diretório...</p>';
+        try {
+            const response = await fetch(`${adUsersSearchUrl}?q=${encodeURIComponent(query)}`, { credentials: 'same-origin' });
+            const data = await response.json();
+            if (!response.ok || !data.ok) throw new Error();
+            renderRequesterLinkResults(data.results || []);
+        } catch (error) {
+            requesterLinkResults.innerHTML = '<p>Não foi possível consultar o diretório.</p>';
+        }
+    }
+
+    async function confirmRequesterLink() {
+        if (!requesterLinkDrawer) return;
+        const reason = requesterLinkDrawer.querySelector('[data-requester-link-reason]')?.value.trim() || '';
+        if (requesterLinkMode !== 'link' && !reason) {
+            showToast('Informe o motivo para alterar o vínculo.', '');
+            return;
+        }
+        if (requesterLinkMode !== 'remove' && !requesterLinkSelected) {
+            showToast('Selecione um usuário do diretório.', '');
+            return;
+        }
+        const currentId = requesterLinkDrawer.dataset.currentUserId || '';
+        try {
+            const response = await fetch(requesterLinkUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken(), 'X-Requested-With': 'XMLHttpRequest' },
+                body: JSON.stringify({
+                    expected_requester_ad_user_id: currentId || null,
+                    requester_ad_user_id: requesterLinkMode === 'remove' ? null : requesterLinkSelected.id,
+                    reason,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.ok) throw new Error(data.error || 'Não foi possível atualizar o vínculo.');
+            state.requesterAdUser = data.requester;
+            syncRequesterLinkSummary(data.requester, data.origin, data.linked_at);
+            addAuditEvent({ type: 'relationship', badge: 'Solicitante', action: requesterLinkMode === 'remove' ? 'Removeu vínculo' : requesterLinkMode === 'replace' ? 'Trocou vínculo' : 'Associou vínculo', oldValue: currentId || '-', newValue: data.requester?.id || '-', severity: 'info' });
+            showToast(requesterLinkMode === 'remove' ? 'Vínculo removido.' : 'Vínculo do solicitante atualizado.', '');
+            closeRequesterLinkDrawer();
+        } catch (error) {
+            showToast(error.message || 'Falha ao atualizar o vínculo.', '');
+        }
     }
 
     function openDrawer(drawer) {
@@ -1426,6 +1556,9 @@
             if (action === 'copy-email') showToast('E-mail do solicitante copiado.');
             if (action === 'open-rmm') showToast('Abrindo endpoint no RMM.');
             if (action === 'link-endpoint') showToast('Vinculo de endpoint preparado no mock.');
+            if (action === 'open-requester-link') openRequesterLinkDrawer('link');
+            if (action === 'replace-requester-link') openRequesterLinkDrawer('replace');
+            if (action === 'remove-requester-link') openRequesterLinkDrawer('remove');
             if (action === 'mention') focusComment('@');
             if (action === 'edit-title') {
                 const nextTitle = window.prompt('Novo titulo do chamado:', state.title || '');
@@ -1443,6 +1576,8 @@
         }
         if (event.target.closest('[data-drawer-close]')) closeDrawers();
         if (event.target.closest('[data-audit-close]')) closeAudit();
+        if (event.target.closest('[data-requester-link-close]')) closeRequesterLinkDrawer();
+        if (event.target.closest('[data-requester-link-confirm]')) confirmRequesterLink();
         if (event.target.closest('[data-audit-export]')) exportAuditCsv();
         if (event.target.closest('[data-audit-copy]')) copyAuditSummary();
         if (event.target.closest('[data-audit-clear]')) {
@@ -1564,6 +1699,20 @@
             else showToast('Mais acoes do relacionado preparadas no mock.');
         }
         if (event.target.closest('[data-related-modal-close]')) closeRelatedModals();
+        const requesterLinkPick = event.target.closest('[data-requester-link-pick]');
+        if (requesterLinkPick) {
+            try {
+                requesterLinkSelected = JSON.parse(requesterLinkPick.dataset.requesterLinkUser || '{}');
+            } catch (error) {
+                requesterLinkSelected = null;
+            }
+            const selected = requesterLinkDrawer?.querySelector('[data-requester-link-selected]');
+            if (selected && requesterLinkSelected) {
+                selected.hidden = false;
+                selected.querySelector('[data-requester-link-selected-name]').textContent = requesterLinkSelected.display_name || requesterLinkSelected.sam_account_name;
+                selected.querySelector('[data-requester-link-selected-meta]').textContent = `${requesterLinkSelected.sam_account_name || ''} · ${requesterLinkSelected.email || 'Sem e-mail'}`;
+            }
+        }
         if (event.target.closest('[data-reference-copy]')) {
             const text = currentReferenceCard ? relatedSolution(currentReferenceCard) : '';
             navigator.clipboard?.writeText(text);
@@ -1872,6 +2021,10 @@
         if (event.target.matches('[data-audit-search]')) {
             filterAudit();
         }
+        if (event.target.matches('[data-requester-link-search]')) {
+            window.clearTimeout(requesterLinkSearchTimer);
+            requesterLinkSearchTimer = window.setTimeout(() => searchRequesterLinkUsers(event.target.value.trim()), 180);
+        }
     });
     document.addEventListener('change', (event) => {
         if (event.target.matches('[data-comment-file]')) {
@@ -1975,6 +2128,7 @@
         if (event.key === 'Escape') closeAudit();
         if (event.key === 'Escape') closeRmmConfirm();
         if (event.key === 'Escape') closeRmmMessageModal();
+        if (event.key === 'Escape') closeRequesterLinkDrawer();
         if (event.key === 'Escape') {
             closeAttachmentPreview();
             closeAttachmentDelete();

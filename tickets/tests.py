@@ -396,6 +396,125 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertContains(detail_response, '"department": "Financeiro"')
         self.assertContains(detail_response, '#9010')
 
+    def test_manual_requester_link_replace_unlink_and_audit_snapshots(self):
+        import json
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket, TicketAuditEvent
+
+        other = ADUser.objects.create(
+            sid='S-1-5-21-LINK-OTHER',
+            sam_account_name='other.user',
+            display_name='Other User',
+            user_principal_name='other.user@nalen.local',
+            email='other.user@nalen.local',
+            distinguished_name='CN=Other User,OU=Financeiro,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        ticket = Ticket.objects.create(number=9020, title='Vinculo manual', description='x')
+        link_url = reverse('tickets:api-requester-link', args=[ticket.number])
+
+        linked = self.client.post(
+            link_url,
+            data=json.dumps({
+                'expected_requester_ad_user_id': None,
+                'requester_ad_user_id': str(self.ad_user.pk),
+            }),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(linked.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.requester_ad_user, self.ad_user)
+        self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_MANUAL)
+        self.assertIsNotNone(ticket.requester_linked_at)
+        event = TicketAuditEvent.objects.get(ticket=ticket, event_type='requester_linked')
+        self.assertEqual(event.actor, 'gabriel')
+        self.assertEqual(event.old_value, '')
+        self.assertEqual(event.new_value, str(self.ad_user.pk))
+        self.assertEqual(event.metadata['new_user']['sam_account_name'], 'mariana.souza')
+
+        missing_reason = self.client.post(
+            link_url,
+            data=json.dumps({
+                'expected_requester_ad_user_id': str(self.ad_user.pk),
+                'requester_ad_user_id': str(other.pk),
+            }),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+
+        replaced = self.client.post(
+            link_url,
+            data=json.dumps({
+                'expected_requester_ad_user_id': str(self.ad_user.pk),
+                'requester_ad_user_id': str(other.pk),
+                'reason': 'Corrigir identidade selecionada',
+            }),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(replaced.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.requester_ad_user, other)
+        self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_MANUAL)
+        replace_event = TicketAuditEvent.objects.get(ticket=ticket, event_type='requester_replaced')
+        self.assertEqual(replace_event.metadata['previous_user']['id'], str(self.ad_user.pk))
+        self.assertEqual(replace_event.metadata['new_user']['id'], str(other.pk))
+
+        removed = self.client.post(
+            link_url,
+            data=json.dumps({
+                'expected_requester_ad_user_id': str(other.pk),
+                'requester_ad_user_id': None,
+                'reason': 'Solicitante incorreto',
+            }),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(removed.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertIsNone(ticket.requester_ad_user)
+        self.assertEqual(ticket.requester_link_origin, '')
+        self.assertIsNone(ticket.requester_linked_at)
+        self.assertTrue(TicketAuditEvent.objects.filter(ticket=ticket, event_type='requester_unlinked').exists())
+
+    def test_requester_link_requires_expected_id_and_rejects_stale_change(self):
+        import json
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.create(number=9021, title='Concorrencia', description='x', requester_ad_user=self.ad_user)
+        link_url = reverse('tickets:api-requester-link', args=[ticket.number])
+        missing = self.client.post(
+            link_url,
+            data=json.dumps({'requester_ad_user_id': None, 'reason': 'Remover'}),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(missing.status_code, 400)
+
+        stale = self.client.post(
+            link_url,
+            data=json.dumps({
+                'expected_requester_ad_user_id': None,
+                'requester_ad_user_id': str(self.ad_user.pk),
+            }),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(stale.status_code, 409)
+
+    def test_ad_user_search_is_explicit_and_does_not_change_tickets(self):
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.create(number=9022, title='Busca', description='x')
+        response = self.client.get(reverse('tickets:api-ad-users'), {'q': 'mariana.souza'}, HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['results'][0]['id'], str(self.ad_user.pk))
+        ticket.refresh_from_db()
+        self.assertIsNone(ticket.requester_ad_user)
+
     def test_users_list_filters_open_tickets_endpoint_and_ou(self):
         from agents.models import AgentMachine
         from tickets.models import Ticket
@@ -564,11 +683,37 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertEqual(api_response.status_code, 201)
         ticket = Ticket.objects.get(title='Novo acesso')
         self.assertEqual(ticket.requester_ad_user, self.ad_user)
+        self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_CREATION)
+        self.assertIsNotNone(ticket.requester_linked_at)
         self.assertEqual(ticket.requester_name, 'Mariana Souza')
         self.assertEqual(ticket.requester_username, 'mariana.souza')
         self.assertEqual(ticket.requester_email, 'mariana.souza@nalen.local')
         self.assertEqual(ticket.requester_department, 'Financeiro')
         self.assertIn('\n\n', ticket.description)
+        self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_CREATION)
+        self.assertIsNotNone(ticket.requester_linked_at)
+
+    def test_api_create_without_ad_user_keeps_empty_provenance(self):
+        from tickets.models import Ticket
+
+        response = self.client.post(
+            reverse('tickets:api-create'),
+            data={
+                'requester': 'Solicitante sem AD',
+                'title': 'Chamado sem vinculo',
+                'description': 'x',
+                'category': 'Acesso',
+                'priority': Ticket.PRIORITY_NORMAL,
+            },
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        ticket = Ticket.objects.get(title='Chamado sem vinculo')
+        self.assertIsNone(ticket.requester_ad_user)
+        self.assertEqual(ticket.requester_link_origin, '')
+        self.assertIsNone(ticket.requester_linked_at)
 
     def test_api_ignores_client_partner_flag_for_linked_non_partner(self):
         from tickets.models import Ticket
@@ -697,6 +842,8 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         call_command('link_ticket_requesters', '--apply', stdout=apply_output)
         ticket.refresh_from_db()
         self.assertEqual(ticket.requester_ad_user, self.ad_user)
+        self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_BACKFILL)
+        self.assertIsNotNone(ticket.requester_linked_at)
         self.assertIn('APPLY', apply_output.getvalue())
 
     def test_backfill_command_reports_ambiguity_without_apply(self):
@@ -735,6 +882,8 @@ class TicketDetailLayoutTests(DeskTechnicalTestCase):
         self.assertContains(response, 'Anexos')
         self.assertContains(response, 'Dispositivo')
         self.assertContains(response, 'Relacionados')
+        self.assertContains(response, 'Associar solicitante')
+        self.assertContains(response, 'Sem vínculo com usuário do AD')
 
     def test_detail_page_uses_compact_inline_actions(self):
         response = self.client.get(reverse('tickets:detail', args=[1048]), HTTP_HOST=self.host)

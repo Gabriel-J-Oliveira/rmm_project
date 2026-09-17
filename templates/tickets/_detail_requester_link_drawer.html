@@ -1,0 +1,42 @@
+<aside class="nw-requester-link-drawer" data-requester-link-drawer hidden aria-label="Vinculo do solicitante">
+    <div class="nw-requester-link-backdrop" data-requester-link-close></div>
+    <section class="nw-requester-link-panel" role="dialog" aria-modal="true" aria-labelledby="requester-link-title">
+        <header class="nw-requester-link-header">
+            <div>
+                <span>Identidade corporativa</span>
+                <h2 id="requester-link-title" data-requester-link-title>Associar solicitante</h2>
+                <p data-requester-link-subtitle>Escolha explicitamente o usuário do Active Directory.</p>
+            </div>
+            <button class="desk-icon-button" type="button" data-requester-link-close aria-label="Fechar vinculo"><i data-lucide="x"></i></button>
+        </header>
+
+        <div class="nw-requester-link-current" data-requester-link-current hidden>
+            <span>Vínculo atual</span>
+            <strong data-requester-link-current-name>-</strong>
+            <small data-requester-link-current-meta>-</small>
+        </div>
+
+        <div class="nw-requester-link-body">
+            <label class="nw-requester-link-field" data-requester-link-search-wrap>
+                <span>Buscar usuário por nome, SAM, UPN ou e-mail</span>
+                <input type="search" autocomplete="off" placeholder="Ex.: gustavo.cordeiro ou nome@empresa.com" data-requester-link-search>
+            </label>
+            <div class="nw-requester-link-results" data-requester-link-results>
+                <p>Digite ao menos dois caracteres para buscar no diretório.</p>
+            </div>
+            <div class="nw-requester-link-selected" data-requester-link-selected hidden>
+                <span>Selecionado</span>
+                <strong data-requester-link-selected-name>-</strong>
+                <small data-requester-link-selected-meta>-</small>
+            </div>
+            <label class="nw-requester-link-field" data-requester-link-reason-wrap>
+                <span data-requester-link-reason-label>Motivo (opcional)</span>
+                <textarea rows="3" placeholder="Descreva o motivo da alteração" data-requester-link-reason></textarea>
+            </label>
+        </div>
+        <footer class="nw-requester-link-footer">
+            <button class="desk-btn" type="button" data-requester-link-close>Cancelar</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-requester-link-confirm>Associar solicitante</button>
+        </footer>
+    </section>
+</aside>

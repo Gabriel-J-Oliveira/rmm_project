@@ -26,6 +26,15 @@
                 <span>{{ ticket.sector }} &middot; {{ ticket.role }}</span>
             </div>
         </div>
+        <div class="nw-requester-link-summary" data-requester-link-summary data-requester-id="{{ requester_link.user_id }}">
+            {% if requester_link.user %}
+            <strong data-requester-link-name>{{ requester_link.user.display_name|default:requester_link.user.sam_account_name }}</strong>
+            <span data-requester-link-username>{{ requester_link.user.sam_account_name }}</span>
+            <small data-requester-link-provenance>Vínculo: {{ requester_link.origin_label }}{% if requester_link.linked_at %} · {{ requester_link.linked_at|date:"d/m/Y H:i" }}{% endif %}</small>
+            {% else %}
+            <span data-requester-link-empty>Sem vínculo com usuário do AD</span>
+            {% endif %}
+        </div>
         <div class="nw-side-actions">
             <details class="desk-inline-popover">
                 <summary class="desk-btn">Ver historico</summary>
@@ -35,6 +44,9 @@
                 </div>
             </details>
             <button class="desk-btn" type="button" data-detail-action="copy-email"><i data-lucide="copy"></i>Copiar e-mail</button>
+            <button class="desk-btn desk-btn-primary" type="button" data-detail-action="open-requester-link" {% if requester_link.user %}hidden{% endif %}><i data-lucide="user-plus"></i>Associar solicitante</button>
+            <button class="desk-btn" type="button" data-detail-action="replace-requester-link" {% if not requester_link.user %}hidden{% endif %}><i data-lucide="repeat-2"></i>Trocar vínculo</button>
+            <button class="desk-btn" type="button" data-detail-action="remove-requester-link" {% if not requester_link.user %}hidden{% endif %}><i data-lucide="unlink"></i>Remover vínculo</button>
         </div>
     </article>
 

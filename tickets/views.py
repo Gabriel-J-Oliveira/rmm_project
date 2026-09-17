@@ -628,6 +628,10 @@ def ticket_detail(request, number):
     if not ticket:
         raise Http404('Chamado nao encontrado.')
     detail_context = build_ticket_detail_context(ticket)
+    ticket_record = getattr(ticket, 'record', None)
+    linked_requester = getattr(ticket_record, 'requester_ad_user', None)
+    requester_link_origin = getattr(ticket_record, 'requester_link_origin', '')
+    requester_link_origin_labels = dict(Ticket.REQUESTER_LINK_ORIGIN_CHOICES)
     device_context = detail_context.get('device_context') or {}
     sla = detail_context.get('sla') or {}
     related_count = len(detail_context.get('related_items') or [])
@@ -658,6 +662,13 @@ def ticket_detail(request, number):
     context = {
         **_base_context('queue'),
         'ticket': ticket,
+        'requester_link': {
+            'user': linked_requester,
+            'user_id': str(linked_requester.pk) if linked_requester else '',
+            'origin': requester_link_origin,
+            'origin_label': requester_link_origin_labels.get(requester_link_origin, 'Sem vinculo') if requester_link_origin else '',
+            'linked_at': getattr(ticket_record, 'requester_linked_at', None),
+        },
         **detail_context,
         'audit_events': audit_events,
         'related_count': related_count,
@@ -682,6 +693,7 @@ def ticket_detail(request, number):
             'slaName': getattr(ticket, 'sla', '') or 'Sem SLA',
             'dueAt': ticket.record.due_at.isoformat() if getattr(ticket, 'record', None) and ticket.record.due_at else '',
             'resolved': ticket.status == 'resolved',
+            'requesterAdUser': requester_identity_snapshot(linked_requester),
         },
         'related_alerts': [
             {'title': 'Alerta RMM relacionado', 'description': 'Espaco reservado para vinculo futuro com EndpointAlert.'},
@@ -871,6 +883,7 @@ def ticket_api_create(request):
                 'queue': queue,
                 'sla': sla.name if sla else '',
                 'origin': 'Web',
+                'requester_link_origin': ticket.requester_link_origin,
             },
         )
         prepare_ticket_notification(ticket, 'ticket_created', user=actor)
