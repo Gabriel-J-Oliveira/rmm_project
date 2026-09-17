@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -110,18 +110,52 @@ def ticket_queryset_for_ad_user(user: ADUser):
     return Ticket.objects.select_related('category', 'endpoint', 'sla', 'requester_ad_user').filter(query).distinct()
 
 
+def _unique_identity_owner_map(users):
+    owners = defaultdict(set)
+    for user in users:
+        for key in ad_user_identity_keys(user):
+            owners[key].add(user.pk)
+    return {key: next(iter(user_ids)) for key, user_ids in owners.items() if len(user_ids) == 1}
+
+
 def summarize_ticket_counts(users):
+    """Resolve ticket totals for a user collection with one ticket query."""
     users = list(users)
     counters = {user.pk: {'total': 0, 'open': 0, 'last_activity': None} for user in users}
-    for user in users:
-        for ticket in ticket_queryset_for_ad_user(user).values('status', 'updated_at'):
-            counters[user.pk]['total'] += 1
-            if ticket['status'] in OPEN_TICKET_STATUSES:
-                counters[user.pk]['open'] += 1
-            last = counters[user.pk]['last_activity']
-            if last is None or ticket['updated_at'] > last:
-                counters[user.pk]['last_activity'] = ticket['updated_at']
+    if not users:
+        return counters
+
+    owner_by_key = _unique_identity_owner_map(users)
+    # The normalized identity may be embedded in DOMAIN\\user or a UPN, so the
+    # batch query intentionally fetches only the small projection needed below.
+    for ticket in Ticket.objects.values(
+        'requester_ad_user_id', 'requester_username', 'requester_email', 'status', 'updated_at'
+    ):
+        user_id = ticket['requester_ad_user_id']
+        if user_id not in counters:
+            candidates = {
+                owner_by_key.get(key)
+                for key in ticket_identity_keys_from_values(ticket)
+                if owner_by_key.get(key)
+            }
+            user_id = next(iter(candidates)) if len(candidates) == 1 else None
+        if user_id not in counters:
+            continue
+        counters[user_id]['total'] += 1
+        if ticket['status'] in OPEN_TICKET_STATUSES:
+            counters[user_id]['open'] += 1
+        last = counters[user_id]['last_activity']
+        if last is None or ticket['updated_at'] > last:
+            counters[user_id]['last_activity'] = ticket['updated_at']
     return counters
+
+
+def ticket_identity_keys_from_values(ticket):
+    keys = set(identity_keys(ticket.get('requester_username')))
+    email = normalized_email(ticket.get('requester_email'))
+    if email:
+        keys.update({email, normalize_identity(email)})
+    return {key for key in keys if key}
 
 
 def _endpoint_record(machine: AgentMachine, source: str, when):
@@ -140,70 +174,83 @@ def _endpoint_record(machine: AgentMachine, source: str, when):
 
 
 def endpoint_context_for_ad_user(user: ADUser):
-    keys = ad_user_identity_keys(user)
-    if not keys:
-        return {
-            'current': None,
-            'online': [],
-            'multiple_online': False,
-            'history': [],
-            'history_count': 0,
-        }
+    return endpoint_context_for_ad_users([user]).get(user.pk, _empty_endpoint_context())
 
-    machines = []
-    for machine in AgentMachine.objects.exclude(last_logged_user='').order_by('-last_seen_at'):
-        if normalize_identity(machine.last_logged_user) in keys or normalized_email(machine.last_logged_user) in keys:
-            machines.append(machine)
 
-    snapshots = (
-        InventorySnapshot.objects.select_related('machine')
-        .exclude(logged_user='')
-        .order_by('-received_at')
+def _empty_endpoint_context():
+    return {'current': None, 'online': [], 'multiple_online': False, 'history': [], 'history_count': 0}
+
+
+def endpoint_context_for_ad_users(users):
+    """Build endpoint context for many AD users with bounded query count."""
+    users = list(users)
+    contexts = {user.pk: _empty_endpoint_context() for user in users}
+    if not users:
+        return contexts
+
+    owner_by_key = _unique_identity_owner_map(users)
+    machines = list(
+        AgentMachine.objects.exclude(last_logged_user='').only(
+            'id', 'hostname', 'status', 'os_name', 'last_ip', 'last_seen_at', 'last_logged_user'
+        )
     )
-    grouped = {}
+    machine_owners = {}
+    for machine in machines:
+        owner_id = owner_by_key.get(normalize_identity(machine.last_logged_user))
+        if owner_id:
+            machine_owners[machine.pk] = owner_id
+
+    machine_by_id = {machine.pk: machine for machine in machines}
+    grouped = defaultdict(dict)
     history_counts = Counter()
     first_seen = {}
     last_seen = {}
-    for snapshot in snapshots:
-        if normalize_identity(snapshot.logged_user) not in keys and normalized_email(snapshot.logged_user) not in keys:
+    for snapshot in InventorySnapshot.objects.exclude(logged_user='').values('machine_id', 'logged_user', 'received_at'):
+        owner_id = owner_by_key.get(normalize_identity(snapshot['logged_user']))
+        if not owner_id:
             continue
-        machine = snapshot.machine
-        key = machine.pk
-        history_counts[key] += 1
-        first_seen[key] = snapshot.received_at if key not in first_seen else min(first_seen[key], snapshot.received_at)
-        last_seen[key] = snapshot.received_at if key not in last_seen else max(last_seen[key], snapshot.received_at)
-        grouped.setdefault(key, machine)
+        machine_id = snapshot['machine_id']
+        history_counts[(owner_id, machine_id)] += 1
+        received_at = snapshot['received_at']
+        first_key = (owner_id, machine_id)
+        first_seen[first_key] = min(first_seen.get(first_key, received_at), received_at)
+        last_seen[first_key] = max(last_seen.get(first_key, received_at), received_at)
+        grouped[owner_id][machine_id] = machine_by_id.get(machine_id)
 
-    for machine in machines:
-        grouped.setdefault(machine.pk, machine)
+    for machine_id, owner_id in machine_owners.items():
+        machine = machine_by_id[machine_id]
+        grouped[owner_id][machine_id] = machine
         if machine.last_seen_at:
-            last_seen[machine.pk] = max(last_seen.get(machine.pk, machine.last_seen_at), machine.last_seen_at)
-            first_seen[machine.pk] = min(first_seen.get(machine.pk, machine.last_seen_at), machine.last_seen_at)
-        history_counts[machine.pk] = max(history_counts[machine.pk], 1)
+            key = (owner_id, machine_id)
+            last_seen[key] = max(last_seen.get(key, machine.last_seen_at), machine.last_seen_at)
+            first_seen[key] = min(first_seen.get(key, machine.last_seen_at), machine.last_seen_at)
+        history_counts[(owner_id, machine_id)] = max(history_counts[(owner_id, machine_id)], 1)
 
-    records = []
-    for key, machine in grouped.items():
-        records.append({
-            **_endpoint_record(machine, 'inventory', last_seen.get(key)),
-            'first_seen_at': first_seen.get(key),
-            'last_usage_at': last_seen.get(key),
-            'usage_count': history_counts[key],
-        })
-
-    def sort_key(item):
-        seen_at = item['last_usage_at'] or datetime.min.replace(tzinfo=timezone.utc)
-        return (0 if item['is_online'] else 1, -seen_at.timestamp())
-
-    records.sort(key=sort_key)
-    online = [item for item in records if item['is_online']]
-    current = online[0] if online else (records[0] if records else None)
-    return {
-        'current': current,
-        'online': online,
-        'multiple_online': len(online) > 1,
-        'history': records,
-        'history_count': len(records),
-    }
+    for owner_id, owner_machines in grouped.items():
+        records = []
+        for machine_id, machine in owner_machines.items():
+            if machine is None:
+                continue
+            key = (owner_id, machine_id)
+            records.append({
+                **_endpoint_record(machine, 'inventory', last_seen.get(key)),
+                'first_seen_at': first_seen.get(key),
+                'last_usage_at': last_seen.get(key),
+                'usage_count': history_counts[key],
+            })
+        records.sort(key=lambda item: (
+            0 if item['is_online'] else 1,
+            -(item['last_usage_at'] or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+        ))
+        online = [item for item in records if item['is_online']]
+        contexts[owner_id] = {
+            'current': online[0] if online else (records[0] if records else None),
+            'online': online,
+            'multiple_online': len(online) > 1,
+            'history': records,
+            'history_count': len(records),
+        }
+    return contexts
 
 
 def user_groups_for_profile(user: ADUser, limit=12):

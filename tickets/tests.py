@@ -2,7 +2,9 @@ from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -265,6 +267,109 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertContains(response, 'Mariana Souza')
 
+    def test_users_filters_are_applied_before_pagination(self):
+        from agents.models import AgentMachine
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket
+
+        for index in range(30):
+            user = ADUser.objects.create(
+                sid=f'S-1-5-21-PAGE-{index}',
+                sam_account_name=f'page.user.{index}',
+                display_name=f'Page User {index:02d}',
+                user_principal_name=f'page.user.{index}@nalen.local',
+                email=f'page.user.{index}@nalen.local',
+                distinguished_name=f'CN=Page User {index:02d},OU=Financeiro,DC=nalen,DC=local',
+                ou=self.ou,
+            )
+            if index == 29:
+                Ticket.objects.create(
+                    title='Chamado da pagina filtrada',
+                    description='x',
+                    requester_ad_user=user,
+                    status=Ticket.STATUS_NEW,
+                )
+            if index == 28:
+                AgentMachine.create_with_token(
+                    hostname='PAGE-ENDPOINT',
+                    domain='nalen.local',
+                    status=AgentMachine.STATUS_ONLINE,
+                    last_seen_at=timezone.now(),
+                    last_logged_user=user.sam_account_name,
+                )
+
+        response = self.client.get(
+            reverse('tickets:users'),
+            {'q': 'Page User', 'state': 'with-open-tickets', 'page': 2},
+            HTTP_HOST=self.host,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].paginator.count, 1)
+        self.assertEqual(response.context['page_obj'].paginator.num_pages, 1)
+        self.assertEqual(len(response.context['user_rows']), 1)
+        self.assertContains(response, 'Page User 29')
+
+        endpoint_response = self.client.get(
+            reverse('tickets:users'),
+            {'q': 'Page User', 'state': 'with-endpoint', 'page': 2},
+            HTTP_HOST=self.host,
+        )
+        self.assertEqual(endpoint_response.context['page_obj'].paginator.count, 1)
+        self.assertEqual(len(endpoint_response.context['user_rows']), 1)
+        self.assertContains(endpoint_response, 'Page User 28')
+
+    def test_users_list_query_budget_is_bounded_and_full_page_is_supported(self):
+        from access_inventory.models import ADUser
+
+        for index in range(30):
+            ADUser.objects.create(
+                sid=f'S-1-5-21-BUDGET-{index}',
+                sam_account_name=f'budget.user.{index}',
+                display_name=f'Budget User {index:02d}',
+                user_principal_name=f'budget.user.{index}@nalen.local',
+                email=f'budget.user.{index}@nalen.local',
+                distinguished_name=f'CN=Budget User {index:02d},OU=Financeiro,DC=nalen,DC=local',
+                ou=self.ou,
+            )
+
+        with CaptureQueriesContext(connection) as one_user_queries:
+            one_user_response = self.client.get(
+                reverse('tickets:users'), {'q': 'Budget User 00'}, HTTP_HOST=self.host
+            )
+        with CaptureQueriesContext(connection) as many_user_queries:
+            many_user_response = self.client.get(
+                reverse('tickets:users'), {'q': 'Budget User'}, HTTP_HOST=self.host
+            )
+
+        self.assertEqual(one_user_response.status_code, 200)
+        self.assertEqual(many_user_response.status_code, 200)
+        self.assertEqual(len(many_user_response.context['user_rows']), 25)
+        self.assertLessEqual(len(many_user_queries), len(one_user_queries) + 2)
+
+    def test_user_profile_totals_are_not_limited_to_recent_ticket_window(self):
+        from tickets.models import Ticket
+
+        tickets = [
+            Ticket(
+                number=10000 + index,
+                title=f'Historico {index}',
+                description='x',
+                requester_ad_user=self.ad_user,
+                status=Ticket.STATUS_RESOLVED if index < 40 else Ticket.STATUS_NEW,
+            )
+            for index in range(205)
+        ]
+        Ticket.objects.bulk_create(tickets)
+
+        response = self.client.get(reverse('tickets:user-detail', args=[self.ad_user.pk]), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['total_count'], 205)
+        self.assertEqual(response.context['resolved_count'], 40)
+        self.assertEqual(response.context['open_count'], 165)
+        self.assertEqual(len(response.context['recent_tickets']), 5)
+
     def test_user_without_ticket_or_endpoint_has_empty_states(self):
         detail_response = self.client.get(reverse('tickets:user-detail', args=[self.ad_user.pk]), HTTP_HOST=self.host)
 
@@ -304,6 +409,29 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertEqual(ticket.requester_email, 'mariana.souza@nalen.local')
         self.assertEqual(ticket.requester_department, 'Financeiro')
         self.assertIn('\n\n', ticket.description)
+
+    def test_api_ignores_client_partner_flag_for_linked_non_partner(self):
+        from tickets.models import Ticket
+
+        response = self.client.post(
+            reverse('tickets:api-create'),
+            data={
+                'requester_ad_user_id': str(self.ad_user.pk),
+                'requester': 'Browser value',
+                'title': 'Solicitacao normal',
+                'description': 'x',
+                'category': 'Acesso',
+                'priority': Ticket.PRIORITY_NORMAL,
+                'requester_is_partner': True,
+            },
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        ticket = Ticket.objects.get(title='Solicitacao normal')
+        self.assertFalse(ticket.requester_is_partner)
+        self.assertEqual(ticket.priority, Ticket.PRIORITY_NORMAL)
 
     def test_endpoint_context_prefers_online_recent_endpoint_and_deduplicates_history(self):
         from agents.models import AgentMachine, InventorySnapshot

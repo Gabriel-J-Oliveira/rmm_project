@@ -5,7 +5,7 @@ from django.contrib import messages
 from django.core.paginator import Paginator
 from django.core.exceptions import PermissionDenied
 from django.db import OperationalError, ProgrammingError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -56,6 +56,7 @@ from .services.user_directory import (
     OPEN_TICKET_STATUSES,
     build_recent_ticket_rows,
     endpoint_context_for_ad_user,
+    endpoint_context_for_ad_users,
     find_ad_user_for_ticket,
     requester_prefill_from_ad_user,
     summarize_ticket_counts,
@@ -503,10 +504,9 @@ def _users_queryset_from_request(request):
 def ticket_users(request):
     _require_technical_access(request)
     base_queryset = _users_queryset_from_request(request)
-    page = Paginator(base_queryset, 25).get_page(request.GET.get('page'))
-    users = list(page.object_list)
+    users = list(base_queryset)
     counts = summarize_ticket_counts(users)
-    endpoint_map = {user.pk: endpoint_context_for_ad_user(user) for user in users}
+    endpoint_map = endpoint_context_for_ad_users(users)
     rows = []
     filter_state = str(request.GET.get('state') or 'all').strip()
     for user in users:
@@ -527,6 +527,8 @@ def ticket_users(request):
             continue
         rows.append(row)
 
+    page = Paginator(rows, 25).get_page(request.GET.get('page'))
+
     ou_options = (
         ADUser.objects.select_related('ou')
         .filter(ou__isnull=False)
@@ -538,7 +540,7 @@ def ticket_users(request):
         **_base_context('users'),
         'page_title': 'Usuários',
         'page_subtitle': 'Identidades do AD, chamados e endpoints usados no NightOwl Desk.',
-        'user_rows': rows,
+        'user_rows': page.object_list,
         'page_obj': page,
         'query': request.GET.get('q', ''),
         'state': filter_state,
@@ -562,10 +564,13 @@ def ticket_user_detail(request, pk):
         tickets = tickets.filter(priority=priority_filter)
 
     ticket_rows = list(tickets[:50])
-    all_tickets = list(ticket_queryset_for_ad_user(ad_user).order_by('-updated_at')[:200])
+    ticket_counts = ticket_queryset_for_ad_user(ad_user).aggregate(
+        total_count=Count('id'),
+        open_count=Count('id', filter=Q(status__in=OPEN_TICKET_STATUSES)),
+        resolved_count=Count('id', filter=Q(status=Ticket.STATUS_RESOLVED)),
+    )
+    all_tickets = list(ticket_queryset_for_ad_user(ad_user).order_by('-updated_at')[:50])
     endpoints = endpoint_context_for_ad_user(ad_user)
-    open_count = len([ticket for ticket in all_tickets if ticket.status in OPEN_TICKET_STATUSES])
-    resolved_count = len([ticket for ticket in all_tickets if ticket.status == Ticket.STATUS_RESOLVED])
     prefill = requester_prefill_from_ad_user(ad_user)
     current_endpoint = endpoints['current']
     if current_endpoint:
@@ -574,9 +579,9 @@ def ticket_user_detail(request, pk):
         **_base_context('users'),
         'ad_user': ad_user,
         'ou_name': ad_user.ou.name if ad_user.ou else '',
-        'open_count': open_count,
-        'resolved_count': resolved_count,
-        'total_count': len(all_tickets),
+        'open_count': ticket_counts['open_count'],
+        'resolved_count': ticket_counts['resolved_count'],
+        'total_count': ticket_counts['total_count'],
         'last_activity': all_tickets[0].updated_at if all_tickets else (current_endpoint or {}).get('last_usage_at'),
         'endpoints': endpoints,
         'recent_tickets': all_tickets[:5],
@@ -813,6 +818,8 @@ def ticket_api_create(request):
         'is_partner': bool(payload.get('requester_is_partner')),
     }
     if requester_ad_user:
+        # A linked directory identity is authoritative; never trust this flag from the browser.
+        requester_snapshot['is_partner'] = requester_prefill_from_ad_user(requester_ad_user)['is_partner']
         requester_snapshot.update({
             'name': requester_ad_user.display_name or requester_ad_user.sam_account_name,
             'email': requester_ad_user.email or '',
