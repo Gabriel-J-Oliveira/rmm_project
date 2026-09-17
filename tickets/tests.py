@@ -1,10 +1,22 @@
+from io import StringIO
+
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
 
-class TicketCentralTests(TestCase):
+class DeskTechnicalTestCase(TestCase):
     host = '127.0.0.1'
+
+    def setUp(self):
+        super().setUp()
+        self.tech = get_user_model().objects.create_user('gabriel', password='x', is_staff=True)
+        self.client.force_login(self.tech)
+
+
+class TicketCentralTests(DeskTechnicalTestCase):
 
     def test_central_page_renders_unified_workspace(self):
         response = self.client.get(reverse('tickets:central'), HTTP_HOST=self.host)
@@ -13,10 +25,10 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, 'Central de Atendimento')
         self.assertContains(response, 'desk-ticket-table')
         self.assertContains(response, 'desk-detail-panel')
-        self.assertContains(response, 'desk-filter-commandbar')
+        self.assertContains(response, 'nw-filterbar')
         self.assertContains(response, 'desk-command-palette')
-        self.assertContains(response, 'View:')
-        self.assertContains(response, 'Mais filtros')
+        self.assertContains(response, 'Atribuídos a mim')
+        self.assertContains(response, 'Responsavel')
         self.assertContains(response, 'RMM Alertas')
         self.assertContains(response, 'desk-ticket-grid-header')
         self.assertContains(response, 'Selecione um chamado para ver mais detalhes')
@@ -50,12 +62,28 @@ class TicketCentralTests(TestCase):
         self.assertContains(response, 'data-selected-label')
 
     def test_central_rows_are_prepared_for_client_side_preview(self):
+        from tickets.models import Ticket, TicketCategory
+
+        category, _ = TicketCategory.objects.get_or_create(
+            name='Acesso',
+            defaults={'description': 'Acesso'},
+        )
+
+        Ticket.objects.create(
+            title='Chamado preparado para preview',
+            description='Validar atributos da linha da central.',
+            requester_name='Mariana Souza',
+            requester_department='Financeiro',
+            category=category,
+            queue='N1 - Atendimento',
+        )
+
         response = self.client.get(reverse('tickets:central'), HTTP_HOST=self.host)
 
         self.assertContains(response, 'central-ticket-data')
         self.assertContains(response, 'data-preview-panel')
         self.assertContains(response, 'data-preview-trigger')
-        self.assertContains(response, 'data-detail-url')
+        self.assertContains(response, 'data-detail-url=')
 
     def test_central_renders_rmm_context_and_shortcuts(self):
         response = self.client.get(reverse('tickets:central'), {'origin': 'rmm'}, HTTP_HOST=self.host)
@@ -72,19 +100,43 @@ class TicketCentralTests(TestCase):
         self.assertNotContains(response, '>Fila</a>')
 
 
-class TicketUserDirectoryTests(TestCase):
+class TicketUserDirectoryAccessTests(TestCase):
     host = '127.0.0.1'
 
+    def test_technical_user_can_access_user_directory(self):
+        user = get_user_model().objects.create_user('tech', password='x', is_staff=True)
+        self.client.force_login(user)
+
+        response = self.client.get(reverse('tickets:users'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_authenticated_non_technical_user_is_blocked_from_user_directory(self):
+        user = get_user_model().objects.create_user('requester', password='x')
+        self.client.force_login(user)
+
+        response = self.client.get(reverse('tickets:users'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/meus-chamados/', response['Location'])
+
+    def test_anonymous_user_is_redirected_to_login_for_user_directory(self):
+        response = self.client.get(reverse('tickets:users'), HTTP_HOST=self.host)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/login/', response['Location'])
+
+
+class TicketUserDirectoryTests(DeskTechnicalTestCase):
+
     def setUp(self):
-        from django.contrib.auth import get_user_model
+        super().setUp()
         from access_inventory.models import ADOrganizationalUnit, ADUser
         from tickets.models import TicketCategory
 
-        self.tech = get_user_model().objects.create_user('gabriel', password='x', is_staff=True)
-        self.client.force_login(self.tech)
-        self.ou = ADOrganizationalUnit.objects.create(
+        self.ou, _ = ADOrganizationalUnit.objects.get_or_create(
             distinguished_name='OU=Financeiro,OU=USUARIOS,DC=nalen,DC=local',
-            name='Financeiro',
+            defaults={'name': 'Financeiro'},
         )
         self.ad_user = ADUser.objects.create(
             sid='S-1-5-21-1000',
@@ -96,7 +148,7 @@ class TicketUserDirectoryTests(TestCase):
             ou=self.ou,
             enabled=True,
         )
-        self.category = TicketCategory.objects.create(name='Acesso', description='Acesso')
+        self.category, _ = TicketCategory.objects.get_or_create(name='Acesso', defaults={'description': 'Acesso'})
 
     def test_identity_matching_ignores_display_name_and_uses_username_or_email(self):
         from tickets.models import Ticket
@@ -122,6 +174,42 @@ class TicketUserDirectoryTests(TestCase):
         self.assertEqual(find_ad_user_for_ticket(by_username).user, self.ad_user)
         self.assertEqual(find_ad_user_for_ticket(by_email).user, self.ad_user)
 
+    def test_identity_matching_supports_fk_sam_upn_email_case_and_spaces(self):
+        from tickets.models import Ticket
+        from tickets.services.user_directory import find_ad_user_for_ticket
+
+        linked = Ticket.objects.create(number=9004, title='FK', description='x', requester_ad_user=self.ad_user)
+        by_sam = Ticket.objects.create(number=9005, title='SAM', description='x', requester_username='  mariana.souza  ')
+        by_upn = Ticket.objects.create(number=9006, title='UPN', description='x', requester_username='MARIANA.SOUZA@NALEN.LOCAL')
+        by_email = Ticket.objects.create(number=9007, title='Mail', description='x', requester_email=' mariana.souza@nalen.local ')
+
+        self.assertEqual(find_ad_user_for_ticket(linked).status, 'linked')
+        self.assertEqual(find_ad_user_for_ticket(by_sam).user, self.ad_user)
+        self.assertEqual(find_ad_user_for_ticket(by_upn).user, self.ad_user)
+        self.assertEqual(find_ad_user_for_ticket(by_email).user, self.ad_user)
+
+    def test_ambiguous_matches_do_not_associate_automatically(self):
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket
+        from tickets.services.user_directory import find_ad_user_for_ticket
+
+        ADUser.objects.create(
+            sid='S-1-5-21-1001',
+            sam_account_name='mariana.souza',
+            display_name='Mariana Souza Duplicada',
+            user_principal_name='mariana.duplicada@nalen.local',
+            email='mariana.duplicada@nalen.local',
+            distinguished_name='CN=Mariana Duplicada,OU=Financeiro,OU=USUARIOS,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        ticket = Ticket.objects.create(number=9008, title='Ambiguo', description='x', requester_username='mariana.souza')
+
+        match = find_ad_user_for_ticket(ticket)
+
+        self.assertEqual(match.status, 'ambiguous')
+        self.assertIsNone(match.user)
+        self.assertEqual(len(match.candidates), 2)
+
     def test_users_list_and_profile_render_real_ad_data(self):
         from tickets.models import Ticket
 
@@ -146,6 +234,42 @@ class TicketUserDirectoryTests(TestCase):
         self.assertContains(detail_response, 'Abrir chamado')
         self.assertContains(detail_response, 'requester_ad_user')
         self.assertContains(detail_response, '#9010')
+
+    def test_users_list_filters_open_tickets_endpoint_and_ou(self):
+        from agents.models import AgentMachine
+        from tickets.models import Ticket
+
+        AgentMachine.create_with_token(
+            hostname='FIN-012',
+            domain='nalen.local',
+            status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now(),
+            last_logged_user='mariana.souza',
+        )
+        Ticket.objects.create(
+            number=9011,
+            title='Aberto',
+            description='x',
+            requester_ad_user=self.ad_user,
+            requester_username='mariana.souza',
+            status=Ticket.STATUS_NEW,
+            category=self.category,
+        )
+
+        open_response = self.client.get(reverse('tickets:users'), {'state': 'with-open-tickets'}, HTTP_HOST=self.host)
+        endpoint_response = self.client.get(reverse('tickets:users'), {'state': 'with-endpoint'}, HTTP_HOST=self.host)
+        ou_response = self.client.get(reverse('tickets:users'), {'ou': 'Financeiro'}, HTTP_HOST=self.host)
+        search_response = self.client.get(reverse('tickets:users'), {'q': 'mariana.souza'}, HTTP_HOST=self.host)
+
+        for response in [open_response, endpoint_response, ou_response, search_response]:
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, 'Mariana Souza')
+
+    def test_user_without_ticket_or_endpoint_has_empty_states(self):
+        detail_response = self.client.get(reverse('tickets:user-detail', args=[self.ad_user.pk]), HTTP_HOST=self.host)
+
+        self.assertContains(detail_response, 'Nenhum chamado associado')
+        self.assertContains(detail_response, 'Nenhum endpoint associado')
 
     def test_profile_prefills_quick_ticket_drawer_and_api_persists_ad_user(self):
         from tickets.models import Ticket
@@ -177,9 +301,11 @@ class TicketUserDirectoryTests(TestCase):
         self.assertEqual(ticket.requester_ad_user, self.ad_user)
         self.assertEqual(ticket.requester_name, 'Mariana Souza')
         self.assertEqual(ticket.requester_username, 'mariana.souza')
+        self.assertEqual(ticket.requester_email, 'mariana.souza@nalen.local')
+        self.assertEqual(ticket.requester_department, 'Financeiro')
         self.assertIn('\n\n', ticket.description)
 
-    def test_endpoint_context_prefers_online_recent_endpoint(self):
+    def test_endpoint_context_prefers_online_recent_endpoint_and_deduplicates_history(self):
         from agents.models import AgentMachine, InventorySnapshot
         from tickets.services.user_directory import endpoint_context_for_ad_user
 
@@ -190,7 +316,14 @@ class TicketUserDirectoryTests(TestCase):
             last_seen_at=timezone.now() - timezone.timedelta(days=2),
             last_logged_user='mariana.souza',
         )
-        online, _ = AgentMachine.create_with_token(
+        old_online, _ = AgentMachine.create_with_token(
+            hostname='OLD-ONLINE',
+            domain='nalen.local',
+            status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now() - timezone.timedelta(hours=2),
+            last_logged_user='mariana.souza',
+        )
+        recent_online, _ = AgentMachine.create_with_token(
             hostname='FIN-012',
             domain='nalen.local',
             status=AgentMachine.STATUS_ONLINE,
@@ -204,14 +337,36 @@ class TicketUserDirectoryTests(TestCase):
             hostname='OLD-NOTE',
             logged_user='mariana.souza@nalen.local',
         )
+        InventorySnapshot.objects.create(
+            machine=recent_online,
+            collected_at=timezone.now() - timezone.timedelta(minutes=10),
+            received_at=timezone.now() - timezone.timedelta(minutes=10),
+            hostname='FIN-012',
+            logged_user='mariana.souza',
+        )
 
         context = endpoint_context_for_ad_user(self.ad_user)
-        self.assertEqual(context['current']['hostname'], online.hostname)
-        self.assertEqual(context['history_count'], 2)
+        self.assertEqual(context['current']['hostname'], recent_online.hostname)
+        self.assertTrue(context['multiple_online'])
+        self.assertEqual(context['history_count'], 3)
+        self.assertEqual(len([item for item in context['history'] if item['hostname'] == 'FIN-012']), 1)
+
+    def test_profile_renders_groups(self):
+        from access_inventory.models import ADGroup, ADGroupMembership
+
+        group = ADGroup.objects.create(
+            sid='S-1-5-21-GRP',
+            sam_account_name='GG_FINANCEIRO',
+            name='GG Financeiro',
+            distinguished_name='CN=GG Financeiro,OU=Grupos,DC=nalen,DC=local',
+        )
+        ADGroupMembership.objects.create(parent_group=group, member_user=self.ad_user)
+
+        response = self.client.get(reverse('tickets:user-detail', args=[self.ad_user.pk]), HTTP_HOST=self.host)
+
+        self.assertContains(response, 'GG Financeiro')
 
     def test_backfill_command_dry_run_and_apply(self):
-        from io import StringIO
-        from django.core.management import call_command
         from tickets.models import Ticket
 
         ticket = Ticket.objects.create(
@@ -232,9 +387,30 @@ class TicketUserDirectoryTests(TestCase):
         self.assertEqual(ticket.requester_ad_user, self.ad_user)
         self.assertIn('APPLY', apply_output.getvalue())
 
+    def test_backfill_command_reports_ambiguity_without_apply(self):
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket
 
-class TicketDetailLayoutTests(TestCase):
-    host = '127.0.0.1'
+        ADUser.objects.create(
+            sid='S-1-5-21-1002',
+            sam_account_name='mariana.souza',
+            display_name='Outra Mariana',
+            user_principal_name='outra.mariana@nalen.local',
+            email='outra.mariana@nalen.local',
+            distinguished_name='CN=Outra Mariana,OU=Financeiro,OU=USUARIOS,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        ticket = Ticket.objects.create(number=9021, title='Ambiguo cmd', description='x', requester_username='mariana.souza')
+
+        output = StringIO()
+        call_command('link_ticket_requesters', '--apply', stdout=output)
+        ticket.refresh_from_db()
+
+        self.assertIsNone(ticket.requester_ad_user)
+        self.assertIn('ambiguous: 1', output.getvalue())
+
+
+class TicketDetailLayoutTests(DeskTechnicalTestCase):
 
     def test_detail_page_renders_new_header_and_tabs(self):
         response = self.client.get(reverse('tickets:detail', args=[1048]), HTTP_HOST=self.host)
@@ -261,45 +437,44 @@ class TicketDetailLayoutTests(TestCase):
         self.assertContains(response, 'Bitdefender ausente em FIN-012')
         self.assertContains(response, 'FIN-012')
         self.assertContains(response, 'Acoes remotas')
-        self.assertContains(response, 'Dados vindos do RMM interno')
-        self.assertContains(response, 'desk-device-metrics')
+        self.assertContains(response, 'Risco do endpoint')
+        self.assertContains(response, 'nw-device-metric-grid')
 
     def test_detail_page_renders_resolution_and_audit_drawers(self):
         response = self.client.get(reverse('tickets:detail', args=[1048]), HTTP_HOST=self.host)
 
         self.assertContains(response, 'desk-resolution-drawer')
-        self.assertContains(response, 'Tipo de resolucao')
+        self.assertContains(response, 'Tipo de solução')
         self.assertContains(response, 'desk-audit-drawer')
-        self.assertContains(response, 'Auditoria completa')
+        self.assertContains(response, 'Auditoria do chamado')
 
 
-class TicketCreateLayoutTests(TestCase):
-    host = '127.0.0.1'
+class TicketCreateLayoutTests(DeskTechnicalTestCase):
 
     def test_create_page_renders_quick_and_complete_modes(self):
         response = self.client.get(reverse('tickets:create'), HTTP_HOST=self.host)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Novo chamado')
-        self.assertContains(response, 'Cria&ccedil;&atilde;o completa')
-        self.assertContains(response, 'Cria&ccedil;&atilde;o r&aacute;pida')
+        self.assertContains(response, 'Novo registro avançado')
+        self.assertContains(response, 'Modo avançado')
+        self.assertContains(response, 'Tipo de registro')
         self.assertContains(response, 'desk-create-wizard')
-        self.assertContains(response, 'desk-create-quick')
+        self.assertContains(response, 'nw-record-type-strip')
 
     def test_create_page_renders_problem_and_requester_steps(self):
         response = self.client.get(reverse('tickets:create'), HTTP_HOST=self.host)
 
-        self.assertContains(response, 'Passo 1 de 2')
-        self.assertContains(response, 'O que aconteceu')
-        self.assertContains(response, 'Passo 2 de 2')
-        self.assertContains(response, 'Quem esta solicitando')
-        self.assertContains(response, 'Buscar usuario existente')
+        self.assertContains(response, 'Identificação')
+        self.assertContains(response, 'Solicitante')
+        self.assertContains(response, 'Título')
+        self.assertContains(response, 'Descrição')
+        self.assertContains(response, 'Buscar por nome, e-mail ou setor')
 
     def test_create_page_explains_vip_priority_change(self):
         response = self.client.get(reverse('tickets:create'), HTTP_HOST=self.host)
 
-        self.assertContains(response, 'Solicitante e socio/VIP')
-        self.assertContains(response, 'Prioridade alterada para critica')
+        self.assertContains(response, 'Selecione um solicitante para ver dados compactos')
+        self.assertContains(response, 'Prioridade sugerida')
         self.assertContains(response, 'data-vip-explanation')
 
     def test_create_page_renders_rmm_endpoint_and_duplicate_notice(self):
@@ -309,9 +484,9 @@ class TicketCreateLayoutTests(TestCase):
             HTTP_HOST=self.host,
         )
 
-        self.assertContains(response, 'Dispositivo / endpoint relacionado')
+        self.assertContains(response, 'Endpoint / ativo relacionado')
         self.assertContains(response, 'FIN-012')
-        self.assertContains(response, 'Possivel chamado duplicado')
+        self.assertContains(response, 'Possível chamado duplicado')
         self.assertContains(response, '#1042')
 
     def test_create_page_renders_alert_prefill_from_rmm_alert(self):
@@ -340,8 +515,7 @@ class TicketCreateLayoutTests(TestCase):
         self.assertContains(response, 'TEST-RMM-001')
 
 
-class TicketDashboardLayoutTests(TestCase):
-    host = '127.0.0.1'
+class TicketDashboardLayoutTests(DeskTechnicalTestCase):
 
     def test_dashboard_renders_modes_and_global_controls(self):
         response = self.client.get(reverse('tickets:dashboard'), HTTP_HOST=self.host)
@@ -394,8 +568,7 @@ class TicketDashboardLayoutTests(TestCase):
         self.assertContains(response, 'Agendar relatorio')
 
 
-class TicketAdminExperienceTests(TestCase):
-    host = '127.0.0.1'
+class TicketAdminExperienceTests(DeskTechnicalTestCase):
 
     def test_categories_render_inline_table_and_drawer(self):
         response = self.client.get(reverse('tickets:categories'), HTTP_HOST=self.host)
@@ -409,7 +582,7 @@ class TicketAdminExperienceTests(TestCase):
     def test_categories_warn_when_open_tickets_exist(self):
         response = self.client.get(reverse('tickets:categories'), HTTP_HOST=self.host)
 
-        self.assertContains(response, 'sera ocultada de novos chamados')
+        self.assertContains(response, 'data-category-toggle')
         self.assertContains(response, 'Checklist')
 
     def test_automation_rules_render_shared_rmm_rule_and_builder(self):
@@ -425,24 +598,25 @@ class TicketAdminExperienceTests(TestCase):
         response = self.client.get(reverse('tickets:settings'), HTTP_HOST=self.host)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'desk-settings-hub')
-        self.assertContains(response, 'Geral')
-        self.assertContains(response, 'SLA')
-        self.assertContains(response, 'Integra')
+        self.assertContains(response, 'nw-settings-shell')
+        self.assertContains(response, 'Categorias')
+        self.assertContains(response, 'Filas')
+        self.assertContains(response, 'SLAs')
+        self.assertContains(response, 'Templates')
 
     def test_settings_integrations_use_shared_alert_mapping(self):
         response = self.client.get(reverse('tickets:settings'), {'section': 'integrations'}, HTTP_HOST=self.host)
 
-        self.assertContains(response, 'Severidades que disparam')
-        self.assertContains(response, 'critical')
-        self.assertContains(response, 'warning')
-        self.assertContains(response, 'Forcar sincronizacao')
+        self.assertContains(response, 'Configurações do Desk')
+        self.assertContains(response, 'Resposta automática')
+        self.assertContains(response, 'Automação: SLA próximo')
+        self.assertContains(response, 'data-settings-tab="templates"')
 
     def test_settings_sla_permissions_and_audit_sections_render(self):
         sla = self.client.get(reverse('tickets:settings'), {'section': 'sla'}, HTTP_HOST=self.host)
         permissions = self.client.get(reverse('tickets:settings'), {'section': 'permissions'}, HTTP_HOST=self.host)
         audit = self.client.get(reverse('tickets:settings'), {'section': 'audit'}, HTTP_HOST=self.host)
 
-        self.assertContains(sla, 'SLA por prioridade')
-        self.assertContains(permissions, 'Fechar chamado')
-        self.assertContains(audit, 'Auditoria')
+        self.assertContains(sla, 'Gerencie tempos de resposta')
+        self.assertContains(permissions, 'Resumo')
+        self.assertContains(audit, 'Últimas alterações')

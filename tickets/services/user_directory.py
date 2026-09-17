@@ -114,13 +114,13 @@ def summarize_ticket_counts(users):
     users = list(users)
     counters = {user.pk: {'total': 0, 'open': 0, 'last_activity': None} for user in users}
     for user in users:
-        for ticket in ticket_queryset_for_ad_user(user).only('id', 'status', 'updated_at'):
+        for ticket in ticket_queryset_for_ad_user(user).values('status', 'updated_at'):
             counters[user.pk]['total'] += 1
-            if ticket.status in OPEN_TICKET_STATUSES:
+            if ticket['status'] in OPEN_TICKET_STATUSES:
                 counters[user.pk]['open'] += 1
             last = counters[user.pk]['last_activity']
-            if last is None or ticket.updated_at > last:
-                counters[user.pk]['last_activity'] = ticket.updated_at
+            if last is None or ticket['updated_at'] > last:
+                counters[user.pk]['last_activity'] = ticket['updated_at']
     return counters
 
 
@@ -190,7 +190,11 @@ def endpoint_context_for_ad_user(user: ADUser):
             'usage_count': history_counts[key],
         })
 
-    records.sort(key=lambda item: (not item['is_online'], item['last_usage_at'] or datetime.min.replace(tzinfo=timezone.utc)))
+    def sort_key(item):
+        seen_at = item['last_usage_at'] or datetime.min.replace(tzinfo=timezone.utc)
+        return (0 if item['is_online'] else 1, -seen_at.timestamp())
+
+    records.sort(key=sort_key)
     online = [item for item in records if item['is_online']]
     current = online[0] if online else (records[0] if records else None)
     return {
