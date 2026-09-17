@@ -1,4 +1,5 @@
 from io import StringIO
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -410,7 +411,13 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
             distinguished_name='CN=Other User,OU=Financeiro,DC=nalen,DC=local',
             ou=self.ou,
         )
-        ticket = Ticket.objects.create(number=9020, title='Vinculo manual', description='x')
+        historical = {
+            'requester_name': 'Solicitante historico',
+            'requester_email': 'historico@example.com',
+            'requester_username': 'historico.user',
+            'requester_department': 'Operacoes',
+        }
+        ticket = Ticket.objects.create(number=9020, title='Vinculo manual', description='x', **historical)
         link_url = reverse('tickets:api-requester-link', args=[ticket.number])
 
         linked = self.client.post(
@@ -432,6 +439,9 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertEqual(event.old_value, '')
         self.assertEqual(event.new_value, str(self.ad_user.pk))
         self.assertEqual(event.metadata['new_user']['sam_account_name'], 'mariana.souza')
+        ticket.refresh_from_db()
+        for field, value in historical.items():
+            self.assertEqual(getattr(ticket, field), value)
 
         missing_reason = self.client.post(
             link_url,
@@ -461,6 +471,9 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         replace_event = TicketAuditEvent.objects.get(ticket=ticket, event_type='requester_replaced')
         self.assertEqual(replace_event.metadata['previous_user']['id'], str(self.ad_user.pk))
         self.assertEqual(replace_event.metadata['new_user']['id'], str(other.pk))
+        ticket.refresh_from_db()
+        for field, value in historical.items():
+            self.assertEqual(getattr(ticket, field), value)
 
         removed = self.client.post(
             link_url,
@@ -478,6 +491,59 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertEqual(ticket.requester_link_origin, '')
         self.assertIsNone(ticket.requester_linked_at)
         self.assertTrue(TicketAuditEvent.objects.filter(ticket=ticket, event_type='requester_unlinked').exists())
+        ticket.refresh_from_db()
+        for field, value in historical.items():
+            self.assertEqual(getattr(ticket, field), value)
+
+    def test_generic_update_rejects_requester_ad_user(self):
+        import json
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.create(number=9023, title='API generica', description='x')
+        response = self.client.post(
+            reverse('tickets:api-update', args=[ticket.number]),
+            data=json.dumps({'field': 'requester_ad_user', 'value': str(self.ad_user.pk)}),
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        ticket.refresh_from_db()
+        self.assertIsNone(ticket.requester_ad_user)
+
+    def test_requester_link_endpoints_enforce_technical_access(self):
+        import json
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.create(number=9024, title='Autorizacao', description='x')
+        ad_users_url = reverse('tickets:api-ad-users')
+        link_url = reverse('tickets:api-requester-link', args=[ticket.number])
+        payload = json.dumps({
+            'expected_requester_ad_user_id': None,
+            'requester_ad_user_id': str(self.ad_user.pk),
+        })
+
+        self.assertEqual(self.client.get(ad_users_url, {'q': 'Mariana'}, HTTP_HOST=self.host).status_code, 200)
+        self.assertEqual(self.client.post(link_url, payload, content_type='application/json', HTTP_HOST=self.host).status_code, 200)
+
+        self.client.force_login(get_user_model().objects.create_user('requester-only', password='x'))
+        self.assertEqual(self.client.get(ad_users_url, {'q': 'Mariana'}, HTTP_HOST=self.host).status_code, 302)
+        self.assertEqual(self.client.post(link_url, payload, content_type='application/json', HTTP_HOST=self.host).status_code, 302)
+
+        self.client.logout()
+        self.assertEqual(self.client.get(ad_users_url, {'q': 'Mariana'}, HTTP_HOST=self.host).status_code, 302)
+        self.assertEqual(self.client.post(link_url, payload, content_type='application/json', HTTP_HOST=self.host).status_code, 302)
+
+    def test_ad_user_search_supports_display_name_sam_upn_and_email(self):
+        from tickets.models import Ticket
+
+        ticket = Ticket.objects.create(number=9025, title='Busca completa', description='x')
+        for query in ('Mariana Souza', 'mariana.souza', 'mariana.souza@nalen.local', 'mariana.souza@nalen.local'):
+            response = self.client.get(reverse('tickets:api-ad-users'), {'q': query}, HTTP_HOST=self.host)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()['results'][0]['id'], str(self.ad_user.pk))
+        ticket.refresh_from_db()
+        self.assertIsNone(ticket.requester_ad_user)
 
     def test_requester_link_requires_expected_id_and_rejects_stale_change(self):
         import json
@@ -824,7 +890,7 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertContains(response, 'GG Financeiro')
 
     def test_backfill_command_dry_run_and_apply(self):
-        from tickets.models import Ticket
+        from tickets.models import Ticket, TicketAuditEvent
 
         ticket = Ticket.objects.create(
             number=9020,
@@ -844,7 +910,59 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         self.assertEqual(ticket.requester_ad_user, self.ad_user)
         self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_BACKFILL)
         self.assertIsNotNone(ticket.requester_linked_at)
+        event = TicketAuditEvent.objects.get(ticket=ticket, event_type='requester_linked')
+        self.assertEqual(event.actor, 'Sistema')
+        self.assertEqual(event.metadata['origin'], Ticket.REQUESTER_LINK_BACKFILL)
+        self.assertEqual(event.metadata['match_method'], 'username')
+        self.assertEqual(event.metadata['new_user']['id'], str(self.ad_user.pk))
+        self.assertEqual(event.metadata['new_user']['sam_account_name'], 'mariana.souza')
         self.assertIn('APPLY', apply_output.getvalue())
+
+    def test_backfill_does_not_overwrite_link_created_before_locked_persist(self):
+        from access_inventory.models import ADUser
+        from tickets.models import Ticket, TicketAuditEvent
+
+        manual_user = ADUser.objects.create(
+            sid='S-1-5-21-RACE-MANUAL',
+            sam_account_name='manual.user',
+            display_name='Manual User',
+            user_principal_name='manual.user@nalen.local',
+            email='manual.user@nalen.local',
+            distinguished_name='CN=Manual User,OU=Financeiro,DC=nalen,DC=local',
+            ou=self.ou,
+        )
+        ticket = Ticket.objects.create(number=9026, title='Backfill race', description='x', requester_username='mariana.souza')
+        command_module = __import__(
+            'tickets.management.commands.link_ticket_requesters', fromlist=['Ticket']
+        )
+        real_select_for_update = Ticket.objects.select_for_update
+
+        def select_for_update_with_manual_link(*args, **kwargs):
+            queryset = real_select_for_update(*args, **kwargs)
+            real_get = queryset.get
+
+            def get_and_reconcile(*get_args, **get_kwargs):
+                locked = real_get(*get_args, **get_kwargs)
+                Ticket.objects.filter(pk=locked.pk).update(
+                    requester_ad_user=manual_user,
+                    requester_link_origin=Ticket.REQUESTER_LINK_MANUAL,
+                )
+                locked.refresh_from_db()
+                return locked
+
+            queryset.get = get_and_reconcile
+            return queryset
+
+        with patch.object(command_module.Ticket.objects, 'select_for_update', side_effect=select_for_update_with_manual_link):
+            output = StringIO()
+            call_command('link_ticket_requesters', '--apply', stdout=output)
+
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.requester_ad_user, manual_user)
+        self.assertEqual(ticket.requester_link_origin, Ticket.REQUESTER_LINK_MANUAL)
+        self.assertIn('associated: 0', output.getvalue())
+        self.assertIn('ignored_existing: 1', output.getvalue())
+        self.assertFalse(TicketAuditEvent.objects.filter(ticket=ticket, event_type='requester_linked').exists())
 
     def test_backfill_command_reports_ambiguity_without_apply(self):
         from access_inventory.models import ADUser

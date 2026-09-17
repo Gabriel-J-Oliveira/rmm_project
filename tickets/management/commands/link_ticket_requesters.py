@@ -23,7 +23,7 @@ class Command(BaseCommand):
             'no_match': 0,
             'no_identity': 0,
         }
-        updates = []
+        pending_matches = []
         queryset = Ticket.objects.select_related('requester_ad_user').order_by('number')
         for ticket in queryset:
             if ticket.requester_ad_user_id:
@@ -31,8 +31,10 @@ class Command(BaseCommand):
                 continue
             match = find_ad_user_for_ticket(ticket)
             if match.user:
-                totals['associated'] += 1
-                updates.append((ticket, match.user, match.match_method))
+                if apply:
+                    pending_matches.append((ticket.pk, match.user, match.match_method))
+                else:
+                    totals['associated'] += 1
             elif match.status == 'ambiguous':
                 totals['ambiguous'] += 1
                 self.stdout.write(
@@ -44,11 +46,16 @@ class Command(BaseCommand):
             else:
                 totals['no_match'] += 1
 
-        if apply and updates:
-            with transaction.atomic():
-                for ticket, user, match_method in updates:
+        if apply:
+            for ticket_pk, user, match_method in pending_matches:
+                with transaction.atomic():
+                    ticket = Ticket.objects.select_for_update().get(pk=ticket_pk)
+                    if ticket.requester_ad_user_id:
+                        totals['ignored_existing'] += 1
+                        continue
+
                     linked_at = timezone.now()
-                    ticket.requester_ad_user = user
+                    ticket.requester_ad_user_id = user.pk
                     ticket.requester_link_origin = Ticket.REQUESTER_LINK_BACKFILL
                     ticket.requester_linked_at = linked_at
                     ticket.save(update_fields=[
@@ -73,6 +80,7 @@ class Command(BaseCommand):
                             'actor_user_id': '',
                         },
                     )
+                    totals['associated'] += 1
 
         mode = 'APPLY' if apply else 'DRY-RUN'
         self.stdout.write(self.style.SUCCESS(f'{mode} concluido.'))
