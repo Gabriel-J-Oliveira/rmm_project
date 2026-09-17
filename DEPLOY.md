@@ -678,7 +678,7 @@ Roadmap atual:
 | 3 | Internal release pipeline | CLOSED |
 | 4 | Updater / rollback / observability local / lifecycle resilience | CLOSED |
 | 5 | Secrets / configuration hardening | CLOSED |
-| 6 | Fleet rollout / policies | PENDING |
+| 6 | Fleet rollout / policies | IN PROGRESS |
 | 7 | Central observability | PENDING |
 | 8 | Wider RMM / Desk | PENDING |
 
@@ -1180,7 +1180,7 @@ PURGE_HISTORY_PRESERVED=PASS
 ### Phase 5 - closure gates
 
 ```text
-CURRENT PHASE: PHASE 5 - SECRETS / CONFIGURATION HARDENING
+CURRENT PHASE: PHASE 6 - FLEET ROLLOUT / POLICIES
 PHASE_5_STATUS: CLOSED
 READY_FOR_PHASE6: true
 ```
@@ -1199,5 +1199,270 @@ Gates fechados antes de liberar a Fase 6:
 - pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos. Concluido para RC38 e RC39.
 - `stable/latest` preservado em `0.1.0.7`, sem promocao de RC39 para pilot/stable e sem rollout automatico.
 
-Fase 6 permanece `PENDING` neste documento; ela fica liberada para planejamento
-separado, mas nao foi iniciada neste fechamento.
+No fechamento da Fase 5, a Fase 6 permaneceu `PENDING`, liberada para planejamento
+separado. O registro posterior abaixo formaliza seu inicio documental em 2026-09-17.
+
+## Fase 6 - Fleet Rollout / Policies
+
+Inicio documental: `2026-09-17`. O levantamento e a especificacao comecaram;
+`IN_PROGRESS` nao significa campanha, orquestrador ou rollout automatico ativos.
+As Fases 0A-5 continuam CLOSED; Fases 7 e 8 continuam PENDING.
+
+```text
+PHASE_5_STATUS = CLOSED
+READY_FOR_PHASE6 = true
+PHASE_6_STATUS = IN_PROGRESS
+PHASE_6_ACTIVE_SUBPHASE = 6A
+PHASE_6_ORCHESTRATOR_ENABLED = false
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false
+AUTO_PAUSE_IMPLEMENTED = false
+```
+
+### Objetivo e baseline funcional
+
+Transformar os controles individuais de update em rollout de frota controlado,
+rastreavel, reproduzivel e auditavel, dividido em ondas e protegido por gates.
+A governanca planejada conecta release publicada, politica, selecao da coorte,
+aprovacao, campanha, onda, job, health check, reconciliacao e decisao de avancar
+ou pausar novas entregas. Nao ha promocao ou distribuicao automatica implicita.
+
+Antes da Fase 6, ja existem:
+
+- canais `development`, `pilot` e `stable`;
+- politicas `manual`, `notify_only`, `automatic` e `maintenance_window`;
+- `AgentReleaseGroup`, associacao de endpoints e grupos permitidos por release;
+- `update_paused`, `pinned_agent_version` e `is_pilot_endpoint`;
+- `rollout_percentage`, `rollout_paused` e selecao deterministica por endpoint/machine_id;
+- validacao de assinatura, revogacao e minimum updater version;
+- criacao basica/idempotente sequencial de jobs de update;
+- promocao, pausa, revogacao e auditoria de releases.
+
+Esses controles nao constituem uma campanha persistente acompanhada de ponta a
+ponta. A idempotencia concorrente ainda precisa ser garantida. Os indicadores
+de automacao desabilitada acima descrevem a nova arquitetura da Fase 6; nao
+significam que o GET legado deixou de criar jobs quando a politica o permite.
+
+### Lacunas antes da implementacao
+
+Todos os itens iniciam com status `UNDER_REVIEW_IN_6A`. O levantamento tecnico
+de 2026-09-17 confirmou os comportamentos abaixo; nenhuma correcao foi aplicada.
+
+| ID | Lacuna observada | Contrato futuro a validar |
+| --- | --- | --- |
+| F6-GAP-01 | GET `/api/agent/update-policy/` pode criar job; `evaluate_agent_update_policy` grava timestamp com `record_evaluation=True`. | Separar avaliacao pura, telemetria e despacho; somente orquestrador cria jobs automaticos. |
+| F6-GAP-02 | Aumento de 10% para 25% libera novos buckets na proxima avaliacao, sem onda ou observacao persistente. | Ondas, aprovacao intermediaria, observacao minima e snapshot. |
+| F6-GAP-03 | Nao existe snapshot persistente de campanha. | Registrar selecionados/excluidos, razoes, onda, job, politica efetiva, versao inicial e bucket. |
+| F6-GAP-04 | Metricas recalculam elegibilidade e usam frota atual/jobs historicos. | Metricas de uma coorte automatica congelada, sem mudar denominador silenciosamente. |
+| F6-GAP-05 | Nao existe auto-pause de campanha. | Suspender novas entregas diante de falha, rollback, rollback_failed, health ausente, offline, job travado ou limite excedido. |
+| F6-GAP-06 | Maintenance window usa timezone corrente do Django, sem timezone proprio. | Definir timezone, dias, limites e janelas que atravessam meia-noite. |
+| F6-GAP-07 | Flag `is_pilot_endpoint` e grupo Pilot sao independentes. | Escolher fonte canonica e definir migracao/compatibilidade. |
+| F6-GAP-08 | Lista vazia de rollout_groups nao limpa associacoes no fluxo atual. | Permitir remocao de todos os grupos com semantica explicita. |
+
+### Registro inicial do inventario 6A
+
+Consulta em `2026-09-17T14:28:47Z`, via Django em transacao PostgreSQL READ ONLY.
+Nenhuma API de update-policy/pull ou avaliacao com persistencia foi executada.
+
+- Frota: 6 AgentMachine ativos cadastralmente, 0 inativos; 3 online e 3 offline.
+- Lifecycle: 1 installed e 5 sem valor; 5 machine_id em formato UUID e 1 baseado em hostname.
+- Agent: 0.1.0 (3), 0.1.0.6 (1), RC17 (1), RC39 (1).
+- Canais: stable (4), development (2), pilot (0).
+- Todos manual, auto_update_enabled=false, update_paused=false, sem pin e sem janela.
+- Grupos Critical, Internal IT, Manual, Pilot, Remote, Servers e Workstations: todos vazios; nenhuma flag Pilot ativa.
+- Updates historicos: completed (23), failed (5), invalid_parameters (1), rolled_back (1), sent (2); queued/running (0).
+- Dois updates sent antigos no TAXCEL, para RC13/RC14, bloqueiam novos updates pelo fluxo atual. Reconciliacao exige decisao separada; nenhum job foi alterado.
+- Releases cadastradas: RC1-RC39, exceto RC7/RC8; todas development/paused/rollout=0, nao revogadas e nao mandatory.
+- RC38 e RC39 mantem assinatura valida registrada; stable/latest publico permanece 0.1.0.7, sem registro stable correspondente no banco.
+- Updater/Tray sao reportados no inventario. A elegibilidade atual recorre a agent_version, sem utilizar essas versoes reais; valores antigos 1.0.0 nao provam compatibilidade funcional.
+
+Referencia 6A: CS-SRV-CST, endpoint `476f5039-5e7e-4b0f-b24c-849ee6551434`,
+machine_id `c4e59106-035a-455f-bdeb-3e8287718dd6`, online/installed, Agent/Updater/Tray
+RC39, development/manual, sem grupo/pin/janela, auto-update e pause do endpoint
+false. Ultimo update RC38 -> RC39 completed/exit=0; nenhum job ativo na consulta.
+Esse snapshot nao substitui um novo preview antes de qualquer futura campanha.
+
+### Arquitetura planejada, ainda nao implementada
+
+| Componente | Responsabilidade e conceitos planejados | Estados candidatos |
+| --- | --- | --- |
+| AgentRolloutCampaign | Release/channel, estado, grupos-alvo, percentual/escopo, concorrencia, observacao minima, criterios de pausa, responsavel/aprovador, motivos e timestamps. | draft, ready, running, paused, completed, aborted |
+| AgentRolloutWave | Sequencia, percentual/quantidade-alvo, estado, inicio/termino, observacao, sucessos/falhas/rollbacks, decisao administrativa e snapshot dos gates. | A definir em 6B/6C |
+| AgentRolloutTarget | Campanha, endpoint, wave, bucket, versao inicial, politica efetiva, estado/exclusao, job e timestamps de selecao/inicio/conclusao. | excluded, eligible, queued, running, succeeded, failed, rolled_back, cancelled |
+
+Nenhum desses models existe por causa deste registro. Contrato planejado:
+
+- evaluate: somente leitura, sem timestamp/auditoria ou criacao de job;
+- preview: calcula coorte e razoes, sem executar;
+- dispatch/orchestrator: unico componente autorizado a criar jobs automaticos;
+- reconcile: acompanha job, receipt, versao efetiva e health;
+- administrative actions: pause/resume/advance/abort/revoke com autorizacao e auditoria.
+
+### Preview e integridade da coorte
+
+Toda campanha devera ter preview explicito: release, politica, grupos,
+candidatos, elegiveis, excluidos, razoes, buckets e impacto total.
+Planeja-se `cohort_hash` para comparar PREVIEW APROVADO com COORTE QUE SERA
+EXECUTADA antes dos primeiros jobs. Mudanca relevante que invalide o fingerprint
+exigira novo preview/aprovacao. Algoritmo definitivo sera definido em 6B.
+
+### Regras operacionais planejadas
+
+1. Nenhuma release inicia rollout automaticamente.
+2. Nenhuma campanha comeca sem preview.
+3. Critical/Servers ficam fora da participacao automatica por default.
+4. Endpoint offline, desinstalado ou com job incompativel ativo nao recebe novo job.
+5. Mandatory nunca ignora assinatura, revogacao, pausa, incompatibilidade ou gates criticos.
+6. Downgrade exige autorizacao explicita.
+7. Pause de campanha impede novos jobs.
+8. Jobs nao despachados poderao ser cancelados conforme semantica futura.
+9. Pause administrativa nao interrompe simplesmente jobs em execucao.
+10. Revogacao impede imediatamente novas entregas.
+11. Auto-pause nao gera rollback em massa automaticamente.
+12. Recovery/rollback coletivo depende de decisao administrativa separada.
+
+### Auto-pause: criterios iniciais planejados
+
+Ainda nao ativos; amostra minima e detalhes de reconcile serao definidos antes
+da implementacao. `AUTO_PAUSE_IMPLEMENTED = false`.
+
+| Sinal | Resposta planejada |
+| --- | --- |
+| Qualquer rollback_failed | Pausa imediata. |
+| Falha de assinatura/checksum | Pausa imediata e investigacao/revogacao. |
+| Qualquer rollback durante Pilot | Pausa imediata. |
+| 2 endpoints com falha na mesma onda | Pausa. |
+| Failure rate > 10%, apos amostra minima | Pausa. |
+| Offline > 15 minutos no periodo critico pos-update | Contabilizar conforme politica futura de health/reconcile. |
+| Update job acima do timeout | Investigar/pausar conforme gate. |
+| Health check nao confirmado | Nunca considerar sucesso. |
+
+### Ondas e politica inicial por canal
+
+Modelo inicial sujeito a revisao e aprovacao no fechamento da 6A:
+
+| Onda | Alvo inicial | Observacao minima |
+| --- | --- | --- |
+| Development | 1 endpoint manual | 24h |
+| Pilot A | 1-3 endpoints nomeados | 24h |
+| Pilot B | Restante do grupo Pilot | 24h |
+| Stable A | 10% dos elegiveis | 24h |
+| Stable B | 25% | 24h |
+| Stable C | 50% | 24h |
+| Stable D | 100% | 48h |
+
+Frotas pequenas poderao usar quantidades absolutas. O inventario inicial de seis
+endpoints recomenda 1 referencia, depois 1 elegivel adicional, depois restante
+aprovado. Valores definitivos dependem de compatibilidade, grupos e contrato 6A.
+
+| Canal / grupo operacional | Politica planejada | Publico |
+| --- | --- | --- |
+| Development | Manual explicita | CS-SRV-CST / laboratorio |
+| Pilot | Maintenance window | TI interna / endpoints descartaveis |
+| Stable | Manual ou notify_only inicialmente | Estacoes comuns apos aprovacao |
+| Critical / Servers | Manual | Servidores e endpoints criticos |
+
+Critical/Servers sao grupos/politica de protecao, nao novos release channels.
+
+### Subfases e gates
+
+| Subfase | Escopo | Status |
+| --- | --- | --- |
+| 6A | Inventario e contrato operacional | IN PROGRESS |
+| 6B | Preview e politicas em massa | PENDING |
+| 6C | Campanha e orquestrador | PENDING |
+| 6D | Metricas, reconciliacao e auto-pause | PENDING |
+| 6E | Canario real e encerramento | PENDING |
+
+#### 6A - Inventario e contrato operacional
+
+`IN_PROGRESS`: levantar frota, versoes, canais, politicas, grupos, updater,
+jobs e releases; validar F6-GAP; estabelecer baseline CS-SRV-CST; definir
+estados, gates, sucesso/falha, matriz de testes e estrategia Pilot.
+Restricoes do levantamento: somente leitura, sem rollout automatico, sem novo
+comportamento operacional e sem AgentJob provocado pelas consultas.
+Gate: inventario documentado, lacunas confirmadas/corrigidas no contrato,
+contrato aprovado, ambiguidades resolvidas, arquitetura 6B/6C definida e zero
+alteracao operacional involuntaria. O levantamento nao fecha esses gates sozinho.
+
+#### 6B - Preview e politicas em massa
+
+`PENDING`: evaluate separado de dispatch, preview somente leitura e deterministico,
+razoes, cohort_hash, grupos consistentes/limpeza completa, operacoes em massa,
+timezone de maintenance window e auditoria. Gate:
+`preview must be deterministic and reproducible`; preview nunca cria job automatico.
+
+#### 6C - Campanha e orquestrador
+
+`PENDING`: Campaign/Wave/Target, comando planejado `process_agent_rollouts`,
+execucao periodica, idempotencia transacional, concorrencia limitada, vinculo
+campanha/target/job, restart safety e feature flag global inicialmente OFF.
+Gate: pelo menos 250 endpoints sinteticos, execucao concorrente/repetida, zero
+jobs duplicados e restart sem perda do estado da campanha.
+
+#### 6D - Metricas, reconciliacao e auto-pause
+
+`PENDING`: metricas por campanha/onda, job/health, offline pos-update,
+rollback/rollback_failed, timeout/stalled, auto-pause, pause/resume, preview
+antes de advance e auditoria. Gate: simular sucesso, falha, rollback,
+rollback_failed, offline, health ausente, job travado, pausa e retomada.
+
+#### 6E - Canario real
+
+`PENDING`: referencia atual CS-SRV-CST; preferir ao menos dois Windows
+descartaveis antes da validacao final. Fluxo planejado:
+
+1. Baselines conhecidos e release candidata Pilot inicialmente pausada.
+2. Primeira onda com um endpoint; confirmar demais intocados.
+3. Cumprir observacao e avancar explicitamente para o proximo endpoint.
+4. Validar ausencia de duplicacao/vazamento entre grupos, health, jobs, audit e identidade.
+
+RC39 continua prerelease: nao planejar sua promocao para stable.
+Uma versao final futura, por exemplo `0.1.1.0`, sera tratada separadamente apos
+aprovacao da Fase 6. Nenhum canario novo foi executado neste registro.
+
+### Organizacao prevista de desenvolvimento
+
+Plano sujeito a ajustes apos 6A:
+
+1. `phase6/rollout-spec-and-preview`
+2. `phase6/campaign-models`
+3. `phase6/rollout-orchestrator`
+4. `phase6/fleet-policy-ui`
+5. `phase6/autopause-and-canary`
+
+Incrementos do orquestrador chegam com automacao desabilitada; ativacao exige
+preview atualizado da frota e aprovacao explicita.
+
+### Criterios de encerramento da Fase 6
+
+- [ ] Preview e coorte executada correspondem.
+- [ ] Fingerprint/cohort validation aprovado, se adotado.
+- [ ] Nenhum job duplicado sob concorrencia.
+- [ ] Pausa bloqueia novas entregas.
+- [ ] Endpoints excluidos permanecem intocados.
+- [ ] Critical/Servers protegidos.
+- [ ] Maintenance window respeita timezone.
+- [ ] Auto-pause validado.
+- [ ] Revogacao validada.
+- [ ] Campanha sobrevive a restart.
+- [ ] Ator, motivo e impacto auditados.
+- [ ] Canario real com mais de um endpoint.
+- [ ] Ausencia de vazamento entre grupos.
+- [ ] Nenhuma alteracao involuntaria em stable/latest.
+- [ ] security_preflight --strict continua PASS.
+- [ ] Documentacao final atualizada.
+- [ ] PHASE_6_STATUS pode ser alterado para CLOSED.
+
+Planejamento nao comprova nenhum item desse checklist.
+
+### Convencao de acompanhamento
+
+DEPLOY.md continua a fonte canonica de roadmap tecnico, fases, gates, releases
+e validacoes operacionais. Ao finalizar cada subfase:
+
+1. Atualizar status `PENDING -> IN_PROGRESS -> CLOSED` e `PHASE_6_ACTIVE_SUBPHASE`.
+2. Registrar commits, migrations relevantes, testes/resultados, incidentes,
+   desvios, decisoes arquiteturais e validacoes de producao/canario aplicaveis.
+3. Preservar o historico de cada subfase concluida.
+4. Adicionar mudancas de decisao como registro posterior, explicando a substituicao.
+5. Alterar `PHASE_6_STATUS = CLOSED` somente com todos os gates finais comprovados.
