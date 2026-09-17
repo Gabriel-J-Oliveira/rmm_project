@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/agent/releases/<uuid:pk>/rollout-preview/', fleet_views.rollout_preview, name='api-rollout-preview'),
     path('api/agent/releases/<uuid:pk>/rollout-preview/validate/', fleet_views.rollout_preview, {'validate': True}, name='api-rollout-preview-validate'),
     path('api/endpoints/bulk-policy/', fleet_views.bulk_policy, name='api-endpoints-bulk-policy'),
+    path('api/agent/releases/<uuid:pk>/rollout-campaigns/', fleet_views.rollout_campaign_create, name='api-rollout-campaign-create'),
     path('api/endpoints/<str:pk>/', dashboard_views.endpoint_detail_data, name='api-endpoint-detail'),
     path('api/deployments/windows/', dashboard_views.deployment_create, name='api-deployment-create'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),

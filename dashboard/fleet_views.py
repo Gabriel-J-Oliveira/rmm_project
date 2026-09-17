@@ -11,6 +11,7 @@ from config.authz import is_nightowl_technical_user
 from agents.fleet_policy import PolicyContractError, bulk_policy_operation
 from agents.models import AgentRelease, AgentReleaseGroup
 from agents.services import build_agent_rollout_preview
+from agents.rollout_campaigns import create_agent_rollout_campaign_from_preview
 
 
 def authorized(request, permission):
@@ -75,5 +76,24 @@ def bulk_policy(request):
         return JsonResponse({'error': 'forbidden'}, status=403)
     try:
         return JsonResponse(bulk_policy_operation(read_json(request), request.user))
+    except PolicyContractError as exc:
+        return JsonResponse({'error': str(exc), 'preview': exc.plan}, status=exc.status)
+
+
+@require_POST
+def rollout_campaign_create(request, pk):
+    if not authorized(request, 'agents.add_agentrolloutcampaign'):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    release = AgentRelease.objects.filter(pk=pk).first()
+    if release is None:
+        return JsonResponse({'error': 'release_not_found'}, status=404)
+    try:
+        campaign = create_agent_rollout_campaign_from_preview(release, read_json(request), request.user)
+        return JsonResponse({'campaign_id': str(campaign.pk), 'state': campaign.state,
+                             'cohort_schema': campaign.cohort_schema, 'cohort_hash': campaign.cohort_hash,
+                             'total_candidates': campaign.total_candidates, 'eligible_count': campaign.eligible_count,
+                             'excluded_count': campaign.excluded_count,
+                             'waves': [{'id': str(w.pk), 'sequence': w.sequence, 'state': w.state,
+                                        'count': w.target_count, 'observation_seconds': w.minimum_observation_seconds} for w in campaign.waves.all()]}, status=201)
     except PolicyContractError as exc:
         return JsonResponse({'error': str(exc), 'preview': exc.plan}, status=exc.status)

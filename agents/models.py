@@ -1881,3 +1881,6 @@ class MaintenanceTaskResult(models.Model):
 
     def __str__(self) -> str:
         return f'{self.task_name} - {self.status}'
+
+
+from .rollout_models import AgentRolloutCampaign, AgentRolloutWave, AgentRolloutTarget

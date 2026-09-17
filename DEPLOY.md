@@ -1369,7 +1369,7 @@ Critical/Servers sao grupos/politica de protecao, nao novos release channels.
 | --- | --- | --- |
 | 6A | Inventario e contrato operacional | CLOSED |
 | 6B | Preview e politicas em massa | CLOSED |
-| 6C | Campanha e orquestrador | PENDING |
+| 6C | Campanha e orquestrador | IN PROGRESS |
 | 6D | Metricas, reconciliacao e auto-pause | PENDING |
 | 6E | Canario real e encerramento | PENDING |
 
@@ -1394,7 +1394,8 @@ timezone de maintenance window e auditoria. Gate:
 
 #### 6C - Campanha e orquestrador
 
-`PENDING`: Campaign/Wave/Target, comando planejado `process_agent_rollouts`,
+`IN PROGRESS`: persistencia Campaign/Wave/Target entregue em 6C.1 abaixo.
+Ainda pendentes: comando planejado `process_agent_rollouts`,
 execucao periodica, idempotencia transacional, concorrencia limitada, vinculo
 campanha/target/job, restart safety e feature flag global inicialmente OFF.
 Gate: pelo menos 250 endpoints sinteticos, execucao concorrente/repetida, zero
@@ -1732,3 +1733,66 @@ conexoes de validacao restantes e nenhum processo de teste ativo. Checkout de
 producao permaneceu no mesmo HEAD, limpo, servico sem restart.
 Todos os gates materiais 6B PASS; campanha/orquestrador/reconcile/auto-pause
 continuam ausentes. Nenhuma nova migration, funcionalidade ou release criada.
+
+### 6C.1 - Persistencia de campanhas e state machines (2026-09-17)
+
+6C = IN PROGRESS; PHASE_6_ACTIVE_SUBPHASE = 6C. 6A/6B = CLOSED;
+6D/6E = PENDING. PHASE_6_ORCHESTRATOR_ENABLED = false;
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false; AUTO_PAUSE_IMPLEMENTED = false.
+Este incremento implementa somente decisao persistente, nao dispatch.
+Os registros anteriores de ausencia dos models descrevem suas respectivas entregas.
+
+- AgentRolloutCampaign: release FK protegida, snapshot dos artefatos/seguranca,
+  channel, schema/hash 6B, instante/freshness, grupos, plano, contagens,
+  concorrencia/observacao, criador/aprovador, motivo sanitizado e timestamps.
+  URLs dos artefatos sao representadas por hashes separados, sem query sensivel.
+- AgentRolloutWave: sequencia, quantidade absoluta, observacao, estado,
+  estado de retomada e timestamps. AgentRolloutTarget: endpoint FK protegido,
+  identidade/hostname/versoes/canal/politica/grupos/bucket/decisao congelados,
+  razao de exclusao, wave e timestamps. Persistimos elegiveis E excluidos.
+- Migration `agents.0031_agentrolloutcampaign_agentrolloutwave_and_more`:
+  tabelas novas, uniques/partial uniques/checks e 14 guards em SQLite/PostgreSQL.
+  Uma campanha nao terminal por release; sequence unica; endpoint unico por
+  campanha; uma wave running/observing/paused por campanha; contagens nao negativas,
+  concorrencia >= 1, observacao >= 0 e bucket 0-99. Guards garantem wave/target e
+  current_wave da mesma campanha, snapshot imutavel apos READY inclusive em
+  save/QuerySet.update/bulk_update e impedem reabrir/thaw de estado terminal/READY.
+  PostgreSQL serializa writes dos filhos com o lock da campanha, inclusive approval.
+- API POST `/api/agent/releases/<release_id>/rollout-campaigns/`: CSRF, usuario
+  tecnico ativo e permissao `agents.add_agentrolloutcampaign`. Recebe schema/hash,
+  grupos, freshness 60-3600, wave_plan, concurrency_limit 1-500, observacao minima,
+  reason e ready opcional (default true). Nao existe endpoint de start/dispatch.
+- Criacao atomica: lock da release, preview 6B recalculado sem novo algoritmo,
+  hash/schema exatos; divergencia retorna 409 preview_changed sem persistencia.
+  Auditoria obrigatoria agregada: campaign.created/ready/state_changed/aborted,
+  wave.created/state_changed; nenhuma auditoria por Target. Falha desfaz tudo.
+- Plano: counts positivos, observation_seconds >= minimo, somente uma remaining
+  na ultima posicao, sem ondas vazias/excesso. READY exige todos os elegiveis
+  atribuidos; draft admite plano parcial ou vazio. Zero elegiveis somente draft.
+  Distribuicao persistida por (bucket, endpoint UUID); excluidos sem wave.
+- Campaign: draft -> ready -> running; running <-> paused; running -> completed
+  somente com todas as waves completed; nao terminais -> aborted. Abortar cancela
+  waves nao terminais. Wave: pending -> ready -> running -> observing -> completed;
+  running/observing -> paused -> estado anterior; nao terminal -> cancelled.
+  Campanha running e predecessoras completed sao exigidas para iniciar uma wave;
+  completar exige inicio/observacao e tempo minimo. Running/completed sao SOMENTE
+  estados de dominio: nao provam dispatch, health ou resultados nesta entrega.
+- Release alterada/pausada/revogada depois nao reescreve o snapshot historico.
+  Snapshot NAO e autorizacao eterna: dispatch futuro devera revalidar seguranca.
+
+Validacao final: SQLite agents/config, 279 testes, 276 PASS e 3 skips
+(browser opt-in e dois testes exclusivos PostgreSQL), zero falhas, 43,449 s.
+PostgreSQL isolado: 136 testes PASS, zero skips/falhas, 7,167 s.
+check/py_compile/makemigrations --check/diff --check PASS; scan sensivel do diff:
+zero matches. Testes sinteticos cobrem 250 targets, waves deterministicas,
+exclusoes, stale preview por policy/grupo/updater/release/job/online/freshness,
+imutabilidade, constraints, autorizacao/CSRF, state machines e rollback de auditoria.
+PostgreSQL 17.10: forward vazio, reverse/reaplicacao com dados preexistentes
+sinteticos sem alterar AgentMachine/AgentRelease, indexes/guards e duas conexoes
+concorrentes (uma cria, outra 409), restart com 250 targets em nova conexao.
+Banco e role descartaveis, sem clone de producao; cleanup confirmado.
+Zero AgentJob criado pelo servico/estados de campanha; AgentJob de fixtures
+regressivas existe somente no banco sintetico. Targets aceitam somente
+eligible/excluded e agent_job NULL nesta entrega, com CHECK real no banco.
+Nao houve deploy/migration em producao, restart, rollout, canario ou nova release.
+RC39/stable/latest/CS-SRV-CST/TAXCEL permanecem fora do escopo operacional.
