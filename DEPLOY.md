@@ -677,7 +677,7 @@ Roadmap atual:
 | 2 | Git hygiene / build reproducibility | CLOSED |
 | 3 | Internal release pipeline | CLOSED |
 | 4 | Updater / rollback / observability local / lifecycle resilience | CLOSED |
-| 5 | Secrets / configuration hardening | IN PROGRESS |
+| 5 | Secrets / configuration hardening | CLOSED |
 | 6 | Fleet rollout / policies | PENDING |
 | 7 | Central observability | PENDING |
 | 8 | Wider RMM / Desk | PENDING |
@@ -715,11 +715,30 @@ RC38 foi publicada pelo publisher oficial usando artefato local previamente vali
 O upload versionado, URLs publicas, import Django e `verify_agent_release` passaram.
 `stable/latest` nao foi alterado, nenhum job foi criado e nenhum rollout foi iniciado.
 
+Release final de agente validada para fechamento da Fase 5:
+
+```text
+Agent release: 0.1.1.0-rc39
+Agent release id: 6a699546-ebd0-4788-af77-5f846b66a618
+Agent release commit: b865f313d7a48e69cd18d52c6090c450da24c563
+Build id: a06c9f7aad714308aeebab0facbee323
+Channel: development
+Status: paused
+Rollout percentage: 0
+Rollout paused: true
+ZIP SHA256: 8f355d178cbf7d5a64aadbb2a4b4771985a8b92a1c1e8d740f1b6c61dda37d2b
+Signature: RSA-PSS-SHA256 valid
+Legacy unsigned: false
+```
+
+RC39 permanece em `development`, pausada e com rollout `0`. Ela nao promoveu
+`stable/latest`, nao criou jobs automaticos e nao foi promovida para pilot/stable.
+
 Phase 5 status:
 
 ```text
-PHASE_5_STATUS = IN_PROGRESS
-READY_FOR_PHASE6 = false
+PHASE_5_STATUS = CLOSED
+READY_FOR_PHASE6 = true
 ```
 
 Blocos de Phase 5 ja implementados:
@@ -732,9 +751,10 @@ Blocos de Phase 5 ja implementados:
 - `f151f2218028fc2547b1338e96e980fa434d57ae`: hardening local do agente Windows, incluindo ACLs sensiveis, runner/autorizacao AdminOnly e redaction.
 - `57e46edd2b8d4ed38d760beb71630c5af56f8a89`: redaction de resultados de AgentJob antes de persistir job, receipt e audit metadata.
 - `1e8f24571a6a180804670db4a7fe603cfd956d1d`: isolamento de `SECURE_SSL_REDIRECT` nos settings de teste para reproduzibilidade no servidor.
+- `b865f313d7a48e69cd18d52c6090c450da24c563`: resiliencia da persistencia de estado do agente e retentativas do `NightOwlFileStore`, empacotado em RC39.
 
 O commit `f151f2218028fc2547b1338e96e980fa434d57ae` e posterior a RC36 e esta contido na RC38.
-O proximo passo da Fase 5 e validar RC38 em canario controlado antes de qualquer rollout.
+O commit `b865f313d7a48e69cd18d52c6090c450da24c563` e posterior a RC38 e esta contido na RC39, release usada para fechar o canario da Fase 5.
 
 Baseline Linux validado para o servico em producao:
 
@@ -827,6 +847,74 @@ A causa consolidada para a RC39 e que uma falha transitoria em
 retentativa limitada no `NightOwlFileStore` para falhas transitorias de
 gravacao/substituicao atomica. A ocorrencia suspeita de `Bearer` em logs foi
 reclassificada como falso positivo, sem segredo plaintext confirmado.
+
+Canario final da Fase 5 com RC39:
+
+```text
+Target endpoint: CS-SRV-CST
+Endpoint id: 476f5039-5e7e-4b0f-b24c-849ee6551434
+Machine id: c4e59106-035a-455f-bdeb-3e8287718dd6
+Update path: 0.1.1.0-rc38 -> 0.1.1.0-rc39
+Job id: abf51b3c-bb3d-4a6d-b49c-a544c22f0c2c
+Receipt id: 6a9cf56f-6b4d-4dca-bf4b-5e0fa2dd9b07
+Result id: 5b125e55-00e6-412f-aeb5-ddaad1df514e
+Result: completed
+Exit code: 0
+Health check: confirmed
+Rollback performed: false
+Conflict count: 0
+Machine id preserved: true
+```
+
+Observacao sustentada apos o update:
+
+```text
+Observation duration: 24.56h
+Endpoint remained online: true
+Inventory snapshots: 315
+Activity points: 15040
+Maximum observed activity gap: 72.33s
+Offline changes: 0
+Offline alerts: 0
+state.save.failed: 0
+UnauthorizedAccessException: 0
+Persistence-related IOException: 0
+BackgroundServiceException: 0
+service.loop.failed: 0
+rollback_failed: 0
+Unexpected jobs: 0
+```
+
+Diagnostico final local do Windows:
+
+```text
+Diagnostic package: NightOwl-Diagnostics-CS-SRV-CST-20260917T132143Z.zip
+Diagnostic SHA256: b013c3a7cdfc721a725082be904c13027a61fb812c351da9d8e8c185b4a4f996
+Warnings: 0
+Service: Running / Automatic
+Agent process start: 2026-09-16T12:42:45Z
+Agent process restart during canary: false
+Tray start: 2026-09-16T12:43:24Z
+RC39 version/build/commit: confirmed
+Identity/config match: confirmed
+Sensitive ACLs: PASS
+State temporary files: 0
+Pending results: 0
+HTTPS/TLS connectivity: PASS
+Secrets in process arguments: 0
+```
+
+Residuo historico aceito:
+
+```text
+Legacy service-install.log lines with enrollment_token field: 15
+Date range: 2026-08-25 to 2026-09-04
+AFTER_RC39: 0
+Classification: test-environment residue, not RC39 regression
+Risk acceptance: database and credentials will be reset before production
+```
+
+Nenhum valor de token, credencial ou chave deve ser registrado neste documento.
 
 Capacidades de lifecycle validadas em canario real:
 
@@ -1089,15 +1177,15 @@ PURGE_HISTORY_PRESERVED=PASS
 
    Commit: `1c095558e62a22b457ca9bf0a6190a2a917982bb`
 
-### Phase 5 - remaining closure gates
+### Phase 5 - closure gates
 
 ```text
 CURRENT PHASE: PHASE 5 - SECRETS / CONFIGURATION HARDENING
-PHASE_5_STATUS: IN_PROGRESS
-READY_FOR_PHASE6: false
+PHASE_5_STATUS: CLOSED
+READY_FOR_PHASE6: true
 ```
 
-Antes de iniciar Fase 6, fechar os gates:
+Gates fechados antes de liberar a Fase 6:
 
 - `security_preflight --strict` PASS em producao. Concluido.
 - zero segredos literais versionados. Concluido.
@@ -1105,9 +1193,11 @@ Antes de iniciar Fase 6, fechar os gates:
 - HTTPS/HSTS canario de producao validado, com `max-age=300`, `includeSubDomains=false` e `preload=false`. Concluido.
 - AD com transporte seguro via LDAPS e validacao de certificado. Concluido.
 - regressoes de redaction de logs/stdout/exceptions PASS. Concluido no backend em `57e46edd2b8d4ed38d760beb71630c5af56f8a89`.
-- publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior. Concluido com RC38.
-- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs. Parcial: ACLs e varreduras de segredo passaram; RC38 chegou ao CS-SRV-CST e voltou a reportar, mas a correcao RC39 de resiliencia do state save deve ser publicada antes do fechamento.
-- upgrade sem regressao de heartbeat, jobs, update, repair e uninstall. Pendente: repetir canario minimo apos RC39.
-- pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos. Concluido para RC38; validar novamente em qualquer publicacao futura.
+- publicacao de nova RC do agente contendo `f151f2218028fc2547b1338e96e980fa434d57ae` ou commit posterior. Concluido com RC38 e encerrado com RC39.
+- canario real validando ACLs locais, arquivos sensiveis e ausencia de segredo em args/logs. Concluido com RC39 e diagnostico final do Windows.
+- upgrade sem regressao de heartbeat, jobs, update, repair e uninstall. Concluido: RC38 -> RC39 completed, health check confirmado, 24.56h online e sem jobs inesperados.
+- pipeline de publicacao sem vazamento de segredo e com artefatos assinados completos. Concluido para RC38 e RC39.
+- `stable/latest` preservado em `0.1.0.7`, sem promocao de RC39 para pilot/stable e sem rollout automatico.
 
-Nao iniciar Fase 6 ainda.
+Fase 6 permanece `PENDING` neste documento; ela fica liberada para planejamento
+separado, mas nao foi iniciada neste fechamento.
