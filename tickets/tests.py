@@ -386,7 +386,14 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         detail_response = self.client.get(reverse('tickets:user-detail', args=[self.ad_user.pk]), HTTP_HOST=self.host)
         self.assertEqual(detail_response.status_code, 200)
         self.assertContains(detail_response, 'Abrir chamado')
-        self.assertContains(detail_response, 'requester_ad_user')
+        self.assertContains(detail_response, 'data-quick-ticket-open')
+        self.assertContains(detail_response, 'data-quick-ticket-drawer')
+        self.assertContains(detail_response, 'requester_ad_user_id')
+        self.assertNotContains(detail_response, '?new=1&requester_ad_user=')
+        self.assertContains(detail_response, f'"requester_ad_user_id": "{self.ad_user.pk}"')
+        self.assertContains(detail_response, '"username": "mariana.souza"')
+        self.assertContains(detail_response, '"email": "mariana.souza@nalen.local"')
+        self.assertContains(detail_response, '"department": "Financeiro"')
         self.assertContains(detail_response, '#9010')
 
     def test_users_list_filters_open_tickets_endpoint_and_ou(self):
@@ -537,6 +544,7 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
             HTTP_HOST=self.host,
         )
         self.assertContains(response, 'quick-ticket-prefill')
+        self.assertContains(response, 'data-quick-ticket-drawer')
         self.assertContains(response, 'Mariana Souza')
 
         payload = {
@@ -584,6 +592,30 @@ class TicketUserDirectoryTests(DeskTechnicalTestCase):
         ticket = Ticket.objects.get(title='Solicitacao normal')
         self.assertFalse(ticket.requester_is_partner)
         self.assertEqual(ticket.priority, Ticket.PRIORITY_NORMAL)
+
+    def test_api_create_and_assume_keeps_quick_ticket_behavior(self):
+        from tickets.models import Ticket
+
+        response = self.client.post(
+            reverse('tickets:api-create'),
+            data={
+                'requester_ad_user_id': str(self.ad_user.pk),
+                'requester': 'Browser value',
+                'title': 'Acesso assumido pelo perfil',
+                'description': 'Validar acesso do usuario.',
+                'category': 'Acesso',
+                'priority': Ticket.PRIORITY_NORMAL,
+                'mode': 'assign',
+            },
+            content_type='application/json',
+            HTTP_HOST=self.host,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        ticket = Ticket.objects.get(title='Acesso assumido pelo perfil')
+        self.assertEqual(ticket.requester_ad_user, self.ad_user)
+        self.assertEqual(ticket.status, Ticket.STATUS_IN_PROGRESS)
+        self.assertEqual(ticket.assigned_to, 'gabriel')
 
     def test_endpoint_context_prefers_online_recent_endpoint_and_deduplicates_history(self):
         from agents.models import AgentMachine, InventorySnapshot
