@@ -19,7 +19,7 @@
             </div>
         </div>
         <div class="nw-user-profile-actions">
-            <a class="desk-btn desk-btn-primary" href="{% url 'tickets:central' %}?new=1&requester_ad_user={{ ad_user.pk }}"><i data-lucide="ticket-plus"></i>Abrir chamado</a>
+            <button class="desk-btn desk-btn-primary" type="button" data-quick-ticket-open><i data-lucide="ticket-plus"></i>Abrir chamado</button>
             {% if ad_user.email %}<button class="desk-btn" type="button" data-copy-text="{{ ad_user.email }}"><i data-lucide="copy"></i>Copiar e-mail</button>{% endif %}
         </div>
     </header>
@@ -149,7 +149,10 @@
     </section>
 </section>
 
+{% include "tickets/_central_quick_ticket_drawer.html" %}
+{% include "tickets/_central_toasts.html" %}
 {{ quick_ticket_prefill|json_script:"quick-ticket-prefill" }}
+{% include "tickets/_central_scripts.html" %}
 <script>
 document.querySelectorAll('[data-user-tab]').forEach((button) => {
     button.addEventListener('click', () => {
