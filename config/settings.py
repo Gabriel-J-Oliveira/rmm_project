@@ -73,6 +73,7 @@ SECURE_HSTS_PRELOAD = env.bool('DJANGO_SECURE_HSTS_PRELOAD', default=False)
 
 # Independent future execution switches; read-only rollout planning ignores them.
 NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED = env.bool('NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED', default=False)
+NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = env.bool('NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED', default=False)
 NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED = env.bool('NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED', default=False)
 
 

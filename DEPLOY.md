@@ -1212,10 +1212,11 @@ As Fases 0A-5 continuam CLOSED; Fases 7 e 8 continuam PENDING.
 PHASE_5_STATUS = CLOSED
 READY_FOR_PHASE6 = true
 PHASE_6_STATUS = IN_PROGRESS
-PHASE_6_ACTIVE_SUBPHASE = 6D
+PHASE_6_ACTIVE_SUBPHASE = 6E
 PHASE_6_ORCHESTRATOR_ENABLED = false
 PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false
-AUTO_PAUSE_IMPLEMENTED = false
+NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = false
+AUTO_PAUSE_IMPLEMENTED = true
 ```
 
 ### Objetivo e baseline funcional
@@ -1320,20 +1321,21 @@ exigira novo preview/aprovacao. Algoritmo definitivo sera definido em 6B.
 11. Auto-pause nao gera rollback em massa automaticamente.
 12. Recovery/rollback coletivo depende de decisao administrativa separada.
 
-### Auto-pause: criterios iniciais planejados
+### Auto-pause: contrato implementado e runtime desabilitado
 
-Ainda nao ativos; amostra minima e detalhes de reconcile serao definidos antes
-da implementacao. `AUTO_PAUSE_IMPLEMENTED = false`.
+O contrato inicial abaixo foi substituido pela implementacao conservadora schema 1
+da 6D.2. `AUTO_PAUSE_IMPLEMENTED = true` registra codigo e testes concluidos;
+`NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = false` continua impedindo qualquer transicao
+automatica em runtime ate decisao operacional da 6E.
 
 | Sinal | Resposta planejada |
 | --- | --- |
 | Qualquer rollback_failed | Pausa imediata. |
 | Falha de assinatura/checksum | Pausa imediata e investigacao/revogacao. |
 | Qualquer rollback durante Pilot | Pausa imediata. |
-| 2 endpoints com falha na mesma onda | Pausa. |
-| Failure rate > 10%, apos amostra minima | Pausa. |
-| Offline > 15 minutos no periodo critico pos-update | Contabilizar conforme politica futura de health/reconcile. |
-| Update job acima do timeout | Investigar/pausar conforme gate. |
+| 1 Target failed/rolled_back/cancelled/stalled/offline pos-update | Pausa pelo threshold default schema 1; cada threshold e inteiro >= 1 e pode ser elevado no snapshot draft. |
+| binding_invalid, receipt_conflict ou rollback_failed | Hard-stop e pausa mesmo com policy enabled=false. |
+| Update job acima do timeout | Stalled e pausa pelo threshold da Campaign. |
 | Health check nao confirmado | Nunca considerar sucesso. |
 
 ### Ondas e politica inicial por canal
@@ -1370,7 +1372,7 @@ Critical/Servers sao grupos/politica de protecao, nao novos release channels.
 | 6A | Inventario e contrato operacional | CLOSED |
 | 6B | Preview e politicas em massa | CLOSED |
 | 6C | Campanha e orquestrador | CLOSED |
-| 6D | Metricas, reconciliacao e auto-pause | IN PROGRESS |
+| 6D | Metricas, reconciliacao e auto-pause | CLOSED |
 | 6E | Canario real e encerramento | PENDING |
 
 #### 6A - Inventario e contrato operacional
@@ -1394,19 +1396,16 @@ timezone de maintenance window e auditoria. Gate:
 
 #### 6C - Campanha e orquestrador
 
-`IN PROGRESS`: persistencia Campaign/Wave/Target entregue em 6C.1 abaixo.
-Ainda pendentes: comando planejado `process_agent_rollouts`,
-execucao periodica, idempotencia transacional, concorrencia limitada, vinculo
-campanha/target/job, restart safety e feature flag global inicialmente OFF.
-Gate: pelo menos 250 endpoints sinteticos, execucao concorrente/repetida, zero
-jobs duplicados e restart sem perda do estado da campanha.
+`CLOSED`: persistencia Campaign/Wave/Target, control plane, planner, dispatch,
+runner explicito, idempotencia transacional, concorrencia limitada, vinculo
+Campaign/Target/Job, restart safety e feature flags default OFF foram entregues
+e validados nos registros 6C abaixo.
 
 #### 6D - Metricas, reconciliacao e auto-pause
 
-`PENDING`: metricas por campanha/onda, job/health, offline pos-update,
-rollback/rollback_failed, timeout/stalled, auto-pause, pause/resume, preview
-antes de advance e auditoria. Gate: simular sucesso, falha, rollback,
-rollback_failed, offline, health ausente, job travado, pausa e retomada.
+`CLOSED`: 6D.1 entregou metricas/reconciliacao; 6D.2 entregou policy persistente,
+auto-pause, observation/progression, conclusao objetiva e advance preview/hash.
+Todo runtime novo permanece OFF e nenhuma Campaign real foi executada.
 
 #### 6E - Canario real
 
@@ -2111,3 +2110,112 @@ ficou em 18 queries. Django check, py_compile, node --check, makemigrations
 --check --dry-run, lifecycle scripts e git diff --check PASS. Banco/role PostgreSQL
 temporarios foram removidos; banco de producao nao foi usado. Nenhuma migration foi
 criada e nenhum deploy, Campaign, AgentJob ou rollout real foi executado.
+
+### 6D.2 - Governanca, observation e advance seguro (2026-09-21)
+
+6D = CLOSED; PHASE_6_ACTIVE_SUBPHASE = 6E; 6E = PENDING.
+`AUTO_PAUSE_IMPLEMENTED = true` significa somente que o codigo foi implementado e
+validado. `NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = false`,
+`PHASE_6_ORCHESTRATOR_ENABLED = false` e
+`PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false` continuam sendo os defaults. Nenhum
+timer foi instalado e nenhuma Campaign, Wave, Target ou AgentJob real foi criado.
+
+Persistencia e policy:
+
+- Migration `agents.0033_agentrolloutcampaign_auto_pause_policy_and_more` adiciona
+  o snapshot `auto_pause_policy` e o relogio persistente de observation. Campaigns
+  preexistentes recebem deterministicamente o policy seguro default.
+- Schema 1 exige exatamente `schema=1`, `enabled` booleano e thresholds inteiros
+  `failed_count`, `rolled_back_count`, `cancelled_count`, `stalled_count` e
+  `offline_post_update_count`, todos >= 1 e default 1. Zero nao desliga um gate;
+  somente `enabled=false` desliga triggers normais.
+- O policy pode mudar em draft e fica imutavel ao sair de draft, inclusive por
+  guard de banco SQLite/PostgreSQL. `binding_invalid`, `receipt_conflict` e
+  `rollback_failed` permanecem hard-stops e pausam com governance ON mesmo quando
+  o policy esta disabled.
+
+Decisao e transicoes:
+
+- `evaluate_rollout_governance` e read-only e aplica a ordem hard-stop, thresholds,
+  in-flight, entrada em observation, health, tempo minimo, conclusao da Wave e da
+  Campaign. Estados waiting nao pausam antes de se tornarem stale.
+- `apply_rollout_governance` usa transacao e locks Campaign -> Wave -> Targets. O
+  auto-pause grava primeiro Wave paused com `resume_state`, depois Campaign paused,
+  sem cancelar job/target/receipt, sem auto-resume e com audit
+  `rollout.auto_paused` atomico e idempotente.
+- Wave entra em observing apenas quando todos os Targets executaveis foram
+  despachados e terminaram succeeded, sem waiting, outcome negativo ou integridade
+  comprometida. Observation revalida endpoint ativo/installed/online/fresh,
+  identidade, versao e OperationalStatus nao contraditorio.
+- `observation_accumulated_seconds` e `observation_resumed_at` contam somente tempo
+  efetivamente observing. Pause congela o relogio; resume continua do acumulado;
+  completed congela o total. Tempo paused nunca satisfaz observation.
+- Observation saudavel e duracao cumprida completam a Wave, limpam current_wave e
+  auditam `rollout.wave_completed`. A ultima Wave so completa a Campaign quando
+  todas as Waves e todos os Targets executaveis comprovam sucesso global, sem
+  negative outcome ou integrity issue. Nao existe completed_with_errors.
+
+Advance e operacao:
+
+- `build_rollout_advance_preview` opera somente sobre Targets congelados da proxima
+  Wave, reutiliza a safety 6C.2 em modo preview, nao reseleciona frota e nao substitui
+  Target. O `advance_hash` SHA-256 canonico inclui coorte, Wave, release safety,
+  Targets e estado material usado na decisao, excluindo generated_at e labels.
+- `prepare_next_wave` exige `expected_advance_schema/hash`, reconstrui o preview sob
+  os mesmos locks e retorna conflito para hash stale ou blockers. Apenas
+  `advance_ready=true` permite pending -> ready. Prepare e Start continuam humanos;
+  nao ha auto-prepare nem auto-start.
+- A UI mostra policy, kill switch, decisao, observation, blockers, hash e botao de
+  prepare apenas quando seguro. Mudanca concorrente retorna 409 e recarrega o
+  preview atual.
+- `govern_agent_rollouts --plan-only --campaign <UUID>` funciona read-only com flag
+  OFF. `--run-once` exige governance ON, usa advisory lock PostgreSQL global proprio,
+  reconcilia via servico Python e depois governa; nunca despacha AgentJob.
+
+Unit/timer de referencia, documentado e NAO instalado:
+
+```ini
+# /etc/systemd/system/nightowl-rollout-governance.service
+[Unit]
+Description=NightOwl rollout governance (one safe round)
+After=network-online.target postgresql.service nightowl.service
+
+[Service]
+Type=oneshot
+User=nightowl
+WorkingDirectory=/opt/nightowl
+EnvironmentFile=/opt/nightowl/.env
+ExecStart=/opt/nightowl/.venv/bin/python manage.py govern_agent_rollouts --run-once
+
+# /etc/systemd/system/nightowl-rollout-governance.timer
+[Unit]
+Description=Run NightOwl rollout governance once per minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+```
+
+Validacao sintetica:
+
+- SQLite: suite `agents` + `config` com 370 testes descobertos, incluindo policy,
+  hard-stops, thresholds abaixo/exato/acima, waiting/stale, observation health,
+  pause/resume sem contar pausa, completion, advance/hash otimista, UI/API, audit,
+  250 Targets e regressoes 6B/6C/6D.1, jobs, receipt, result, update, repair e
+  uninstall. PostgreSQL/browser permanecem opt-in.
+- PostgreSQL 17.10 isolado: migration 0032 -> 0033, reverse/forward, backfill draft
+  e running, guards, dois runners, duas ordens governance/dispatch, governance/admin,
+  auto-pause e completion concorrentes, advisory lock e restart safety. Banco e role
+  descartaveis foram removidos; nenhum dado da aplicacao foi clonado.
+- Campaign sintetica com 250 Targets: governance summary em 5 queries; detail UI em
+  22; sem crescimento N+1 material. Django check, py_compile, node --check,
+  makemigrations --check --dry-run, lifecycle scripts e git diff --check PASS.
+
+Fora de escopo e confirmado ausente: auto-advance, retry, rollback automatico,
+promocao de release, instalacao de timer, deploy, migration de producao, alteracao de
+flags, Campaign real, AgentJob real, rollout real, RC39/stable/latest, CS-SRV-CST,
+TAXCEL ou qualquer endpoint de producao. A ativacao e o canario pertencem a 6E.

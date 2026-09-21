@@ -11,6 +11,7 @@ from .job_progress import sanitize_job_value
 from .models import AgentMachine, AgentRelease, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
 from .services import build_agent_rollout_preview
 from .rollout_planning import campaign_release_snapshot
+from .rollout_governance import validate_auto_pause_policy
 
 
 def authorize(actor, permission='agents.add_agentrolloutcampaign'):
@@ -62,13 +63,14 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
         raise PolicyContractError('invalid_contract')
     reason = reason_text(data.get('reason'))
     allowed = {'expected_cohort_hash', 'cohort_schema', 'target_group_ids', 'freshness_seconds',
-               'wave_plan', 'concurrency_limit', 'minimum_observation_seconds', 'reason', 'ready'}
+               'wave_plan', 'concurrency_limit', 'minimum_observation_seconds', 'auto_pause_policy', 'reason', 'ready'}
     if set(data) - allowed or type(data.get('cohort_schema')) is not int or data['cohort_schema'] != 1 or not isinstance(data.get('expected_cohort_hash'), str) or not re.fullmatch('[a-f0-9]{64}', data['expected_cohort_hash']):
         raise PolicyContractError('invalid_hash_contract')
     freshness = data.get('freshness_seconds', 900)
     concurrency = data.get('concurrency_limit', 1)
     minimum = data.get('minimum_observation_seconds', 0)
     ready = data.get('ready', True)
+    auto_pause_policy = validate_auto_pause_policy(data.get('auto_pause_policy'))
     if type(freshness) is not int or not 60 <= freshness <= 3600 or type(concurrency) is not int or not 1 <= concurrency <= 500 or type(minimum) is not int or minimum < 0 or type(ready) is not bool:
         raise PolicyContractError('invalid_limits')
     groups = data.get('target_group_ids', [])
@@ -106,7 +108,8 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
                 preview_generated_at=now, freshness_seconds=freshness, target_group_ids_snapshot=groups,
                 wave_plan=plan, total_candidates=preview['total_candidates'], eligible_count=preview['eligible_count'],
                 excluded_count=preview['excluded_count'], concurrency_limit=concurrency,
-                minimum_observation_seconds=minimum, created_by=actor, administrative_reason=reason)
+                minimum_observation_seconds=minimum, auto_pause_policy=auto_pause_policy,
+                created_by=actor, administrative_reason=reason)
             audit('campaign.created', campaign, actor, reason)
             assignments, offset = {}, 0
             selected = sorted((target for target in preview['targets'] if target['eligible']), key=lambda t: (t['bucket'], t['endpoint_id']))
@@ -192,11 +195,19 @@ def transition_wave(wave, state, actor, reason, *, now=None, permission='agents.
         raise PolicyContractError('observation_incomplete', status=409)
     if state == 'paused':
         wave.resume_state = wave.state
+        if wave.state == 'observing' and wave.observation_resumed_at:
+            wave.observation_accumulated_seconds += max(0, int((now - wave.observation_resumed_at).total_seconds()))
+            wave.observation_resumed_at = None
     if state == 'running' and wave.started_at is None:
         wave.started_at = now
     if state == 'observing' and wave.observation_started_at is None:
         wave.observation_started_at = now
+    if state == 'observing' and wave.observation_resumed_at is None:
+        wave.observation_resumed_at = now
     if state == 'completed':
+        if wave.observation_resumed_at:
+            wave.observation_accumulated_seconds += max(0, int((now - wave.observation_resumed_at).total_seconds()))
+            wave.observation_resumed_at = None
         wave.completed_at = now
     wave.state = state
     wave.save()

@@ -126,7 +126,12 @@ class RolloutControlTests(TestCase):
         self.act(c, 'start', first)
         transition_wave(first, 'observing', self.actor, 'Synthetic reconcile boundary', now=self.now)
         transition_wave(first, 'completed', self.actor, 'Synthetic reconcile boundary', now=self.now)
-        result = self.act(c, 'prepare_next_wave', first)
+        AgentRolloutCampaign.objects.filter(pk=c.pk).update(current_wave=None)
+        from .rollout_governance import build_rollout_advance_preview
+        preview = build_rollout_advance_preview(c, now=self.now)
+        result = self.act(c, 'prepare_next_wave', first,
+                          expected_advance_schema=preview['advance_schema'],
+                          expected_advance_hash=preview['advance_hash'])
         self.assertEqual(result['wave_state'], 'ready')
         self.assertEqual(c.waves.get(sequence=2).state, 'ready')
         self.assertEqual(c.waves.get(sequence=3).state, 'pending')

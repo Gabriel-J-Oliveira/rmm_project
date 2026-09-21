@@ -5,6 +5,18 @@ from django.conf import settings
 from django.db import models
 
 
+def default_auto_pause_policy():
+    return {
+        'schema': 1,
+        'enabled': True,
+        'failed_count': 1,
+        'rolled_back_count': 1,
+        'cancelled_count': 1,
+        'stalled_count': 1,
+        'offline_post_update_count': 1,
+    }
+
+
 class AgentRolloutCampaign(models.Model):
     STATES = ('draft', 'ready', 'running', 'paused', 'completed', 'aborted')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -24,6 +36,7 @@ class AgentRolloutCampaign(models.Model):
     current_wave = models.ForeignKey('AgentRolloutWave', null=True, blank=True, on_delete=models.PROTECT, related_name='+')
     concurrency_limit = models.PositiveIntegerField(default=1)
     minimum_observation_seconds = models.PositiveIntegerField(default=0)
+    auto_pause_policy = models.JSONField(default=default_auto_pause_policy)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='rollout_campaigns_created')
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT, related_name='rollout_campaigns_approved')
     administrative_reason = models.CharField(max_length=1000)
@@ -57,6 +70,8 @@ class AgentRolloutWave(models.Model):
     excluded_target_count = models.PositiveIntegerField(default=0)
     started_at = models.DateTimeField(null=True)
     observation_started_at = models.DateTimeField(null=True)
+    observation_accumulated_seconds = models.PositiveIntegerField(default=0)
+    observation_resumed_at = models.DateTimeField(null=True)
     completed_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

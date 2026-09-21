@@ -9,6 +9,7 @@ from .fleet_policy import PolicyContractError
 from .models import AgentRolloutCampaign, AuditEvent
 from .rollout_campaigns import authorize, reason_text, transition_campaign, transition_wave
 from .rollout_planning import MATERIAL_RELEASE_FIELDS, rollout_orchestration_enabled
+from .rollout_governance import build_rollout_advance_preview, validate_auto_pause_policy
 
 CHANGE_PERMISSION = 'agents.change_agentrolloutcampaign'
 CAMPAIGN_ACTIONS = {'approve': 'ready', 'start': 'running', 'pause': 'paused', 'resume': 'running', 'abort': 'aborted'}
@@ -16,6 +17,7 @@ WAVE_ACTIONS = {'prepare': 'ready', 'start': 'running', 'pause': 'paused', 'resu
 
 
 def integrity(campaign):
+    validate_auto_pause_policy(campaign.auto_pause_policy)
     waves = list(campaign.waves.all())
     targets = list(campaign.targets.values('wave_id', 'eligibility_at_selection', 'exclusion_metadata'))
     eligible = [t for t in targets if t['eligibility_at_selection']]
@@ -41,7 +43,8 @@ def integrity(campaign):
 @transaction.atomic
 def control_rollout_campaign(campaign, data, actor, *, wave_id=None, now=None):
     authorize(actor, CHANGE_PERMISSION)
-    allowed = {'action', 'reason', 'expected_state', 'expected_wave_state', 'expected_updated_at'}
+    allowed = {'action', 'reason', 'expected_state', 'expected_wave_state', 'expected_updated_at',
+               'expected_advance_schema', 'expected_advance_hash'}
     if not isinstance(data, dict) or set(data) - allowed:
         raise PolicyContractError('invalid_control_contract')
     reason = reason_text(data.get('reason'))
@@ -65,9 +68,21 @@ def control_rollout_campaign(campaign, data, actor, *, wave_id=None, now=None):
             if wave is None:
                 raise PolicyContractError('next_wave_unavailable', status=409)
             before = wave.state
+            list(wave.targets.select_for_update().order_by('endpoint_id', 'pk'))
+            preview = build_rollout_advance_preview(campaign, now=now)
+            if data.get('expected_advance_schema') != preview['advance_schema'] or data.get('expected_advance_hash') != preview['advance_hash']:
+                raise PolicyContractError('advance_preview_changed', status=409, plan=preview)
+            if not preview['advance_ready']:
+                raise PolicyContractError('next_wave_not_ready', status=409, plan=preview)
         destination = wave.resume_state if action == 'resume' else actions[action]
-        required_state = {'prepare': 'pending', 'start': 'ready', 'pause': 'running', 'resume': 'paused', 'prepare_next_wave': 'pending'}[action]
-        if wave.state != required_state:
+        required_states = {
+            'prepare': {'pending'},
+            'start': {'ready'},
+            'pause': {'running', 'observing'},
+            'resume': {'paused'},
+            'prepare_next_wave': {'pending'},
+        }[action]
+        if wave.state not in required_states:
             raise PolicyContractError('invalid_control_transition', status=409)
         if destination == 'running' and not rollout_orchestration_enabled():
             raise PolicyContractError('rollout_orchestrator_disabled', status=409)

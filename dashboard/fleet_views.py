@@ -20,6 +20,7 @@ from agents.rollout_campaigns import create_agent_rollout_campaign_from_preview
 from agents.rollout_control import control_rollout_campaign
 from agents.rollout_planning import build_rollout_dispatch_plan
 from agents.rollout_reconcile import summarize_rollout_campaign
+from agents.rollout_governance import build_rollout_advance_preview, evaluate_rollout_governance, governance_enabled
 
 
 def authorized(request, permission):
@@ -101,6 +102,7 @@ def rollout_campaign_create(request, pk):
                              'cohort_schema': campaign.cohort_schema, 'cohort_hash': campaign.cohort_hash,
                              'total_candidates': campaign.total_candidates, 'eligible_count': campaign.eligible_count,
                              'excluded_count': campaign.excluded_count,
+                             'auto_pause_policy': campaign.auto_pause_policy,
                              'waves': [{'id': str(w.pk), 'sequence': w.sequence, 'state': w.state,
                                         'count': w.target_count, 'observation_seconds': w.minimum_observation_seconds} for w in campaign.waves.all()]}, status=201)
     except PolicyContractError as exc:
@@ -134,6 +136,8 @@ def rollout_detail(request, pk):
         wave_counts.setdefault(target.wave_id, Counter())[target.state] += 1
     plan = build_rollout_dispatch_plan(campaign)
     reconciliation = summarize_rollout_campaign(campaign)
+    governance = evaluate_rollout_governance(campaign, summary=reconciliation)
+    advance = build_rollout_advance_preview(campaign)
     reconciliation_targets = {item['target_id']: item for item in reconciliation['targets']}
     blockers = {t['target_id']: t['reason_code'] for t in plan['targets']}
     approved_at = AuditEvent.objects.filter(event_type='campaign.ready', metadata__campaign_id=str(pk)).order_by('created_at').values_list('created_at', flat=True).first()
@@ -146,6 +150,8 @@ def rollout_detail(request, pk):
         'total': campaign.total_candidates, 'eligible': campaign.eligible_count, 'excluded': campaign.excluded_count,
         'target_counts': dict(counts), 'current_wave': str(campaign.current_wave_id) if campaign.current_wave_id else None,
         'reconciliation_metrics': reconciliation['metrics'],
+        'governance_enabled': governance_enabled(), 'auto_pause_policy': campaign.auto_pause_policy,
+        'governance': governance, 'advance_preview': advance,
         'orchestrator_enabled': settings.NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED,
         'automatic_enabled': settings.NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED,
         'waves': [{'id': str(w.pk), 'sequence': w.sequence, 'state': w.state, 'resume_state': w.resume_state,

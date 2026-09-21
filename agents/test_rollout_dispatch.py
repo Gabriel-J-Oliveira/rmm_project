@@ -250,8 +250,10 @@ class PostgreSQLDispatchTests(TransactionTestCase):
         before = list(AgentMachine.objects.values())
         MigrationExecutor(connection).migrate([('agents', '0031_agentrolloutcampaign_agentrolloutwave_and_more')])
         MigrationExecutor(connection).migrate([('agents', '0032_rollout_target_execution')])
+        MigrationExecutor(connection).migrate([('agents', '0033_agentrolloutcampaign_auto_pause_policy_and_more')])
         self.assertEqual(before, list(AgentMachine.objects.values()))
         self.dispatch(c)
         with self.assertRaisesMessage(RuntimeError, 'ROLLBACK_UNSAFE'):
             MigrationExecutor(connection).migrate([('agents', '0031_agentrolloutcampaign_agentrolloutwave_and_more')])
+        MigrationExecutor(connection).migrate([('agents', '0033_agentrolloutcampaign_auto_pause_policy_and_more')])
         self.assertEqual(c.targets.get().state, 'queued')

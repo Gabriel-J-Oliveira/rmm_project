@@ -21,6 +21,9 @@
             Criada: current.created_at, Aprovada: current.approved_at, Iniciada: current.started_at,
             Concorrencia: current.concurrency_limit, Targets: `${current.total} / ${current.eligible} elegiveis / ${current.excluded} excluidos`,
             Runtime: JSON.stringify(current.target_counts), Reconciliacao: JSON.stringify(current.reconciliation_metrics), "Onda atual": current.current_wave,
+            Governanca: current.governance_enabled ? "ON" : "OFF", "Auto-pause policy": JSON.stringify(current.auto_pause_policy),
+            "Decisao governance": `${current.governance?.decision || "-"} / ${current.governance?.reason_code || "-"}`,
+            "Observation": JSON.stringify(current.governance?.observation || {}), "Advance": JSON.stringify(current.advance_preview || {}),
             Orchestrator: current.orchestrator_enabled ? "ON" : "OFF", "Automatic rollout": current.automatic_enabled ? "ON" : "OFF", Motivo: current.reason};
         Object.entries(values).forEach(([label, value]) => summary.append(text("dt", label), text("dd", value)));
         const actions = document.getElementById("rollout-actions"); actions.replaceChildren();
@@ -35,9 +38,10 @@
             const predecessors = current.waves.filter(w => w.sequence < wave.sequence).every(w => w.state === "completed");
             const otherActive = current.waves.some(w => w.id !== wave.id && ["running", "observing", "paused"].includes(w.state));
             if (mutable && current.state === "running") {
-                if (wave.state === "pending" && predecessors && !otherActive) cell.append(button("prepare", wave));
+                if (wave.state === "completed" && current.advance_preview?.completed_wave_id === wave.id && current.advance_preview?.advance_ready) cell.append(button("prepare_next_wave", wave));
+                if (wave.state === "pending" && wave.sequence === 1 && predecessors && !otherActive) cell.append(button("prepare", wave));
                 if (wave.state === "ready" && predecessors && !otherActive) cell.append(button("start", wave));
-                if (wave.state === "running") cell.append(button("pause", wave));
+                if (["running", "observing"].includes(wave.state)) cell.append(button("pause", wave));
                 if (wave.state === "paused") cell.append(button("resume", wave));
             }
             row.append(cell); waves.append(row);
@@ -70,7 +74,10 @@
         try {
             const response = await fetch(`/api/agent/rollout-campaigns/${current.id}/${wave ? `waves/${wave.id}/` : ""}actions/`, {
                 method: "POST", headers: {"Content-Type": "application/json", "X-CSRFToken": root.querySelector("[name=csrfmiddlewaretoken]").value},
-                body: JSON.stringify({action, reason, expected_state: current.state, expected_updated_at: current.updated_at, ...(wave ? {expected_wave_state: wave.state} : {})})});
+                body: JSON.stringify({action, reason, expected_state: current.state, expected_updated_at: current.updated_at,
+                    ...(wave ? {expected_wave_state: wave.state} : {}), ...(action === "prepare_next_wave" ? {
+                        expected_advance_schema: current.advance_preview.advance_schema,
+                        expected_advance_hash: current.advance_preview.advance_hash} : {})})});
             const data = await response.json();
             if (!response.ok) throw new Error(response.status === 409 ? "Estado alterado ou operacao bloqueada. Atualize a decisao." : data.error || "Operacao recusada.");
             message.textContent = "Operacao registrada.";
