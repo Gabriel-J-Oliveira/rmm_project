@@ -16,6 +16,7 @@
         <div>
             <span class="page-kicker">Distribuicao controlada</span>
             <h1>Releases do NightOwl Agent</h1>
+            {% if perms.agents.view_agentrolloutcampaign %}<a class="btn-secondary" href="{% url 'agent-rollouts' %}"><i data-lucide="layers"></i>Campanhas</a>{% endif %}
             <p>Publique versoes por canal, grupos e rollout gradual. O pacote continua sendo baixado e aplicado pelo updater do endpoint.</p>
         </div>
     </header>

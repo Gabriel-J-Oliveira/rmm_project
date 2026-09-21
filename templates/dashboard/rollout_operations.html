@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Night Owl | Campanhas{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/rollout_operations.css' %}">{% endblock %}
+{% block body_class %}page-agent-rollouts{% endblock %}
+{% block content %}
+<section id="rollout-operations" data-can-change="{{ can_change|yesno:'true,false' }}">
+    <header class="page-header"><h1>Campanhas de rollout</h1><a href="{% url 'agent-releases' %}" class="btn-secondary"><i data-lucide="package"></i>Releases</a></header>
+    <form id="rollout-control-form">{% csrf_token %}
+        <label>Campanha<select id="rollout-campaign"><option value="">Selecionar</option>{% for campaign in campaigns %}<option value="{{ campaign.id }}">{{ campaign.release.version }} - {{ campaign.state }} - {{ campaign.id }}</option>{% endfor %}</select></label>
+        <label>Motivo administrativo<input id="rollout-reason" maxlength="1000" autocomplete="off"></label>
+    </form>
+    <p id="rollout-message" role="status"></p>
+    <dl id="rollout-summary"></dl>
+    <div id="rollout-actions" class="release-actions"></div>
+    <h2>Ondas</h2><div class="table-wrap"><table><thead><tr><th>Onda</th><th>Estado</th><th>Targets</th><th>Runtime</th><th>Observacao</th><th>Inicio / fim</th><th>Acoes</th></tr></thead><tbody id="rollout-waves"></tbody></table></div>
+    <h2>Targets</h2><div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Snapshot / atual</th><th>Estado</th><th>Razao inicial</th><th>Blocker atual</th><th>Job</th><th>Bucket</th></tr></thead><tbody id="rollout-targets"></tbody></table></div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{% static 'js/rollout_operations.js' %}"></script>{% endblock %}

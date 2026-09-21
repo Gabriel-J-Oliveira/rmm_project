@@ -1,0 +1,22 @@
+#rollout-operations { min-width: 0; }
+#rollout-operations h1 { font-size: 24px; }
+#rollout-operations h2 { font-size: 18px; margin: 24px 0 12px; }
+#rollout-control-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+#rollout-control-form label { display: grid; gap: 8px; min-width: 0; }
+#rollout-control-form select, #rollout-control-form input { width: 100%; min-width: 0; box-sizing: border-box; }
+#rollout-summary { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 8px 16px; }
+#rollout-summary dd { margin: 0; overflow-wrap: anywhere; }
+#rollout-summary dt { font-weight: 600; }
+#rollout-operations .table-wrap { overflow-x: auto; max-width: 100%; }
+#rollout-operations table { width: 100%; min-width: 900px; border-collapse: collapse; }
+#rollout-operations th, #rollout-operations td { padding: 10px; text-align: left; border-bottom: 1px solid var(--border-color, #35353c); }
+#rollout-operations td { max-width: 260px; overflow-wrap: anywhere; }
+#rollout-actions, #rollout-operations td:last-child { gap: 8px; }
+#rollout-actions { display: flex; flex-wrap: wrap; }
+#rollout-operations button { display: inline-flex; align-items: center; gap: 8px; }
+#rollout-operations button:disabled { opacity: .55; cursor: not-allowed; }
+#rollout-operations button svg { width: 16px; height: 16px; flex: none; }
+@media (max-width: 640px) {
+    #rollout-control-form { grid-template-columns: minmax(0, 1fr); }
+    #rollout-summary { grid-template-columns: 110px minmax(0, 1fr); gap: 8px; }
+}

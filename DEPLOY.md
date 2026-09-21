@@ -1963,3 +1963,82 @@ Cleanup dos bancos/roles/arquivos temporarios confirmado antes do commit.
 Rodada PostgreSQL ampliada: 217 testes PASS, zero skips/falhas, 17,033 s,
 incluindo uninstall administrativo, diagnostics e job progress/pull/result.
 Uninstall administrativo SQLite repetido apos revisao final: 13 PASS.
+
+### 6C.4 - Control plane e execucao periodica segura (2026-09-21)
+
+6C = CLOSED; PHASE_6_ACTIVE_SUBPHASE = 6D; 6D/6E = PENDING.
+PHASE_6_STATUS = IN_PROGRESS. PHASE_6_ORCHESTRATOR_ENABLED = false;
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false; AUTO_PAUSE_IMPLEMENTED = false.
+O schema/orchestrator desta fase ainda nao esta em producao. Nenhuma flag real foi
+habilitada e nao houve deploy, migration, restart, Campaign ou AgentJob real.
+
+Control plane administrativo:
+- APIs POST/JSON de Campaign e Wave exigem usuario tecnico ativo, permissao
+  `agents.change_agentrolloutcampaign`, CSRF, motivo e expected state. Leitura exige
+  `agents.view_agentrolloutcampaign`. Locks e comparacao de estado/revisao retornam
+  conflito 409 em decisoes obsoletas; audit e transicao pertencem a mesma transacao.
+- Campaign expoe somente approve/start/pause/resume/abort. Wave expoe somente
+  prepare/start/pause/resume/prepare_next_wave. Nao existem Complete, Force Advance,
+  Retry Target, reconcile ou interpretacao de receipt/result nesta entrega.
+- Start/resume para estado executavel exigem os dois kill switches ON. Approve,
+  prepare, pause e abort continuam disponiveis com flags OFF quando o estado permite.
+  Pause/abort preservam AgentJobs e estados runtime dos Targets; abort cancela apenas
+  estados de dominio das Waves e o historico permanece intacto.
+- A pagina `/agent-rollouts/` apresenta Campaign, Waves, 250 Targets, blockers,
+  contagens runtime e flags; nao mostra payloads, tokens ou URLs de artefato. Acoes
+  invalidas ficam ausentes e Start/Resume ficam bloqueados e explicados com flags OFF.
+
+Runner:
+- `process_agent_rollouts --run-once` e modo explicito, mutuamente exclusivo de
+  `--plan-only` e `--execute`. Nao aceita Campaign; considera apenas Campaign running
+  cuja current Wave esteja running e somente chama o executor idempotente 6C.3.
+  Nunca transiciona Campaign/Wave, avanca Wave ou reconcilia resultado.
+- Um advisory lock PostgreSQL global nao bloqueante permite uma rodada por vez;
+  concorrente retorna `already_running`. Lock e liberado em sucesso/erro. SQLite nao
+  simula essa garantia. Erros de contrato conhecidos bloqueiam apenas a Campaign;
+  erro inesperado/database aborta a rodada. Rodada vazia nao cria AuditEvent.
+- Preflight read-only oficial antes da 0032:
+  `python manage.py check_rollout_migration_readiness`. O resultado obrigatorio e
+  `eligible_without_wave=0`; valor maior bloqueia o deploy, sem autoatribuir Wave.
+
+Mecanismo periodico planejado, NAO instalado/ativado nesta entrega:
+```ini
+# /etc/systemd/system/nightowl-rollout-orchestrator.service
+[Unit]
+Description=NightOwl rollout orchestrator (one safe round)
+After=network-online.target postgresql.service nightowl.service
+
+[Service]
+Type=oneshot
+User=nightowl
+Group=nightowl
+WorkingDirectory=/opt/nightowl
+EnvironmentFile=/opt/nightowl/.env
+ExecStart=/opt/nightowl/.venv/bin/python manage.py process_agent_rollouts --run-once
+NoNewPrivileges=true
+PrivateTmp=true
+
+# /etc/systemd/system/nightowl-rollout-orchestrator.timer
+[Unit]
+Description=Run NightOwl rollout orchestrator once per minute
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=false
+[Install]
+WantedBy=timers.target
+```
+O EnvironmentFile deve permanecer protegido para o usuario do servico. Nao executar
+daemon-reload/enable/start ate decisao operacional explicita e flags duplas ON.
+
+6D implementara metrics/reconcile, validacao de receipt/exit/version/health,
+auto-pause e progresso objetivo. Nenhum Target foi marcado success/failure pela 6C.
+
+Gate final 6C.4: SQLite agents/config 327 testes, 316 PASS e 11 skips
+(PostgreSQL/browser opt-in), zero falhas. PostgreSQL 17.10 isolado: regressao
+ampliada 231 PASS e rodada final focada 15 PASS; concorrencia administrativa,
+dois runners, lock/restart/error cleanup, tres Waves, 250 Targets e schema 0031
+readiness PASS. Detail UI com 250 Targets: 14 queries; run-once: 25 queries;
+dispatch 6C.3 permaneceu em 22 queries. Lifecycle scripts, Django check, py_compile,
+node --check, makemigrations --check --dry-run e git diff --check PASS. Cleanup
+confirmou zero databases/roles temporarios. Nenhuma migration nova foi criada.

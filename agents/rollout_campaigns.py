@@ -13,8 +13,8 @@ from .services import build_agent_rollout_preview
 from .rollout_planning import campaign_release_snapshot
 
 
-def authorize(actor):
-    if not actor or not actor.is_active or not is_nightowl_technical_user(actor) or not actor.has_perm('agents.add_agentrolloutcampaign'):
+def authorize(actor, permission='agents.add_agentrolloutcampaign'):
+    if not actor or not actor.is_active or not is_nightowl_technical_user(actor) or not actor.has_perm(permission):
         raise PolicyContractError('forbidden', status=403)
 
 
@@ -136,8 +136,8 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
 
 
 @transaction.atomic
-def transition_campaign(campaign, state, actor, reason, *, now=None):
-    authorize(actor)
+def transition_campaign(campaign, state, actor, reason, *, now=None, permission='agents.add_agentrolloutcampaign'):
+    authorize(actor, permission)
     reason = reason_text(reason)
     now = now or timezone.now()
     campaign = AgentRolloutCampaign.objects.select_for_update().get(pk=campaign.pk)
@@ -173,8 +173,8 @@ def transition_campaign(campaign, state, actor, reason, *, now=None):
 
 
 @transaction.atomic
-def transition_wave(wave, state, actor, reason, *, now=None):
-    authorize(actor)
+def transition_wave(wave, state, actor, reason, *, now=None, permission='agents.add_agentrolloutcampaign'):
+    authorize(actor, permission)
     reason = reason_text(reason)
     now = now or timezone.now()
     campaign = AgentRolloutCampaign.objects.select_for_update().get(pk=wave.campaign_id)
