@@ -13,8 +13,8 @@
     <p id="rollout-message" role="status"></p>
     <dl id="rollout-summary"></dl>
     <div id="rollout-actions" class="release-actions"></div>
-    <h2>Ondas</h2><div class="table-wrap"><table><thead><tr><th>Onda</th><th>Estado</th><th>Targets</th><th>Runtime</th><th>Observacao</th><th>Inicio / fim</th><th>Acoes</th></tr></thead><tbody id="rollout-waves"></tbody></table></div>
-    <h2>Targets</h2><div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Snapshot / atual</th><th>Estado</th><th>Razao inicial</th><th>Blocker atual</th><th>Job</th><th>Bucket</th></tr></thead><tbody id="rollout-targets"></tbody></table></div>
+    <h2>Ondas</h2><div class="table-wrap"><table><thead><tr><th>Onda</th><th>Estado</th><th>Targets</th><th>Runtime</th><th>Reconciliacao</th><th>Observacao</th><th>Inicio / fim</th><th>Acoes</th></tr></thead><tbody id="rollout-waves"></tbody></table></div>
+    <h2>Targets</h2><div class="table-wrap"><table><thead><tr><th>Hostname</th><th>Snapshot / atual</th><th>Estado</th><th>Resultado seguro</th><th>Razao inicial</th><th>Blocker atual</th><th>Job</th><th>Bucket</th></tr></thead><tbody id="rollout-targets"></tbody></table></div>
 </section>
 {% endblock %}
 {% block scripts %}<script src="{% static 'js/rollout_operations.js' %}"></script>{% endblock %}

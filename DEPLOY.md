@@ -1212,7 +1212,7 @@ As Fases 0A-5 continuam CLOSED; Fases 7 e 8 continuam PENDING.
 PHASE_5_STATUS = CLOSED
 READY_FOR_PHASE6 = true
 PHASE_6_STATUS = IN_PROGRESS
-PHASE_6_ACTIVE_SUBPHASE = 6C
+PHASE_6_ACTIVE_SUBPHASE = 6D
 PHASE_6_ORCHESTRATOR_ENABLED = false
 PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false
 AUTO_PAUSE_IMPLEMENTED = false
@@ -1369,8 +1369,8 @@ Critical/Servers sao grupos/politica de protecao, nao novos release channels.
 | --- | --- | --- |
 | 6A | Inventario e contrato operacional | CLOSED |
 | 6B | Preview e politicas em massa | CLOSED |
-| 6C | Campanha e orquestrador | IN PROGRESS |
-| 6D | Metricas, reconciliacao e auto-pause | PENDING |
+| 6C | Campanha e orquestrador | CLOSED |
+| 6D | Metricas, reconciliacao e auto-pause | IN PROGRESS |
 | 6E | Canario real e encerramento | PENDING |
 
 #### 6A - Inventario e contrato operacional
@@ -2031,8 +2031,9 @@ WantedBy=timers.target
 O EnvironmentFile deve permanecer protegido para o usuario do servico. Nao executar
 daemon-reload/enable/start ate decisao operacional explicita e flags duplas ON.
 
-6D implementara metrics/reconcile, validacao de receipt/exit/version/health,
-auto-pause e progresso objetivo. Nenhum Target foi marcado success/failure pela 6C.
+6D.1 implementa metrics/reconcile, validacao de receipt/exit/version/health e
+progresso objetivo. Auto-pause permanece explicitamente fora deste incremento.
+Nenhum Target foi marcado success/failure pela 6C.
 
 Gate final 6C.4: SQLite agents/config 327 testes, 316 PASS e 11 skips
 (PostgreSQL/browser opt-in), zero falhas. PostgreSQL 17.10 isolado: regressao
@@ -2042,3 +2043,71 @@ readiness PASS. Detail UI com 250 Targets: 14 queries; run-once: 25 queries;
 dispatch 6C.3 permaneceu em 22 queries. Lifecycle scripts, Django check, py_compile,
 node --check, makemigrations --check --dry-run e git diff --check PASS. Cleanup
 confirmou zero databases/roles temporarios. Nenhuma migration nova foi criada.
+
+### 6D.1 - Reconciliacao e metricas observaveis (2026-09-21)
+
+6C = CLOSED; PHASE_6_ACTIVE_SUBPHASE = 6D; 6D = IN PROGRESS; 6E = PENDING.
+PHASE_6_ORCHESTRATOR_ENABLED = false;
+PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false; AUTO_PAUSE_IMPLEMENTED = false.
+Esta entrega nao instala timer, nao habilita flags, nao avanca/completa Campaign ou
+Wave e nao cria, repete ou modifica AgentJob. O dispatch 6C e a reconciliacao 6D.1
+continuam processos separados.
+
+Contrato de evidencia:
+- `evaluate_rollout_target` e puro sobre Target/Job/receipt/status ja carregados.
+  `summarize_rollout_campaign` somente le e produz metricas de Campaign e de cada
+  Wave com denominadores seguros, sem AuditEvent ou mudanca de estado.
+- `reconcile_rollout_campaign` bloqueia Campaign e Targets em ordem deterministica e
+  altera somente `AgentRolloutTarget.state`, `completed_at` e `updated_at`, conforme
+  os guards da 0032. Rodadas repetidas/restart sao idempotentes.
+- Binding Campaign/Target/Job exige tipo update_agent, endpoint, release,
+  correlation_id e rollout_metadata de Campaign/Wave/Target/coorte exatos. Divergencia
+  falha fechada como `binding_invalid`; FK e payload nunca sao reparados.
+- Sucesso requer Job completed, exit_code zero, resultado final recebido, result_id,
+  receipt do mesmo Job/endpoint sem conflito, versao instalada e versao atual do
+  endpoint iguais ao alvo e health confirmado. Resultado final e a fonte primaria;
+  `AgentOperationalStatus` e evidencia complementar vinculada ao mesmo Job.
+- Completed incompleto permanece running com classificacao waiting_result_receipt,
+  waiting_result_evidence, waiting_version ou waiting_health. Receipt conflitante
+  bloqueia sucesso. queued/sent permanecem queued; running permanece running;
+  falhas/timeout/expired/interrupted/duplicate terminam failed; cancelled e
+  rolled_back preservam estados proprios; rollback_failed termina failed com metrica
+  distinta. Target terminal nunca reabre por evidencia tardia conflitante.
+- Stale/timeout usam `job_stale_info` e sao sinais observaveis, sem alterar AgentJob ou
+  fabricar falha. `offline_post_update` contabiliza Target despachado nao terminal cujo
+  endpoint esta offline/stale.
+
+Metricas read-only: total, excluded, eligible_initial, dispatched, queued, running,
+succeeded, failed, rolled_back, cancelled, terminal, in_flight, waiting_health,
+stalled, offline_post_update, rollback_failed, receipt_conflict, binding_invalid e
+taxas de sucesso/falha/conclusao. Wave inclui apenas seus Targets; excluded pertence
+somente ao agregado da Campaign. A pagina `/agent-rollouts/` mostra apenas essas
+metricas e classificacao/razao/versao sanitizadas, sem payload, URL, stdout/stderr ou
+segredo e sem novos controles mutaveis.
+
+Execucao explicita:
+- `python manage.py reconcile_agent_rollouts --campaign <UUID>` reconcilia uma
+  Campaign; `--run-once` percorre Campaigns relevantes. Funciona com os dois flags OFF
+  e continua observando Jobs ja despachados em Campaign paused/aborted.
+- O comando nao substitui `process_agent_rollouts`; nenhum scheduler/timer foi criado.
+- Audit `rollout.reconciled` existe somente quando ha transicao. Inconsistencia de
+  binding/evidencia terminal gera audit agregado deduplicado por fingerprint; no-op
+  normal nao gera ruido.
+
+Matriz 6D.1: sucesso completo; completed sem exit/result/receipt/health/versao;
+receipt conflitante; exit nao zero (incluindo 10); failed/timed_out/expired/
+interrupted/cancelled/rolled_back/rollback_failed/duplicate; queued/sent/running;
+stale/offline; binding invalido; Target terminal; 250 Targets com consultas limitadas;
+duas reconciliacoes concorrentes; corrida com escrita de resultado e convergencia na
+rodada seguinte. Auto-pause, auto-advance, completion automatica, retry e rollout real
+permanecem fora do escopo e pendentes para incrementos posteriores da 6D.
+
+Gate 6D.1: SQLite agents/config 338 testes, 325 PASS e 13 skips opt-in;
+regressao 6B/6C focada 112 testes, 100 PASS e 12 skips. PostgreSQL 17.10 isolado
+na migration 0032: 11 testes 6D.1 PASS e regressao ampliada 207 PASS, incluindo
+concorrencia, restart, pull/result, waiting health, target-not-installed, repair e
+uninstall. Resumo read-only de 250 Targets ficou abaixo de 15 queries; detail UI
+ficou em 18 queries. Django check, py_compile, node --check, makemigrations
+--check --dry-run, lifecycle scripts e git diff --check PASS. Banco/role PostgreSQL
+temporarios foram removidos; banco de producao nao foi usado. Nenhuma migration foi
+criada e nenhum deploy, Campaign, AgentJob ou rollout real foi executado.

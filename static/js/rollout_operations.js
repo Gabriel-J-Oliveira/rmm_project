@@ -20,7 +20,7 @@
         const values = {ID: current.id, Release: current.release_version, Estado: current.state, Coorte: current.cohort_hash.slice(0, 12),
             Criada: current.created_at, Aprovada: current.approved_at, Iniciada: current.started_at,
             Concorrencia: current.concurrency_limit, Targets: `${current.total} / ${current.eligible} elegiveis / ${current.excluded} excluidos`,
-            Runtime: JSON.stringify(current.target_counts), "Onda atual": current.current_wave,
+            Runtime: JSON.stringify(current.target_counts), Reconciliacao: JSON.stringify(current.reconciliation_metrics), "Onda atual": current.current_wave,
             Orchestrator: current.orchestrator_enabled ? "ON" : "OFF", "Automatic rollout": current.automatic_enabled ? "ON" : "OFF", Motivo: current.reason};
         Object.entries(values).forEach(([label, value]) => summary.append(text("dt", label), text("dd", value)));
         const actions = document.getElementById("rollout-actions"); actions.replaceChildren();
@@ -30,7 +30,7 @@
         const waves = document.getElementById("rollout-waves"); waves.replaceChildren();
         current.waves.forEach(wave => {
             const row = document.createElement("tr");
-            [wave.sequence, wave.state, wave.target_count, JSON.stringify(wave.counts), `${wave.observation_seconds}s`, `${wave.started_at || "-"} / ${wave.completed_at || "-"}`].forEach(v => row.append(text("td", v)));
+            [wave.sequence, wave.state, wave.target_count, JSON.stringify(wave.counts), JSON.stringify(wave.reconciliation_metrics), `${wave.observation_seconds}s`, `${wave.started_at || "-"} / ${wave.completed_at || "-"}`].forEach(v => row.append(text("td", v)));
             const cell = document.createElement("td");
             const predecessors = current.waves.filter(w => w.sequence < wave.sequence).every(w => w.state === "completed");
             const otherActive = current.waves.some(w => w.id !== wave.id && ["running", "observing", "paused"].includes(w.state));
@@ -44,7 +44,9 @@
         });
         const targets = document.getElementById("rollout-targets"); targets.replaceChildren();
         current.targets.forEach(target => { const row = document.createElement("tr");
-            [target.hostname, `${target.snapshot_version} / ${target.current_version}`, target.state, target.initial_reason, target.blocker, target.job_id, target.bucket].forEach(v => row.append(text("td", v))); targets.append(row); });
+            const result = target.reconciliation || {};
+            const safeResult = `${result.classification || "-"} / ${result.reason_code || "-"} / ${result.installed_version || "-"}`;
+            [target.hostname, `${target.snapshot_version} / ${target.current_version}`, target.state, safeResult, target.initial_reason, target.blocker, target.job_id, target.bucket].forEach(v => row.append(text("td", v))); targets.append(row); });
         if (window.lucide) window.lucide.createIcons();
     }
     async function reload() {

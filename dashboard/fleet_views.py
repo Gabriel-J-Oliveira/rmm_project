@@ -19,6 +19,7 @@ from agents.services import build_agent_rollout_preview
 from agents.rollout_campaigns import create_agent_rollout_campaign_from_preview
 from agents.rollout_control import control_rollout_campaign
 from agents.rollout_planning import build_rollout_dispatch_plan
+from agents.rollout_reconcile import summarize_rollout_campaign
 
 
 def authorized(request, permission):
@@ -132,6 +133,8 @@ def rollout_detail(request, pk):
     for target in targets:
         wave_counts.setdefault(target.wave_id, Counter())[target.state] += 1
     plan = build_rollout_dispatch_plan(campaign)
+    reconciliation = summarize_rollout_campaign(campaign)
+    reconciliation_targets = {item['target_id']: item for item in reconciliation['targets']}
     blockers = {t['target_id']: t['reason_code'] for t in plan['targets']}
     approved_at = AuditEvent.objects.filter(event_type='campaign.ready', metadata__campaign_id=str(pk)).order_by('created_at').values_list('created_at', flat=True).first()
     return JsonResponse({'id': str(campaign.pk), 'release_version': campaign.release.version,
@@ -142,17 +145,20 @@ def rollout_detail(request, pk):
         'updated_at': campaign.updated_at.isoformat(), 'concurrency_limit': campaign.concurrency_limit,
         'total': campaign.total_candidates, 'eligible': campaign.eligible_count, 'excluded': campaign.excluded_count,
         'target_counts': dict(counts), 'current_wave': str(campaign.current_wave_id) if campaign.current_wave_id else None,
+        'reconciliation_metrics': reconciliation['metrics'],
         'orchestrator_enabled': settings.NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED,
         'automatic_enabled': settings.NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED,
         'waves': [{'id': str(w.pk), 'sequence': w.sequence, 'state': w.state, 'resume_state': w.resume_state,
             'target_count': w.target_count, 'counts': dict(wave_counts.get(w.pk, {})),
+            'reconciliation_metrics': reconciliation['waves'].get(str(w.pk), {}),
             'observation_seconds': w.minimum_observation_seconds,
             'started_at': w.started_at.isoformat() if w.started_at else None,
             'completed_at': w.completed_at.isoformat() if w.completed_at else None} for w in campaign.waves.all()],
         'targets': [{'id': str(t.pk), 'hostname': t.endpoint_hostname_snapshot,
             'current_version': t.endpoint.agent_version, 'snapshot_version': t.current_version_snapshot,
             'state': t.state, 'initial_reason': t.reason_code, 'blocker': blockers.get(str(t.pk), 'wave_not_dispatchable'),
-            'job_id': str(t.agent_job_id) if t.agent_job_id else None, 'bucket': t.rollout_bucket} for t in targets]})
+            'job_id': str(t.agent_job_id) if t.agent_job_id else None, 'bucket': t.rollout_bucket,
+            'reconciliation': reconciliation_targets.get(str(t.pk), {})} for t in targets]})
 
 
 @require_GET
