@@ -2388,3 +2388,74 @@ Gates e inercia:
 
 Proxima etapa: 6E.2B, em tarefa separada. A RC40 permanece congelada,
 development/paused e rollout 0 ate aprovacao explicita.
+
+### 6E.2B-0 - Hardening selection vs delivery (2026-09-22)
+
+6E permanece IN PROGRESS; `PHASE_6_STATUS = IN_PROGRESS`,
+`PHASE_6_ACTIVE_SUBPHASE = 6E` e `PHASE_6_REAL_CANARY_EXECUTED = false`.
+Nenhum canario, Campaign, Wave, Target ou AgentJob real foi criado.
+
+Risco e contrato corrigido:
+
+- O preview de Campaign reutilizava a elegibilidade de entrega e, por isso, uma
+  release congelada em paused/rollout 0 nao podia formar uma coorte. Abrir a
+  release antes de congelar a Campaign criaria uma corrida com o GET legado de
+  update policy, que ainda pode criar jobs `source=update_policy` quando elegivel.
+- `campaign_selection` agora e um contexto interno explicito, usado somente pelo
+  preview/cohort hash e pela criacao da Campaign. Ele aceita para selecao apenas
+  releases published ou paused e ignora somente pause operacional e percentual
+  de rollout. Todos os gates de assinatura, key, artefato, HTTPS, updater,
+  identidade, lifecycle, freshness, grupos, Pilot, policy, consentimento,
+  maintenance window, pin e jobs continuam obrigatorios.
+- A elegibilidade normal permaneceu inalterada: paused retorna `release_paused`;
+  published com rollout 0 retorna `rollout_not_selected`; o GET legado nao cria
+  job em nenhum dos dois estados.
+- O dispatch continua usando `release_safety`: release paused nunca despacha. Uma
+  release posteriormente published/unpaused com rollout 0 pode despachar somente
+  o Target previamente congelado da Campaign; o percentual zero continua
+  bloqueando a entrega legada.
+- O snapshot continua registrando status, pause e percentual como evidencia. O
+  contrato material continua imutavel para version, channel, hashes, size,
+  signing identity, minimum updater, mandatory, URLs e allowed groups; a mudanca
+  operacional paused -> published nao e tratada como troca de artefato.
+- A API/UI do preview distingue `elegivel para selecao` de `execucao liberada` e
+  informa `release_execution_blocker` sem expor bypass ao cliente.
+
+Validacao sintetica:
+
+- SQLite/regressoes: 377 testes PASS, 23 skips exclusivos de PostgreSQL. A suite
+  cobriu preview, Campaign, planning, dispatch, control, reconcile, governance,
+  agents e config. Query count do preview: 6 para um endpoint e 6 para 250
+  endpoints, sem N+1.
+- PostgreSQL isolado: 23 testes PASS, incluindo Campaign lock, lifecycle lock,
+  paused/rollout 0, dispatcher e concorrencia GET legado x dispatcher. A corrida
+  produziu exatamente um job, correlacionado ao Target e com
+  `source=rollout_campaign`; nenhum job `source=update_policy` foi criado e nao
+  houve deadlock. Banco e fonte descartaveis foram removidos.
+- Django check, makemigrations --check --dry-run, py_compile, node --check,
+  git diff --check e sensitive scan PASS. Nenhuma migration ou dependencia nova.
+
+Deploy e inercia de producao:
+
+- Commit funcional `197750f4b30b12f751aa2991503e5e9547613f6a`, aplicado diretamente
+  sobre o checkout produtivo anterior
+  `7f856e0f83791a5f2bc94966874089a1f43ef161`. A referencia de recuperacao
+  `refs/nightowl-recovery/phase6e2b0-pre-20260922` preserva o HEAD anterior.
+- Migration plan vazio e Django check PASS. Como `static/js/fleet_policy.js`
+  mudou, collectstatic copiou um arquivo. `nightowl.service` reiniciou de PID
+  `2566893` para `2618640` e permaneceu active/running, sem warning no journal.
+- Smoke: login 200; dashboard/endpoints/releases/agent-rollouts protegidos;
+  preview, heartbeat, pull e result responderam 403 sem credencial, sem mutacao.
+  O preview read-only da RC40 informou `release_execution_blocker=release_paused`
+  e preservou a contagem total de AgentJobs antes/depois.
+- RC40 permaneceu development/paused/rollout 0; RC39 permaneceu inalterada;
+  stable/latest permaneceu 0.1.0.7 com SHA-256
+  `88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+- Flags orchestrator/automatic/governance permaneceram false/false/false;
+  Campaign/Wave/Target `0/0/0`; jobs do orquestrador zero; Pilot zero membros.
+  Seis endpoints, policies manuais, channels, grupos e pauses permaneceram
+  inalterados. Nenhum rollout real foi iniciado.
+
+Proxima etapa: `6E.2B_REAL_CANARY_PREPARATION`, em tarefa separada e com aprovacao
+explicita. Nao adicionar endpoint ao Pilot, alterar policy/channel/allowed groups,
+abrir RC40, habilitar flags ou criar Campaign/job nesta etapa.
