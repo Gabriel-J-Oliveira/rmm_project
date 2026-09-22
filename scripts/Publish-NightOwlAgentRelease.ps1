@@ -414,8 +414,21 @@ function Assert-SafeRemoteSegment([string]$Value) {
     }
 }
 
+function ConvertTo-UnixLineEndings([AllowNull()][string]$Value) {
+    if ($null -eq $Value) {
+        return ""
+    }
+    return $Value.Replace("`r`n", "`n").Replace("`r", "`n")
+}
+
 function ConvertTo-BashSingleQuoted([string]$Value) {
     return "'" + $Value.Replace("'", "'\''") + "'"
+}
+
+function New-SshBashArguments([string]$Command) {
+    $normalized = ConvertTo-UnixLineEndings $Command
+    $quoted = ConvertTo-BashSingleQuoted $normalized
+    return @($RemoteAlias, "bash", "-lc", $quoted)
 }
 
 function Invoke-Native([string]$FileName, [string[]]$Arguments, [string]$FailureCode) {
@@ -649,7 +662,39 @@ function Invoke-SelfTest {
         $dryRunScpOutput = Invoke-Native "scp.exe" @("missing-local-file", "unreachable-nightowl-selftest:/tmp/should-not-run") "upload_failed"
         if (@($dryRunScpOutput).Count -ne 0) { Fail "validation_failed" "SelfTest falhou: DryRun retornou saida para SCP nao executado." }
 
+        $crlfCommand = "set -euo pipefail`r`necho ok`r`n"
+        $expectedLfCommand = "set -euo pipefail`necho ok`n"
+        $normalizedCrlf = ConvertTo-UnixLineEndings $crlfCommand
+        if ($normalizedCrlf -cne $expectedLfCommand -or $normalizedCrlf.Contains("`r")) {
+            Fail "validation_failed" "SelfTest falhou: CRLF nao foi normalizado para LF preservando linhas e newline final."
+        }
+
+        $lfCommand = "set -euo pipefail`necho ok`n"
+        if ((ConvertTo-UnixLineEndings $lfCommand) -cne $lfCommand) {
+            Fail "validation_failed" "SelfTest falhou: comando com LF nativo foi alterado."
+        }
+
+        $loneCrCommand = "line1`rline2`r"
+        if ((ConvertTo-UnixLineEndings $loneCrCommand) -cne "line1`nline2`n") {
+            Fail "validation_failed" "SelfTest falhou: carriage return isolado nao foi normalizado para LF."
+        }
+
+        $script:RemoteAlias = "nightowl-selftest"
+        $quotedCommand = "set -euo pipefail`r`necho 'NightOwl'`r`n"
+        $sshArguments = New-SshBashArguments $quotedCommand
+        if ($sshArguments.Count -ne 4 -or $sshArguments[0] -ne $script:RemoteAlias -or $sshArguments[1] -ne "bash" -or $sshArguments[2] -ne "-lc") {
+            Fail "validation_failed" "SelfTest falhou: argumentos finais do SSH/Bash estao incorretos."
+        }
+        if ($sshArguments[3].Contains("`r")) {
+            Fail "validation_failed" "SelfTest falhou: argumento final de bash -lc ainda contem carriage return."
+        }
+        $expectedQuotedCommand = ConvertTo-BashSingleQuoted "set -euo pipefail`necho 'NightOwl'`n"
+        if ($sshArguments[3] -cne $expectedQuotedCommand) {
+            Fail "validation_failed" "SelfTest falhou: normalizacao alterou o quoting Bash existente."
+        }
+
         Write-Step "SelfTest OK: argumentos do build montados sem switches falsos."
+        Write-Step "SelfTest OK: transporte SSH normaliza CRLF e CR para LF antes do quoting Bash."
         Write-Step ("Force false: powershell.exe {0}" -f ($withoutForce -join " "))
         Write-Step ("Force true:  powershell.exe {0}" -f ($withForce -join " "))
     }
@@ -675,8 +720,8 @@ function Invoke-SelfTest {
 }
 
 function Invoke-Ssh([string]$Command, [string]$FailureCode = "ssh_failed") {
-    $quoted = ConvertTo-BashSingleQuoted $Command
-    return Invoke-Native "ssh.exe" @($RemoteAlias, "bash", "-lc", $quoted) $FailureCode
+    $arguments = New-SshBashArguments $Command
+    return Invoke-Native "ssh.exe" $arguments $FailureCode
 }
 
 function Get-FileSha256([string]$Path) {
