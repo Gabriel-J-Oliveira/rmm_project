@@ -2320,3 +2320,71 @@ Candidatos read-only para a futura 6E.2:
   um endpoint de referencia ja em RC39. A exigencia preferencial de dois Windows
   descartaveis ainda nao foi atendida; nenhuma Campaign, grupo Pilot ou policy foi
   criada/alterada para contornar esse limite.
+
+### 6E.2A - RC40 candidata publicada e congelada (2026-09-22)
+
+6E permanece IN PROGRESS; `PHASE_6_STATUS = IN_PROGRESS` e
+`PHASE_6_ACTIVE_SUBPHASE = 6E`. A RC40 foi publicada somente como alvo inerte da
+futura 6E.2B. Nenhum rollout, Campaign, Wave, Target ou AgentJob foi criado.
+
+Release e proveniencia:
+
+- Source e publisher fix SHA:
+  `6f5cda46728ec5a2a18aaecf10563f8df590c731`.
+- Version `0.1.1.0-rc40`; release ID
+  `eabb8918-a6c2-4a89-b969-a09aaca081d5`; build ID
+  `8237af8395254a2e882ac5acae1fc22e`.
+- Channel development, status paused, rollout 0, mandatory false, revoked false e
+  legacy_unsigned false.
+- Assinatura RSA-PSS/SHA-256 valida com key ID
+  `nightowl-release-2026-02`, chave ativa e trust roots validas.
+- ZIP com 71937402 bytes e SHA-256
+  `e5345d9bf123999f68afe24723fb066b9e7cb39d02d5c13664f1e23a186faf22`.
+- Manifest SHA-256
+  `46bc66da2360021e6a99b69db84f13502a5e78de504daf82f4ef94887d94b64d`
+  e signature SHA-256
+  `aa2b2c90dc4d276785b47af767653f2682d499b63b48073b63acdf9e9cef1d6b`.
+- Minimum updater permaneceu `0.1.1.0-rc6`. O conteudo runtime e funcionalmente
+  equivalente a RC39; a nova versao/proveniencia cria somente um target superior.
+- O `agent.config.json` sintetico usado apenas para satisfazer o build local nao
+  foi empacotado e foi removido depois da publicacao.
+
+URLs versionadas validadas com HTTP 200:
+
+```text
+https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc40/version.json
+https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc40/checksums.json
+https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc40/release-manifest.json
+https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc40/release-manifest.sig
+https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc40/NightOwl.Agent.Windows.zip
+```
+
+Gates e inercia:
+
+- Shared, Windows, Updater e Uninstaller Tests PASS; builds Release de Tray,
+  Diagnostics, Windows, Updater e Uninstaller PASS; lifecycle, installer trust,
+  Builder SelfTest, Publisher SelfTest, PowerShell parser, security preflight
+  strict, RSA-PSS, trust roots, diff check e sensitive scan PASS.
+- `-ValidateOnly` confirmou SSH BatchMode e Bash `set -euo pipefail` sem CRLF,
+  antes do build/upload/import. A publicacao oficial concluiu build, validacao
+  local, upload temporario, verificacao remota, publish atomico, HTTP, import e
+  `verify_agent_release`.
+- SHA-256 remoto do ZIP igual ao local. Todos os artefatos obrigatorios existem no
+  diretorio versionado
+  `/opt/nightowl/downloads/agent/windows/releases/0.1.1.0-rc40`.
+- Stable/latest permaneceu `0.1.0.7`, antes e depois, com SHA-256
+  `88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+- RC39 permaneceu development/paused, rollout 0 e assinatura valida.
+- Campaign/Wave/Target permaneceram `0/0/0`; rollout jobs permaneceram zero;
+  AgentJobs total/update permaneceram `76/32`; os dois lifecycle jobs ativos
+  continuam sendo historicos e nao foram alterados.
+- Pilot permaneceu com zero membros. Grupos, channels, policies, auto update,
+  pauses, pins, maintenance windows e endpoints permaneceram inalterados.
+- Flags efetivos permaneceram orchestrator/automatic/governance
+  `false/false/false`.
+- Producao Django nao foi redeployada: checkout permaneceu em
+  `7f856e0f83791a5f2bc94966874089a1f43ef161`; nao houve migrate, collectstatic
+  ou restart do `nightowl.service`.
+
+Proxima etapa: 6E.2B, em tarefa separada. A RC40 permanece congelada,
+development/paused e rollout 0 ate aprovacao explicita.
