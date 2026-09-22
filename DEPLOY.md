@@ -1217,6 +1217,9 @@ PHASE_6_ORCHESTRATOR_ENABLED = false
 PHASE_6_AUTOMATIC_ROLLOUT_ENABLED = false
 NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = false
 AUTO_PAUSE_IMPLEMENTED = true
+PHASE_6_CODE_DEPLOYED = true
+PHASE_6_SCHEMA_DEPLOYED = true
+PHASE_6_REAL_CANARY_EXECUTED = false
 ```
 
 ### Objetivo e baseline funcional
@@ -1373,7 +1376,7 @@ Critical/Servers sao grupos/politica de protecao, nao novos release channels.
 | 6B | Preview e politicas em massa | CLOSED |
 | 6C | Campanha e orquestrador | CLOSED |
 | 6D | Metricas, reconciliacao e auto-pause | CLOSED |
-| 6E | Canario real e encerramento | PENDING |
+| 6E | Deploy estrutural, canario real e encerramento | IN PROGRESS |
 
 #### 6A - Inventario e contrato operacional
 
@@ -1409,7 +1412,9 @@ Todo runtime novo permanece OFF e nenhuma Campaign real foi executada.
 
 #### 6E - Canario real
 
-`PENDING`: referencia atual CS-SRV-CST; preferir ao menos dois Windows
+`IN PROGRESS`: o deploy estrutural 6E.1 foi concluido com todo runtime de rollout
+OFF. Nenhuma Campaign ou Target real existe e nenhum AgentJob de rollout foi
+criado. A referencia atual e CS-SRV-CST; preferir ao menos dois Windows
 descartaveis antes da validacao final. Fluxo planejado:
 
 1. Baselines conhecidos e release candidata Pilot inicialmente pausada.
@@ -2219,3 +2224,99 @@ Fora de escopo e confirmado ausente: auto-advance, retry, rollback automatico,
 promocao de release, instalacao de timer, deploy, migration de producao, alteracao de
 flags, Campaign real, AgentJob real, rollout real, RC39/stable/latest, CS-SRV-CST,
 TAXCEL ou qualquer endpoint de producao. A ativacao e o canario pertencem a 6E.
+
+### 6E.1 - Deploy estrutural e preflight de producao (2026-09-22)
+
+6E = IN PROGRESS; `PHASE_6_STATUS = IN_PROGRESS` e
+`PHASE_6_ACTIVE_SUBPHASE = 6E`. Codigo e schema da Fase 6 estao em producao,
+mas nenhum canario real foi executado. Os tres controles efetivos permaneceram
+OFF durante toda a operacao:
+
+```text
+NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED = false
+NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED = false
+NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = false
+AUTO_PAUSE_IMPLEMENTED = true
+PHASE_6_CODE_DEPLOYED = true
+PHASE_6_SCHEMA_DEPLOYED = true
+PHASE_6_REAL_CANARY_EXECUTED = false
+```
+
+Deploy e recuperacao:
+
+- Host `CS-HOST-INFRA`; janela iniciada em `2026-09-22T12:13:39Z`.
+- `PRE_DEPLOY_HEAD = 28e53e7d6a8420c2768d6eafee428ae92f71485b` e
+  `DEPLOY_HEAD = 7f856e0f83791a5f2bc94966874089a1f43ef161`.
+- A referencia local `production-pre-phase6-20260922` preserva o HEAD anterior.
+- A integracao 6E.0 manteve o quick-ticket do perfil byte a byte equivalente ao
+  checkout produtivo e preservou separadamente o contrato Central `?new=1`.
+- PostgreSQL 17.10, database `nightowl`, role de aplicacao `nightowl_user`.
+- Backup custom format validado com `pg_restore --list`:
+  `/opt/nightowl/backups/nightowl-pre-phase6-20260922T121930Z-28e53e7d6a8420c2768d6eafee428ae92f71485b.dump`,
+  994551128 bytes, SHA-256
+  `e7aa885f8286107ada5daa1ad7d77fd749665cfeec6b37adc410ef67345f5278`.
+- `requirements.txt` permaneceu identico; nenhuma dependencia foi reinstalada.
+
+Schema e gates:
+
+- O checkout antigo exibia ate 0029 porque nao continha a migration 0030. O plano
+  real no novo codigo confirmou 0030 ja aplicada em `2026-09-17T16:10:15Z`, com
+  `updater_version`, `tray_version` e `maintenance_window_timezone` presentes.
+- O backfill 0030 preservou seis endpoints e grupos; Pilot permaneceu com zero
+  membros. Versoes reportadas de updater/tray nao foram fabricadas a partir de uma
+  unica versao de agente.
+- 0031 criou Campaign/Wave/Target; contagens imediatamente apos: `0/0/0`.
+- `check_rollout_migration_readiness` retornou `eligible_without_wave=0`.
+- 0032 e 0033 foram aplicadas deliberadamente. Estado final: migrations ate 0033
+  aplicadas, `migrate --plan` vazio, `makemigrations --check --dry-run` sem mudancas,
+  Django check PASS e Campaign/Wave/Target ainda `0/0/0`.
+- `collectstatic`: 4 arquivos copiados, 170 inalterados e 163 pos-processados.
+- `nightowl.service` reiniciado somente apos os gates: PID `1578027 -> 2566893`,
+  active/running desde `2026-09-22T12:25:20Z`.
+
+Smoke e prova de nao execucao:
+
+- Login e static HTTP 200; paginas protegidas redirecionaram sem autenticacao e
+  renderizaram 200 em smoke transacional revertido: dashboard, endpoints, releases,
+  `/agent-rollouts/`, users, perfil e Central `?new=1`.
+- Perfil preservou drawer local e removeu o link legado; Central preservou abertura
+  pelo query parameter. Nenhum ticket foi criado.
+- Heartbeat, pull e result responderam 403 sem credencial, comprovando rotas sem
+  usar token real ou provocar escrita.
+- `reconcile_agent_rollouts --run-once` retornou zero Campaigns. Jobs permaneceram
+  76 antes/depois; jobs com payload `source=rollout_campaign`: zero; auditorias de
+  rollout: zero; Campaign/Wave/Target finais: `0/0/0`.
+- Nenhum timer de orchestrator/governance existe ou esta ativo. O timer historico
+  `nightowl-maintenance.timer` permaneceu inalterado e nao pertence ao rollout.
+- Logs desde o restart: zero traceback, IntegrityError, OperationalError, 500,
+  database error, rollout ou campaign. As duas linhas ERROR observadas pertencem ao
+  SIGTERM esperado dos workers antigos durante o restart; warning-or-higher apos o
+  startup e 5xx recentes ficaram em zero.
+
+Baseline preservada:
+
+- Frota antes/depois: seis endpoints, tres online e tres offline; lifecycle um
+  installed e cinco vazios. Distribuicao permaneceu 0.1.0 (3), 0.1.0.6 (1), RC17
+  (1) e RC39 (1). Canais, policies, grupos, pause e pins nao mudaram; apenas
+  `last_seen` avancou naturalmente.
+- AgentJobs permaneceram 76. Cinco jobs antigos seguem sent: dois updates historicos
+  no TAXCEL e tres jobs no CS-CVEL-0254; nenhum foi criado ou alterado pela 6E.1.
+- RC39 `6a699546-ebd0-4788-af77-5f846b66a618` continua development/paused,
+  rollout 0, nao revogada, assinatura valida e minimum updater RC6.
+- Public stable/latest continua `0.1.0.7`, SHA-256
+  `88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+
+Candidatos read-only para a futura 6E.2:
+
+- `CS-SRV-CST` e o unico endpoint que satisfaz online/fresh, lifecycle installed,
+  identidade UUID, updater conhecido e ausencia de job ativo, mas ja esta em RC39.
+- `CS-SRV-004` esta online/fresh e possui updater 0.1.0.7, mas lifecycle vazio e
+  versao/canal stable; nao e candidato sem saneamento e aprovacao separados.
+- TAXCEL foi excluido por regra explicita, lifecycle vazio e dois updates sent.
+- CS-CVEL-0254 foi excluido por machine_id nao UUID, offline/stale, updater
+  desconhecido e tres jobs sent. FS e G15-GABRIEL foram excluidos por offline/stale
+  e lifecycle vazio.
+- Resultado: zero endpoints novos tecnicamente seguros para receber RC39 e somente
+  um endpoint de referencia ja em RC39. A exigencia preferencial de dois Windows
+  descartaveis ainda nao foi atendida; nenhuma Campaign, grupo Pilot ou policy foi
+  criada/alterada para contornar esse limite.
