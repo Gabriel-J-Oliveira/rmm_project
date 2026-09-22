@@ -2459,3 +2459,62 @@ Deploy e inercia de producao:
 Proxima etapa: `6E.2B_REAL_CANARY_PREPARATION`, em tarefa separada e com aprovacao
 explicita. Nao adicionar endpoint ao Pilot, alterar policy/channel/allowed groups,
 abrir RC40, habilitar flags ou criar Campaign/job nesta etapa.
+
+### 6E.2B-1 - Primeira Campaign real preparada e congelada (2026-09-22)
+
+6E permanece IN PROGRESS. `PHASE_6_REAL_CANARY_PREPARED = true` e
+`PHASE_6_REAL_CANARY_EXECUTED = false`. Preparacao confirmada em
+`2026-09-22T18:56:16.503294Z`, com producao em
+`adb5607bba0e06f090706d3e397e5001d45370c2`. O backup novo
+`/opt/nightowl/backups/phase6e2b1-adb5607-20260922T185236Z.dump`
+foi validado com `pg_restore --list` antes da mutacao. Ator tecnico:
+`gabriel.oliveira`, ativo e autorizado para promocao, policy e Campaign.
+
+- A RC40 (`eabb8918-a6c2-4a89-b969-a09aaca081d5`) foi promovida pelo
+  dominio oficial de development/paused/rollout 0 para pilot/paused/rollout 0.
+  Assinatura valida, nao revogada, `legacy_unsigned=false`; ZIP SHA-256
+  `e5345d9bf123999f68afe24723fb066b9e7cb39d02d5c13664f1e23a186faf22`.
+  Hashes, URLs, signing key, minimum updater e allowed groups nao mudaram.
+- O grupo canonico `pilot` e
+  `e242e6d2-f9b0-4c13-9cb8-c1c589635ea8`: membros antes/depois `0/1`.
+  Somente CS-SRV-CST (`476f5039-5e7e-4b0f-b24c-849ee6551434`, machine ID
+  `c4e59106-035a-455f-bdeb-3e8287718dd6`) foi adicionado. A flag legada
+  `is_pilot_endpoint` nao foi alterada.
+- O endpoint estava online, lifecycle installed, agente/updater RC39 e heartbeat
+  recente. Bulk policy dry-run e apply usaram o mesmo `bulk_change_hash` para um
+  alvo. Policy antes: development/manual, auto update false, sem grupos, sem pin,
+  pause false. Depois: pilot/automatic, auto update true, grupo pilot adicionado,
+  sem pin, pause false. Maintenance window e demais grupos foram preservados.
+- Preview automatic com freshness 900s, grupo pilot e timestamp unico produziu
+  coorte `1/1/0` (total/elegivel/excluido), schema 1, hash
+  `14c50bcd7484af5971214cb670169c8979e67d10126b9eca7c770ccc0337e774`
+  e bucket 49. O unico alvo foi CS-SRV-CST, RC39 -> RC40, reason `eligible`.
+  `release_execution_ready=false` e blocker `release_paused`.
+- Campaign `bd76c7bd-a969-498e-a27b-cc2a2612a456` ficou `ready`, coorte
+  `1/1/0`, concorrencia 1, freshness 900s, observacao minima 3600s e
+  `current_wave=NULL`. Wave 1 `c0e389e4-594c-4455-9af3-a6df66323023`
+  ficou `pending`, um target elegivel, observacao 3600s. Target
+  `0a4189cd-4d36-42cd-b007-e53055f0bdf9` ficou `eligible`, sem AgentJob.
+  Snapshots preservam machine ID, agent RC39, updater RC39, channel pilot,
+  policy automatic, grupo pilot e release RC40 pilot/paused/rollout 0.
+- Auto-pause policy: schema 1, enabled true, e limiar 1 para failed,
+  rolled_back, cancelled, stalled e offline_post_update. Audits novos:
+  `release.promoted`, `agent.policy.bulk_changed`, `campaign.created`,
+  `wave.created` e `campaign.ready`. Nenhum audit de dispatch.
+- A promocao, bulk policy e criacao da Campaign ocorreram em uma transacao
+  externa com locks Release -> Machine -> Pilot group. Reconsulta antes do
+  commit exigiu zero novos jobs: AgentJobs total `76 -> 76`, update_agent
+  `32 -> 32`, rollout jobs `0`. Pos-commit, a elegibilidade normal de entrega
+  retornou `release_paused` e nao criou job. Flags efetivas orchestrator,
+  automatic e governance permaneceram `false/false/false`.
+- RC39 permaneceu development/paused/rollout 0. Stable/latest permaneceu
+  `0.1.0.7`, ZIP SHA-256
+  `88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+  Nao houve migration, collectstatic, restart, alteracao de artefato ou
+  atualizacao do software do endpoint. `nightowl.service` permaneceu active com PID
+  `2618640`.
+
+**NO UPDATE DISPATCHED. NO AGENT UPDATED.** A Campaign esta preparada, nao
+iniciada; Wave continua pending, Target sem job e RC40 continua pausada com
+rollout 0. Proxima etapa: `6E.2B-2_EXECUTE_FIRST_CANARY`, somente em tarefa
+separada e com aprovacao explicita.
