@@ -68,6 +68,25 @@ class FleetPolicyTests(TestCase):
         self.assertFalse(AuditEvent.objects.exists())
         self.assertTrue(all(query['sql'].lstrip().upper().startswith('SELECT') for query in queries))
 
+    def test_preview_api_distinguishes_selection_from_execution_readiness(self):
+        self.admin()
+        self.machine.last_seen_at = timezone.now()
+        self.machine.save(update_fields=['last_seen_at'])
+        self.release.status = 'paused'
+        self.release.rollout_paused = True
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['status', 'rollout_paused', 'rollout_percentage'])
+
+        response = self.preview_api()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['eligible_count'], 1)
+        self.assertFalse(response.json()['release_execution_ready'])
+        self.assertEqual(response.json()['release_execution_blocker'], 'release_paused')
+        script = (Path(__file__).resolve().parent.parent / 'static/js/fleet_policy.js').read_text(encoding='utf-8')
+        self.assertIn('elegiveis para selecao', script)
+        self.assertIn('execucao bloqueada', script)
+
     def test_material_changes_invalidate_preview(self):
         self.admin()
         self.machine.last_seen_at = timezone.now()
@@ -101,6 +120,8 @@ class FleetPolicyTests(TestCase):
     def test_250_endpoints_deterministic_and_constant_queries(self):
         template = dict(agent_version='0.1.1.0-rc38', updater_version='0.1.1.0-rc38', agent_lifecycle_status='installed',
                         status='online', last_seen_at=self.now, update_channel='development', update_policy='automatic', auto_update_enabled=True)
+        with CaptureQueriesContext(connection) as single:
+            build_agent_rollout_preview(self.release, now=self.now)
         AgentMachine.objects.bulk_create([AgentMachine(hostname=f'SYNTHETIC-{index}', machine_id=str(uuid.uuid4()), agent_token_hash=f'synthetic-{index}', **template) for index in range(249)])
         with CaptureQueriesContext(connection) as individual:
             for machine in AgentMachine.objects.all():
@@ -112,10 +133,11 @@ class FleetPolicyTests(TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first['total_candidates'], 250)
         self.assertEqual(first['eligible_count'], 250)
+        self.assertLessEqual(len(single), 6)
         self.assertLessEqual(len(batch), 6)
         self.assertGreater(len(individual), 1000)
         self.assertFalse(AgentJob.objects.exists())
-        print(f'Synthetic preview: 250 endpoints; individual queries={len(individual)}; batch queries={len(batch)}')
+        print(f'Synthetic preview: one endpoint queries={len(single)}; 250 endpoints individual queries={len(individual)}; batch queries={len(batch)}')
 
     def test_dry_run_zero_writes_and_omitted_fields_preserved(self):
         user = self.admin()

@@ -27,7 +27,8 @@
         function render(data) {
             const groups = Object.fromEntries((data.group_options || []).map(group => [group.id, group.name]));
             const groupNames = ids => ids.map(id => groups[id] || id).join(", ");
-            previewRoot.querySelector("[data-fleet-summary]").textContent = `${data.total_candidates} candidatos · ${data.eligible_count} elegiveis (${data.eligible_percentage}%) · ${data.excluded_count} excluidos · ${data.cohort_hash.slice(0, 16)} · ${data.generated_at}`;
+            const execution = data.release_execution_ready ? "execucao liberada" : `execucao bloqueada: ${label(data.release_execution_blocker)}`;
+            previewRoot.querySelector("[data-fleet-summary]").textContent = `${data.total_candidates} candidatos · ${data.eligible_count} elegiveis para selecao (${data.eligible_percentage}%) · ${data.excluded_count} excluidos · ${execution} · ${data.cohort_hash.slice(0, 16)} · ${data.generated_at}`;
             const release = data.release;
             previewRoot.querySelector("[data-fleet-release]").textContent = `${release.version} · ${release.channel} · ${release.status} · assinatura: ${release.signature_valid ? "valida" : "invalida"} · rollout: ${release.rollout_percentage}% · paused: ${release.rollout_paused} · grupos: ${groupNames(release.allowed_groups) || "Todos"}`;
             const reasons = previewRoot.querySelector("[data-fleet-reasons]"); reasons.replaceChildren();

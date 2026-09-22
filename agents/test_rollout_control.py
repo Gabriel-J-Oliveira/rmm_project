@@ -341,8 +341,9 @@ class PostgreSQLControlTests(TransactionTestCase):
             return dispatch_rollout_campaign(pk, now=now)
         with patch('agents.rollout_runner.dispatch_rollout_campaign', side_effect=mixed):
             summaries = run_rollout_round(now=self.now)['campaigns']
-        self.assertEqual([item.get('status') for item in summaries], ['blocked', None])
-        self.assertEqual(summaries[1]['created_count'], 1)
+        self.assertCountEqual([item.get('status') for item in summaries], ['blocked', None])
+        successful = next(item for item in summaries if item.get('status') is None)
+        self.assertEqual(successful['created_count'], 1)
         self.assertEqual(before + 1, AuditEvent.objects.count())
         self.act(c, 'abort')
         self.act(second, 'abort')

@@ -892,10 +892,13 @@ def _updater_version(endpoint):
 
 def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_agent=False,
                                       explicit_release=None, allow_downgrade=False,
-                                      automatic_rollout=False, freshness_seconds=900, context=None):
+                                      automatic_rollout=False, campaign_selection=False,
+                                      freshness_seconds=900, context=None):
     """Read-only decision. The rollout contract is stricter than legacy delivery."""
     if automatic_rollout and (manual or allow_downgrade or freshness_seconds <= 0):
         raise ValueError('Automatic rollout cannot use manual overrides')
+    if campaign_selection and (not automatic_rollout or explicit_release is None):
+        raise ValueError('Campaign selection requires automatic rollout and an explicit release')
     now = now or timezone.now()
     if timezone.is_naive(now):
         raise ValueError('Eligibility requires an aware timestamp')
@@ -968,12 +971,15 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
 
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
+    if campaign_selection and release.status not in {
+            AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_PAUSED}:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     manual_explicit_release = manual and explicit_release is not None
-    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and not manual_explicit_release:
+    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and not (
+            manual_explicit_release or campaign_selection):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
-    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not (
-        manual_explicit_release and release.status in {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED}
-    ):
+    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not campaign_selection and not (
+            manual_explicit_release and release.status in {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED}):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     if not release.package_url or not release.sha256:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
@@ -1016,7 +1022,7 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
 
     bucket = deterministic_rollout_bucket(endpoint, release)
     rollout_percentage = 100 if release.mandatory and not automatic_rollout else min(100, max(0, release.rollout_percentage or 0))
-    if not manual and bucket >= rollout_percentage:
+    if not manual and not campaign_selection and bucket >= rollout_percentage:
         return decision(False, UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED, release, bucket)
 
     policy = endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL
@@ -1088,7 +1094,8 @@ def build_agent_rollout_preview(release, *, endpoints=None, target_group_ids=Non
     targets, canonical_targets = [], []
     for endpoint in sorted(candidates, key=lambda item: str(item.pk)):
         decision = evaluate_agent_update_eligibility(endpoint, now=now, explicit_release=release,
-                                                    automatic_rollout=True, freshness_seconds=freshness_seconds, context=context)
+                                                    automatic_rollout=True, campaign_selection=True,
+                                                    freshness_seconds=freshness_seconds, context=context)
         groups = sorted(str(value) for value in context['groups'][endpoint.pk])
         target = dict(endpoint_id=str(endpoint.pk), machine_id=endpoint.machine_id,
                       current_version=endpoint.agent_version, updater_version=_updater_version(endpoint),
@@ -1116,10 +1123,20 @@ def build_agent_rollout_preview(release, *, endpoints=None, target_group_ids=Non
                      target_groups=group_ids, release=release_state, targets=canonical_targets)
     cohort_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
     eligible = sum(target['eligible'] for target in targets)
+    if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
+        execution_blocker = UPDATE_POLICY_REASON_RELEASE_REVOKED
+    elif release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED:
+        execution_blocker = UPDATE_POLICY_REASON_RELEASE_PAUSED
+    elif release.status != AgentRelease.STATUS_PUBLISHED:
+        execution_blocker = UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE
+    else:
+        execution_blocker = ''
     from collections import Counter
     return dict(release_id=str(release.pk), version=release.version, channel=release.channel,
                 generated_at=now.isoformat(), mode=mode, total_candidates=len(targets),
                 eligible_count=eligible, excluded_count=len(targets)-eligible,
+                release_execution_ready=not execution_blocker,
+                release_execution_blocker=execution_blocker,
                 targets=targets, cohort_hash=cohort_hash, cohort_schema=1,
                 reason_counts=dict(sorted(Counter(target['reason_code'] for target in targets).items())),
                 eligible_percentage=round(100 * eligible / len(targets), 2) if targets else 0)

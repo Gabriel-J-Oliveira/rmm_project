@@ -40,6 +40,24 @@ class CampaignTests(TestCase):
         self.assertEqual(c.targets.count(), 2)
         self.assertFalse(AgentJob.objects.exists())
 
+    def test_paused_rollout_zero_release_can_freeze_ready_campaign_without_jobs(self):
+        self.release.status = 'paused'
+        self.release.rollout_paused = True
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['status', 'rollout_paused', 'rollout_percentage'])
+
+        preview = build_agent_rollout_preview(self.release, now=self.now)
+        campaign = create_agent_rollout_campaign_from_preview(
+            self.release,
+            {'cohort_schema': preview['cohort_schema'], 'expected_cohort_hash': preview['cohort_hash'],
+             'wave_plan': [{'remaining': True}], 'reason': 'Synthetic paused selection'},
+            self.actor, now=self.now)
+
+        self.assertEqual((preview['eligible_count'], campaign.state, campaign.eligible_count), (1, 'ready', 1))
+        self.assertEqual(campaign.targets.get().state, 'eligible')
+        self.assertEqual(campaign.waves.count(), 1)
+        self.assertFalse(AgentJob.objects.exists())
+
     def test_250_targets_deterministic_and_reload(self):
         AgentMachine.objects.bulk_create([AgentMachine(hostname=f'SYNTHETIC-{i}', machine_id=str(uuid.uuid4()),
             agent_token_hash=f'synthetic-{i}', agent_version=self.machine.agent_version, updater_version=self.machine.updater_version,

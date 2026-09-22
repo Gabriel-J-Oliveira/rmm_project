@@ -12,17 +12,17 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import IntegrityError, connection, connections, transaction
 from django.db.migrations.executor import MigrationExecutor
-from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 
 from . import test_rollout_planning as fixtures
 from .fleet_policy import PolicyContractError
 from .lifecycle_jobs import active_lifecycle_job, agent_job_parameters, lock_lifecycle_endpoint
 from .models import AgentJob, AgentMachine, AgentRolloutTarget, AuditEvent
-from .rollout_campaigns import transition_wave
+from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .rollout_dispatch import dispatch_rollout_campaign
 from .rollout_planning import build_rollout_dispatch_plan
-from .services import AgentUpdateDecision, build_update_agent_job_payload
+from .services import AgentUpdateDecision, build_agent_rollout_preview, build_update_agent_job_payload
 
 
 @override_settings(NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED=True, NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED=True)
@@ -91,6 +91,60 @@ class RolloutDispatchTests(TestCase):
         result = self.dispatch(c)
         self.assertEqual(result['created_count'], 0)
         self.assertEqual(result['plan']['targets'][0]['reason_code'], 'endpoint_paused')
+
+    def test_paused_release_never_dispatches_frozen_target(self):
+        self.release.status = 'paused'
+        self.release.rollout_paused = True
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['status', 'rollout_paused', 'rollout_percentage'])
+        preview = build_agent_rollout_preview(self.release, now=self.now)
+        campaign = create_agent_rollout_campaign_from_preview(self.release, {
+            'cohort_schema': 1, 'expected_cohort_hash': preview['cohort_hash'],
+            'wave_plan': [{'remaining': True}], 'reason': 'Synthetic paused dispatch guard',
+        }, self.actor, now=self.now)
+        transition_campaign(campaign, 'running', self.actor, 'Synthetic start', now=self.now)
+        wave = transition_wave(campaign.waves.get(), 'ready', self.actor, 'Synthetic prepare', now=self.now)
+        transition_wave(wave, 'running', self.actor, 'Synthetic wave start', now=self.now)
+
+        result = self.dispatch(campaign)
+
+        self.assertEqual(result['created_count'], 0)
+        self.assertEqual(result['plan']['targets'][0]['reason_code'], 'release_paused')
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_selection_delivery_and_campaign_dispatch_choreography(self):
+        self.release.status = 'paused'
+        self.release.rollout_paused = True
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['status', 'rollout_paused', 'rollout_percentage'])
+        preview = build_agent_rollout_preview(self.release, now=self.now)
+        campaign = create_agent_rollout_campaign_from_preview(self.release, {
+            'cohort_schema': 1, 'expected_cohort_hash': preview['cohort_hash'],
+            'wave_plan': [{'remaining': True}], 'reason': 'Synthetic selection delivery choreography',
+        }, self.actor, now=self.now)
+        self.assertEqual(preview['eligible_count'], 1)
+        self.assertFalse(AgentJob.objects.exists())
+
+        self.release.status = 'published'
+        self.release.rollout_paused = False
+        self.release.save(update_fields=['status', 'rollout_paused'])
+        self.machine.set_agent_token('synthetic-choreography-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+        response = Client(HTTP_AUTHORIZATION='Bearer synthetic-choreography-token').get('/api/agent/update-policy/')
+        self.assertEqual((response.status_code, response.json()['reason_code']), (200, 'rollout_not_selected'))
+        self.assertFalse(AgentJob.objects.exists())
+
+        transition_campaign(campaign, 'running', self.actor, 'Synthetic start', now=self.now)
+        wave = transition_wave(campaign.waves.get(), 'ready', self.actor, 'Synthetic prepare', now=self.now)
+        transition_wave(wave, 'running', self.actor, 'Synthetic wave start', now=self.now)
+        self.assertEqual(build_rollout_dispatch_plan(campaign, now=self.now)['dispatchable_count'], 1)
+        result = self.dispatch(campaign)
+
+        self.assertEqual(result['created_count'], 1)
+        job = AgentJob.objects.get()
+        self.assertEqual(job.payload['source'], 'rollout_campaign')
+        self.assertEqual(job.correlation_id, str(campaign.targets.get().pk))
+        self.assertFalse(AgentJob.objects.filter(created_by='update_policy').exists())
 
     def test_failures_roll_back_job_link_and_audit(self):
         c = self.create()
@@ -196,6 +250,42 @@ class PostgreSQLDispatchTests(TransactionTestCase):
         connections.close_all()
         self.assertEqual(self.dispatch(c)['created_count'], 0)
         self.assertEqual(c.targets.filter(state='queued', agent_job__isnull=False).count(), 3)
+
+    def test_legacy_get_concurrent_with_campaign_dispatch_creates_only_campaign_job(self):
+        c = self.create()
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['rollout_percentage'])
+        self.machine.set_agent_token('synthetic-concurrent-policy-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+        barrier = threading.Barrier(2)
+
+        def legacy_get():
+            connections.close_all()
+            try:
+                barrier.wait(timeout=10)
+                response = Client(HTTP_AUTHORIZATION='Bearer synthetic-concurrent-policy-token').get('/api/agent/update-policy/')
+                return response.status_code, response.json()['reason_code']
+            finally:
+                connections.close_all()
+
+        def campaign_dispatch():
+            connections.close_all()
+            try:
+                barrier.wait(timeout=10)
+                return dispatch_rollout_campaign(c.pk, now=self.now)['created_count']
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            get_future = pool.submit(legacy_get)
+            dispatch_future = pool.submit(campaign_dispatch)
+            self.assertEqual(get_future.result(timeout=20), (200, 'rollout_not_selected'))
+            self.assertEqual(dispatch_future.result(timeout=20), 1)
+
+        jobs = list(AgentJob.objects.all())
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].payload['source'], 'rollout_campaign')
+        self.assertEqual(jobs[0].correlation_id, str(c.targets.get().pk))
 
     def test_manual_writer_and_campaign_both_lock_orders(self):
         from dashboard.views import endpoint_job_create

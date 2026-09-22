@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from .models import AgentJob, AgentMachine, AgentRelease, AgentReleaseGroup, AgentReleaseSigningKey, AuditEvent, InventorySnapshot
@@ -124,6 +124,62 @@ class AgentRolloutPreviewTests(TestCase):
         self.key.revocation_reason = 'Synthetic revocation test'
         self.key.save()
         self.assertEqual(self.decision().reason_code, 'key_revoked')
+
+    def test_campaign_selection_accepts_paused_rollout_zero_but_delivery_does_not(self):
+        self.release.status = AgentRelease.STATUS_PAUSED
+        self.release.rollout_paused = True
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['status', 'rollout_paused', 'rollout_percentage'])
+
+        preview = self.preview()
+        delivery = evaluate_agent_update_eligibility(
+            self.machine, now=self.now, explicit_release=self.release, automatic_rollout=True)
+
+        self.assertEqual((preview['eligible_count'], preview['targets'][0]['reason_code']), (1, 'eligible'))
+        self.assertFalse(preview['release_execution_ready'])
+        self.assertEqual(preview['release_execution_blocker'], 'release_paused')
+        self.assertEqual(delivery.reason_code, 'release_paused')
+        self.machine.set_agent_token('synthetic-paused-policy-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+        response = Client(HTTP_AUTHORIZATION='Bearer synthetic-paused-policy-token').get('/api/agent/update-policy/')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['update_available'])
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_campaign_selection_accepts_published_rollout_zero_but_delivery_does_not(self):
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['rollout_percentage'])
+
+        preview = self.preview()
+        delivery = evaluate_agent_update_eligibility(
+            self.machine, now=self.now, explicit_release=self.release, automatic_rollout=True)
+
+        self.assertEqual((preview['eligible_count'], preview['targets'][0]['reason_code']), (1, 'eligible'))
+        self.assertTrue(preview['release_execution_ready'])
+        self.assertEqual(preview['release_execution_blocker'], '')
+        self.assertEqual(delivery.reason_code, 'rollout_not_selected')
+        self.machine.set_agent_token('synthetic-zero-policy-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+        response = Client(HTTP_AUTHORIZATION='Bearer synthetic-zero-policy-token').get('/api/agent/update-policy/')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['update_available'])
+        self.assertEqual(response.json()['reason_code'], 'rollout_not_selected')
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_campaign_selection_is_explicit_and_rejects_non_operational_release_states(self):
+        with self.assertRaisesMessage(ValueError, 'Campaign selection requires'):
+            evaluate_agent_update_eligibility(
+                self.machine, now=self.now, explicit_release=self.release, campaign_selection=True)
+        for status in [AgentRelease.STATUS_REVOKED, AgentRelease.STATUS_SUPERSEDED, 'active', 'draft', 'unknown']:
+            with self.subTest(status=status):
+                self.release.status = status
+                self.release.revoked = status == AgentRelease.STATUS_REVOKED
+                decision = evaluate_agent_update_eligibility(
+                    self.machine, now=self.now, explicit_release=self.release,
+                    automatic_rollout=True, campaign_selection=True)
+                self.assertFalse(decision.eligible)
+                self.assertIn(decision.reason_code, {'release_revoked', 'release_not_available'})
+        self.release.revoked = False
 
     def test_pilot_group_is_only_authority(self):
         self.machine.update_channel = self.release.channel = 'pilot'
