@@ -1176,6 +1176,7 @@ class AgentJobsResultView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @transaction.atomic
     def post(self, request):
         machine = authenticate_agent_token(request)
         payload = request.data if isinstance(request.data, dict) else {}
@@ -1185,7 +1186,7 @@ class AgentJobsResultView(APIView):
         job_status = _normalize_job_status(payload.get('status'))
         job = None
         if job_id:
-            job = AgentJob.objects.filter(pk=job_id, endpoint=machine).first()
+            job = AgentJob.objects.select_for_update().filter(pk=job_id, endpoint=machine).first()
         if job_id and job is None:
             create_audit_event(
                 event_type='job.result_rejected',
