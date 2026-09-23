@@ -1219,7 +1219,10 @@ NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = false
 AUTO_PAUSE_IMPLEMENTED = true
 PHASE_6_CODE_DEPLOYED = true
 PHASE_6_SCHEMA_DEPLOYED = true
-PHASE_6_REAL_CANARY_EXECUTED = false
+PHASE_6_REAL_CANARY_EXECUTED = true
+PHASE_6_REAL_CANARY_SUCCEEDED = true
+PHASE_6_RETRY_CANARY_PREPARED = true
+PHASE_6_RETRY_CANARY_EXECUTED = true
 ```
 
 ### Objetivo e baseline funcional
@@ -2686,3 +2689,95 @@ migration, collectstatic, restart ou novo canario ocorreu nesta preparacao.
 `PHASE_6_REAL_CANARY_SUCCEEDED=false`. `PHASE_6_RETRY_CANARY_PREPARED=true` e
 `PHASE_6_RETRY_CANARY_EXECUTED=false`. A Fase 6E continua IN PROGRESS.
 Proxima etapa: `6E.2B-2C_EXECUTE_RETRY_CANARY`, somente em tarefa separada.
+
+### 6E.2B-2C - Retry do primeiro canario real concluido com sucesso (2026-09-23)
+
+A execucao real ocorreu em producao no commit funcional
+`fb664c64c322248d7229bb2d971a9ef9af2a4ba6`; `nightowl.service` permaneceu
+active/running, PID `2788060`, sem restart e sem migrations. Backup imediatamente
+pre-execucao da Campaign preparada:
+`/opt/nightowl/backups/phase6e2b2c-pre-execute-fb664c64c322248d7229bb2d971a9ef9af2a4ba6-20260923T141312Z.dump`,
+1,004,056,817 bytes, `root:root 600`, SHA-256
+`16eb9031596f9c28b09c815d19141c5bfacabe62db7baed334840a7f1565d963`;
+`pg_dump` e `pg_restore --list` retornaram 0.
+
+Controles e janela de execucao:
+
+- A Campaign `2340d302-4370-4b50-aab6-7723236681e8` e a Wave
+  `ca32f129-f61d-4df5-9008-ab583301d2ed` estavam `running`, com Target
+  `290c150f-ecd1-4a74-a24e-1386ba85ede8` elegivel e ainda sem job. O primeiro
+  primeira janela administrativa abriu em `2026-09-23T14:18:28.197802Z`.
+  A validacao confirmou o bloqueio da policy legada (`rollout_not_selected`)
+  e o plan-only selecionou somente o Target esperado, mas o processo de
+  dispatch abortou antes de chamar o dispatcher por usar um filtro de campo
+  inexistente. Nenhuma linha de AgentJob foi criada; a RC40 foi fechada via
+  servico de dominio em `2026-09-23T14:23:00.530652Z`, com a contagem em 77.
+  O erro foi corrigido apenas no comando administrativo, sem mudanca de codigo.
+- A janela final, usada para os gates e o unico dispatch, abriu em
+  `2026-09-23T14:24:13.060768Z` e fechou em
+  `2026-09-23T14:24:13.130196Z`. A avaliacao de policy legada retornou
+  `eligible=false`, `rollout_not_selected`, com zero jobs `update_policy`.
+  O plan-only selecionou somente o Target autorizado: dispatchable 1,
+  blocked 0. Foram usados flags process-scoped apenas nos comandos de controle
+  e dispatch; os tres flags persistentes continuaram false/false/false.
+- Uma unica chamada explicita de `process_agent_rollouts --execute` criou o job
+  `ddf2f378-74e7-4cf6-9b36-9385e331256e`, `update_agent`, source
+  `rollout_campaign`, correlation/Target ID
+  `290c150f-ecd1-4a74-a24e-1386ba85ede8`, release
+  `eabb8918-a6c2-4a89-b969-a09aaca081d5`, attempt 1 e timeout 900s. O payload
+  persistido continha `channel=development`, `source_channel=development` e
+  `policy_channel=pilot`; o wire preservou os dois primeiros e omitiu
+  `policy_channel`. O manifest assinado tambem declara `development`.
+  `WIRE_CHANNEL_MATCH=true`; nao ocorreu `RELEASE_CHANNEL_MISMATCH`.
+- A RC40 estava assinada e valida no preflight, com signing key
+  `nightowl-release-2026-02`; a verificacao do manifest da release confirmou
+  `channel=development` antes do dispatch.
+- Ao fim da janela, RC40 ficou `pilot/paused/rollout=0`, mantendo
+  `source_channel=development`. Nao houve outro job nem alteracao de endpoint
+  fora do CS-SRV-CST. Contagens: AgentJobs 77 -> 78, `update_agent` 33 -> 34,
+  rollout jobs 1 -> 2 (um historico failed e este retry), `update_policy` delta
+  0 e outros endpoints sem novo update job.
+
+Resultado do canario CS-SRV-CST:
+
+- O job foi queued `2026-09-23T14:24:13.111241Z`, dispatched
+  `14:24:13.743097Z`, started `14:24:58.844045Z`, terminou `completed` com
+  exit code 0 em `14:28:11.515014Z`; resultado recebido `14:28:22.789531Z`.
+  `result_id=38feab45-3636-49c2-879b-c23debc23fef`; receipt final
+  `fb90b8b8-4db5-44e0-9079-c3e50a9ff3c4`, conflito 0. Houve tambem receipt
+  intermediario sem conflito, preservado no historico.
+- Resultado: RC39 -> RC40, `updated=true`, installed version
+  `0.1.1.0-rc40`, health check `confirmed=true`, servico iniciado e
+  `machine_id` preservado como
+  `c4e59106-035a-455f-bdeb-3e8287718dd6`; `rollback_performed=false`.
+  O endpoint reportou online, lifecycle `installed`, agent/updater/Tray em
+  RC40 e heartbeat posterior em `2026-09-23T14:28:32.365539Z`.
+- O reconcile explicito confirmou binding valido, Target `succeeded`, receipt
+  presente, conflito 0 e health confirmado. Governance plan retornou
+  `start_observation`, sem auto-pause. Uma unica rodada process-scoped do
+  governance moveu a Wave para `observing` em
+  `2026-09-23T14:29:31.150699Z`; Campaign permaneceu `running`, Target
+  `succeeded`, observacao minima 3600 segundos. A observacao nao foi concluida
+  nem acelerada nesta etapa.
+- Registro de consistencia: `last_installed_agent_version` foi observado como
+  RC36 mesmo com agent/updater/Tray e resultado do job confirmando RC40. Este
+  campo nao foi usado como prova do update pelo reconciler; investigar sua
+  semantica na etapa de observacao, sem alterar o endpoint nesta execucao.
+
+Isolamento final: RC39 permaneceu inalterada. `stable/latest` continuou em
+`0.1.0.7`, SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+RC40 continua pausada com rollout 0; grupo Pilot permaneceu com exatamente um
+membro. Os flags persistentes permaneceram false/false/false; arquivo de
+ambiente e timers nao foram alterados; nenhum deploy ou restart ocorreu.
+
+```text
+PHASE_6_RETRY_CANARY_PREPARED=true
+PHASE_6_RETRY_CANARY_EXECUTED=true
+PHASE_6_REAL_CANARY_SUCCEEDED=true
+PHASE_6_STATUS=IN_PROGRESS
+PHASE_6_ACTIVE_SUBPHASE=6E
+```
+
+Proxima etapa: `6E.2B-3_OBSERVATION_GATE`. Nao iniciar nem concluir a
+observacao nesta entrega.
