@@ -2621,3 +2621,68 @@ alterado. Nenhum novo canario foi executado.
 Proxima etapa: `6E.2B-2B_PREPARE_RETRY_CAMPAIGN`, em tarefa separada e com
 aprovacao operacional; esta secao nao autoriza criar Campaign, Target ou job,
 retomar a Campaign antiga ou abrir RC40.
+
+### 6E.2B-2B - Campaign de retry preparada apos correcao de source_channel (2026-09-23)
+
+Preparacao administrativa concluida sem dispatch. Producao permaneceu no
+commit funcional `fb664c64c322248d7229bb2d971a9ef9af2a4ba6`, com
+`nightowl.service` active/running e zero migrations pendentes. Antes da
+transacao, foi criado o backup PostgreSQL custom
+`/opt/nightowl/backups/phase6e2b2b-pre-retry-fb664c64c322248d7229bb2d971a9ef9af2a4ba6-20260923T134902Z.dump`
+no volume persistente `/dev/sda6`. `pg_dump` e `pg_restore --list` passaram;
+SHA-256 `e5c09113275c1d01d39f568938a75f07af04415f71634487f63b6284529d9d1b`.
+O arquivo ficou `root:root 600`.
+
+O snapshot da Campaign historica
+`bd76c7bd-a969-498e-a27b-cc2a2612a456` nao continha `source_channel`.
+`validate_campaign_release_contract()` retornou `valid=false` com somente
+`source_channel` em `changed_fields`; `integrity()` retornou
+`campaign_snapshot_incomplete`. A Campaign nao foi reutilizada nem teve seu
+snapshot modificado. `gabriel.oliveira` aplicou `abort` pela API de dominio
+com estado e timestamp otimistas; a Campaign terminou `aborted`, sua Wave
+`c0e389e4-594c-4455-9af3-a6df66323023` terminou `cancelled` e
+`current_wave=NULL`. O Target
+`0a4189cd-4d36-42cd-b007-e53055f0bdf9` permaneceu `failed`; o job
+`92de892c-c636-4fd4-83f9-9b3ad77570ca` permaneceu `failed` com
+`RELEASE_CHANNEL_MISMATCH`. O receipt
+`fb8f8cd7-aeb9-4006-b37e-553e3893168f` permaneceu vinculado, sem conflito.
+O cohort hash historico e
+`14c50bcd7484af5971214cb670169c8979e67d10126b9eca7c770ccc0337e774`.
+
+O novo preview somente leitura da RC40 para o grupo Pilot retornou exatamente
+um candidato, CS-SRV-CST, elegivel, sem exclusoes, bucket 49. O novo cohort
+hash e `77c793212064266727135f53774d26f0a3cde5e4e04a94213e20fc0e5b4f832c`.
+A release ainda nao estava pronta para execucao: blocker `release_paused`.
+Numa unica transacao externa, apos o abort, o preview foi recomputado e a
+Campaign `2340d302-4370-4b50-aab6-7723236681e8` foi criada pela API de
+dominio em `ready`, com concurrency 1, freshness 900s e auto-pause habilitado
+com todos os limiares em 1. Sua Wave
+`ca32f129-f61d-4df5-9008-ab583301d2ed` ficou `pending`, sequencia 1,
+um alvo e observacao minima de 3600s. O Target
+`290c150f-ecd1-4a74-a24e-1386ba85ede8` ficou `eligible`, vinculado
+somente a CS-SRV-CST, com machine ID e versoes agent/updater RC39 preservados
+no snapshot e `agent_job=NULL`. O contrato material e `integrity()` da nova
+Campaign passaram; seu snapshot inclui `channel=pilot` e
+`source_channel=development`.
+
+O payload gerado sem salvar job confirmou `channel=development`,
+`source_channel=development`, `policy_channel=pilot` e source
+`rollout_campaign`. No wire para o agente, `channel` e `source_channel`
+permanecem `development`, enquanto `policy_channel` administrativo nao e
+enviado. O canal coincide com o manifest assinado da RC40. O total de
+AgentJobs permaneceu 77, sendo 33 `update_agent`; o unico rollout job ainda
+e o historico falho e nenhum job de update-policy foi criado. Uma leitura
+independente apos o commit da transacao confirmou os estados, o contrato,
+os jobs e a ausencia de mudancas nos demais endpoints.
+
+RC40 continuou `pilot/paused/rollout=0`, com `source_channel=development`;
+CS-SRV-CST continuou online/installed em RC39; o grupo Pilot continuou com
+somente esse endpoint. Stable/latest continuou 0.1.0.7, SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+Os tres flags persistentes continuaram false/false/false. Nenhum deploy,
+migration, collectstatic, restart ou novo canario ocorreu nesta preparacao.
+
+`PHASE_6_REAL_CANARY_EXECUTED=true` e
+`PHASE_6_REAL_CANARY_SUCCEEDED=false`. `PHASE_6_RETRY_CANARY_PREPARED=true` e
+`PHASE_6_RETRY_CANARY_EXECUTED=false`. A Fase 6E continua IN PROGRESS.
+Proxima etapa: `6E.2B-2C_EXECUTE_RETRY_CANARY`, somente em tarefa separada.
