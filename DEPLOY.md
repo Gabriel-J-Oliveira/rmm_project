@@ -2968,3 +2968,84 @@ PHASE_6_REAL_WAVE_PROGRESSION_PLANNED=true
 6E_3_READY_FOR_PREPARATION=false
 PHASE_6_STATUS=IN_PROGRESS
 ```
+
+### 6E.3A-1 - Reconciliacao de lifecycle legado para candidatos multi-Wave (2026-09-23)
+
+Resultado parcial e seguro. O campo `AgentMachine.agent_lifecycle_status`
+foi introduzido sem backfill dos agentes legados. No codigo, o deployment
+saudavel escreve `installed`; resultado final de uninstall/purge escreve
+`uninstalled`/`purged`. Heartbeat e update nao escrevem lifecycle. Assim,
+CS-SRV-004 e TAXCEL podiam estar online com heartbeat autenticado recente,
+mas permanecer com lifecycle vazio. Nenhum endpoint terminal foi reativado.
+
+O commit funcional `c6823151da21b309ce066c69bb2a406e1b16b41c` adicionou
+`reconcile_agent_lifecycle`, dry-run por padrao e `--apply --reason` somente
+para um endpoint por vez. O helper exige endpoint ativo/online, `last_seen`
+e heartbeat autenticado recentes (900 s), machine ID UUID nao zero e unico,
+versao valida e coerente com o heartbeat, modo/caminho de instalacao
+reportados e zero jobs de lifecycle `queued/sent/running`. A data do proprio
+heartbeat e validada: uma coleta recente que copia heartbeat antigo nao o
+torna fresh. Somente lifecycle vazio/unknown pode transitar para installed;
+`uninstalled`/`purged` nunca sao sobrescritos. A aplicacao revalida sob lock
+e transacao, altera somente lifecycle e registra AuditEvent sanitizado.
+Chamadas repetidas sao no-op. Nao foi habilitada reconciliacao automatica no
+heartbeat, pois isso mudaria outros agentes legados antes da triagem de jobs
+e politicas. `last_installed_agent_version` permanece separado e intocado.
+
+Validacao local: 7 testes novos e 95 de heartbeat/deployment/rollout (102
+no total, 10 skips), todos PASS. `py_compile`, Django check,
+`makemigrations --check --dry-run`, `git diff --check` e scan de padroes
+sensiveis passaram. `MIGRATIONS=NONE`. O servidor recebeu o commit por
+fast-forward, `python manage.py check` passou e `nightowl.service` voltou
+active apos um unico restart do backend Python. Nenhum `.env` ou flag mudou.
+
+Antes do `--apply`, backup PostgreSQL validado:
+`/opt/nightowl/backups/phase6e3a1-pre-lifecycle-reconcile-c6823151da21b309ce066c69bb2a406e1b16b41c-20260923T1744Z.dump`;
+SHA-256 `dc13161a51c922c7f8e24af3523dc737ec12ed6b289135ad1414d4bf08063230`,
+1,005,314,164 bytes, owner `root:root`, modo 600, `pg_dump=0` e
+`pg_restore --list=0`.
+
+CS-SRV-004 (`dc7910a6-b0e7-4492-8946-174e8fffd6a8`) estava
+online/fresh em 0.1.0.6, updater 0.1.0.7, lifecycle vazio e zero jobs
+ativos. O dry-run antes e depois do backup retornou eligible=true, sem
+blockers. Uma unica aplicacao moveu lifecycle para `installed` e criou um
+AuditEvent. Agent version, updater, last-installed, canal stable, policy
+manual e demais campos operacionais permaneceram inalterados. O preview
+read-only RC40 passou de `endpoint_lifecycle_unknown` para
+`channel_no_release` neste host. Seu updater 0.1.0.7 e inferior ao minimo
+RC6 da RC40: `update_agent_requires_bootstrap=true`; logo este host ainda
+nao e candidato tecnico a um update normal para RC40.
+
+TAXCEL (`280b807b-7d4f-4bf9-9cae-2ab624d8a862`) permaneceu online/fresh,
+RC17, lifecycle vazio. Dois updates historicos ainda constam `sent`:
+
+| Job | Target | Evidencia | Classificacao |
+| --- | --- | --- | --- |
+| `2ae838d9-8751-4460-9fb2-5c57f8727654` | RC14 | `manual_recovery`, sent em 2026-08-20T16:06:13Z, sem expires_at, resultado ou receipt; `job_stale_info=timeout_exceeded` desde 16:21:13Z | STALE com evidencia terminal ausente |
+| `2eb5fa5d-b6c3-495a-b03d-da52b8ad07ce` | RC13 | `manual_panel`, sent em 2026-08-19T16:39:20Z, expires_at 17:09:18Z, sem resultado ou receipt; `job_stale_info=timeout_exceeded` desde 16:54:20Z | STALE com evidencia terminal ausente |
+
+O codigo atual marca stale apenas para exibicao/planejamento. O pull expira
+somente jobs `queued`; nao existe comando de dominio seguro para finalizar
+esses dois jobs ja `sent` sem inventar resultado. Revogar releases para
+cancelar jobs violaria o escopo. Nao houve edicao de AgentJob, novo job ou
+dry-run/aplicacao de lifecycle no TAXCEL. O preview segue
+`endpoint_lifecycle_unknown` para ele; se lifecycle for resolvido no futuro,
+os jobs `sent` ainda bloqueariam o rollout.
+
+Preview RC40 apos o saneamento parcial: `eligible=0`, reasons
+`already_current=1`, `channel_no_release=1`,
+`endpoint_lifecycle_unknown=4`; a release permanece
+`pilot/paused/rollout=0` com source_channel development. CS-SRV-CST segue
+RC40, `AgentOperationalStatus` continua sem linha, os tres alertas criticos
+continuam em triagem e `last_installed_agent_version` nao foi corrigido.
+Contagens finais: Campaigns 2, Waves 2, Targets 2, AgentJobs 78,
+rollout jobs 2, update_policy jobs 0, sem novas entidades de rollout.
+Stable/latest segue 0.1.0.7 com SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`;
+flags persistentes false/false/false.
+
+`6E_3_ELIGIBILITY_REMEDIATED=false` e
+`6E_3_READY_FOR_PREPARATION=false`. Proxima etapa proposta:
+`6E.3A-2_RESOLVE_STALE_SENT_JOBS_AND_LEGACY_UPDATER`, com contrato e
+autorizacao proprios. Nao iniciar 6E.3B nem alterar canais, policies,
+Pilot membership ou releases nesta etapa.
