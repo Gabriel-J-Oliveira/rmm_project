@@ -1223,6 +1223,7 @@ PHASE_6_REAL_CANARY_EXECUTED = true
 PHASE_6_REAL_CANARY_SUCCEEDED = true
 PHASE_6_RETRY_CANARY_PREPARED = true
 PHASE_6_RETRY_CANARY_EXECUTED = true
+PHASE_6_OBSERVATION_GATE_PASSED = true
 ```
 
 ### Objetivo e baseline funcional
@@ -2705,7 +2706,7 @@ Controles e janela de execucao:
 
 - A Campaign `2340d302-4370-4b50-aab6-7723236681e8` e a Wave
   `ca32f129-f61d-4df5-9008-ab583301d2ed` estavam `running`, com Target
-  `290c150f-ecd1-4a74-a24e-1386ba85ede8` elegivel e ainda sem job. O primeiro
+  `290c150f-ecd1-4a74-a24e-1386ba85ede8` elegivel e ainda sem job. A
   primeira janela administrativa abriu em `2026-09-23T14:18:28.197802Z`.
   A validacao confirmou o bloqueio da policy legada (`rollout_not_selected`)
   e o plan-only selecionou somente o Target esperado, mas o processo de
@@ -2781,3 +2782,85 @@ PHASE_6_ACTIVE_SUBPHASE=6E
 
 Proxima etapa: `6E.2B-3_OBSERVATION_GATE`. Nao iniciar nem concluir a
 observacao nesta entrega.
+
+### 6E.2B-3 - Observation Gate do primeiro canario RC40 concluido (2026-09-23)
+
+O gate foi executado sobre a Campaign
+`2340d302-4370-4b50-aab6-7723236681e8`, Wave
+`ca32f129-f61d-4df5-9008-ab583301d2ed` e Target
+`290c150f-ecd1-4a74-a24e-1386ba85ede8`, com producao ainda no commit
+funcional `fb664c64c322248d7229bb2d971a9ef9af2a4ba6`.
+
+- A observacao comecou em `2026-09-23T14:29:31.150699Z` e terminou em
+  `2026-09-23T16:23:23.955921Z`. O relogio persistido pela Wave acumulou
+  6832 segundos, acima do minimo de 3600, sem ajuste de timestamps. Antes
+  da conclusao, `build_wave_observation_summary()` retornou `healthy=true`,
+  um Target verificado, `risk_count=0`, `reason_counts={}` e
+  `remaining_seconds=0`. O endpoint estava online/installed e ativo, com
+  heartbeat e inventarios posteriores ao inicio da janela; foram observados
+  23 snapshots de inventario e nenhuma nova criacao de AgentJob.
+- O reconcile explicito retornou zero transicoes e manteve o Target
+  `succeeded`, binding valido, resultado e receipt presentes, health
+  confirmado e nenhum conflito. O job
+  `ddf2f378-74e7-4cf6-9b36-9385e331256e` permaneceu `completed`, exit 0,
+  resultado `38feab45-3636-49c2-879b-c23debc23fef` e receipt final
+  `fb90b8b8-4db5-44e0-9079-c3e50a9ff3c4`, conflito 0. A versao instalada
+  ficou RC40 e `rollback_performed=false`.
+- O governance plan retornou `decision=complete_wave`,
+  `reason_code=observation_complete`, `can_complete_wave=true` e
+  `can_complete_campaign=true`. Antes da rodada global, somente esta Campaign
+  estava nao terminal; a Campaign historica continuou `aborted`.
+- Backup PostgreSQL pre-conclusao:
+  `/opt/nightowl/backups/phase6e2b3-pre-complete-fb664c64c322248d7229bb2d971a9ef9af2a4ba6-20260923T161941Z.dump`,
+  1,004,825,359 bytes, `root:root 600`, SHA-256
+  `a4b50748a4b3fbb6706537b66d4a777a6aed5c08513f363018472d0103449c0c`.
+  `pg_dump` e `pg_restore --list` retornaram 0. O hash foi validado por
+  leitura separada do caminho exato antes de aplicar governance.
+- Uma unica rodada `govern_agent_rollouts --run-once`, com somente a flag
+  process-scoped de governance habilitada, concluiu Wave e Campaign em
+  `2026-09-23T16:23:23.955921Z`. A Wave ficou `completed`,
+  `observation_accumulated_seconds=6832` e `observation_resumed_at=NULL`;
+  a Campaign ficou `completed`, `current_wave=NULL`. O plan-only posterior
+  retornou `terminal/campaign_completed`, sem nova mutacao possivel.
+
+CS-SRV-CST permaneceu online/installed, machine ID
+`c4e59106-035a-455f-bdeb-3e8287718dd6`, com agent/updater/Tray RC40 e
+`last_seen_at=2026-09-23T16:21:08.104583Z` na checagem final. Nao houve
+alerta offline durante a janela, novo update, repair, uninstall, receipt
+conflict ou rollback. `AgentOperationalStatus` nao possui linha para este
+endpoint, portanto nao havia `health_indicator` para consultar; o resumo de
+observacao usou os demais sinais persistidos. Tres alertas criticos gerais
+preexistentes (`high_uptime`, `security_antivirus` e
+`change.security_protection_disabled`) continuavam abertos. Eles nao sao
+eventos de updater/rollback e nao participam do contrato atual de governance;
+devem ser triados antes de ampliar a frota.
+
+`last_installed_agent_version` permaneceu RC36. No codigo atual, o campo e
+escrito no completion de deployment e no resultado de uninstall/purge, mas
+nao em `update_agent`. O ultimo deployment completed vinculado ao endpoint
+foi RC37 (`2026-09-04T15:58:24.396540Z`); sob a semantica atual de ultimo
+install/reinstall, RC37 seria o valor esperado. RC36 e metadado stale de
+historico, nao evidenca de downgrade da instalacao RC40. Nao houve alteracao
+manual; reconciliar a semantica e o dado antes do fechamento definitivo da
+Fase 6.
+
+Isolamento final: AgentJobs 78, `update_agent` 34, rollout jobs 2 e
+`update_policy` 0, sem delta nesta etapa. RC40 continuou
+`pilot/paused/rollout=0` com `source_channel=development`; RC39 permaneceu
+inalterada. Stable/latest continuou em `0.1.0.7`, SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+O grupo Pilot manteve um membro, os tres flags persistentes ficaram OFF e
+`nightowl.service` permaneceu active/running com o mesmo PID. Nao houve
+deploy, migration, collectstatic, alteracao de `.env`, timer ou restart.
+
+```text
+PHASE_6_REAL_CANARY_EXECUTED=true
+PHASE_6_REAL_CANARY_SUCCEEDED=true
+PHASE_6_RETRY_CANARY_PREPARED=true
+PHASE_6_RETRY_CANARY_EXECUTED=true
+PHASE_6_OBSERVATION_GATE_PASSED=true
+PHASE_6_STATUS=IN_PROGRESS
+PHASE_6_ACTIVE_SUBPHASE=6E
+```
+
+Proxima etapa: `6E.3_REAL_WAVE_PROGRESSION_PLANNING`, em tarefa separada.
