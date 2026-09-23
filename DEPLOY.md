@@ -2518,3 +2518,67 @@ foi validado com `pg_restore --list` antes da mutacao. Ator tecnico:
 iniciada; Wave continua pending, Target sem job e RC40 continua pausada com
 rollout 0. Proxima etapa: `6E.2B-2_EXECUTE_FIRST_CANARY`, somente em tarefa
 separada e com aprovacao explicita.
+
+### 6E.2B-2 - Primeiro canario real falhou antes da instalacao (2026-09-23)
+
+`PHASE_6_REAL_CANARY_PREPARED = true` e
+`PHASE_6_REAL_CANARY_EXECUTED = true`; a Fase 6E permanece IN PROGRESS e o
+canario NAO passou. A primeira tentativa foi interrompida antes de qualquer
+transicao porque o `pg_dump` encontrou ENOSPC. Nenhuma Campaign, Wave, Target,
+release, endpoint ou AgentJob foi alterado nessa tentativa. O dump parcial foi
+removido para devolver espaco. Operacionalmente, `/opt/nightowl/backups` foi
+movido para bind mount persistente em `/home/nightowl-data/backups` sobre
+`/dev/sda6`; `fstab` foi validado sem erros. O backup valido desta execucao,
+criado antes de qualquer mutacao, foi
+`/opt/nightowl/backups/phase6e2b2-pre-canary-adb5607-20260923T121543Z.dump`,
+SHA-256 `aa7642c9fe66c100814301ec618b06b7af460f07c927bd9cd08e5573731ec074`;
+`pg_restore --list` passou.
+
+- Producao continuou em `adb5607bba0e06f090706d3e397e5001d45370c2`, com
+  `nightowl.service` active e sem migrations pendentes. Os flags persistentes
+  permaneceram false/false/false. Os flags de orchestrator/automatic foram
+  true somente nos processos explicitos de controle e dispatch; governance foi
+  true somente na rodada explicita de auto-pause. `.env`, timers, servico e
+  stable/latest nao foram alterados.
+- A Campaign `bd76c7bd-a969-498e-a27b-cc2a2612a456` passou de ready para
+  running; a Wave `c0e389e4-594c-4455-9af3-a6df66323023` passou de pending para
+  running. Com RC40 ainda pausada, o plano bloqueou o Target por
+  `release_paused`, sem criar job. RC40 foi aberta brevemente em
+  `2026-09-23T12:30:19.790215Z` como pilot/published/unpaused/rollout 0. O
+  caminho legado retornou `rollout_not_selected`; o plano da Campaign selecionou
+  somente CS-SRV-CST, bucket 49. RC40 foi pausada novamente em
+  `2026-09-23T12:32:42.461703Z`, antes da chegada do resultado final.
+- Um unico job foi criado: `92de892c-c636-4fd4-83f9-9b3ad77570ca`, tipo
+  `update_agent`, source `rollout_campaign`, correlacionado ao Target
+  `0a4189cd-4d36-42cd-b007-e53055f0bdf9`, release RC40, attempt 1 e timeout 900s.
+  O job terminou failed, exit code 25, error code `RELEASE_CHANNEL_MISMATCH`.
+  A mensagem sanitizada foi: `manifest channel development != pilot`. A RC40
+  publicada tem manifest assinado declarando development; sua promocao no banco
+  para pilot nao altera o manifest assinado. O agente rejeitou o pacote antes da
+  instalacao. Resultado: versao anterior/instalada RC39, updated=false,
+  health_check=false, rollback=false. Result ID
+  `update-92de892c-c636-4fd4-83f9-9b3ad77570ca`; receipt final
+  `fb8f8cd7-aeb9-4006-b37e-553e3893168f`, conflict_count 0. Nenhum segundo job
+  ou job `source=update_policy` foi criado.
+- O reconciler vinculou validamente job, Campaign, Wave e Target e marcou o
+  Target failed. O governance plan indicou `auto_pause` por `failed_count=1`;
+  uma rodada process-scoped pausou Campaign e Wave. Estados finais: Campaign
+  paused, Wave paused, Target failed. A observacao de 3600 segundos nao iniciou.
+- CS-SRV-CST permaneceu online/installed, machine ID preservado, agente e
+  updater RC39. RC40 terminou pilot/paused/rollout 0. RC39 permaneceu
+  development/paused/rollout 0. Stable/latest permaneceu 0.1.0.7, ZIP SHA-256
+  `88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+  O total de AgentJobs passou de 76 para 77; update_agent de 32 para 33; ha
+  exatamente um rollout job, ligado somente ao CS-SRV-CST.
+- Flags efetivos no servico continuaram false/false/false; o servico nao foi
+  reiniciado. O journal nao mostrou Traceback, IntegrityError ou
+  OperationalError ou resposta 5xx no intervalo consultado. Nao houve rollback
+  nem conflito de receipt.
+
+**Resultado: CANARY_FAILED; nenhuma atualizacao foi instalada e a observacao
+nao comecou.** Nao repetir nem criar outro job ate corrigir e validar a
+incompatibilidade entre o canal do manifest assinado e o canal pilot esperado
+pelo updater. Preservar job, Target e receipts como evidencia. A proxima etapa
+e investigar o contrato de promocao/canal e definir uma release/caminho cujo
+manifest e metadata satisfaçam a verificacao do agente; isso requer aprovacao
+operacional separada. A Campaign e a Wave permanecem pausadas.
