@@ -3049,3 +3049,89 @@ flags persistentes false/false/false.
 `6E.3A-2_RESOLVE_STALE_SENT_JOBS_AND_LEGACY_UPDATER`, com contrato e
 autorizacao proprios. Nao iniciar 6E.3B nem alterar canais, policies,
 Pilot membership ou releases nesta etapa.
+
+### 6E.3A-2 - Jobs stale reconciliados; updater legado aguarda bootstrap (2026-09-23)
+
+Resultado parcial, com stop condition antes do bootstrap Windows. O commit
+funcional `b7e85394a32a9e2a49d1e321829dc36f1e9abe35` adicionou
+`reconcile_stale_agent_job`: dry-run por padrao, um job por chamada,
+`--apply --reason` explicito, transacao e row lock. Somente jobs `sent`
+com `timeout_exceeded` ou `dispatched_too_long`, sem resultado nem receipt,
+podem transitar para `timed_out` com `JOB_TIMEOUT`. O comando reavalia depois
+do lock, preserva payload e timestamps de dispatch/start, nao inventa
+`result`, `receipt`, `exit_code` ou versao instalada, e registra AuditEvent
+uma unica vez. `AgentJobsResultView` usa o mesmo lock para que um resultado
+tardio nao reabra o job terminal; responde `job_already_final` e pode
+registrar receipt tardio apenas como evidencia, sem alterar o endpoint.
+Seis testes novos e 125 testes focados no total passaram; Django check,
+`makemigrations --check --dry-run`, py_compile, diff check e scan de
+padroes sensiveis passaram. `MIGRATIONS=NONE`. O servidor recebeu o
+commit por fast-forward, sem editar `.env`, e `nightowl.service` voltou
+active apos um unico restart.
+
+Antes do primeiro apply, backup PostgreSQL validado em
+`/opt/nightowl/backups/phase6e3a2-pre-stale-job-reconcile-b7e85394a32a9e2a49d1e321829dc36f1e9abe35-20260923T182254Z.dump`;
+SHA-256 `072d36c7333290ee97ad2be05b9443028f5f77976bdb656bc211b6f1fbd68c41`,
+1,005,571,439 bytes, owner `root:root`, modo 600, `pg_dump=0` e
+`pg_restore --list=0`.
+
+TAXCEL (`280b807b-7d4f-4bf9-9cae-2ab624d8a862`, machine ID
+`80f4eb42-7241-4118-9afc-e8457c37657c`) estava online/fresh, RC17,
+updater/tray RC17 e lifecycle vazio. Cada job teve dry-run elegivel e
+apply separado, com `timeout_exceeded`, sem resultado ou receipt novo:
+
+| Job | Target | Antes | Depois | Resultado/receipt fabricado |
+| --- | --- | --- | --- | --- |
+| `2ae838d9-8751-4460-9fb2-5c57f8727654` | RC14 | sent | timed_out / JOB_TIMEOUT | nao / nao |
+| `2eb5fa5d-b6c3-495a-b03d-da52b8ad07ce` | RC13 | sent | timed_out / JOB_TIMEOUT | nao / nao |
+
+Os jobs historicos continuam presentes, sem alterar `dispatched_at` ou
+`started_at`. Com zero lifecycle jobs ativos, o dry-run de
+`reconcile_agent_lifecycle` retornou eligible=true, sem blockers; um apply
+moveu TAXCEL para `installed` e gerou AuditEvent. O endpoint permaneceu
+online/fresh em RC17, com machine ID unico e updater RC17. O preview RC40
+read-only passou a `channel_no_release`: nenhum blocker tecnico de
+lifecycle, job ativo/stale, identidade, offline ou updater legado. Canal
+development e policy manual permaneceram inalterados.
+
+RC39 (`0.1.1.0-rc39`) segue development/paused/rollout 0, nao revogada,
+assinatura valida e artefatos versionados presentes; `verify_agent_release`
+passou. O deployment oficial permite selecao explicita de release
+development pausada. No codigo, o instalador recupera machine ID valido
+de Config/State e o enrollment reutiliza o endpoint pelo machine ID;
+o completion exige release e health corretos. Contudo, nao houve leitura
+do Config/State do proprio CS-SRV-004 nem canal administrativo para executar
+o comando oficial nesse Windows. Nao e seguro afirmar preservacao real da
+identidade apenas pelo backend. Por isso nenhum deployment/token foi criado,
+nenhum comando foi executado no host e nao houve segundo backup: o
+bootstrap RC39 e a prova updater >= RC6 permanecem pendentes.
+
+CS-SRV-004 (`dc7910a6-b0e7-4492-8946-174e8fffd6a8`) permanece
+online/installed em agent 0.1.0.6, updater/tray 0.1.0.7, machine ID
+`951fde43-eace-4d76-b3db-727daf662375`, canal stable, policy manual,
+sem lifecycle jobs ativos. `update_agent_requires_bootstrap=true` para
+RC40; seu preview tambem mostra `channel_no_release`, portanto nao foi
+criado `update_agent`. Proximo gate: confirmar localmente o machine ID
+preservado e executar uma unica vez o deployment oficial pinado a RC39
+como Administrador no CS-SRV-004; exigir completion/health, machine ID
+inalterado e updater moderno antes de qualquer preparacao multi-Wave.
+
+Contagens verificadas: Campaigns 2, Waves 2, Targets 2, AgentJobs 78,
+rollout jobs 2, update_policy jobs 0. Nenhuma dessas entidades foi criada
+nesta etapa. RC40 permanece pilot/paused/rollout 0, source_channel
+development; flags orchestrator/automatic/governance false/false/false.
+Stable/latest permanece 0.1.0.7, ZIP SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+AgentOperationalStatus, last_installed_agent_version e alertas de
+seguranca continuam como follow-ups separados.
+
+```text
+PHASE_6_REAL_WAVE_PROGRESSION_PLANNED=true
+6E_3_ELIGIBILITY_REMEDIATED=false
+6E_3_READY_FOR_PREPARATION=false
+NEXT_STEP=confirmar identidade local e executar bootstrap oficial RC39 no CS-SRV-004
+PHASE_6_STATUS=IN_PROGRESS
+```
+
+Nao iniciar `6E.3B_PREPARE_MULTI_WAVE_CAMPAIGN` enquanto o gate do
+CS-SRV-004 nao for comprovado.
