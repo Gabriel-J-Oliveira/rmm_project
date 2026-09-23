@@ -2864,3 +2864,107 @@ PHASE_6_ACTIVE_SUBPHASE=6E
 ```
 
 Proxima etapa: `6E.3_REAL_WAVE_PROGRESSION_PLANNING`, em tarefa separada.
+
+### 6E.3A - Planejamento da progressao real entre Waves (2026-09-23)
+
+Levantamento somente leitura sobre a producao funcional em
+`fb664c64c322248d7229bb2d971a9ef9af2a4ba6`. A Campaign do primeiro
+canario (`2340d302-4370-4b50-aab6-7723236681e8`) e sua unica Wave estao
+`completed`, com Target `succeeded` e CS-SRV-CST em RC40. Uma Campaign
+terminal nao aceita uma Wave posterior: a prova de progressao requer nova
+Campaign criada desde o inicio com Wave 1 e Wave 2, cada uma com um Target.
+Nenhuma Campaign, Wave, Target, job ou politica foi criada nesta etapa.
+
+Inventario: 6 endpoints ativos, dos quais 5 reportam versao abaixo de RC40.
+O preview automatico read-only da RC40 retornou `eligible_count=0`,
+`reason_counts={"already_current":1,"endpoint_lifecycle_unknown":5}` e
+`release_execution_blocker=release_paused`. CS-SRV-CST e o `already_current`;
+continua como controle, nao candidato RC40. Nenhum endpoint esta pronto para
+Wave 1 ou Wave 2:
+
+| Endpoint | Estado observado | Bloqueio principal |
+| --- | --- | --- |
+| TAXCEL | Online, RC17, development/manual, dois update jobs `sent` | Lifecycle desconhecido; jobs ativos; politica manual |
+| CS-SRV-004 | Online, 0.1.0.6, stable/manual | Lifecycle desconhecido; politica manual; updater legado a verificar |
+| FS | Offline, 0.1.0, stable/manual | Lifecycle desconhecido; stale; ultimo update failed |
+| G15-GABRIEL | Offline, 0.1.0, stable/manual | Lifecycle desconhecido; stale |
+| CS-CVEL-0254 | Offline, 0.1.0, stable/manual | Lifecycle desconhecido; identidade nao UUID; updater desconhecido; jobs `sent` |
+
+Nao alterar endpoints, canais, grupos ou jobs para fabricar elegibilidade.
+RC40 e preferivel a uma release nova por ja ter artefato, assinatura e canario
+validados, mas esta `pilot/paused/rollout=0` com
+`source_channel=development`; o contrato de dispatch exige release
+`published` e `rollout_paused=false`. A RC41 nao resolveria os bloqueios de
+lifecycle, politica e disponibilidade atualmente observados. A futura
+ativacao controlada da release e dos flags exigiria autorizacao separada.
+Stable/latest segue em 0.1.0.7, SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`;
+os flags persistentes continuam false/false/false.
+
+Alertas criticos abertos do CS-SRV-CST, todos anteriores ao update RC40:
+
+| Tipo | ID | Evidencia e classificacao |
+| --- | --- | --- |
+| `high_uptime` | `ef24359d-af8d-42fc-bb73-f58656be99f8` | Aberto desde 2026-08-24; ultimo inventario 2026-09-23T17:11:35Z reporta 116,7 dias. Atual, nao ligado ao updater; requer triagem operacional. |
+| `security_antivirus` | `ed5d1a3e-ddd4-4616-aa76-38c9918740d2` | Aberto desde 2026-08-24; atualizado em 2026-09-23T17:09:55Z, `security_state=missing`; inventario atual nao traz Defender. Protecao real nao confirmada; requer triagem humana. |
+| `change.security_protection_disabled` | `37bfed8a-110e-423e-8551-c8ae5aff480b` | Evento temporario de change detection em 2026-09-21T15:07:56Z, sem nova ocorrencia registrada; expira em 2026-09-24. O estado atual da protecao e inconclusivo; nao fechar sem triagem. |
+
+Os tres alertas sao pre-RC40 e nao evidenciam falha de updater ou rollback.
+Nao participam do governance atual, mas a protecao de endpoint incerta deve
+ser examinada antes de ampliar o rollout. Nenhum alerta foi fechado.
+
+`AgentOperationalStatus` nao possui linha para CS-SRV-CST nem para os demais
+cinco endpoints. O backend so a cria em `record_agent_operational_status()`
+quando recebe POST `/api/agent/status/` ou um objeto `diagnostics`,
+`operational_status` ou `status` no heartbeat. O ultimo heartbeat do canario
+nao continha esse objeto, e o agente RC40 nao apresenta emissao do endpoint
+de status no codigo atual. A ausencia e explicavel pelo contrato de reporte,
+mas o governance verifica health indicator, installed version e update job ID
+somente se a linha existir. Tratar ausencia como sinal desconhecido em uma
+futura revisao de contrato; nao confundir ausencia de linha com health PASS.
+
+`last_installed_agent_version=RC36` e metadado historico stale, nao versao
+ativa. O ultimo deployment concluido foi RC37 em
+`2026-09-04T15:58:24.396540Z`; o writer que passou a gravar esse campo no
+completion de deployment so foi introduzido no commit `c01dffe3` as
+`2026-09-04T18:59:26Z`, depois daquele deployment. O codigo atual escreve
+o campo no completion de deployment e ao registrar versao anterior no
+uninstall/purge; `update_agent` nao o escreve. Portanto RC37 seria esperado
+sob a semantica de ultimo install/reinstall, mas o caminho historico nao
+possuia o writer. Nao usar o campo como criterio de coorte ate definir
+reconciliacao e semantica; nenhum dado foi corrigido aqui.
+
+Contrato futuro: criar uma nova Campaign com os dois Targets congelados no
+preview, `concurrency_limit=1`, `freshness_seconds=900`, auto-pause habilitado
+e duas Waves de um endpoint com 3600 segundos de observacao cada. Apos
+Wave 1 `completed`, a existencia de Wave 2 impede
+`can_complete_campaign=true`; o estado esperado e Campaign `running`,
+`current_wave=NULL`, Wave 1 `completed`, Wave 2 `pending`. O
+`build_rollout_advance_preview()` exige ancora completed, Wave seguinte
+pending, Campaign running, release/assinatura/contrato validos e todos os
+Targets seguintes dispatchable; produz `advance_schema=1`, `advance_hash` e
+`advance_ready`. `prepare_next_wave` revalida schema/hash sob locks antes de
+passar a Wave 2 para ready. Nenhum preview desse tipo foi fabricado com
+mutacao de producao.
+
+Gaps antes de 6E.3B:
+
+| Gap | Severidade | Bloqueia preparacao? | Acao necessaria |
+| --- | --- | --- | --- |
+| Zero candidatos elegiveis | Alta | Sim | Recuperar e validar pelo menos dois endpoints distintos, sem alterar grupos protegidos para contornar policy |
+| RC40 pausada, rollout 0 e flags OFF | Alta | Sim para execucao | Definir ativacao administrativa controlada em tarefa autorizada |
+| Lifecycle desconhecido nos cinco endpoints abaixo de RC40 | Alta | Sim | Reconciliar lifecycle por evidencia de instalacao saudavel; verificar politica e updater |
+| Alertas criticos de protecao no controle | Media | Nao pelo codigo; triagem antes de ampliar | Confirmar protecao real e tratar os alertas sem mascaramento |
+| `AgentOperationalStatus` ausente | Media | Nao pelo codigo; lacuna de governanca | Definir contrato de reporte/unknown antes de rollout maior |
+| `last_installed_agent_version` stale | Baixa | Nao | Documentar semantica e reconciliar historico separadamente |
+| Grupos protegidos `critical`/`servers` | Alta se presentes | Sim | Respeitar bloqueio; nenhum candidato observado pertence a eles |
+
+Decisao: `6E_3_READY_FOR_PREPARATION=false`. A etapa seguinte e triagem de
+elegibilidade, lifecycle, jobs pendentes e protecao dos candidatos antes de
+`6E.3B_PREPARE_MULTI_WAVE_CAMPAIGN`. A Fase 6 permanece `IN_PROGRESS`.
+
+```text
+PHASE_6_REAL_WAVE_PROGRESSION_PLANNED=true
+6E_3_READY_FOR_PREPARATION=false
+PHASE_6_STATUS=IN_PROGRESS
+```
