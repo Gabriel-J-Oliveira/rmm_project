@@ -26,5 +26,8 @@ def active_lifecycle_job(endpoint):
 
 
 def agent_job_parameters(job):
-    # Administrative correlation belongs to the backend, not the strict agent contract.
-    return {key: value for key, value in job.payload.items() if key != 'rollout_metadata'}
+    # Policy/correlation metadata is stored for backend auditing, not sent to the strict agent contract.
+    excluded = {'rollout_metadata', 'policy_channel'}
+    if job.job_type == AgentJob.TYPE_REPAIR_AGENT:
+        excluded.add('source_channel')
+    return {key: value for key, value in job.payload.items() if key not in excluded}

@@ -59,6 +59,12 @@ class AgentRolloutPreviewTests(TestCase):
         self.assertEqual(result['eligible_count'], 1)
         self.assertNotIn('agent_token_hash', str(result))
 
+    def test_artifact_source_channel_is_part_of_cohort_fingerprint(self):
+        original_hash = self.preview()['cohort_hash']
+        AgentRelease.objects.filter(pk=self.release.pk).update(source_channel='pilot')
+        self.release.refresh_from_db()
+        self.assertNotEqual(self.preview()['cohort_hash'], original_hash)
+
     def test_hash_is_repeatable_independent_of_queryset_order_and_visuals(self):
         AgentMachine.objects.create(hostname='SECOND', machine_id=str(uuid.uuid4()), agent_token_hash='second')
         first = self.preview(endpoints=AgentMachine.objects.order_by('id'))

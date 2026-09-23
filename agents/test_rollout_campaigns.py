@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from . import test_rollout_preview as fixtures
 from .fleet_policy import PolicyContractError
-from .models import AgentJob, AgentMachine, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
+from .models import AgentJob, AgentMachine, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
 from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .services import build_agent_rollout_preview
 
@@ -93,6 +93,17 @@ class CampaignTests(TestCase):
         c.refresh_from_db()
         self.assertFalse(c.release_snapshot['revoked'])
         self.assertEqual(c.state, 'ready')
+
+    def test_promoted_release_snapshot_freezes_both_channels(self):
+        self.machine.update_channel = 'pilot'
+        self.machine.save(update_fields=['update_channel'])
+        self.machine.rollout_groups.add(AgentReleaseGroup.objects.get(slug='pilot'))
+        self.release.channel = 'pilot'
+        self.release.source_channel = 'development'
+        self.release.save(update_fields=['channel', 'source_channel'])
+        campaign = self.create()
+        self.assertEqual(campaign.release_snapshot['channel'], 'pilot')
+        self.assertEqual(campaign.release_snapshot['source_channel'], 'development')
 
     def assert_changed(self, data):
         with self.assertRaises(PolicyContractError) as result:

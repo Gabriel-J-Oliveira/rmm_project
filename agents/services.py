@@ -216,15 +216,31 @@ def update_agent_uses_legacy_bootstrap_payload(endpoint, *, manual_explicit=Fals
     return False
 
 
+def agent_release_artifact_channel(release) -> str:
+    """Return the immutable channel carried by the signed release artifact."""
+    valid_channels = {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}
+    source_channel = (release.source_channel or '').strip()
+    if source_channel:
+        if source_channel not in valid_channels:
+            raise ValidationError('RELEASE_SOURCE_CHANNEL_INVALID: canal material da release invalido.')
+        return source_channel
+
+    channel = (release.channel or '').strip()
+    if channel not in valid_channels:
+        raise ValidationError('RELEASE_CHANNEL_INVALID: canal da release invalido.')
+    return channel
+
+
 def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, force=False, source='manual_panel', manual_explicit=False) -> dict:
     release = decision.release
     if release is None:
         raise ValueError('AgentUpdateDecision sem release nao pode gerar payload update_agent.')
+    artifact_channel = agent_release_artifact_channel(release)
 
     payload = {
         'release_id': str(release.id),
         'target_version': release.version,
-        'channel': decision.channel,
+        'channel': artifact_channel,
         'package_url': release.package_url,
         'checksum_url': release.checksum_url,
         'sha256': release.sha256,
@@ -237,7 +253,8 @@ def build_update_agent_job_payload(endpoint, decision: AgentUpdateDecision, *, f
     }
 
     payload.update({
-        'source_channel': decision.channel,
+        'source_channel': artifact_channel,
+        'policy_channel': decision.channel,
         'policy_reason': decision.reason_code,
         'manifest_url': release.manifest_url,
         'manifest_sha256': release.manifest_sha256,
@@ -281,12 +298,15 @@ def build_repair_agent_job_payload(endpoint, release, *, source='manual_panel') 
     if not _release_domain_allowed(release.package_url):
         raise ValidationError('REPAIR_RELEASE_DOMAIN_BLOCKED: dominio de pacote nao permitido.')
     ensure_release_signature_policy(release)
+    artifact_channel = agent_release_artifact_channel(release)
     return {
         'operation': 'repair',
         'release_id': str(release.id),
         'target_version': release.version,
         'current_version': endpoint.agent_version or '',
-        'channel': release.channel,
+        'channel': artifact_channel,
+        'source_channel': artifact_channel,
+        'policy_channel': release.channel,
         'package_url': release.package_url,
         'checksum_url': release.checksum_url,
         'sha256': release.sha256,
@@ -583,12 +603,13 @@ def assert_release_immutable_compatible(existing, metadata):
         'signature_sha256': (metadata.get('signature_sha256') or metadata.get('signatureSha256') or '').lower(),
         'signature_key_id': metadata.get('signature_key_id') or metadata.get('signatureKeyId') or '',
         'minimum_updater_version': metadata.get('minimum_updater_version') or metadata.get('minimumUpdaterVersion') or '',
+        'source_channel': metadata.get('source_channel') or metadata.get('sourceChannel') or '',
     }
-    differences = {
-        field: {'existing': getattr(existing, field), 'incoming': value}
-        for field, value in critical.items()
-        if value not in ('', 0) and getattr(existing, field) != value
-    }
+    differences = {}
+    for field, value in critical.items():
+        existing_value = (existing.source_channel or existing.channel) if field == 'source_channel' else getattr(existing, field)
+        if value not in ('', 0) and existing_value != value:
+            differences[field] = {'existing': existing_value, 'incoming': value}
     if differences and existing.status in AgentRelease.IMMUTABLE_STATUSES:
         _release_audit(
             existing,
@@ -721,7 +742,8 @@ def promote_agent_release(
         reason=approval_reason,
         channel_before=channel_before,
         rollout_before=rollout_before,
-        metadata={'target_channel': target_channel, 'actor': _actor_name(actor), 'sha256': release.sha256},
+        metadata={'target_channel': target_channel, 'actor': _actor_name(actor), 'sha256': release.sha256,
+                  'source_channel': release.source_channel},
     )
     return release
 
@@ -1112,7 +1134,7 @@ def build_agent_rollout_preview(release, *, endpoints=None, target_group_ids=Non
                                   'window_timezone': endpoint.maintenance_window_timezone or settings.TIME_ZONE})
         targets.append({**target, 'hostname': endpoint.hostname})
     release_state = {field: getattr(release, field) for field in (
-        'version', 'channel', 'status', 'rollout_percentage', 'rollout_paused', 'mandatory',
+        'version', 'channel', 'source_channel', 'status', 'rollout_percentage', 'rollout_paused', 'mandatory',
         'revoked', 'signature_valid', 'legacy_unsigned', 'signature_key_id', 'minimum_updater_version',
         'sha256', 'size', 'manifest_sha256', 'signature_sha256')}
     # URLs influence domain eligibility and artifact identity, but are not emitted as target data.

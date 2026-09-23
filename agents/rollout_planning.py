@@ -17,7 +17,7 @@ from .services import _is_now_inside_window, _release_domain_allowed, update_age
 from .versioning import compare_versions
 
 
-MATERIAL_RELEASE_FIELDS = ('version', 'channel', 'sha256', 'size', 'manifest_sha256',
+MATERIAL_RELEASE_FIELDS = ('version', 'channel', 'source_channel', 'sha256', 'size', 'manifest_sha256',
                            'signature_sha256', 'signature_key_id', 'minimum_updater_version',
                            'legacy_unsigned', 'mandatory')
 LIFECYCLE_JOB_TYPES = ('update_agent', 'repair_agent', 'uninstall_agent')

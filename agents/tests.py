@@ -24,7 +24,8 @@ from django.utils import timezone
 
 from .models import AuditEvent, AgentDeploymentToken, AgentEnrollmentLog, AgentJob, AgentJobResultReceipt, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stage, job_stale_info, sanitize_job_value
-from .services import build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
+from .lifecycle_jobs import agent_job_parameters
+from .services import agent_release_artifact_channel, build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
 from .services import change_agent_release_rollout, promote_agent_release, publish_agent_release, revoke_agent_release, supersede_agent_release
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_versions
 from .management.commands.security_preflight import Command as SecurityPreflightCommand, INSECURE_SECRET_KEY_FALLBACK
@@ -3172,6 +3173,9 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(job.payload['minimum_updater_version'], release.minimum_updater_version)
         self.assertEqual(job.payload['channel'], release.channel)
         self.assertEqual(job.payload['source'], 'manual_panel')
+        self.assertEqual(job.payload['source_channel'], release.source_channel)
+        self.assertEqual(job.payload['policy_channel'], release.channel)
+        self.assertNotIn('policy_channel', agent_job_parameters(job))
         self.assertEqual(job.payload['policy_reason'], 'eligible')
         self.assertEqual(job.payload['manifest_url'], release.manifest_url)
         self.assertEqual(job.payload['manifest_sha256'], release.manifest_sha256)
@@ -3244,6 +3248,69 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(payload['signature_key_id'], release.signature_key_id)
         self.assertTrue(payload['signature_valid'])
         self.assertFalse(payload['legacy_unsigned'])
+
+    def test_promoted_release_update_payload_separates_artifact_and_policy_channels(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
+        self.machine.save(update_fields=['update_channel'])
+        release = self.release(
+            version='0.1.1.0-rc40', channel=AgentRelease.CHANNEL_PILOT,
+            source_channel=AgentRelease.CHANNEL_DEVELOPMENT,
+        )
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+        payload = build_update_agent_job_payload(self.machine, decision)
+
+        self.assertEqual(decision.channel, AgentMachine.UPDATE_CHANNEL_PILOT)
+        self.assertEqual(payload['channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertEqual(payload['source_channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertEqual(payload['policy_channel'], AgentRelease.CHANNEL_PILOT)
+        wire_job = AgentJob(job_type=AgentJob.TYPE_UPDATE_AGENT, payload=payload)
+        wire_payload = agent_job_parameters(wire_job)
+        self.assertEqual(wire_payload['channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertEqual(wire_payload['source_channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertNotIn('policy_channel', wire_payload)
+
+    def test_non_promoted_release_update_payload_uses_same_artifact_and_policy_channel(self):
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
+        self.machine.save(update_fields=['update_channel'])
+        release = self.release(
+            version='0.1.1.0-rc40', channel=AgentRelease.CHANNEL_PILOT,
+            source_channel=AgentRelease.CHANNEL_PILOT,
+        )
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+        payload = build_update_agent_job_payload(self.machine, decision)
+
+        self.assertEqual(payload['channel'], AgentRelease.CHANNEL_PILOT)
+        self.assertEqual(payload['source_channel'], AgentRelease.CHANNEL_PILOT)
+        self.assertEqual(payload['policy_channel'], AgentRelease.CHANNEL_PILOT)
+
+    def test_historical_empty_source_channel_falls_back_to_valid_release_channel(self):
+        release = self.release(source_channel='')
+        AgentRelease.objects.filter(pk=release.pk).update(source_channel='')
+        release.refresh_from_db()
+        self.assertEqual(agent_release_artifact_channel(release), AgentRelease.CHANNEL_STABLE)
+
+    def test_invalid_source_channel_is_rejected(self):
+        release = self.release()
+        AgentRelease.objects.filter(pk=release.pk).update(source_channel='unexpected')
+        release.refresh_from_db()
+        with self.assertRaisesMessage(ValidationError, 'RELEASE_SOURCE_CHANNEL_INVALID'):
+            agent_release_artifact_channel(release)
+
+    def test_repair_payload_uses_promoted_release_artifact_channel(self):
+        self.machine.agent_version = '0.1.1.0-rc40'
+        self.machine.save(update_fields=['agent_version'])
+        release = self.release(
+            version='0.1.1.0-rc40', channel=AgentRelease.CHANNEL_PILOT,
+            source_channel=AgentRelease.CHANNEL_DEVELOPMENT,
+        )
+        payload = build_repair_agent_job_payload(self.machine, release)
+        self.assertEqual(payload['channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertEqual(payload['source_channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertEqual(payload['policy_channel'], AgentRelease.CHANNEL_PILOT)
+        wire_payload = agent_job_parameters(AgentJob(job_type=AgentJob.TYPE_REPAIR_AGENT, payload=payload))
+        self.assertEqual(wire_payload['channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertNotIn('source_channel', wire_payload)
+        self.assertNotIn('policy_channel', wire_payload)
 
     def test_legacy_bootstrap_payload_is_not_used_for_pilot_channel(self):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_PILOT
@@ -3795,6 +3862,8 @@ class AgentReleaseGovernanceTests(TestCase):
         with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
             json.dump({
                 'version': release.version,
+                'channel': release.source_channel,
+                'initial_channel': release.source_channel,
                 'packageUrl': release.package_url,
                 'checksumUrl': release.checksum_url,
                 'manifestUrl': release.manifest_url,
@@ -3810,6 +3879,54 @@ class AgentReleaseGovernanceTests(TestCase):
 
         call_command('import_agent_release', '--agent-version', release.version, '--channel', release.channel, '--version-json', path)
         self.assertEqual(AgentRelease.objects.filter(version=release.version).count(), 1)
+
+    def test_import_rejects_signed_artifact_channel_mismatch_before_writes(self):
+        manifest = {
+            'version': '0.1.1.0-rc40',
+            'channel': 'development',
+            'initial_channel': 'development',
+            'key_id': 'synthetic-import-key',
+            'signatureUrl': 'https://nightowl.controlsul.com.br/releases/rc40/release-manifest.sig',
+        }
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump(manifest, handle)
+            path = handle.name
+
+        with self.assertRaisesMessage(CommandError, 'version.json channel deve corresponder a --channel'):
+            call_command('import_agent_release', '--agent-version', '0.1.1.0-rc40', '--channel', 'pilot', '--version-json', path)
+
+        self.assertFalse(AgentRelease.objects.filter(version='0.1.1.0-rc40').exists())
+        self.assertFalse(AgentReleaseSigningKey.objects.filter(key_id='synthetic-import-key').exists())
+
+    def test_import_requires_channel_for_signed_artifact(self):
+        manifest = {
+            'version': '0.1.1.0-rc40',
+            'key_id': 'synthetic-import-key',
+        }
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump(manifest, handle)
+            path = handle.name
+
+        with self.assertRaisesMessage(CommandError, 'version.json assinado deve declarar um channel valido'):
+            call_command('import_agent_release', '--agent-version', '0.1.1.0-rc40', '--channel', 'development', '--version-json', path)
+
+        self.assertFalse(AgentRelease.objects.filter(version='0.1.1.0-rc40').exists())
+        self.assertFalse(AgentReleaseSigningKey.objects.filter(key_id='synthetic-import-key').exists())
+
+    def test_import_rejects_initial_channel_mismatch(self):
+        manifest = {
+            'version': '0.1.1.0-rc40',
+            'channel': 'development',
+            'initial_channel': 'pilot',
+        }
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as handle:
+            json.dump(manifest, handle)
+            path = handle.name
+
+        with self.assertRaisesMessage(CommandError, 'version.json initial_channel deve corresponder a --channel'):
+            call_command('import_agent_release', '--agent-version', '0.1.1.0-rc40', '--channel', 'development', '--version-json', path)
+
+        self.assertFalse(AgentRelease.objects.filter(version='0.1.1.0-rc40').exists())
 
     def test_verify_agent_release_uses_agent_version_argument(self):
         release = self.release(version='0.1.1.0-rc6')
@@ -3836,6 +3953,7 @@ class AgentReleaseGovernanceTests(TestCase):
         promote_agent_release(release, AgentRelease.CHANNEL_PILOT, self.admin, rollout_percentage=20, rollout_paused=True, approval_reason='Piloto inicial')
         release.refresh_from_db()
         self.assertEqual(release.channel, AgentRelease.CHANNEL_PILOT)
+        self.assertEqual(release.source_channel, AgentRelease.CHANNEL_DEVELOPMENT)
         self.assertEqual(release.rollout_percentage, 20)
         promote_agent_release(
             release,
@@ -3848,6 +3966,7 @@ class AgentReleaseGovernanceTests(TestCase):
         )
         release.refresh_from_db()
         self.assertEqual(release.channel, AgentRelease.CHANNEL_STABLE)
+        self.assertEqual(release.source_channel, AgentRelease.CHANNEL_DEVELOPMENT)
         self.assertEqual(release.stable_approval_reason, 'Aprovado para stable')
 
     def test_prerelease_stable_requires_explicit_confirmation(self):

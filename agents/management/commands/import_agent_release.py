@@ -48,6 +48,17 @@ class Command(BaseCommand):
         if manifest_version != version:
             raise CommandError(f'version.json declara {manifest_version}, mas --version informou {version}.')
 
+        valid_channels = {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}
+        signed_artifact = bool(manifest.get('key_id') or manifest.get('signature_key_id'))
+        declared_channel = str(manifest.get('channel') or '').strip()
+        initial_channel = str(manifest.get('initial_channel') or '').strip()
+        if signed_artifact and declared_channel not in valid_channels:
+            raise CommandError('version.json assinado deve declarar um channel valido.')
+        if declared_channel and (declared_channel not in valid_channels or declared_channel != channel):
+            raise CommandError('version.json channel deve corresponder a --channel na importacao inicial.')
+        if initial_channel and (initial_channel not in valid_channels or initial_channel != channel):
+            raise CommandError('version.json initial_channel deve corresponder a --channel na importacao inicial.')
+
         package_url = str(manifest.get('packageUrl') or manifest.get('package_url') or '').strip()
         checksum_url = str(manifest.get('checksumUrl') or manifest.get('checksum_url') or '').strip()
         manifest_url = str(manifest.get('manifestUrl') or manifest.get('manifest_url') or '').strip()
@@ -84,6 +95,7 @@ class Command(BaseCommand):
                 'signature_sha256': signature_sha256,
                 'signature_key_id': signature_key_id,
                 'minimum_updater_version': minimum_updater_version,
+                'source_channel': channel,
             }
             try:
                 assert_release_immutable_compatible(existing, incoming)

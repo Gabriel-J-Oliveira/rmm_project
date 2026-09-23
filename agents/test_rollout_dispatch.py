@@ -59,6 +59,7 @@ class RolloutDispatchTests(TestCase):
         expected = build_update_agent_job_payload(target.endpoint,
             AgentUpdateDecision(True, 'eligible_for_dispatch', target.endpoint, release=self.release,
                                 channel=self.release.channel), source='rollout_campaign')
+        expected.pop('policy_channel')
         self.assertEqual(agent_job_parameters(job), expected)
         self.assertEqual(job.payload['rollout_metadata']['target_id'], str(target.pk))
         self.assertEqual(job.payload['rollout_metadata']['cohort_hash'], c.cohort_hash)

@@ -44,6 +44,8 @@ try
         !UpdaterProgram.VerifyReleaseManifestSignatureForTest(manifestBytes, signature, differentKey.ToXmlString(false)),
         "Updater should reject a release manifest signature verified with a different key.");
 
+    TestSignedManifestChannelGate();
+
     TestCopyNormal();
     TestTemporaryLockRetry();
     TestPermanentLockTimeout();
@@ -80,6 +82,27 @@ static void TestCopyNormal()
     UpdaterProgram.CopyStagedFilesWithRetryForTest(staged, install, TimeSpan.FromSeconds(3));
 
     Require(File.ReadAllText(Path.Combine(install, "a.dll")) == "new", "Normal copy should write staged file.");
+}
+
+static void TestSignedManifestChannelGate()
+{
+    DirectoryInfo? root = new(AppContext.BaseDirectory);
+    while (root is not null && !File.Exists(Path.Combine(root.FullName, "NightOwl.Agent.Updater", "Program.cs")))
+    {
+        root = root.Parent;
+    }
+
+    Require(root is not null, "Updater source should be available to the contract test.");
+    string source = File.ReadAllText(Path.Combine(root!.FullName, "NightOwl.Agent.Updater", "Program.cs"));
+    Require(source.Contains(
+        "if (!signedManifest.Channel.Equals(manifest.Channel, StringComparison.OrdinalIgnoreCase))",
+        StringComparison.Ordinal), "Updater must keep the signed manifest channel equality gate.");
+    Require(source.Contains("UpdateErrorCodes.ReleaseChannelMismatch", StringComparison.Ordinal),
+        "Updater must reject channel mismatch with RELEASE_CHANNEL_MISMATCH.");
+    Require(string.Equals("development", "development", StringComparison.OrdinalIgnoreCase),
+        "An artifact channel matching the signed manifest should pass.");
+    Require(!string.Equals("pilot", "development", StringComparison.OrdinalIgnoreCase),
+        "An administrative channel differing from the signed artifact channel must not pass.");
 }
 
 static void TestTemporaryLockRetry()

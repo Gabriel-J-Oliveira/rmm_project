@@ -92,7 +92,7 @@ class DispatchPlanningTests(TestCase):
 
     def test_release_material_drift_matrix(self):
         c = self.create()
-        cases = [('version', '0.1.1.0-rc40'), ('channel', 'pilot'), ('sha256', 'd'*64), ('size', 101),
+        cases = [('version', '0.1.1.0-rc40'), ('channel', 'pilot'), ('source_channel', 'pilot'), ('sha256', 'd'*64), ('size', 101),
                  ('manifest_sha256', 'd'*64), ('signature_sha256', 'd'*64),
                  ('minimum_updater_version', '0.1.1.0-rc39'), ('mandatory', True),
                  ('package_url', 'https://nightowl.controlsul.com.br/different.zip')]
