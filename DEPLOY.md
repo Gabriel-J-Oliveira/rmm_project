@@ -2582,3 +2582,42 @@ pelo updater. Preservar job, Target e receipts como evidencia. A proxima etapa
 e investigar o contrato de promocao/canal e definir uma release/caminho cujo
 manifest e metadata satisfaçam a verificacao do agente; isso requer aprovacao
 operacional separada. A Campaign e a Wave permanecem pausadas.
+
+### 6E.2B-2A - Contrato de source_channel corrigido apos falha do primeiro canario (2026-09-23)
+
+A causa do `RELEASE_CHANNEL_MISMATCH` foi o payload de update usar o canal
+administrativo atual (`pilot`) como se fosse o canal material do artefato.
+O manifest assinado da RC40 declara `development`; a promocao administrativa
+para `pilot` preservou corretamente `source_channel=development`. O updater
+permaneceu inalterado e continua exigindo igualdade entre o canal do payload
+e o canal do manifest assinado.
+
+A resolucao central de canal material agora usa `source_channel`, com fallback
+ao canal apenas para registros historicos cujo campo esteja vazio. Os payloads
+de update e repair separam o canal material do canal de policy. O snapshot
+material de Campaign inclui `source_channel`; a importacao valida a origem
+declarada no metadata contra o canal de importacao; e a promocao continua
+alterando somente `channel`, preservando `source_channel`. Nenhum snapshot
+historico foi reescrito.
+
+A correcao funcional foi publicada e implantada em producao; o servidor recebeu
+somente a correcao de contrato, sem migration. A validacao Django somente
+leitura confirmou para RC40 `channel=pilot`, `source_channel=development` e
+payloads de update/repair usando `channel=development`. O manifest remoto
+continua declarando `development` e seu hash corresponde ao registro. O gate
+de assinatura/canal do updater nao foi enfraquecido.
+
+Nenhum novo job foi criado. A Campaign
+`bd76c7bd-a969-498e-a27b-cc2a2612a456` e a Wave
+`c0e389e4-594c-4455-9af3-a6df66323023` continuam pausadas; o Target
+`0a4189cd-4d36-42cd-b007-e53055f0bdf9` e o job
+`92de892c-c636-4fd4-83f9-9b3ad77570ca` permanecem failed e preservados como
+evidencia. RC40 continua `pilot/paused/rollout=0`; CS-SRV-CST continua em
+RC39; os tres flags persistentes permanecem false. Stable/latest nao foi
+alterado. Nenhum novo canario foi executado.
+
+`PHASE_6_REAL_CANARY_EXECUTED=true` e
+`PHASE_6_REAL_CANARY_SUCCEEDED=false`. A Fase 6E continua IN PROGRESS.
+Proxima etapa: `6E.2B-2B_PREPARE_RETRY_CAMPAIGN`, em tarefa separada e com
+aprovacao operacional; esta secao nao autoriza criar Campaign, Target ou job,
+retomar a Campaign antiga ou abrir RC40.
