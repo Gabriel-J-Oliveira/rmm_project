@@ -3218,3 +3218,102 @@ SECURITY_ALERTS_FOLLOWUP=true
 NEXT_STEP=6E.3B_PREPARE_MULTI_WAVE_CAMPAIGN
 PHASE_6_STATUS=IN_PROGRESS
 ```
+
+### 6E.3B - RC40 Multi-Wave Campaign preparada (2026-09-24)
+
+Preparacao administrativa concluida em 2026-09-24T14:39Z, sem executar
+nenhuma Wave. Producao permaneceu no HEAD funcional
+`b7e85394a32a9e2a49d1e321829dc36f1e9abe35`; nao houve deploy,
+migration, collectstatic, restart, alteracao de `.env` ou timer.
+Preflight no banco PostgreSQL `nightowl`: RC40 assinada e valida,
+`pilot/paused/rollout=0`, source_channel development; manifest, assinatura
+e trust bundle publicados responderam HTTP 200 com SHA correspondente.
+Stable/latest permaneceu 0.1.0.7, ZIP SHA-256
+`88d73cf5146a7120da6d313645441f3e4a941b54ff18aded087216e9e1043c25`.
+O estado `release_execution_blocker=release_paused` e esperado nesta
+preparacao e nao impede o congelamento da coorte.
+
+Backup anterior a qualquer write:
+`/opt/nightowl/backups/phase6e3b-pre-multiwave-b7e85394a32a9e2a49d1e321829dc36f1e9abe35-20260924T143527Z.dump`;
+SHA-256 `f22e62b891b3e2418f0f6f2857541cf4c96034c8da814494116b677ad5993810`,
+1,012,863,090 bytes, root:root, modo 600, `pg_dump=0` e
+`pg_restore --list=0`. Actor administrativo `gabriel.oliveira` (user ID 1)
+estava ativo, autorizado como usuario tecnico e possuia
+`agents.add_agentrolloutcampaign`; e o criador da Campaign anterior
+`2340d302-4370-4b50-aab6-7723236681e8`, que estava completed.
+
+Estado administrativo original a restaurar **depois da Campaign**, nao
+agora:
+
+| Endpoint | Canal | Policy | Auto-update | Grupos | is_pilot_endpoint |
+| --- | --- | --- | --- | --- | --- |
+| CS-SRV-004 (`dc7910a6-b0e7-4492-8946-174e8fffd6a8`) | stable | manual | false | [] | false |
+| TAXCEL (`280b807b-7d4f-4bf9-9cae-2ab624d8a862`) | development | manual | false | [] | false |
+
+Ambos estavam online/fresh, installed, identidade unica e sem lifecycle
+jobs ativos. Pelo contrato `agents.fleet_policy`, um PLAN sem rejeicoes ou
+warnings produziu `bulk_change_hash`
+`a444d142fcc27e163070fec59f327b9e837cffcf00a530c48cf7b0b31c003870`;
+o apply exigiu `confirmed_count=2` e esse hash. Uma unica transacao
+preparou exclusivamente os dois endpoints com canal pilot, policy
+automatic e auto_update_enabled=true. `update_paused`, pin, maintenance
+window, machine ID, lifecycle, versoes e `is_pilot_endpoint` ficaram
+intocados. A operacao de grupos foi `add`, sem substituir memberships.
+
+O grupo Pilot existente `e242e6d2-f9b0-4c13-9cb8-c1c589635ea8`
+tinha CS-SRV-CST e terminou com CS-SRV-CST, CS-SRV-004 e TAXCEL.
+O grupo temporario de coorte `Phase 6 RC40 Multi-Wave Validation`
+(`phase6-rc40-multiwave-validation`, ID
+`75402674-0687-4804-ac09-221e2ae9c166`) contem **somente**
+CS-SRV-004 e TAXCEL. `RC40.allowed_groups` continuou vazio; nenhum
+terceiro endpoint entrou no snapshot. O preview final read-only pelo
+grupo dedicado retornou total=2, eligible=2, excluded=0,
+`reason_code=eligible` nos dois e cohort hash
+`1cd9a5aab3d22c717f76d571a195fe0529cf4a861a261d6c351de78cfc4c0f76`.
+Os buckets recalculados foram CS-SRV-004=79 e TAXCEL=93, validando a
+ordem deterministica solicitada.
+
+A API `create_agent_rollout_campaign_from_preview()` congelou a Campaign
+RC40 `cf02abab-f43b-4eb1-b0b0-be04d5df237d` em `ready`, com
+`current_wave=NULL`, cohort hash acima, freshness=900 s,
+concurrency=1 e minimum_observation_seconds=3600. Auto-pause schema 1
+esta enabled, com thresholds 1 para failed, rolled_back, cancelled,
+stalled e offline_post_update. Sao duas Waves de um Target elegivel cada,
+com observacao minima individual de 3600 s:
+
+| Wave | ID | State | Target ID | Endpoint | Snapshot | Bucket |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `cdd5cdda-f437-4f30-9932-d69b36f36d4d` | pending | `e63aed84-36b0-455d-bc51-182a22a8509b` | CS-SRV-004 | machine ID `951fde43-eace-4d76-b3db-727daf662375`; RC39 -> RC40; updater RC39; pilot/automatic | 79 |
+| 2 | `cf6a93c6-822f-4bbf-9bd4-4ca3f81251c1` | pending | `90fce7e1-cff2-4ad5-ab55-7a2f91824973` | TAXCEL | machine ID `80f4eb42-7241-4118-9afc-e8457c37657c`; RC17 -> RC40; updater RC17; pilot/automatic | 93 |
+
+As duas Waves ficaram sem started_at, observation_started_at e
+completed_at. Os dois Targets estao `eligible`, sem agent_job,
+started_at ou completed_at. A leitura independente pos-transacao
+confirmou os snapshots e nenhum dispatch. Contagens antes -> depois:
+Campaigns 2 -> 3, Waves 2 -> 4, Targets 2 -> 4; AgentJobs 78 -> 78,
+update_agent 34 -> 34, rollout jobs 2 -> 2 e update_policy jobs 0 -> 0.
+CS-SRV-004 permaneceu RC39 e TAXCEL RC17, ambos installed/online, com
+zero lifecycle jobs ativos. RC40 permaneceu pilot/paused/rollout 0;
+flags orchestrator/automatic/governance permaneceram false/false/false.
+
+`AgentOperationalStatus` continua sem linha para os dois endpoints:
+isso nao constitui PASS de health operacional e fica como follow-up.
+Apos encerrar a Campaign, restaurar canal, policy, auto-update e grupos
+conforme a tabela original, preservando os demais dados. O grupo dedicado
+e temporario e deve ser removido/arquivado somente quando nenhuma Campaign
+ativa depender dele. Nao fazer essa restauracao durante a Campaign.
+Fase 6 permanece IN_PROGRESS; nem a 6E.3 nem a Fase 6 foram encerradas.
+
+```text
+PHASE_6E_3B=PASS
+MULTI_WAVE_CAMPAIGN_PREPARED=true
+WAVE_1_ENDPOINT=CS-SRV-004
+WAVE_1_EXECUTED=false
+WAVE_2_ENDPOINT=TAXCEL
+WAVE_2_EXECUTED=false
+6E_3_READY_FOR_WAVE_1_EXECUTION=true
+AGENT_OPERATIONAL_STATUS_FOLLOWUP=true
+ADMIN_STATE_RESTORE_REQUIRED_AFTER_CAMPAIGN=true
+NEXT_STEP=6E.3C_EXECUTE_WAVE_1_CS_SRV_004
+PHASE_6_STATUS=IN_PROGRESS
+```
