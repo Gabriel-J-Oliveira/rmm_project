@@ -3050,9 +3050,10 @@ flags persistentes false/false/false.
 autorizacao proprios. Nao iniciar 6E.3B nem alterar canais, policies,
 Pilot membership ou releases nesta etapa.
 
-### 6E.3A-2 - Jobs stale reconciliados; updater legado aguarda bootstrap (2026-09-23)
+### 6E.3A-2 - Jobs stale reconciliados e updater legado preparado (2026-09-23/24)
 
-Resultado parcial, com stop condition antes do bootstrap Windows. O commit
+Registro intermediario de 2026-09-23, com stop condition antes do bootstrap
+Windows; o fechamento de 2026-09-24 consta ao final desta secao. O commit
 funcional `b7e85394a32a9e2a49d1e321829dc36f1e9abe35` adicionou
 `reconcile_stale_agent_job`: dry-run por padrao, um job por chamada,
 `--apply --reason` explicito, transacao e row lock. Somente jobs `sent`
@@ -3135,3 +3136,85 @@ PHASE_6_STATUS=IN_PROGRESS
 
 Nao iniciar `6E.3B_PREPARE_MULTI_WAVE_CAMPAIGN` enquanto o gate do
 CS-SRV-004 nao for comprovado.
+
+#### Fechamento da 6E.3A-2 (2026-09-24)
+
+O bootstrap oficial do CS-SRV-004 foi concluido depois do registro
+intermediario acima. Antes da instalacao, a identidade local foi conferida
+no config ativo `C:\ProgramData\NightOwl\AgentDotNet\agent.config.json`:
+machine ID `951fde43-eace-4d76-b3db-727daf662375`, igual ao backend.
+Arquivos de staging sem machine ID nao foram usados como fonte de identidade.
+O instalador RC39 migrou a configuracao legada para o layout canonico e
+preservou essa identidade; nao surgiu AgentMachine duplicado.
+
+O backup anterior ao deployment foi validado em
+`/opt/nightowl/backups/phase6e3a2-pre-cs-srv-004-bootstrap-b7e85394a32a9e2a49d1e321829dc36f1e9abe35-20260924T120307Z.dump`;
+SHA-256 `45c48f54e0721ddb94deb3205ae58410924d4249695a0cc8e6f267998d8b688b`,
+`pg_dump=0`, `pg_restore --list=0`, owner root e modo 600. O deployment
+`d667bff9-5366-45ec-ab29-54928f912acc` foi vinculado somente ao
+CS-SRV-004 (`dc7910a6-b0e7-4492-8946-174e8fffd6a8`) e a RC39
+(`6a699546-ebd0-4788-af77-5f846b66a618`, development). Foi criado em
+2026-09-24T12:06:02.270787Z, entrou em installing em
+2026-09-24T12:17:38.330982Z e ficou used/completed em
+2026-09-24T12:24:46.590261Z. `failed_at` e `failure_code` ficaram vazios.
+O resultado local reportado foi `installation_status=completed`,
+`deployment_confirmation_status=completed`, servico Running,
+`identity_preserved=true` e `rollback_performed=false`. O backend confirmou
+completion para a release pinada; o fluxo de completion exige servico
+Running e health check confirmado. Nenhum token ou credencial foi registrado
+neste documento.
+
+No snapshot operacional de 2026-09-24T14:11Z, CS-SRV-004 estava
+active/online/installed, com agent, updater e Tray em `0.1.1.0-rc39`,
+`last_seen` e `agent_reported_at` em 2026-09-24T14:11:01.440127Z,
+machine ID preservado e unico (contagem 1), zero lifecycle jobs ativos,
+zero jobs/receipts novos desde o bootstrap e zero conflitos. O canal do
+endpoint permaneceu stable e a policy manual. O preview RC40 read-only
+retornou `eligible=false`, `reason=channel_no_release`; o updater RC39
+nao requer mais bootstrap para a RC40.
+
+No mesmo snapshot, TAXCEL (`280b807b-7d4f-4bf9-9cae-2ab624d8a862`)
+estava active/online/installed, com machine ID unico
+`80f4eb42-7241-4118-9afc-e8457c37657c`, `last_seen` em
+2026-09-24T14:10:55.352875Z, agent/updater/Tray RC17 e zero lifecycle
+jobs ativos. Os jobs RC14 `2ae838d9-8751-4460-9fb2-5c57f8727654` e
+RC13 `2eb5fa5d-b6c3-495a-b03d-da52b8ad07ce` permanecem `timed_out`
+com `JOB_TIMEOUT`, sem result, receipt ou conflito: nenhum resultado ou
+receipt foi fabricado. Seu preview RC40 tambem retornou `eligible=false`,
+`reason=channel_no_release`. O canal development e a policy manual nao
+foram alterados.
+
+`channel_no_release` e blocker administrativo esperado nesta fase. Nos
+dois candidatos nao restam os blockers tecnicos
+`endpoint_lifecycle_unknown`, `updater_bootstrap_required`,
+`minimum_updater_incompatible`, `update_job_active`, `update_job_stale`,
+`machine_identity_invalid`, `machine_identity_ambiguous`,
+`endpoint_offline` ou `endpoint_stale`. O preview nao autoriza dispatch:
+RC40 (`eabb8918-a6c2-4a89-b969-a09aaca081d5`) continua
+pilot/paused/rollout 0, source_channel development, e flags
+orchestrator/automatic/governance continuam false/false/false. Contagens
+seguem Campaigns 2, Waves 2, Targets 2, AgentJobs 78, rollout jobs 2 e
+update_policy jobs 0; nenhuma entidade nova dessas categorias foi criada
+nesta etapa.
+
+`AgentOperationalStatus` nao possui linha para CS-SRV-004 nem TAXCEL.
+Isso continua follow-up, nao PASS de health operacional. Tambem permanecem
+separados os follow-ups de `last_installed_agent_version` e alertas de
+seguranca. A Fase 6 continua IN_PROGRESS; a 6E.3 nao esta concluida e a
+6E.3B nao foi iniciada.
+
+```text
+PHASE_6E_3A_2=PASS
+CS_SRV_004_BOOTSTRAP=PASS
+TAXCEL_STALE_JOB_REMEDIATION=PASS
+TAXCEL_LIFECYCLE_RECONCILIATION=PASS
+SUITABLE_CANDIDATE_1=CS-SRV-004
+SUITABLE_CANDIDATE_2=TAXCEL
+6E_3_ELIGIBILITY_REMEDIATED=true
+6E_3_READY_FOR_PREPARATION=true
+AGENT_OPERATIONAL_STATUS_FOLLOWUP=true
+LAST_INSTALLED_FOLLOWUP=true
+SECURITY_ALERTS_FOLLOWUP=true
+NEXT_STEP=6E.3B_PREPARE_MULTI_WAVE_CAMPAIGN
+PHASE_6_STATUS=IN_PROGRESS
+```
