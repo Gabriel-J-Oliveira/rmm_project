@@ -9,7 +9,7 @@ from datetime import timedelta
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, connections
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 
 from . import test_rollout_dispatch as fixtures
@@ -19,6 +19,7 @@ from .rollout_reconcile import (
     reconcile_rollout_campaign,
     summarize_rollout_campaign,
 )
+from .stale_job_reconciliation import apply_stale_sent_job_timeout
 
 
 @override_settings(NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED=False, NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED=False)
@@ -103,6 +104,49 @@ class RolloutReconcileTests(TestCase):
             self.assertEqual(evaluation['desired_state'], desired)
             if status == 'rollback_failed':
                 self.assertEqual(evaluation['classification'], 'rollback_failed')
+
+    def test_stale_running_timeout_and_late_result_cannot_succeed_target(self):
+        campaign = self.create_dispatched()
+        target = self.target(campaign)
+        job = target.agent_job
+        progress_id = str(uuid.uuid4())
+        AgentJob.objects.filter(pk=job.pk).update(
+            status='running', started_at=self.now, result_received_at=self.now,
+            result_id=progress_id, result={'update_status': 'runner_started'},
+        )
+        AgentJobResultReceipt.objects.create(
+            result_id=progress_id, job=job, endpoint=target.endpoint,
+            payload_sha256='0' * 64,
+            first_payload={'job_id': str(job.pk), 'status': 'running',
+                           'result': {'update_status': 'runner_started'}},
+        )
+        later = self.now + timedelta(hours=1)
+        self.assertTrue(apply_stale_sent_job_timeout(job.pk, reason='Synthetic stalled runner', now=later)['applied'])
+        first = reconcile_rollout_campaign(campaign, now=later)
+        self.assertEqual(first['transition_count'], 1)
+        self.assertEqual(campaign.targets.get().state, 'failed')
+        self.assertEqual(self.evaluation(campaign)['classification'], 'timed_out')
+
+        token = 'synthetic-late-rollout-result-token'
+        target.endpoint.set_agent_token(token)
+        target.endpoint.save(update_fields=['agent_token_hash'])
+        late_id = str(uuid.uuid4())
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {token}').post(
+            '/api/agent/jobs/result/',
+            data={'job_id': str(job.pk), 'status': 'completed', 'exit_code': 0,
+                  'result': {'installed_version': campaign.release.version,
+                             'health_check': {'confirmed': True}}},
+            content_type='application/json', HTTP_IDEMPOTENCY_KEY=late_id,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['reason'], 'job_already_final')
+        self.assertEqual(AgentJobResultReceipt.objects.filter(job=job, result_id=late_id).count(), 1)
+        job.refresh_from_db()
+        target.endpoint.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_TIMED_OUT)
+        self.assertNotEqual(target.endpoint.agent_version, campaign.release.version)
+        self.assertEqual(reconcile_rollout_campaign(campaign, now=later + timedelta(seconds=1))['transition_count'], 0)
+        self.assertEqual(campaign.targets.get().state, 'failed')
 
     def test_queued_sent_running_stale_offline_and_waiting_health_metrics(self):
         campaign = self.create_dispatched()

@@ -4,6 +4,7 @@ from datetime import timedelta
 from io import StringIO
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import Client, TestCase
 from django.utils import timezone
 
@@ -37,9 +38,9 @@ class StaleSentJobReconciliationTests(TestCase):
         self.assertTrue(decision['eligible_for_timeout'])
         self.assertEqual(decision['stale_reason'], 'dispatched_too_long')
 
-    def test_non_sent_or_fresh_jobs_are_blocked(self):
+    def test_non_active_or_fresh_sent_jobs_are_blocked(self):
         for status in (
-            AgentJob.STATUS_QUEUED, AgentJob.STATUS_RUNNING, AgentJob.STATUS_COMPLETED,
+            AgentJob.STATUS_QUEUED, AgentJob.STATUS_COMPLETED,
             AgentJob.STATUS_FAILED, AgentJob.STATUS_TIMED_OUT,
         ):
             with self.subTest(status=status):
@@ -47,6 +48,150 @@ class StaleSentJobReconciliationTests(TestCase):
                 self.assertFalse(decision['eligible_for_timeout'])
         fresh = evaluate_stale_sent_job_timeout(self.job(age=timedelta(minutes=1)), now=self.now)
         self.assertFalse(fresh['eligible_for_timeout'])
+
+    def test_sent_evidence_still_blocks(self):
+        for change in ('result', 'result_id', 'result_received_at', 'receipt'):
+            with self.subTest(change=change):
+                job = self.job()
+                if change == 'receipt':
+                    AgentJobResultReceipt.objects.create(
+                        result_id=str(uuid.uuid4()), job=job, endpoint=self.machine,
+                        payload_sha256='0' * 64,
+                        first_payload={'status': 'running', 'result': {'update_status': 'runner_started'}},
+                    )
+                else:
+                    setattr(job, change, {'update_status': 'runner_started'} if change == 'result' else
+                            self.now if change == 'result_received_at' else str(uuid.uuid4()))
+                    job.save(update_fields=[change])
+                decision = evaluate_stale_sent_job_timeout(job, now=self.now)
+                self.assertFalse(decision['eligible_for_timeout'])
+                self.assertIn('receipt_exists' if change == 'receipt' else 'result_exists', decision['blockers'])
+
+    def test_running_recent_is_blocked(self):
+        decision = evaluate_stale_sent_job_timeout(
+            self.job(status=AgentJob.STATUS_RUNNING, age=timedelta(minutes=1)), now=self.now,
+        )
+        self.assertFalse(decision['eligible_for_timeout'])
+        self.assertIn('job_not_stale', decision['blockers'])
+
+    def test_running_without_update_and_timeout_exceeded_are_eligible(self):
+        no_timeout = self.job(status=AgentJob.STATUS_RUNNING, timeout_seconds=None)
+        AgentJob.objects.filter(pk=no_timeout.pk).update(
+            result_received_at=self.now - timedelta(minutes=20),
+            result={'update_status': 'runner_started'},
+        )
+        no_timeout.refresh_from_db()
+        decision = evaluate_stale_sent_job_timeout(no_timeout, now=self.now)
+        self.assertTrue(decision['eligible_for_timeout'])
+        self.assertEqual(decision['stale_reason'], 'running_without_update')
+
+        timed_out = self.job(status=AgentJob.STATUS_RUNNING)
+        decision = evaluate_stale_sent_job_timeout(timed_out, now=self.now)
+        self.assertTrue(decision['eligible_for_timeout'])
+        self.assertEqual(decision['stale_reason'], 'timeout_exceeded')
+
+    def test_running_intermediate_result_and_receipt_are_eligible(self):
+        job = self.job(status=AgentJob.STATUS_RUNNING)
+        result_id = str(uuid.uuid4())
+        job.result = {'update_status': 'runner_started', 'target_version': '0.1.1.0-rc39'}
+        job.result_id = result_id
+        job.result_received_at = self.now - timedelta(minutes=20)
+        job.exit_code = 0  # Progress receipts may carry an exit code before completion.
+        job.save(update_fields=['result', 'result_id', 'result_received_at', 'exit_code'])
+        AgentJobResultReceipt.objects.create(
+            result_id=result_id, job=job, endpoint=self.machine, payload_sha256='0' * 64,
+            first_payload={'job_id': str(job.pk), 'status': 'running',
+                           'result': {'update_status': 'runner_started', 'target_version': '0.1.1.0-rc39'}},
+        )
+        decision = evaluate_stale_sent_job_timeout(job, now=self.now)
+        self.assertTrue(decision['eligible_for_timeout'])
+        self.assertEqual(decision['intermediate_receipt_count'], 1)
+        self.assertTrue(decision['intermediate_result_present'])
+        self.assertFalse(decision['terminal_evidence_present'])
+
+    def test_running_terminal_or_ambiguous_evidence_is_blocked(self):
+        for result, receipt_payload in (
+            ({'status': 'completed'}, None),
+            ({'update_status': 'runner_started'}, {'status': 'completed'}),
+            ({'message': 'unknown progress'}, None),
+            ({'update_status': 'runner_started'}, {}),
+        ):
+            with self.subTest(result=result, receipt_payload=receipt_payload):
+                job = self.job(status=AgentJob.STATUS_RUNNING)
+                job.result = result
+                job.save(update_fields=['result'])
+                if receipt_payload is not None:
+                    AgentJobResultReceipt.objects.create(
+                        result_id=str(uuid.uuid4()), job=job, endpoint=self.machine,
+                        payload_sha256='0' * 64, first_payload=receipt_payload,
+                    )
+                decision = evaluate_stale_sent_job_timeout(job, now=self.now)
+                self.assertFalse(decision['eligible_for_timeout'])
+                self.assertTrue(any(blocker in decision['blockers'] for blocker in
+                                    ('result_not_intermediate', 'receipt_not_intermediate')))
+
+    def test_running_apply_times_out_with_audit_and_is_idempotent(self):
+        job = self.job(status=AgentJob.STATUS_RUNNING)
+        result_id = str(uuid.uuid4())
+        job.result = {'update_status': 'runner_started'}
+        job.result_id = result_id
+        job.result_received_at = self.now - timedelta(minutes=20)
+        job.save(update_fields=['result', 'result_id', 'result_received_at'])
+        AgentJobResultReceipt.objects.create(
+            result_id=result_id, job=job, endpoint=self.machine, payload_sha256='0' * 64,
+            first_payload={'job_id': str(job.pk), 'status': 'running',
+                           'result': {'update_status': 'runner_started'}},
+        )
+        out = StringIO()
+        call_command('reconcile_stale_agent_job', '--job', str(job.pk), stdout=out)
+        dry_run = json.loads(out.getvalue())
+        self.assertEqual((dry_run['status'], dry_run['stale_reason'], dry_run['proposed_status']),
+                         ('running', 'timeout_exceeded', 'timed_out'))
+        self.assertTrue(dry_run['eligible_for_timeout'])
+        self.assertEqual(AgentJob.objects.get(pk=job.pk).status, AgentJob.STATUS_RUNNING)
+
+        result = apply_stale_sent_job_timeout(job.pk, reason='Synthetic running timeout', now=self.now)
+        self.assertTrue(result['applied'])
+        job.refresh_from_db()
+        self.assertEqual((job.status, job.finished_at, job.error_code),
+                         (AgentJob.STATUS_TIMED_OUT, self.now, 'JOB_RUNNING_TIMEOUT'))
+        self.assertEqual(job.result, {'update_status': 'runner_started'})
+        audit = AuditEvent.objects.get(event_type='job.admin_timeout')
+        self.assertEqual(audit.metadata['previous_status'], 'running')
+        self.assertEqual(audit.metadata['new_status'], 'timed_out')
+        self.assertEqual(audit.metadata['intermediate_receipt_count'], 1)
+        self.assertEqual(audit.metadata['expected_timeout_at'], result['expected_timeout_at'])
+        self.assertFalse(apply_stale_sent_job_timeout(job.pk, reason='Synthetic replay', now=self.now).get('applied', False))
+        self.assertEqual(AuditEvent.objects.filter(event_type='job.admin_timeout').count(), 1)
+
+    def test_running_terminal_before_apply_is_not_overwritten(self):
+        job = self.job(status=AgentJob.STATUS_RUNNING)
+        self.assertTrue(evaluate_stale_sent_job_timeout(job, now=self.now)['eligible_for_timeout'])
+        AgentJob.objects.filter(pk=job.pk).update(status=AgentJob.STATUS_COMPLETED, finished_at=self.now)
+        decision = apply_stale_sent_job_timeout(job.pk, reason='Synthetic concurrent completion', now=self.now)
+        self.assertFalse(decision.get('applied', False))
+        self.assertEqual(AgentJob.objects.get(pk=job.pk).status, AgentJob.STATUS_COMPLETED)
+        self.assertFalse(AuditEvent.objects.filter(event_type='job.admin_timeout').exists())
+
+    def test_running_audit_reason_is_redacted(self):
+        job = self.job(status=AgentJob.STATUS_RUNNING)
+        apply_stale_sent_job_timeout(job.pk, reason='Bearer synthetic-test-secret', now=self.now)
+        audit = AuditEvent.objects.get(event_type='job.admin_timeout')
+        self.assertNotIn('synthetic-test-secret', audit.description)
+        self.assertNotIn('synthetic-test-secret', json.dumps(audit.metadata))
+
+    def test_command_apply_running_requires_reason(self):
+        job = self.job(status=AgentJob.STATUS_RUNNING)
+        with self.assertRaisesMessage(CommandError, 'reason_required'):
+            call_command('reconcile_stale_agent_job', '--job', str(job.pk), '--apply')
+        self.assertEqual(AgentJob.objects.get(pk=job.pk).status, AgentJob.STATUS_RUNNING)
+        out = StringIO()
+        call_command('reconcile_stale_agent_job', '--job', str(job.pk), '--apply',
+                     '--reason', 'Synthetic running reconciliation', stdout=out)
+        body = json.loads(out.getvalue())
+        self.assertTrue(body['applied'])
+        self.assertEqual(body['status'], AgentJob.STATUS_TIMED_OUT)
+        self.assertEqual(AgentJob.objects.get(pk=job.pk).error_code, 'JOB_RUNNING_TIMEOUT')
 
     def test_dry_run_does_not_mutate_and_apply_is_idempotent(self):
         job = self.job()
@@ -80,7 +225,7 @@ class StaleSentJobReconciliationTests(TestCase):
                     job.result = {'status': 'completed'}
                     job.save(update_fields=['result'])
                 elif change == 'status':
-                    job.status = AgentJob.STATUS_RUNNING
+                    job.status = AgentJob.STATUS_COMPLETED
                     job.save(update_fields=['status'])
                 else:
                     AgentJobResultReceipt.objects.create(
@@ -113,3 +258,30 @@ class StaleSentJobReconciliationTests(TestCase):
         self.assertEqual(job.result, {})
         self.assertEqual(self.machine.agent_version, '0.1.1.0-rc17')
         self.assertEqual(AgentJobResultReceipt.objects.filter(job=job, result_id=result_id).count(), 1)
+
+    def test_late_completion_reusing_progress_result_id_cannot_reopen(self):
+        job = self.job(status=AgentJob.STATUS_RUNNING)
+        result_id = str(uuid.uuid4())
+        job.result_id = result_id
+        job.result = {'update_status': 'runner_started'}
+        job.save(update_fields=['result_id', 'result'])
+        receipt = AgentJobResultReceipt.objects.create(
+            result_id=result_id, job=job, endpoint=self.machine, payload_sha256='0' * 64,
+            first_payload={'job_id': str(job.pk), 'status': 'running',
+                           'result': {'update_status': 'runner_started'}},
+        )
+        apply_stale_sent_job_timeout(job.pk, reason='Synthetic stale runner', now=self.now)
+        response = self.client.post(
+            '/api/agent/jobs/result/',
+            data={'job_id': str(job.pk), 'status': 'completed',
+                  'result': {'installed_version': '0.1.1.0-rc39', 'health_check': {'confirmed': True}}},
+            content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id,
+        )
+        self.assertEqual(response.status_code, 409)
+        receipt.refresh_from_db()
+        job.refresh_from_db()
+        self.machine.refresh_from_db()
+        self.assertEqual(receipt.conflict_count, 1)
+        self.assertEqual(job.status, AgentJob.STATUS_TIMED_OUT)
+        self.assertEqual(self.machine.agent_version, '0.1.1.0-rc17')
+        self.assertEqual(AuditEvent.objects.filter(event_type='job.result_conflict').count(), 1)

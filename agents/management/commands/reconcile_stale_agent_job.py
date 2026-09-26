@@ -11,7 +11,7 @@ from agents.stale_job_reconciliation import (
 
 
 class Command(BaseCommand):
-    help = 'Dry-run or explicitly time out one sent job without result evidence.'
+    help = 'Dry-run or explicitly time out one stale sent/running job without terminal result evidence.'
 
     def add_arguments(self, parser):
         parser.add_argument('--job', required=True)
