@@ -21,6 +21,7 @@ public sealed class Worker : BackgroundService
     private readonly JobExecutor _jobExecutor;
     private readonly JobExecutionCoordinator _jobCoordinator;
     private readonly PendingResultQueue _resultQueue;
+    private readonly TelemetryPipeline _telemetry;
 
     public Worker(
         ConfigService configService,
@@ -30,7 +31,8 @@ public sealed class Worker : BackgroundService
         WindowsInventoryCollector collector,
         JobExecutor jobExecutor,
         JobExecutionCoordinator jobCoordinator,
-        PendingResultQueue resultQueue)
+        PendingResultQueue resultQueue,
+        TelemetryPipeline telemetry)
     {
         _configService = configService;
         _stateService = stateService;
@@ -40,6 +42,7 @@ public sealed class Worker : BackgroundService
         _jobExecutor = jobExecutor;
         _jobCoordinator = jobCoordinator;
         _resultQueue = resultQueue;
+        _telemetry = telemetry;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -65,6 +68,9 @@ public sealed class Worker : BackgroundService
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
         await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
         TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
+        Task telemetryTask = config.TelemetryEnabled && config.HasValidToken
+            ? _telemetry.RunAsync(config, stoppingToken)
+            : Task.CompletedTask;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -116,6 +122,7 @@ public sealed class Worker : BackgroundService
         }
 
         await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None);
+        await telemetryTask;
     }
 
     private async Task ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)

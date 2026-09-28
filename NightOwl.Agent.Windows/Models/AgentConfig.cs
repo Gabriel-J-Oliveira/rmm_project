@@ -27,6 +27,24 @@ public sealed class AgentConfig
     [JsonPropertyName("collectUrl")]
     public string CollectUrl { get; set; } = "";
 
+    [JsonPropertyName("telemetryUrl")]
+    public string TelemetryUrl { get; set; } = "";
+
+    [JsonPropertyName("telemetryEnabled")]
+    public bool TelemetryEnabled { get; set; } = false;
+
+    [JsonPropertyName("telemetrySampleSeconds")]
+    public int TelemetrySampleSeconds { get; set; } = 300;
+
+    [JsonPropertyName("telemetryFlushSeconds")]
+    public int TelemetryFlushSeconds { get; set; } = 1800;
+
+    [JsonPropertyName("telemetryBufferMaxSamples")]
+    public int TelemetryBufferMaxSamples { get; set; } = 288;
+
+    [JsonPropertyName("telemetryBufferMaxAgeHours")]
+    public int TelemetryBufferMaxAgeHours { get; set; } = 48;
+
     [JsonPropertyName("jobsPullUrl")]
     public string JobsPullUrl { get; set; } = "";
 

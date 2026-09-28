@@ -25,6 +25,11 @@ public sealed class AgentApiClient
         return SendJsonAsync(config, HttpMethod.Post, config.CollectUrl, payload, ct, "collection");
     }
 
+    public Task PostTelemetryAsync(AgentConfig config, TelemetryBatch payload, CancellationToken ct)
+    {
+        return SendJsonAsync(config, HttpMethod.Post, config.TelemetryUrl, payload, ct, "telemetry");
+    }
+
     public async Task<AgentJobsPullResponse> PullJobsAsync(AgentConfig config, CancellationToken ct)
     {
         using HttpRequestMessage request = new(HttpMethod.Get, config.JobsPullUrl);
