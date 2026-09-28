@@ -1,6 +1,7 @@
 using UpdaterProgram = NightOwl.Agent.Updater.Program;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Diagnostics;
 using NightOwl.Agent.Shared;
 
@@ -47,6 +48,7 @@ try
     TestSignedManifestChannelGate();
 
     TestCopyNormal();
+    TestBackupManifestIsNotManaged();
     TestTemporaryLockRetry();
     TestPermanentLockTimeout();
     TestUnauthorizedAccess();
@@ -82,6 +84,68 @@ static void TestCopyNormal()
     UpdaterProgram.CopyStagedFilesWithRetryForTest(staged, install, TimeSpan.FromSeconds(3));
 
     Require(File.ReadAllText(Path.Combine(install, "a.dll")) == "new", "Normal copy should write staged file.");
+}
+
+static void TestBackupManifestIsNotManaged()
+{
+    foreach (string residualName in new[] { "backup-manifest.json", "BACKUP-MANIFEST.JSON" })
+    {
+        using TempTree tree = TempTree.Create();
+        string install = tree.CreateDirectory("install");
+        string backup = Path.Combine(tree.Root, "backup");
+        const string updateId = "synthetic-backup-update";
+        const string previousVersion = "0.1.1.0-rc39";
+        string[] requiredFiles = {
+            "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Tray.exe", "agent.version.json"
+        };
+        foreach (string name in requiredFiles)
+        {
+            File.WriteAllText(Path.Combine(install, name), name);
+        }
+        string library = Path.Combine(install, "lib", "helper.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(library)!);
+        File.WriteAllText(library, "agent-v1");
+        File.WriteAllText(Path.Combine(install, residualName), new string('x', 91547));
+
+        UpdaterProgram.CreateBackupForTest(install, backup, updateId, previousVersion);
+
+        string manifestPath = Path.Combine(backup, "backup-manifest.json");
+        Require(File.Exists(manifestPath), "Backup must create its own manifest.");
+        using JsonDocument manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        JsonElement.ArrayEnumerator entries = manifest.RootElement.GetProperty("files").EnumerateArray();
+        List<JsonElement> files = entries.ToList();
+        string[] paths = files.Select(file => file.GetProperty("path").GetString() ?? "").ToArray();
+        Require(!paths.Contains(residualName, StringComparer.OrdinalIgnoreCase), "Residual backup manifest must not be managed.");
+        Require(files.Count == requiredFiles.Length + 1, "Only real agent files should be backed up.");
+        foreach (string name in requiredFiles)
+        {
+            Require(paths.Contains(name), $"Backup should preserve {name}.");
+        }
+        JsonElement libraryEntry = files.Single(file => file.GetProperty("path").GetString() == "lib/helper.dll");
+        string backedUpLibrary = Path.Combine(backup, "lib", "helper.dll");
+        Require(File.Exists(backedUpLibrary), "Managed library should be copied.");
+        Require(libraryEntry.GetProperty("size").GetInt64() == new FileInfo(backedUpLibrary).Length,
+            "Managed library size must be recorded.");
+        Require(libraryEntry.GetProperty("sha256").GetString() == Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(backedUpLibrary))).ToLowerInvariant(),
+            "Managed library hash must be recorded.");
+        UpdaterProgram.ValidateBackupForTest(backup, updateId, previousVersion);
+
+        File.WriteAllText(backedUpLibrary, "agent-v1-extra");
+        Require(ExpectThrows(() => UpdaterProgram.ValidateBackupForTest(backup, updateId, previousVersion))
+            .Message.Contains("Tamanho invalido", StringComparison.Ordinal), "Size mismatch must still fail validation.");
+        File.WriteAllText(backedUpLibrary, "agent-v2");
+        Require(ExpectThrows(() => UpdaterProgram.ValidateBackupForTest(backup, updateId, previousVersion))
+            .Message.Contains("SHA256 invalido", StringComparison.Ordinal), "Hash mismatch must still fail validation.");
+
+        string staged = tree.CreateDirectory("staged");
+        string copied = tree.CreateDirectory("copied");
+        File.WriteAllText(Path.Combine(staged, residualName), "stale metadata");
+        File.WriteAllText(Path.Combine(staged, "new.dll"), "new agent file");
+        UpdaterProgram.CopyStagedFilesWithRetryForTest(staged, copied, TimeSpan.FromSeconds(3));
+        Require(!File.Exists(Path.Combine(copied, residualName)), "Staged backup metadata must not enter the installation.");
+        Require(File.Exists(Path.Combine(copied, "new.dll")), "Managed staged file should still be installed.");
+    }
 }
 
 static void TestSignedManifestChannelGate()

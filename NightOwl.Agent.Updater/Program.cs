@@ -1331,6 +1331,16 @@ internal static class Program
         return manifest;
     }
 
+    internal static void CreateBackupForTest(string installPath, string backupPath, string updateId, string previousVersion)
+    {
+        CreateBackup(installPath, backupPath, updateId, previousVersion);
+    }
+
+    internal static void ValidateBackupForTest(string backupPath, string updateId, string previousVersion)
+    {
+        ValidateBackup(backupPath, updateId, previousVersion);
+    }
+
     private static void ExtractZipSafe(string zipPath, string destination)
     {
         string destinationFull = Path.GetFullPath(destination);
@@ -1376,9 +1386,9 @@ internal static class Program
         return process.ExitCode;
     }
 
-    private static readonly string[] ProtectedInstallFileNames = { "agent.config.json", "agent-dotnet.state.json", "agent.state.json", "update-state.json" };
-    private static readonly string[] ProtectedInstallDirectoryNames = { "Config", "Identity", "State", "Logs", "Diagnostics", "Updates", "Packages", "Cache" };
     private const string BackupManifestFileName = "backup-manifest.json";
+    private static readonly string[] ProtectedInstallFileNames = { "agent.config.json", "agent-dotnet.state.json", "agent.state.json", "update-state.json", BackupManifestFileName };
+    private static readonly string[] ProtectedInstallDirectoryNames = { "Config", "Identity", "State", "Logs", "Diagnostics", "Updates", "Packages", "Cache" };
 
     internal static void CopyStagedFilesWithRetryForTest(string stagedPath, string installPath, TimeSpan timeout)
     {
