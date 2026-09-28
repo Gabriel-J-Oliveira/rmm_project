@@ -3,7 +3,10 @@ using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Services;
 using NightOwl.Agent.Windows;
 using NightOwl.Agent.Shared;
+using NightOwl.Agent.Windows.Collectors;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http;
 using System.Text.Json;
 
 try
@@ -40,6 +43,11 @@ try
     TestAgentStateRuntimePreservesUnknownPropertiesAndRecentJobs();
     TestStateSaveFailureDoesNotEscapeWorkerBoundary();
     TestStateSaveFailureBackoffPreventsAcceleratedLoop();
+    TestTelemetryDefaultsAndLegacyConfig();
+    TestTelemetryCollectorAndCpuMath();
+    TestTelemetryBufferAndOfflineRetry();
+    TestTelemetryPipelineIsolation();
+    TestTelemetryCollectionCost();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -81,6 +89,147 @@ static AgentConfig LegacyConfig()
             "restart_agent"
         }
     };
+}
+
+static void TestTelemetryDefaultsAndLegacyConfig()
+{
+    AgentConfig legacy = JsonSerializer.Deserialize<AgentConfig>("{\"machineId\":\"synthetic-machine\",\"agentToken\":\"synthetic-token\"}")!;
+    Require(!legacy.TelemetryEnabled, "Legacy config must keep telemetry disabled.");
+    Require(legacy.TelemetrySampleSeconds == 300 && legacy.TelemetryFlushSeconds == 1800, "Telemetry cadence defaults must be safe.");
+    Require(legacy.TelemetryBufferMaxSamples == 288 && legacy.TelemetryBufferMaxAgeHours == 48, "Buffer defaults must be bounded.");
+    Require(!new AgentConfig().TelemetryEnabled, "New config must be opt-in.");
+}
+
+static void TestTelemetryCollectorAndCpuMath()
+{
+    Require(TelemetryCollector.CpuPercent(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1), 4) == 50,
+        "Process CPU must divide by elapsed time and logical processor count.");
+    Require(TelemetryCollector.CpuPercent(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), 2) == 100,
+        "Process CPU must be clamped.");
+    Require(TelemetryCollector.CpuPercent(TimeSpan.FromSeconds(-1), TimeSpan.FromSeconds(1), 2) is null,
+        "Invalid process CPU deltas must be unavailable.");
+    var processes = Enumerable.Range(1, 10).Select(index => new TelemetryProcess
+    {
+        ProcessName = $"synthetic-{index}", Pid = index, CpuPercent = index, WorkingSetBytes = index * 100,
+    }).ToList();
+    TelemetryProcesses top = TelemetryCollector.SelectTopProcesses(processes);
+    Require(top.Cpu.Count == 5 && top.Memory.Count == 5, "Top process lists must be capped at five.");
+    Require(top.Cpu[0].Pid == 10 && top.Memory[0].Pid == 10, "Top process ordering must be descending.");
+    TelemetryCollector collector = new(new TelemetryCollectorHooks
+    {
+        Cpu = () => throw new IOException("synthetic metric unavailable"),
+        Memory = () => new TelemetryMemory { TotalBytes = 1000, AvailableBytes = 500, UsedPercent = 50 },
+        Network = () => new TelemetryNetwork { ReceivedBytes = 5, SentBytes = 7 },
+        Processes = (_, _) => top,
+    });
+    TelemetrySample sample = collector.Collect("synthetic-machine", CancellationToken.None);
+    Require(sample.TelemetryErrorsCount == 1 && sample.Cpu.UsagePercent is null, "A failed metric must not discard the sample.");
+    Require(sample.Memory.TotalBytes == 1000 && sample.Network.ReceivedBytes == 5, "Healthy metrics must survive partial failure.");
+    using JsonDocument serialized = JsonDocument.Parse(JsonSerializer.Serialize(sample));
+    Require(serialized.RootElement.GetProperty("sample_id").GetGuid() == sample.SampleId, "Telemetry sample must serialize with its stable ID.");
+    Require(JsonSerializer.Deserialize<TelemetrySample>(JsonSerializer.Serialize(sample))?.SampleId == sample.SampleId,
+        "Telemetry sample must deserialize without changing ID.");
+}
+
+static void TestTelemetryBufferAndOfflineRetry()
+{
+    string root = CreateTempDir();
+    try
+    {
+        string path = Path.Combine(root, "telemetry-buffer.json");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        TelemetryBuffer buffer = new(path, 6, TimeSpan.FromHours(48), () => now);
+        List<Guid> ids = new();
+        for (int index = 0; index < 7; index++)
+        {
+            TelemetrySample sample = new() { CollectedAt = now.AddMinutes(index - 7) };
+            ids.Add(sample.SampleId);
+            Require(buffer.Add(sample) == (index == 6 ? 1 : 0), "Overflow must evict only the oldest sample.");
+        }
+        TelemetryBuffer reloaded = new(path, 6, TimeSpan.FromHours(48), () => now);
+        Require(reloaded.Count == 6 && !reloaded.Snapshot(24).Any(item => item.SampleId == ids[0]),
+            "Buffer must survive restart and discard oldest sample on overflow.");
+        Require(reloaded.Snapshot(24).Select(item => item.SampleId).SequenceEqual(ids.Skip(1)),
+            "Offline retry must retain sample IDs and ordering.");
+        reloaded.Acknowledge(new[] { ids[2], ids[3] });
+        Require(reloaded.Count == 4 && reloaded.Snapshot(24).Any(item => item.SampleId == ids[1]),
+            "Flush confirmation must remove only acknowledged samples.");
+        now = now.AddHours(49);
+        Require(reloaded.Add(new TelemetrySample { CollectedAt = now }) == 0 && reloaded.Count == 1,
+            "Age limit must discard expired samples before accepting a new one.");
+        Require(!Directory.GetFiles(root, "*.tmp", SearchOption.AllDirectories).Any(), "Successful atomic writes must not leave temporary files.");
+    }
+    finally { DeleteTempDir(root); }
+}
+
+static void TestTelemetryPipelineIsolation()
+{
+    string root = CreateTempDir();
+    try
+    {
+        AgentConfig disabled = new() { MachineId = Guid.NewGuid().ToString(), TelemetryEnabled = false };
+        int collectionCalls = 0;
+        using ManualResetEventSlim entered = new(false);
+        using ManualResetEventSlim release = new(false);
+        TelemetryCollector collector = new(new TelemetryCollectorHooks
+        {
+            Cpu = () => 10,
+            Memory = () => new TelemetryMemory(),
+            Network = () => new TelemetryNetwork(),
+            Processes = (_, _) =>
+            {
+                Interlocked.Increment(ref collectionCalls);
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(3));
+                return new TelemetryProcesses();
+            },
+        });
+        FakeTelemetryHttpClientFactory http = new();
+        AgentApiClient api = new(http);
+        JsonlLogger logger = new(Path.Combine(root, "telemetry.jsonl"));
+        TelemetryPipeline pipeline = new(collector, api, logger);
+        pipeline.RunAsync(disabled, CancellationToken.None).GetAwaiter().GetResult();
+        Require(collectionCalls == 0 && http.Calls == 0, "Disabled telemetry must neither collect nor send.");
+
+        AgentConfig enabled = new() { MachineId = disabled.MachineId, TelemetryEnabled = true,
+            TelemetryUrl = "https://localhost/api/agent/telemetry/", AgentToken = "synthetic-token" };
+        TelemetryBuffer buffer = new(Path.Combine(root, "buffer.json"), 6, TimeSpan.FromHours(48));
+        Task first = pipeline.CollectOnceAsync(enabled, buffer, CancellationToken.None);
+        Require(entered.Wait(TimeSpan.FromSeconds(3)), "First collection must start.");
+        pipeline.CollectOnceAsync(enabled, buffer, CancellationToken.None).GetAwaiter().GetResult();
+        Require(collectionCalls == 1, "A second collection must skip while the first is active.");
+        release.Set();
+        first.GetAwaiter().GetResult();
+        Require(buffer.Count == 1, "First collection must persist its sample.");
+        Guid sampleId = buffer.Snapshot(1)[0].SampleId;
+        http.Succeed = false;
+        pipeline.FlushOnceAsync(enabled, buffer, CancellationToken.None).GetAwaiter().GetResult();
+        Require(buffer.Count == 1 && buffer.Snapshot(1)[0].SampleId == sampleId,
+            "Failed HTTP flush must preserve the same sample ID.");
+        http.Succeed = true;
+        pipeline.FlushOnceAsync(enabled, buffer, CancellationToken.None).GetAwaiter().GetResult();
+        Require(buffer.Count == 0 && http.Calls == 2, "Successful flush must acknowledge the sample.");
+        Require(http.SampleIds.All(id => id == sampleId), "Retries must send the same sample ID.");
+        string logs = File.ReadAllText(Path.Combine(root, "telemetry.jsonl"));
+        Require(logs.Contains("telemetry.sample.skipped") && logs.Contains("telemetry.flush.failed"),
+            "Telemetry skip and retry must be observable.");
+    }
+    finally { DeleteTempDir(root); }
+}
+
+static void TestTelemetryCollectionCost()
+{
+    if (!OperatingSystem.IsWindows()) return;
+    Stopwatch clock = Stopwatch.StartNew();
+    TelemetrySample sample = new TelemetryCollector().Collect("synthetic-machine", CancellationToken.None);
+    Require(sample.Memory.TotalBytes > 0, "Windows memory total should be available through GlobalMemoryStatusEx.");
+    long sampleBytes = JsonSerializer.SerializeToUtf8Bytes(sample).Length;
+    long batchBytes = JsonSerializer.SerializeToUtf8Bytes(new TelemetryBatch
+    {
+        MachineId = "synthetic-machine",
+        Samples = Enumerable.Repeat(sample, 6).ToList(),
+    }).Length;
+    Console.WriteLine($"Telemetry collector: duration_ms={clock.ElapsedMilliseconds} sample_bytes={sampleBytes} batch_6_bytes={batchBytes}");
 }
 
 static void TestNewConfigContainsTrustedReleaseKeys()
@@ -1103,3 +1252,30 @@ static void Require(bool condition, string message)
 }
 
 sealed record RepairRunnerTestResult(string RootDir, string RunnerDir, string JobId, string Stdout, string Stderr);
+
+sealed class FakeTelemetryHttpClientFactory : IHttpClientFactory
+{
+    public bool Succeed { get; set; } = true;
+    public int Calls { get; private set; }
+    public List<Guid> SampleIds { get; } = new();
+
+    public HttpClient CreateClient(string name)
+    {
+        return new HttpClient(new FakeTelemetryHandler(this));
+    }
+
+    private sealed class FakeTelemetryHandler(FakeTelemetryHttpClientFactory owner) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            owner.Calls++;
+            using JsonDocument body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+            foreach (JsonElement sample in body.RootElement.GetProperty("samples").EnumerateArray())
+                owner.SampleIds.Add(sample.GetProperty("sample_id").GetGuid());
+            return new HttpResponseMessage(owner.Succeed ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent(owner.Succeed ? "{}" : "offline"),
+            };
+        }
+    }
+}

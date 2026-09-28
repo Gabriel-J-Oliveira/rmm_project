@@ -14,8 +14,11 @@ from .views import (
     AgentStatusView,
     AgentUpdatePolicyView,
 )
+from .telemetry_views import AgentTelemetryView, EndpointTelemetryView
 
 urlpatterns = [
+    path('telemetry/', AgentTelemetryView.as_view(), name='agent-telemetry'),
+    path('telemetry/<uuid:endpoint_id>/', EndpointTelemetryView.as_view(), name='endpoint-telemetry'),
     path('deployments/bootstrap.ps1', AgentDeploymentBootstrapScriptView.as_view(), name='agent-deployment-bootstrap'),
     path('deployments/metadata/', AgentDeploymentMetadataView.as_view(), name='agent-deployment-metadata'),
     path('deployments/complete/', AgentDeploymentCompleteView.as_view(), name='agent-deployment-complete'),

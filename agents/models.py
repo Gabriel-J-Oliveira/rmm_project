@@ -1015,6 +1015,38 @@ class InventorySnapshot(models.Model):
         return f'{self.hostname} @ {self.received_at:%Y-%m-%d %H:%M:%S}'
 
 
+class EndpointPerformanceSample(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE, related_name='performance_samples')
+    sample_id = models.UUIDField()
+    collected_at = models.DateTimeField()
+    cpu_percent = models.FloatField(null=True)
+    memory_total_bytes = models.BigIntegerField(null=True)
+    memory_available_bytes = models.BigIntegerField(null=True)
+    memory_used_percent = models.FloatField(null=True)
+    memory_committed_bytes = models.BigIntegerField(null=True)
+    memory_commit_limit_bytes = models.BigIntegerField(null=True)
+    memory_committed_percent = models.FloatField(null=True)
+    disk_active_percent = models.FloatField(null=True)
+    disk_queue_length = models.FloatField(null=True)
+    disk_read_bytes_per_sec = models.FloatField(null=True)
+    disk_write_bytes_per_sec = models.FloatField(null=True)
+    disk_read_latency_ms = models.FloatField(null=True)
+    disk_write_latency_ms = models.FloatField(null=True)
+    network_received_bytes = models.BigIntegerField(null=True)
+    network_sent_bytes = models.BigIntegerField(null=True)
+    uptime_seconds = models.BigIntegerField()
+    process_consumers = models.JSONField(default=dict)
+    collection_duration_ms = models.BigIntegerField()
+    agent_working_set_bytes = models.BigIntegerField(null=True)
+    telemetry_errors_count = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['endpoint', 'sample_id'], name='uniq_endpoint_telemetry_sample')]
+        indexes = [models.Index(fields=['endpoint', '-collected_at'], name='endpoint_perf_time_idx')]
+
+
 class SoftwarePolicy(models.Model):
     TYPE_PERMITTED = 'permitted'
     TYPE_PROHIBITED = 'prohibited'
