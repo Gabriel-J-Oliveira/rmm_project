@@ -113,8 +113,8 @@ public sealed class ConfigService
         }
         config.TelemetrySampleSeconds = Math.Clamp(config.TelemetrySampleSeconds, 60, 3600);
         config.TelemetryFlushSeconds = Math.Clamp(config.TelemetryFlushSeconds, 60, 86400);
-        config.TelemetryBufferMaxSamples = Math.Clamp(config.TelemetryBufferMaxSamples, 6, 2016);
-        config.TelemetryBufferMaxAgeHours = Math.Clamp(config.TelemetryBufferMaxAgeHours, 1, 168);
+        config.TelemetryBufferMaxSamples = Math.Clamp(config.TelemetryBufferMaxSamples, 6, 2304);
+        config.TelemetryBufferMaxAgeHours = Math.Clamp(config.TelemetryBufferMaxAgeHours, 1, 192);
         if (string.IsNullOrWhiteSpace(config.JobsPullUrl))
         {
             config.JobsPullUrl = $"{config.ServerBaseUrl}/api/agent/jobs/pull/";

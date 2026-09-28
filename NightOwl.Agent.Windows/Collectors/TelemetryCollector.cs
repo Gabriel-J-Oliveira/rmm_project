@@ -9,7 +9,7 @@ public sealed class TelemetryCollector
 {
     private readonly TelemetryCollectorHooks? _hooks;
     private (ulong Idle, ulong Kernel, ulong User)? _lastCpu;
-    private (long Received, long Sent)? _lastNetwork;
+    private Dictionary<string, (long Received, long Sent)> _lastNetwork = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? _lastProcessAt;
     private Dictionary<(int Pid, long Started), TimeSpan> _lastProcesses = new();
 
@@ -90,22 +90,49 @@ public sealed class TelemetryCollector
 
     private TelemetryNetwork ReadNetwork()
     {
-        long received = 0;
-        long sent = 0;
+        Dictionary<string, (long Received, long Sent)> current = new(StringComparer.OrdinalIgnoreCase);
         foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (nic.OperationalStatus != OperationalStatus.Up || nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
                 continue;
-            IPv4InterfaceStatistics stats = nic.GetIPv4Statistics();
-            received = checked(received + stats.BytesReceived);
-            sent = checked(sent + stats.BytesSent);
+            try
+            {
+                IPv4InterfaceStatistics stats = nic.GetIPv4Statistics();
+                current[nic.Id] = (stats.BytesReceived, stats.BytesSent);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // One disappearing interface must not invalidate the others.
+            }
         }
-        var previous = _lastNetwork;
-        _lastNetwork = (received, sent);
+        return CalculateNetworkDelta(current);
+    }
+
+    internal TelemetryNetwork CalculateNetworkDelta(IReadOnlyDictionary<string, (long Received, long Sent)> current)
+    {
+        long received = 0;
+        long sent = 0;
+        bool hasReceived = false;
+        bool hasSent = false;
+        foreach (var (id, counters) in current)
+        {
+            if (!_lastNetwork.TryGetValue(id, out var previous)) continue;
+            if (counters.Received >= previous.Received && previous.Received >= 0)
+            {
+                received = checked(received + counters.Received - previous.Received);
+                hasReceived = true;
+            }
+            if (counters.Sent >= previous.Sent && previous.Sent >= 0)
+            {
+                sent = checked(sent + counters.Sent - previous.Sent);
+                hasSent = true;
+            }
+        }
+        _lastNetwork = current.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase);
         return new TelemetryNetwork
         {
-            ReceivedBytes = previous is not null && received >= previous.Value.Received ? received - previous.Value.Received : null,
-            SentBytes = previous is not null && sent >= previous.Value.Sent ? sent - previous.Value.Sent : null,
+            ReceivedBytes = hasReceived ? received : null,
+            SentBytes = hasSent ? sent : null,
         };
     }
 
@@ -121,18 +148,11 @@ public sealed class TelemetryCollector
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    (int Pid, long Started) key = (process.Id, process.StartTime.ToUniversalTime().Ticks);
-                    TimeSpan cpuTime = process.TotalProcessorTime;
-                    current[key] = cpuTime;
-                    double? cpu = _lastProcesses.TryGetValue(key, out TimeSpan old)
-                        ? CpuPercent(cpuTime - old, wall, Environment.ProcessorCount) : null;
-                    processes.Add(new TelemetryProcess
-                    {
-                        ProcessName = process.ProcessName[..Math.Min(process.ProcessName.Length, 128)],
-                        Pid = process.Id,
-                        CpuPercent = cpu,
-                        WorkingSetBytes = Math.Max(0, process.WorkingSet64),
-                    });
+                    int pid = process.Id;
+                    string name = process.ProcessName;
+                    long workingSet = process.WorkingSet64;
+                    processes.Add(SampleProcess(pid, name, workingSet, () => process.StartTime,
+                        () => process.TotalProcessorTime, current, wall));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -143,6 +163,32 @@ public sealed class TelemetryCollector
         _lastProcesses = current;
         _lastProcessAt = now;
         return SelectTopProcesses(processes);
+    }
+
+    internal TelemetryProcess SampleProcess(int pid, string name, long workingSet,
+        Func<DateTime> startTime, Func<TimeSpan> processorTime,
+        Dictionary<(int Pid, long Started), TimeSpan> current, TimeSpan wall)
+    {
+        double? cpu = null;
+        try
+        {
+            (int Pid, long Started) key = (pid, startTime().ToUniversalTime().Ticks);
+            TimeSpan total = processorTime();
+            current[key] = total;
+            if (_lastProcesses.TryGetValue(key, out TimeSpan old))
+                cpu = CpuPercent(total - old, wall, Environment.ProcessorCount);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // CPU identity/access can fail while working set remains readable.
+        }
+        return new TelemetryProcess
+        {
+            ProcessName = name[..Math.Min(name.Length, 128)],
+            Pid = pid,
+            CpuPercent = cpu,
+            WorkingSetBytes = Math.Max(0, workingSet),
+        };
     }
 
     internal static TelemetryProcesses SelectTopProcesses(IEnumerable<TelemetryProcess> processes)

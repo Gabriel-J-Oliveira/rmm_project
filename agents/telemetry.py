@@ -98,7 +98,8 @@ class SampleSerializer(StrictSerializer):
 
     def validate_collected_at(self, value):
         now = timezone.now()
-        if value > now + timedelta(minutes=5) or value < now - timedelta(days=7):
+        # Accept the eight-day offline spool plus a day of clock/transport margin.
+        if value > now + timedelta(minutes=5) or value < now - timedelta(days=9):
             raise serializers.ValidationError('Sample timestamp outside accepted window.')
         return value
 

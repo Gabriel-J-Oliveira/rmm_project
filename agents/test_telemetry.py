@@ -79,6 +79,21 @@ class TelemetryApiTests(TestCase):
         self.assertEqual(row.cpu_percent, 11.5)
         self.assertEqual(row.process_consumers['cpu'][0]['process_name'], 'synthetic-worker')
 
+    def test_eight_day_offline_batch_is_accepted_atomically(self):
+        eight_days_old = self.sample(timezone.now() - timedelta(days=8))
+        current = self.sample()
+        self.assertEqual(self.post(self.batch([eight_days_old, current])).status_code, 200)
+        self.assertEqual(EndpointPerformanceSample.objects.count(), 2)
+        self.assertEqual(self.post(self.batch([eight_days_old, current])).status_code, 200)
+        self.assertEqual(EndpointPerformanceSample.objects.count(), 2)
+
+    def test_invalid_member_rejects_entire_batch(self):
+        valid = self.sample()
+        invalid = self.sample()
+        invalid['collected_at'] = (timezone.now() - timedelta(days=10)).isoformat()
+        self.assertEqual(self.post(self.batch([valid, invalid])).status_code, 400)
+        self.assertEqual(EndpointPerformanceSample.objects.count(), 0)
+
     def test_invalid_schema_batch_size_and_fields(self):
         payload = self.batch()
         payload['schema_version'] = 2

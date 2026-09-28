@@ -72,57 +72,75 @@ public sealed class Worker : BackgroundService
             ? _telemetry.RunAsync(config, stoppingToken)
             : Task.CompletedTask;
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                if (!config.HasValidToken)
+                try
                 {
-                    await _logger.LogAsync(
-                        "config.invalid_missing_token",
-                        "Agent token is missing or still contains a placeholder. API calls are paused.",
-                        new { config.ServerBaseUrl, config.MachineId },
-                        stoppingToken,
-                        "error");
-                    await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
-                    continue;
+                    if (!config.HasValidToken)
+                    {
+                        await _logger.LogAsync(
+                            "config.invalid_missing_token",
+                            "Agent token is missing or still contains a placeholder. API calls are paused.",
+                            new { config.ServerBaseUrl, config.MachineId },
+                            stoppingToken,
+                            "error");
+                        await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+                        continue;
+                    }
+
+                    DateTimeOffset now = DateTimeOffset.UtcNow;
+
+                    await FlushPendingResultsAsync(config, stoppingToken);
+
+                    if (IsDue(state.LastHeartbeatAt, config.Intervals.HeartbeatSeconds, now))
+                    {
+                        await SendHeartbeatAsync(config, state, now, stoppingToken);
+                    }
+
+                    if (IsDue(state.LastCollectionAt, config.Intervals.CollectSeconds, now))
+                    {
+                        await SendCollectionAsync(config, state, now, stoppingToken);
+                    }
+
+                    if (IsDue(state.LastJobPullAt, config.Intervals.JobsSeconds, now))
+                    {
+                        await PullAndRunJobsAsync(config, state, now, stoppingToken);
+                    }
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (Exception ex)
+                {
+                    await _logger.LogAsync("service.loop.failed", ex.Message, BuildErrorData(ex), stoppingToken, "error");
                 }
 
-                DateTimeOffset now = DateTimeOffset.UtcNow;
-
-                await FlushPendingResultsAsync(config, stoppingToken);
-
-                if (IsDue(state.LastHeartbeatAt, config.Intervals.HeartbeatSeconds, now))
-                {
-                    await SendHeartbeatAsync(config, state, now, stoppingToken);
-                }
-
-                if (IsDue(state.LastCollectionAt, config.Intervals.CollectSeconds, now))
-                {
-                    await SendCollectionAsync(config, state, now, stoppingToken);
-                }
-
-                if (IsDue(state.LastJobPullAt, config.Intervals.JobsSeconds, now))
-                {
-                    await PullAndRunJobsAsync(config, state, now, stoppingToken);
-                }
+                StateSaveOutcome saveOutcome = await SaveStateWithBoundaryAsync(
+                    token => _stateService.SaveAsync(config, state, token),
+                    _logger,
+                    stateSaveBackoff,
+                    stoppingToken);
+                stateSaveBackoff = saveOutcome.NextBackoff;
+                await Task.Delay(saveOutcome.LoopDelay, stoppingToken);
+            }
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+        finally
         {
-            await _logger.LogAsync("service.loop.failed", ex.Message, BuildErrorData(ex), stoppingToken, "error");
+            try { await telemetryTask.WaitAsync(TimeSpan.FromSeconds(3)); }
+            catch (TimeoutException)
+            {
+                try
+                {
+                    await _logger.LogAsync("telemetry.shutdown.deferred", "Telemetry did not finish within shutdown grace.",
+                        new { grace_seconds = 3 }, CancellationToken.None, "warning");
+                }
+                catch (Exception) { /* Shutdown must not be blocked by diagnostics. */ }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+            try { await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None); }
+            catch (Exception) { /* Shutdown must not be blocked by diagnostics. */ }
         }
-
-            StateSaveOutcome saveOutcome = await SaveStateWithBoundaryAsync(
-                token => _stateService.SaveAsync(config, state, token),
-                _logger,
-                stateSaveBackoff,
-                stoppingToken);
-            stateSaveBackoff = saveOutcome.NextBackoff;
-            await Task.Delay(saveOutcome.LoopDelay, stoppingToken);
-        }
-
-        await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None);
-        await telemetryTask;
     }
 
     private async Task ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
