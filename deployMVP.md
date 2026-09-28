@@ -18,7 +18,8 @@
 A revisao do primeiro commit foi `PASS_WITH_FIXES`. Os tres problemas HIGH
 eram: falha de carga do buffer encerrando a telemetria, delta de rede calculado
 sobre um total de interfaces mutavel e coleta sincrona ainda ativa apos timeout
-sem shutdown limitado. As correcoes estao nesta branch, pendentes de review final.
+sem shutdown limitado. O hardening e a review final passaram; Telemetry Core v1
+esta pronta para a preparacao da RC41, ainda desabilitada por default.
 
 - Opt-in: `telemetryEnabled=false` por default. Coleta local a cada 300 segundos
   (5 minutos); envio normal em lotes a cada 3600 segundos (aproximadamente 1 hora).
@@ -40,5 +41,16 @@ sem shutdown limitado. As correcoes estao nesta branch, pendentes de review fina
 - Throttling especifico no POST de telemetria fica como hardening anterior ao
   rollout amplo. O MVP mantem autenticacao e limites de corpo/lote atuais.
 
-Proximo gate: review final dos fixes e testes antes de gerar a RC41. Nenhuma
-release, endpoint ou campanha e alterada por este documento.
+## Base integrada para futura RC41
+
+- Base: `origin/main` em `d6ab7a72974797cb284bb90acb76b74e9c996f55`.
+- Correcao de `backup-manifest.json`: `a3418c14de61df73b24443ce76afdcfc6bc0d6e6`.
+- Telemetry Core: `a7c1d7bfe8e01b893361d8539e72e16a46ac9829`.
+- Roadmap do MVP: `513d70d57e335edddce54a55b2459ffa4df28d84`.
+- Hardening da telemetria: `535c53fc695c4ad4d165606e728dbdc18415b968`.
+- Validacao local integrada: builds e testes .NET, testes Django, grafo de
+  migrations e regressao do backup manifest passaram.
+
+Proximo gate: deploy do backend e build/publicacao da RC41 mediante aprovacao
+separada. Nenhuma RC41 foi criada, nenhum endpoint recebeu telemetria e nenhum
+rollout ou campanha foi alterado nesta integracao.
