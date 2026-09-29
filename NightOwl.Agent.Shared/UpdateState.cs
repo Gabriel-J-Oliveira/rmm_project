@@ -91,6 +91,15 @@ public sealed class UpdateState
     [JsonPropertyName("job_id")]
     public string JobId { get; set; } = "";
 
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = "";
+
+    [JsonPropertyName("channel")]
+    public string Channel { get; set; } = "";
+
+    [JsonPropertyName("release_id")]
+    public string ReleaseId { get; set; } = "";
+
     [JsonPropertyName("from_version")]
     public string FromVersion { get; set; } = "";
 

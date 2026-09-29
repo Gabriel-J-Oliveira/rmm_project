@@ -108,13 +108,22 @@ internal static class Program
     private static async Task<int> RunUpdateAsync(string[] args, bool interactive)
     {
         JobContext jobContext = JobContext.FromArgs(args);
-        string updateId = GetOption(args, "--update-id") ?? Guid.NewGuid().ToString();
+        string updateId = GetOption(args, "--update-id") ?? "";
         string source = GetOption(args, "--source") ?? "";
         WriteLog("update.start", "Update requested.", new { update_id = updateId, job_id = jobContext.JobId, runner = HasFlag(args, "--runner"), source });
 
         string? stagedPath = GetOption(args, "--apply-staged");
         if (!string.IsNullOrWhiteSpace(stagedPath))
         {
+            if (string.IsNullOrWhiteSpace(updateId))
+            {
+                throw new InvalidOperationException("Staged update requires update_id.");
+            }
+            if (TryReturnStagedTerminal(UpdateStateStore, updateId, Paths.InstallDir,
+                    EnsureTrayLifecycleBestEffort, out int terminalResult))
+            {
+                return terminalResult;
+            }
             string stagedManifestPath = GetOption(args, "--manifest") ?? throw new InvalidOperationException("Manifesto ausente para aplicacao staged.");
             string packageSha256 = GetOption(args, "--package-sha256") ?? "";
             return ApplyStagedUpdate(stagedPath, stagedManifestPath, packageSha256, interactive);
@@ -122,26 +131,57 @@ internal static class Program
 
         if (!HasFlag(args, "--runner"))
         {
-            if (HasActiveUpdate(out UpdateState? active, out string invalidError) && active is not null)
+            using (UpdateStateLock launchLock = UpdateStateLock.TryAcquire())
             {
-                WriteLog("update.already_running", "Active update state already exists.", new { active.UpdateId, active.JobId, active.CurrentStage, active.Status });
-                WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateAlreadyRunning, update_id = active.UpdateId, message = "Update already running." });
-                return 31;
-            }
-            if (!string.IsNullOrWhiteSpace(invalidError))
-            {
-                WriteLog("update.state.invalid", "Invalid update state detected before starting update.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error = invalidError });
-                WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateStateInvalid, message = invalidError });
-                return 32;
-            }
+                if (!launchLock.Acquired)
+                {
+                    WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateAlreadyRunning, message = "Update already running." });
+                    return 31;
+                }
+                if (!UpdateStateStore.TryLoad(out UpdateState? persisted, out string invalidError))
+                {
+                    WriteLog("update.state.invalid", "Invalid update state detected before starting update.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error = invalidError });
+                    WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateStateInvalid, message = invalidError });
+                    return 32;
+                }
 
-            AgentConfig bootstrapConfig = LoadConfig();
-            AgentVersionInfo bootstrapInstalled = LoadInstalledVersion(bootstrapConfig);
-            string requestedTarget = GetOption(args, "--target-version") ?? "latest";
-            UpdateState bootstrapState = UpdateState.Create(updateId, jobContext.JobId, bootstrapInstalled.Version, requestedTarget);
-            UpdateStateStore.Save(bootstrapState);
-            WriteLog("update.state.created", "Update state created before runner launch.", new { update_id = bootstrapState.UpdateId, job_id = bootstrapState.JobId, stage = bootstrapState.CurrentStage, from_version = bootstrapState.FromVersion, target_version = bootstrapState.TargetVersion });
+                InvocationDecision decision = DecideInvocation(persisted, args);
+                if (decision == InvocationDecision.Conflict)
+                {
+                    WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateAlreadyRunning, update_id = persisted?.UpdateId ?? "", message = "Update already running." });
+                    return 31;
+                }
+                if (decision == InvocationDecision.Terminal)
+                {
+                    return ReturnTerminalWithTray(persisted!, Paths.InstallDir);
+                }
+                if (decision == InvocationDecision.Resume)
+                {
+                    updateId = persisted!.UpdateId;
+                    WriteLog("update.resume", "Resuming persisted update.", new { update_id = updateId, job_id = persisted.JobId, stage = persisted.CurrentStage });
+                }
+                else
+                {
+                    updateId = string.IsNullOrWhiteSpace(updateId) ? Guid.NewGuid().ToString() : updateId;
+                    AgentConfig bootstrapConfig = LoadConfig();
+                    AgentVersionInfo bootstrapInstalled = LoadInstalledVersion(bootstrapConfig);
+                    UpdateState bootstrapState = UpdateState.Create(updateId, jobContext.JobId, bootstrapInstalled.Version, jobContext.TargetVersion);
+                    bootstrapState.Source = source;
+                    bootstrapState.Channel = jobContext.Channel;
+                    bootstrapState.ReleaseId = jobContext.ReleaseId;
+                    bootstrapState.PackageUrl = jobContext.PackageUrl;
+                    bootstrapState.ExpectedSha256 = jobContext.Sha256;
+                    RequirePersisted(bootstrapState);
+                    WriteLog("update.state.created", "Update state created before runner launch.", new { update_id = bootstrapState.UpdateId, job_id = bootstrapState.JobId, stage = bootstrapState.CurrentStage, from_version = bootstrapState.FromVersion, target_version = bootstrapState.TargetVersion });
+                }
+            }
+            // The child runner takes the mutex only after the parent releases it.
             return LaunchIndependentRunner(args, interactive, updateId);
+        }
+
+        if (string.IsNullOrWhiteSpace(updateId))
+        {
+            throw new InvalidOperationException("Runner requires update_id.");
         }
 
         using UpdateStateLock updateLock = UpdateStateLock.TryAcquire();
@@ -153,14 +193,14 @@ internal static class Program
             return 31;
         }
 
-        UpdateState state = LoadOrCreateRunnerState(updateId, jobContext);
+        UpdateState state = LoadOrCreateRunnerState(updateId, args);
         if (!state.IsActive)
         {
-            return ReturnPersistedTerminal(state);
+            return ReturnTerminalWithTray(state, Paths.InstallDir);
         }
         AgentConfig config = LoadConfig();
-        int? resumed = ResumeInterruptedHealthCheck(state, UpdateStateStore,
-            LoadInstalledVersion(config).Version, GetServiceStatus, StartService,
+        int? resumed = DispatchRecovery(state, UpdateStateStore,
+            () => LoadInstalledVersion(config).Version, GetServiceStatus, StartService,
             (current, rollback) => WaitForHealthCheck(current, rollback, TimeSpan.FromSeconds(
                 GetOptionInt(args, "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
             current => ExecuteAutomaticRollback(current, config.InstallPathOrDefault, interactive));
@@ -509,39 +549,73 @@ internal static class Program
         return string.Join(" ", filtered.Select(QuoteArg));
     }
 
-    private static bool HasActiveUpdate(out UpdateState? active, out string invalidError)
+    internal enum InvocationDecision { Fresh, Resume, Terminal, Conflict }
+
+    internal static InvocationDecision DecideInvocation(UpdateState? persisted, string[] args)
     {
-        active = null;
-        invalidError = "";
-        if (!UpdateStateStore.TryLoad(out UpdateState? state, out string error))
+        if (persisted is null)
         {
-            invalidError = error;
-            return false;
+            return InvocationDecision.Fresh;
         }
-
-        if (state is not null && state.IsActive)
+        JobContext current = JobContext.FromArgs(args);
+        string requestedId = GetOption(args, "--update-id") ?? "";
+        bool sameId = !string.IsNullOrWhiteSpace(requestedId)
+            && persisted.UpdateId.Equals(requestedId, StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(requestedId) && !sameId)
         {
-            active = state;
-            return true;
+            return persisted.IsActive ? InvocationDecision.Conflict : InvocationDecision.Fresh;
         }
-
-        return false;
+        bool sameJob = current.IsJob && !string.IsNullOrWhiteSpace(persisted.JobId)
+            && persisted.JobId.Equals(current.JobId, StringComparison.OrdinalIgnoreCase);
+        if (!sameId && !sameJob)
+        {
+            return persisted.IsActive ? InvocationDecision.Conflict : InvocationDecision.Fresh;
+        }
+        if (!string.IsNullOrWhiteSpace(persisted.JobId))
+        {
+            if (!sameJob
+                || !persisted.Source.Equals("job", StringComparison.OrdinalIgnoreCase)
+                || !persisted.Channel.Equals(current.Channel, StringComparison.OrdinalIgnoreCase)
+                || !persisted.TargetVersion.Equals(current.TargetVersion, StringComparison.OrdinalIgnoreCase)
+                || !persisted.ReleaseId.Equals(current.ReleaseId, StringComparison.OrdinalIgnoreCase)
+                || !persisted.ExpectedSha256.Equals(current.Sha256, StringComparison.OrdinalIgnoreCase)
+                || !persisted.PackageUrl.Equals(current.PackageUrl, StringComparison.Ordinal))
+            {
+                return InvocationDecision.Conflict;
+            }
+        }
+        else if (!sameId)
+        {
+            return InvocationDecision.Conflict;
+        }
+        return persisted.IsActive ? InvocationDecision.Resume : InvocationDecision.Terminal;
     }
 
-    private static UpdateState LoadOrCreateRunnerState(string updateId, JobContext jobContext)
+    private static UpdateState LoadOrCreateRunnerState(string updateId, string[] args)
     {
-        if (!UpdateStateStore.TryLoad(out UpdateState? loaded, out string error))
+        if (!updateId.Equals(GetOption(args, "--update-id"), StringComparison.OrdinalIgnoreCase))
         {
-            WriteLog("update.state.invalid", "Invalid update state detected.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error });
-            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateStateInvalid}: persisted state could not be read.");
+            throw new InvalidOperationException("Runner update_id mismatch.");
         }
+        return PrepareRunnerState(UpdateStateStore, args);
+    }
 
-        UpdateState selected = ResolveRunnerState(loaded, updateId, jobContext.JobId);
-        if (!ReferenceEquals(selected, loaded))
+    internal static UpdateState PrepareRunnerState(UpdateStateStore store, string[] args)
+    {
+        string updateId = GetOption(args, "--update-id") ?? "";
+        if (string.IsNullOrWhiteSpace(updateId)
+            || !store.TryLoad(out UpdateState? state, out _)
+            || state is null)
         {
-            RequirePersisted(selected);
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateStateInvalid}: runner state missing or invalid.");
         }
-        return selected;
+        InvocationDecision decision = DecideInvocation(state, args);
+        if (decision is not (InvocationDecision.Resume or InvocationDecision.Terminal)
+            || !state.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateAlreadyRunning}: runner execution does not match persisted state.");
+        }
+        return state;
     }
 
     internal static UpdateState ResolveRunnerState(UpdateState? loaded, string updateId, string jobId)
@@ -575,12 +649,102 @@ internal static class Program
         return completed || rolledBack ? 0 : 1;
     }
 
+    private static void EnsureTrayLifecycleBestEffort(string installPath)
+    {
+        try
+        {
+            EnsureTrayLifecycleAfterUpdate(installPath);
+        }
+        catch (Exception ex)
+        {
+            WriteLog("tray.lifecycle.recovery_failed", "Tray lifecycle recovery failed without changing update state.",
+                new { error = SanitizeMessage(ex.Message) });
+        }
+    }
+
+    private static int ReturnTerminalWithTray(UpdateState state, string installPath)
+    {
+        if (state.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase)
+            || state.CurrentStage.Equals(UpdateStages.RolledBack, StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureTrayLifecycleBestEffort(installPath);
+        }
+        return ReturnPersistedTerminal(state);
+    }
+
+    internal static bool TryReturnStagedTerminal(UpdateStateStore store, string updateId, string installPath,
+        Action<string> repairTray, out int result)
+    {
+        result = 0;
+        if (!store.TryLoad(out UpdateState? state, out string error))
+        {
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateStateInvalid}: {error}");
+        }
+        if (state is null || !state.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase) || state.IsActive)
+        {
+            return false;
+        }
+        if (state.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase)
+            || state.CurrentStage.Equals(UpdateStages.RolledBack, StringComparison.OrdinalIgnoreCase))
+        {
+            try { repairTray(installPath); }
+            catch (Exception ex)
+            {
+                WriteLog("tray.lifecycle.recovery_failed", "Tray lifecycle recovery failed without changing update state.",
+                    new { error = SanitizeMessage(ex.Message) });
+            }
+        }
+        result = ReturnPersistedTerminal(state);
+        return true;
+    }
+
+    internal enum RecoveryAction { Normal, HealthCheck, Rollback, Terminal, FailSafe }
+
+    internal static RecoveryAction ClassifyRecovery(UpdateState state) => state.CurrentStage switch
+    {
+        UpdateStages.Received or UpdateStages.CheckingVersion or UpdateStages.Downloading
+            or UpdateStages.Downloaded or UpdateStages.Validating or UpdateStages.Validated
+            or UpdateStages.Staging or UpdateStages.Staged => RecoveryAction.Normal,
+        UpdateStages.StartingService or UpdateStages.ServiceStarted or UpdateStages.WaitingHealthCheck
+            or UpdateStages.RollbackWaitingHealthCheck => RecoveryAction.HealthCheck,
+        UpdateStages.RollbackRequired or UpdateStages.RollbackStarting
+            or UpdateStages.RollbackStoppingService or UpdateStages.RollbackRestoringFiles
+            or UpdateStages.RollbackStartingService => RecoveryAction.Rollback,
+        UpdateStages.Completed or UpdateStages.RolledBack or UpdateStages.Failed
+            or UpdateStages.RollbackFailed => RecoveryAction.Terminal,
+        _ => RecoveryAction.FailSafe
+    };
+
+    internal static int? DispatchRecovery(UpdateState state, UpdateStateStore store,
+        Func<string> installedVersion, Func<string> serviceStatus, Action startService,
+        Func<UpdateState, bool, HealthCheckWaitResult> waitForHealth, Func<UpdateState, int> rollback)
+    {
+        return ClassifyRecovery(state) switch
+        {
+            RecoveryAction.Rollback => rollback(state),
+            RecoveryAction.HealthCheck => ResumeInterruptedHealthCheck(state, store,
+                installedVersion(), serviceStatus, startService, waitForHealth, rollback),
+            RecoveryAction.FailSafe => ReportUnsupportedRecoveryStage(state),
+            RecoveryAction.Terminal => ReturnPersistedTerminal(state),
+            _ => null
+        };
+    }
+
+    private static int ReportUnsupportedRecoveryStage(UpdateState state)
+    {
+        WriteLog("update.recovery.unsupported_stage", "Update cannot safely resume at this stage.",
+            new { update_id = state.UpdateId, stage = state.CurrentStage });
+        WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateInterrupted,
+            update_id = state.UpdateId, stage = state.CurrentStage });
+        return 1;
+    }
+
     private static int ReturnRecoveredResult(UpdateState initial, int exitCode, string installPath)
     {
         UpdateState persisted = UpdateStateStore.Load() ?? initial;
         if (persisted.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
         {
-            return ReturnPersistedTerminal(persisted);
+            return ReturnTerminalWithTray(persisted, installPath);
         }
         if (initial.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase))
         {
@@ -588,7 +752,7 @@ internal static class Program
             {
                 WriteCriticalRollbackResult(persisted, installPath, persisted.RollbackErrorMessage);
             }
-            return ReturnPersistedTerminal(persisted);
+            return ReturnTerminalWithTray(persisted, installPath);
         }
         return exitCode;
     }
@@ -770,17 +934,16 @@ internal static class Program
         }
 
         AgentConfig config = LoadConfig();
-        JobContext jobContext = JobContext.FromArgs(Environment.GetCommandLineArgs());
-        UpdateManifest manifest = JsonSerializer.Deserialize<UpdateManifest>(File.ReadAllText(manifestPath), JsonOptions)
-            ?? throw new InvalidOperationException("Manifesto staged invalido.");
-        AgentVersionInfo installed = LoadInstalledVersion(config);
+        string[] args = Environment.GetCommandLineArgs();
+        JobContext jobContext = JobContext.FromArgs(args);
         string installPath = config.InstallPathOrDefault;
-        UpdateState state = LoadOrCreateRunnerState(GetOption(Environment.GetCommandLineArgs(), "--update-id") ?? "", jobContext);
+        UpdateState state = LoadOrCreateRunnerState(GetOption(args, "--update-id") ?? "", args);
         if (!state.IsActive)
         {
-            return ReturnPersistedTerminal(state);
+            return ReturnTerminalWithTray(state, installPath);
         }
-        int? resumed = ResumeInterruptedHealthCheck(state, UpdateStateStore, installed.Version,
+        int? resumed = DispatchRecovery(state, UpdateStateStore,
+            () => LoadInstalledVersion(config).Version,
             GetServiceStatus, StartService,
             (current, rollback) => WaitForHealthCheck(current, rollback, TimeSpan.FromSeconds(
                 GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
@@ -789,6 +952,9 @@ internal static class Program
         {
             return ReturnRecoveredResult(state, resumed.Value, installPath);
         }
+        AgentVersionInfo installed = LoadInstalledVersion(config);
+        UpdateManifest manifest = JsonSerializer.Deserialize<UpdateManifest>(File.ReadAllText(manifestPath), JsonOptions)
+            ?? throw new InvalidOperationException("Manifesto staged invalido.");
         string backupPath = Path.Combine(BackupsRoot, state.UpdateId);
         state.FromVersion = installed.Version;
         state.TargetVersion = manifest.Version;
@@ -885,7 +1051,7 @@ internal static class Program
             HealthCheckWaitResult health = WaitForHealthCheck(state, expectRollback: false, TimeSpan.FromSeconds(healthTimeoutSeconds));
             if (health == HealthCheckWaitResult.Completed)
             {
-                EnsureTrayLifecycleAfterUpdate(installPath);
+                EnsureTrayLifecycleBestEffort(installPath);
                 CleanupStaging(stagedPath);
                 WriteLog("update.completed", "Update completed after agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, version = manifest.Version, previous_version = installed.Version });
                 WriteJson(new { ok = true, updated = true, healthCheckConfirmed = true, update_id = state.UpdateId, version = manifest.Version, backupPath });
@@ -989,7 +1155,7 @@ internal static class Program
             StopService();
             RestoreBackup(latest.FullName, installPath);
             StartService();
-            EnsureTrayLifecycleAfterUpdate(installPath);
+            EnsureTrayLifecycleBestEffort(installPath);
             WriteLog("updater.rollback.completed", "Rollback concluido.", new { backup = latest.FullName });
             WriteJson(new { ok = true, rollback = true, backup = latest.FullName });
             if (interactive)
@@ -2222,21 +2388,16 @@ $shortcut.Save()
 
     private static int ExecuteAutomaticRollback(UpdateState state, string installPath, bool interactive)
     {
-        bool rollbackStarted = UpdateStateStore.TryTransitionNonTerminal(state.UpdateId, current =>
-        {
-            if (current.RollbackAttempt >= 1)
-            {
-                return false;
-            }
-            current.RollbackAttempt++;
-            current.MarkStage(UpdateStages.RollbackStarting);
-            return true;
-        }, out UpdateState? currentState);
+        bool rollbackStarted = TryBeginRollback(UpdateStateStore, state.UpdateId, out UpdateState? currentState);
         state = currentState ?? ReloadUpdateState(state);
         if (!rollbackStarted && state.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
         {
             WriteLog("rollback.skipped_completed", "Agent already confirmed the update before rollback began.", new { update_id = state.UpdateId, job_id = state.JobId });
             return 0;
+        }
+        if (!rollbackStarted && !state.IsActive)
+        {
+            return ReturnTerminalWithTray(state, installPath);
         }
         if (!rollbackStarted)
         {
@@ -2307,7 +2468,7 @@ $shortcut.Save()
             HealthCheckWaitResult result = WaitForHealthCheck(state, expectRollback: true, TimeSpan.FromSeconds(healthTimeoutSeconds));
             if (result == HealthCheckWaitResult.RolledBack)
             {
-                EnsureTrayLifecycleAfterUpdate(installPath);
+                EnsureTrayLifecycleBestEffort(installPath);
                 WriteLog("rollback.completed", "Rollback confirmed by agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, restored_file_count = ReloadUpdateState(state).RestoredFileCount });
                 WriteJson(new { ok = false, rolled_back = true, update_id = state.UpdateId, active_version = state.FromVersion, attempted_version = state.TargetVersion });
                 if (interactive)
@@ -2347,6 +2508,27 @@ $shortcut.Save()
         }
     }
 
+    internal static bool TryBeginRollback(UpdateStateStore store, string updateId, out UpdateState? state)
+    {
+        return store.TryTransitionNonTerminal(updateId, current =>
+        {
+            bool resuming = current.CurrentStage is UpdateStages.RollbackStarting
+                or UpdateStages.RollbackStoppingService or UpdateStages.RollbackRestoringFiles
+                or UpdateStages.RollbackStartingService;
+            if (current.RollbackAttempt == 0 && current.CurrentStage == UpdateStages.RollbackRequired)
+            {
+                current.RollbackAttempt = 1;
+            }
+            else if (!resuming || current.RollbackAttempt != 1)
+            {
+                return false;
+            }
+            // Backup validation precedes every restore, so repeating a partial restore is safe.
+            current.MarkStage(UpdateStages.RollbackStarting);
+            return true;
+        }, out state);
+    }
+
     private static int RestoreManagedFiles(string installPath, string backupPath, BackupManifest manifest)
     {
         foreach (string currentFile in EnumerateManagedFiles(installPath).ToList())
@@ -2367,6 +2549,12 @@ $shortcut.Save()
         ValidateBackup(backupPath, manifest.UpdateId, manifest.PreviousVersion);
         WriteLog("rollback.files_restored", "Managed files restored from backup.", new { update_id = manifest.UpdateId, backupPath, restored_file_count = count });
         return count;
+    }
+
+    internal static int RestoreManagedFilesForTest(string installPath, string backupPath, string updateId, string previousVersion)
+    {
+        BackupManifest manifest = ValidateBackup(backupPath, updateId, previousVersion);
+        return RestoreManagedFiles(installPath, backupPath, manifest);
     }
 
     private static void WriteCriticalRollbackResult(UpdateState state, string installPath, string message)

@@ -404,38 +404,7 @@ public sealed class JobExecutor
         bool mandatory = GetPayloadBool(job, "mandatory", false);
         bool force = GetPayloadBool(job, "force", false);
 
-        List<string> args = new()
-        {
-            "update",
-            "--source", "job",
-            "--job-id", job.Id,
-            "--channel", channel,
-            "--target-version", targetVersion,
-            "--quiet",
-            "--json-output"
-        };
-        AddOption(args, "--release-id", releaseId);
-        AddOption(args, "--package-url", packageUrl);
-        AddOption(args, "--checksum-url", checksumUrl);
-        AddOption(args, "--sha256", sha256);
-        AddOption(args, "--manifest-url", manifestUrl);
-        AddOption(args, "--manifest-sha256", manifestSha256);
-        AddOption(args, "--signature-url", signatureUrl);
-        AddOption(args, "--signature-sha256", signatureSha256);
-        AddOption(args, "--signature-key-id", signatureKeyId);
-        if (size > 0)
-        {
-            AddOption(args, "--size", size.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        }
-        AddOption(args, "--minimum-updater-version", minimumUpdaterVersion);
-        if (mandatory)
-        {
-            args.Add("--mandatory");
-        }
-        if (force)
-        {
-            args.Add("--force");
-        }
+        List<string> args = BuildUpdaterArguments(job);
 
         string arguments = string.Join(" ", args.Select(QuoteArg));
         await _logger.LogAsync(
@@ -508,6 +477,42 @@ public sealed class JobExecutor
                 force
             }
         };
+    }
+
+    public static List<string> BuildUpdaterArguments(AgentJobRequest job)
+    {
+        List<string> args = new()
+        {
+            "update", "--source", "job", "--job-id", job.Id,
+            "--channel", GetPayloadString(job, "channel", "stable"),
+            "--target-version", GetPayloadString(job, "target_version", "latest"),
+            "--quiet", "--json-output"
+        };
+        foreach ((string option, string key) in new[] {
+            ("--release-id", "release_id"), ("--package-url", "package_url"),
+            ("--checksum-url", "checksum_url"), ("--sha256", "sha256"),
+            ("--manifest-url", "manifest_url"), ("--manifest-sha256", "manifest_sha256"),
+            ("--signature-url", "signature_url"), ("--signature-sha256", "signature_sha256"),
+            ("--signature-key-id", "signature_key_id")
+        })
+        {
+            AddOption(args, option, GetPayloadString(job, key, ""));
+        }
+        long size = GetPayloadLong(job, "size", 0);
+        if (size > 0)
+        {
+            AddOption(args, "--size", size.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        AddOption(args, "--minimum-updater-version", GetPayloadString(job, "minimum_updater_version", ""));
+        if (GetPayloadBool(job, "mandatory", false))
+        {
+            args.Add("--mandatory");
+        }
+        if (GetPayloadBool(job, "force", false))
+        {
+            args.Add("--force");
+        }
+        return args;
     }
 
     private async Task<JobExecutionResult> StartUninstallAgentAsync(AgentConfig config, AgentJobRequest job, DateTimeOffset started, Stopwatch stopwatch, CancellationToken ct)

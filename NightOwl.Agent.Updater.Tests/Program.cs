@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
 using NightOwl.Agent.Shared;
+using NightOwl.Agent.Windows.Jobs;
+using NightOwl.Agent.Windows.Models;
 
 try
 {
@@ -58,6 +60,10 @@ try
     TestRollbackOriginalErrorPreserved();
     TestHealthCheckOrderingAndOutcomes();
     TestInterruptedHealthCheckRecovery();
+    TestOfficialJobRecovery();
+    TestRollbackStageRecovery();
+    TestTerminalReplayWithoutStaging();
+    TestCrashAfterRollbackRestore();
     TestTrayLifecycleSourceMarkers();
 
     Console.WriteLine("NightOwl updater version decision tests passed.");
@@ -456,6 +462,195 @@ static void TestInterruptedHealthCheckRecovery()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static string[] OfficialJobArgs(string jobId = "JOB-A", string target = "0.1.1.0-rc43",
+    string releaseId = "release-43", string sha = "synthetic-sha-43")
+{
+    AgentJobRequest job = new()
+    {
+        Id = jobId,
+        Type = "update_agent",
+        Payload = new Dictionary<string, object?>
+        {
+            ["channel"] = "development", ["target_version"] = target,
+            ["release_id"] = releaseId, ["package_url"] = "https://example.invalid/rc43.zip",
+            ["sha256"] = sha
+        }
+    };
+    return JobExecutor.BuildUpdaterArguments(job).ToArray();
+}
+
+static UpdateState NewOfficialState(string updateId, string stage)
+{
+    UpdateState state = UpdateState.Create(updateId, "JOB-A", "0.1.1.0-rc42", "0.1.1.0-rc43");
+    state.Source = "job";
+    state.Channel = "development";
+    state.ReleaseId = "release-43";
+    state.PackageUrl = "https://example.invalid/rc43.zip";
+    state.ExpectedSha256 = "synthetic-sha-43";
+    state.MarkStage(stage);
+    return state;
+}
+
+static void TestOfficialJobRecovery()
+{
+    using TempTree tree = TempTree.Create();
+    UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+    UpdateState waiting = NewOfficialState("persisted-update-id", UpdateStages.WaitingHealthCheck);
+    DateTimeOffset startedAt = waiting.StartedAt;
+    Require(store.Save(waiting), "Active job state should persist.");
+    string[] jobArgs = OfficialJobArgs(); // JobExecutor does not supply --update-id.
+    UpdateState persisted = store.Load()!;
+    Require(UpdaterProgram.DecideInvocation(persisted, jobArgs) == UpdaterProgram.InvocationDecision.Resume,
+        "The normal JobExecutor invocation must recognize the same persisted execution.");
+    string[] runnerArgs = [.. jobArgs, "--runner", "--update-id", persisted.UpdateId];
+    UpdateState runnerState = UpdaterProgram.PrepareRunnerState(store, runnerArgs);
+    Require(runnerState.UpdateId == waiting.UpdateId && runnerState.StartedAt == startedAt && runnerState.Attempt == 1,
+        "Resume must retain update_id, started_at, and attempt.");
+    int downloads = 0;
+    int? result = UpdaterProgram.DispatchRecovery(runnerState, store, () => "0.1.1.0-rc43",
+        () => "Running", () => throw new InvalidOperationException("No service start expected."),
+        (state, rollback) => {
+            store.TryTransitionNonTerminal(state.UpdateId, current => { current.MarkStage(UpdateStages.Completed); return true; }, out _);
+            return UpdaterProgram.WaitForHealthCheckCore(() => store.Load()!, () => "Running", false,
+                TimeSpan.FromMilliseconds(30), TimeSpan.FromMilliseconds(2));
+        }, _ => { downloads++; return 1; });
+    Require(result == 0 && downloads == 0 && store.Load()?.CurrentStage == UpdateStages.Completed,
+        "Official-path recovery must confirm health without download or reinstall.");
+
+    Require(UpdaterProgram.DecideInvocation(waiting, OfficialJobArgs(jobId: "JOB-B")) == UpdaterProgram.InvocationDecision.Conflict,
+        "A different job must not resume the active update.");
+    Require(UpdaterProgram.DecideInvocation(waiting, OfficialJobArgs(target: "0.1.1.0-rc44")) == UpdaterProgram.InvocationDecision.Conflict,
+        "Same job with a different target must fail closed.");
+    Require(UpdaterProgram.DecideInvocation(waiting, OfficialJobArgs(releaseId: "release-other")) == UpdaterProgram.InvocationDecision.Conflict,
+        "Same job with a different release must fail closed.");
+    Require(UpdaterProgram.DecideInvocation(waiting, OfficialJobArgs(sha: "different-sha")) == UpdaterProgram.InvocationDecision.Conflict,
+        "Same job with a different package hash must fail closed.");
+    Require(UpdaterProgram.DecideInvocation(waiting,
+        [.. OfficialJobArgs(), "--update-id", "different-update-id"]) == UpdaterProgram.InvocationDecision.Conflict,
+        "Explicit update_id must not override the active job identity.");
+    string[] manualArgs = OfficialJobArgs();
+    manualArgs[Array.IndexOf(manualArgs, "--source") + 1] = "manual";
+    Require(UpdaterProgram.DecideInvocation(waiting, manualArgs) == UpdaterProgram.InvocationDecision.Conflict,
+        "The job source must not be changed during recovery.");
+    Require(ExpectThrows(() => UpdaterProgram.PrepareRunnerState(store,
+        [.. OfficialJobArgs(jobId: "JOB-B"), "--runner", "--update-id", waiting.UpdateId])) is InvalidOperationException,
+        "Runner entrypoint must reject a mismatched job even with the update_id.");
+}
+
+static void TestRollbackStageRecovery()
+{
+    Require(UpdaterProgram.ClassifyRecovery(NewOfficialState("failed", UpdateStages.Failed))
+        == UpdaterProgram.RecoveryAction.Terminal, "Failed must remain terminal.");
+    Require(UpdaterProgram.ClassifyRecovery(NewOfficialState("rollback-failed", UpdateStages.RollbackFailed))
+        == UpdaterProgram.RecoveryAction.Terminal, "RollbackFailed must remain terminal.");
+    foreach (string stage in new[] { UpdateStages.RollbackRequired, UpdateStages.RollbackStarting,
+        UpdateStages.RollbackStoppingService, UpdateStages.RollbackRestoringFiles,
+        UpdateStages.RollbackStartingService })
+    {
+        using TempTree tree = TempTree.Create();
+        UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+        UpdateState state = NewOfficialState("rollback-" + stage, stage);
+        state.BackupPath = Path.Combine(tree.Root, "backup");
+        state.RollbackAttempt = stage == UpdateStages.RollbackRequired ? 0 : 1;
+        Require(store.Save(state), "Rollback state should persist.");
+        int rollbackCalls = 0;
+        int? result = UpdaterProgram.DispatchRecovery(store.Load()!, store,
+            () => throw new InvalidOperationException("Rollback must not check target version."),
+            () => "Stopped", () => { }, (_, _) => throw new InvalidOperationException("No early health check."),
+            current => {
+                rollbackCalls++;
+                Require(UpdaterProgram.TryBeginRollback(store, current.UpdateId, out UpdateState? resumed),
+                    "Rollback should start or resume at " + stage);
+                Require(resumed?.CurrentStage == UpdateStages.RollbackStarting && resumed.RollbackAttempt == 1,
+                    "Rollback retry must not increment attempt or return to normal update.");
+                return 0;
+            });
+        Require(result == 0 && rollbackCalls == 1, "Rollback stage must dispatch to rollback: " + stage);
+    }
+
+    foreach (string service in new[] { "Stopped", "Running" })
+    {
+        using TempTree tree = TempTree.Create();
+        UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+        UpdateState state = NewOfficialState("rollback-wait-" + service, UpdateStages.RollbackWaitingHealthCheck);
+        state.RollbackAttempt = 1;
+        store.Save(state);
+        int starts = 0;
+        int? result = UpdaterProgram.DispatchRecovery(store.Load()!, store, () => state.FromVersion,
+            () => service, () => starts++, (current, restoring) => {
+                Require(restoring, "Rollback wait must expect the previous version.");
+                store.TryTransitionNonTerminal(current.UpdateId,
+                    persisted => { persisted.MarkStage(UpdateStages.RolledBack); return true; }, out _);
+                return UpdaterProgram.WaitForHealthCheckCore(() => store.Load()!, () => "Running", true,
+                    TimeSpan.FromMilliseconds(30), TimeSpan.FromMilliseconds(2));
+            }, _ => throw new InvalidOperationException("Restore must not run again."));
+        Require(result == 0 && starts == (service == "Stopped" ? 1 : 0)
+            && store.Load()?.CurrentStage == UpdateStages.RolledBack,
+            "Rollback wait must start stopped service and confirm rollback.");
+    }
+}
+
+static void TestTerminalReplayWithoutStaging()
+{
+    foreach (string terminal in new[] { UpdateStages.Completed, UpdateStages.RolledBack })
+    {
+        using TempTree tree = TempTree.Create();
+        UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+        UpdateState state = NewOfficialState("terminal-" + terminal, terminal);
+        Require(store.Save(state), "Terminal state should persist.");
+        int trayCalls = 0;
+        string absentStaging = Path.Combine(tree.Root, "missing-staging");
+        Require(!Directory.Exists(absentStaging), "Test staging must be absent.");
+        Require(UpdaterProgram.TryReturnStagedTerminal(store, state.UpdateId, tree.Root,
+            _ => { trayCalls++; throw new IOException("Synthetic Tray failure."); }, out int result)
+            && result == 0 && trayCalls == 1 && store.Load()?.CurrentStage == terminal,
+            "Terminal apply-staged replay must ignore staging and keep Tray best-effort.");
+    }
+}
+
+static void TestCrashAfterRollbackRestore()
+{
+    using TempTree tree = TempTree.Create();
+    string install = tree.CreateDirectory("install");
+    string backup = Path.Combine(tree.Root, "backup");
+    UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+    UpdateState state = NewOfficialState("crash-after-restore", UpdateStages.RollbackStartingService);
+    state.BackupPath = backup;
+    state.RollbackAttempt = 1;
+    foreach (string name in new[] { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe",
+        "NightOwl.Agent.Tray.exe", "agent.version.json" })
+    {
+        File.WriteAllText(Path.Combine(install, name), "previous-" + name);
+    }
+    UpdaterProgram.CreateBackupForTest(install, backup, state.UpdateId, state.FromVersion);
+    File.WriteAllText(Path.Combine(install, "NightOwl.Agent.Windows.exe"), "target");
+    UpdaterProgram.RestoreManagedFilesForTest(install, backup, state.UpdateId, state.FromVersion);
+    store.Save(state); // Crash after restore, before StartService.
+    int? dispatch = UpdaterProgram.DispatchRecovery(store.Load()!, store,
+        () => throw new InvalidOperationException("Never enter CheckingVersion."),
+        () => "Stopped", () => { }, (_, _) => throw new InvalidOperationException("Not waiting yet."),
+        current => {
+            Require(UpdaterProgram.TryBeginRollback(store, current.UpdateId, out _), "Interrupted restore must resume.");
+            UpdaterProgram.RestoreManagedFilesForTest(install, backup, current.UpdateId, current.FromVersion);
+            store.TryTransitionNonTerminal(current.UpdateId,
+                persisted => { persisted.MarkStage(UpdateStages.RollbackWaitingHealthCheck); return true; }, out _);
+            return 0;
+        });
+    Require(dispatch == 0 && File.ReadAllText(Path.Combine(install, "NightOwl.Agent.Windows.exe"))
+        == "previous-NightOwl.Agent.Windows.exe", "Repeated validated restore must retain previous files.");
+    int starts = 0;
+    int? health = UpdaterProgram.DispatchRecovery(store.Load()!, store, () => state.FromVersion,
+        () => "Stopped", () => starts++, (current, restoring) => {
+            store.TryTransitionNonTerminal(current.UpdateId,
+                persisted => { persisted.MarkStage(UpdateStages.RolledBack); return true; }, out _);
+            return UpdaterProgram.WaitForHealthCheckCore(() => store.Load()!, () => "Running", restoring,
+                TimeSpan.FromMilliseconds(30), TimeSpan.FromMilliseconds(2));
+        }, _ => throw new InvalidOperationException("No second file restore expected."));
+    Require(health == 0 && starts == 1 && store.Load()?.CurrentStage == UpdateStages.RolledBack,
+        "Crash after restore must start the service and finish rollback.");
+    UpdaterProgram.ValidateBackupForTest(backup, state.UpdateId, state.FromVersion);
 }
 
 static void TestTrayLifecycleSourceMarkers()

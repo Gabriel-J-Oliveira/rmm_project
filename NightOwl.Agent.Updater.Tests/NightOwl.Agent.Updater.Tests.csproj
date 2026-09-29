@@ -8,5 +8,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NightOwl.Agent.Updater\NightOwl.Agent.Updater.csproj" />
+    <ProjectReference Include="..\NightOwl.Agent.Windows\NightOwl.Agent.Windows.csproj" />
   </ItemGroup>
 </Project>
