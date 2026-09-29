@@ -48,7 +48,7 @@ foi publicada na RC41 e validada no laboratorio. Continua desabilitada por defau
 - Throttling especifico no POST de telemetria fica como hardening anterior ao
   rollout amplo. O MVP mantem autenticacao e limites de corpo/lote atuais.
 
-## M1 - Hardware Inventory 2.0: IN DEVELOPMENT
+## M1 - Hardware Inventory 2.0: CODE_REVIEW_PASS
 
 Esta implementacao adiciona `hardware.memory` (modulos e slots),
 `hardware.physical_disks` (midia, barramento e associacao a letras quando
@@ -57,15 +57,21 @@ hardware e os volumes logicos em `disks` permanecem no contrato. A coleta
 enriquecida ocorre no ciclo de inventario; o heartbeat nao recebe as consultas
 adicionais de memoria fisica ou storage. Nenhum rollout foi iniciado nesta etapa.
 
-A primeira review concluiu `NEEDS_FIXES`. As correcoes de correlacao de storage,
-fallback WMI e merge de bateria foram aplicadas. A segunda review concluiu
-`NEEDS_FIXES` pelo timeout compartilhado entre hardware basico e enriquecimento.
-O core agora e coletado independentemente do enriquecimento de RAM/bateria;
-falha, JSON invalido ou timeout deste nao descarta fabricante, CPU, BIOS,
-memoria total ou estado basico da bateria. Storage fisico tambem tem timeout
-proprio. Sao tres subprocessos PowerShell de hardware/storage por inventario:
-core, enriquecimento e storage. Foi priorizado isolamento/fail-soft sobre
-reducao de subprocessos. M1 aguarda review final e validacao em Windows real.
+A implementacao inicial foi concluida. A primeira review concluiu
+`NEEDS_FIXES`; a correlacao de storage, o fallback WMI e o merge de bateria
+foram endurecidos. A segunda review concluiu `NEEDS_FIXES` pelo timeout
+compartilhado entre hardware basico e enriquecimento. O isolamento foi corrigido
+e a review final concluiu `PASS`, com risco de codigo `LOW`. M1 ainda nao e
+`LAB PASS`: falta validar em hardware Windows real.
+
+O core roda em PowerShell independente (timeout de 12 s), o enriquecimento de
+RAM/bateria em outro (15 s) e storage fisico em outro (18 s). Falha, JSON
+invalido ou timeout do enriquecimento nao descarta fabricante, CPU, BIOS,
+memoria total ou estado basico da bateria. O enriquecimento e fail-soft e a
+associacao de storage e fail-closed. Sao tres subprocessos intencionais por
+inventario; robustez e isolamento de falhas foram priorizados sobre
+micro-otimizacao.
+
 Letras de unidade e disco do sistema so sao atribuidos a um disco fisico com identificador unico
 e sem evidencia de camada RAID, Storage Spaces ou virtual. Os campos
 `cpu.socket`, `cpu.processor_id` e `cpu.max_clock_mhz` representam somente o
@@ -83,4 +89,4 @@ primeiro `Win32_Processor` (CPU0) neste MVP.
 
 Esta secao registra a integracao que precedeu o deploy do backend, a
 publicacao da RC41 e o canario LAB descrito acima. O proximo gate de M1 e
-review do contrato aditivo e validacao em Windows antes de qualquer nova RC.
+validacao em Windows real antes de qualquer nova RC.
