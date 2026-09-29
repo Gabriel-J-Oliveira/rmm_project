@@ -52,6 +52,7 @@ try
     TestTelemetryPipelineIsolation();
     TestTelemetryTimeoutAndShutdown();
     TestTelemetryCollectionCost();
+    TestHardwareInventoryV2();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -93,6 +94,121 @@ static AgentConfig LegacyConfig()
             "restart_agent"
         }
     };
+}
+
+static void TestHardwareInventoryV2()
+{
+    Dictionary<string, object?> module = new()
+    {
+        ["device_locator"] = " DIMM A1 ", ["bank_label"] = " BANK 0 ",
+        ["capacity_bytes"] = 16L * 1024 * 1024 * 1024, ["speed_mhz"] = 3200L,
+        ["configured_speed_mhz"] = 2933L, ["manufacturer"] = " Vendor ",
+        ["part_number"] = " Part ", ["serial_number"] = " Serial ",
+        ["form_factor"] = 8L, ["memory_type"] = 26L
+    };
+    Dictionary<string, object?> oneModule = HardwareInventoryNormalizer.Memory(new()
+    {
+        ["modules"] = new List<object?> { module }, ["memory_slots"] = new List<object?> { 2L }
+    }, 16L * 1024 * 1024 * 1024);
+    Require(Equals(oneModule["slots_total"], 2L) && Equals(oneModule["slots_used"], 1) && Equals(oneModule["slots_free"], 1L),
+        "One physical module must leave one slot free.");
+    Dictionary<string, object?> firstModule = ((List<Dictionary<string, object?>>)oneModule["modules"]!)[0];
+    Require(Equals(firstModule["device_locator"], "DIMM A1") && Equals(firstModule["manufacturer"], "Vendor") &&
+            Equals(firstModule["memory_type"], "ddr4") && Equals(firstModule["form_factor"], "dimm") &&
+            Equals(firstModule["configured_speed_mhz"], 2933L), "Module details must be normalized and trimmed.");
+
+    Dictionary<string, object?> full = HardwareInventoryNormalizer.Memory(new()
+    {
+        ["modules"] = new List<object?>
+        {
+            new Dictionary<string, object?> { ["capacity_bytes"] = 8L * 1024 * 1024 * 1024 },
+            new Dictionary<string, object?> { ["capacity_bytes"] = 8L * 1024 * 1024 * 1024 }
+        },
+        ["memory_slots"] = new List<object?> { 2L }
+    }, null);
+    Require(Equals(full["slots_used"], 2) && Equals(full["slots_free"], 0L) &&
+            Equals(full["total_bytes"], 16L * 1024 * 1024 * 1024), "Occupied slots and module sum must be accurate.");
+    Dictionary<string, object?> unknownSlots = HardwareInventoryNormalizer.Memory(new()
+    {
+        ["modules"] = new List<object?> { module }, ["memory_slots"] = new List<object?> { 0L }
+    }, null);
+    Require(unknownSlots["slots_total"] is null && unknownSlots["slots_free"] is null &&
+            Equals(unknownSlots["slots_used"], 1), "Unavailable MemoryArray must not invent slot capacity.");
+    Dictionary<string, object?> partial = HardwareInventoryNormalizer.Memory(new()
+    {
+        ["modules"] = new List<object?> { new Dictionary<string, object?> { ["capacity_bytes"] = null } }
+    }, null);
+    Require(partial["total_bytes"] is null && Equals(partial["slots_used"], 1),
+        "An installed module with unknown capacity still occupies a slot without implying total RAM.");
+
+    List<Dictionary<string, object?>> disks = HardwareInventoryNormalizer.PhysicalDisks(new List<object?>
+    {
+        new Dictionary<string, object?>
+        {
+            ["disk_number"] = 0L, ["model"] = " NVMe model ", ["size_bytes"] = 256L * 1024 * 1024 * 1024,
+            ["media_type"] = "SSD", ["bus_type"] = "NVMe", ["drive_letters"] = new List<object?> { "c", "D:" }
+        },
+        new Dictionary<string, object?>
+        {
+            ["disk_number"] = 1L, ["model"] = " SATA model ", ["media_type"] = "HDD",
+            ["bus_type"] = "SATA", ["drive_letters"] = new List<object?> { "E:" }
+        },
+        new Dictionary<string, object?>
+        {
+            ["disk_number"] = 2L, ["media_type"] = "Fixed hard disk media",
+            ["bus_type"] = "SCSI", ["drive_letters"] = new List<object?>()
+        }
+    }, "C:");
+    Require(disks.Count == 3 && Equals(disks[0]["media_type"], "ssd") && Equals(disks[0]["bus_type"], "nvme") &&
+            Equals(disks[0]["is_system_disk"], true) && ((List<string>)disks[0]["drive_letters"]!).SequenceEqual(new[] { "C:", "D:" }),
+        "NVMe is a bus, SSD is media, and C: must map to the physical disk.");
+    Require(Equals(disks[1]["media_type"], "hdd") && Equals(disks[1]["bus_type"], "sata") &&
+            Equals(disks[1]["is_system_disk"], false), "A second SATA HDD must not be marked as the system disk.");
+    Require(Equals(disks[2]["media_type"], "unknown") && Equals(disks[2]["bus_type"], "scsi") &&
+            disks[2]["is_system_disk"] is null, "WMI fallback must not infer HDD or a volume association.");
+    List<Dictionary<string, object?>> unavailable = HardwareInventoryNormalizer.PhysicalDisks(new List<object?>
+    {
+        new Dictionary<string, object?> { ["media_type"] = null, ["bus_type"] = "Unspecified" }
+    }, "C:");
+    Require(Equals(unavailable[0]["media_type"], "unknown") && Equals(unavailable[0]["bus_type"], "unknown"),
+        "Missing Get-PhysicalDisk data and unknown bus values must remain unknown.");
+    List<Dictionary<string, object?>> noSystemDrive = HardwareInventoryNormalizer.PhysicalDisks(new List<object?>
+    {
+        new Dictionary<string, object?> { ["drive_letters"] = new List<object?> { "C:" } }
+    }, "");
+    Require(noSystemDrive[0]["is_system_disk"] is null,
+        "A missing SystemDrive must not imply that C: is the system disk.");
+
+    Dictionary<string, object?> notebook = HardwareInventoryNormalizer.Battery(new()
+    {
+        ["present"] = true, ["status_code"] = 6L, ["estimated_charge_remaining"] = 75L,
+        ["design_capacity_mwh"] = 50000L, ["full_charge_capacity_mwh"] = 40000L, ["cycle_count"] = 250L
+    });
+    Require(Equals(notebook["status"], "charging") && Equals(notebook["health_percent"], 80d) &&
+            Equals(notebook["cycle_count"], 250L), "Battery health requires valid design and full capacities.");
+    Dictionary<string, object?> desktop = HardwareInventoryNormalizer.Battery(new() { ["present"] = false });
+    Require(Equals(desktop["status"], "not_present") && desktop["health_percent"] is null &&
+            desktop["estimated_charge_remaining"] is null, "Desktop battery metrics must remain absent.");
+    Dictionary<string, object?> incomplete = HardwareInventoryNormalizer.Battery(new()
+    {
+        ["present"] = true, ["design_capacity_mwh"] = 0L, ["full_charge_capacity_mwh"] = 40000L
+    });
+    Require(incomplete["health_percent"] is null, "Incomplete battery capacity must never divide by zero.");
+
+    AgentCollectPayload oldPayload = new() { MachineId = "synthetic-machine" };
+    using JsonDocument oldJson = JsonDocument.Parse(JsonSerializer.Serialize(oldPayload));
+    Require(oldJson.RootElement.TryGetProperty("hardware", out _) && oldJson.RootElement.TryGetProperty("disks", out _),
+        "Legacy collect sections must remain in the payload.");
+    oldPayload.Hardware["memory"] = oneModule;
+    oldPayload.Hardware["physical_disks"] = disks;
+    oldPayload.Hardware["battery"] = notebook;
+    oldPayload.Hardware["memory_total_bytes"] = oneModule["total_bytes"];
+    oldPayload.Disks.Add(new Dictionary<string, object?> { ["letter"] = "C:", ["size_bytes"] = 256L });
+    using JsonDocument newJson = JsonDocument.Parse(JsonSerializer.Serialize(oldPayload));
+    Require(newJson.RootElement.GetProperty("hardware").GetProperty("memory").GetProperty("slots_free").GetInt64() == 1 &&
+            newJson.RootElement.GetProperty("hardware").GetProperty("physical_disks").GetArrayLength() == 3 &&
+            newJson.RootElement.GetProperty("disks").GetArrayLength() == 1,
+        "Enriched hardware must coexist with the existing logical-disk contract.");
 }
 
 static void TestTelemetryDefaultsAndLegacyConfig()

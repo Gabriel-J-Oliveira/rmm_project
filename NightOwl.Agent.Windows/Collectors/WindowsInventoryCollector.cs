@@ -74,6 +74,15 @@ public sealed class WindowsInventoryCollector
         DateTimeOffset collectedAt = DateTimeOffset.UtcNow;
         Dictionary<string, object?> system = CollectSection("system", GetSystem, new Dictionary<string, object?>());
         Dictionary<string, object?> hardware = CollectSection("hardware", GetHardware, new Dictionary<string, object?>());
+        Dictionary<string, object?> assetDetails = CollectSection("asset_hardware", GetAssetHardwareDetails, new Dictionary<string, object?>());
+        hardware["memory"] = HardwareInventoryNormalizer.Memory(assetDetails, ToLong(hardware.GetValueOrDefault("total_memory_bytes")));
+        Dictionary<string, object?> battery = AsDict(assetDetails.GetValueOrDefault("battery"));
+        battery.TryAdd("present", hardware.GetValueOrDefault("battery_present"));
+        battery.TryAdd("status_code", hardware.GetValueOrDefault("battery_status"));
+        hardware["battery"] = HardwareInventoryNormalizer.Battery(battery);
+        hardware["physical_disks"] = HardwareInventoryNormalizer.PhysicalDisks(
+            CollectSection("physical_disks", GetPhysicalDisksRaw, new List<Dictionary<string, object?>>()),
+            Environment.GetEnvironmentVariable("SystemDrive") ?? "");
         Dictionary<string, object?> network = CollectSection("network", GetNetwork, new Dictionary<string, object?> { ["interfaces"] = new List<object>() });
         List<Dictionary<string, object?>> disks = CollectSection("disks", GetDisks, new List<Dictionary<string, object?>>());
         List<Dictionary<string, object?>> software = CollectSection("software", GetSoftware, new List<Dictionary<string, object?>>());
@@ -341,6 +350,9 @@ public sealed class WindowsInventoryCollector
               cpu_manufacturer = $cpu.Manufacturer
               physical_cores = $cpu.NumberOfCores
               logical_processors = $cpu.NumberOfLogicalProcessors
+              cpu_max_clock_mhz = $cpu.MaxClockSpeed
+              cpu_socket = $cpu.SocketDesignation
+              cpu_processor_id = $cpu.ProcessorId
               total_memory_bytes = if ($cs.TotalPhysicalMemory) { [int64]$cs.TotalPhysicalMemory } else { $null }
               available_memory_bytes = if ($os.FreePhysicalMemory) { [int64]$os.FreePhysicalMemory * 1024 } else { $null }
               tpm_present = [bool]$tpm
@@ -355,7 +367,10 @@ public sealed class WindowsInventoryCollector
             ["name"] = ps.GetValueOrDefault("cpu_name")?.ToString() ?? RuntimeInformation.ProcessArchitecture.ToString(),
             ["manufacturer"] = ps.GetValueOrDefault("cpu_manufacturer")?.ToString() ?? "",
             ["physical_cores"] = ToLong(ps.GetValueOrDefault("physical_cores")),
-            ["logical_processors"] = ToLong(ps.GetValueOrDefault("logical_processors")) ?? Environment.ProcessorCount
+            ["logical_processors"] = ToLong(ps.GetValueOrDefault("logical_processors")) ?? Environment.ProcessorCount,
+            ["max_clock_mhz"] = ToLong(ps.GetValueOrDefault("cpu_max_clock_mhz")),
+            ["socket"] = ps.GetValueOrDefault("cpu_socket")?.ToString()?.Trim(),
+            ["processor_id"] = ps.GetValueOrDefault("cpu_processor_id")?.ToString()?.Trim()
         };
 
         return new Dictionary<string, object?>
@@ -391,6 +406,111 @@ public sealed class WindowsInventoryCollector
             ["battery_status"] = ps.GetValueOrDefault("battery_status"),
             ["collected_at"] = DateTimeOffset.UtcNow
         };
+    }
+
+    private Dictionary<string, object?> GetAssetHardwareDetails()
+    {
+        return RunPowerShellObject("""
+            $modules = @()
+            $arrays = @()
+            $battery = $null
+            try { $modules = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop) } catch {}
+            try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop) } catch {}
+            try { $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1 } catch {}
+            $design = $null; $full = $null; $cycles = $null
+            if ($battery) {
+              try {
+                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)
+                if ($rows.Count -eq 1) { $design = $rows[0].DesignedCapacity }
+              } catch {}
+              try {
+                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)
+                if ($rows.Count -eq 1) { $full = $rows[0].FullChargedCapacity }
+              } catch {}
+              try {
+                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction Stop)
+                if ($rows.Count -eq 1) { $cycles = $rows[0].CycleCount }
+              } catch {}
+            }
+            [pscustomobject]@{
+              modules = @($modules | ForEach-Object {
+                [pscustomobject]@{
+                  device_locator = $_.DeviceLocator; bank_label = $_.BankLabel
+                  capacity_bytes = $_.Capacity; speed_mhz = $_.Speed
+                  configured_speed_mhz = $_.ConfiguredClockSpeed
+                  manufacturer = $_.Manufacturer; part_number = $_.PartNumber
+                  serial_number = $_.SerialNumber; form_factor = $_.FormFactor
+                  memory_type = if ($_.SMBIOSMemoryType) { $_.SMBIOSMemoryType } else { $_.MemoryType }
+                }
+              })
+              memory_slots = @($arrays | ForEach-Object { $_.MemoryDevices })
+              battery = [pscustomobject]@{
+                present = [bool]$battery
+                status_code = if ($battery) { $battery.BatteryStatus } else { $null }
+                estimated_charge_remaining = if ($battery) { $battery.EstimatedChargeRemaining } else { $null }
+                design_capacity_mwh = $design
+                full_charge_capacity_mwh = $full
+                cycle_count = $cycles
+              }
+            }
+        """, timeoutSeconds: 15);
+    }
+
+    private List<Dictionary<string, object?>> GetPhysicalDisksRaw()
+    {
+        return RunPowerShellList("""
+            $modern = @(); $physical = @(); $wmi = @(); $rows = @()
+            try { $modern = @(Get-Disk -ErrorAction Stop) } catch {}
+            try { $physical = @(Get-PhysicalDisk -ErrorAction Stop) } catch {}
+            try { $wmi = @(Get-CimInstance Win32_DiskDrive -ErrorAction Stop) } catch {}
+            if ($modern.Count -gt 0) {
+              foreach ($disk in $modern) {
+                $legacy = $wmi | Where-Object { $_.Index -eq $disk.Number } | Select-Object -First 1
+                $serial = ([string]$disk.SerialNumber).Trim()
+                if (-not $serial -and $legacy) { $serial = ([string]$legacy.SerialNumber).Trim() }
+                $matches = @($physical | Where-Object { $serial -and ([string]$_.SerialNumber).Trim() -eq $serial })
+                $media = if ($matches.Count -eq 1) { $matches[0] } else { $null }
+                $letters = @()
+                try {
+                  $letters = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop |
+                    Where-Object { $_.DriveLetter } | ForEach-Object { "$($_.DriveLetter):" })
+                } catch {}
+                $rows += [pscustomobject]@{
+                  disk_number = $disk.Number
+                  device_id = if ($legacy) { $legacy.DeviceID } else { $disk.Path }
+                  model = if ($disk.Model) { $disk.Model } else { $legacy.Model }
+                  manufacturer = if ($disk.Manufacturer) { $disk.Manufacturer } else { $legacy.Manufacturer }
+                  serial_number = $serial
+                  firmware_version = if ($disk.FirmwareVersion) { $disk.FirmwareVersion } else { $media.FirmwareVersion }
+                  size_bytes = $disk.Size
+                  media_type = if ($media) { [string]$media.MediaType } else { [string]$legacy.MediaType }
+                  bus_type = [string]$disk.BusType
+                  health_status = if ($media) { [string]$media.HealthStatus } else { [string]$disk.HealthStatus }
+                  operational_status = (@($disk.OperationalStatus) -join ',')
+                  drive_letters = $letters
+                }
+              }
+            } else {
+              foreach ($disk in $wmi) {
+                $letters = @()
+                try {
+                  foreach ($partition in @(Get-CimAssociatedInstance -InputObject $disk -Association Win32_DiskDriveToDiskPartition -ErrorAction Stop)) {
+                    $letters += @(Get-CimAssociatedInstance -InputObject $partition -Association Win32_LogicalDiskToPartition -ErrorAction Stop |
+                      ForEach-Object { $_.DeviceID })
+                  }
+                } catch { $letters = @() }
+                $rows += [pscustomobject]@{
+                  disk_number = $disk.Index; device_id = $disk.DeviceID
+                  model = $disk.Model; manufacturer = $disk.Manufacturer
+                  serial_number = $disk.SerialNumber; firmware_version = $disk.FirmwareRevision
+                  size_bytes = $disk.Size; media_type = $disk.MediaType
+                  bus_type = $disk.InterfaceType; health_status = $null
+                  operational_status = $disk.Status; drive_letters = $letters
+                }
+              }
+            }
+            $rows
+        """, timeoutSeconds: 18);
     }
 
     private Dictionary<string, object?> GetNetwork()

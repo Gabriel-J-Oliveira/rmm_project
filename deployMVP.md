@@ -13,13 +13,20 @@
 | M9 | Janela de 7 dias | Dataset do OBZ |
 | M10 | Fechamento do MVP | Relatorio final confiavel |
 
-## Estado da telemetria v1
+## M2 - Telemetria v1: LAB PASS
 
 A revisao do primeiro commit foi `PASS_WITH_FIXES`. Os tres problemas HIGH
 eram: falha de carga do buffer encerrando a telemetria, delta de rede calculado
 sobre um total de interfaces mutavel e coleta sincrona ainda ativa apos timeout
 sem shutdown limitado. O hardening e a review final passaram; Telemetry Core v1
-esta pronta para a preparacao da RC41, ainda desabilitada por default.
+foi publicada na RC41 e validada no laboratorio. Continua desabilitada por default.
+
+- Release: `0.1.1.0-rc41`, source `a00e05a13efa86bb003df58891d1aac08566bdf4`.
+- LAB: `CS-FISCAL-02`, endpoint `3c9db4f4-7dff-4051-8bbe-7791993eef5d`.
+- Observacao overnight: 122 amostras, 122 `sample_id` distintos, zero
+  duplicatas, zero intervalos acima de 7 minutos e zero erros de telemetria.
+  Store-and-forward apos reboot/restart validado. Resultado:
+  `OVERNIGHT_TELEMETRY_PASS`.
 
 - Opt-in: `telemetryEnabled=false` por default. Coleta local a cada 300 segundos
   (5 minutos); envio normal em lotes a cada 3600 segundos (aproximadamente 1 hora).
@@ -41,7 +48,16 @@ esta pronta para a preparacao da RC41, ainda desabilitada por default.
 - Throttling especifico no POST de telemetria fica como hardening anterior ao
   rollout amplo. O MVP mantem autenticacao e limites de corpo/lote atuais.
 
-## Base integrada para futura RC41
+## M1 - Hardware Inventory 2.0: IN DEVELOPMENT
+
+Esta implementacao adiciona `hardware.memory` (modulos e slots),
+`hardware.physical_disks` (midia, barramento e associacao a letras quando
+confiavel), detalhes de CPU e `hardware.battery`. Os campos existentes de
+hardware e os volumes logicos em `disks` permanecem no contrato. A coleta
+enriquecida ocorre no ciclo de inventario; o heartbeat nao recebe as consultas
+adicionais de memoria fisica ou storage. Nenhum rollout foi iniciado nesta etapa.
+
+## Historico da base integrada da RC41
 
 - Base: `origin/main` em `d6ab7a72974797cb284bb90acb76b74e9c996f55`.
 - Correcao de `backup-manifest.json`: `a3418c14de61df73b24443ce76afdcfc6bc0d6e6`.
@@ -51,6 +67,6 @@ esta pronta para a preparacao da RC41, ainda desabilitada por default.
 - Validacao local integrada: builds e testes .NET, testes Django, grafo de
   migrations e regressao do backup manifest passaram.
 
-Proximo gate: deploy do backend e build/publicacao da RC41 mediante aprovacao
-separada. Nenhuma RC41 foi criada, nenhum endpoint recebeu telemetria e nenhum
-rollout ou campanha foi alterado nesta integracao.
+Esta secao registra a integracao que precedeu o deploy do backend, a
+publicacao da RC41 e o canario LAB descrito acima. O proximo gate de M1 e
+review do contrato aditivo e validacao em Windows antes de qualquer nova RC.
