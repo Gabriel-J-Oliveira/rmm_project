@@ -64,6 +64,30 @@ compartilhado entre hardware basico e enriquecimento. O isolamento foi corrigido
 e a review final concluiu `PASS`, com risco de codigo `LOW`. M1 ainda nao e
 `LAB PASS`: falta validar em hardware Windows real.
 
+### LAB RC42 e preparacao da RC43
+
+A RC42 passou no build, assinatura e integridade do artefato. No LAB
+CS-FISCAL-02, o update RC41 -> RC42 instalou os binarios, iniciou o agente e
+recebeu healthcheck confirmado em 2026-09-29T15:38:22Z. A RC42 produziu uma
+amostra local de telemetria em 2026-09-29T15:38:23Z com
+`telemetryErrorsCount=0`. O updater, ainda com uma copia antiga do estado,
+gravou `WaitingHealthCheck` depois do `Completed` confirmado pelo agente.
+O timeout subsequente foi artificial; o rollback automatico para RC41 passou
+e o endpoint se recuperou. O backend recebeu o rollback posterior, mas manteve
+o job como `completed`, exigindo reconciliacao de receipt tardio.
+
+`TelemetryEnabled` permaneceu `true` e a RC41 continuou acrescentando
+amostras ao mesmo buffer apos o rollback. A ausencia de novo lote no backend
+ate 16:10Z corresponde ao proximo flush horario ainda nao ocorrido apos os
+restarts, nao a perda da configuracao ou do buffer.
+`TELEMETRY_CONFIG_PRESERVED=PASS` e `TELEMETRY_BUFFER_PRESERVED=PASS`.
+
+A RC42 permanece em `development`, `paused=true` e `rollout=0`, e nao deve ser
+reutilizada. A review do codigo M1 passou, mas a validacao final do inventario
+enriquecido em Windows permanece bloqueada pela race do updater:
+`CODE_REVIEW_PASS_WINDOWS_LAB_BLOCKED_BY_UPDATER_RACE`. A proxima candidata
+para esse gate sera a RC43 apos review e publicacao separadas.
+
 O core roda em PowerShell independente (timeout de 12 s), o enriquecimento de
 RAM/bateria em outro (15 s) e storage fisico em outro (18 s). Falha, JSON
 invalido ou timeout do enriquecimento nao descarta fabricante, CPU, BIOS,
