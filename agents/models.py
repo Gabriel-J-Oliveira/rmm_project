@@ -1764,6 +1764,22 @@ class AgentJobResultReceipt(models.Model):
         return f'{self.result_id} - {self.endpoint}'
 
 
+class AgentJobResultReceiptProgression(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    receipt = models.ForeignKey(AgentJobResultReceipt, on_delete=models.CASCADE, related_name='progressions')
+    payload_sha256 = models.CharField(max_length=64)
+    payload = models.JSONField(default=dict)
+    job_status = models.CharField(max_length=32)
+    update_id = models.CharField(max_length=80, blank=True)
+    received_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['received_at']
+        constraints = [
+            models.UniqueConstraint(fields=['receipt', 'payload_sha256'], name='uniq_job_receipt_progression_hash'),
+        ]
+
+
 class AgentOperationalStatus(models.Model):
     HEALTH_HEALTHY = 'healthy'
     HEALTH_ATTENTION = 'attention'

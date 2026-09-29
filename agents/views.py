@@ -28,6 +28,7 @@ from .models import (
     AgentReleaseTrustBundle,
     AgentJob,
     AgentJobResultReceipt,
+    AgentJobResultReceiptProgression,
     AgentMachine,
     AgentLocalUninstallAuthorization,
     AgentManualValidationToken,
@@ -1280,14 +1281,7 @@ class AgentJobsResultView(APIView):
             if receipt:
                 receipt.last_seen_at = timezone.now()
                 if receipt.payload_sha256 != payload_hash:
-                    rollback_receipt_id = f'update-rollback-{uuid.uuid5(uuid.NAMESPACE_URL, result_id + ":" + payload_hash)}'
-                    if (
-                        job is not None
-                        and job.status in {AgentJob.STATUS_ROLLED_BACK, AgentJob.STATUS_ROLLBACK_FAILED}
-                        and AgentJobResultReceipt.objects.filter(
-                            result_id=rollback_receipt_id, job=job, payload_sha256=payload_hash
-                        ).exists()
-                    ):
+                    if receipt.progressions.filter(payload_sha256=payload_hash).exists():
                         return Response(
                             {
                                 'status': 'ok', 'duplicate': True, 'result_id': result_id,
@@ -1306,19 +1300,15 @@ class AgentJobsResultView(APIView):
                         )
                         and job_status in RESULT_FINAL_STATUSES
                     )
-                    if same_job_progression and late_rollback:
-                        AgentJobResultReceipt.objects.create(
-                            result_id=rollback_receipt_id,
-                            job=job,
-                            endpoint=machine,
+                    if same_job_progression:
+                        AgentJobResultReceiptProgression.objects.create(
+                            receipt=receipt,
                             payload_sha256=payload_hash,
-                            first_payload=_sanitize_agent_payload(payload),
+                            payload=_sanitize_agent_payload(payload),
+                            job_status=job_status,
+                            update_id=str(_payload_result(payload).get('update_id') or ''),
                         )
                         receipt.save(update_fields=['last_seen_at'])
-                    elif same_job_progression:
-                        receipt.payload_sha256 = payload_hash
-                        receipt.first_payload = _sanitize_agent_payload(payload)
-                        receipt.save(update_fields=['last_seen_at', 'payload_sha256', 'first_payload'])
                     else:
                         receipt.conflict_count += 1
                         receipt.last_conflict_at = timezone.now()
