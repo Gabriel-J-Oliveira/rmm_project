@@ -450,7 +450,7 @@ public sealed class UpdateStateLock : IDisposable
         _hasHandle = hasHandle;
     }
 
-    public static UpdateStateLock TryAcquire()
+    public static UpdateStateLock TryAcquire(TimeSpan? timeout = null)
     {
         Mutex mutex;
         try
@@ -465,7 +465,7 @@ public sealed class UpdateStateLock : IDisposable
         bool acquired = false;
         try
         {
-            acquired = mutex.WaitOne(TimeSpan.Zero);
+            acquired = mutex.WaitOne(timeout ?? TimeSpan.Zero);
         }
         catch (AbandonedMutexException)
         {

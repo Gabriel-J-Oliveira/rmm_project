@@ -7,6 +7,18 @@ using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Models;
 
+if (args.Length == 2 && args[0] == "--hold-runner-lock")
+{
+    using UpdateRunnerLifetimeLock childLock = UpdateRunnerLifetimeLock.TryAcquire(args[1]);
+    if (!childLock.Acquired)
+    {
+        Environment.Exit(2);
+    }
+    Console.WriteLine("LOCKED");
+    Console.ReadLine();
+    return;
+}
+
 try
 {
     Require(
@@ -64,6 +76,10 @@ try
     TestRollbackStageRecovery();
     TestTerminalReplayWithoutStaging();
     TestCrashAfterRollbackRestore();
+    TestRecoveryMatrix();
+    TestPreReplacementRecovery();
+    TestFullAutomaticRollback();
+    TestRunnerCopyAndLifetimeLock();
     TestTrayLifecycleSourceMarkers();
 
     Console.WriteLine("NightOwl updater version decision tests passed.");
@@ -527,6 +543,10 @@ static void TestOfficialJobRecovery()
         "Same job with a different release must fail closed.");
     Require(UpdaterProgram.DecideInvocation(waiting, OfficialJobArgs(sha: "different-sha")) == UpdaterProgram.InvocationDecision.Conflict,
         "Same job with a different package hash must fail closed.");
+    string[] otherPackage = OfficialJobArgs();
+    otherPackage[Array.IndexOf(otherPackage, "--package-url") + 1] = "https://example.invalid/other-rc43.zip?variant=2";
+    Require(UpdaterProgram.DecideInvocation(waiting, otherPackage) == UpdaterProgram.InvocationDecision.Conflict,
+        "Same job with a different package URL must fail closed.");
     Require(UpdaterProgram.DecideInvocation(waiting,
         [.. OfficialJobArgs(), "--update-id", "different-update-id"]) == UpdaterProgram.InvocationDecision.Conflict,
         "Explicit update_id must not override the active job identity.");
@@ -651,6 +671,237 @@ static void TestCrashAfterRollbackRestore()
     Require(health == 0 && starts == 1 && store.Load()?.CurrentStage == UpdateStages.RolledBack,
         "Crash after restore must start the service and finish rollback.");
     UpdaterProgram.ValidateBackupForTest(backup, state.UpdateId, state.FromVersion);
+}
+
+static void TestRecoveryMatrix()
+{
+    Dictionary<string, UpdaterProgram.RecoveryAction> expected = new()
+    {
+        [UpdateStages.Received] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.CheckingVersion] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.Downloading] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.Downloaded] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.Validating] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.Validated] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.Staging] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.Staged] = UpdaterProgram.RecoveryAction.Normal,
+        [UpdateStages.CreatingBackup] = UpdaterProgram.RecoveryAction.ResumeApply,
+        [UpdateStages.BackupCreated] = UpdaterProgram.RecoveryAction.ResumeApply,
+        [UpdateStages.StoppingService] = UpdaterProgram.RecoveryAction.ResumeApply,
+        [UpdateStages.ServiceStopped] = UpdaterProgram.RecoveryAction.ResumeApply,
+        [UpdateStages.Quiescing] = UpdaterProgram.RecoveryAction.ResumeApply,
+        [UpdateStages.ReplacingFiles] = UpdaterProgram.RecoveryAction.StartRollback,
+        [UpdateStages.FilesReplaced] = UpdaterProgram.RecoveryAction.StartRollback,
+        [UpdateStages.StartingService] = UpdaterProgram.RecoveryAction.HealthCheck,
+        [UpdateStages.ServiceStarted] = UpdaterProgram.RecoveryAction.HealthCheck,
+        [UpdateStages.WaitingHealthCheck] = UpdaterProgram.RecoveryAction.HealthCheck,
+        [UpdateStages.RollbackRequired] = UpdaterProgram.RecoveryAction.Rollback,
+        [UpdateStages.RollbackStarting] = UpdaterProgram.RecoveryAction.Rollback,
+        [UpdateStages.RollbackStoppingService] = UpdaterProgram.RecoveryAction.Rollback,
+        [UpdateStages.RollbackRestoringFiles] = UpdaterProgram.RecoveryAction.Rollback,
+        [UpdateStages.RollbackStartingService] = UpdaterProgram.RecoveryAction.Rollback,
+        [UpdateStages.RollbackWaitingHealthCheck] = UpdaterProgram.RecoveryAction.HealthCheck,
+        [UpdateStages.Completed] = UpdaterProgram.RecoveryAction.Terminal,
+        [UpdateStages.Failed] = UpdaterProgram.RecoveryAction.Terminal,
+        [UpdateStages.RolledBack] = UpdaterProgram.RecoveryAction.Terminal,
+        [UpdateStages.RollbackFailed] = UpdaterProgram.RecoveryAction.Terminal
+    };
+    foreach ((string stage, UpdaterProgram.RecoveryAction action) in expected)
+    {
+        Require(UpdaterProgram.ClassifyRecovery(NewOfficialState("matrix-" + stage, stage)) == action,
+            "Unexpected recovery action: " + stage);
+    }
+    Require(UpdaterProgram.ClassifyRecovery(NewOfficialState("unknown", "synthetic_unknown"))
+        == UpdaterProgram.RecoveryAction.FailSafe, "Unknown active stage must fail safe.");
+    using TempTree tree = TempTree.Create();
+    UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+    UpdateState unknown = NewOfficialState("unknown-active", "synthetic_unknown");
+    store.Save(unknown);
+    int? handled = UpdaterProgram.DispatchRecovery(store.Load()!, store, () => "", () => "Stopped",
+        () => { }, (_, _) => throw new InvalidOperationException("Unexpected health wait."),
+        _ => throw new InvalidOperationException("Invalid backup must not roll back."),
+        failSafe: current => UpdaterProgram.FailSafeInterruptedUpdateCore(current, store, _ => 0));
+    Require(handled == 1 && store.Load()?.CurrentStage == UpdateStages.RollbackFailed
+        && store.Load()?.IsActive == false, "Unknown active stage must end terminally.");
+}
+
+static void TestPreReplacementRecovery()
+{
+    foreach (string stage in new[] { UpdateStages.CreatingBackup, UpdateStages.BackupCreated,
+        UpdateStages.StoppingService, UpdateStages.ServiceStopped, UpdateStages.Quiescing })
+    {
+        using TempTree tree = TempTree.Create();
+        string install = tree.CreateDirectory("install");
+        string staged = tree.CreateDirectory("staged");
+        string backup = Path.Combine(tree.Root, "backup");
+        UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+        UpdateState state = NewOfficialState("pre-" + stage, stage);
+        state.BackupPath = backup;
+        state.StagingPath = staged;
+        foreach (string name in new[] { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Tray.exe", "agent.version.json" })
+        {
+            File.WriteAllText(Path.Combine(install, name), "previous-" + name);
+        }
+        if (stage != UpdateStages.CreatingBackup)
+        {
+            UpdaterProgram.CreateBackupForTest(install, backup, state.UpdateId, state.FromVersion);
+        }
+        Require(store.Save(state), "Pre-replacement state must persist.");
+        bool stopped = stage is UpdateStages.ServiceStopped or UpdateStages.Quiescing;
+        int stopCalls = 0;
+        int quiesceCalls = 0;
+        int startCalls = 0;
+        bool prepared = UpdaterProgram.PrepareReplacement(store.Load()!, store, install, staged, backup,
+            stage == UpdateStages.CreatingBackup, recovering: true,
+            () => { }, () => { stopped = true; stopCalls++; }, () => { stopped = false; startCalls++; },
+            () => { quiesceCalls++; });
+        Require(prepared && stopped && stopCalls == 1 && quiesceCalls == 1 && startCalls == 0
+            && store.Load()?.CurrentStage == UpdateStages.Quiescing,
+            "Pre-replacement recovery must validate backup, stop and quiesce: " + stage);
+        UpdaterProgram.ValidateBackupForTest(backup, state.UpdateId, state.FromVersion);
+
+        if (stage is UpdateStages.ServiceStopped or UpdateStages.Quiescing)
+        {
+            bool failed = UpdaterProgram.PrepareReplacement(store.Load()!, store, install, staged, backup,
+                recreateBackup: false, recovering: true, () => { }, () => stopped = true,
+                () => { stopped = false; startCalls++; }, () => throw new TimeoutException("synthetic quiesce timeout"));
+            Require(!failed && !stopped && startCalls == 1 && store.Load()?.CurrentStage == UpdateStages.Failed,
+                "Quiesce timeout must restart FromVersion and terminate: " + stage);
+        }
+    }
+
+    using TempTree invalidTree = TempTree.Create();
+    string invalidInstall = invalidTree.CreateDirectory("install");
+    string invalidStaged = invalidTree.CreateDirectory("staged");
+    UpdateStateStore invalidStore = new(Path.Combine(invalidTree.Root, "state.json"));
+    UpdateState invalid = NewOfficialState("invalid-backup", UpdateStages.BackupCreated);
+    invalidStore.Save(invalid);
+    int restart = 0;
+    Require(!UpdaterProgram.PrepareReplacement(invalid, invalidStore, invalidInstall, invalidStaged,
+        Path.Combine(invalidTree.Root, "missing"), false, true, () => { }, () => { }, () => restart++, () => { })
+        && restart == 1 && invalidStore.Load()?.CurrentStage == UpdateStages.Failed,
+        "Invalid backup must not begin replacement and must terminate safely.");
+}
+
+static void TestFullAutomaticRollback()
+{
+    foreach (string stage in new[] { UpdateStages.ReplacingFiles, UpdateStages.FilesReplaced, "synthetic_unknown" })
+    {
+    using TempTree tree = TempTree.Create();
+    string install = tree.CreateDirectory("install");
+    string backup = Path.Combine(tree.Root, "backup");
+    UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+    UpdateState state = NewOfficialState("full-rollback-" + stage, stage);
+    state.BackupPath = backup;
+    foreach (string name in new[] { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe",
+        "NightOwl.Agent.Tray.exe", "agent.version.json" })
+    {
+        File.WriteAllText(Path.Combine(install, name), "previous-" + name);
+    }
+    UpdaterProgram.CreateBackupForTest(install, backup, state.UpdateId, state.FromVersion);
+    File.WriteAllText(Path.Combine(install, "NightOwl.Agent.Windows.exe"), "partial-target");
+    store.Save(state);
+    int stops = 0;
+    int starts = 0;
+    Func<UpdateState, int> rollback = current => UpdaterProgram.ExecuteAutomaticRollbackCore(
+        current, store, install, false,
+            () => stops++, () => starts++, restoring => {
+                Require(restoring.CurrentStage == UpdateStages.RollbackWaitingHealthCheck,
+                    "Real rollback must wait for previous-version health confirmation.");
+                Require(File.ReadAllText(Path.Combine(install, "NightOwl.Agent.Windows.exe"))
+                    == "previous-NightOwl.Agent.Windows.exe", "Real restore must replace partial target.");
+                store.TryTransitionNonTerminal(restoring.UpdateId,
+                    persisted => { persisted.MarkStage(UpdateStages.RolledBack); return true; }, out _);
+                return UpdaterProgram.HealthCheckWaitResult.RolledBack;
+            }, _ => { });
+    int? result = UpdaterProgram.DispatchRecovery(store.Load()!, store,
+        () => throw new InvalidOperationException("Partial target must not be treated as current."),
+        () => "Stopped", () => { }, (_, _) => throw new InvalidOperationException("No early health check."),
+        rollback, failSafe: current => UpdaterProgram.FailSafeInterruptedUpdateCore(current, store, rollback));
+    Require(result == 0 && stops == 1 && starts == 1
+        && store.Load()?.CurrentStage == UpdateStages.RolledBack,
+        "Interrupted replacement must complete real automatic rollback: " + stage);
+    }
+}
+
+static void TestRunnerCopyAndLifetimeLock()
+{
+    using TempTree tree = TempTree.Create();
+    string source = tree.CreateDirectory("source");
+    string root = tree.CreateDirectory("runner");
+    File.WriteAllText(Path.Combine(source, "NightOwl.Agent.Updater.exe"), "synthetic executable");
+    using (Barrier barrier = new(2))
+    {
+        Task<string> firstCopy = Task.Run(() => {
+            barrier.SignalAndWait();
+            return UpdaterProgram.CopyRunnerFilesForTest(source, root, "same-update");
+        });
+        Task<string> secondCopy = Task.Run(() => {
+            barrier.SignalAndWait();
+            return UpdaterProgram.CopyRunnerFilesForTest(source, root, "same-update");
+        });
+        Task.WaitAll(firstCopy, secondCopy);
+        string first = firstCopy.Result;
+        string second = secondCopy.Result;
+        Require(first != second && File.Exists(first) && File.Exists(second),
+            "Simultaneous launches must copy to separate runner directories.");
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(first)!, "in-use.dll"), "runner A loaded");
+        string retry = UpdaterProgram.CopyRunnerFilesForTest(source, root, "same-update");
+        Require(File.Exists(retry) && File.ReadAllText(Path.Combine(Path.GetDirectoryName(first)!, "in-use.dll"))
+            == "runner A loaded", "Retry must not delete or overwrite active runner files.");
+        string unrelated = Path.Combine(root, "uninstall-synthetic", "payload");
+        Directory.CreateDirectory(unrelated);
+        UpdateState terminal = NewOfficialState("cleanup", UpdateStages.Completed);
+        UpdaterProgram.CleanupInactiveRunnerDirectories(root, Path.GetDirectoryName(retry)!, terminal,
+            candidate => candidate.Equals(Path.GetDirectoryName(first), StringComparison.OrdinalIgnoreCase));
+        Require(File.Exists(first) && !File.Exists(second) && File.Exists(retry)
+            && Directory.Exists(unrelated), "Cleanup must preserve active/current and unrelated runners.");
+    }
+
+    for (int attempt = 0; attempt < 10; attempt++)
+    {
+        string id = "runner-lock-" + Guid.NewGuid().ToString("N");
+        using ManualResetEventSlim acquired = new(false);
+        using ManualResetEventSlim release = new(false);
+        Task<bool> owner = Task.Run(() => {
+            using UpdateRunnerLifetimeLock owned = UpdateRunnerLifetimeLock.TryAcquire(id);
+            acquired.Set();
+            release.Wait(TimeSpan.FromSeconds(5));
+            return owned.Acquired;
+        });
+        Require(acquired.Wait(TimeSpan.FromSeconds(5)), "First runner must acquire lifetime lock.");
+        using (UpdateRunnerLifetimeLock duplicate = UpdateRunnerLifetimeLock.TryAcquire(id))
+        {
+            Require(!duplicate.Acquired, "Second runner must not execute same update concurrently.");
+        }
+        release.Set();
+        Require(owner.Result, "First runner must retain lock through lifetime.");
+        using UpdateRunnerLifetimeLock after = UpdateRunnerLifetimeLock.TryAcquire(id);
+        Require(after.Acquired, "Runner lock must release at process completion.");
+    }
+
+    string crossProcessId = "cross-process-" + Guid.NewGuid().ToString("N");
+    using Process child = new()
+    {
+        StartInfo = new ProcessStartInfo(Environment.ProcessPath!,
+            "--hold-runner-lock " + crossProcessId)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true
+        }
+    };
+    Require(child.Start(), "Cross-process lock test helper must start.");
+    Require(child.StandardOutput.ReadLine() == "LOCKED", "Child runner must acquire named mutex.");
+    using (UpdateRunnerLifetimeLock duplicate = UpdateRunnerLifetimeLock.TryAcquire(crossProcessId))
+    {
+        Require(!duplicate.Acquired, "Another process must not acquire the same runner mutex.");
+    }
+    child.StandardInput.WriteLine();
+    Require(child.WaitForExit(5000) && child.ExitCode == 0, "Child runner must exit cleanly.");
+    using UpdateRunnerLifetimeLock released = UpdateRunnerLifetimeLock.TryAcquire(crossProcessId);
+    Require(released.Acquired, "Named runner mutex must release after child exit.");
 }
 
 static void TestTrayLifecycleSourceMarkers()

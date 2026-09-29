@@ -135,6 +135,13 @@ internal static class Program
             {
                 if (!launchLock.Acquired)
                 {
+                    if (UpdateStateStore.TryLoad(out UpdateState? activeState, out _)
+                        && activeState is not null && activeState.IsActive
+                        && DecideInvocation(activeState, args) == InvocationDecision.Resume)
+                    {
+                        WriteJson(new { ok = true, runnerAlreadyActive = true, update_id = activeState.UpdateId });
+                        return 0;
+                    }
                     WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateAlreadyRunning, message = "Update already running." });
                     return 31;
                 }
@@ -153,6 +160,7 @@ internal static class Program
                 }
                 if (decision == InvocationDecision.Terminal)
                 {
+                    CleanupInactiveRunnerDirectories(RunnerRoot, "", persisted);
                     return ReturnTerminalWithTray(persisted!, Paths.InstallDir);
                 }
                 if (decision == InvocationDecision.Resume)
@@ -162,6 +170,7 @@ internal static class Program
                 }
                 else
                 {
+                    CleanupInactiveRunnerDirectories(RunnerRoot, "", persisted);
                     updateId = string.IsNullOrWhiteSpace(updateId) ? Guid.NewGuid().ToString() : updateId;
                     AgentConfig bootstrapConfig = LoadConfig();
                     AgentVersionInfo bootstrapInstalled = LoadInstalledVersion(bootstrapConfig);
@@ -174,9 +183,9 @@ internal static class Program
                     RequirePersisted(bootstrapState);
                     WriteLog("update.state.created", "Update state created before runner launch.", new { update_id = bootstrapState.UpdateId, job_id = bootstrapState.JobId, stage = bootstrapState.CurrentStage, from_version = bootstrapState.FromVersion, target_version = bootstrapState.TargetVersion });
                 }
+                // Copy and Process.Start stay under the launch lock; the child waits for this handoff.
+                return LaunchIndependentRunner(args, interactive, updateId);
             }
-            // The child runner takes the mutex only after the parent releases it.
-            return LaunchIndependentRunner(args, interactive, updateId);
         }
 
         if (string.IsNullOrWhiteSpace(updateId))
@@ -184,7 +193,15 @@ internal static class Program
             throw new InvalidOperationException("Runner requires update_id.");
         }
 
-        using UpdateStateLock updateLock = UpdateStateLock.TryAcquire();
+        using UpdateRunnerLifetimeLock runnerLock = UpdateRunnerLifetimeLock.TryAcquire(updateId);
+        if (!runnerLock.Acquired)
+        {
+            WriteLog("runner.duplicate", "Another runner owns this update execution.", new { update_id = updateId });
+            WriteJson(new { ok = true, runnerAlreadyActive = true, update_id = updateId });
+            return 0;
+        }
+
+        using UpdateStateLock updateLock = UpdateStateLock.TryAcquire(TimeSpan.FromMinutes(2));
         if (!updateLock.Acquired)
         {
             UpdateState? active = UpdateStateStore.TryLoad(out UpdateState? loadedState, out _) ? loadedState : null;
@@ -203,7 +220,9 @@ internal static class Program
             () => LoadInstalledVersion(config).Version, GetServiceStatus, StartService,
             (current, rollback) => WaitForHealthCheck(current, rollback, TimeSpan.FromSeconds(
                 GetOptionInt(args, "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
-            current => ExecuteAutomaticRollback(current, config.InstallPathOrDefault, interactive));
+            current => ExecuteAutomaticRollback(current, config.InstallPathOrDefault, interactive),
+            current => ResumeInterruptedApply(current, config.InstallPathOrDefault, interactive),
+            current => FailSafeInterruptedUpdate(current, config.InstallPathOrDefault, interactive));
         if (resumed.HasValue)
         {
             return ReturnRecoveredResult(state, resumed.Value, config.InstallPathOrDefault);
@@ -460,7 +479,7 @@ internal static class Program
 
     private static int LaunchIndependentRunner(string[] args, bool interactive, string updateId)
     {
-        string runnerExe = CopyRunnerFiles();
+        string runnerExe = CopyRunnerFiles(updateId);
         string arguments = BuildRunnerArguments(args, updateId);
         WriteLog("runner.start", "Starting independent updater runner.", new { runnerExe, arguments = SanitizeCommandLine(arguments) });
 
@@ -468,7 +487,7 @@ internal static class Program
         {
             FileName = runnerExe,
             Arguments = arguments,
-            WorkingDirectory = RunnerRoot,
+            WorkingDirectory = Path.GetDirectoryName(runnerExe)!,
             UseShellExecute = true
         };
 
@@ -486,36 +505,88 @@ internal static class Program
         return 0;
     }
 
-    private static string CopyRunnerFiles()
-    {
-        Directory.CreateDirectory(RunnerRoot);
-        foreach (string path in Directory.EnumerateFileSystemEntries(RunnerRoot))
-        {
-            try
-            {
-                if (Directory.Exists(path))
-                {
-                    Directory.Delete(path, recursive: true);
-                }
-                else
-                {
-                    File.Delete(path);
-                }
-            }
-            catch (Exception ex)
-            {
-                WriteLog("runner.cleanup_failed", "Failed to clean previous runner file.", new { path, error = ex.Message });
-            }
-        }
+    private static string CopyRunnerFiles(string updateId)
+        => CopyRunnerFilesFrom(AppContext.BaseDirectory, RunnerRoot, updateId);
 
-        CopyDirectory(AppContext.BaseDirectory, RunnerRoot, overwrite: true, excludeNames: ProtectedInstallFileNames);
-        string runnerExe = Path.Combine(RunnerRoot, "NightOwl.Agent.Updater.exe");
+    internal static string CopyRunnerFilesForTest(string source, string root, string updateId)
+        => CopyRunnerFilesFrom(source, root, updateId);
+
+    private static string CopyRunnerFilesFrom(string source, string root, string updateId)
+    {
+        string runnerPath = AllocateRunnerDirectory(root, updateId);
+        CopyDirectory(source, runnerPath, overwrite: false, excludeNames: ProtectedInstallFileNames);
+        string runnerExe = Path.Combine(runnerPath, "NightOwl.Agent.Updater.exe");
         if (!File.Exists(runnerExe))
         {
             throw new FileNotFoundException("NightOwl.Agent.Updater.exe nao foi copiado para o runner.", runnerExe);
         }
-        WriteLog("runner.copy", "Independent runner copied.", new { source = AppContext.BaseDirectory, runner = RunnerRoot });
+        WriteLog("runner.copy", "Independent runner copied.", new { source, runner = runnerPath });
         return runnerExe;
+    }
+
+    internal static string AllocateRunnerDirectory(string root, string updateId)
+    {
+        string safeId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(updateId.ToUpperInvariant())));
+        string path = Path.Combine(root, safeId, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    internal static void CleanupInactiveRunnerDirectories(string root, string currentPath, UpdateState? state,
+        Func<string, bool>? isInUse = null)
+    {
+        if (state?.IsActive != false || !Directory.Exists(root))
+        {
+            return;
+        }
+        foreach (string updateDirectory in Directory.EnumerateDirectories(root))
+        {
+            string updateName = Path.GetFileName(updateDirectory);
+            if (updateName.Length != 64 || !updateName.All(Uri.IsHexDigit))
+            {
+                continue;
+            }
+            foreach (string candidate in Directory.EnumerateDirectories(updateDirectory))
+            {
+                string launchName = Path.GetFileName(candidate);
+                if (launchName.Length != 32 || !launchName.All(Uri.IsHexDigit))
+                {
+                    continue;
+                }
+                if (candidate.Equals(currentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                try
+                {
+                    if (!(isInUse ?? RunnerDirectoryInUse)(candidate))
+                    {
+                        Directory.Delete(candidate, recursive: true);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteLog("runner.cleanup_failed", "Inactive runner cleanup deferred.", new { path = candidate, error = SanitizeMessage(ex.Message) });
+                }
+            }
+        }
+    }
+
+    private static bool RunnerDirectoryInUse(string candidate)
+    {
+        foreach (Process process in Process.GetProcessesByName("NightOwl.Agent.Updater"))
+        {
+            using (process)
+            {
+                string? executable = process.MainModule?.FileName;
+                if (executable is null || Path.GetFullPath(executable).StartsWith(
+                    Path.GetFullPath(candidate) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static string BuildRunnerArguments(string[] args, string updateId)
@@ -698,13 +769,16 @@ internal static class Program
         return true;
     }
 
-    internal enum RecoveryAction { Normal, HealthCheck, Rollback, Terminal, FailSafe }
+    internal enum RecoveryAction { Normal, ResumeApply, HealthCheck, Rollback, StartRollback, Terminal, FailSafe }
 
     internal static RecoveryAction ClassifyRecovery(UpdateState state) => state.CurrentStage switch
     {
         UpdateStages.Received or UpdateStages.CheckingVersion or UpdateStages.Downloading
             or UpdateStages.Downloaded or UpdateStages.Validating or UpdateStages.Validated
             or UpdateStages.Staging or UpdateStages.Staged => RecoveryAction.Normal,
+        UpdateStages.CreatingBackup or UpdateStages.BackupCreated or UpdateStages.StoppingService
+            or UpdateStages.ServiceStopped or UpdateStages.Quiescing => RecoveryAction.ResumeApply,
+        UpdateStages.ReplacingFiles or UpdateStages.FilesReplaced => RecoveryAction.StartRollback,
         UpdateStages.StartingService or UpdateStages.ServiceStarted or UpdateStages.WaitingHealthCheck
             or UpdateStages.RollbackWaitingHealthCheck => RecoveryAction.HealthCheck,
         UpdateStages.RollbackRequired or UpdateStages.RollbackStarting
@@ -717,25 +791,128 @@ internal static class Program
 
     internal static int? DispatchRecovery(UpdateState state, UpdateStateStore store,
         Func<string> installedVersion, Func<string> serviceStatus, Action startService,
-        Func<UpdateState, bool, HealthCheckWaitResult> waitForHealth, Func<UpdateState, int> rollback)
+        Func<UpdateState, bool, HealthCheckWaitResult> waitForHealth, Func<UpdateState, int> rollback,
+        Func<UpdateState, int>? resumeApply = null, Func<UpdateState, int>? failSafe = null)
     {
         return ClassifyRecovery(state) switch
         {
             RecoveryAction.Rollback => rollback(state),
+            RecoveryAction.StartRollback => BeginInterruptedRollback(state, store, rollback),
+            RecoveryAction.ResumeApply => resumeApply is not null ? resumeApply(state)
+                : throw new InvalidOperationException("Apply recovery handler is required."),
             RecoveryAction.HealthCheck => ResumeInterruptedHealthCheck(state, store,
                 installedVersion(), serviceStatus, startService, waitForHealth, rollback),
-            RecoveryAction.FailSafe => ReportUnsupportedRecoveryStage(state),
+            RecoveryAction.FailSafe => failSafe is not null ? failSafe(state)
+                : throw new InvalidOperationException("Fail-safe recovery handler is required."),
             RecoveryAction.Terminal => ReturnPersistedTerminal(state),
             _ => null
         };
     }
 
-    private static int ReportUnsupportedRecoveryStage(UpdateState state)
+    private static int BeginInterruptedRollback(UpdateState state, UpdateStateStore store, Func<UpdateState, int> rollback)
     {
-        WriteLog("update.recovery.unsupported_stage", "Update cannot safely resume at this stage.",
-            new { update_id = state.UpdateId, stage = state.CurrentStage });
-        WriteJson(new { ok = false, error_code = UpdateErrorCodes.UpdateInterrupted,
-            update_id = state.UpdateId, stage = state.CurrentStage });
+        store.TryTransitionNonTerminal(state.UpdateId, current => {
+            current.MarkRollbackRequired(current.CurrentStage, UpdateErrorCodes.UpdateInterrupted,
+                "Update interrupted after file replacement began.");
+            return true;
+        }, out UpdateState? currentState);
+        return currentState?.IsActive == true ? rollback(currentState)
+            : currentState is not null ? ReturnPersistedTerminal(currentState) : 1;
+    }
+
+    private static int ResumeInterruptedApply(UpdateState state, string installPath, bool interactive)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(state.StagingPath)
+                || string.IsNullOrWhiteSpace(state.BackupPath)
+                || !Directory.Exists(state.StagingPath))
+            {
+                return FailPreReplacement(state, UpdateStateStore, StartService,
+                    "Staged files or backup path are unavailable for recovery.");
+            }
+            string manifestPath = Path.Combine(state.StagingPath, "version.json");
+            if (!File.Exists(manifestPath))
+            {
+                return FailPreReplacement(state, UpdateStateStore, StartService,
+                    "Staged manifest is unavailable for recovery.");
+            }
+            return ApplyStagedUpdate(state.StagingPath, manifestPath, state.ExpectedSha256, interactive, recovering: true);
+        }
+        catch (UpdateTerminalStateException terminal)
+        {
+            return ReturnPersistedTerminal(terminal.State);
+        }
+        catch (Exception ex)
+        {
+            UpdateState current = UpdateStateStore.Load() ?? state;
+            if (!current.IsActive)
+            {
+                return ReturnPersistedTerminal(current);
+            }
+            if (ClassifyRecovery(current) == RecoveryAction.Rollback)
+            {
+                return ExecuteAutomaticRollback(current, installPath, interactive);
+            }
+            if (ClassifyRecovery(current) is RecoveryAction.StartRollback or RecoveryAction.HealthCheck)
+            {
+                return BeginInterruptedRollback(current, UpdateStateStore,
+                    rollback => ExecuteAutomaticRollback(rollback, installPath, interactive));
+            }
+            return FailPreReplacement(current, UpdateStateStore, StartService,
+                "Interrupted apply recovery failed: " + SanitizeMessage(ex.Message));
+        }
+    }
+
+    private static int FailSafeInterruptedUpdate(UpdateState state, string installPath, bool interactive)
+        => FailSafeInterruptedUpdateCore(state, UpdateStateStore,
+            current => ExecuteAutomaticRollback(current, installPath, interactive));
+
+    internal static int FailSafeInterruptedUpdateCore(UpdateState state, UpdateStateStore store,
+        Func<UpdateState, int> rollback)
+    {
+        bool backupValid = false;
+        if (!string.IsNullOrWhiteSpace(state.BackupPath))
+        {
+            try
+            {
+                ValidateBackup(state.BackupPath, state.UpdateId, state.FromVersion);
+                backupValid = true;
+            }
+            catch (Exception ex)
+            {
+                WriteLog("update.recovery.backup_invalid", "Unknown stage backup cannot be validated.",
+                    new { update_id = state.UpdateId, error = SanitizeMessage(ex.Message) });
+            }
+        }
+        if (backupValid)
+        {
+            return BeginInterruptedRollback(state, store, rollback);
+        }
+        store.TryTransitionNonTerminal(state.UpdateId, current => {
+            current.MarkRollbackFailed(UpdateErrorCodes.RollbackBackupInvalid,
+                "Unknown active stage without a validated backup.");
+            return true;
+        }, out _);
+        return 1;
+    }
+
+    internal static int FailPreReplacement(UpdateState state, UpdateStateStore store, Action startService, string reason)
+    {
+        try
+        {
+            startService();
+        }
+        catch (Exception ex)
+        {
+            reason += " Service restart failed: " + SanitizeMessage(ex.Message);
+        }
+        store.TryTransitionNonTerminal(state.UpdateId, current => {
+            current.MarkFailed(UpdateErrorCodes.UpdateInterrupted, SanitizeMessage(reason), rollbackRequired: false);
+            return true;
+        }, out _);
+        WriteLog("update.recovery.failed", "Pre-replacement update ended without replacing files.",
+            new { update_id = state.UpdateId, error_code = UpdateErrorCodes.UpdateInterrupted });
         return 1;
     }
 
@@ -926,7 +1103,8 @@ internal static class Program
             : fallback;
     }
 
-    private static int ApplyStagedUpdate(string stagedPath, string manifestPath, string packageSha256, bool interactive)
+    private static int ApplyStagedUpdate(string stagedPath, string manifestPath, string packageSha256,
+        bool interactive, bool recovering = false)
     {
         if (!IsAdministrator())
         {
@@ -942,12 +1120,14 @@ internal static class Program
         {
             return ReturnTerminalWithTray(state, installPath);
         }
-        int? resumed = DispatchRecovery(state, UpdateStateStore,
+        int? resumed = recovering ? null : DispatchRecovery(state, UpdateStateStore,
             () => LoadInstalledVersion(config).Version,
             GetServiceStatus, StartService,
             (current, rollback) => WaitForHealthCheck(current, rollback, TimeSpan.FromSeconds(
                 GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
-            current => ExecuteAutomaticRollback(current, installPath, interactive));
+            current => ExecuteAutomaticRollback(current, installPath, interactive),
+            current => ResumeInterruptedApply(current, installPath, interactive),
+            current => FailSafeInterruptedUpdate(current, installPath, interactive));
         if (resumed.HasValue)
         {
             return ReturnRecoveredResult(state, resumed.Value, installPath);
@@ -956,54 +1136,47 @@ internal static class Program
         UpdateManifest manifest = JsonSerializer.Deserialize<UpdateManifest>(File.ReadAllText(manifestPath), JsonOptions)
             ?? throw new InvalidOperationException("Manifesto staged invalido.");
         string backupPath = Path.Combine(BackupsRoot, state.UpdateId);
-        state.FromVersion = installed.Version;
-        state.TargetVersion = manifest.Version;
-        state.StagingPath = stagedPath;
-        state.BackupPath = backupPath;
-        state.ExpectedSha256 = packageSha256;
-        UpdateStateStore.Save(state);
+        if (recovering)
+        {
+            if (string.IsNullOrWhiteSpace(state.FromVersion)
+                || CompareVersions(installed.Version, state.FromVersion) != 0
+                || !manifest.Version.Equals(state.TargetVersion, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(state.Channel)
+                    && !manifest.Channel.Equals(state.Channel, StringComparison.OrdinalIgnoreCase))
+                || !state.StagingPath.Equals(stagedPath, StringComparison.OrdinalIgnoreCase)
+                || !state.BackupPath.Equals(backupPath, StringComparison.OrdinalIgnoreCase)
+                || !state.ExpectedSha256.Equals(packageSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return FailPreReplacement(state, UpdateStateStore, StartService,
+                    "Installed or staged version no longer matches interrupted update.");
+            }
+        }
+        else
+        {
+            state.FromVersion = installed.Version;
+            state.TargetVersion = manifest.Version;
+            state.StagingPath = stagedPath;
+            state.BackupPath = backupPath;
+            state.ExpectedSha256 = packageSha256;
+            RequirePersisted(state);
+        }
 
         WriteLog("updater.apply.started", "Aplicando atualizacao staged.", new { update_id = state.UpdateId, job_id = state.JobId, stagedPath, installPath, backupPath, from = installed.Version, to = manifest.Version });
 
         try
         {
-            MarkStage(state, UpdateStages.CreatingBackup);
-            try
+            bool recreateBackup = !recovering || state.CurrentStage == UpdateStages.CreatingBackup;
+            if (!PrepareReplacement(state, UpdateStateStore, installPath, stagedPath, backupPath,
+                recreateBackup, recovering, StopTray, StopService, StartService,
+                () => {
+                    WaitForNightOwlProcessesToExit(new[] { installPath, RunnerRoot }, TimeSpan.FromSeconds(
+                        GetOptionInt(Environment.GetCommandLineArgs(), "--quiesce-timeout-seconds", DefaultQuiesceTimeoutSeconds)));
+                    WaitForInstallFilesReady(stagedPath, installPath, TimeSpan.FromSeconds(
+                        GetOptionInt(Environment.GetCommandLineArgs(), "--file-ready-timeout-seconds", DefaultFileReplaceTimeoutSeconds)));
+                }))
             {
-                CreateBackup(installPath, backupPath, state.UpdateId, installed.Version);
-                ValidateBackup(backupPath, state.UpdateId, installed.Version);
+                return 1;
             }
-            catch (Exception ex)
-            {
-                MarkFailed(state, UpdateErrorCodes.UpdateBackupFailed, ex.Message);
-                throw;
-            }
-            MarkStage(state, UpdateStages.BackupCreated);
-            WriteLog("backup.created", "Install backup created.", new { backupPath });
-            StopTray();
-            WriteLog("tray.stop.done", "Tray process stopped.");
-            WriteLog("service.stop.start", "Stopping service for update.");
-            MarkStage(state, UpdateStages.StoppingService);
-            try
-            {
-                StopService();
-            }
-            catch (Exception ex)
-            {
-                MarkFailed(state, UpdateErrorCodes.UpdateServiceStopTimeout, ex.Message);
-                throw;
-            }
-            MarkStage(state, UpdateStages.ServiceStopped);
-            WriteLog("service.stop.done", "Service stopped for update.");
-            MarkStage(state, UpdateStages.Quiescing);
-            WriteLog("update.quiesce.start", "Waiting for NightOwl processes and install files to become idle.", new { installPath, runnerPath = RunnerRoot });
-            WaitForNightOwlProcessesToExit(
-                new[] { installPath, RunnerRoot },
-                TimeSpan.FromSeconds(GetOptionInt(Environment.GetCommandLineArgs(), "--quiesce-timeout-seconds", DefaultQuiesceTimeoutSeconds)));
-            WaitForInstallFilesReady(
-                stagedPath,
-                installPath,
-                TimeSpan.FromSeconds(GetOptionInt(Environment.GetCommandLineArgs(), "--file-ready-timeout-seconds", DefaultFileReplaceTimeoutSeconds)));
             WriteLog("update.files.ready", "Install files are ready for replacement.", new { stagedPath, installPath });
             WriteLog("files.copy.start", "Copying staged files to install path.", new { stagedPath, installPath });
             MarkStage(state, UpdateStages.ReplacingFiles);
@@ -1081,6 +1254,11 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            if (state.IsActive && ClassifyRecovery(state) is RecoveryAction.StartRollback or RecoveryAction.HealthCheck)
+            {
+                return BeginInterruptedRollback(state, UpdateStateStore,
+                    current => ExecuteAutomaticRollback(current, installPath, interactive));
+            }
             WriteLog("updater.apply.failed", "Falha ao aplicar atualizacao.", new { update_id = state.UpdateId, job_id = state.JobId, error = ex.Message, backupPath });
             if (state.IsActive)
             {
@@ -2388,8 +2566,19 @@ $shortcut.Save()
 
     private static int ExecuteAutomaticRollback(UpdateState state, string installPath, bool interactive)
     {
-        bool rollbackStarted = TryBeginRollback(UpdateStateStore, state.UpdateId, out UpdateState? currentState);
-        state = currentState ?? ReloadUpdateState(state);
+        return ExecuteAutomaticRollbackCore(state, UpdateStateStore, installPath, interactive,
+            StopService, StartService,
+            current => WaitForHealthCheck(current, expectRollback: true, TimeSpan.FromSeconds(
+                GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
+            EnsureTrayLifecycleBestEffort);
+    }
+
+    internal static int ExecuteAutomaticRollbackCore(UpdateState state, UpdateStateStore store,
+        string installPath, bool interactive, Action stopService, Action startService,
+        Func<UpdateState, HealthCheckWaitResult> waitForHealth, Action<string> ensureTray)
+    {
+        bool rollbackStarted = TryBeginRollback(store, state.UpdateId, out UpdateState? currentState);
+        state = currentState ?? store.Load() ?? state;
         if (!rollbackStarted && state.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
         {
             WriteLog("rollback.skipped_completed", "Agent already confirmed the update before rollback began.", new { update_id = state.UpdateId, job_id = state.JobId });
@@ -2404,7 +2593,7 @@ $shortcut.Save()
             if (state.IsActive && state.RollbackAttempt >= 1)
             {
                 state.MarkRollbackFailed(UpdateErrorCodes.RollbackFailed, "Automatic rollback already attempted for this update_id.");
-                UpdateStateStore.Save(state);
+                store.Save(state);
             }
             WriteCriticalRollbackResult(state, installPath, "Rollback already attempted.");
             return 1;
@@ -2414,19 +2603,19 @@ $shortcut.Save()
 
         try
         {
-            MarkStage(state, UpdateStages.RollbackStoppingService);
+            PersistRecoveryStage(store, state, UpdateStages.RollbackStoppingService);
             try
             {
-                StopService();
+                stopService();
             }
             catch (Exception ex)
             {
                 state.MarkRollbackFailed(UpdateErrorCodes.RollbackServiceStopFailed, SanitizeMessage(ex.Message));
-                UpdateStateStore.Save(state);
+                store.Save(state);
                 throw;
             }
 
-            MarkStage(state, UpdateStages.RollbackRestoringFiles);
+            PersistRecoveryStage(store, state, UpdateStages.RollbackRestoringFiles);
             BackupManifest manifest;
             try
             {
@@ -2435,41 +2624,40 @@ $shortcut.Save()
             catch (Exception ex)
             {
                 state.MarkRollbackFailed(UpdateErrorCodes.RollbackBackupInvalid, SanitizeMessage(ex.Message));
-                UpdateStateStore.Save(state);
+                store.Save(state);
                 throw;
             }
 
             try
             {
                 state.RestoredFileCount = RestoreManagedFiles(installPath, state.BackupPath, manifest);
-                UpdateStateStore.Save(state);
+                store.Save(state);
             }
             catch (Exception ex)
             {
                 state.MarkRollbackFailed(UpdateErrorCodes.RollbackFileRestoreFailed, SanitizeMessage(ex.Message));
-                UpdateStateStore.Save(state);
+                store.Save(state);
                 throw;
             }
 
-            MarkStage(state, UpdateStages.RollbackStartingService);
-            MarkStage(state, UpdateStages.RollbackWaitingHealthCheck);
+            PersistRecoveryStage(store, state, UpdateStages.RollbackStartingService);
+            PersistRecoveryStage(store, state, UpdateStages.RollbackWaitingHealthCheck);
             try
             {
-                StartService();
+                startService();
             }
             catch (Exception ex)
             {
                 state.MarkRollbackFailed(UpdateErrorCodes.RollbackServiceStartFailed, SanitizeMessage(ex.Message));
-                UpdateStateStore.Save(state);
+                store.Save(state);
                 throw;
             }
 
-            int healthTimeoutSeconds = GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds);
-            HealthCheckWaitResult result = WaitForHealthCheck(state, expectRollback: true, TimeSpan.FromSeconds(healthTimeoutSeconds));
+            HealthCheckWaitResult result = waitForHealth(state);
             if (result == HealthCheckWaitResult.RolledBack)
             {
-                EnsureTrayLifecycleBestEffort(installPath);
-                WriteLog("rollback.completed", "Rollback confirmed by agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, restored_file_count = ReloadUpdateState(state).RestoredFileCount });
+                ensureTray(installPath);
+                WriteLog("rollback.completed", "Rollback confirmed by agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, restored_file_count = store.Load()?.RestoredFileCount });
                 WriteJson(new { ok = false, rolled_back = true, update_id = state.UpdateId, active_version = state.FromVersion, attempted_version = state.TargetVersion });
                 if (interactive)
                 {
@@ -2480,12 +2668,12 @@ $shortcut.Save()
 
             string errorCode = result == HealthCheckWaitResult.Timeout
                 ? UpdateErrorCodes.RollbackHealthcheckTimeout
-                : result == HealthCheckWaitResult.FailedState && !string.IsNullOrWhiteSpace(ReloadUpdateState(state).RollbackErrorCode)
-                    ? ReloadUpdateState(state).RollbackErrorCode
+                : result == HealthCheckWaitResult.FailedState && !string.IsNullOrWhiteSpace(store.Load()?.RollbackErrorCode)
+                    ? store.Load()!.RollbackErrorCode
                     : UpdateErrorCodes.RollbackFailed;
-            state = ReloadUpdateState(state);
+            state = store.Load() ?? state;
             state.MarkRollbackFailed(errorCode, $"Rollback health check did not confirm previous version. Result: {result}.");
-            UpdateStateStore.Save(state);
+            store.Save(state);
             WriteCriticalRollbackResult(state, installPath, state.RollbackErrorMessage);
             return 1;
         }
@@ -2495,16 +2683,76 @@ $shortcut.Save()
         }
         catch (Exception ex)
         {
-            state = ReloadUpdateState(state);
+            state = store.Load() ?? state;
             if (!state.CurrentStage.Equals(UpdateStages.RollbackFailed, StringComparison.OrdinalIgnoreCase))
             {
                 state.MarkRollbackFailed(string.IsNullOrWhiteSpace(state.RollbackErrorCode) ? UpdateErrorCodes.RollbackFailed : state.RollbackErrorCode, SanitizeMessage(ex.Message));
-                UpdateStateStore.Save(state);
+                store.Save(state);
             }
             WriteLog("rollback.failed", "Automatic rollback failed.", new { update_id = state.UpdateId, job_id = state.JobId, rollback_error_code = state.RollbackErrorCode, error = ex.Message });
             WriteCriticalRollbackResult(state, installPath, SanitizeMessage(ex.Message));
             WriteJson(new { ok = false, rollback_failed = true, update_id = state.UpdateId, error_code = state.RollbackErrorCode, error = ex.Message });
             return 1;
+        }
+    }
+
+    internal static bool PrepareReplacement(UpdateState state, UpdateStateStore store,
+        string installPath, string stagedPath, string backupPath, bool recreateBackup, bool recovering,
+        Action stopTray, Action stopService, Action startService, Action quiesce)
+    {
+        if (recreateBackup)
+        {
+            PersistRecoveryStage(store, state, UpdateStages.CreatingBackup);
+        }
+        try
+        {
+            if (recreateBackup)
+            {
+                CreateBackup(installPath, backupPath, state.UpdateId, state.FromVersion);
+            }
+            ValidateBackup(backupPath, state.UpdateId, state.FromVersion);
+        }
+        catch (Exception ex)
+        {
+            if (!recovering)
+            {
+                state.MarkFailed(UpdateErrorCodes.UpdateBackupFailed, SanitizeMessage(ex.Message));
+                store.Save(state);
+            }
+            else
+            {
+                FailPreReplacement(state, store, startService, "Interrupted backup could not be validated: " + SanitizeMessage(ex.Message));
+            }
+            return false;
+        }
+
+        PersistRecoveryStage(store, state, UpdateStages.BackupCreated);
+        WriteLog("backup.created", "Install backup validated.", new { backupPath });
+        stopTray();
+        WriteLog("tray.stop.done", "Tray process stopped.");
+        PersistRecoveryStage(store, state, UpdateStages.StoppingService);
+        try
+        {
+            stopService();
+            PersistRecoveryStage(store, state, UpdateStages.ServiceStopped);
+            PersistRecoveryStage(store, state, UpdateStages.Quiescing);
+            quiesce();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            FailPreReplacement(state, store, startService,
+                "Service stop or quiesce failed before replacement: " + SanitizeMessage(ex.Message));
+            return false;
+        }
+    }
+
+    private static void PersistRecoveryStage(UpdateStateStore store, UpdateState state, string stage)
+    {
+        state.MarkStage(stage);
+        if (!store.Save(state))
+        {
+            throw new UpdateTerminalStateException(store.Load() ?? state);
         }
     }
 
