@@ -73,10 +73,11 @@ public sealed class WindowsInventoryCollector
     {
         DateTimeOffset collectedAt = DateTimeOffset.UtcNow;
         Dictionary<string, object?> system = CollectSection("system", GetSystem, new Dictionary<string, object?>());
-        Dictionary<string, object?> hardware = CollectSection("hardware", () => GetHardware(includeAssetDetails: true), new Dictionary<string, object?>());
-        hardware["physical_disks"] = HardwareInventoryNormalizer.PhysicalDisks(
-            CollectSection("physical_disks", GetPhysicalDisksRaw, new Dictionary<string, object?>()),
-            Environment.GetEnvironmentVariable("SystemDrive") ?? "");
+        Dictionary<string, object?> hardwareCore = CollectSection("hardware", GetHardware, new Dictionary<string, object?>());
+        Dictionary<string, object?> hardwareDetails = CollectSection("asset_hardware", GetAssetHardwareDetails, new Dictionary<string, object?>());
+        Dictionary<string, object?> physicalDisks = CollectSection("physical_disks", GetPhysicalDisksRaw, new Dictionary<string, object?>());
+        Dictionary<string, object?> hardware = HardwareInventoryNormalizer.MergeHardware(
+            hardwareCore, hardwareDetails, physicalDisks, Environment.GetEnvironmentVariable("SystemDrive") ?? "");
         Dictionary<string, object?> network = CollectSection("network", GetNetwork, new Dictionary<string, object?> { ["interfaces"] = new List<object>() });
         List<Dictionary<string, object?>> disks = CollectSection("disks", GetDisks, new List<Dictionary<string, object?>>());
         List<Dictionary<string, object?>> software = CollectSection("software", GetSoftware, new List<Dictionary<string, object?>>());
@@ -322,44 +323,20 @@ public sealed class WindowsInventoryCollector
         };
     }
 
-    public Dictionary<string, object?> GetHardware(bool includeAssetDetails = false)
+    public Dictionary<string, object?> GetHardware()
     {
-        string script = "$includeAssetDetails = " + (includeAssetDetails ? "$true" : "$false") + "; " + """
+        Dictionary<string, object?> ps = RunPowerShellObject("""
             $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
             $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
             $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
             $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
             $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
-            $battery = $null; $batteryQuerySucceeded = $false
+            $battery = $null
             try {
               $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
-              $batteryQuerySucceeded = $true
             } catch {}
             $tpm = $null
             try { $tpm = Get-CimInstance -Namespace "root\cimv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1 } catch {}
-            $modules = @(); $arrays = @(); $modulesQuerySucceeded = $false
-            $design = $null; $full = $null; $cycles = $null
-            if ($includeAssetDetails) {
-              try {
-                $modules = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop)
-                $modulesQuerySucceeded = $true
-              } catch {}
-              try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop) } catch {}
-              if ($battery) {
-                try {
-                  $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)
-                  if ($rows.Count -eq 1) { $design = $rows[0].DesignedCapacity }
-                } catch {}
-                try {
-                  $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)
-                  if ($rows.Count -eq 1) { $full = $rows[0].FullChargedCapacity }
-                } catch {}
-                try {
-                  $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction Stop)
-                  if ($rows.Count -eq 1) { $cycles = $rows[0].CycleCount }
-                } catch {}
-              }
-            }
             [pscustomobject]@{
               manufacturer = $cs.Manufacturer
               model = $cs.Model
@@ -380,34 +357,8 @@ public sealed class WindowsInventoryCollector
               tpm_enabled = if ($tpm) { [bool]$tpm.IsEnabled_InitialValue } else { $null }
               battery_present = [bool]$battery
               battery_status = if ($battery) { $battery.BatteryStatus } else { $null }
-              asset_details = if ($includeAssetDetails) {
-                [pscustomobject]@{
-                  modules = @($modules | ForEach-Object {
-                    [pscustomobject]@{
-                      device_locator = $_.DeviceLocator; bank_label = $_.BankLabel
-                      capacity_bytes = $_.Capacity; speed_mhz = $_.Speed
-                      configured_speed_mhz = $_.ConfiguredClockSpeed
-                      manufacturer = $_.Manufacturer; part_number = $_.PartNumber
-                      serial_number = $_.SerialNumber; form_factor = $_.FormFactor
-                      memory_type = if ($_.SMBIOSMemoryType) { $_.SMBIOSMemoryType } else { $_.MemoryType }
-                    }
-                  })
-                  memory_slots = @($arrays | ForEach-Object { $_.MemoryDevices })
-                  modules_query_succeeded = $modulesQuerySucceeded
-                  battery = [pscustomobject]@{
-                    query_succeeded = $batteryQuerySucceeded
-                    present = [bool]$battery
-                    status_code = if ($battery) { $battery.BatteryStatus } else { $null }
-                    estimated_charge_remaining = if ($battery) { $battery.EstimatedChargeRemaining } else { $null }
-                    design_capacity_mwh = $design
-                    full_charge_capacity_mwh = $full
-                    cycle_count = $cycles
-                  }
-                }
-              } else { $null }
             }
-        """;
-        Dictionary<string, object?> ps = RunPowerShellObject(script, timeoutSeconds: includeAssetDetails ? 20 : 12);
+        """, timeoutSeconds: 12);
 
         Dictionary<string, object?> cpu = new()
         {
@@ -420,7 +371,7 @@ public sealed class WindowsInventoryCollector
             ["processor_id"] = ps.GetValueOrDefault("cpu_processor_id")?.ToString()?.Trim()
         };
 
-        Dictionary<string, object?> hardware = new()
+        return new Dictionary<string, object?>
         {
             ["manufacturer"] = ps.GetValueOrDefault("manufacturer")?.ToString() ?? "",
             ["model"] = ps.GetValueOrDefault("model")?.ToString() ?? "",
@@ -453,15 +404,61 @@ public sealed class WindowsInventoryCollector
             ["battery_status"] = ps.GetValueOrDefault("battery_status"),
             ["collected_at"] = DateTimeOffset.UtcNow
         };
-        if (includeAssetDetails)
-        {
-            Dictionary<string, object?> asset = AsDict(ps.GetValueOrDefault("asset_details"));
-            hardware["memory"] = HardwareInventoryNormalizer.Memory(asset, ToLong(hardware.GetValueOrDefault("total_memory_bytes")));
-            hardware["battery"] = HardwareInventoryNormalizer.Battery(
-                AsDict(asset.GetValueOrDefault("battery")), ToBool(hardware.GetValueOrDefault("battery_present")),
-                hardware.GetValueOrDefault("battery_status"));
-        }
-        return hardware;
+    }
+
+    private Dictionary<string, object?> GetAssetHardwareDetails()
+    {
+        return RunPowerShellObject("""
+            $modules = @(); $arrays = @(); $modulesQuerySucceeded = $false
+            $battery = $null; $batteryQuerySucceeded = $false
+            try {
+              $modules = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop)
+              $modulesQuerySucceeded = $true
+            } catch {}
+            try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop) } catch {}
+            try {
+              $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+              $batteryQuerySucceeded = $true
+            } catch {}
+            $design = $null; $full = $null; $cycles = $null
+            if ($battery) {
+              try {
+                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)
+                if ($rows.Count -eq 1) { $design = $rows[0].DesignedCapacity }
+              } catch {}
+              try {
+                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)
+                if ($rows.Count -eq 1) { $full = $rows[0].FullChargedCapacity }
+              } catch {}
+              try {
+                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction Stop)
+                if ($rows.Count -eq 1) { $cycles = $rows[0].CycleCount }
+              } catch {}
+            }
+            [pscustomobject]@{
+              modules = @($modules | ForEach-Object {
+                [pscustomobject]@{
+                  device_locator = $_.DeviceLocator; bank_label = $_.BankLabel
+                  capacity_bytes = $_.Capacity; speed_mhz = $_.Speed
+                  configured_speed_mhz = $_.ConfiguredClockSpeed
+                  manufacturer = $_.Manufacturer; part_number = $_.PartNumber
+                  serial_number = $_.SerialNumber; form_factor = $_.FormFactor
+                  memory_type = if ($_.SMBIOSMemoryType) { $_.SMBIOSMemoryType } else { $_.MemoryType }
+                }
+              })
+              memory_slots = @($arrays | ForEach-Object { $_.MemoryDevices })
+              modules_query_succeeded = $modulesQuerySucceeded
+              battery = [pscustomobject]@{
+                query_succeeded = $batteryQuerySucceeded
+                present = [bool]$battery
+                status_code = if ($battery) { $battery.BatteryStatus } else { $null }
+                estimated_charge_remaining = if ($battery) { $battery.EstimatedChargeRemaining } else { $null }
+                design_capacity_mwh = $design
+                full_charge_capacity_mwh = $full
+                cycle_count = $cycles
+              }
+            }
+        """, timeoutSeconds: 15);
     }
 
     private Dictionary<string, object?> GetPhysicalDisksRaw()

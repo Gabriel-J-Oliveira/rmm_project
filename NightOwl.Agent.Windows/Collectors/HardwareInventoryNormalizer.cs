@@ -4,6 +4,18 @@ namespace NightOwl.Agent.Windows.Collectors;
 
 internal static class HardwareInventoryNormalizer
 {
+    internal static Dictionary<string, object?> MergeHardware(Dictionary<string, object?> core,
+        Dictionary<string, object?> enrichment, Dictionary<string, object?> storage, string systemDrive)
+    {
+        Dictionary<string, object?> hardware = new(core);
+        hardware["memory"] = Memory(enrichment, Long(core.GetValueOrDefault("memory_total_bytes")));
+        hardware["battery"] = Battery(
+            enrichment.GetValueOrDefault("battery") as Dictionary<string, object?> ?? new(),
+            core.GetValueOrDefault("battery_present") as bool?, core.GetValueOrDefault("battery_status"));
+        hardware["physical_disks"] = PhysicalDisks(storage, systemDrive);
+        return hardware;
+    }
+
     internal static Dictionary<string, object?> Memory(Dictionary<string, object?> source, long? reportedTotalBytes)
     {
         List<Dictionary<string, object?>> modules = new();
@@ -50,8 +62,7 @@ internal static class HardwareInventoryNormalizer
         object? legacyStatus = null)
     {
         bool querySucceeded = source.GetValueOrDefault("query_succeeded") is true;
-        bool? present = querySucceeded ? source.GetValueOrDefault("present") is true
-            : legacyPresent is true ? true : null;
+        bool? present = querySucceeded ? source.GetValueOrDefault("present") is true : legacyPresent;
         long? design = present is true ? BatteryCapacity(source.GetValueOrDefault("design_capacity_mwh")) : null;
         long? full = present is true ? BatteryCapacity(source.GetValueOrDefault("full_charge_capacity_mwh")) : null;
         return new Dictionary<string, object?>

@@ -58,9 +58,15 @@ enriquecida ocorre no ciclo de inventario; o heartbeat nao recebe as consultas
 adicionais de memoria fisica ou storage. Nenhum rollout foi iniciado nesta etapa.
 
 A primeira review concluiu `NEEDS_FIXES`. As correcoes de correlacao de storage,
-fallback WMI e merge de bateria foram aplicadas; M1 permanece em desenvolvimento,
-aguardando re-review e validacao em hardware Windows real. Letras de unidade e
-disco do sistema so sao atribuidos a um disco fisico com identificador unico
+fallback WMI e merge de bateria foram aplicadas. A segunda review concluiu
+`NEEDS_FIXES` pelo timeout compartilhado entre hardware basico e enriquecimento.
+O core agora e coletado independentemente do enriquecimento de RAM/bateria;
+falha, JSON invalido ou timeout deste nao descarta fabricante, CPU, BIOS,
+memoria total ou estado basico da bateria. Storage fisico tambem tem timeout
+proprio. Sao tres subprocessos PowerShell de hardware/storage por inventario:
+core, enriquecimento e storage. Foi priorizado isolamento/fail-soft sobre
+reducao de subprocessos. M1 aguarda review final e validacao em Windows real.
+Letras de unidade e disco do sistema so sao atribuidos a um disco fisico com identificador unico
 e sem evidencia de camada RAID, Storage Spaces ou virtual. Os campos
 `cpu.socket`, `cpu.processor_id` e `cpu.max_clock_mhz` representam somente o
 primeiro `Win32_Processor` (CPU0) neste MVP.

@@ -53,6 +53,7 @@ try
     TestTelemetryTimeoutAndShutdown();
     TestTelemetryCollectionCost();
     TestHardwareInventoryV2();
+    TestHardwareEnrichmentIsolation();
 
     Console.WriteLine("NightOwl agent config migration tests passed.");
 }
@@ -321,6 +322,83 @@ static void TestHardwareInventoryV2()
             newJson.RootElement.GetProperty("hardware").GetProperty("physical_disks").GetArrayLength() == 3 &&
             newJson.RootElement.GetProperty("disks").GetArrayLength() == 1,
         "Enriched hardware must coexist with the existing logical-disk contract.");
+}
+
+static void TestHardwareEnrichmentIsolation()
+{
+    const long totalMemory = 17179869184;
+    Dictionary<string, object?> core = new()
+    {
+        ["manufacturer"] = "Dell Inc.", ["model"] = "Latitude Test", ["serial_number"] = "ABC123",
+        ["bios_version"] = "1.2.3", ["motherboard"] = "Dell Board",
+        ["cpu_name"] = "Test CPU", ["physical_cores"] = 4L, ["logical_processors"] = 8L,
+        ["memory_total_bytes"] = totalMemory, ["total_memory_bytes"] = totalMemory,
+        ["available_memory_bytes"] = 8589934592L, ["tpm_present"] = true,
+        ["battery_present"] = true, ["battery_status"] = 6L
+    };
+    Dictionary<string, object?> details = new()
+    {
+        ["modules"] = new List<object?> { new Dictionary<string, object?> { ["capacity_bytes"] = totalMemory } },
+        ["memory_slots"] = new List<object?> { 2L }, ["modules_query_succeeded"] = true,
+        ["battery"] = new Dictionary<string, object?>
+        {
+            ["query_succeeded"] = true, ["present"] = true, ["status_code"] = 6L,
+            ["design_capacity_mwh"] = 50000L, ["full_charge_capacity_mwh"] = 40000L
+        }
+    };
+    Dictionary<string, object?> storage = new()
+    {
+        ["physical_disks"] = new List<object?>
+        {
+            new Dictionary<string, object?> { ["serial_number"] = "DISK-001", ["media_type"] = "SSD" }
+        }
+    };
+
+    Dictionary<string, object?> complete = HardwareInventoryNormalizer.MergeHardware(core, details, storage, "C:");
+    Dictionary<string, object?> completeMemory = (Dictionary<string, object?>)complete["memory"]!;
+    Dictionary<string, object?> completeBattery = (Dictionary<string, object?>)complete["battery"]!;
+    Require(Equals(completeMemory["slots_total"], 2L) && Equals(completeMemory["slots_used"], 1) &&
+            ((List<Dictionary<string, object?>>)completeMemory["modules"]!).Count == 1 &&
+            Equals(completeBattery["health_percent"], 80d) &&
+            ((List<Dictionary<string, object?>>)complete["physical_disks"]!).Count == 1,
+        "Successful enrichment and storage must populate their additive fields.");
+
+    var powerShellObject = typeof(WindowsInventoryCollector).GetMethod("RunPowerShellObject",
+        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+    Dictionary<string, object?> timedOut = (Dictionary<string, object?>)powerShellObject.Invoke(null,
+        new object[] { "Start-Sleep -Seconds 3; [pscustomobject]@{ value = 1 }", 1 })!;
+    Dictionary<string, object?> invalidJson = (Dictionary<string, object?>)powerShellObject.Invoke(null,
+        new object[] { "Write-Host 'not-json'; [pscustomobject]@{ value = 1 }", 5 })!;
+    Require(timedOut.Count == 0 && invalidJson.Count == 0,
+        "Controlled timeout and malformed PowerShell JSON must produce empty enrichment results.");
+
+    foreach (Dictionary<string, object?> failedDetails in new[] { timedOut, invalidJson, new Dictionary<string, object?>() })
+    {
+        Dictionary<string, object?> merged = HardwareInventoryNormalizer.MergeHardware(core, failedDetails, storage, "C:");
+        foreach ((string key, object? value) in core)
+            Require(Equals(merged[key], value), $"Core field {key} must survive enrichment failure.");
+        Dictionary<string, object?> memory = (Dictionary<string, object?>)merged["memory"]!;
+        Dictionary<string, object?> battery = (Dictionary<string, object?>)merged["battery"]!;
+        Require(Equals(memory["total_bytes"], totalMemory) && memory["slots_total"] is null &&
+                memory["slots_used"] is null && memory["slots_free"] is null &&
+                ((List<Dictionary<string, object?>>)memory["modules"]!).Count == 0,
+            "Failed enrichment must retain core RAM total without fabricating slot counts.");
+        Require(Equals(battery["present"], true) && Equals(battery["status"], "charging") &&
+                battery["estimated_charge_remaining"] is null && battery["design_capacity_mwh"] is null &&
+                battery["full_charge_capacity_mwh"] is null && battery["health_percent"] is null &&
+                battery["cycle_count"] is null,
+            "Failed enrichment must retain core battery presence and status without inventing detail.");
+    }
+
+    Dictionary<string, object?> noBattery = new(core) { ["battery_present"] = false, ["battery_status"] = null };
+    Dictionary<string, object?> noBatteryMerged = HardwareInventoryNormalizer.MergeHardware(noBattery, timedOut, storage, "C:");
+    Require(Equals(((Dictionary<string, object?>)noBatteryMerged["battery"]!)["present"], false),
+        "A core report of no battery must remain false after enrichment failure.");
+    Dictionary<string, object?> noStorage = HardwareInventoryNormalizer.MergeHardware(core, details, timedOut, "C:");
+    Require(Equals(noStorage["manufacturer"], "Dell Inc.") &&
+            Equals(((Dictionary<string, object?>)noStorage["memory"]!)["slots_total"], 2L) &&
+            ((List<Dictionary<string, object?>>)noStorage["physical_disks"]!).Count == 0,
+        "Storage timeout must preserve core and enrichment and return empty physical disks.");
 }
 
 static void TestTelemetryDefaultsAndLegacyConfig()
