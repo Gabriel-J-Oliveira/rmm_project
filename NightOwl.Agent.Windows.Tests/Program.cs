@@ -98,6 +98,11 @@ static AgentConfig LegacyConfig()
 
 static void TestHardwareInventoryV2()
 {
+    static Dictionary<string, object?> Storage(object?[] physical, object?[] os, object?[] wmi) => new()
+    {
+        ["physical_disks"] = physical.ToList(), ["os_disks"] = os.ToList(), ["wmi_disks"] = wmi.ToList()
+    };
+
     Dictionary<string, object?> module = new()
     {
         ["device_locator"] = " DIMM A1 ", ["bank_label"] = " BANK 0 ",
@@ -140,60 +145,167 @@ static void TestHardwareInventoryV2()
     }, null);
     Require(partial["total_bytes"] is null && Equals(partial["slots_used"], 1),
         "An installed module with unknown capacity still occupies a slot without implying total RAM.");
+    Dictionary<string, object?> failedModules = HardwareInventoryNormalizer.Memory(new()
+    {
+        ["modules_query_succeeded"] = false, ["memory_slots"] = new List<object?> { 2L }
+    }, 16L * 1024 * 1024 * 1024);
+    Require(failedModules["slots_used"] is null && failedModules["slots_free"] is null,
+        "A failed memory-module query must not claim that every slot is free.");
 
-    List<Dictionary<string, object?>> disks = HardwareInventoryNormalizer.PhysicalDisks(new List<object?>
+    Dictionary<string, object?> nvme = new()
     {
-        new Dictionary<string, object?>
-        {
-            ["disk_number"] = 0L, ["model"] = " NVMe model ", ["size_bytes"] = 256L * 1024 * 1024 * 1024,
-            ["media_type"] = "SSD", ["bus_type"] = "NVMe", ["drive_letters"] = new List<object?> { "c", "D:" }
-        },
-        new Dictionary<string, object?>
-        {
-            ["disk_number"] = 1L, ["model"] = " SATA model ", ["media_type"] = "HDD",
-            ["bus_type"] = "SATA", ["drive_letters"] = new List<object?> { "E:" }
-        },
-        new Dictionary<string, object?>
-        {
-            ["disk_number"] = 2L, ["media_type"] = "Fixed hard disk media",
-            ["bus_type"] = "SCSI", ["drive_letters"] = new List<object?>()
-        }
-    }, "C:");
-    Require(disks.Count == 3 && Equals(disks[0]["media_type"], "ssd") && Equals(disks[0]["bus_type"], "nvme") &&
-            Equals(disks[0]["is_system_disk"], true) && ((List<string>)disks[0]["drive_letters"]!).SequenceEqual(new[] { "C:", "D:" }),
-        "NVMe is a bus, SSD is media, and C: must map to the physical disk.");
-    Require(Equals(disks[1]["media_type"], "hdd") && Equals(disks[1]["bus_type"], "sata") &&
-            Equals(disks[1]["is_system_disk"], false), "A second SATA HDD must not be marked as the system disk.");
-    Require(Equals(disks[2]["media_type"], "unknown") && Equals(disks[2]["bus_type"], "scsi") &&
-            disks[2]["is_system_disk"] is null, "WMI fallback must not infer HDD or a volume association.");
-    List<Dictionary<string, object?>> unavailable = HardwareInventoryNormalizer.PhysicalDisks(new List<object?>
+        ["serial_number"] = " NVME-SERIAL-001 ", ["unique_id"] = "UNIQUE-NVME-001",
+        ["model"] = " NVMe model ", ["size_bytes"] = 256L * 1024 * 1024 * 1024,
+        ["media_type"] = "SSD", ["bus_type"] = "NVMe"
+    };
+    Dictionary<string, object?> sataSsd = new()
     {
-        new Dictionary<string, object?> { ["media_type"] = null, ["bus_type"] = "Unspecified" }
-    }, "C:");
-    Require(Equals(unavailable[0]["media_type"], "unknown") && Equals(unavailable[0]["bus_type"], "unknown"),
-        "Missing Get-PhysicalDisk data and unknown bus values must remain unknown.");
-    List<Dictionary<string, object?>> noSystemDrive = HardwareInventoryNormalizer.PhysicalDisks(new List<object?>
+        ["serial_number"] = "SATA-SSD-002", ["model"] = "SATA SSD",
+        ["media_type"] = "SSD", ["bus_type"] = "SATA"
+    };
+    Dictionary<string, object?> sataHdd = new()
     {
-        new Dictionary<string, object?> { ["drive_letters"] = new List<object?> { "C:" } }
-    }, "");
+        ["serial_number"] = "SATA-HDD-003", ["model"] = "SATA HDD",
+        ["media_type"] = "HDD", ["bus_type"] = "SATA"
+    };
+    Dictionary<string, object?> osNvme = new()
+    {
+        ["disk_number"] = 0L, ["serial_number"] = "NVME-SERIAL-001",
+        ["unique_id"] = "UNIQUE-NVME-001", ["bus_type"] = "NVMe",
+        ["drive_letters"] = new List<object?> { "c", "D:" }
+    };
+    Dictionary<string, object?> osSsd = new()
+    {
+        ["disk_number"] = 1L, ["serial_number"] = "SATA-SSD-002", ["bus_type"] = "SATA",
+        ["drive_letters"] = new List<object?> { "E:" }
+    };
+    Dictionary<string, object?> osHdd = new()
+    {
+        ["disk_number"] = 2L, ["serial_number"] = "SATA-HDD-003", ["bus_type"] = "SATA",
+        ["drive_letters"] = new List<object?> { "F:" }
+    };
+    List<Dictionary<string, object?>> disks = HardwareInventoryNormalizer.PhysicalDisks(
+        Storage(new object?[] { nvme, sataSsd, sataHdd }, new object?[] { osNvme, osSsd, osHdd },
+            new object?[] { new Dictionary<string, object?> { ["serial_number"] = "NVME-SERIAL-001" } }), "C:");
+    Require(disks.Count == 3 && Equals(disks[0]["disk_number"], 0L) && Equals(disks[0]["media_type"], "ssd") &&
+            Equals(disks[0]["bus_type"], "nvme") && Equals(disks[0]["is_system_disk"], true) &&
+            Equals(disks[0]["association_source"], "unique_id") && Equals(disks[0]["association_confidence"], "high") &&
+            ((List<string>)disks[0]["drive_letters"]!).SequenceEqual(new[] { "C:", "D:" }),
+        "A unique ID must map disk zero and C: without confusing NVMe bus and SSD media.");
+    Require(Equals(disks[1]["media_type"], "ssd") && Equals(disks[1]["bus_type"], "sata") &&
+            Equals(disks[1]["association_source"], "serial_number") && Equals(disks[1]["is_system_disk"], false) &&
+            Equals(disks[2]["media_type"], "hdd") && Equals(disks[2]["bus_type"], "sata") &&
+            ((List<string>)disks[2]["drive_letters"]!).SequenceEqual(new[] { "F:" }),
+        "SSD SATA, HDD SATA, and multiple one-to-one associations must remain distinct.");
+
+    List<Dictionary<string, object?>> duplicateOs = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { sataSsd }, new object?[] { osSsd, new Dictionary<string, object?>
+        { ["serial_number"] = "SATA-SSD-002", ["disk_number"] = 4L, ["drive_letters"] = new List<object?> { "C:" } } },
+        Array.Empty<object?>()), "C:");
+    Require(Equals(duplicateOs[0]["association_source"], "none") && duplicateOs[0]["is_system_disk"] is null &&
+            ((List<string>)duplicateOs[0]["drive_letters"]!).Count == 0,
+        "A serial duplicated on OS disks must never attach a volume.");
+    List<Dictionary<string, object?>> duplicatePhysical = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { sataSsd, new Dictionary<string, object?> { ["serial_number"] = "SATA-SSD-002" } },
+        new object?[] { osSsd }, Array.Empty<object?>()), "C:");
+    Require(duplicatePhysical.All(row => Equals(row["association_source"], "none")),
+        "A serial duplicated on physical disks must never correlate.");
+    List<Dictionary<string, object?>> duplicateSerialWithUniqueId = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { nvme }, new object?[] { osNvme, new Dictionary<string, object?>
+        { ["serial_number"] = "NVME-SERIAL-001", ["disk_number"] = 9L } }, Array.Empty<object?>()), "C:");
+    Require(Equals(duplicateSerialWithUniqueId[0]["association_source"], "none"),
+        "A duplicated serial must fail closed even if a second identifier appears to match.");
+    List<Dictionary<string, object?>> noSerial = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { new Dictionary<string, object?> { ["model"] = "same", ["size_bytes"] = 1000L } },
+        new object?[] { new Dictionary<string, object?> { ["model"] = "same", ["size_bytes"] = 1000L,
+            ["drive_letters"] = new List<object?> { "C:" } } }, Array.Empty<object?>()), "C:");
+    Require(noSerial[0]["is_system_disk"] is null && Equals(noSerial[0]["association_confidence"], "none"),
+        "Model and size must never be used as association keys.");
+    List<Dictionary<string, object?>> genericSerial = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { new Dictionary<string, object?> { ["serial_number"] = "None" } },
+        new object?[] { new Dictionary<string, object?> { ["serial_number"] = "None",
+            ["drive_letters"] = new List<object?> { "C:" } } }, Array.Empty<object?>()), "C:");
+    Require(Equals(genericSerial[0]["association_source"], "none"),
+        "Generic serial placeholders must not map a system volume.");
+
+    foreach (string layeredBus in new[] { "Spaces", "RAID", "Virtual" })
+    {
+        List<Dictionary<string, object?>> layered = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+            new object?[] { sataSsd, sataHdd },
+            new object?[] { new Dictionary<string, object?> { ["serial_number"] = "SATA-SSD-002",
+                ["disk_number"] = 0L, ["bus_type"] = layeredBus,
+                ["drive_letters"] = new List<object?> { "C:" } } }, Array.Empty<object?>()), "C:");
+        Require(layered.All(row => row["is_system_disk"] is null &&
+                ((List<string>)row["drive_letters"]!).Count == 0),
+            $"{layeredBus} must not attribute a logical C: volume to a physical member.");
+    }
+    List<Dictionary<string, object?>> disguisedVirtual = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { sataSsd }, new object?[] { new Dictionary<string, object?>
+        {
+            ["serial_number"] = "SATA-SSD-002", ["bus_type"] = "SCSI",
+            ["friendly_name"] = "VMware Virtual Disk", ["drive_letters"] = new List<object?> { "C:" }
+        } }, Array.Empty<object?>()), "C:");
+    Require(disguisedVirtual[0]["is_system_disk"] is null &&
+            ((List<string>)disguisedVirtual[0]["drive_letters"]!).Count == 0,
+        "A virtual disk presented as SCSI must not map to a physical SSD.");
+    List<Dictionary<string, object?>> wmiFallback = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        Array.Empty<object?>(), Array.Empty<object?>(),
+        new object?[] { new Dictionary<string, object?> { ["disk_number"] = 0L,
+            ["device_id"] = @"\\.\PHYSICALDRIVE0", ["media_type"] = "Fixed hard disk media",
+            ["bus_type"] = "Unspecified", ["serial_number"] = "WMI-ONLY-004" } }), "C:");
+    Require(wmiFallback.Count == 1 && Equals(wmiFallback[0]["disk_number"], 0L) &&
+            Equals(wmiFallback[0]["media_type"], "unknown") && Equals(wmiFallback[0]["bus_type"], "unknown") &&
+            wmiFallback[0]["is_system_disk"] is null, "WMI must survive when Get-PhysicalDisk is unavailable.");
+    List<Dictionary<string, object?>> mixed = HardwareInventoryNormalizer.PhysicalDisks(Storage(
+        new object?[] { nvme }, new object?[] { osNvme }, new object?[]
+        {
+            new Dictionary<string, object?> { ["serial_number"] = "NVME-SERIAL-001" },
+            new Dictionary<string, object?> { ["serial_number"] = "WMI-ONLY-004", ["disk_number"] = 3L }
+        }), "C:");
+    Require(mixed.Count == 2 && Equals(mixed[1]["serial_number"], "WMI-ONLY-004") &&
+            mixed[1]["is_system_disk"] is null, "WMI-only disks must be included without duplicating a known physical disk.");
+    List<Dictionary<string, object?>> noSystemDrive = HardwareInventoryNormalizer.PhysicalDisks(
+        Storage(new object?[] { nvme }, new object?[] { osNvme }, Array.Empty<object?>()), "");
     Require(noSystemDrive[0]["is_system_disk"] is null,
         "A missing SystemDrive must not imply that C: is the system disk.");
 
     Dictionary<string, object?> notebook = HardwareInventoryNormalizer.Battery(new()
     {
-        ["present"] = true, ["status_code"] = 6L, ["estimated_charge_remaining"] = 75L,
+        ["query_succeeded"] = true, ["present"] = true, ["status_code"] = 6L,
+        ["estimated_charge_remaining"] = 75L,
         ["design_capacity_mwh"] = 50000L, ["full_charge_capacity_mwh"] = 40000L, ["cycle_count"] = 250L
     });
     Require(Equals(notebook["status"], "charging") && Equals(notebook["health_percent"], 80d) &&
             Equals(notebook["cycle_count"], 250L), "Battery health requires valid design and full capacities.");
-    Dictionary<string, object?> desktop = HardwareInventoryNormalizer.Battery(new() { ["present"] = false });
+    Dictionary<string, object?> desktop = HardwareInventoryNormalizer.Battery(new()
+    { ["query_succeeded"] = true, ["present"] = false });
     Require(Equals(desktop["status"], "not_present") && desktop["health_percent"] is null &&
             desktop["estimated_charge_remaining"] is null, "Desktop battery metrics must remain absent.");
     Dictionary<string, object?> incomplete = HardwareInventoryNormalizer.Battery(new()
     {
-        ["present"] = true, ["design_capacity_mwh"] = 0L, ["full_charge_capacity_mwh"] = 40000L
+        ["query_succeeded"] = true, ["present"] = true,
+        ["design_capacity_mwh"] = 0L, ["full_charge_capacity_mwh"] = 40000L
     });
     Require(incomplete["health_percent"] is null, "Incomplete battery capacity must never divide by zero.");
+    Dictionary<string, object?> failedEnrichment = HardwareInventoryNormalizer.Battery(new()
+    { ["query_succeeded"] = false, ["present"] = false }, legacyPresent: true, legacyStatus: 6L);
+    Require(Equals(failedEnrichment["present"], true) && Equals(failedEnrichment["status"], "charging") &&
+            failedEnrichment["health_percent"] is null,
+        "A failed battery query must not overwrite a previously observed battery.");
+    Dictionary<string, object?> missingNamespace = HardwareInventoryNormalizer.Battery(new()
+    { ["query_succeeded"] = true, ["present"] = true, ["estimated_charge_remaining"] = 255L });
+    Require(missingNamespace["health_percent"] is null && missingNamespace["cycle_count"] is null &&
+            missingNamespace["estimated_charge_remaining"] is null,
+        "Missing root-wmi metrics and sentinel charge must remain null.");
+    Dictionary<string, object?> sentinelBattery = HardwareInventoryNormalizer.Battery(new()
+    {
+        ["query_succeeded"] = true, ["present"] = true,
+        ["design_capacity_mwh"] = (long)uint.MaxValue,
+        ["full_charge_capacity_mwh"] = 40000L,
+        ["cycle_count"] = (long)uint.MaxValue
+    });
+    Require(sentinelBattery["design_capacity_mwh"] is null && sentinelBattery["health_percent"] is null &&
+            sentinelBattery["cycle_count"] is null, "WMI sentinel battery values must remain unknown.");
 
     AgentCollectPayload oldPayload = new() { MachineId = "synthetic-machine" };
     using JsonDocument oldJson = JsonDocument.Parse(JsonSerializer.Serialize(oldPayload));

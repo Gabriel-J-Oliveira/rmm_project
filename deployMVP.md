@@ -57,6 +57,14 @@ hardware e os volumes logicos em `disks` permanecem no contrato. A coleta
 enriquecida ocorre no ciclo de inventario; o heartbeat nao recebe as consultas
 adicionais de memoria fisica ou storage. Nenhum rollout foi iniciado nesta etapa.
 
+A primeira review concluiu `NEEDS_FIXES`. As correcoes de correlacao de storage,
+fallback WMI e merge de bateria foram aplicadas; M1 permanece em desenvolvimento,
+aguardando re-review e validacao em hardware Windows real. Letras de unidade e
+disco do sistema so sao atribuidos a um disco fisico com identificador unico
+e sem evidencia de camada RAID, Storage Spaces ou virtual. Os campos
+`cpu.socket`, `cpu.processor_id` e `cpu.max_clock_mhz` representam somente o
+primeiro `Win32_Processor` (CPU0) neste MVP.
+
 ## Historico da base integrada da RC41
 
 - Base: `origin/main` em `d6ab7a72974797cb284bb90acb76b74e9c996f55`.

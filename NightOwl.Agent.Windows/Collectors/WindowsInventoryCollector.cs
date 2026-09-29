@@ -73,15 +73,9 @@ public sealed class WindowsInventoryCollector
     {
         DateTimeOffset collectedAt = DateTimeOffset.UtcNow;
         Dictionary<string, object?> system = CollectSection("system", GetSystem, new Dictionary<string, object?>());
-        Dictionary<string, object?> hardware = CollectSection("hardware", GetHardware, new Dictionary<string, object?>());
-        Dictionary<string, object?> assetDetails = CollectSection("asset_hardware", GetAssetHardwareDetails, new Dictionary<string, object?>());
-        hardware["memory"] = HardwareInventoryNormalizer.Memory(assetDetails, ToLong(hardware.GetValueOrDefault("total_memory_bytes")));
-        Dictionary<string, object?> battery = AsDict(assetDetails.GetValueOrDefault("battery"));
-        battery.TryAdd("present", hardware.GetValueOrDefault("battery_present"));
-        battery.TryAdd("status_code", hardware.GetValueOrDefault("battery_status"));
-        hardware["battery"] = HardwareInventoryNormalizer.Battery(battery);
+        Dictionary<string, object?> hardware = CollectSection("hardware", () => GetHardware(includeAssetDetails: true), new Dictionary<string, object?>());
         hardware["physical_disks"] = HardwareInventoryNormalizer.PhysicalDisks(
-            CollectSection("physical_disks", GetPhysicalDisksRaw, new List<Dictionary<string, object?>>()),
+            CollectSection("physical_disks", GetPhysicalDisksRaw, new Dictionary<string, object?>()),
             Environment.GetEnvironmentVariable("SystemDrive") ?? "");
         Dictionary<string, object?> network = CollectSection("network", GetNetwork, new Dictionary<string, object?> { ["interfaces"] = new List<object>() });
         List<Dictionary<string, object?>> disks = CollectSection("disks", GetDisks, new List<Dictionary<string, object?>>());
@@ -328,17 +322,44 @@ public sealed class WindowsInventoryCollector
         };
     }
 
-    public Dictionary<string, object?> GetHardware()
+    public Dictionary<string, object?> GetHardware(bool includeAssetDetails = false)
     {
-        Dictionary<string, object?> ps = RunPowerShellObject("""
+        string script = "$includeAssetDetails = " + (includeAssetDetails ? "$true" : "$false") + "; " + """
             $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
             $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
             $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
             $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
             $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
-            $battery = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
+            $battery = $null; $batteryQuerySucceeded = $false
+            try {
+              $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+              $batteryQuerySucceeded = $true
+            } catch {}
             $tpm = $null
             try { $tpm = Get-CimInstance -Namespace "root\cimv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1 } catch {}
+            $modules = @(); $arrays = @(); $modulesQuerySucceeded = $false
+            $design = $null; $full = $null; $cycles = $null
+            if ($includeAssetDetails) {
+              try {
+                $modules = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop)
+                $modulesQuerySucceeded = $true
+              } catch {}
+              try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop) } catch {}
+              if ($battery) {
+                try {
+                  $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)
+                  if ($rows.Count -eq 1) { $design = $rows[0].DesignedCapacity }
+                } catch {}
+                try {
+                  $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)
+                  if ($rows.Count -eq 1) { $full = $rows[0].FullChargedCapacity }
+                } catch {}
+                try {
+                  $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction Stop)
+                  if ($rows.Count -eq 1) { $cycles = $rows[0].CycleCount }
+                } catch {}
+              }
+            }
             [pscustomobject]@{
               manufacturer = $cs.Manufacturer
               model = $cs.Model
@@ -359,8 +380,34 @@ public sealed class WindowsInventoryCollector
               tpm_enabled = if ($tpm) { [bool]$tpm.IsEnabled_InitialValue } else { $null }
               battery_present = [bool]$battery
               battery_status = if ($battery) { $battery.BatteryStatus } else { $null }
+              asset_details = if ($includeAssetDetails) {
+                [pscustomobject]@{
+                  modules = @($modules | ForEach-Object {
+                    [pscustomobject]@{
+                      device_locator = $_.DeviceLocator; bank_label = $_.BankLabel
+                      capacity_bytes = $_.Capacity; speed_mhz = $_.Speed
+                      configured_speed_mhz = $_.ConfiguredClockSpeed
+                      manufacturer = $_.Manufacturer; part_number = $_.PartNumber
+                      serial_number = $_.SerialNumber; form_factor = $_.FormFactor
+                      memory_type = if ($_.SMBIOSMemoryType) { $_.SMBIOSMemoryType } else { $_.MemoryType }
+                    }
+                  })
+                  memory_slots = @($arrays | ForEach-Object { $_.MemoryDevices })
+                  modules_query_succeeded = $modulesQuerySucceeded
+                  battery = [pscustomobject]@{
+                    query_succeeded = $batteryQuerySucceeded
+                    present = [bool]$battery
+                    status_code = if ($battery) { $battery.BatteryStatus } else { $null }
+                    estimated_charge_remaining = if ($battery) { $battery.EstimatedChargeRemaining } else { $null }
+                    design_capacity_mwh = $design
+                    full_charge_capacity_mwh = $full
+                    cycle_count = $cycles
+                  }
+                }
+              } else { $null }
             }
-        """, timeoutSeconds: 12);
+        """;
+        Dictionary<string, object?> ps = RunPowerShellObject(script, timeoutSeconds: includeAssetDetails ? 20 : 12);
 
         Dictionary<string, object?> cpu = new()
         {
@@ -373,7 +420,7 @@ public sealed class WindowsInventoryCollector
             ["processor_id"] = ps.GetValueOrDefault("cpu_processor_id")?.ToString()?.Trim()
         };
 
-        return new Dictionary<string, object?>
+        Dictionary<string, object?> hardware = new()
         {
             ["manufacturer"] = ps.GetValueOrDefault("manufacturer")?.ToString() ?? "",
             ["model"] = ps.GetValueOrDefault("model")?.ToString() ?? "",
@@ -406,110 +453,65 @@ public sealed class WindowsInventoryCollector
             ["battery_status"] = ps.GetValueOrDefault("battery_status"),
             ["collected_at"] = DateTimeOffset.UtcNow
         };
+        if (includeAssetDetails)
+        {
+            Dictionary<string, object?> asset = AsDict(ps.GetValueOrDefault("asset_details"));
+            hardware["memory"] = HardwareInventoryNormalizer.Memory(asset, ToLong(hardware.GetValueOrDefault("total_memory_bytes")));
+            hardware["battery"] = HardwareInventoryNormalizer.Battery(
+                AsDict(asset.GetValueOrDefault("battery")), ToBool(hardware.GetValueOrDefault("battery_present")),
+                hardware.GetValueOrDefault("battery_status"));
+        }
+        return hardware;
     }
 
-    private Dictionary<string, object?> GetAssetHardwareDetails()
+    private Dictionary<string, object?> GetPhysicalDisksRaw()
     {
         return RunPowerShellObject("""
-            $modules = @()
-            $arrays = @()
-            $battery = $null
-            try { $modules = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop) } catch {}
-            try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop) } catch {}
-            try { $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1 } catch {}
-            $design = $null; $full = $null; $cycles = $null
-            if ($battery) {
-              try {
-                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)
-                if ($rows.Count -eq 1) { $design = $rows[0].DesignedCapacity }
-              } catch {}
-              try {
-                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)
-                if ($rows.Count -eq 1) { $full = $rows[0].FullChargedCapacity }
-              } catch {}
-              try {
-                $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryCycleCount -ErrorAction Stop)
-                if ($rows.Count -eq 1) { $cycles = $rows[0].CycleCount }
-              } catch {}
-            }
-            [pscustomobject]@{
-              modules = @($modules | ForEach-Object {
-                [pscustomobject]@{
-                  device_locator = $_.DeviceLocator; bank_label = $_.BankLabel
-                  capacity_bytes = $_.Capacity; speed_mhz = $_.Speed
-                  configured_speed_mhz = $_.ConfiguredClockSpeed
-                  manufacturer = $_.Manufacturer; part_number = $_.PartNumber
-                  serial_number = $_.SerialNumber; form_factor = $_.FormFactor
-                  memory_type = if ($_.SMBIOSMemoryType) { $_.SMBIOSMemoryType } else { $_.MemoryType }
-                }
-              })
-              memory_slots = @($arrays | ForEach-Object { $_.MemoryDevices })
-              battery = [pscustomobject]@{
-                present = [bool]$battery
-                status_code = if ($battery) { $battery.BatteryStatus } else { $null }
-                estimated_charge_remaining = if ($battery) { $battery.EstimatedChargeRemaining } else { $null }
-                design_capacity_mwh = $design
-                full_charge_capacity_mwh = $full
-                cycle_count = $cycles
-              }
-            }
-        """, timeoutSeconds: 15);
-    }
-
-    private List<Dictionary<string, object?>> GetPhysicalDisksRaw()
-    {
-        return RunPowerShellList("""
-            $modern = @(); $physical = @(); $wmi = @(); $rows = @()
-            try { $modern = @(Get-Disk -ErrorAction Stop) } catch {}
+            $modern = @(); $physical = @(); $wmi = @(); $osRows = @()
             try { $physical = @(Get-PhysicalDisk -ErrorAction Stop) } catch {}
             try { $wmi = @(Get-CimInstance Win32_DiskDrive -ErrorAction Stop) } catch {}
-            if ($modern.Count -gt 0) {
-              foreach ($disk in $modern) {
-                $legacy = $wmi | Where-Object { $_.Index -eq $disk.Number } | Select-Object -First 1
-                $serial = ([string]$disk.SerialNumber).Trim()
-                if (-not $serial -and $legacy) { $serial = ([string]$legacy.SerialNumber).Trim() }
-                $matches = @($physical | Where-Object { $serial -and ([string]$_.SerialNumber).Trim() -eq $serial })
-                $media = if ($matches.Count -eq 1) { $matches[0] } else { $null }
-                $letters = @()
-                try {
-                  $letters = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop |
-                    Where-Object { $_.DriveLetter } | ForEach-Object { "$($_.DriveLetter):" })
-                } catch {}
-                $rows += [pscustomobject]@{
+            try { $modern = @(Get-Disk -ErrorAction Stop) } catch {}
+            foreach ($disk in $modern) {
+              $letters = @()
+              try {
+                $letters = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop |
+                  Where-Object { $_.DriveLetter } | ForEach-Object { "$($_.DriveLetter):" })
+              } catch {}
+              $osRows += [pscustomobject]@{
                   disk_number = $disk.Number
-                  device_id = if ($legacy) { $legacy.DeviceID } else { $disk.Path }
-                  model = if ($disk.Model) { $disk.Model } else { $legacy.Model }
-                  manufacturer = if ($disk.Manufacturer) { $disk.Manufacturer } else { $legacy.Manufacturer }
-                  serial_number = $serial
-                  firmware_version = if ($disk.FirmwareVersion) { $disk.FirmwareVersion } else { $media.FirmwareVersion }
-                  size_bytes = $disk.Size
-                  media_type = if ($media) { [string]$media.MediaType } else { [string]$legacy.MediaType }
+                  unique_id = $disk.UniqueId
+                  serial_number = $disk.SerialNumber
+                  model = $disk.Model
+                  friendly_name = $disk.FriendlyName
                   bus_type = [string]$disk.BusType
-                  health_status = if ($media) { [string]$media.HealthStatus } else { [string]$disk.HealthStatus }
-                  operational_status = (@($disk.OperationalStatus) -join ',')
                   drive_letters = $letters
-                }
-              }
-            } else {
-              foreach ($disk in $wmi) {
-                $letters = @()
-                try {
-                  foreach ($partition in @(Get-CimAssociatedInstance -InputObject $disk -Association Win32_DiskDriveToDiskPartition -ErrorAction Stop)) {
-                    $letters += @(Get-CimAssociatedInstance -InputObject $partition -Association Win32_LogicalDiskToPartition -ErrorAction Stop |
-                      ForEach-Object { $_.DeviceID })
-                  }
-                } catch { $letters = @() }
-                $rows += [pscustomobject]@{
-                  disk_number = $disk.Index; device_id = $disk.DeviceID
-                  model = $disk.Model; manufacturer = $disk.Manufacturer
-                  serial_number = $disk.SerialNumber; firmware_version = $disk.FirmwareRevision
-                  size_bytes = $disk.Size; media_type = $disk.MediaType
-                  bus_type = $disk.InterfaceType; health_status = $null
-                  operational_status = $disk.Status; drive_letters = $letters
-                }
               }
             }
-            $rows
+            [pscustomobject]@{
+              physical_disks = @($physical | ForEach-Object {
+                [pscustomobject]@{
+                  device_id = $_.DeviceId; friendly_name = $_.FriendlyName
+                  model = $_.Model; manufacturer = $_.Manufacturer
+                  serial_number = $_.SerialNumber; unique_id = $_.UniqueId
+                  firmware_version = $_.FirmwareVersion; size_bytes = $_.Size
+                  media_type = [string]$_.MediaType; bus_type = [string]$_.BusType
+                  health_status = [string]$_.HealthStatus
+                  operational_status = (@($_.OperationalStatus) -join ',')
+                }
+              })
+              os_disks = $osRows
+              wmi_disks = @($wmi | ForEach-Object {
+                [pscustomobject]@{
+                  disk_number = $_.Index; device_id = $_.DeviceID
+                  pnp_device_id = $_.PNPDeviceID
+                  model = $_.Model; manufacturer = $_.Manufacturer
+                  serial_number = $_.SerialNumber; firmware_version = $_.FirmwareRevision
+                  size_bytes = $_.Size; media_type = $_.MediaType
+                  bus_type = $_.InterfaceType; health_status = $null
+                  operational_status = $_.Status
+                }
+              })
+            }
         """, timeoutSeconds: 18);
     }
 
