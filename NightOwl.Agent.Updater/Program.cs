@@ -59,6 +59,10 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            if (ex is UpdateTerminalStateException terminal)
+            {
+                return ReturnPersistedTerminal(terminal.State);
+            }
             WriteLog("updater.error", "Falha nao tratada no updater.", new { command, error = ex.Message });
             WriteJson(new { ok = false, error = ex.Message });
             if (interactive)
@@ -150,13 +154,26 @@ internal static class Program
         }
 
         UpdateState state = LoadOrCreateRunnerState(updateId, jobContext);
+        if (!state.IsActive)
+        {
+            return ReturnPersistedTerminal(state);
+        }
+        AgentConfig config = LoadConfig();
+        int? resumed = ResumeInterruptedHealthCheck(state, UpdateStateStore,
+            LoadInstalledVersion(config).Version, GetServiceStatus, StartService,
+            (current, rollback) => WaitForHealthCheck(current, rollback, TimeSpan.FromSeconds(
+                GetOptionInt(args, "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
+            current => ExecuteAutomaticRollback(current, config.InstallPathOrDefault, interactive));
+        if (resumed.HasValue)
+        {
+            return ReturnRecoveredResult(state, resumed.Value, config.InstallPathOrDefault);
+        }
         if (!state.CurrentStage.Equals(UpdateStages.Received, StringComparison.OrdinalIgnoreCase)
             && !state.CurrentStage.Equals(UpdateStages.CheckingVersion, StringComparison.OrdinalIgnoreCase))
         {
             WriteLog("update.interrupted_detected", "Incomplete update state detected at runner start.", new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage, status = state.Status });
         }
 
-        AgentConfig config = LoadConfig();
         MarkStage(state, UpdateStages.CheckingVersion);
         AgentVersionInfo installed = LoadInstalledVersion(config);
         state.FromVersion = installed.Version;
@@ -516,46 +533,180 @@ internal static class Program
         if (!UpdateStateStore.TryLoad(out UpdateState? loaded, out string error))
         {
             WriteLog("update.state.invalid", "Invalid update state detected.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error });
-            UpdateState invalid = UpdateState.Create(updateId, jobContext.JobId, "", "");
-            invalid.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, error);
-            UpdateStateStore.Save(invalid);
-            throw new InvalidOperationException(error);
+            throw new InvalidOperationException($"{UpdateErrorCodes.UpdateStateInvalid}: persisted state could not be read.");
         }
 
+        UpdateState selected = ResolveRunnerState(loaded, updateId, jobContext.JobId);
+        if (!ReferenceEquals(selected, loaded))
+        {
+            RequirePersisted(selected);
+        }
+        return selected;
+    }
+
+    internal static UpdateState ResolveRunnerState(UpdateState? loaded, string updateId, string jobId)
+    {
         if (loaded is null)
         {
-            UpdateState created = UpdateState.Create(updateId, jobContext.JobId, "", "");
-            UpdateStateStore.Save(created);
-            return created;
+            return UpdateState.Create(updateId, jobId, "", "");
         }
-
-        if (loaded.IsActive && !string.IsNullOrWhiteSpace(updateId) && !loaded.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase))
+        if (loaded.IsActive && !string.IsNullOrWhiteSpace(updateId)
+            && !loaded.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase))
         {
-            WriteLog("update.already_running", "Different active update detected.", new { error_code = UpdateErrorCodes.UpdateAlreadyRunning, active_update_id = loaded.UpdateId, requested_update_id = updateId });
             throw new InvalidOperationException($"{UpdateErrorCodes.UpdateAlreadyRunning}: {loaded.UpdateId}");
         }
-
-        if (loaded.IsActive)
+        if (loaded.IsActive || loaded.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase))
         {
             return loaded;
         }
-
-        int nextAttempt = loaded.Attempt + 1;
-        UpdateState replacement = UpdateState.Create(string.IsNullOrWhiteSpace(updateId) ? Guid.NewGuid().ToString() : updateId, jobContext.JobId, loaded.FromVersion, loaded.TargetVersion);
-        replacement.Attempt = nextAttempt;
-        UpdateStateStore.Save(replacement);
+        UpdateState replacement = UpdateState.Create(
+            string.IsNullOrWhiteSpace(updateId) ? Guid.NewGuid().ToString() : updateId,
+            jobId, loaded.FromVersion, loaded.TargetVersion);
+        replacement.Attempt = loaded.Attempt + 1;
         return replacement;
+    }
+
+    private static int ReturnPersistedTerminal(UpdateState state)
+    {
+        bool completed = state.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase);
+        bool rolledBack = state.CurrentStage.Equals(UpdateStages.RolledBack, StringComparison.OrdinalIgnoreCase);
+        WriteJson(new { ok = completed, updated = completed, rolled_back = rolledBack,
+            update_id = state.UpdateId, status = state.CurrentStage, error_code = state.ErrorCode });
+        return completed || rolledBack ? 0 : 1;
+    }
+
+    private static int ReturnRecoveredResult(UpdateState initial, int exitCode, string installPath)
+    {
+        UpdateState persisted = UpdateStateStore.Load() ?? initial;
+        if (persisted.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
+        {
+            return ReturnPersistedTerminal(persisted);
+        }
+        if (initial.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase))
+        {
+            if (persisted.CurrentStage.Equals(UpdateStages.RollbackFailed, StringComparison.OrdinalIgnoreCase))
+            {
+                WriteCriticalRollbackResult(persisted, installPath, persisted.RollbackErrorMessage);
+            }
+            return ReturnPersistedTerminal(persisted);
+        }
+        return exitCode;
+    }
+
+    private sealed class UpdateTerminalStateException(UpdateState state) : Exception("Persisted update state is terminal.")
+    {
+        public UpdateState State { get; } = state;
+    }
+
+    private static void RequirePersisted(UpdateState state)
+    {
+        if (!UpdateStateStore.Save(state))
+        {
+            UpdateState persisted = UpdateStateStore.Load()
+                ?? throw new InvalidOperationException("Update state disappeared after rejected transition.");
+            throw new UpdateTerminalStateException(persisted);
+        }
+    }
+
+    internal static int? ResumeInterruptedHealthCheck(
+        UpdateState state, UpdateStateStore store, string installedVersion,
+        Func<string> serviceStatus, Action startService,
+        Func<UpdateState, bool, HealthCheckWaitResult> waitForHealth,
+        Func<UpdateState, int> rollback)
+    {
+        bool restoring = state.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase);
+        bool updating = state.CurrentStage.Equals(UpdateStages.WaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
+            || state.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase)
+            || state.CurrentStage.Equals(UpdateStages.StartingService, StringComparison.OrdinalIgnoreCase);
+        if (!restoring && !updating)
+        {
+            return null;
+        }
+        string expected = restoring ? state.FromVersion : state.TargetVersion;
+        if (string.IsNullOrWhiteSpace(expected) || CompareVersions(installedVersion, expected) != 0)
+        {
+            if (restoring)
+            {
+                store.TryTransitionNonTerminal(state.UpdateId, current => {
+                    current.MarkRollbackFailed(UpdateErrorCodes.RollbackVersionMismatch, "Restored version does not match the previous version.");
+                    return true;
+                }, out UpdateState? mismatchRollback);
+                return mismatchRollback?.IsActive == false ? ReturnPersistedTerminal(mismatchRollback) : 1;
+            }
+            store.TryTransitionNonTerminal(state.UpdateId, current => {
+                current.MarkRollbackRequired(current.CurrentStage, UpdateErrorCodes.UpdateHealthcheckVersionMismatch,
+                    "Installed version does not match the pending update target.");
+                return true;
+            }, out UpdateState? mismatch);
+            return mismatch?.IsActive == true ? rollback(mismatch)
+                : mismatch is not null ? ReturnPersistedTerminal(mismatch) : 1;
+        }
+        if (updating && !state.CurrentStage.Equals(UpdateStages.WaitingHealthCheck, StringComparison.OrdinalIgnoreCase))
+        {
+            store.TryTransitionNonTerminal(state.UpdateId, current => {
+                current.MarkStage(UpdateStages.WaitingHealthCheck);
+                return true;
+            }, out _);
+        }
+        state = store.Load() ?? throw new InvalidOperationException("Update state disappeared during recovery.");
+        if (!state.IsActive)
+        {
+            return ReturnPersistedTerminal(state);
+        }
+        if (!serviceStatus().Equals("Running", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                startService();
+            }
+            catch (Exception ex)
+            {
+                if (restoring)
+                {
+                    store.TryTransitionNonTerminal(state.UpdateId, current => {
+                        current.MarkRollbackFailed(UpdateErrorCodes.RollbackServiceStartFailed, SanitizeMessage(ex.Message));
+                        return true;
+                    }, out UpdateState? failedRollbackStart);
+                    return failedRollbackStart?.CurrentStage == UpdateStages.RolledBack
+                        ? ReturnPersistedTerminal(failedRollbackStart) : 1;
+                }
+                store.TryTransitionNonTerminal(state.UpdateId, current => {
+                    current.MarkRollbackRequired(current.CurrentStage, UpdateErrorCodes.UpdateServiceStartFailed,
+                        SanitizeMessage(ex.Message));
+                    return true;
+                }, out UpdateState? failedStart);
+                return failedStart?.IsActive == true ? rollback(failedStart)
+                    : failedStart is not null ? ReturnPersistedTerminal(failedStart) : 1;
+            }
+        }
+        HealthCheckWaitResult health = waitForHealth(state, restoring);
+        if (health == (restoring ? HealthCheckWaitResult.RolledBack : HealthCheckWaitResult.Completed))
+        {
+            return 0;
+        }
+        if (restoring)
+        {
+            store.TryTransitionNonTerminal(state.UpdateId, current => {
+                current.MarkRollbackFailed(UpdateErrorCodes.RollbackHealthcheckTimeout, "Rollback health check was not confirmed.");
+                return true;
+            }, out UpdateState? failedRollbackHealth);
+            return failedRollbackHealth?.CurrentStage == UpdateStages.RolledBack
+                ? ReturnPersistedTerminal(failedRollbackHealth) : 1;
+        }
+        store.TryTransitionNonTerminal(state.UpdateId, current => {
+            current.MarkRollbackRequired(current.CurrentStage, UpdateErrorCodes.UpdateHealthcheckTimeout,
+                "Update health check was not confirmed.");
+            return true;
+        }, out UpdateState? failedHealth);
+        return failedHealth?.IsActive == true ? rollback(failedHealth)
+            : failedHealth is not null ? ReturnPersistedTerminal(failedHealth) : 1;
     }
 
     private static void MarkStage(UpdateState state, string stage, string status = UpdateStatuses.Running)
     {
         DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
         state.MarkStage(stage, status);
-        if (!UpdateStateStore.Save(state))
-        {
-            WriteLog("update.stage.skipped_terminal", "Persisted update state is already terminal.", new { update_id = state.UpdateId, job_id = state.JobId, attempted_stage = stage });
-            return;
-        }
+        RequirePersisted(state);
         WriteLog("update.stage", "Update stage persisted.", new
         {
             update_id = state.UpdateId,
@@ -572,7 +723,7 @@ internal static class Program
     {
         DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
         state.MarkFailed(errorCode, SanitizeMessage(errorMessage), rollbackRequired);
-        UpdateStateStore.Save(state);
+        RequirePersisted(state);
         WriteLog("update.stage", "Update failed state persisted.", new
         {
             update_id = state.UpdateId,
@@ -590,7 +741,7 @@ internal static class Program
     {
         DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
         state.MarkRollbackRequired(failureStage, errorCode, SanitizeMessage(errorMessage));
-        UpdateStateStore.Save(state);
+        RequirePersisted(state);
         WriteLog("rollback.required", "Rollback required.", new
         {
             update_id = state.UpdateId,
@@ -625,6 +776,19 @@ internal static class Program
         AgentVersionInfo installed = LoadInstalledVersion(config);
         string installPath = config.InstallPathOrDefault;
         UpdateState state = LoadOrCreateRunnerState(GetOption(Environment.GetCommandLineArgs(), "--update-id") ?? "", jobContext);
+        if (!state.IsActive)
+        {
+            return ReturnPersistedTerminal(state);
+        }
+        int? resumed = ResumeInterruptedHealthCheck(state, UpdateStateStore, installed.Version,
+            GetServiceStatus, StartService,
+            (current, rollback) => WaitForHealthCheck(current, rollback, TimeSpan.FromSeconds(
+                GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds))),
+            current => ExecuteAutomaticRollback(current, installPath, interactive));
+        if (resumed.HasValue)
+        {
+            return ReturnRecoveredResult(state, resumed.Value, installPath);
+        }
         string backupPath = Path.Combine(BackupsRoot, state.UpdateId);
         state.FromVersion = installed.Version;
         state.TargetVersion = manifest.Version;
@@ -739,6 +903,10 @@ internal static class Program
                     : UpdateErrorCodes.UpdateHealthcheckTimeout;
             MarkRollbackRequired(state, UpdateStages.WaitingHealthCheck, healthErrorCode, $"Health check failed or timed out after {healthTimeoutSeconds}s.");
             return ExecuteAutomaticRollback(state, installPath, interactive);
+        }
+        catch (UpdateTerminalStateException terminal)
+        {
+            return ReturnPersistedTerminal(terminal.State);
         }
         catch (Exception ex) when (state.RollbackRequired && state.RollbackAttempt < 1)
         {
@@ -2159,6 +2327,10 @@ $shortcut.Save()
             UpdateStateStore.Save(state);
             WriteCriticalRollbackResult(state, installPath, state.RollbackErrorMessage);
             return 1;
+        }
+        catch (UpdateTerminalStateException terminal)
+        {
+            return ReturnPersistedTerminal(terminal.State);
         }
         catch (Exception ex)
         {

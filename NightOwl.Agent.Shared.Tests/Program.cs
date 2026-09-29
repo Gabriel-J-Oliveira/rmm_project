@@ -274,6 +274,11 @@ try
     File.WriteAllText(updateStatePath, "{ invalid json");
     Require(!store.TryLoad(out _, out string invalidError), "Invalid update state should fail TryLoad.");
     Require(invalidError.Length > 0, "Invalid state error should be reported.");
+    bool rejectedInvalidSave = false;
+    try { store.Save(state); } catch (InvalidOperationException) { rejectedInvalidSave = true; }
+    Require(rejectedInvalidSave, "Invalid persisted state must fail closed on Save.");
+    Require(File.ReadAllText(updateStatePath) == "{ invalid json", "Failed Save must preserve the unreadable state.");
+    File.Delete(updateStatePath);
 
     state.MarkStage(UpdateStages.WaitingHealthCheck);
     store.Save(state);
@@ -291,6 +296,43 @@ try
     state.MarkStage(UpdateStages.WaitingHealthCheck);
     Require(!store.Save(state), "A stale updater must not regress a completed health check.");
     Require(store.Load()?.CurrentStage == UpdateStages.Completed, "Early agent confirmation was overwritten.");
+    UpdateStateStore failedReadStore = new(updateStatePath, () => throw new IOException("Synthetic read failure."));
+    bool rejectedFailedRead = false;
+    try { failedReadStore.Save(state); } catch (IOException) { rejectedFailedRead = true; }
+    Require(rejectedFailedRead && store.Load()?.CurrentStage == UpdateStages.Completed,
+        "Read failure must not overwrite a completed state.");
+    UpdateState pendingRead = UpdateState.Create("read-failure", "job-read", "rc41", "rc42");
+    pendingRead.MarkStage(UpdateStages.WaitingHealthCheck);
+    store.Save(pendingRead);
+    pendingRead.MarkStage(UpdateStages.Completed);
+    rejectedFailedRead = false;
+    try { failedReadStore.Save(pendingRead); } catch (IOException) { rejectedFailedRead = true; }
+    Require(rejectedFailedRead && store.Load()?.CurrentStage == UpdateStages.WaitingHealthCheck,
+        "Read failure must not overwrite a pending health check either.");
+    UpdateState concurrent = UpdateState.Create("concurrent", "job-concurrent", "rc41", "rc42");
+    store.Save(concurrent);
+    using (Barrier barrier = new(2))
+    {
+        Task<bool> staleWriter = Task.Run(() => {
+            UpdateState stale = store.Load()!;
+            barrier.SignalAndWait();
+            barrier.SignalAndWait();
+            stale.MarkStage(UpdateStages.WaitingHealthCheck);
+            return store.Save(stale);
+        });
+        Task<bool> finalWriter = Task.Run(() => {
+            barrier.SignalAndWait();
+            bool saved = store.TryTransitionNonTerminal("concurrent", current => {
+                current.MarkStage(UpdateStages.Completed);
+                return true;
+            }, out _);
+            barrier.SignalAndWait();
+            return saved;
+        });
+        Require(finalWriter.GetAwaiter().GetResult() && !staleWriter.GetAwaiter().GetResult()
+            && store.Load()?.CurrentStage == UpdateStages.Completed,
+            "Concurrent stale writer must not regress terminal state.");
+    }
     Require(!store.TryTransitionNonTerminal("update-test", current => {
         current.MarkStage(UpdateStages.RollbackStarting);
         return true;

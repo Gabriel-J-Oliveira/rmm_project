@@ -268,19 +268,21 @@ public sealed class UpdateStateStore
     };
 
     public string Path { get; }
+    private readonly Func<UpdateState?>? _readForSave;
 
     public UpdateStateStore(string path)
     {
         Path = path;
     }
 
+    internal UpdateStateStore(string path, Func<UpdateState?> readForSave)
+        : this(path)
+    {
+        _readForSave = readForSave;
+    }
+
     public UpdateState? Load()
     {
-        if (!File.Exists(Path))
-        {
-            return null;
-        }
-
         try
         {
             string json = File.ReadAllText(Path);
@@ -288,6 +290,14 @@ public sealed class UpdateStateStore
                 ?? throw new InvalidOperationException("Update state JSON is empty.");
             Validate(state);
             return state;
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
         }
         catch (Exception ex)
         {
@@ -318,7 +328,7 @@ public sealed class UpdateStateStore
         AcquireStateMutex(mutex);
         try
         {
-            TryLoad(out UpdateState? current, out _);
+            UpdateState? current = _readForSave is null ? Load() : _readForSave();
             if (current is not null
                 && current.UpdateId.Equals(state.UpdateId, StringComparison.OrdinalIgnoreCase)
                 && !current.IsActive)
