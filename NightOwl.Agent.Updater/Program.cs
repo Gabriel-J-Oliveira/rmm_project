@@ -551,7 +551,11 @@ internal static class Program
     {
         DateTimeOffset previous = state.UpdatedAt == default ? DateTimeOffset.UtcNow : state.UpdatedAt;
         state.MarkStage(stage, status);
-        UpdateStateStore.Save(state);
+        if (!UpdateStateStore.Save(state))
+        {
+            WriteLog("update.stage.skipped_terminal", "Persisted update state is already terminal.", new { update_id = state.UpdateId, job_id = state.JobId, attempted_stage = stage });
+            return;
+        }
         WriteLog("update.stage", "Update stage persisted.", new
         {
             update_id = state.UpdateId,
@@ -694,19 +698,7 @@ internal static class Program
             MarkStage(state, UpdateStages.StartingService);
             try
             {
-                StartService();
-            }
-            catch (Exception ex)
-            {
-                MarkRollbackRequired(state, state.CurrentStage, UpdateErrorCodes.UpdateServiceStartFailed, ex.Message);
-                throw;
-            }
-            MarkStage(state, UpdateStages.ServiceStarted);
-            WriteLog("service.start.done", "Service started after update.");
-            EnsureTrayLifecycleAfterUpdate(installPath);
-            try
-            {
-                ValidatePostUpdate(installPath, manifest.Version);
+                ValidatePostUpdate(installPath, manifest.Version, requireRunningService: false);
             }
             catch (Exception ex)
             {
@@ -714,12 +706,22 @@ internal static class Program
                 throw;
             }
             MarkStage(state, UpdateStages.WaitingHealthCheck);
-
+            try
+            {
+                StartService();
+            }
+            catch (Exception ex)
+            {
+                MarkRollbackRequired(state, state.CurrentStage, UpdateErrorCodes.UpdateServiceStartFailed, ex.Message);
+                throw;
+            }
+            WriteLog("service.start.done", "Service started after update.");
             WriteLog("updater.apply.waiting_health_check", "Servico iniciado; aguardando confirmacao do agente.", new { update_id = state.UpdateId, job_id = state.JobId, version = manifest.Version, previous_version = installed.Version });
             int healthTimeoutSeconds = GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds);
             HealthCheckWaitResult health = WaitForHealthCheck(state, expectRollback: false, TimeSpan.FromSeconds(healthTimeoutSeconds));
             if (health == HealthCheckWaitResult.Completed)
             {
+                EnsureTrayLifecycleAfterUpdate(installPath);
                 CleanupStaging(stagedPath);
                 WriteLog("update.completed", "Update completed after agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, version = manifest.Version, previous_version = installed.Version });
                 WriteJson(new { ok = true, updated = true, healthCheckConfirmed = true, update_id = state.UpdateId, version = manifest.Version, backupPath });
@@ -1990,7 +1992,7 @@ $shortcut.Save()
         return "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     }
 
-    private static void ValidatePostUpdate(string installPath, string expectedVersion)
+    private static void ValidatePostUpdate(string installPath, string expectedVersion, bool requireRunningService = true)
     {
         if (!File.Exists(Paths.ConfigPath))
         {
@@ -2000,8 +2002,7 @@ $shortcut.Save()
         {
             throw new InvalidOperationException("NightOwl.Agent.Windows.exe ausente apos update.");
         }
-        string serviceStatus = GetServiceStatus();
-        if (!serviceStatus.Equals("Running", StringComparison.OrdinalIgnoreCase))
+        if (requireRunningService && !GetServiceStatus().Equals("Running", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Servico nao voltou como Running.");
         }
@@ -2014,10 +2015,16 @@ $shortcut.Save()
 
     private static HealthCheckWaitResult WaitForHealthCheck(UpdateState state, bool expectRollback, TimeSpan timeout)
     {
+        return WaitForHealthCheckCore(() => ReloadUpdateState(state), GetServiceStatus, expectRollback, timeout, TimeSpan.FromSeconds(3));
+    }
+
+    internal static HealthCheckWaitResult WaitForHealthCheckCore(
+        Func<UpdateState> loadState, Func<string> serviceStatus, bool expectRollback, TimeSpan timeout, TimeSpan pollInterval)
+    {
         DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
         while (DateTimeOffset.UtcNow < deadline)
         {
-            UpdateState current = ReloadUpdateState(state);
+            UpdateState current = loadState();
             if (!expectRollback && current.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
             {
                 return HealthCheckWaitResult.Completed;
@@ -2032,14 +2039,14 @@ $shortcut.Save()
             {
                 return HealthCheckWaitResult.FailedState;
             }
-            string serviceStatus = GetServiceStatus();
-            if (serviceStatus.Equals("Stopped", StringComparison.OrdinalIgnoreCase)
-                || serviceStatus.Equals("StopPending", StringComparison.OrdinalIgnoreCase)
-                || serviceStatus.Equals("NotInstalled", StringComparison.OrdinalIgnoreCase))
+            string status = serviceStatus();
+            if (status.Equals("Stopped", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("StopPending", StringComparison.OrdinalIgnoreCase)
+                || status.Equals("NotInstalled", StringComparison.OrdinalIgnoreCase))
             {
                 return HealthCheckWaitResult.ServiceExitedEarly;
             }
-            Thread.Sleep(TimeSpan.FromSeconds(3));
+            Thread.Sleep(pollInterval);
         }
 
         return HealthCheckWaitResult.Timeout;
@@ -2047,17 +2054,33 @@ $shortcut.Save()
 
     private static int ExecuteAutomaticRollback(UpdateState state, string installPath, bool interactive)
     {
-        state = ReloadUpdateState(state);
-        if (state.RollbackAttempt >= 1)
+        bool rollbackStarted = UpdateStateStore.TryTransitionNonTerminal(state.UpdateId, current =>
         {
-            state.MarkRollbackFailed(UpdateErrorCodes.RollbackFailed, "Automatic rollback already attempted for this update_id.");
-            UpdateStateStore.Save(state);
+            if (current.RollbackAttempt >= 1)
+            {
+                return false;
+            }
+            current.RollbackAttempt++;
+            current.MarkStage(UpdateStages.RollbackStarting);
+            return true;
+        }, out UpdateState? currentState);
+        state = currentState ?? ReloadUpdateState(state);
+        if (!rollbackStarted && state.CurrentStage.Equals(UpdateStages.Completed, StringComparison.OrdinalIgnoreCase))
+        {
+            WriteLog("rollback.skipped_completed", "Agent already confirmed the update before rollback began.", new { update_id = state.UpdateId, job_id = state.JobId });
+            return 0;
+        }
+        if (!rollbackStarted)
+        {
+            if (state.IsActive && state.RollbackAttempt >= 1)
+            {
+                state.MarkRollbackFailed(UpdateErrorCodes.RollbackFailed, "Automatic rollback already attempted for this update_id.");
+                UpdateStateStore.Save(state);
+            }
             WriteCriticalRollbackResult(state, installPath, "Rollback already attempted.");
             return 1;
         }
 
-        state.RollbackAttempt++;
-        MarkStage(state, UpdateStages.RollbackStarting);
         WriteLog("rollback.start", "Automatic rollback started.", new { update_id = state.UpdateId, job_id = state.JobId, from_version = state.FromVersion, target_version = state.TargetVersion, reason = state.RollbackReason, original_error_code = state.ErrorCode });
 
         try
@@ -2100,6 +2123,7 @@ $shortcut.Save()
             }
 
             MarkStage(state, UpdateStages.RollbackStartingService);
+            MarkStage(state, UpdateStages.RollbackWaitingHealthCheck);
             try
             {
                 StartService();
@@ -2111,11 +2135,11 @@ $shortcut.Save()
                 throw;
             }
 
-            MarkStage(state, UpdateStages.RollbackWaitingHealthCheck);
             int healthTimeoutSeconds = GetOptionInt(Environment.GetCommandLineArgs(), "--health-timeout-seconds", DefaultHealthCheckTimeoutSeconds);
             HealthCheckWaitResult result = WaitForHealthCheck(state, expectRollback: true, TimeSpan.FromSeconds(healthTimeoutSeconds));
             if (result == HealthCheckWaitResult.RolledBack)
             {
+                EnsureTrayLifecycleAfterUpdate(installPath);
                 WriteLog("rollback.completed", "Rollback confirmed by agent health check.", new { update_id = state.UpdateId, job_id = state.JobId, restored_file_count = ReloadUpdateState(state).RestoredFileCount });
                 WriteJson(new { ok = false, rolled_back = true, update_id = state.UpdateId, active_version = state.FromVersion, attempted_version = state.TargetVersion });
                 if (interactive)
@@ -2937,7 +2961,7 @@ $shortcut.Save()
 
     private sealed record FileChecksum(string Name, string Sha256, long Size);
 
-    private enum HealthCheckWaitResult
+    internal enum HealthCheckWaitResult
     {
         Completed,
         RolledBack,

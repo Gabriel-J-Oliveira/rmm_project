@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace NightOwl.Agent.Shared;
 
@@ -309,9 +311,53 @@ public sealed class UpdateStateStore
         }
     }
 
-    public void Save(UpdateState state)
+    public bool Save(UpdateState state)
     {
         Validate(state);
+        using Mutex mutex = CreateStateMutex();
+        AcquireStateMutex(mutex);
+        try
+        {
+            TryLoad(out UpdateState? current, out _);
+            if (current is not null
+                && current.UpdateId.Equals(state.UpdateId, StringComparison.OrdinalIgnoreCase)
+                && !current.IsActive)
+            {
+                return false;
+            }
+            WriteState(state);
+            return true;
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+        }
+    }
+
+    public bool TryTransitionNonTerminal(string updateId, Func<UpdateState, bool> transition, out UpdateState? current)
+    {
+        using Mutex mutex = CreateStateMutex();
+        AcquireStateMutex(mutex);
+        try
+        {
+            current = Load();
+            if (current is null || !current.UpdateId.Equals(updateId, StringComparison.OrdinalIgnoreCase)
+                || !current.IsActive || !transition(current))
+            {
+                return false;
+            }
+            Validate(current);
+            WriteState(current);
+            return true;
+        }
+        finally
+        {
+            mutex.ReleaseMutex();
+        }
+    }
+
+    private void WriteState(UpdateState state)
+    {
         string? directory = System.IO.Path.GetDirectoryName(Path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
@@ -320,6 +366,29 @@ public sealed class UpdateStateStore
 
         string json = JsonSerializer.Serialize(state, JsonOptions);
         NightOwlFileStore.WriteAllText(Path, json);
+    }
+
+    private Mutex CreateStateMutex()
+    {
+        string fullPath = System.IO.Path.GetFullPath(Path).ToUpperInvariant();
+        string suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fullPath)));
+        string name = $"NightOwl.Agent.UpdateState.{suffix}";
+        return new Mutex(false, OperatingSystem.IsWindows() ? @"Global\" + name : name);
+    }
+
+    private static void AcquireStateMutex(Mutex mutex)
+    {
+        try
+        {
+            if (!mutex.WaitOne(TimeSpan.FromSeconds(30)))
+            {
+                throw new TimeoutException("Timed out waiting for update state lock.");
+            }
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous writer exited; the current state is reloaded before mutation.
+        }
     }
 
     public static void Validate(UpdateState state)

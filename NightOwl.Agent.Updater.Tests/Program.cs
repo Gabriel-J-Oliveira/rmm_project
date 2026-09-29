@@ -56,6 +56,7 @@ try
     TestUnrelatedProcessIgnored();
     TestCurrentProcessIsIgnored();
     TestRollbackOriginalErrorPreserved();
+    TestHealthCheckOrderingAndOutcomes();
     TestTrayLifecycleSourceMarkers();
 
     Console.WriteLine("NightOwl updater version decision tests passed.");
@@ -306,6 +307,73 @@ static void TestRollbackOriginalErrorPreserved()
 
     Require(state.ErrorCode == UpdateErrorCodes.UpdateFileLockTimeout, "Rollback should preserve original error code.");
     Require(state.ErrorMessage.Contains("clrjit.dll", StringComparison.OrdinalIgnoreCase), "Rollback should preserve original error message.");
+}
+
+static void TestHealthCheckOrderingAndOutcomes()
+{
+    string directory = Path.Combine(Path.GetTempPath(), "nightowl-healthcheck-tests-" + Guid.NewGuid());
+    Directory.CreateDirectory(directory);
+    try
+    {
+        UpdateStateStore store = new(Path.Combine(directory, "update-state.json"));
+        UpdateState state = UpdateState.Create("early", "job-early", "rc41", "rc42");
+        state.MarkStage(UpdateStages.WaitingHealthCheck);
+        store.Save(state);
+        UpdateState stale = store.Load()!;
+        store.TryTransitionNonTerminal("early", current => {
+            current.MarkStage(UpdateStages.Completed);
+            return true;
+        }, out _);
+        stale.MarkStage(UpdateStages.WaitingHealthCheck);
+        Require(!store.Save(stale), "Early confirmation must not be overwritten by the updater.");
+        Require(UpdaterProgram.WaitForHealthCheckCore(
+            () => store.Load()!, () => "Running", false, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(5))
+            == UpdaterProgram.HealthCheckWaitResult.Completed, "Early confirmation should finish without timeout or rollback.");
+
+        state = UpdateState.Create("slow", "job-slow", "rc41", "rc42");
+        state.MarkStage(UpdateStages.WaitingHealthCheck);
+        store.Save(state);
+        Task confirmation = Task.Run(async () => {
+            await Task.Delay(40);
+            store.TryTransitionNonTerminal("slow", current => {
+                current.MarkStage(UpdateStages.Completed);
+                return true;
+            }, out _);
+        });
+        Require(UpdaterProgram.WaitForHealthCheckCore(
+            () => store.Load()!, () => "Running", false, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(5))
+            == UpdaterProgram.HealthCheckWaitResult.Completed, "Delayed confirmation should finish normally.");
+        confirmation.GetAwaiter().GetResult();
+
+        state = UpdateState.Create("timeout", "job-timeout", "rc41", "rc42");
+        state.MarkStage(UpdateStages.WaitingHealthCheck);
+        store.Save(state);
+        Require(UpdaterProgram.WaitForHealthCheckCore(
+            () => store.Load()!, () => "Running", false, TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(5))
+            == UpdaterProgram.HealthCheckWaitResult.Timeout, "Missing confirmation must produce a real timeout.");
+        Require(store.TryTransitionNonTerminal("timeout", current => {
+            current.MarkRollbackRequired(UpdateStages.WaitingHealthCheck, UpdateErrorCodes.UpdateHealthcheckTimeout, "Timed out.");
+            return true;
+        }, out _), "Real timeout must leave rollback available.");
+
+        state = UpdateState.Create("rollback", "job-rollback", "rc41", "rc42");
+        state.MarkStage(UpdateStages.RollbackWaitingHealthCheck);
+        store.Save(state);
+        stale = store.Load()!;
+        store.TryTransitionNonTerminal("rollback", current => {
+            current.MarkStage(UpdateStages.RolledBack);
+            return true;
+        }, out _);
+        stale.MarkStage(UpdateStages.RollbackWaitingHealthCheck);
+        Require(!store.Save(stale), "Immediate rollback confirmation must remain terminal.");
+        Require(UpdaterProgram.WaitForHealthCheckCore(
+            () => store.Load()!, () => "Running", true, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(5))
+            == UpdaterProgram.HealthCheckWaitResult.RolledBack, "Rollback should complete without second confirmation.");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
 }
 
 static void TestTrayLifecycleSourceMarkers()

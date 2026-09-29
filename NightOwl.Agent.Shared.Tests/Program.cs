@@ -288,6 +288,54 @@ try
     UpdateState completed = store.Load() ?? throw new InvalidOperationException("Completed state was not loaded.");
     Require(!completed.IsActive, "Completed update state should not be active.");
     Require(completed.HealthCheckConfirmed, "Completed update must have health check confirmed.");
+    state.MarkStage(UpdateStages.WaitingHealthCheck);
+    Require(!store.Save(state), "A stale updater must not regress a completed health check.");
+    Require(store.Load()?.CurrentStage == UpdateStages.Completed, "Early agent confirmation was overwritten.");
+    Require(!store.TryTransitionNonTerminal("update-test", current => {
+        current.MarkStage(UpdateStages.RollbackStarting);
+        return true;
+    }, out _), "A completed update must not start an artificial rollback.");
+
+    UpdateState slower = UpdateState.Create("update-slower", "job-slower", "rc41", "rc42");
+    slower.MarkStage(UpdateStages.WaitingHealthCheck);
+    store.Save(slower);
+    Require(store.Load()?.CurrentStage == UpdateStages.WaitingHealthCheck, "Recovery must see the armed health check after interruption.");
+    bool absentConfirmationTimedOut = false;
+    DateTimeOffset deadline = DateTimeOffset.UtcNow.AddMilliseconds(100);
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        if (store.Load()?.CurrentStage == UpdateStages.Completed) break;
+        await Task.Delay(10);
+    }
+    absentConfirmationTimedOut = store.Load()?.CurrentStage != UpdateStages.Completed;
+    Require(absentConfirmationTimedOut, "Missing confirmation must produce a real timeout.");
+    Require(store.TryTransitionNonTerminal("update-slower", current => {
+        current.MarkRollbackRequired(UpdateStages.WaitingHealthCheck, UpdateErrorCodes.UpdateHealthcheckTimeout, "Timed out.");
+        return true;
+    }, out _), "Timeout must still permit rollback.");
+    Require(store.Load()?.CurrentStage == UpdateStages.RollbackRequired, "Timeout rollback state was not persisted.");
+
+    UpdateState delayed = UpdateState.Create("update-delayed", "job-delayed", "rc41", "rc42");
+    delayed.MarkStage(UpdateStages.WaitingHealthCheck);
+    store.Save(delayed);
+    await Task.Delay(30);
+    Require(store.TryTransitionNonTerminal("update-delayed", current => {
+        current.MarkStage(UpdateStages.Completed);
+        return true;
+    }, out _), "Delayed agent confirmation was not accepted.");
+    Require(store.Load()?.CurrentStage == UpdateStages.Completed, "Delayed confirmation did not finish the update.");
+
+    UpdateState rollbackRace = UpdateState.Create("update-rollback-race", "job-rollback-race", "rc41", "rc42");
+    rollbackRace.MarkStage(UpdateStages.RollbackWaitingHealthCheck);
+    store.Save(rollbackRace);
+    UpdateState staleRollback = store.Load()!;
+    Require(store.TryTransitionNonTerminal("update-rollback-race", current => {
+        current.MarkStage(UpdateStages.RolledBack);
+        return true;
+    }, out _), "Immediate rollback confirmation was not accepted.");
+    staleRollback.MarkStage(UpdateStages.RollbackWaitingHealthCheck);
+    Require(!store.Save(staleRollback), "Stale rollback state must not overwrite RolledBack.");
+    Require(store.Load()?.CurrentStage == UpdateStages.RolledBack, "Rollback confirmation was regressed.");
 
     UpdateState mismatch = UpdateState.Create("update-mismatch", "job-mismatch", "0.1.0.7", "0.1.0.8");
     mismatch.MarkStage(UpdateStages.WaitingHealthCheck);

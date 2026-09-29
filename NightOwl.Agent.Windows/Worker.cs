@@ -158,9 +158,11 @@ public sealed class Worker : BackgroundService
         }
 
         bool isRollbackHealthCheck = state.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase);
-        if (!state.CurrentStage.Equals(UpdateStages.WaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
-            && !state.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase)
-            && !isRollbackHealthCheck)
+        bool CanConfirm(UpdateState current) => isRollbackHealthCheck
+            ? current.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
+            : current.CurrentStage.Equals(UpdateStages.WaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
+                || current.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase);
+        if (!CanConfirm(state))
         {
             return;
         }
@@ -180,15 +182,20 @@ public sealed class Worker : BackgroundService
 
         if (!VersionsEqual(runningVersion, expectedVersion))
         {
-            if (isRollbackHealthCheck)
+            bool persisted = store.TryTransitionNonTerminal(state.UpdateId, current =>
             {
-                state.MarkRollbackFailed(UpdateErrorCodes.RollbackVersionMismatch, $"Running version {runningVersion} does not match rollback target {state.FromVersion}.");
-            }
-            else
+                if (!CanConfirm(current)) return false;
+                if (isRollbackHealthCheck)
+                    current.MarkRollbackFailed(UpdateErrorCodes.RollbackVersionMismatch, $"Running version {runningVersion} does not match rollback target {current.FromVersion}.");
+                else
+                    current.MarkRollbackRequired(UpdateStages.WaitingHealthCheck, UpdateErrorCodes.UpdateHealthcheckVersionMismatch, $"Running version {runningVersion} does not match target {current.TargetVersion}.");
+                return true;
+            }, out UpdateState? currentState);
+            if (!persisted)
             {
-                state.MarkRollbackRequired(UpdateStages.WaitingHealthCheck, UpdateErrorCodes.UpdateHealthcheckVersionMismatch, $"Running version {runningVersion} does not match target {state.TargetVersion}.");
+                return;
             }
-            store.Save(state);
+            state = currentState!;
             await _logger.LogAsync("update.healthcheck.failed", "Update target version mismatch.", new
             {
                 update_id = state.UpdateId,
@@ -208,26 +215,38 @@ public sealed class Worker : BackgroundService
 
         if (string.IsNullOrWhiteSpace(config.MachineId))
         {
-            state.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, "Machine ID is empty after update.");
-            store.Save(state);
+            bool persisted = store.TryTransitionNonTerminal(state.UpdateId, current =>
+            {
+                if (!CanConfirm(current)) return false;
+                current.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, "Machine ID is empty after update.");
+                return true;
+            }, out UpdateState? currentState);
+            if (!persisted) return;
+            state = currentState!;
             await _logger.LogAsync("update.healthcheck.failed", "Machine ID was not available after update.", new { update_id = state.UpdateId, job_id = state.JobId, error_code = state.ErrorCode }, ct, "error");
             WritePendingUpdateResult(config, state, "failed", 20, runningVersion, state.FromVersion, state.ErrorMessage);
             return;
         }
 
-        state.ServiceStarted = true;
-        if (isRollbackHealthCheck)
+        bool confirmed = store.TryTransitionNonTerminal(state.UpdateId, current =>
         {
-            state.PreviousVersionConfirmed = true;
-            state.HealthCheckConfirmed = false;
-            state.MarkStage(UpdateStages.RolledBack, UpdateStatuses.Failed);
-        }
-        else
-        {
-            state.HealthCheckConfirmed = true;
-            state.MarkStage(UpdateStages.Completed, UpdateStatuses.Completed);
-        }
-        store.Save(state);
+            if (!CanConfirm(current)) return false;
+            current.ServiceStarted = true;
+            if (isRollbackHealthCheck)
+            {
+                current.PreviousVersionConfirmed = true;
+                current.HealthCheckConfirmed = false;
+                current.MarkStage(UpdateStages.RolledBack, UpdateStatuses.Failed);
+            }
+            else
+            {
+                current.HealthCheckConfirmed = true;
+                current.MarkStage(UpdateStages.Completed, UpdateStatuses.Completed);
+            }
+            return true;
+        }, out UpdateState? confirmedState);
+        if (!confirmed) return;
+        state = confirmedState!;
         await _logger.LogAsync(isRollbackHealthCheck ? "rollback.healthcheck.confirmed" : "update.healthcheck.confirmed", isRollbackHealthCheck ? "Rollback completed after agent health check." : "Update completed after agent health check.", new
         {
             update_id = state.UpdateId,
