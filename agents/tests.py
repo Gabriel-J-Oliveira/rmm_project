@@ -1369,6 +1369,160 @@ class AgentOperationalJobProgressTests(TestCase):
         self.machine.save()
         self.client = Client(HTTP_AUTHORIZATION=f'Bearer {self.token}')
 
+    def test_late_update_rollback_supersedes_completed_only_for_same_execution(self):
+        update_id = str(uuid.uuid4())
+        job = AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'target_version': '0.1.1.0-rc42'},
+        )
+        first_time = timezone.now() - timedelta(minutes=3)
+        completed = {
+            'job_id': str(job.id), 'status': 'completed', 'exit_code': 0,
+            'finished_at': first_time.isoformat(),
+            'result': {
+                'update_id': update_id, 'target_version': '0.1.1.0-rc42',
+                'previous_version': '0.1.1.0-rc41', 'installed_version': '0.1.1.0-rc42',
+                'health_check_confirmed': True,
+            },
+        }
+        result_id = str(uuid.uuid4())
+        first = self.client.post('/api/agent/jobs/result/', data=completed, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+        self.assertEqual(first.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        original_receipt = AgentJobResultReceipt.objects.get(result_id=result_id)
+        original_hash = original_receipt.payload_sha256
+
+        rollback = {
+            'job_id': str(job.id), 'status': 'rolled_back', 'exit_code': 23,
+            'finished_at': (first_time + timedelta(minutes=2)).isoformat(),
+            'error_code': 'UPDATE_HEALTHCHECK_TIMEOUT',
+            'result': {
+                'update_id': update_id, 'target_version': '0.1.1.0-rc42',
+                'previous_version': '0.1.1.0-rc41', 'installed_version': '0.1.1.0-rc41',
+                'rollback_performed': True, 'rollback_confirmed': True,
+            },
+        }
+        second = self.client.post('/api/agent/jobs/result/', data=rollback, content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(second.status_code, 200)
+        job.refresh_from_db()
+        self.machine.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_ROLLED_BACK)
+        self.assertEqual(job.error_code, 'UPDATE_HEALTHCHECK_TIMEOUT')
+        self.assertEqual(self.machine.agent_version, '0.1.1.0-rc41')
+        self.assertEqual(AgentJobResultReceipt.objects.get(result_id=result_id).payload_sha256, original_hash)
+        self.assertTrue(AuditEvent.objects.filter(endpoint=self.machine, event_type='agent.update.late_rollback_reconciled').exists())
+
+        late_completed = self.client.post('/api/agent/jobs/result/', data=completed, content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertTrue(late_completed.json()['ignored'])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_ROLLED_BACK)
+
+    def test_late_update_rollback_rejects_other_update_and_old_receipt(self):
+        job = AgentJob.objects.create(
+            endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_COMPLETED,
+            finished_at=timezone.now(),
+            result={'update_id': 'correct-id', 'target_version': '0.1.1.0-rc42', 'previous_version': '0.1.1.0-rc41'},
+        )
+        for update_id, finished_at in [
+            ('other-id', timezone.now() + timedelta(minutes=1)),
+            ('correct-id', timezone.now() - timedelta(minutes=1)),
+        ]:
+            with self.subTest(update_id=update_id):
+                response = self.client.post('/api/agent/jobs/result/', data={
+                    'job_id': str(job.id), 'status': 'rolled_back',
+                    'finished_at': finished_at.isoformat(),
+                    'result': {
+                        'update_id': update_id, 'target_version': '0.1.1.0-rc42',
+                        'previous_version': '0.1.1.0-rc41', 'installed_version': '0.1.1.0-rc41',
+                        'rollback_performed': True, 'rollback_confirmed': True,
+                    },
+                }, content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json()['ignored'])
+                job.refresh_from_db()
+                self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def test_late_rollback_failed_and_duplicate_completion(self):
+        update_id = str(uuid.uuid4())
+        job = AgentJob.objects.create(
+            endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+        )
+        completed = {
+            'job_id': str(job.id), 'status': 'completed',
+            'finished_at': (timezone.now() - timedelta(minutes=2)).isoformat(),
+            'result': {'update_id': update_id, 'installed_version': '0.1.1.0-rc42'},
+        }
+        result_id = str(uuid.uuid4())
+        self.client.post('/api/agent/jobs/result/', data=completed, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+        duplicate = self.client.post('/api/agent/jobs/result/', data=completed, content_type='application/json', HTTP_IDEMPOTENCY_KEY=result_id)
+        self.assertTrue(duplicate.json()['duplicate'])
+        failed = self.client.post('/api/agent/jobs/result/', data={
+            'job_id': str(job.id), 'status': 'failed',
+            'finished_at': timezone.now().isoformat(), 'error_code': 'ROLLBACK_FAILED',
+            'result': {
+                'update_id': update_id, 'update_status': 'rollback_failed',
+                'rollback_error_code': 'ROLLBACK_FAILED',
+            },
+        }, content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(failed.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_ROLLBACK_FAILED)
+
+    def test_late_rollback_reuses_result_id_without_conflict(self):
+        update_id = str(uuid.uuid4())
+        job = AgentJob.objects.create(
+            endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+        )
+        result_id = str(uuid.uuid4())
+        finished_at = timezone.now() - timedelta(minutes=2)
+        completed = {
+            'job_id': str(job.id), 'status': 'completed',
+            'finished_at': finished_at.isoformat(),
+            'result': {
+                'update_id': update_id, 'target_version': '0.1.1.0-rc42',
+                'previous_version': '0.1.1.0-rc41', 'installed_version': '0.1.1.0-rc42',
+            },
+        }
+        self.assertEqual(self.client.post(
+            '/api/agent/jobs/result/', data=completed, content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=result_id,
+        ).status_code, 200)
+        completed_hash = AgentJobResultReceipt.objects.get(result_id=result_id).payload_sha256
+        rollback = {
+            'job_id': str(job.id), 'status': 'rolled_back',
+            'finished_at': timezone.now().isoformat(),
+            'result': {
+                'update_id': update_id, 'target_version': '0.1.1.0-rc42',
+                'previous_version': '0.1.1.0-rc41', 'installed_version': '0.1.1.0-rc41',
+                'rollback_performed': True, 'rollback_confirmed': True,
+            },
+        }
+        from agents.views import _is_late_update_rollback_resolution
+        job.refresh_from_db()
+        self.assertTrue(_is_late_update_rollback_resolution(job, AgentJob.STATUS_ROLLED_BACK, rollback))
+        response = self.client.post(
+            '/api/agent/jobs/result/', data=rollback, content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=result_id,
+        )
+        self.assertEqual(response.status_code, 200)
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_ROLLED_BACK)
+        self.assertEqual(AgentJobResultReceipt.objects.get(result_id=result_id).conflict_count, 0)
+        self.assertEqual(AgentJobResultReceipt.objects.get(result_id=result_id).payload_sha256, completed_hash)
+        self.assertEqual(AgentJobResultReceipt.objects.filter(job=job).count(), 2)
+        replay = self.client.post(
+            '/api/agent/jobs/result/', data=rollback, content_type='application/json',
+            HTTP_IDEMPOTENCY_KEY=result_id,
+        )
+        self.assertEqual(replay.status_code, 200)
+        self.assertTrue(replay.json()['duplicate'])
+
     def test_update_job_stage_maps_to_progress_and_message(self):
         job = AgentJob.objects.create(
             endpoint=self.machine,

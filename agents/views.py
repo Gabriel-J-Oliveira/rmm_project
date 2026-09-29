@@ -639,6 +639,44 @@ def _is_update_interrupted_resolution(job, incoming_status):
     )
 
 
+def _is_late_update_rollback_resolution(job, incoming_status, payload):
+    if (
+        job is None
+        or job.job_type != AgentJob.TYPE_UPDATE_AGENT
+        or job.status != AgentJob.STATUS_COMPLETED
+        or incoming_status not in {AgentJob.STATUS_ROLLED_BACK, AgentJob.STATUS_ROLLBACK_FAILED}
+    ):
+        return False
+    previous = job.result if isinstance(job.result, dict) else {}
+    result = _payload_result(payload)
+    previous_update_id = str(previous.get('update_id') or '').strip()
+    incoming_update_id = str(result.get('update_id') or '').strip()
+    if not previous_update_id or previous_update_id != incoming_update_id:
+        return False
+    finished_at = _parse_agent_datetime(payload.get('finished_at'))
+    if not finished_at or not job.finished_at or finished_at <= job.finished_at:
+        return False
+    target = str(previous.get('target_version') or '').strip()
+    incoming_target = str(result.get('target_version') or result.get('attempted_version') or '').strip()
+    if target and incoming_target != target:
+        return False
+    if result.get('rollback_performed') is not True and incoming_status != AgentJob.STATUS_ROLLBACK_FAILED:
+        return False
+    if incoming_status == AgentJob.STATUS_ROLLBACK_FAILED and not result.get('rollback_error_code'):
+        return False
+    if incoming_status == AgentJob.STATUS_ROLLED_BACK:
+        restored = _update_installed_version(payload)
+        previous_version = normalize_agent_version(result.get('previous_version') or previous.get('previous_version') or '')
+        if not restored or not previous_version or compare_versions(restored, previous_version) != 0:
+            return False
+        if result.get('rollback_confirmed') is not True and not (
+            isinstance(result.get('health_check'), dict)
+            and result['health_check'].get('stage') == 'rolled_back'
+        ):
+            return False
+    return True
+
+
 def _payload_result(payload):
     result = payload.get('result') if isinstance(payload, dict) else {}
     return result if isinstance(result, dict) else {}
@@ -1187,6 +1225,15 @@ class AgentJobsResultView(APIView):
         job = None
         if job_id:
             job = AgentJob.objects.select_for_update().filter(pk=job_id, endpoint=machine).first()
+        if (
+            job is not None
+            and job.job_type == AgentJob.TYPE_UPDATE_AGENT
+            and job_status == AgentJob.STATUS_FAILED
+            and _result_stage(_payload_result(payload)) == AgentJob.STATUS_ROLLBACK_FAILED
+        ):
+            job_status = AgentJob.STATUS_ROLLBACK_FAILED
+            payload = {**payload, 'status': job_status}
+            payload_hash = _payload_sha256(payload)
         if job_id and job is None:
             create_audit_event(
                 event_type='job.result_rejected',
@@ -1227,21 +1274,48 @@ class AgentJobsResultView(APIView):
                 },
             )
         receipt = None
+        late_rollback = _is_late_update_rollback_resolution(job, job_status, payload)
         if result_id:
             receipt = AgentJobResultReceipt.objects.filter(result_id=result_id).select_related('job', 'endpoint').first()
             if receipt:
                 receipt.last_seen_at = timezone.now()
                 if receipt.payload_sha256 != payload_hash:
+                    rollback_receipt_id = f'update-rollback-{uuid.uuid5(uuid.NAMESPACE_URL, result_id + ":" + payload_hash)}'
+                    if (
+                        job is not None
+                        and job.status in {AgentJob.STATUS_ROLLED_BACK, AgentJob.STATUS_ROLLBACK_FAILED}
+                        and AgentJobResultReceipt.objects.filter(
+                            result_id=rollback_receipt_id, job=job, payload_sha256=payload_hash
+                        ).exists()
+                    ):
+                        return Response(
+                            {
+                                'status': 'ok', 'duplicate': True, 'result_id': result_id,
+                                'machine_id': machine.machine_id or str(machine.id),
+                                'job_id': str(job.id), 'job_status': job.status, 'updated': False,
+                            },
+                            status=status.HTTP_200_OK,
+                        )
                     same_job_progression = (
                         job is not None
                         and receipt.job_id == job.id
                         and (
                             job.status not in RESULT_FINAL_STATUSES
                             or _is_update_interrupted_resolution(job, job_status)
+                            or late_rollback
                         )
                         and job_status in RESULT_FINAL_STATUSES
                     )
-                    if same_job_progression:
+                    if same_job_progression and late_rollback:
+                        AgentJobResultReceipt.objects.create(
+                            result_id=rollback_receipt_id,
+                            job=job,
+                            endpoint=machine,
+                            payload_sha256=payload_hash,
+                            first_payload=_sanitize_agent_payload(payload),
+                        )
+                        receipt.save(update_fields=['last_seen_at'])
+                    elif same_job_progression:
                         receipt.payload_sha256 = payload_hash
                         receipt.first_payload = _sanitize_agent_payload(payload)
                         receipt.save(update_fields=['last_seen_at', 'payload_sha256', 'first_payload'])
@@ -1284,7 +1358,9 @@ class AgentJobsResultView(APIView):
                     )
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
-            if job.status in RESULT_FINAL_STATUSES and not _is_update_interrupted_resolution(job, incoming_status):
+            if job.status in RESULT_FINAL_STATUSES and not (
+                _is_update_interrupted_resolution(job, incoming_status) or late_rollback
+            ):
                 logger.info(
                     'job.result.ignored_final_job endpoint_id=%s job_id=%s current_status=%s incoming_status=%s',
                     machine.id,
@@ -1445,6 +1521,30 @@ class AgentJobsResultView(APIView):
                                 'new_version': installed_version,
                             },
                         )
+                if late_rollback:
+                    if job.status == AgentJob.STATUS_ROLLED_BACK:
+                        restored_version = _update_installed_version(payload)
+                        if restored_version != (machine.agent_version or ''):
+                            machine.agent_version = restored_version
+                            machine.save(update_fields=['agent_version', 'updated_at'])
+                    create_audit_event(
+                        event_type='agent.update.late_rollback_reconciled',
+                        title='Rollback tardio reconciliado',
+                        description=f'Resultado de rollback de update_agent reconciliado para {machine.hostname}.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent',
+                        endpoint=machine,
+                        metadata={
+                            'job_id': str(job.id),
+                            'update_id': str(job.result.get('update_id') or ''),
+                            'from_version': str(job.result.get('previous_version') or ''),
+                            'target_version': str(job.result.get('target_version') or ''),
+                            'active_version': _update_installed_version(payload),
+                            'error_code': job.error_code,
+                            'final_status': job.status,
+                        },
+                    )
                 if (
                     job.status in {
                         AgentJob.STATUS_COMPLETED,
