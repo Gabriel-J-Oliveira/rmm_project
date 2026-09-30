@@ -18,8 +18,10 @@ public sealed class JobExecutionCoordinator
         _logger = logger;
     }
 
-    public async Task RecoverInterruptedJobsAsync(AgentConfig config, PendingResultQueue resultQueue, CancellationToken ct)
+    public async Task RecoverInterruptedJobsAsync(AgentConfig config, PendingResultQueue resultQueue, CancellationToken ct,
+        string? updateStatePath = null)
     {
+        updateStatePath ??= NightOwlPaths.Current.UpdateStatePath;
         HashSet<string> pendingResultJobIds = new(StringComparer.OrdinalIgnoreCase);
         foreach (PendingResultRecord pendingResult in resultQueue.LoadAll())
         {
@@ -32,6 +34,8 @@ public sealed class JobExecutionCoordinator
             if (TryBuildFinalResult(config, pendingResult, out RemoteJobResult? finalResult))
             {
                 RemoteJobResult recovered = finalResult!;
+                JobStateRecord? existing = _policy.Store.Load(recovered.JobId);
+                if (existing is not null && JobFinalStatuses.All.Contains(existing.Status)) continue;
                 _policy.Store.MarkFinal(recovered);
                 await _logger.LogAsync("job.final_state.recovered", "Local job state finalized from pending result.", new
                 {
@@ -52,6 +56,14 @@ public sealed class JobExecutionCoordinator
                     record.JobId,
                     record.JobType
                 }, ct);
+                continue;
+            }
+
+            if (ShouldSkipInterruptedRecoveryForPendingUpdate(record, updateStatePath))
+            {
+                await _logger.LogAsync("job.interrupted.recovery_skipped_update_handshake",
+                    "Update job is still owned by an active updater handshake.",
+                    new { record.JobId, record.JobType }, ct);
                 continue;
             }
 
@@ -189,6 +201,16 @@ public sealed class JobExecutionCoordinator
         int timeoutSeconds = Math.Clamp(record.ExternalRunnerTimeoutSeconds <= 0 ? 900 : record.ExternalRunnerTimeoutSeconds, 60, 3600);
         DateTimeOffset expiresAt = record.ExternalRunnerStartedAt.Value.AddSeconds(timeoutSeconds);
         return now <= expiresAt;
+    }
+
+    public static bool ShouldSkipInterruptedRecoveryForPendingUpdate(JobStateRecord record, string updateStatePath)
+    {
+        if (!record.JobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || !File.Exists(updateStatePath)) return false;
+        UpdateStateStore store = new(updateStatePath);
+        if (!store.TryLoad(out UpdateState? state, out _)) return true;
+        return state is not null && state.IsActive
+            && state.JobId.Equals(record.JobId, StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<JobStartDecision> TryStartAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)

@@ -11,6 +11,13 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--handshake-only", StringComparer.Ordinal))
+    {
+        await UpdateHealthCheckHandshakeTests.RunAsync();
+        Console.WriteLine("Update healthcheck handshake tests passed.");
+        return;
+    }
+    await UpdateHealthCheckHandshakeTests.RunAsync();
     TestNewConfigContainsTrustedReleaseKeys();
     TestLegacyDefaultConfigReceivesTrustedReleaseKeys();
     TestMigrationIsIdempotent();
@@ -36,6 +43,7 @@ try
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
     TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
+    TestRunningUpdateWaitsForActiveHandshakeBeforeRecovery();
     TestCompletedUpdateJobIsIgnoredOnLaterRestart();
     TestAgentStateHeartbeatPreservesInstalledLifecycle();
     TestAgentStateJobPullAndCollectionPreserveLifecycle();
@@ -1188,6 +1196,49 @@ static void TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart()
         {
             Environment.SetEnvironmentVariable("NIGHTOWL_AGENT_CONFIG", previousConfig);
         }
+    }
+    finally
+    {
+        DeleteTempDir(dir);
+    }
+}
+
+static void TestRunningUpdateWaitsForActiveHandshakeBeforeRecovery()
+{
+    string dir = CreateTempDir();
+    try
+    {
+        string jobId = Guid.NewGuid().ToString();
+        string jobsDir = Path.Combine(dir, "jobs");
+        string pendingDir = Path.Combine(dir, "pending-results");
+        string updateStatePath = Path.Combine(dir, "update-state.json");
+        JobStore jobs = new(jobsDir);
+        PendingResultQueue queue = new(pendingDir);
+        JobExecutionCoordinator coordinator = new(new JobExecutionPolicy(jobs),
+            new JsonlLogger(Path.Combine(dir, "agent.log")));
+        AgentConfig config = new() { MachineId = "test-machine", AgentVersion = "rc43" };
+        UpdateStateStore updateStore = new(updateStatePath);
+        UpdateState update = UpdateState.Create(Guid.NewGuid().ToString(), jobId, "rc41", "rc43");
+        update.MarkStage(UpdateStages.ServiceStarted);
+        Require(updateStore.Save(update), "Could not persist legacy updater state.");
+        jobs.Mark(jobId, "update_agent", "running", 1, "test-correlation");
+
+        coordinator.RecoverInterruptedJobsAsync(config, queue, CancellationToken.None, updateStatePath)
+            .GetAwaiter().GetResult();
+        Require(jobs.Load(jobId)!.Status == "running", "Recovery interrupted an active updater handshake.");
+        Require(queue.LoadAll().Count == 0, "Recovery fabricated JOB_INTERRUPTED during handshake.");
+
+        update.MarkStage(UpdateStages.WaitingHealthCheck);
+        Require(updateStore.Save(update), "Could not persist WaitingHealthCheck.");
+        Require(UpdateHealthCheckHandshake.TryConfirm(updateStore, update, false, out _),
+            "Handshake did not persist Completed.");
+        queue.Enqueue("update_agent", NewCompletedUpdateResult(jobId), critical: true,
+            resultId: $"update-{jobId}");
+        coordinator.RecoverInterruptedJobsAsync(config, queue, CancellationToken.None, updateStatePath)
+            .GetAwaiter().GetResult();
+        Require(jobs.Load(jobId)!.Status == JobFinalStatuses.Completed,
+            "Final result did not finalize the local update job.");
+        Require(queue.LoadAll().Count == 1, "Recovery added an interrupted result after completion.");
     }
     finally
     {

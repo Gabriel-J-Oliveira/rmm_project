@@ -64,9 +64,10 @@ public sealed class Worker : BackgroundService
             source = config.MachineIdSource
         }, stoppingToken);
         await _logger.LogAsync("service.starting", "NightOwl .NET agent starting.", new { config.AgentVersion }, stoppingToken);
-        await ConfirmPendingUpdateAsync(config, stoppingToken);
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
         await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
+        using CancellationTokenSource handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        Task updateHandshakeTask = RunPendingUpdateHandshakeAsync(config, handshakeCancellation.Token);
         TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
         Task telemetryTask = config.TelemetryEnabled && config.HasValidToken
             ? _telemetry.RunAsync(config, stoppingToken)
@@ -127,6 +128,8 @@ public sealed class Worker : BackgroundService
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         finally
         {
+            handshakeCancellation.Cancel();
+            await updateHandshakeTask;
             try { await telemetryTask.WaitAsync(TimeSpan.FromSeconds(3)); }
             catch (TimeoutException)
             {
@@ -143,28 +146,75 @@ public sealed class Worker : BackgroundService
         }
     }
 
+    private async Task RunPendingUpdateHandshakeAsync(AgentConfig config, CancellationToken ct)
+    {
+        try
+        {
+            await ConfirmPendingUpdateAsync(config, ct);
+            await MigrateLegacyPendingResultsAsync(config, ct);
+            await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            await _logger.LogAsync("update.healthcheck.skipped", "Pending update confirmation could not finish.",
+                new { reason = "unexpected_error", exception_type = ex.GetType().Name }, CancellationToken.None, "error");
+        }
+    }
+
     private async Task ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
     {
         UpdateStateStore store = new(NightOwlPaths.Current.UpdateStatePath);
-        if (!store.TryLoad(out UpdateState? state, out string error))
+        (bool readable, UpdateState? state) = await UpdateHealthCheckHandshake.ReadInitialAsync(
+            () => (store.TryLoad(out UpdateState? loaded, out _), loaded), Task.Delay, ct);
+        if (!readable)
         {
-            await _logger.LogAsync("update.state.invalid", "Update state file is invalid.", new { error_code = UpdateErrorCodes.UpdateStateInvalid, error }, ct, "error");
+            await _logger.LogAsync("update.state.invalid", "Update state could not be read after bounded retries.",
+                new { error_code = UpdateErrorCodes.UpdateStateInvalid }, ct, "error");
             return;
         }
 
-        if (state is null || !state.IsActive)
+        if (state is null)
         {
             return;
         }
 
+        await _logger.LogAsync("update.healthcheck.pending_found", "Pending update state found at agent startup.",
+            new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage }, ct);
+        if (!state.IsActive)
+        {
+            await _logger.LogAsync("update.healthcheck.skipped", "Update state is already terminal.",
+                new { update_id = state.UpdateId, job_id = state.JobId, reason = "terminal_state" }, ct);
+            return;
+        }
+
+        UpdateState initial = state;
         bool isRollbackHealthCheck = state.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase);
-        bool CanConfirm(UpdateState current) => isRollbackHealthCheck
-            ? current.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
-            : current.CurrentStage.Equals(UpdateStages.WaitingHealthCheck, StringComparison.OrdinalIgnoreCase)
-                || current.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase);
-        if (!CanConfirm(state))
+        if (state.CurrentStage.Equals(UpdateStages.StartingService, StringComparison.OrdinalIgnoreCase)
+            || state.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase))
         {
+            await _logger.LogAsync("update.healthcheck.waiting_handshake", "Waiting for updater healthcheck stage.",
+                new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage,
+                    max_wait_seconds = UpdateHealthCheckHandshake.MaxPolls * UpdateHealthCheckHandshake.PollInterval.TotalSeconds }, ct);
+        }
+        HandshakeResult handshake = await UpdateHealthCheckHandshake.WaitAsync(initial,
+            () => (store.TryLoad(out UpdateState? loaded, out _), loaded), Task.Delay, ct);
+        if (handshake.Status != HandshakeStatus.Ready)
+        {
+            await _logger.LogAsync(handshake.Status == HandshakeStatus.TimedOut
+                    ? "update.healthcheck.handshake_timeout" : "update.healthcheck.skipped",
+                "Update healthcheck confirmation was not attempted.",
+                new { update_id = initial.UpdateId, job_id = initial.JobId, reason = handshake.Reason,
+                    read_retries = handshake.ReadRetries }, ct,
+                handshake.Status is HandshakeStatus.TimedOut or HandshakeStatus.ReadFailed ? "warning" : "info");
             return;
+        }
+        state = handshake.State!;
+        if (handshake.Waited)
+        {
+            await _logger.LogAsync("update.healthcheck.waiting_observed", "Updater healthcheck stage observed.",
+                new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage,
+                    read_retries = handshake.ReadRetries }, ct);
         }
 
         string runningVersion = GetRunningAgentVersion(config.AgentVersion);
@@ -184,7 +234,7 @@ public sealed class Worker : BackgroundService
         {
             bool persisted = store.TryTransitionNonTerminal(state.UpdateId, current =>
             {
-                if (!CanConfirm(current)) return false;
+                if (!UpdateHealthCheckHandshake.CanConfirm(current, initial, isRollbackHealthCheck)) return false;
                 if (isRollbackHealthCheck)
                     current.MarkRollbackFailed(UpdateErrorCodes.RollbackVersionMismatch, $"Running version {runningVersion} does not match rollback target {current.FromVersion}.");
                 else
@@ -217,7 +267,7 @@ public sealed class Worker : BackgroundService
         {
             bool persisted = store.TryTransitionNonTerminal(state.UpdateId, current =>
             {
-                if (!CanConfirm(current)) return false;
+                if (!UpdateHealthCheckHandshake.CanConfirm(current, initial, isRollbackHealthCheck)) return false;
                 current.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, "Machine ID is empty after update.");
                 return true;
             }, out UpdateState? currentState);
@@ -228,25 +278,17 @@ public sealed class Worker : BackgroundService
             return;
         }
 
-        bool confirmed = store.TryTransitionNonTerminal(state.UpdateId, current =>
+        bool confirmed = UpdateHealthCheckHandshake.TryConfirm(store, initial, isRollbackHealthCheck,
+            out UpdateState? confirmedState);
+        if (!confirmed)
         {
-            if (!CanConfirm(current)) return false;
-            current.ServiceStarted = true;
-            if (isRollbackHealthCheck)
-            {
-                current.PreviousVersionConfirmed = true;
-                current.HealthCheckConfirmed = false;
-                current.MarkStage(UpdateStages.RolledBack, UpdateStatuses.Failed);
-            }
-            else
-            {
-                current.HealthCheckConfirmed = true;
-                current.MarkStage(UpdateStages.Completed, UpdateStatuses.Completed);
-            }
-            return true;
-        }, out UpdateState? confirmedState);
-        if (!confirmed) return;
+            await _logger.LogAsync("update.healthcheck.skipped", "Update state changed before confirmation.",
+                new { update_id = initial.UpdateId, job_id = initial.JobId, reason = "state_changed_before_persist" }, ct);
+            return;
+        }
         state = confirmedState!;
+        await _logger.LogAsync("update.healthcheck.persisted", "Healthcheck terminal state persisted.",
+            new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage }, ct);
         await _logger.LogAsync(isRollbackHealthCheck ? "rollback.healthcheck.confirmed" : "update.healthcheck.confirmed", isRollbackHealthCheck ? "Rollback completed after agent health check." : "Update completed after agent health check.", new
         {
             update_id = state.UpdateId,
