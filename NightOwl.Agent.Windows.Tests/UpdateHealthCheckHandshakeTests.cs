@@ -39,6 +39,9 @@ internal static class UpdateHealthCheckHandshakeTests
         await RollbackHealthCheckStillWorksAsync();
         await CancellationPropagatesAsync();
         await WorkerRunsWhileLegacyHandshakeWaitsAsync();
+        await WorkerRunsWhileLegacyHandshakeWaitsAsync("stale");
+        await WorkerRunsWhileLegacyHandshakeWaitsAsync("missing");
+        await TargetedFinalizationRequiresMatchingUpdateIdAsync();
     }
 
     private static async Task LegacyUpdaterWaitsForHandshakeAsync()
@@ -256,7 +259,7 @@ internal static class UpdateHealthCheckHandshakeTests
         catch (OperationCanceledException) { }
     }
 
-    private static async Task WorkerRunsWhileLegacyHandshakeWaitsAsync()
+    private static async Task WorkerRunsWhileLegacyHandshakeWaitsAsync(string? oldResult = null)
     {
         string directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
             "nightowl-worker-handshake-tests", Guid.NewGuid().ToString("N"));
@@ -320,6 +323,20 @@ internal static class UpdateHealthCheckHandshakeTests
             Require(jobs.Load(jobA)!.Status == "running", "Startup recovery interrupted update A.");
             jobs.Mark(jobB, "ping", "running", 1, "test-concurrent-job");
 
+            if (oldResult is not null)
+            {
+                Directory.CreateDirectory(pendingPath);
+                Dictionary<string, string> details = new() { ["type"] = "update_agent" };
+                if (oldResult == "stale") details["update_id"] = Guid.NewGuid().ToString();
+                File.WriteAllText(System.IO.Path.Combine(pendingPath, "aaa-old-result.json"),
+                    JsonSerializer.Serialize(new JobExecutionResult
+                    {
+                        JobId = jobA,
+                        Status = JobFinalStatuses.Failed,
+                        Result = details
+                    }));
+            }
+
             update.MarkStage(UpdateStages.WaitingHealthCheck);
             Require(updateStore.Save(update), "Could not persist RC41 WaitingHealthCheck.");
             await handler.Result.Task.WaitAsync(TimeSpan.FromSeconds(20));
@@ -327,6 +344,13 @@ internal static class UpdateHealthCheckHandshakeTests
                 TimeSpan.FromSeconds(10));
             Require(jobs.Load(jobB)!.Status == "running",
                 "Concurrent job B was incorrectly recovered as JOB_INTERRUPTED.");
+            if (oldResult is not null)
+            {
+                Require(Directory.GetFiles(System.IO.Path.Combine(pendingPath, "migrated"), "aaa-old-result-*.json").Length == 1,
+                    "Incompatible legacy result was not removed from the active pending directory.");
+                Require(!queue.LoadAll().Any(record => record.JobId == jobA && record.Status == JobFinalStatuses.Failed),
+                    "Incompatible legacy result was reused in the pending queue.");
+            }
             Require(updateStore.Load()!.CurrentStage == UpdateStages.Completed,
                 "RC41 updater could not observe persisted Completed.");
             using JsonDocument result = JsonDocument.Parse(handler.Result.Task.Result);
@@ -348,6 +372,46 @@ internal static class UpdateHealthCheckHandshakeTests
                 worker.Dispose();
             }
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static async Task TargetedFinalizationRequiresMatchingUpdateIdAsync()
+    {
+        foreach (string candidate in new[] { "stale", "missing", "matching" })
+        {
+            string directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "nightowl-targeted-recovery-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                string jobId = Guid.NewGuid().ToString();
+                string expectedUpdateId = Guid.NewGuid().ToString();
+                Dictionary<string, string> details = new() { ["type"] = "update_agent" };
+                if (candidate != "missing")
+                    details["update_id"] = candidate == "matching" ? expectedUpdateId : Guid.NewGuid().ToString();
+
+                JobStore jobs = new(System.IO.Path.Combine(directory, "jobs"));
+                jobs.Mark(jobId, "update_agent", "running", 1, "test-targeted-recovery");
+                PendingResultQueue queue = new(System.IO.Path.Combine(directory, "pending"));
+                PendingResultRecord pending = queue.Enqueue("update_agent", new JobExecutionResult
+                {
+                    JobId = jobId,
+                    Status = JobFinalStatuses.Completed,
+                    Result = details
+                });
+                JobExecutionCoordinator coordinator = new(new JobExecutionPolicy(jobs),
+                    new JsonlLogger(System.IO.Path.Combine(directory, "agent.log")));
+                bool finalized = await coordinator.FinalizePendingUpdateJobAsync(new AgentConfig(), pending,
+                    jobId, expectedUpdateId, CancellationToken.None);
+                bool shouldFinalize = candidate == "matching";
+                Require(finalized == shouldFinalize
+                    && jobs.Load(jobId)!.Status == (shouldFinalize ? JobFinalStatuses.Completed : "running"),
+                    $"Targeted finalization accepted an incompatible {candidate} update result.");
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
         }
     }
 

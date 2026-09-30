@@ -162,10 +162,11 @@ public sealed class Worker : BackgroundService
     {
         try
         {
-            string? resultJobId = await ConfirmPendingUpdateAsync(config, ct);
-            if (!string.IsNullOrWhiteSpace(resultJobId))
+            (string JobId, string UpdateId)? target = await ConfirmPendingUpdateAsync(config, ct);
+            if (target is { } identity && !string.IsNullOrWhiteSpace(identity.JobId)
+                && !string.IsNullOrWhiteSpace(identity.UpdateId))
             {
-                await MigrateLegacyPendingResultsAsync(config, ct, resultJobId);
+                await MigrateLegacyPendingResultsAsync(config, ct, identity.JobId, identity.UpdateId);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
@@ -176,7 +177,7 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    private async Task<string?> ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
+    private async Task<(string JobId, string UpdateId)?> ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
     {
         UpdateStateStore store = new(_updateStatePath);
         (bool readable, UpdateState? state) = await UpdateHealthCheckHandshake.ReadInitialAsync(
@@ -271,7 +272,7 @@ public sealed class Worker : BackgroundService
             if (isRollbackHealthCheck)
             {
                 WritePendingUpdateResult(config, state, "failed", 24, runningVersion, state.FromVersion, state.RollbackErrorMessage);
-                return state.JobId;
+                return (state.JobId, state.UpdateId);
             }
             return null;
         }
@@ -288,7 +289,7 @@ public sealed class Worker : BackgroundService
             state = currentState!;
             await _logger.LogAsync("update.healthcheck.failed", "Machine ID was not available after update.", new { update_id = state.UpdateId, job_id = state.JobId, error_code = state.ErrorCode }, ct, "error");
             WritePendingUpdateResult(config, state, "failed", 20, runningVersion, state.FromVersion, state.ErrorMessage);
-            return state.JobId;
+            return (state.JobId, state.UpdateId);
         }
 
         bool confirmed = UpdateHealthCheckHandshake.TryConfirm(store, initial, isRollbackHealthCheck,
@@ -312,7 +313,7 @@ public sealed class Worker : BackgroundService
             machine_id = config.MachineId
         }, ct);
         WritePendingUpdateResult(config, state, isRollbackHealthCheck ? "rolled_back" : "completed", isRollbackHealthCheck ? 23 : 0, runningVersion, state.FromVersion, isRollbackHealthCheck ? "Agent rollback confirmed." : "Agent updated successfully.");
-        return state.JobId;
+        return (state.JobId, state.UpdateId);
     }
 
     private static void WritePendingUpdateResult(AgentConfig config, UpdateState state, string status, int exitCode, string installedVersion, string previousVersion, string message)
@@ -411,7 +412,7 @@ public sealed class Worker : BackgroundService
     }
 
     private async Task MigrateLegacyPendingResultsAsync(AgentConfig config, CancellationToken ct,
-        string? finalizeUpdateJobId = null)
+        string? finalizeUpdateJobId = null, string? finalizeUpdateId = null)
     {
         List<string> pendingFiles = new();
         string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
@@ -451,6 +452,19 @@ public sealed class Worker : BackgroundService
                 JobExecutionResult result = JsonSerializer.Deserialize<JobExecutionResult>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("Pending job result is invalid.");
                 string jobType = InferJobType(result);
+                if (!string.IsNullOrWhiteSpace(finalizeUpdateJobId)
+                    && jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+                    && result.JobId.Equals(finalizeUpdateJobId, StringComparison.OrdinalIgnoreCase)
+                    && !JobExecutionCoordinator.MatchesTargetedUpdate(result, finalizeUpdateJobId, finalizeUpdateId))
+                {
+                    string rejectedDir = Path.Combine(pendingDir, "migrated");
+                    Directory.CreateDirectory(rejectedDir);
+                    File.Move(pendingPath, Path.Combine(rejectedDir,
+                        $"{Path.GetFileNameWithoutExtension(pendingPath)}-{Guid.NewGuid():N}.json"));
+                    await _logger.LogAsync("update.result.stale_ignored", "Pending update result does not match the confirmed update.",
+                        new { job_id = result.JobId }, ct, "warning");
+                    continue;
+                }
                 string? resultId = Path.GetFileName(pendingPath).Equals("pending-update-result.json", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(result.JobId)
                     ? $"update-{result.JobId}"
                     : null;
@@ -459,7 +473,7 @@ public sealed class Worker : BackgroundService
                     && jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
                     && result.JobId.Equals(finalizeUpdateJobId, StringComparison.OrdinalIgnoreCase))
                 {
-                    await _jobCoordinator.FinalizePendingUpdateJobAsync(config, queued, finalizeUpdateJobId, ct);
+                    await _jobCoordinator.FinalizePendingUpdateJobAsync(config, queued, finalizeUpdateJobId, finalizeUpdateId!, ct);
                 }
                 string migratedDir = Path.Combine(pendingDir, "migrated");
                 Directory.CreateDirectory(migratedDir);

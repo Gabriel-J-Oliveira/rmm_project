@@ -130,10 +130,11 @@ public sealed class JobExecutionCoordinator
     }
 
     public async Task<bool> FinalizePendingUpdateJobAsync(AgentConfig config, PendingResultRecord pending,
-        string jobId, CancellationToken ct)
+        string jobId, string updateId, CancellationToken ct)
     {
         if (!pending.JobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
             || !pending.JobId.Equals(jobId, StringComparison.OrdinalIgnoreCase)
+            || !MatchesTargetedUpdate(pending, jobId, updateId)
             || !TryBuildFinalResult(config, pending, out RemoteJobResult? finalResult))
             return false;
 
@@ -151,6 +152,31 @@ public sealed class JobExecutionCoordinator
             result_id = pending.ResultId
         }, ct);
         return true;
+    }
+
+    internal static bool MatchesTargetedUpdate(PendingResultRecord pending, string jobId, string updateId)
+    {
+        try
+        {
+            JobExecutionResult? result = pending.Payload.Deserialize<JobExecutionResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            return result is not null && MatchesTargetedUpdate(result, jobId, updateId);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool MatchesTargetedUpdate(JobExecutionResult result, string jobId, string? updateId)
+    {
+        return !string.IsNullOrWhiteSpace(jobId)
+            && !string.IsNullOrWhiteSpace(updateId)
+            && result.JobId.Equals(jobId, StringComparison.OrdinalIgnoreCase)
+            && result.Result is JsonElement { ValueKind: JsonValueKind.Object } details
+            && details.TryGetProperty("update_id", out JsonElement actual)
+            && actual.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(actual.GetString())
+            && actual.GetString()!.Equals(updateId, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryBuildFinalResult(AgentConfig config, PendingResultRecord pendingResult, out RemoteJobResult? finalResult)
