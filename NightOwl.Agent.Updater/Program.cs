@@ -533,42 +533,66 @@ internal static class Program
     }
 
     internal static void CleanupInactiveRunnerDirectories(string root, string currentPath, UpdateState? state,
-        Func<string, bool>? isInUse = null)
+        Func<string, bool>? isInUse = null, Func<string, IEnumerable<string>>? enumerateDirectories = null,
+        Action<string>? removeDirectory = null)
     {
-        if (state?.IsActive != false || !Directory.Exists(root))
+        if (state?.IsActive != false)
         {
             return;
         }
-        foreach (string updateDirectory in Directory.EnumerateDirectories(root))
+        try
         {
-            string updateName = Path.GetFileName(updateDirectory);
-            if (updateName.Length != 64 || !updateName.All(Uri.IsHexDigit))
+            if (!Directory.Exists(root))
             {
-                continue;
+                return;
             }
-            foreach (string candidate in Directory.EnumerateDirectories(updateDirectory))
+            Func<string, IEnumerable<string>> enumerate = enumerateDirectories ?? Directory.EnumerateDirectories;
+            foreach (string updateDirectory in enumerate(root))
             {
-                string launchName = Path.GetFileName(candidate);
-                if (launchName.Length != 32 || !launchName.All(Uri.IsHexDigit))
-                {
-                    continue;
-                }
-                if (candidate.Equals(currentPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
                 try
                 {
-                    if (!(isInUse ?? RunnerDirectoryInUse)(candidate))
+                    string updateName = Path.GetFileName(updateDirectory);
+                    if (updateName.Length != 64 || !updateName.All(Uri.IsHexDigit))
                     {
-                        Directory.Delete(candidate, recursive: true);
+                        continue;
+                    }
+                    foreach (string candidate in enumerate(updateDirectory))
+                    {
+                        try
+                        {
+                            string launchName = Path.GetFileName(candidate);
+                            if (launchName.Length != 32 || !launchName.All(Uri.IsHexDigit)
+                                || candidate.Equals(currentPath, StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+                            if (!(isInUse ?? RunnerDirectoryInUse)(candidate))
+                            {
+                                if (removeDirectory is null)
+                                {
+                                    Directory.Delete(candidate, recursive: true);
+                                }
+                                else
+                                {
+                                    removeDirectory(candidate);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            WriteLog("runner.cleanup_failed", "Inactive runner cleanup deferred.", new { path = candidate, error = SanitizeMessage(ex.Message) });
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    WriteLog("runner.cleanup_failed", "Inactive runner cleanup deferred.", new { path = candidate, error = SanitizeMessage(ex.Message) });
+                    WriteLog("runner.cleanup_failed", "Inactive runner cleanup deferred.", new { path = updateDirectory, error = SanitizeMessage(ex.Message) });
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            WriteLog("runner.cleanup_failed", "Inactive runner cleanup deferred.", new { path = root, error = SanitizeMessage(ex.Message) });
         }
     }
 
@@ -2235,35 +2259,44 @@ internal static class Program
         }
     }
 
-    private static void StopTray()
+    private static void StopTray() => TryStopTrayBestEffort(() => Process.GetProcessesByName(TrayProcessName));
+
+    internal static void TryStopTrayBestEffort(Func<Process[]> enumerateProcesses)
     {
-        string[] allowedRoots = NormalizeRoots(new[] { Paths.InstallDir, RunnerRoot });
-        int currentProcessId = Environment.ProcessId;
-        foreach (Process process in Process.GetProcessesByName(TrayProcessName))
+        try
         {
-            try
+            string[] allowedRoots = NormalizeRoots(new[] { Paths.InstallDir, RunnerRoot });
+            int currentProcessId = Environment.ProcessId;
+            foreach (Process process in enumerateProcesses())
             {
-                if (!IsNightOwlRelatedProcess(process, allowedRoots, currentProcessId, out string executablePath))
+                try
                 {
-                    WriteLog("updater.tray.stop_skipped", "Tray-like process ignored because it is outside NightOwl roots.", new { process_id = process.Id, process_name = process.ProcessName });
-                    continue;
+                    if (!IsNightOwlRelatedProcess(process, allowedRoots, currentProcessId, out string executablePath))
+                    {
+                        WriteLog("updater.tray.stop_skipped", "Tray-like process ignored because it is outside NightOwl roots.", new { process_id = process.Id, process_name = process.ProcessName });
+                        continue;
+                    }
+                    process.CloseMainWindow();
+                    if (!process.WaitForExit(3000))
+                    {
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(5000);
+                    }
+                    WriteLog("updater.tray.stopped", "Tray process stopped.", new { process_id = process.Id, executable_path = executablePath });
                 }
-                process.CloseMainWindow();
-                if (!process.WaitForExit(3000))
+                catch (Exception ex)
                 {
-                    process.Kill(entireProcessTree: true);
-                    process.WaitForExit(5000);
+                    WriteLog("updater.tray.stop_failed", "Falha ao encerrar tray.", new { error = SanitizeMessage(ex.Message) });
                 }
-                WriteLog("updater.tray.stopped", "Tray process stopped.", new { process_id = process.Id, executable_path = executablePath });
+                finally
+                {
+                    process.Dispose();
+                }
             }
-            catch (Exception ex)
-            {
-                WriteLog("updater.tray.stop_failed", "Falha ao encerrar tray.", new { error = ex.Message });
-            }
-            finally
-            {
-                process.Dispose();
-            }
+        }
+        catch (Exception ex)
+        {
+            WriteLog("updater.tray.stop_failed", "Falha ao enumerar tray.", new { error = SanitizeMessage(ex.Message) });
         }
     }
 
@@ -2728,8 +2761,15 @@ $shortcut.Save()
 
         PersistRecoveryStage(store, state, UpdateStages.BackupCreated);
         WriteLog("backup.created", "Install backup validated.", new { backupPath });
-        stopTray();
-        WriteLog("tray.stop.done", "Tray process stopped.");
+        try
+        {
+            stopTray();
+            WriteLog("tray.stop.done", "Tray process stopped.");
+        }
+        catch (Exception ex)
+        {
+            WriteLog("updater.tray.stop_failed", "Falha auxiliar ao encerrar tray; update continua.", new { error = SanitizeMessage(ex.Message) });
+        }
         PersistRecoveryStage(store, state, UpdateStages.StoppingService);
         try
         {

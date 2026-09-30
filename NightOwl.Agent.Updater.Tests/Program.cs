@@ -78,8 +78,10 @@ try
     TestCrashAfterRollbackRestore();
     TestRecoveryMatrix();
     TestPreReplacementRecovery();
+    TestTrayFailureDuringPreReplacementRecovery();
     TestFullAutomaticRollback();
     TestRunnerCopyAndLifetimeLock();
+    TestRunnerCleanupFailures();
     TestTrayLifecycleSourceMarkers();
 
     Console.WriteLine("NightOwl updater version decision tests passed.");
@@ -784,6 +786,48 @@ static void TestPreReplacementRecovery()
         "Invalid backup must not begin replacement and must terminate safely.");
 }
 
+static void TestTrayFailureDuringPreReplacementRecovery()
+{
+    UpdaterProgram.TryStopTrayBestEffort(() => throw new UnauthorizedAccessException("synthetic enumeration failure"));
+    UpdaterProgram.TryStopTrayBestEffort(() => throw new IOException("synthetic process enumeration failure"));
+
+    foreach (string stage in new[] { UpdateStages.StoppingService, UpdateStages.ServiceStopped,
+        UpdateStages.Quiescing })
+    {
+        using TempTree tree = TempTree.Create();
+        string install = tree.CreateDirectory("install");
+        string staged = tree.CreateDirectory("staged");
+        string backup = Path.Combine(tree.Root, "backup");
+        UpdateStateStore store = new(Path.Combine(tree.Root, "state.json"));
+        UpdateState state = NewOfficialState("tray-failure-" + stage, stage);
+        state.BackupPath = backup;
+        state.StagingPath = staged;
+        foreach (string name in new[] { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe",
+            "NightOwl.Agent.Tray.exe", "agent.version.json" })
+        {
+            File.WriteAllText(Path.Combine(install, name), "previous-" + name);
+        }
+        UpdaterProgram.CreateBackupForTest(install, backup, state.UpdateId, state.FromVersion);
+        Require(store.Save(state), "Recovery state must persist before tray failure.");
+
+        bool serviceStopped = true;
+        int startCalls = 0;
+        int quiesceCalls = 0;
+        bool prepared = UpdaterProgram.PrepareReplacement(store.Load()!, store, install, staged, backup,
+            recreateBackup: false, recovering: true,
+            () => throw new UnauthorizedAccessException("synthetic tray stop failure"),
+            () => Require(serviceStopped, "Service stop must be idempotent on recovery."),
+            () => { serviceStopped = false; startCalls++; },
+            () => quiesceCalls++);
+        Require(prepared && quiesceCalls == 1 && startCalls == 0
+            && store.Load()?.CurrentStage == UpdateStages.Quiescing
+            && store.Load()?.IsActive == true,
+            "Tray exception must not terminalize a stopped-service recovery: " + stage);
+        Require(serviceStopped && prepared,
+            "Stopped service is safe only while replacement recovery continues: " + stage);
+    }
+}
+
 static void TestFullAutomaticRollback()
 {
     foreach (string stage in new[] { UpdateStages.ReplacingFiles, UpdateStages.FilesReplaced, "synthetic_unknown" })
@@ -823,6 +867,60 @@ static void TestFullAutomaticRollback()
         && store.Load()?.CurrentStage == UpdateStages.RolledBack,
         "Interrupted replacement must complete real automatic rollback: " + stage);
     }
+}
+
+static void TestRunnerCleanupFailures()
+{
+    using TempTree tree = TempTree.Create();
+    string source = tree.CreateDirectory("source");
+    string root = tree.CreateDirectory("runner");
+    File.WriteAllText(Path.Combine(source, "NightOwl.Agent.Updater.exe"), "synthetic executable");
+    UpdateState terminal = NewOfficialState("cleanup-errors", UpdateStages.Completed);
+    string updateDirectory = Path.Combine(root, new string('A', 64));
+    string current = Path.Combine(updateDirectory, Guid.NewGuid().ToString("N"));
+    string active = Path.Combine(updateDirectory, Guid.NewGuid().ToString("N"));
+    string failing = Path.Combine(updateDirectory, Guid.NewGuid().ToString("N"));
+    string removable = Path.Combine(updateDirectory, Guid.NewGuid().ToString("N"));
+    foreach (string path in new[] { current, active, failing, removable })
+    {
+        Directory.CreateDirectory(path);
+    }
+
+    UpdaterProgram.CleanupInactiveRunnerDirectories(root, current, terminal,
+        enumerateDirectories: _ => throw new UnauthorizedAccessException("synthetic root enumeration failure"));
+    UpdaterProgram.CleanupInactiveRunnerDirectories(root, current, terminal,
+        enumerateDirectories: _ => throw new IOException("synthetic root enumeration failure"));
+    Require(Directory.Exists(current) && Directory.Exists(active),
+        "Enumeration failure must not delete current or active runner.");
+
+    UpdaterProgram.CleanupInactiveRunnerDirectories(root, current, terminal,
+        isInUse: path => path.Equals(active, StringComparison.OrdinalIgnoreCase),
+        enumerateDirectories: path => path.Equals(updateDirectory, StringComparison.OrdinalIgnoreCase)
+            ? throw new IOException("synthetic nested enumeration failure")
+            : Directory.EnumerateDirectories(path));
+    Require(Directory.Exists(removable), "Nested enumeration failure must be contained.");
+
+    int removalFailures = 0;
+    UpdaterProgram.CleanupInactiveRunnerDirectories(root, current, terminal,
+        isInUse: path => path.Equals(active, StringComparison.OrdinalIgnoreCase),
+        enumerateDirectories: path => path.Equals(updateDirectory, StringComparison.OrdinalIgnoreCase)
+            ? new[] { current, active, failing, removable }
+            : Directory.EnumerateDirectories(path),
+        removeDirectory: path => {
+            if (path.Equals(failing, StringComparison.OrdinalIgnoreCase))
+            {
+                removalFailures++;
+                throw new UnauthorizedAccessException("synthetic item removal failure");
+            }
+            Directory.Delete(path, recursive: true);
+        });
+    Require(removalFailures == 1 && Directory.Exists(current) && Directory.Exists(active)
+        && Directory.Exists(failing) && !Directory.Exists(removable),
+        "One failed runner removal must not block later candidates or remove protected runners.");
+    Require(terminal.CurrentStage == UpdateStages.Completed,
+        "Best-effort cleanup must not mutate terminal update state.");
+    string launch = UpdaterProgram.CopyRunnerFilesForTest(source, root, "after-cleanup-failure");
+    Require(File.Exists(launch), "Valid runner launch must continue after cleanup failures.");
 }
 
 static void TestRunnerCopyAndLifetimeLock()
