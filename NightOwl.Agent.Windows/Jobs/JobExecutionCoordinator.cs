@@ -129,6 +129,30 @@ public sealed class JobExecutionCoordinator
         }
     }
 
+    public async Task<bool> FinalizePendingUpdateJobAsync(AgentConfig config, PendingResultRecord pending,
+        string jobId, CancellationToken ct)
+    {
+        if (!pending.JobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+            || !pending.JobId.Equals(jobId, StringComparison.OrdinalIgnoreCase)
+            || !TryBuildFinalResult(config, pending, out RemoteJobResult? finalResult))
+            return false;
+
+        JobStateRecord? existing = _policy.Store.Load(jobId);
+        if (existing is not null && JobFinalStatuses.All.Contains(existing.Status))
+            return existing.Status.Equals(finalResult!.Status, StringComparison.OrdinalIgnoreCase);
+        if (existing is not null && !existing.JobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        _policy.Store.MarkFinal(finalResult!, existing?.CorrelationId ?? "");
+        await _logger.LogAsync("job.final_state.recovered", "Local update job finalized from pending result.", new
+        {
+            job_id = jobId,
+            status = finalResult!.Status,
+            result_id = pending.ResultId
+        }, ct);
+        return true;
+    }
+
     private static bool TryBuildFinalResult(AgentConfig config, PendingResultRecord pendingResult, out RemoteJobResult? finalResult)
     {
         finalResult = null;

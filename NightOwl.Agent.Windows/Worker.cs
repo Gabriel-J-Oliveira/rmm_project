@@ -13,7 +13,6 @@ public sealed class Worker : BackgroundService
     private static readonly TimeSpan DefaultLoopDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan InitialStateSaveBackoff = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan MaxStateSaveBackoff = TimeSpan.FromSeconds(60);
-    private readonly ConfigService _configService;
     private readonly StateService _stateService;
     private readonly JsonlLogger _logger;
     private readonly AgentApiClient _api;
@@ -22,6 +21,8 @@ public sealed class Worker : BackgroundService
     private readonly JobExecutionCoordinator _jobCoordinator;
     private readonly PendingResultQueue _resultQueue;
     private readonly TelemetryPipeline _telemetry;
+    private readonly Func<AgentConfig> _loadConfig;
+    private readonly string _updateStatePath;
 
     public Worker(
         ConfigService configService,
@@ -34,7 +35,6 @@ public sealed class Worker : BackgroundService
         PendingResultQueue resultQueue,
         TelemetryPipeline telemetry)
     {
-        _configService = configService;
         _stateService = stateService;
         _logger = logger;
         _api = api;
@@ -43,11 +43,23 @@ public sealed class Worker : BackgroundService
         _jobCoordinator = jobCoordinator;
         _resultQueue = resultQueue;
         _telemetry = telemetry;
+        _loadConfig = configService.Load;
+        _updateStatePath = NightOwlPaths.Current.UpdateStatePath;
+    }
+
+    internal Worker(ConfigService configService, StateService stateService, JsonlLogger logger,
+        AgentApiClient api, WindowsInventoryCollector collector, JobExecutor jobExecutor,
+        JobExecutionCoordinator jobCoordinator, PendingResultQueue resultQueue, TelemetryPipeline telemetry,
+        Func<AgentConfig> loadConfig, string updateStatePath)
+        : this(configService, stateService, logger, api, collector, jobExecutor, jobCoordinator, resultQueue, telemetry)
+    {
+        _loadConfig = loadConfig;
+        _updateStatePath = updateStatePath;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        AgentConfig config = _configService.Load();
+        AgentConfig config = _loadConfig();
         AgentState state = _stateService.Load(config);
         await _logger.LogAsync("config.loaded", "Agent config loaded.", new { config.AgentVersion, config.ServerBaseUrl }, stoppingToken);
         await _logger.LogAsync("config.normalized", "Agent URLs normalized.", new
@@ -65,7 +77,7 @@ public sealed class Worker : BackgroundService
         }, stoppingToken);
         await _logger.LogAsync("service.starting", "NightOwl .NET agent starting.", new { config.AgentVersion }, stoppingToken);
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
-        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken);
+        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken, _updateStatePath);
         using CancellationTokenSource handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         Task updateHandshakeTask = RunPendingUpdateHandshakeAsync(config, handshakeCancellation.Token);
         TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
@@ -150,9 +162,11 @@ public sealed class Worker : BackgroundService
     {
         try
         {
-            await ConfirmPendingUpdateAsync(config, ct);
-            await MigrateLegacyPendingResultsAsync(config, ct);
-            await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, ct);
+            string? resultJobId = await ConfirmPendingUpdateAsync(config, ct);
+            if (!string.IsNullOrWhiteSpace(resultJobId))
+            {
+                await MigrateLegacyPendingResultsAsync(config, ct, resultJobId);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
@@ -162,21 +176,21 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    private async Task ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
+    private async Task<string?> ConfirmPendingUpdateAsync(AgentConfig config, CancellationToken ct)
     {
-        UpdateStateStore store = new(NightOwlPaths.Current.UpdateStatePath);
+        UpdateStateStore store = new(_updateStatePath);
         (bool readable, UpdateState? state) = await UpdateHealthCheckHandshake.ReadInitialAsync(
             () => (store.TryLoad(out UpdateState? loaded, out _), loaded), Task.Delay, ct);
         if (!readable)
         {
             await _logger.LogAsync("update.state.invalid", "Update state could not be read after bounded retries.",
                 new { error_code = UpdateErrorCodes.UpdateStateInvalid }, ct, "error");
-            return;
+            return null;
         }
 
         if (state is null)
         {
-            return;
+            return null;
         }
 
         await _logger.LogAsync("update.healthcheck.pending_found", "Pending update state found at agent startup.",
@@ -185,7 +199,7 @@ public sealed class Worker : BackgroundService
         {
             await _logger.LogAsync("update.healthcheck.skipped", "Update state is already terminal.",
                 new { update_id = state.UpdateId, job_id = state.JobId, reason = "terminal_state" }, ct);
-            return;
+            return null;
         }
 
         UpdateState initial = state;
@@ -194,20 +208,18 @@ public sealed class Worker : BackgroundService
             || state.CurrentStage.Equals(UpdateStages.ServiceStarted, StringComparison.OrdinalIgnoreCase))
         {
             await _logger.LogAsync("update.healthcheck.waiting_handshake", "Waiting for updater healthcheck stage.",
-                new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage,
-                    max_wait_seconds = UpdateHealthCheckHandshake.MaxPolls * UpdateHealthCheckHandshake.PollInterval.TotalSeconds }, ct);
+                new { update_id = state.UpdateId, job_id = state.JobId, stage = state.CurrentStage }, ct);
         }
         HandshakeResult handshake = await UpdateHealthCheckHandshake.WaitAsync(initial,
             () => (store.TryLoad(out UpdateState? loaded, out _), loaded), Task.Delay, ct);
         if (handshake.Status != HandshakeStatus.Ready)
         {
-            await _logger.LogAsync(handshake.Status == HandshakeStatus.TimedOut
-                    ? "update.healthcheck.handshake_timeout" : "update.healthcheck.skipped",
+            await _logger.LogAsync("update.healthcheck.skipped",
                 "Update healthcheck confirmation was not attempted.",
                 new { update_id = initial.UpdateId, job_id = initial.JobId, reason = handshake.Reason,
                     read_retries = handshake.ReadRetries }, ct,
-                handshake.Status is HandshakeStatus.TimedOut or HandshakeStatus.ReadFailed ? "warning" : "info");
-            return;
+                handshake.Status == HandshakeStatus.ReadFailed ? "warning" : "info");
+            return null;
         }
         state = handshake.State!;
         if (handshake.Waited)
@@ -243,7 +255,7 @@ public sealed class Worker : BackgroundService
             }, out UpdateState? currentState);
             if (!persisted)
             {
-                return;
+                return null;
             }
             state = currentState!;
             await _logger.LogAsync("update.healthcheck.failed", "Update target version mismatch.", new
@@ -259,8 +271,9 @@ public sealed class Worker : BackgroundService
             if (isRollbackHealthCheck)
             {
                 WritePendingUpdateResult(config, state, "failed", 24, runningVersion, state.FromVersion, state.RollbackErrorMessage);
+                return state.JobId;
             }
-            return;
+            return null;
         }
 
         if (string.IsNullOrWhiteSpace(config.MachineId))
@@ -271,11 +284,11 @@ public sealed class Worker : BackgroundService
                 current.MarkFailed(UpdateErrorCodes.UpdateStateInvalid, "Machine ID is empty after update.");
                 return true;
             }, out UpdateState? currentState);
-            if (!persisted) return;
+            if (!persisted) return null;
             state = currentState!;
             await _logger.LogAsync("update.healthcheck.failed", "Machine ID was not available after update.", new { update_id = state.UpdateId, job_id = state.JobId, error_code = state.ErrorCode }, ct, "error");
             WritePendingUpdateResult(config, state, "failed", 20, runningVersion, state.FromVersion, state.ErrorMessage);
-            return;
+            return state.JobId;
         }
 
         bool confirmed = UpdateHealthCheckHandshake.TryConfirm(store, initial, isRollbackHealthCheck,
@@ -284,7 +297,7 @@ public sealed class Worker : BackgroundService
         {
             await _logger.LogAsync("update.healthcheck.skipped", "Update state changed before confirmation.",
                 new { update_id = initial.UpdateId, job_id = initial.JobId, reason = "state_changed_before_persist" }, ct);
-            return;
+            return null;
         }
         state = confirmedState!;
         await _logger.LogAsync("update.healthcheck.persisted", "Healthcheck terminal state persisted.",
@@ -299,6 +312,7 @@ public sealed class Worker : BackgroundService
             machine_id = config.MachineId
         }, ct);
         WritePendingUpdateResult(config, state, isRollbackHealthCheck ? "rolled_back" : "completed", isRollbackHealthCheck ? 23 : 0, runningVersion, state.FromVersion, isRollbackHealthCheck ? "Agent rollback confirmed." : "Agent updated successfully.");
+        return state.JobId;
     }
 
     private static void WritePendingUpdateResult(AgentConfig config, UpdateState state, string status, int exitCode, string installedVersion, string previousVersion, string message)
@@ -396,7 +410,8 @@ public sealed class Worker : BackgroundService
         return string.Equals((left ?? "").Trim(), (right ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task MigrateLegacyPendingResultsAsync(AgentConfig config, CancellationToken ct)
+    private async Task MigrateLegacyPendingResultsAsync(AgentConfig config, CancellationToken ct,
+        string? finalizeUpdateJobId = null)
     {
         List<string> pendingFiles = new();
         string pendingDir = string.IsNullOrWhiteSpace(config.PendingResultsPath)
@@ -440,6 +455,12 @@ public sealed class Worker : BackgroundService
                     ? $"update-{result.JobId}"
                     : null;
                 PendingResultRecord queued = _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType), resultId);
+                if (!string.IsNullOrWhiteSpace(finalizeUpdateJobId)
+                    && jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
+                    && result.JobId.Equals(finalizeUpdateJobId, StringComparison.OrdinalIgnoreCase))
+                {
+                    await _jobCoordinator.FinalizePendingUpdateJobAsync(config, queued, finalizeUpdateJobId, ct);
+                }
                 string migratedDir = Path.Combine(pendingDir, "migrated");
                 Directory.CreateDirectory(migratedDir);
                 string migratedPath = Path.Combine(migratedDir, $"{Path.GetFileNameWithoutExtension(pendingPath)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");

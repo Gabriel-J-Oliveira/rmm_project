@@ -1,11 +1,19 @@
 using NightOwl.Agent.Shared;
+using NightOwl.Agent.Windows;
+using NightOwl.Agent.Windows.Collectors;
+using NightOwl.Agent.Windows.Jobs;
+using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
+using System.Net;
+using System.Reflection;
+using System.Text.Json;
 
 internal static class UpdateHealthCheckHandshakeTests
 {
     internal static async Task RunAsync()
     {
         await LegacyUpdaterWaitsForHandshakeAsync();
+        await LegacyUpdaterDelayOver110SecondsAsync();
         await ModernUpdaterConfirmsImmediatelyAsync();
         await WaitingStateCanChangeBeforeConfirmationAsync();
         foreach (string stage in new[] { UpdateStages.RollbackRequired, UpdateStages.RollbackStarting })
@@ -16,19 +24,27 @@ internal static class UpdateHealthCheckHandshakeTests
         await ChangedIdentityIsNotConfirmedAsync("update_id");
         await ChangedIdentityIsNotConfirmedAsync("job_id");
         await ChangedIdentityIsNotConfirmedAsync("target_version");
+        await ChangedIdentityIsNotConfirmedAsync("attempt");
+        await ChangedIdentityIsNotConfirmedAsync("channel");
+        await ChangedIdentityIsNotConfirmedAsync("release_id");
+        await ChangedIdentityIsNotConfirmedAsync("package_sha256");
+        await ChangedIdentityIsNotConfirmedAsync("package_url");
+        await ChangedIdentityIsNotConfirmedAsync("source");
         await DisappearedStateIsNotRecreatedAsync();
-        await TimeoutDoesNotConfirmAsync();
+        await StaleStateWaitsUntilCancellationAsync();
         await TransientReadFailureRecoversAsync();
         await PersistentReadFailureStopsAsync();
         await InitialReadRetriesAreBoundedAsync();
         await AlreadyCompletedIsIdempotentAsync();
         await RollbackHealthCheckStillWorksAsync();
         await CancellationPropagatesAsync();
+        await WorkerRunsWhileLegacyHandshakeWaitsAsync();
     }
 
     private static async Task LegacyUpdaterWaitsForHandshakeAsync()
     {
-        using Fixture fixture = new(UpdateStages.ServiceStarted);
+        // RC41: StartService -> ServiceStarted -> Tray/validation -> WaitingHealthCheck.
+        using Fixture fixture = new(UpdateStages.ServiceStarted, legacy: true);
         (Task<HandshakeResult> wait, TaskCompletionSource<bool> resume) = fixture.StartParkedWait();
         Require(fixture.Store.Load()!.CurrentStage == UpdateStages.ServiceStarted,
             "Legacy updater state changed before the healthcheck handshake.");
@@ -45,6 +61,28 @@ internal static class UpdateHealthCheckHandshakeTests
         Require(fixture.Store.Load()!.CurrentStage == UpdateStages.Completed,
             "Legacy updater waiter did not observe persisted Completed.");
         Require(!fixture.Store.Save(fixture.Initial), "Legacy updater overwrote terminal state.");
+    }
+
+    private static async Task LegacyUpdaterDelayOver110SecondsAsync()
+    {
+        using Fixture fixture = new(UpdateStages.ServiceStarted, legacy: true);
+        int virtualPolls = 0;
+        HandshakeResult result = await UpdateHealthCheckHandshake.WaitAsync(fixture.Initial, fixture.Read,
+            (_, _) =>
+            {
+                virtualPolls++;
+                Require(fixture.Store.Load()!.CurrentStage != UpdateStages.Completed,
+                    "Agent completed before RC41 persisted WaitingHealthCheck.");
+                if (virtualPolls == 221) fixture.ChangeStage(UpdateStages.WaitingHealthCheck);
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+        Require(virtualPolls * UpdateHealthCheckHandshake.PollInterval.TotalSeconds > 110,
+            "Test did not cross the RC41 post-start delay envelope.");
+        Require(result.Status == HandshakeStatus.Ready && result.Waited,
+            "Watcher did not survive the RC41 post-start delay.");
+        Require(UpdateHealthCheckHandshake.TryConfirm(fixture.Store, fixture.Initial, false, out _)
+            && fixture.Store.Load()!.CurrentStage == UpdateStages.Completed,
+            "RC41 waiter did not observe Completed after the delayed handshake.");
     }
 
     private static async Task ModernUpdaterConfirmsImmediatelyAsync()
@@ -94,6 +132,12 @@ internal static class UpdateHealthCheckHandshakeTests
         if (field == "update_id") replacement.UpdateId = Guid.NewGuid().ToString();
         if (field == "job_id") replacement.JobId = Guid.NewGuid().ToString();
         if (field == "target_version") replacement.TargetVersion = "different-target";
+        if (field == "attempt") replacement.Attempt++;
+        if (field == "channel") replacement.Channel = "stable";
+        if (field == "release_id") replacement.ReleaseId = "different-release";
+        if (field == "package_sha256") replacement.ExpectedSha256 = new string('b', 64);
+        if (field == "package_url") replacement.PackageUrl = "https://example.invalid/other.zip";
+        if (field == "source") replacement.Source = "different-source";
         replacement.MarkStage(UpdateStages.WaitingHealthCheck);
         Require(fixture.Store.Save(replacement), "Replacement state was not persisted.");
         resume.SetResult(true);
@@ -120,16 +164,22 @@ internal static class UpdateHealthCheckHandshakeTests
         Require(!File.Exists(fixture.Path), "Missing state was recreated.");
     }
 
-    private static async Task TimeoutDoesNotConfirmAsync()
+    private static async Task StaleStateWaitsUntilCancellationAsync()
     {
         using Fixture fixture = new(UpdateStages.ServiceStarted);
+        using CancellationTokenSource cts = new();
         int delays = 0;
-        HandshakeResult result = await UpdateHealthCheckHandshake.WaitAsync(fixture.Initial, fixture.Read,
-            (_, _) => { delays++; return Task.CompletedTask; }, CancellationToken.None, maxPolls: 3);
-        Require(result.Status == HandshakeStatus.TimedOut && delays == 3,
-            "Handshake timeout was not bounded.");
+        try
+        {
+            await UpdateHealthCheckHandshake.WaitAsync(fixture.Initial, fixture.Read,
+                (_, ct) => { if (++delays == 3) cts.Cancel(); ct.ThrowIfCancellationRequested(); return Task.CompletedTask; },
+                cts.Token);
+            throw new InvalidOperationException("Stale watcher ended without cancellation.");
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        Require(delays == 3, "Watcher did not remain active until cancellation.");
         Require(fixture.Store.Load()!.CurrentStage == UpdateStages.ServiceStarted,
-            "Timed out handshake changed state.");
+            "Stale watcher changed state.");
     }
 
     private static async Task TransientReadFailureRecoversAsync()
@@ -139,7 +189,7 @@ internal static class UpdateHealthCheckHandshakeTests
         HandshakeResult result = await UpdateHealthCheckHandshake.WaitAsync(fixture.Initial,
             () => ++reads <= 2 ? (false, null) : fixture.Read(),
             (_, _) => { if (reads == 2) fixture.ChangeStage(UpdateStages.WaitingHealthCheck); return Task.CompletedTask; },
-            CancellationToken.None, maxPolls: 4);
+            CancellationToken.None);
         Require(result.Status == HandshakeStatus.Ready && result.ReadRetries == 2,
             "Transient read errors did not recover.");
         Require(UpdateHealthCheckHandshake.TryConfirm(fixture.Store, fixture.Initial, false, out _),
@@ -150,7 +200,7 @@ internal static class UpdateHealthCheckHandshakeTests
     {
         using Fixture fixture = new(UpdateStages.ServiceStarted);
         HandshakeResult result = await UpdateHealthCheckHandshake.WaitAsync(fixture.Initial,
-            () => (false, null), (_, _) => Task.CompletedTask, CancellationToken.None, maxPolls: 4);
+            () => (false, null), (_, _) => Task.CompletedTask, CancellationToken.None);
         Require(result.Status == HandshakeStatus.ReadFailed && result.ReadRetries == 3,
             "Persistent read errors were not bounded.");
         Require(fixture.Store.Load()!.CurrentStage == UpdateStages.ServiceStarted,
@@ -206,6 +256,136 @@ internal static class UpdateHealthCheckHandshakeTests
         catch (OperationCanceledException) { }
     }
 
+    private static async Task WorkerRunsWhileLegacyHandshakeWaitsAsync()
+    {
+        string directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "nightowl-worker-handshake-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        Worker? worker = null;
+        try
+        {
+            string version = (typeof(Worker).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                ?? typeof(Worker).Assembly.GetName().Version?.ToString() ?? "").Split('+')[0];
+            Require(!string.IsNullOrWhiteSpace(version), "Running test agent version is missing.");
+            string updatePath = System.IO.Path.Combine(directory, "update-state.json");
+            string statePath = System.IO.Path.Combine(directory, "agent.state.json");
+            string jobsPath = System.IO.Path.Combine(directory, "jobs");
+            string pendingPath = System.IO.Path.Combine(directory, "pending-results");
+            string jobA = Guid.NewGuid().ToString();
+            string jobB = Guid.NewGuid().ToString();
+            UpdateStateStore updateStore = new(updatePath);
+            UpdateState update = UpdateState.Create(Guid.NewGuid().ToString(), jobA, "rc41", version);
+            update.MarkStage(UpdateStages.ServiceStarted);
+            Require(updateStore.Save(update), "Could not persist RC41 ServiceStarted state.");
+
+            JobStore jobs = new(jobsPath);
+            jobs.Mark(jobA, "update_agent", "running", 1, "test-update");
+            AgentConfig config = new()
+            {
+                AgentToken = "synthetic-test-token",
+                MachineId = "synthetic-test-machine",
+                AgentVersion = version,
+                ServerBaseUrl = "https://nightowl.test.invalid",
+                HeartbeatUrl = "https://nightowl.test.invalid/heartbeat",
+                CollectUrl = "https://nightowl.test.invalid/collect",
+                JobsPullUrl = "https://nightowl.test.invalid/jobs/pull",
+                JobsResultUrl = "https://nightowl.test.invalid/jobs/result",
+                StatePath = statePath,
+                LogPath = System.IO.Path.Combine(directory, "agent.log"),
+                JobsPath = jobsPath,
+                PendingResultsPath = pendingPath,
+                TelemetryEnabled = false
+            };
+            File.WriteAllText(statePath, JsonSerializer.Serialize(new AgentState
+            {
+                LastCollectionAt = DateTimeOffset.UtcNow
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+            JsonlLogger logger = new(config.LogPath);
+            TestHttpHandler handler = new();
+            AgentApiClient api = new(new TestHttpClientFactory(handler));
+            WindowsInventoryCollector collector = new(logger);
+            JobExecutionPolicy policy = new(jobs);
+            JobExecutionCoordinator coordinator = new(policy, logger);
+            PendingResultQueue queue = new(pendingPath);
+            worker = new Worker(new ConfigService(), new StateService(), logger, api, collector,
+                new JobExecutor(collector, logger, policy), coordinator, queue,
+                new TelemetryPipeline(new TelemetryCollector(), api, logger), () => config, updatePath);
+
+            await worker.StartAsync(CancellationToken.None);
+            await Task.WhenAll(handler.Heartbeat.Task, handler.JobPull.Task).WaitAsync(TimeSpan.FromSeconds(20));
+            Require(updateStore.Load()!.CurrentStage == UpdateStages.ServiceStarted,
+                "Worker completed the update before RC41 wrote WaitingHealthCheck.");
+            Require(jobs.Load(jobA)!.Status == "running", "Startup recovery interrupted update A.");
+            jobs.Mark(jobB, "ping", "running", 1, "test-concurrent-job");
+
+            update.MarkStage(UpdateStages.WaitingHealthCheck);
+            Require(updateStore.Save(update), "Could not persist RC41 WaitingHealthCheck.");
+            await handler.Result.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            await WaitForAsync(() => jobs.Load(jobA)?.Status == JobFinalStatuses.Completed,
+                TimeSpan.FromSeconds(10));
+            Require(jobs.Load(jobB)!.Status == "running",
+                "Concurrent job B was incorrectly recovered as JOB_INTERRUPTED.");
+            Require(updateStore.Load()!.CurrentStage == UpdateStages.Completed,
+                "RC41 updater could not observe persisted Completed.");
+            using JsonDocument result = JsonDocument.Parse(handler.Result.Task.Result);
+            JsonElement payload = result.RootElement.GetProperty("result");
+            Require(result.RootElement.GetProperty("job_id").GetString() == jobA
+                && result.RootElement.GetProperty("status").GetString() == "completed"
+                && payload.GetProperty("update_id").GetString() == update.UpdateId
+                && payload.GetProperty("installed_version").GetString() == version
+                && payload.GetProperty("active_version").GetString() == version
+                && payload.GetProperty("health_check").GetProperty("confirmed").GetBoolean()
+                && !payload.GetProperty("rollback_performed").GetBoolean(),
+                "Update result protocol changed during legacy handshake.");
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                await worker.StopAsync(CancellationToken.None);
+                worker.Dispose();
+            }
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (!condition())
+        {
+            Require(DateTimeOffset.UtcNow < deadline, "Timed out waiting for local update finalization.");
+            await Task.Delay(25);
+        }
+    }
+
+    private sealed class TestHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    private sealed class TestHttpHandler : HttpMessageHandler
+    {
+        internal TaskCompletionSource<bool> Heartbeat { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<bool> JobPull { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<string> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            string path = request.RequestUri?.AbsolutePath ?? "";
+            if (path == "/heartbeat") Heartbeat.TrySetResult(true);
+            if (path == "/jobs/pull") JobPull.TrySetResult(true);
+            if (path == "/jobs/result")
+                Result.TrySetResult(await request.Content!.ReadAsStringAsync(ct));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(path == "/jobs/pull" ? "{\"jobs\":[]}" : "{}")
+            };
+        }
+    }
+
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
@@ -220,11 +400,19 @@ internal static class UpdateHealthCheckHandshakeTests
         internal UpdateStateStore Store { get; }
         internal UpdateState Initial { get; }
 
-        internal Fixture(string stage)
+        internal Fixture(string stage, bool legacy = false)
         {
             Directory.CreateDirectory(_directory);
             Store = new UpdateStateStore(Path);
             Initial = UpdateState.Create(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "rc41", "rc43");
+            if (!legacy)
+            {
+                Initial.ReleaseId = "test-release";
+                Initial.Channel = "development";
+                Initial.ExpectedSha256 = new string('a', 64);
+                Initial.PackageUrl = "https://example.invalid/package.zip";
+                Initial.Source = "panel";
+            }
             Initial.MarkStage(stage);
             Require(Store.Save(Initial), "Initial update state could not be persisted.");
         }

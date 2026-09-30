@@ -2,13 +2,12 @@ using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Windows.Services;
 
-internal enum HandshakeStatus { Ready, AlreadyCompleted, Skipped, TimedOut, ReadFailed }
+internal enum HandshakeStatus { Ready, AlreadyCompleted, Skipped, ReadFailed }
 
 internal sealed record HandshakeResult(HandshakeStatus Status, UpdateState? State, string Reason, bool Waited, int ReadRetries);
 
 internal static class UpdateHealthCheckHandshake
 {
-    internal const int MaxPolls = 120;
     internal const int MaxReadFailures = 3;
     internal static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
 
@@ -31,8 +30,7 @@ internal static class UpdateHealthCheckHandshake
         UpdateState initial,
         Func<(bool Readable, UpdateState? State)> read,
         Func<TimeSpan, CancellationToken, Task> delay,
-        CancellationToken ct,
-        int maxPolls = MaxPolls)
+        CancellationToken ct)
     {
         bool rollback = initial.CurrentStage.Equals(UpdateStages.RollbackWaitingHealthCheck, StringComparison.OrdinalIgnoreCase);
         if (CanConfirm(initial, initial, rollback))
@@ -42,7 +40,7 @@ internal static class UpdateHealthCheckHandshake
 
         int readFailures = 0;
         int readRetries = 0;
-        for (int poll = 0; poll < maxPolls; poll++)
+        while (true)
         {
             await delay(PollInterval, ct);
             ct.ThrowIfCancellationRequested();
@@ -66,7 +64,6 @@ internal static class UpdateHealthCheckHandshake
             if (!state.IsActive || state.RollbackRequired || !IsPreHandshake(state.CurrentStage))
                 return new(HandshakeStatus.Skipped, state, "stage_changed", true, readRetries);
         }
-        return new(HandshakeStatus.TimedOut, null, "handshake_timeout", true, readRetries);
     }
 
     internal static bool CanConfirm(UpdateState current, UpdateState expected, bool rollback)
@@ -96,9 +93,21 @@ internal static class UpdateHealthCheckHandshake
         }, out confirmed);
 
     private static bool SameIdentity(UpdateState expected, UpdateState current)
-        => current.UpdateId.Equals(expected.UpdateId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(current.JobId, expected.JobId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(current.TargetVersion, expected.TargetVersion, StringComparison.OrdinalIgnoreCase);
+        => !string.IsNullOrWhiteSpace(expected.UpdateId)
+            && current.UpdateId.Equals(expected.UpdateId, StringComparison.OrdinalIgnoreCase)
+            && current.Attempt == expected.Attempt
+            && SameCapturedValue(expected.JobId, current.JobId)
+            && SameCapturedValue(expected.Channel, current.Channel)
+            && SameCapturedValue(expected.FromVersion, current.FromVersion)
+            && SameCapturedValue(expected.TargetVersion, current.TargetVersion)
+            && SameCapturedValue(expected.ReleaseId, current.ReleaseId)
+            && SameCapturedValue(expected.ExpectedSha256, current.ExpectedSha256)
+            && SameCapturedValue(expected.PackageUrl, current.PackageUrl, StringComparison.Ordinal)
+            && SameCapturedValue(expected.Source, current.Source);
+
+    private static bool SameCapturedValue(string expected, string current,
+        StringComparison comparison = StringComparison.OrdinalIgnoreCase)
+        => string.IsNullOrWhiteSpace(expected) || string.Equals(expected, current, comparison);
 
     private static bool IsPreHandshake(string stage)
         => stage.Equals(UpdateStages.StartingService, StringComparison.OrdinalIgnoreCase)
