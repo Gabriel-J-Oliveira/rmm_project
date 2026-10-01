@@ -6,6 +6,13 @@ from django.utils import timezone
 from .models import AgentMachine, EndpointPerformanceSample
 
 
+TELEMETRY_SAMPLE_INTERVAL_SECONDS = 300
+TELEMETRY_GAP_TOLERANCE_SECONDS = 120
+TELEMETRY_GAP_THRESHOLD_SECONDS = (
+    TELEMETRY_SAMPLE_INTERVAL_SECONDS + TELEMETRY_GAP_TOLERANCE_SECONDS
+)
+
+
 def _percentile(sorted_values, fraction):
     position = (len(sorted_values) - 1) * fraction
     lower = math.floor(position)
@@ -41,6 +48,9 @@ def build_endpoint_telemetry_summary(endpoint, start, end):
     if end <= start:
         raise ValueError('end must be after start')
 
+    effective_end = min(end, timezone.now())
+    expected = (math.ceil((effective_end - start).total_seconds() / TELEMETRY_SAMPLE_INTERVAL_SECONDS)
+                if effective_end > start else 0)
     fields = (
         'cpu_percent', 'memory_used_percent', 'memory_committed_percent',
         'network_received_bytes', 'network_sent_bytes',
@@ -48,13 +58,30 @@ def build_endpoint_telemetry_summary(endpoint, start, end):
     )
     series = {name: [] for name in fields}
     received = 0
+    first_sample_at = None
+    last_sample_at = None
+    largest_gap = None
+    gaps_over_threshold = 0
+    lags = []
+    negative_lags = 0
     samples = (EndpointPerformanceSample.objects
                .filter(endpoint=endpoint, collected_at__gte=start, collected_at__lt=end)
                .order_by('collected_at', 'id')
-               .values_list(*fields))
+               .values_list('collected_at', 'created_at', *fields))
     for row in samples:
+        collected_at, created_at, *values = row
         received += 1
-        for name, value in zip(fields, row):
+        if first_sample_at is None:
+            first_sample_at = collected_at
+        if last_sample_at is not None:
+            gap = (collected_at - last_sample_at).total_seconds()
+            largest_gap = max(largest_gap or 0, gap)
+            gaps_over_threshold += gap > TELEMETRY_GAP_THRESHOLD_SECONDS
+        last_sample_at = collected_at
+        lag = (created_at - collected_at).total_seconds()
+        lags.append(lag)
+        negative_lags += lag < 0
+        for name, value in zip(fields, values):
             if value is not None:
                 series[name].append(value)
 
@@ -89,5 +116,21 @@ def build_endpoint_telemetry_summary(endpoint, start, end):
                 'samples_with_errors': sum(value > 0 for value in errors),
                 'total_errors': sum(errors),
             },
+        },
+        'quality': {
+            'expected_samples': expected,
+            'received_samples': received,
+            'coverage_percent': received / expected * 100 if expected else None,
+            'over_expected_samples': max(received - expected, 0),
+            'first_sample_at': first_sample_at.isoformat() if first_sample_at else None,
+            'last_sample_at': last_sample_at.isoformat() if last_sample_at else None,
+            'largest_internal_gap_seconds': largest_gap,
+            'gap_threshold_seconds': TELEMETRY_GAP_THRESHOLD_SECONDS,
+            'gaps_over_threshold_count': gaps_over_threshold,
+            'metric_validity': {
+                name: {'valid_samples': len(series[name])} for name in fields
+            },
+            'ingestion_lag_seconds': _statistics(lags),
+            'negative_lag_samples': negative_lags,
         },
     }

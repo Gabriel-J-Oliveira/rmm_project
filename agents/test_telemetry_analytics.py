@@ -1,11 +1,17 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone as datetime_timezone
+from unittest.mock import patch
 
 from django.test import TestCase
 
 from .models import AgentMachine, EndpointPerformanceSample, hash_agent_token
-from .telemetry_analytics import _statistics, build_endpoint_telemetry_summary
+from .telemetry_analytics import (
+    TELEMETRY_GAP_THRESHOLD_SECONDS,
+    TELEMETRY_SAMPLE_INTERVAL_SECONDS,
+    _statistics,
+    build_endpoint_telemetry_summary,
+)
 
 
 class EndpointTelemetryAnalyticsTests(TestCase):
@@ -134,3 +140,111 @@ class EndpointTelemetryAnalyticsTests(TestCase):
         for endpoint in (str(self.endpoint.pk), AgentMachine(hostname='UNSAVED')):
             with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
                 build_endpoint_telemetry_summary(endpoint, self.start, self.end)
+
+    def test_expected_samples_for_complete_windows_and_partial_interval(self):
+        self.assertEqual(TELEMETRY_SAMPLE_INTERVAL_SECONDS, 300)
+        for duration, expected in ((timedelta(hours=1), 12),
+                                   (timedelta(hours=24), 288),
+                                   (timedelta(days=7), 2016),
+                                   (timedelta(seconds=301), 2)):
+            end = self.start + duration
+            with self.subTest(duration=duration), patch(
+                'agents.telemetry_analytics.timezone.now', return_value=end,
+            ):
+                quality = self.summary(end=end)['quality']
+            self.assertEqual(quality['expected_samples'], expected)
+            self.assertEqual(quality['received_samples'], 0)
+            self.assertEqual(quality['coverage_percent'], 0.0)
+
+    def test_future_portion_does_not_add_expected_samples(self):
+        now = self.start + timedelta(minutes=30)
+        with patch('agents.telemetry_analytics.timezone.now', return_value=now):
+            quality = self.summary()['quality']
+        self.assertEqual(quality['expected_samples'], 6)
+        self.assertEqual(quality['coverage_percent'], 0.0)
+
+    def test_full_future_window_has_no_nominal_expectation(self):
+        now = self.start - timedelta(minutes=10)
+        self.sample(self.start, cpu_percent=0)
+        with patch('agents.telemetry_analytics.timezone.now', return_value=now):
+            quality = self.summary()['quality']
+        self.assertEqual(quality['expected_samples'], 0)
+        self.assertEqual(quality['received_samples'], 1)
+        self.assertIsNone(quality['coverage_percent'])
+        self.assertEqual(quality['over_expected_samples'], 1)
+
+    def test_coverage_above_100_is_not_clamped(self):
+        for minute in range(13):
+            self.sample(self.start + timedelta(minutes=minute), cpu_percent=0)
+        with patch('agents.telemetry_analytics.timezone.now', return_value=self.end):
+            with self.assertNumQueries(1):
+                quality = self.summary()['quality']
+        self.assertEqual(quality['expected_samples'], 12)
+        self.assertEqual(quality['received_samples'], 13)
+        self.assertAlmostEqual(quality['coverage_percent'], 13 / 12 * 100)
+        self.assertEqual(quality['over_expected_samples'], 1)
+
+    def test_first_last_and_strictly_over_threshold_internal_gaps(self):
+        times = [self.start]
+        for seconds in (300, 420, 421, 900):
+            times.append(times[-1] + timedelta(seconds=seconds))
+        for at in times:
+            self.sample(at)
+        quality = self.summary()['quality']
+        self.assertEqual(quality['first_sample_at'], times[0].isoformat())
+        self.assertEqual(quality['last_sample_at'], times[-1].isoformat())
+        self.assertEqual(TELEMETRY_GAP_THRESHOLD_SECONDS, 420)
+        self.assertEqual(quality['gap_threshold_seconds'], 420)
+        self.assertEqual(quality['largest_internal_gap_seconds'], 900)
+        self.assertEqual(quality['gaps_over_threshold_count'], 2)
+
+    def test_zero_or_one_sample_has_no_internal_gap(self):
+        empty = self.summary()['quality']
+        self.assertIsNone(empty['first_sample_at'])
+        self.assertIsNone(empty['last_sample_at'])
+        self.assertIsNone(empty['largest_internal_gap_seconds'])
+        self.assertEqual(empty['gaps_over_threshold_count'], 0)
+        self.assertEqual(empty['negative_lag_samples'], 0)
+        self.assertEqual(empty['ingestion_lag_seconds']['valid_samples'], 0)
+        self.sample(self.start + timedelta(minutes=5))
+        one = self.summary()['quality']
+        self.assertIsNone(one['largest_internal_gap_seconds'])
+        self.assertEqual(one['gaps_over_threshold_count'], 0)
+
+    def test_metric_validity_counts_zero_but_not_null_independently(self):
+        self.sample(self.start, cpu_percent=0, memory_used_percent=None,
+                    memory_committed_percent=0, network_received_bytes=0,
+                    network_sent_bytes=None, agent_working_set_bytes=None)
+        self.sample(self.start + timedelta(minutes=5), cpu_percent=None,
+                    memory_used_percent=50, memory_committed_percent=None,
+                    network_received_bytes=None, network_sent_bytes=0,
+                    agent_working_set_bytes=0)
+        quality = self.summary()['quality']
+        self.assertEqual(quality['metric_validity'], {
+            'cpu_percent': {'valid_samples': 1},
+            'memory_used_percent': {'valid_samples': 1},
+            'memory_committed_percent': {'valid_samples': 1},
+            'network_received_bytes': {'valid_samples': 1},
+            'network_sent_bytes': {'valid_samples': 1},
+            'collection_duration_ms': {'valid_samples': 2},
+            'agent_working_set_bytes': {'valid_samples': 1},
+            'telemetry_errors_count': {'valid_samples': 2},
+        })
+
+    def test_store_forward_and_negative_ingestion_lag_are_facts(self):
+        forwarded = self.sample(self.start)
+        skewed = self.sample(self.start + timedelta(minutes=5))
+        EndpointPerformanceSample.objects.filter(pk=forwarded.pk).update(
+            created_at=forwarded.collected_at + timedelta(minutes=45),
+        )
+        EndpointPerformanceSample.objects.filter(pk=skewed.pk).update(
+            created_at=skewed.collected_at - timedelta(seconds=30),
+        )
+        quality = self.summary()['quality']
+        lag = quality['ingestion_lag_seconds']
+        self.assertEqual(quality['negative_lag_samples'], 1)
+        self.assertEqual(lag['valid_samples'], 2)
+        self.assertEqual((lag['min'], lag['max'], lag['avg'], lag['p50']),
+                         (-30, 2700, 1335, 1335))
+        self.assertEqual(lag['p95'], 2563.5)
+        self.assertEqual(json.loads(json.dumps(quality)), quality)
