@@ -20,6 +20,7 @@ from django.conf.urls.static import static
 from django.urls import include, path
 
 from dashboard import views as dashboard_views
+from dashboard import capacity_views
 from dashboard import fleet_views
 from config import views as config_views
 from tickets import views as ticket_views
@@ -61,6 +62,9 @@ urlpatterns = [
     path('portal/chamados/<int:number>/reopen/', ticket_views.ticket_portal_reopen, name='ticket-portal-reopen'),
     path('noc/', dashboard_views.noc_view, name='noc'),
     path('alerts/', dashboard_views.alerts_list, name='alerts-list'),
+    path('capacity/', capacity_views.capacity_page, name='capacity-page'),
+    path('api/capacity/overview/', capacity_views.capacity_overview, name='api-capacity-overview'),
+    path('api/capacity/<uuid:pk>/', capacity_views.capacity_detail, name='api-capacity-detail'),
     path('events/', dashboard_views.events_list, name='events-list'),
     path('jobs/', dashboard_views.jobs_list, name='jobs-list'),
     path('maintenance/', dashboard_views.maintenance_list, name='maintenance-list'),

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Night Owl | Capacidade &amp; Planejamento{% endblock %}
+{% block body_class %}page-capacity{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=m6-1-1">{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><span>Parque</span><i data-lucide="chevron-right"></i><strong>Capacidade</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="capacity-page" data-capacity-root data-overview-url="{% url 'api-capacity-overview' %}" data-detail-template="{% url 'api-capacity-detail' '00000000-0000-4000-8000-000000000000' %}" data-demo="{% if demo %}1{% else %}0{% endif %}">
+    <header class="capacity-header page-header">
+        <div class="capacity-heading">
+            <span class="page-header-icon"><i data-lucide="chart-no-axes-combined"></i></span>
+            <div><h1 class="page-title">Capacidade &amp; Planejamento</h1><p class="page-subtitle">Pressão observada, qualidade da evidência e contexto do parque.</p></div>
+        </div>
+        <div class="capacity-controls">
+            <label class="capacity-period">Período <select data-capacity-period aria-label="Período principal"><option value="12h">12h</option><option value="24h" selected>24h</option><option value="48h">48h</option></select></label>
+            <span class="capacity-context-label">Contexto 7d</span>
+            <button type="button" class="capacity-action" data-refresh title="Atualizar dados"><i data-lucide="refresh-cw"></i><span>Atualizar</span></button>
+            <a class="capacity-action" href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i><span>Central de Alertas</span></a>
+        </div>
+    </header>
+    {% if demo %}<div class="capacity-demo-banner" role="status"><i data-lucide="flask-conical"></i>Dados demonstrativos — não representam a frota real.</div>{% endif %}
+    <div class="capacity-update" data-updated aria-live="polite">Carregando dados…</div>
+    <div class="capacity-error" data-error role="alert" hidden>Não foi possível carregar o painel. <button type="button" data-refresh>Repetir</button></div>
+
+    <section class="capacity-section" aria-labelledby="capacity-overview-title">
+        <div class="capacity-section-heading"><div><h2 id="capacity-overview-title">Visão geral</h2><p>Selecione um indicador para filtrar o parque.</p></div><button type="button" class="capacity-clear" data-clear-filter hidden>Limpar filtro</button></div>
+        <div class="capacity-kpis" data-kpis aria-label="Indicadores de capacidade"></div>
+    </section>
+
+    <section class="capacity-section" aria-labelledby="capacity-attention-title">
+        <div class="capacity-section-heading"><div><h2 id="capacity-attention-title">Merecem atenção</h2><p>Pressão, evidência incompleta, indisponibilidade e alertas críticos.</p></div></div>
+        <div class="capacity-attention" data-attention></div>
+    </section>
+
+    <div class="capacity-visual-row">
+        <section class="capacity-section capacity-visual" aria-labelledby="capacity-distribution-title">
+            <div class="capacity-section-heading"><div><h2 id="capacity-distribution-title">Distribuição</h2><p>Classificação prioritária por endpoint.</p></div></div>
+            <div data-distribution class="capacity-distribution"></div>
+        </section>
+        <section class="capacity-section capacity-visual" aria-labelledby="capacity-scatter-title">
+            <div class="capacity-section-heading"><div><h2 id="capacity-scatter-title">CPU × RAM</h2><p>P95 do período principal.</p></div></div>
+            <div class="capacity-scatter-wrap"><div class="capacity-scatter" data-scatter role="group" aria-label="Dispersão de CPU e RAM"></div><span class="capacity-axis-x">CPU p95 (%)</span><span class="capacity-axis-y">RAM p95 (%)</span></div>
+            <div class="capacity-chart-note" data-scatter-note></div>
+        </section>
+    </div>
+
+    <section class="capacity-section" aria-labelledby="capacity-workload-title">
+        <div class="capacity-section-heading"><div><h2 id="capacity-workload-title">Maiores consumidores observados</h2><p>Última amostra por endpoint; consumo não implica impacto causal.</p></div></div>
+        <div class="capacity-workloads" data-workloads></div>
+    </section>
+
+    <section class="capacity-section" aria-labelledby="capacity-grid-title">
+        <div class="capacity-section-heading"><div><h2 id="capacity-grid-title">Mapa da frota</h2><p>Selecione um endpoint para abrir o detalhe.</p></div><span class="capacity-filter-count" data-filter-count></span></div>
+        <div class="capacity-grid" data-grid></div>
+    </section>
+
+    <section class="capacity-section" aria-labelledby="capacity-table-title">
+        <div class="capacity-section-heading"><div><h2 id="capacity-table-title">Tabela analítica</h2><p>Ordene ou pesquise para comparar equipamentos.</p></div></div>
+        <div class="capacity-table-controls">
+            <label class="capacity-search"><i data-lucide="search"></i><input type="search" data-search placeholder="Buscar endpoint ou sistema operacional" aria-label="Buscar endpoints"></label>
+            <label>Ordenar <select data-sort><option value="priority">Prioridade</option><option value="hostname">Endpoint</option><option value="cpu">CPU p95</option><option value="memory">RAM p95</option><option value="coverage">Cobertura</option><option value="last_seen">Última atividade</option></select></label>
+        </div>
+        <div class="capacity-table-scroll"><table class="capacity-table"><thead><tr><th>Endpoint</th><th>Estado</th><th>SO</th><th>CPU / cores</th><th>RAM</th><th>CPU p95</th><th>RAM p95</th><th>Evidência</th><th>CPU</th><th>Memória</th><th>Críticos</th><th>Last seen</th></tr></thead><tbody data-table-body></tbody></table></div>
+    </section>
+
+    <div class="capacity-drawer-backdrop" data-drawer-backdrop hidden></div>
+    <div class="capacity-popover" data-popover role="tooltip" hidden></div>
+    <aside class="capacity-drawer" data-drawer aria-label="Detalhes de capacidade" aria-modal="true" role="dialog" hidden>
+        <header class="capacity-drawer-header"><div><span class="capacity-drawer-kicker">CAPACIDADE DO ENDPOINT</span><h2 data-drawer-title>Endpoint</h2><span data-drawer-subtitle></span></div><button type="button" class="capacity-icon-button" data-close-drawer aria-label="Fechar detalhes" title="Fechar"><i data-lucide="x"></i></button></header>
+        <nav class="capacity-tabs" aria-label="Seções do detalhe" data-tabs></nav>
+        <div class="capacity-drawer-content" data-drawer-content></div>
+        <footer class="capacity-drawer-actions"><a data-drawer-endpoint href="#"><i data-lucide="external-link"></i>Abrir endpoint completo</a><a data-drawer-alerts href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i>Ver alertas</a></footer>
+    </aside>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=m6-1-1" defer></script>{% endblock %}

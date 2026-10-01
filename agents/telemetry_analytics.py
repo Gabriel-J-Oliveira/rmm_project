@@ -38,7 +38,7 @@ def _statistics(values):
     }
 
 
-def build_endpoint_telemetry_summary(endpoint, start, end):
+def build_endpoint_telemetry_summary(endpoint, start, end, *, sample_rows=None):
     if not isinstance(endpoint, AgentMachine) or endpoint._state.adding:
         raise ValueError('endpoint must be a persisted AgentMachine')
     if not isinstance(start, datetime) or not timezone.is_aware(start):
@@ -64,10 +64,12 @@ def build_endpoint_telemetry_summary(endpoint, start, end):
     gaps_over_threshold = 0
     lags = []
     negative_lags = 0
-    samples = (EndpointPerformanceSample.objects
-               .filter(endpoint=endpoint, collected_at__gte=start, collected_at__lt=end)
-               .order_by('collected_at', 'id')
-               .values_list('collected_at', 'created_at', *fields))
+    samples = sample_rows
+    if samples is None:
+        samples = (EndpointPerformanceSample.objects
+                   .filter(endpoint=endpoint, collected_at__gte=start, collected_at__lt=end)
+                   .order_by('collected_at', 'id')
+                   .values_list('collected_at', 'created_at', *fields))
     for row in samples:
         collected_at, created_at, *values = row
         received += 1
