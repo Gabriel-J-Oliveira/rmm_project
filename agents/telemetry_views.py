@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
@@ -8,6 +11,10 @@ from rest_framework.views import APIView
 from .authentication import authenticate_agent_token
 from .models import AgentMachine, EndpointPerformanceSample
 from .telemetry import BatchSerializer, MAX_TELEMETRY_BODY_BYTES, persist_telemetry_batch
+from .telemetry_analytics import build_endpoint_telemetry_summary
+
+
+MAX_TELEMETRY_SUMMARY_WINDOW = timedelta(days=7)
 
 
 class AgentTelemetryView(APIView):
@@ -83,3 +90,28 @@ class EndpointTelemetryView(APIView):
                 'telemetry_errors_count': row.telemetry_errors_count,
             } for row in rows],
         })
+
+
+class EndpointTelemetrySummaryView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, endpoint_id):
+        if not (request.user.has_perm('agents.view_agentmachine') and request.user.has_perm('agents.view_endpointperformancesample')):
+            return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+        endpoint = AgentMachine.objects.filter(pk=endpoint_id).first()
+        if endpoint is None:
+            return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
+        if 'from' not in request.query_params or 'to' not in request.query_params:
+            return Response({'error': 'missing_period'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            start = parse_datetime(request.query_params['from'])
+            end = parse_datetime(request.query_params['to'])
+        except ValueError:
+            return Response({'error': 'invalid_period'}, status=status.HTTP_400_BAD_REQUEST)
+        if (start is None or end is None or not timezone.is_aware(start)
+                or not timezone.is_aware(end) or end <= start):
+            return Response({'error': 'invalid_period'}, status=status.HTTP_400_BAD_REQUEST)
+        if end - start > MAX_TELEMETRY_SUMMARY_WINDOW:
+            return Response({'error': 'period_too_large'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(build_endpoint_telemetry_summary(endpoint, start, end))
