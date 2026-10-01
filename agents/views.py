@@ -683,6 +683,42 @@ def _payload_result(payload):
     return result if isinstance(result, dict) else {}
 
 
+def _collection_payload_from_job_result(job):
+    result = job.result
+    if job.output_truncated or result.get('output_truncated') is True:
+        raise ValueError('output_truncated')
+
+    collection = result.get('output') if 'output' in result else result
+    if not isinstance(collection, dict):
+        raise ValueError('invalid_output')
+
+    for key in ('machine_id', 'agent_version'):
+        if key in result and result[key] not in (None, ''):
+            if key in collection and collection[key] != result[key]:
+                raise ValueError(f'{key}_conflict')
+            collection = {**collection, key: collection.get(key, result[key])}
+
+    if job.job_type == AgentJob.TYPE_FORCE_INVENTORY:
+        sections = {
+            'system': dict, 'hardware': dict, 'network': dict,
+            'disks': list, 'software': list, 'security': dict,
+        }
+        if not all(isinstance(collection.get(key), kind) for key, kind in sections.items()):
+            raise ValueError('missing_inventory_sections')
+        if not collection['system'] or not collection['hardware']:
+            raise ValueError('missing_inventory_sections')
+    elif job.job_type == AgentJob.TYPE_COLLECT_DISKS:
+        if not isinstance(collection.get('disks'), list):
+            raise ValueError('invalid_disks')
+    elif job.job_type == AgentJob.TYPE_COLLECT_SOFTWARE:
+        if not isinstance(collection.get('installed_software'), list):
+            raise ValueError('invalid_software')
+    elif job.job_type in (AgentJob.TYPE_COLLECT_SECURITY, AgentJob.TYPE_WINDOWS_UPDATE_SCAN):
+        if not any(key not in ('machine_id', 'agent_version', 'output_truncated') for key in collection):
+            raise ValueError('missing_collection_data')
+    return collection
+
+
 def _result_stage(result):
     return str(
         result.get('update_status')
@@ -1477,9 +1513,17 @@ class AgentJobsResultView(APIView):
                 }.get(job.job_type)
                 if collection_type:
                     try:
-                        record_collection(machine=machine, collection_type=collection_type, payload=job.result)
-                    except Exception:
-                        logger.exception('Failed to persist job result collection for job_id=%s', job.id)
+                        collection_payload = _collection_payload_from_job_result(job)
+                    except ValueError as exc:
+                        logger.warning(
+                            'job.result.collection_skipped job_id=%s job_type=%s reason=%s',
+                            job.id, job.job_type, exc,
+                        )
+                    else:
+                        try:
+                            record_collection(machine=machine, collection_type=collection_type, payload=collection_payload)
+                        except Exception:
+                            logger.exception('Failed to persist job result collection for job_id=%s', job.id)
             if job.job_type == AgentJob.TYPE_UPDATE_AGENT:
                 logger.info(
                     'update_agent job result endpoint_id=%s job_id=%s status=%s exit_code=%s',
