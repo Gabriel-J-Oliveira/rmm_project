@@ -160,3 +160,150 @@ def build_telemetry_evidence(summary):
             },
         },
     }
+
+
+DIAGNOSTIC_NOT_EVALUATED = 'NOT_EVALUATED'
+DIAGNOSTIC_NO_PRESSURE = 'NO_PRESSURE_OBSERVED'
+DIAGNOSTIC_SPIKY = 'SPIKY'
+DIAGNOSTIC_ELEVATED = 'ELEVATED'
+DIAGNOSTIC_PRESSURE = 'PRESSURE'
+
+CPU_AVG_ELEVATED_PERCENT = 50
+CPU_AVG_PRESSURE_PERCENT = 70
+CPU_P95_ELEVATED_PERCENT = 70
+CPU_P95_PRESSURE_PERCENT = 85
+CPU_P99_SPIKE_PERCENT = 85
+
+MEMORY_P95_ELEVATED_PERCENT = 80
+MEMORY_P95_PRESSURE_PERCENT = 90
+MEMORY_P99_SPIKE_PERCENT = 90
+
+
+def _resource_stats(summary, section, metric):
+    group = summary.get(section)
+    stats = group.get(metric) if isinstance(group, dict) else None
+    if not isinstance(stats, dict):
+        raise ValueError(f'{section}.{metric} statistics are required')
+    values = {}
+    for name in ('avg', 'p95', 'p99'):
+        value = _finite_number(stats.get(name), f'{section}.{metric}.{name}')
+        if not 0 <= value <= 100:
+            raise ValueError(f'{section}.{metric}.{name} must be a percentage')
+        values[name] = value
+    if values['p95'] > values['p99']:
+        raise ValueError(f'{section}.{metric}.p95 cannot exceed p99')
+    return values
+
+
+def _cpu_diagnostic(summary, evidence_status):
+    if evidence_status != STATUS_SUFFICIENT:
+        return {
+            'status': DIAGNOSTIC_NOT_EVALUATED,
+            'evidence_status': evidence_status,
+            'facts': {},
+            'reasons': ['evidence_not_sufficient'],
+        }
+    stats = _resource_stats(summary, 'cpu', 'usage_percent')
+    avg, p95, p99 = stats['avg'], stats['p95'], stats['p99']
+    if avg >= CPU_AVG_PRESSURE_PERCENT or p95 >= CPU_P95_PRESSURE_PERCENT:
+        status = DIAGNOSTIC_PRESSURE
+        reasons = []
+        if avg >= CPU_AVG_PRESSURE_PERCENT:
+            reasons.append('cpu_average_pressure')
+        if p95 >= CPU_P95_PRESSURE_PERCENT:
+            reasons.append('cpu_p95_pressure')
+    elif avg >= CPU_AVG_ELEVATED_PERCENT or p95 >= CPU_P95_ELEVATED_PERCENT:
+        status = DIAGNOSTIC_ELEVATED
+        reasons = []
+        if avg >= CPU_AVG_ELEVATED_PERCENT:
+            reasons.append('cpu_average_elevated')
+        if p95 >= CPU_P95_ELEVATED_PERCENT:
+            reasons.append('cpu_p95_elevated')
+    elif p99 >= CPU_P99_SPIKE_PERCENT:
+        status = DIAGNOSTIC_SPIKY
+        reasons = ['cpu_p99_spike']
+    else:
+        status = DIAGNOSTIC_NO_PRESSURE
+        reasons = ['cpu_below_elevated_thresholds']
+    return {
+        'status': status,
+        'evidence_status': evidence_status,
+        'facts': {
+            'avg_percent': avg,
+            'p95_percent': p95,
+            'p99_percent': p99,
+        },
+        'reasons': reasons,
+    }
+
+
+def _memory_diagnostic(summary, used_evidence, committed_evidence):
+    evidence_status = {
+        'used_percent': used_evidence,
+        'committed_percent': committed_evidence,
+    }
+    if used_evidence != STATUS_SUFFICIENT or committed_evidence != STATUS_SUFFICIENT:
+        return {
+            'status': DIAGNOSTIC_NOT_EVALUATED,
+            'evidence_status': evidence_status,
+            'facts': {},
+            'reasons': ['evidence_not_sufficient'],
+        }
+    used = _resource_stats(summary, 'memory', 'used_percent')
+    committed = _resource_stats(summary, 'memory', 'committed_percent')
+    if used['p95'] >= MEMORY_P95_PRESSURE_PERCENT or committed['p95'] >= MEMORY_P95_PRESSURE_PERCENT:
+        status = DIAGNOSTIC_PRESSURE
+        reasons = []
+        if used['p95'] >= MEMORY_P95_PRESSURE_PERCENT:
+            reasons.append('memory_used_p95_pressure')
+        if committed['p95'] >= MEMORY_P95_PRESSURE_PERCENT:
+            reasons.append('memory_committed_p95_pressure')
+    elif used['p95'] >= MEMORY_P95_ELEVATED_PERCENT or committed['p95'] >= MEMORY_P95_ELEVATED_PERCENT:
+        status = DIAGNOSTIC_ELEVATED
+        reasons = []
+        if used['p95'] >= MEMORY_P95_ELEVATED_PERCENT:
+            reasons.append('memory_used_p95_elevated')
+        if committed['p95'] >= MEMORY_P95_ELEVATED_PERCENT:
+            reasons.append('memory_committed_p95_elevated')
+    elif used['p99'] >= MEMORY_P99_SPIKE_PERCENT or committed['p99'] >= MEMORY_P99_SPIKE_PERCENT:
+        status = DIAGNOSTIC_SPIKY
+        reasons = []
+        if used['p99'] >= MEMORY_P99_SPIKE_PERCENT:
+            reasons.append('memory_used_p99_spike')
+        if committed['p99'] >= MEMORY_P99_SPIKE_PERCENT:
+            reasons.append('memory_committed_p99_spike')
+    else:
+        status = DIAGNOSTIC_NO_PRESSURE
+        reasons = ['memory_below_elevated_thresholds']
+    return {
+        'status': status,
+        'evidence_status': evidence_status,
+        'facts': {
+            'used_avg_percent': used['avg'],
+            'used_p95_percent': used['p95'],
+            'used_p99_percent': used['p99'],
+            'committed_avg_percent': committed['avg'],
+            'committed_p95_percent': committed['p95'],
+            'committed_p99_percent': committed['p99'],
+        },
+        'reasons': reasons,
+    }
+
+
+def build_resource_diagnostics(summary):
+    """Describe CPU and memory utilization patterns for one M4 summary window."""
+    result = build_telemetry_evidence(summary)
+    metrics = result['evidence']['metrics']
+    return {
+        'schema_version': 1,
+        'window': result['window'],
+        'evidence': result['evidence'],
+        'diagnostics': {
+            'cpu': _cpu_diagnostic(summary, metrics['cpu_percent']['status']),
+            'memory': _memory_diagnostic(
+                summary,
+                metrics['memory_used_percent']['status'],
+                metrics['memory_committed_percent']['status'],
+            ),
+        },
+    }
