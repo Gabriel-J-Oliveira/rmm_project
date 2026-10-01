@@ -19,7 +19,7 @@ from rest_framework.views import APIView
 
 from .audit import create_audit_event, get_client_ip
 from .authentication import authenticate_agent_token
-from .job_progress import sanitize_job_value
+from .job_progress import SENSITIVE_KEYS, sanitize_job_value
 from .lifecycle_jobs import agent_job_parameters
 from .models import (
     AgentDeploymentToken,
@@ -683,39 +683,93 @@ def _payload_result(payload):
     return result if isinstance(result, dict) else {}
 
 
-def _collection_payload_from_job_result(job):
-    result = job.result
+_COLLECTION_MAX_OUTPUT_BYTES = 64 * 1024  # Agent JobExecutionPolicy.MaxOutputBytes
+_COLLECTION_SENSITIVE_KEYS = SENSITIVE_KEYS | {'credential', 'private_key', 'connection_string'}
+_COLLECTION_METADATA_KEYS = {'collected_at', 'machine_id', 'agent_version', 'status', 'output_truncated'}
+
+
+def _sanitize_collection_value(value):
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                '[REDACTED]' if any(marker in str(key).lower() for marker in _COLLECTION_SENSITIVE_KEYS)
+                else _sanitize_collection_value(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_collection_value(item) for item in value]
+    if isinstance(value, str):
+        if any(marker in value.lower() for marker in ('credential=', 'api_key=', 'cookie=', 'private_key=')):
+            return '[REDACTED]'
+        return sanitize_job_value(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    raise ValueError('invalid_collection_value')
+
+
+def _collection_payload_has_semantic_content(job_type, collection):
+    if job_type == AgentJob.TYPE_FORCE_INVENTORY:
+        sections = {'system': dict, 'hardware': dict, 'network': dict,
+                    'disks': list, 'software': list, 'security': dict, 'patches': dict}
+        present = [(key, collection[key]) for key in sections if key in collection]
+        if any(not isinstance(value, sections[key]) for key, value in present):
+            return False
+        return any(
+            isinstance(value, list) or any(field not in _COLLECTION_METADATA_KEYS for field in value)
+            for _, value in present
+        )
+    if job_type == AgentJob.TYPE_COLLECT_DISKS:
+        return isinstance(collection.get('disks'), list)
+    if job_type == AgentJob.TYPE_COLLECT_SOFTWARE:
+        return isinstance(collection.get('installed_software'), list)
+    if job_type == AgentJob.TYPE_COLLECT_SECURITY:
+        return bool({'overall_status', 'defender', 'firewall', 'bitlocker', 'antivirus_products',
+                     'local_admins', 'rdp_enabled', 'uac_enabled', 'remote_access_tools'} & collection.keys())
+    if job_type == AgentJob.TYPE_WINDOWS_UPDATE_SCAN:
+        return bool({'reboot_pending', 'reboot_pending_reasons', 'pending_updates_count',
+                     'installed_hotfixes', 'installed_hotfix_count', 'windows_build',
+                     'last_windows_update_check', 'last_windows_update_install'} & collection.keys())
+    return False
+
+
+def _collection_payload_from_job_result(job, result):
+    if not isinstance(result, dict):
+        raise ValueError('invalid_result')
     if job.output_truncated or result.get('output_truncated') is True:
         raise ValueError('output_truncated')
 
     collection = result.get('output') if 'output' in result else result
     if not isinstance(collection, dict):
         raise ValueError('invalid_output')
+    if collection.get('output_truncated') is True:
+        raise ValueError('output_truncated')
+
+    try:
+        encoded = json.dumps(collection, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError('invalid_output') from exc
+    if len(encoded.encode('utf-8')) > _COLLECTION_MAX_OUTPUT_BYTES:
+        raise ValueError('collection_too_large')
+
+    raw_collection = collection
+    collection = _sanitize_collection_value(raw_collection)
 
     for key in ('machine_id', 'agent_version'):
+        if collection.get(key) == '[REDACTED]':
+            raise ValueError(f'{key}_invalid')
         if key in result and result[key] not in (None, ''):
-            if key in collection and collection[key] != result[key]:
+            if not isinstance(result[key], str):
+                raise ValueError(f'{key}_invalid')
+            if key in raw_collection and raw_collection[key] != result[key]:
                 raise ValueError(f'{key}_conflict')
-            collection = {**collection, key: collection.get(key, result[key])}
+            sanitized_metadata = _sanitize_collection_value(result[key])
+            if sanitized_metadata != result[key]:
+                raise ValueError(f'{key}_invalid')
+            collection = {**collection, key: collection.get(key, sanitized_metadata)}
 
-    if job.job_type == AgentJob.TYPE_FORCE_INVENTORY:
-        sections = {
-            'system': dict, 'hardware': dict, 'network': dict,
-            'disks': list, 'software': list, 'security': dict,
-        }
-        if not all(isinstance(collection.get(key), kind) for key, kind in sections.items()):
-            raise ValueError('missing_inventory_sections')
-        if not collection['system'] or not collection['hardware']:
-            raise ValueError('missing_inventory_sections')
-    elif job.job_type == AgentJob.TYPE_COLLECT_DISKS:
-        if not isinstance(collection.get('disks'), list):
-            raise ValueError('invalid_disks')
-    elif job.job_type == AgentJob.TYPE_COLLECT_SOFTWARE:
-        if not isinstance(collection.get('installed_software'), list):
-            raise ValueError('invalid_software')
-    elif job.job_type in (AgentJob.TYPE_COLLECT_SECURITY, AgentJob.TYPE_WINDOWS_UPDATE_SCAN):
-        if not any(key not in ('machine_id', 'agent_version', 'output_truncated') for key in collection):
-            raise ValueError('missing_collection_data')
+    if not _collection_payload_has_semantic_content(job.job_type, collection):
+        raise ValueError('missing_collection_data')
     return collection
 
 
@@ -1513,7 +1567,7 @@ class AgentJobsResultView(APIView):
                 }.get(job.job_type)
                 if collection_type:
                     try:
-                        collection_payload = _collection_payload_from_job_result(job)
+                        collection_payload = _collection_payload_from_job_result(job, payload.get('result'))
                     except ValueError as exc:
                         logger.warning(
                             'job.result.collection_skipped job_id=%s job_type=%s reason=%s',

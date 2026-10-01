@@ -4,6 +4,7 @@ from django.test import Client, TestCase
 from django.utils import timezone
 
 from .models import AgentJob, AgentJobResultReceipt, AgentMachine, InventorySnapshot
+from .views import _payload_sha256
 
 
 class InventoryJobResultTests(TestCase):
@@ -48,7 +49,7 @@ class InventoryJobResultTests(TestCase):
             'patches': {'updates_available': 0},
         }
 
-    def post_result(self, job_type, result, *, result_id=None):
+    def post_result(self, job_type, result, *, result_id=None, assert_canonical=True):
         job = AgentJob.objects.create(endpoint=self.machine, job_type=job_type)
         result_id = result_id or str(uuid.uuid4())
         response = self.client.post(
@@ -59,7 +60,8 @@ class InventoryJobResultTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
-        self.assertEqual(job.result, result)
+        if assert_canonical:
+            self.assertEqual(job.result, result)
         self.assertTrue(AgentJobResultReceipt.objects.filter(job=job, result_id=result_id).exists())
         return job, response
 
@@ -107,7 +109,7 @@ class InventoryJobResultTests(TestCase):
             (AgentJob.TYPE_COLLECT_DISKS, 'disk', {'disks': [{'letter': 'C:', 'size_bytes': 1000}]}),
             (AgentJob.TYPE_COLLECT_SECURITY, 'security', {'defender': {'antivirus_enabled': True}}),
             (AgentJob.TYPE_COLLECT_SOFTWARE, 'software', {'installed_software': [{'name': 'Synthetic App'}]}),
-            (AgentJob.TYPE_WINDOWS_UPDATE_SCAN, 'patches', {'updates_available': 0}),
+            (AgentJob.TYPE_WINDOWS_UPDATE_SCAN, 'patches', {'pending_updates_count': 0}),
         )
         for job_type, section, output in cases:
             with self.subTest(job_type=job_type):
@@ -154,13 +156,22 @@ class InventoryJobResultTests(TestCase):
         self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
         self.assertEqual(AgentJobResultReceipt.objects.filter(job=job).count(), 1)
 
+    def test_nested_output_truncation_does_not_create_snapshot(self):
+        inventory = self.full_inventory()
+        inventory['output_truncated'] = True
+        with self.assertLogs('agents.views', level='WARNING'):
+            self.post_result(AgentJob.TYPE_FORCE_INVENTORY, {
+                'output': inventory, 'output_truncated': False,
+            })
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+
     def test_missing_and_invalid_output_do_not_create_snapshots(self):
         cases = (
             {'machine_id': self.machine.machine_id, 'agent_version': '0.1.1.0-rc44'},
             {'output': None},
             {'output': 'not valid JSON'},
             {'output': []},
-            {'output': {'hardware': {'manufacturer': 'Synthetic Vendor'}}},
+            {'output': {'hardware': {'collected_at': 'synthetic', 'status': 'partial'}}},
         )
         for result in cases:
             with self.subTest(result=result), self.assertLogs('agents.views', level='WARNING'):
@@ -213,3 +224,116 @@ class InventoryJobResultTests(TestCase):
         }, content_type='application/json')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(InventorySnapshot.objects.get(machine=self.machine).manufacturer, 'Synthetic Vendor')
+
+    def test_full_inventory_list_lengths_are_independent_of_canonical_job_limit(self):
+        inventory = self.full_inventory()
+        inventory['software'] = [{'name': f'Synthetic App {index}'} for index in range(150)]
+        inventory['disks'] = [{'letter': f'{index}:', 'size_bytes': 1000} for index in range(101)]
+        inventory['hardware']['physical_disks'] = [
+            {**inventory['hardware']['physical_disks'][0], 'model': f'Synthetic Disk {index}'}
+            for index in range(101)
+        ]
+        inventory['hardware']['memory']['modules'] = [
+            {'capacity_bytes': 1024, 'part_number': f'Synthetic Module {index}'}
+            for index in range(101)
+        ]
+        job, _ = self.post_result(AgentJob.TYPE_FORCE_INVENTORY,
+                                  {'output': inventory, 'output_truncated': False}, assert_canonical=False)
+        snapshot = InventorySnapshot.objects.get(machine=self.machine)
+        collections = snapshot.raw_payload['collections']
+        self.assertEqual(len(job.result['output']['software']), 100)
+        self.assertEqual(len(collections['full_inventory']['software']), 150)
+        self.assertEqual(len(collections['software']['installed_software']), 150)
+        self.assertEqual(len(snapshot.installed_software), 150)
+        self.assertEqual(len(collections['full_inventory']['disks']), 101)
+        self.assertEqual(len(collections['disk']['disks']), 101)
+        self.assertEqual(len(snapshot.disks), 101)
+        self.assertEqual(len(collections['hardware']['physical_disks']), 101)
+        self.assertEqual(len(collections['hardware']['memory']['modules']), 101)
+        self.assertEqual(collections['hardware']['physical_disks'][-1]['association_source'], 'none')
+        self.assertEqual(collections['hardware']['physical_disks'][-1]['association_confidence'], 'none')
+        self.assertIsNone(collections['hardware']['physical_disks'][-1]['is_system_disk'])
+        self.assertEqual(collections['hardware']['physical_disks'][-1]['drive_letters'], [])
+
+    def test_collection_sanitizes_nested_secrets_without_truncating_other_entries(self):
+        inventory = self.full_inventory()
+        inventory['hardware']['credential'] = 'synthetic-secret-credential'
+        inventory['hardware']['memory']['modules'][0]['password'] = 'synthetic-secret-password'
+        inventory['software'][0]['token'] = 'synthetic-secret-token'
+        inventory['software'][0]['name'] = 'synthetic api_key=not-real'
+        inventory['software'].append({'name': 'Harmless App'})
+        self.post_result(AgentJob.TYPE_FORCE_INVENTORY, {'output': inventory}, assert_canonical=False)
+        collections = InventorySnapshot.objects.get(machine=self.machine).raw_payload['collections']
+        encoded = str(collections)
+        for secret in ('synthetic-secret-credential', 'synthetic-secret-password',
+                       'synthetic-secret-token', 'api_key=not-real'):
+            self.assertNotIn(secret, encoded)
+        self.assertEqual(collections['hardware']['credential'], '[REDACTED]')
+        self.assertEqual(collections['hardware']['memory']['modules'][0]['password'], '[REDACTED]')
+        self.assertEqual(collections['software']['installed_software'][-1]['name'], 'Harmless App')
+
+    def test_sensitive_envelope_metadata_cannot_enter_snapshot(self):
+        inventory = self.full_inventory()
+        inventory.pop('agent_version')
+        with self.assertLogs('agents.views', level='WARNING'):
+            self.post_result(AgentJob.TYPE_FORCE_INVENTORY, {
+                'output': inventory, 'agent_version': 'Bearer synthetic-envelope-secret',
+            }, assert_canonical=False)
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+
+    def test_metadata_only_security_and_patches_are_rejected(self):
+        for job_type in (AgentJob.TYPE_COLLECT_SECURITY, AgentJob.TYPE_WINDOWS_UPDATE_SCAN):
+            with self.subTest(job_type=job_type), self.assertLogs('agents.views', level='WARNING'):
+                self.post_result(job_type, {'machine_id': self.machine.machine_id,
+                                            'output': {'collected_at': 'synthetic', 'status': 'partial'}})
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+
+    def test_metadata_only_disks_software_and_full_inventory_are_rejected(self):
+        for job_type in (AgentJob.TYPE_COLLECT_DISKS, AgentJob.TYPE_COLLECT_SOFTWARE,
+                         AgentJob.TYPE_FORCE_INVENTORY):
+            with self.subTest(job_type=job_type), self.assertLogs('agents.views', level='WARNING'):
+                self.post_result(job_type, {'output': {'collected_at': 'synthetic',
+                                                       'agent_version': '0.1.1.0-rc44'}})
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+
+    def test_explicit_empty_disks_and_software_are_valid(self):
+        self.post_result(AgentJob.TYPE_COLLECT_DISKS, {'output': {'disks': []}})
+        self.post_result(AgentJob.TYPE_COLLECT_SOFTWARE, {'output': {'installed_software': []}})
+        self.assertEqual(InventorySnapshot.objects.filter(machine=self.machine).count(), 2)
+
+    def test_fail_soft_full_inventory_accepts_one_real_section(self):
+        self.post_result(AgentJob.TYPE_FORCE_INVENTORY, {'output': {'hardware': {'manufacturer': 'Synthetic'}}})
+        snapshot = InventorySnapshot.objects.get(machine=self.machine)
+        self.assertEqual(snapshot.manufacturer, 'Synthetic')
+
+    def test_receipt_hash_uses_original_payload_and_replay_is_idempotent(self):
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_COLLECT_SOFTWARE)
+        result_id = str(uuid.uuid4())
+        payload = {'job_id': str(job.id), 'status': 'completed',
+                   'result': {'output': {'installed_software': [
+                       {'name': f'Synthetic App {index}'} for index in range(150)
+                   ]}, 'output_truncated': False}}
+        expected_hash = _payload_sha256(payload)
+        first = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json',
+                                 HTTP_IDEMPOTENCY_KEY=result_id)
+        second = self.client.post('/api/agent/jobs/result/', data=payload, content_type='application/json',
+                                  HTTP_IDEMPOTENCY_KEY=result_id)
+        self.assertEqual((first.status_code, second.status_code), (200, 200))
+        self.assertTrue(second.json()['duplicate'])
+        self.assertEqual(AgentJobResultReceipt.objects.get(job=job).payload_sha256, expected_hash)
+        self.assertEqual(len(InventorySnapshot.objects.get(machine=self.machine).installed_software), 150)
+        self.assertEqual(InventorySnapshot.objects.filter(machine=self.machine).count(), 1)
+
+    def test_oversized_collection_keeps_job_and_receipt_without_snapshot(self):
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_COLLECT_SOFTWARE)
+        with self.assertLogs('agents.views', level='WARNING') as captured:
+            response = self.client.post('/api/agent/jobs/result/', data={
+                'job_id': str(job.id), 'status': 'completed',
+                'result': {'output': {'installed_software': [{'name': 'x' * 2000} for _ in range(40)]}},
+            }, content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        job.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+        self.assertEqual(AgentJobResultReceipt.objects.filter(job=job).count(), 1)
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+        self.assertIn('reason=collection_too_large', '\n'.join(captured.output))
