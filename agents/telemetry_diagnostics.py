@@ -307,3 +307,192 @@ def build_resource_diagnostics(summary):
             ),
         },
     }
+
+
+CAPACITY_NOT_EVALUATED = 'NOT_EVALUATED'
+CAPACITY_NO_PRESSURE = 'NO_PRESSURE_OBSERVED'
+CAPACITY_OBSERVE = 'OBSERVE'
+CAPACITY_SUSTAINED_PRESSURE = 'SUSTAINED_PRESSURE'
+
+INVENTORY_AVAILABLE = 'AVAILABLE'
+INVENTORY_PARTIAL = 'PARTIAL'
+INVENTORY_MISSING = 'MISSING'
+
+_RESOURCE_DIAGNOSTIC_STATUSES = {
+    DIAGNOSTIC_NOT_EVALUATED,
+    DIAGNOSTIC_NO_PRESSURE,
+    DIAGNOSTIC_SPIKY,
+    DIAGNOSTIC_ELEVATED,
+    DIAGNOSTIC_PRESSURE,
+}
+
+
+def _capacity_input(value, name):
+    if not isinstance(value, dict) or value.get('schema_version') != 1:
+        raise ValueError(f'{name} must be a version 1 resource diagnostic')
+    window = value.get('window')
+    diagnostics = value.get('diagnostics')
+    if not isinstance(window, dict) or not isinstance(diagnostics, dict):
+        raise ValueError(f'{name} window and diagnostics are required')
+    if not isinstance(window.get('start'), str) or not isinstance(window.get('end'), str):
+        raise ValueError(f'{name} window timestamps must be strings')
+    duration = _finite_number(window.get('duration_seconds'), f'{name}.window.duration_seconds')
+    if duration <= 0:
+        raise ValueError(f'{name} window duration must be positive')
+    statuses = {}
+    for resource in ('cpu', 'memory'):
+        diagnostic = diagnostics.get(resource)
+        status = diagnostic.get('status') if isinstance(diagnostic, dict) else None
+        if not isinstance(status, str) or status not in _RESOURCE_DIAGNOSTIC_STATUSES:
+            raise ValueError(f'{name}.diagnostics.{resource}.status is invalid')
+        statuses[resource] = status
+    return {
+        'window': {
+            'start': window['start'],
+            'end': window['end'],
+            'duration_seconds': duration,
+        },
+        'statuses': statuses,
+    }
+
+
+def _capacity_resource(primary, context):
+    reasons = []
+    if primary == DIAGNOSTIC_NOT_EVALUATED:
+        status = CAPACITY_NOT_EVALUATED
+        reasons.append('primary_not_evaluated')
+    elif primary == DIAGNOSTIC_NO_PRESSURE:
+        if context in (DIAGNOSTIC_ELEVATED, DIAGNOSTIC_PRESSURE):
+            status = CAPACITY_OBSERVE
+            reasons.append('historical_signal_present')
+        else:
+            status = CAPACITY_NO_PRESSURE
+            reasons.append('primary_no_pressure_observed')
+    elif primary == DIAGNOSTIC_SPIKY:
+        status = CAPACITY_OBSERVE
+        reasons.append('primary_spiky')
+        if context in (DIAGNOSTIC_ELEVATED, DIAGNOSTIC_PRESSURE):
+            reasons.append('context_pressure_signal')
+    elif primary == DIAGNOSTIC_ELEVATED:
+        status = CAPACITY_OBSERVE
+        reasons.append('primary_elevated')
+        if context in (DIAGNOSTIC_ELEVATED, DIAGNOSTIC_PRESSURE):
+            reasons.append('context_elevated_or_pressure')
+    else:
+        reasons.append('primary_pressure')
+        if context in (DIAGNOSTIC_ELEVATED, DIAGNOSTIC_PRESSURE):
+            status = CAPACITY_SUSTAINED_PRESSURE
+            reasons.append('context_corroborates_pressure')
+        else:
+            status = CAPACITY_OBSERVE
+            if context in (DIAGNOSTIC_NO_PRESSURE, DIAGNOSTIC_SPIKY):
+                reasons.append('context_not_corroborated')
+    if primary != DIAGNOSTIC_NOT_EVALUATED:
+        if context is None and primary != DIAGNOSTIC_NO_PRESSURE:
+            reasons.append('context_window_unavailable')
+        elif context == DIAGNOSTIC_NOT_EVALUATED:
+            reasons.append('context_not_evaluated')
+    return {
+        'status': status,
+        'primary_diagnostic': primary,
+        'context_diagnostic': context,
+        'reasons': reasons,
+    }
+
+
+def _optional_nonnegative_int(value, name):
+    return None if value is None else _nonnegative_int(value, name)
+
+
+def _hardware_context(hardware):
+    if hardware is None:
+        hardware = {}
+    if not isinstance(hardware, dict):
+        raise ValueError('hardware must be a dict or None')
+
+    cpu_input = hardware.get('cpu')
+    if cpu_input is None:
+        cpu_input = {}
+    if not isinstance(cpu_input, dict):
+        raise ValueError('hardware.cpu must be a dict')
+    name = cpu_input.get('name')
+    if name is not None and not isinstance(name, str):
+        raise ValueError('hardware.cpu.name must be a string')
+    if name == '':
+        name = None
+    physical = _optional_nonnegative_int(cpu_input.get('physical_cores'), 'hardware.cpu.physical_cores')
+    logical = _optional_nonnegative_int(cpu_input.get('logical_processors'), 'hardware.cpu.logical_processors')
+    clock = cpu_input.get('max_clock_mhz')
+    if clock is not None:
+        _finite_number(clock, 'hardware.cpu.max_clock_mhz')
+        if clock < 0:
+            raise ValueError('hardware.cpu.max_clock_mhz must be nonnegative')
+    sockets = _optional_nonnegative_int(cpu_input.get('socket_count'), 'hardware.cpu.socket_count')
+    cpu_status = (INVENTORY_AVAILABLE if all(value is not None for value in (name, physical, logical))
+                  else INVENTORY_PARTIAL if any(value is not None for value in (name, physical, logical, clock, sockets))
+                  else INVENTORY_MISSING)
+
+    memory_input = hardware.get('memory')
+    if memory_input is None:
+        memory_input = {}
+    if not isinstance(memory_input, dict):
+        raise ValueError('hardware.memory must be a dict')
+    nested_total = _optional_nonnegative_int(memory_input.get('total_bytes'), 'hardware.memory.total_bytes')
+    top_total = _optional_nonnegative_int(hardware.get('memory_total_bytes'), 'hardware.memory_total_bytes')
+    if nested_total is not None and top_total is not None and nested_total != top_total:
+        raise ValueError('hardware memory totals disagree')
+    total = nested_total if nested_total is not None else top_total
+    slots_total = _optional_nonnegative_int(memory_input.get('slots_total'), 'hardware.memory.slots_total')
+    slots_used = _optional_nonnegative_int(memory_input.get('slots_used'), 'hardware.memory.slots_used')
+    slots_free = _optional_nonnegative_int(memory_input.get('slots_free'), 'hardware.memory.slots_free')
+    if all(value is not None for value in (slots_total, slots_used, slots_free)):
+        if slots_used + slots_free != slots_total:
+            raise ValueError('hardware memory slots disagree')
+    modules = memory_input.get('modules')
+    if modules is not None and not isinstance(modules, list):
+        raise ValueError('hardware.memory.modules must be a list')
+    module_count = len(modules) if modules is not None else None
+    memory_status = (INVENTORY_AVAILABLE if all(value is not None for value in
+                     (total, slots_total, slots_used, slots_free))
+                     else INVENTORY_PARTIAL if any(value is not None for value in
+                     (total, slots_total, slots_used, slots_free, module_count))
+                     else INVENTORY_MISSING)
+    return {
+        'cpu': {
+            'status': cpu_status,
+            'name': name,
+            'physical_cores': physical,
+            'logical_processors': logical,
+            'max_clock_mhz': clock,
+            'socket_count': sockets,
+        },
+        'memory': {
+            'status': memory_status,
+            'total_bytes': total,
+            'slots_total': slots_total,
+            'slots_used': slots_used,
+            'slots_free': slots_free,
+            'module_count': module_count,
+        },
+    }
+
+
+def build_capacity_assessment(primary_diagnostics, context_diagnostics=None, hardware=None):
+    """Corroborate independent CPU and memory patterns without sizing hardware."""
+    primary = _capacity_input(primary_diagnostics, 'primary')
+    context = _capacity_input(context_diagnostics, 'context') if context_diagnostics is not None else None
+    if context and context['window']['duration_seconds'] < primary['window']['duration_seconds']:
+        raise ValueError('context window must be at least as long as primary')
+    return {
+        'schema_version': 1,
+        'windows': {
+            'primary': primary['window'],
+            'context': context['window'] if context else None,
+        },
+        'capacity': {
+            resource: _capacity_resource(
+                primary['statuses'][resource], context['statuses'][resource] if context else None
+            ) for resource in ('cpu', 'memory')
+        },
+        'hardware_context': _hardware_context(hardware),
+    }
