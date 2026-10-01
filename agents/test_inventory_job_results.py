@@ -288,6 +288,37 @@ class InventoryJobResultTests(TestCase):
                                             'output': {'collected_at': 'synthetic', 'status': 'partial'}})
         self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
 
+    def test_windows_build_alone_is_not_patch_scan_data(self):
+        with self.assertLogs('agents.views', level='WARNING'):
+            self.post_result(AgentJob.TYPE_WINDOWS_UPDATE_SCAN, {
+                'output': {'windows_build': '20348'},
+            })
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+
+    def test_combined_patch_metadata_is_not_scan_data(self):
+        with self.assertLogs('agents.views', level='WARNING'):
+            self.post_result(AgentJob.TYPE_WINDOWS_UPDATE_SCAN, {
+                'output': {
+                    'windows_build': '20348', 'collected_at': '2026-10-01T00:00:00Z',
+                    'machine_id': self.machine.machine_id, 'agent_version': '0.1.1.0-rc44',
+                    'status': 'ok',
+                },
+            })
+        self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
+
+    def test_empty_patch_scan_with_explicit_domain_fields_is_valid(self):
+        scan = {'reboot_pending': False, 'reboot_pending_reasons': [],
+                'pending_updates_count': 0, 'installed_hotfixes': []}
+        self.post_result(AgentJob.TYPE_WINDOWS_UPDATE_SCAN, {'output': scan})
+        self.assertEqual(InventorySnapshot.objects.get(machine=self.machine).raw_payload['collections']['patches'], scan)
+
+    def test_nonempty_patch_scan_preserves_update_data(self):
+        scan = {'pending_updates_count': 1, 'installed_hotfixes': [
+            {'hotfix_id': 'KB000000', 'description': 'Synthetic update'},
+        ]}
+        self.post_result(AgentJob.TYPE_WINDOWS_UPDATE_SCAN, {'output': scan})
+        self.assertEqual(InventorySnapshot.objects.get(machine=self.machine).raw_payload['collections']['patches'], scan)
+
     def test_metadata_only_disks_software_and_full_inventory_are_rejected(self):
         for job_type in (AgentJob.TYPE_COLLECT_DISKS, AgentJob.TYPE_COLLECT_SOFTWARE,
                          AgentJob.TYPE_FORCE_INVENTORY):

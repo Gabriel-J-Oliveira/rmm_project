@@ -728,7 +728,7 @@ def _collection_payload_has_semantic_content(job_type, collection):
                      'local_admins', 'rdp_enabled', 'uac_enabled', 'remote_access_tools'} & collection.keys())
     if job_type == AgentJob.TYPE_WINDOWS_UPDATE_SCAN:
         return bool({'reboot_pending', 'reboot_pending_reasons', 'pending_updates_count',
-                     'installed_hotfixes', 'installed_hotfix_count', 'windows_build',
+                     'installed_hotfixes', 'installed_hotfix_count',
                      'last_windows_update_check', 'last_windows_update_install'} & collection.keys())
     return False
 
