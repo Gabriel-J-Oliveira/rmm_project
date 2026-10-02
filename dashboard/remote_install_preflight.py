@@ -1,6 +1,7 @@
 """Ephemeral, read-only preflight for one AD computer."""
 
 import base64
+import ipaddress
 import json
 import re
 import socket
@@ -18,6 +19,9 @@ SOCKET_TIMEOUT_SECONDS = 3
 WINRM_DEADLINE_SECONDS = 25
 MAX_OUTPUT_BYTES = 8192
 _DNS_LABEL = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
+_CORPORATE_NETWORKS = tuple(ipaddress.IPv4Network(network) for network in (
+    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
+))
 
 _READ_ONLY_PROBE = r'''
 $ErrorActionPreference = 'Stop'
@@ -92,6 +96,33 @@ def _tcp_available(address):
         return False
 
 
+def _safe_ipv4(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError:
+        return False
+    if (address.is_loopback or address.is_unspecified or address.is_link_local
+            or address.is_multicast or address.is_reserved or address == ipaddress.IPv4Address('255.255.255.255')):
+        return False
+    return address.is_global or any(address in network for network in _CORPORATE_NETWORKS)
+
+
+def _block_redirects(session):
+    send = session.send
+
+    def send_without_redirects(request, **kwargs):
+        kwargs['allow_redirects'] = False
+        response = send(request, **kwargs)
+        if 300 <= response.status_code < 400:
+            response.close()
+            raise ProbeFailure('WINRM_REDIRECT_BLOCKED')
+        return response
+
+    session.send = send_without_redirects
+
+
 def _winrm_probe(fqdn, username, password):
     try:
         from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
@@ -108,6 +139,7 @@ def _winrm_probe(fqdn, username, password):
             username=username, password=password, server_cert_validation='validate',
             proxy=None, operation_timeout_sec=3, read_timeout_sec=5,
         )
+        _block_redirects(protocol.transport.build_session())
         deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
         shell_id = protocol.open_shell()
         encoded = base64.b64encode(_READ_ONLY_PROBE.encode('utf-16-le')).decode('ascii')
@@ -168,6 +200,9 @@ def run_remote_install_preflight(fqdn, username, password):
     address = dns.get('primary_ipv4')
     if dns.get('dns_status') != 'RESOLVED' or not address:
         return _fail(checks, 'DNS', 'DNS_UNRESOLVED', target)
+    addresses = dns.get('ipv4_addresses', [])
+    if not isinstance(addresses, (list, tuple)) or not all(_safe_ipv4(item) for item in [address, *addresses]):
+        return _fail(checks, 'DNS', 'UNSAFE_TARGET_ADDRESS', target)
     target['ip'] = address
     checks['DNS'] = {'status': 'PASS'}
     if not _tcp_available(address):
@@ -177,6 +212,7 @@ def run_remote_install_preflight(fqdn, username, password):
             not isinstance(password, str) or not password or len(password) > 512 or not password.isprintable():
         return _fail(checks, 'AUTHENTICATION', 'CREDENTIAL_REQUIRED', target)
     try:
+        # WinRM resolves the FQDN again; TLS hostname validation remains required, but DNS is not pinned in this MVP.
         remote = _winrm_probe(target['fqdn'], username.strip(), password)
     except ProbeFailure as exc:
         key = 'AUTHENTICATION' if exc.code in ('AUTHENTICATION_FAILED', 'CREDENTIAL_REQUIRED') else 'REMOTE_TRANSPORT'

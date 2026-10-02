@@ -1,10 +1,16 @@
 import json
 import logging
+from base64 import b64encode
 from unittest import mock
 
+import requests
+from requests.adapters import BaseAdapter
+from requests.models import Response
+from requests_ntlm import HttpNtlmAuth
 from winrm.exceptions import WinRMOperationTimeoutError
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.db import connection
 from django.test import Client, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -22,7 +28,44 @@ REMOTE_OK = {
     'architecture': 'x64', 'powershell_major': 5, 'admin': True,
     'nightowl_service_present': False, 'nightowl_directory_present': False,
 }
-DNS_OK = {'lab-01.control.local': {'dns_status': 'RESOLVED', 'primary_ipv4': '192.0.2.10'}}
+DNS_OK = {'lab-01.control.local': {'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.104.20',
+                                   'ipv4_addresses': ['192.168.104.20']}}
+
+
+class SyntheticRaw:
+    def release_conn(self):
+        pass
+
+
+class SyntheticWinRMAdapter(BaseAdapter):
+    def __init__(self, redirect_status=None, redirect_url=None):
+        self.redirect_status = redirect_status
+        self.redirect_url = redirect_url
+        self.requests = []
+
+    def send(self, request, **kwargs):
+        self.requests.append(request)
+        response = Response()
+        response.request = request
+        response.url = request.url
+        response.raw = SyntheticRaw()
+        response.connection = self
+        response._content = b''
+        if self.redirect_status:
+            response.status_code = self.redirect_status
+            response.headers['Location'] = self.redirect_url
+        elif len(self.requests) == 1:
+            response.status_code = 401
+            response.headers['WWW-Authenticate'] = 'NTLM'
+        elif len(self.requests) == 2:
+            response.status_code = 401
+            response.headers['WWW-Authenticate'] = 'NTLM ' + b64encode(b'synthetic-challenge').decode()
+        else:
+            response.status_code = 200
+        return response
+
+    def close(self):
+        pass
 
 
 @override_settings(AD_AUTH_CONFIG=DOMAIN_CONFIG)
@@ -84,6 +127,52 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(self.run_probe()['checks']['REMOTE_TRANSPORT']['code'], 'WINRM_UNAVAILABLE')
         self.remote_mock.assert_not_called()
 
+    def test_unsafe_dns_addresses_never_connect(self):
+        unsafe = ('127.0.0.1', '127.20.30.40', '0.0.0.0', '169.254.169.254',
+                  '224.0.0.1', '255.255.255.255', '240.0.0.1', '192.0.2.1', 'not-an-ip')
+        for address in unsafe:
+            with self.subTest(address=address):
+                self.dns_mock.return_value = {'lab-01.control.local': {
+                    'dns_status': 'RESOLVED', 'primary_ipv4': address, 'ipv4_addresses': [address],
+                }}
+                result = self.run_probe()
+                self.assertEqual(result['status'], 'NOT_READY')
+                self.assertEqual(result['checks']['DNS']['code'], 'UNSAFE_TARGET_ADDRESS')
+                self.tcp_mock.assert_not_called()
+                self.remote_mock.assert_not_called()
+
+    def test_rfc1918_addresses_remain_eligible(self):
+        for address in ('192.168.104.2', '192.168.100.202', '10.10.10.10', '172.16.10.10'):
+            with self.subTest(address=address):
+                self.dns_mock.return_value = {'lab-01.control.local': {
+                    'dns_status': 'RESOLVED', 'primary_ipv4': address, 'ipv4_addresses': [address],
+                }}
+                self.assertEqual(self.run_probe()['status'], 'READY')
+                self.tcp_mock.assert_called_with(address)
+                self.tcp_mock.reset_mock()
+                self.remote_mock.reset_mock()
+
+    def test_mixed_safe_and_unsafe_dns_fails_closed(self):
+        self.dns_mock.return_value = {'lab-01.control.local': {
+            'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.104.20',
+            'ipv4_addresses': ['192.168.104.20', '127.0.0.1'],
+        }}
+        self.assertEqual(self.run_probe()['checks']['DNS']['code'], 'UNSAFE_TARGET_ADDRESS')
+        self.tcp_mock.assert_not_called()
+        self.remote_mock.assert_not_called()
+
+    def test_browser_ip_is_ignored(self):
+        user = get_user_model().objects.create_user(username='preflight-ip-test', password='synthetic-test-only', is_staff=True)
+        client = Client()
+        client.force_login(user)
+        response = client.post(reverse('agent-install-ad-preflight'), data=json.dumps({
+            'fqdn': 'lab-01.control.local', 'ip': '127.0.0.1', 'url': 'http://localhost/',
+            'username': 'Admin', 'password': SENTINEL,
+        }), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'READY')
+        self.tcp_mock.assert_called_once_with('192.168.104.20')
+
     def test_authentication_and_timeout_fail_closed(self):
         for code, check in [('AUTHENTICATION_FAILED', 'AUTHENTICATION'),
                             ('REMOTE_TIMEOUT', 'REMOTE_TRANSPORT')]:
@@ -124,7 +213,8 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(client.get(url).status_code, 405)
         self.assertEqual(client.post(url, data=body, content_type='application/json').status_code, 403)
         client.cookies['csrftoken'] = 'a' * 32
-        with CaptureQueriesContext(connection) as queries, self.assertLogs(level=logging.WARNING) as logs:
+        with CaptureQueriesContext(connection) as queries, self.assertLogs(level=logging.WARNING) as logs, \
+                mock.patch.object(cache, 'set') as cache_set:
             response = client.post(url, data=body, content_type='application/json',
                                    HTTP_X_CSRFTOKEN='a' * 32)
             logging.getLogger(__name__).warning('preflight test completed')
@@ -133,6 +223,8 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(response['Cache-Control'], 'no-store')
         self.assertNotIn(SENTINEL, response.content.decode())
         self.assertNotIn(SENTINEL, '\n'.join(logs.output))
+        self.assertNotIn(SENTINEL, repr(dict(client.session)))
+        cache_set.assert_not_called()
         self.assertTrue(all(query['sql'].lstrip().upper().startswith('SELECT') for query in queries))
         self.assertNotIn(SENTINEL, '\n'.join(query['sql'] for query in queries))
 
@@ -184,3 +276,60 @@ class WinRMProbeTests(TestCase):
         self.assertNotIn(SENTINEL, str(raised.exception))
         protocol.cleanup_command.assert_called_once()
         protocol.close_shell.assert_called_once()
+
+
+class RedirectProtectionTests(TestCase):
+    def session_with_adapter(self, adapter):
+        session = requests.Session()
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        session.auth = HttpNtlmAuth('SYNTHETIC\\Admin', SENTINEL)
+        preflight._block_redirects(session)
+        return session
+
+    def test_all_redirects_fail_without_second_request_or_ntlm_at_target(self):
+        for status in (301, 302, 303, 307, 308):
+            for destination in ('http://attacker.invalid/', 'https://other.invalid/'):
+                with self.subTest(status=status, destination=destination):
+                    adapter = SyntheticWinRMAdapter(status, destination)
+                    session = self.session_with_adapter(adapter)
+                    with self.assertRaises(preflight.ProbeFailure) as raised:
+                        session.post('https://lab-01.control.local:5986/wsman', data=b'synthetic-probe', timeout=1)
+                    self.assertEqual(raised.exception.code, 'WINRM_REDIRECT_BLOCKED')
+                    self.assertEqual(len(adapter.requests), 1)
+                    self.assertEqual(adapter.requests[0].url, 'https://lab-01.control.local:5986/wsman')
+                    self.assertNotIn(SENTINEL, str(raised.exception))
+                    session.close()
+
+    def test_real_pywinrm_transport_uses_the_guarded_session(self):
+        adapter = SyntheticWinRMAdapter(302, 'http://attacker.invalid/')
+        session_class = requests.Session
+
+        def session_factory():
+            session = session_class()
+            session.mount('https://', adapter)
+            session.mount('http://', adapter)
+            return session
+
+        with mock.patch('winrm.transport.requests.Session', side_effect=session_factory):
+            with self.assertRaises(preflight.ProbeFailure) as raised:
+                preflight._winrm_probe('lab-01.control.local', 'SYNTHETIC\\Admin', SENTINEL)
+        self.assertEqual(raised.exception.code, 'WINRM_REDIRECT_BLOCKED')
+        self.assertNotIn(SENTINEL, str(raised.exception))
+        self.assertEqual(len(adapter.requests), 1)
+        self.assertTrue(adapter.requests[0].url.startswith('https://lab-01.control.local:5986/'))
+
+    @mock.patch('requests_ntlm.requests_ntlm.spnego.client')
+    @mock.patch.object(HttpNtlmAuth, '_get_server_cert', return_value=None)
+    def test_normal_ntlm_401_handshake_still_works(self, _certificate, client_factory):
+        client_factory.return_value.step.side_effect = [b'synthetic-negotiate', b'synthetic-authenticate']
+        adapter = SyntheticWinRMAdapter()
+        session = self.session_with_adapter(adapter)
+        response = session.post('https://lab-01.control.local:5986/wsman', data=b'synthetic-probe', timeout=1)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(adapter.requests), 3)
+        self.assertTrue(all(request.url.startswith('https://lab-01.control.local:5986/')
+                            for request in adapter.requests))
+        self.assertTrue(adapter.requests[1].headers['Authorization'].startswith('NTLM '))
+        self.assertTrue(adapter.requests[2].headers['Authorization'].startswith('NTLM '))
+        session.close()
