@@ -4053,8 +4053,36 @@ body.page-tickets .desk-category-drawer.is-open {
 }
 
 .agent-install-metrics {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     margin-bottom: 18px;
+}
+
+.page-agent-install .metric-card,
+.page-agent-install .panel {
+    transition: none;
+}
+
+.page-agent-install .metric-card:hover,
+.page-agent-install .panel:hover {
+    transform: none;
+    box-shadow: none;
+    background: var(--card);
+    border-color: var(--border);
+}
+
+.page-agent-install .ad-kpi-loading {
+    display: inline-block;
+    min-width: 2ch;
+    color: var(--text-muted);
+    animation: ad-kpi-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes ad-kpi-pulse {
+    to { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .page-agent-install .ad-kpi-loading { animation: none; }
 }
 
 .agent-hero-badges,
@@ -4092,6 +4120,31 @@ body.page-tickets .desk-category-drawer.is-open {
     margin: 3px 0 0;
     font-size: 1.2rem;
 }
+
+.ad-refresh-form {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    color: var(--text-secondary);
+}
+
+.ad-refresh-form button:disabled { cursor: wait; opacity: 0.7; }
+
+.agent-install-section-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 24px 0 14px;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+}
+
+.agent-install-section-heading h2 { margin: 4px 0 0; font-size: 1.2rem; }
+
+.agent-install-manual-meta { color: var(--text-secondary); font-size: 0.88rem; }
 
 .ad-scan-status {
     min-height: 1.4em;
@@ -4142,13 +4195,54 @@ body.page-tickets .desk-category-drawer.is-open {
     gap: 12px;
 }
 
+.ad-pagination,
+.ad-page-controls,
+.ad-page-numbers {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ad-pagination {
+    justify-content: space-between;
+    margin-top: 12px;
+    color: var(--text-secondary);
+}
+
+.ad-pagination select { margin-left: 6px; }
+
+.ad-page-controls button {
+    min-width: 34px;
+    min-height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--text-primary);
+}
+
+.ad-page-controls button[aria-current="page"] {
+    border-color: var(--online);
+    color: var(--online);
+}
+
+.ad-page-controls button:disabled { opacity: 0.45; }
+
+.ad-page-ellipsis { padding: 0 4px; }
+
+#ad-selection-note { color: var(--text-secondary); }
+
 .ad-computer-table {
     min-width: 1250px;
 }
 
 .ad-computer-table td {
     vertical-align: top;
+    font-size: 0.92rem;
+    color: var(--text-primary);
 }
+
+.ad-computer-table td strong { font-weight: 600; color: var(--text-primary); }
 
 .ad-computer-table td strong,
 .ad-computer-table td small {
@@ -4157,7 +4251,13 @@ body.page-tickets .desk-category-drawer.is-open {
 }
 
 .ad-computer-table td small {
-    color: var(--text-muted);
+    color: var(--text-secondary);
+}
+
+.page-agent-install .terminal-block,
+.page-agent-install .created-token-box,
+.page-agent-install .ad-detail-section dd {
+    color: var(--text-primary);
 }
 
 .ad-detail-link {
@@ -4312,6 +4412,8 @@ body.page-tickets .desk-category-drawer.is-open {
     .ad-discovery-toolbar {
         grid-template-columns: 1fr;
     }
+
+    .ad-pagination { align-items: flex-start; flex-direction: column; }
 }
 
 .agent-install-hero {
@@ -4840,10 +4942,11 @@ body.page-tickets .desk-category-drawer.is-open {
 
 @media (max-width: 1060px) {
     .agent-install-grid,
-    .agent-command-layout,
-    .agent-install-metrics {
+    .agent-command-layout {
         grid-template-columns: 1fr;
     }
+
+    .agent-install-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
     .agent-options-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6757,6 +6860,12 @@ body.page-agent-install {
     --module-accent: #22c55e;
     --module-accent-soft: #7c3aed;
     --module-accent-rgb: 34, 197, 94;
+}
+
+@media (max-width: 760px) {
+    body.page-agent-install .agent-install-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 body.drawer-open {

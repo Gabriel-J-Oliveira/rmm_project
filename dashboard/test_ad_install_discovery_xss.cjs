@@ -68,7 +68,7 @@ test('AD values render as text in table and details', async () => {
         },
     });
     document.DOMContentLoaded();
-    await ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} });
+    await new Promise((resolve) => setImmediate(resolve));
     const details = nodes.find((node) => node.tag === 'button' && node.textContent === 'Detalhes');
     assert.ok(details);
     details.listeners.click();

@@ -22,20 +22,53 @@
     </div>
 </section>
 
+<section class="metric-grid agent-install-metrics" aria-label="Resumo da instalação">
+    <article class="metric-card command-metric">
+        <span class="metric-icon"><i data-lucide="network"></i></span>
+        <span class="metric-label">Computadores AD</span>
+        <strong class="metric-value ad-kpi-loading" id="ad-kpi-total" aria-busy="true">--</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon warning"><i data-lucide="monitor-off"></i></span>
+        <span class="metric-label">Sem NightOwl</span>
+        <strong class="metric-value ad-kpi-loading" id="ad-kpi-unmanaged" aria-busy="true">--</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon success"><i data-lucide="monitor-check"></i></span>
+        <span class="metric-label">Gerenciados</span>
+        <strong class="metric-value ad-kpi-loading" id="ad-kpi-managed" aria-busy="true">--</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon security"><i data-lucide="key-round"></i></span>
+        <span class="metric-label">Tokens ativos</span>
+        <strong class="metric-value">{{ active_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon success"><i data-lucide="check-circle"></i></span>
+        <span class="metric-label">Instalações com sucesso 24h</span>
+        <strong class="metric-value">{{ success_24h_count }}</strong>
+    </article>
+    <article class="metric-card command-metric">
+        <span class="metric-icon critical"><i data-lucide="triangle-alert"></i></span>
+        <span class="metric-label">Instalações com falha 24h</span>
+        <strong class="metric-value">{{ failure_24h_count }}</strong>
+    </article>
+</section>
+
 <section class="ad-discovery" id="ad-discovery" data-scan-url="{% url 'agent-install-ad-scan' %}" data-preflight-url="{% url 'agent-install-ad-preflight' %}">
     <div class="ad-discovery-heading">
         <div>
             <span class="section-kicker">Active Directory</span>
             <h2>Computadores do dom&iacute;nio</h2>
         </div>
-        <form id="ad-discovery-form" method="post">
+        <form id="ad-discovery-form" method="post" class="ad-refresh-form">
             {% csrf_token %}
-            <button type="submit" id="ad-scan-button"><i data-lucide="scan-search"></i>Escanear Active Directory</button>
+            <span id="ad-last-updated">Última atualização: --</span>
+            <button type="submit" id="ad-scan-button"><i data-lucide="refresh-cw"></i>Atualizar</button>
         </form>
     </div>
-    <p class="ad-scan-status" id="ad-scan-status" role="status" aria-live="polite"></p>
+    <p class="ad-scan-status" id="ad-scan-status" role="status" aria-live="polite">Carregando computadores do domínio...</p>
     <div id="ad-discovery-results" hidden>
-        <div class="metric-grid ad-discovery-metrics" id="ad-discovery-metrics"></div>
         <div class="ad-discovery-toolbar">
             <label class="filter-field ad-search-field"><span>Busca</span><input id="ad-search" type="search" placeholder="Hostname, FQDN, IP ou usu&aacute;rio"></label>
             <label class="filter-field"><span>OU</span><select id="ad-ou-filter"><option value="">Todas</option></select></label>
@@ -53,12 +86,12 @@
         </div>
         <div class="ad-discovery-selection">
             <span id="ad-visible-count"></span>
-            <div><strong id="ad-selected-count">0 selecionados</strong><button type="button" id="ad-prepare-button" disabled><i data-lucide="list-checks"></i>Preparar instala&ccedil;&atilde;o</button></div>
+            <div><span id="ad-selection-note"></span><strong id="ad-selected-count"></strong><button type="button" id="ad-prepare-button" disabled><i data-lucide="list-checks"></i>Preparar instala&ccedil;&atilde;o</button></div>
         </div>
         <div class="table-wrap">
             <table class="endpoint-table ad-computer-table">
                 <thead><tr>
-                    <th scope="col"><input id="ad-select-visible" type="checkbox" aria-label="Selecionar eleg&iacute;veis vis&iacute;veis"></th>
+                    <th scope="col"><input id="ad-select-visible" type="checkbox" aria-label="Selecionar elegíveis nesta página"></th>
                     <th scope="col">Computador</th><th scope="col">IP</th><th scope="col">SO</th><th scope="col">OU</th>
                     <th scope="col">Usu&aacute;rio reportado</th><th scope="col">Atividade AD</th><th scope="col">NightOwl</th>
                     <th scope="col">Agent</th><th scope="col">&Uacute;ltimo contato</th><th scope="col">A&ccedil;&atilde;o</th>
@@ -66,6 +99,15 @@
                 <tbody id="ad-computer-rows"></tbody>
             </table>
         </div>
+        <nav class="ad-pagination" aria-label="Páginas de computadores AD">
+            <span id="ad-page-summary"></span>
+            <label>Por página <select id="ad-page-size"><option value="10" selected>10</option><option value="20">20</option><option value="50">50</option></select></label>
+            <div class="ad-page-controls">
+                <button type="button" id="ad-page-prev" aria-label="Página anterior" title="Página anterior"><i data-lucide="chevron-left"></i></button>
+                <div id="ad-page-numbers" class="ad-page-numbers"></div>
+                <button type="button" id="ad-page-next" aria-label="Próxima página" title="Próxima página"><i data-lucide="chevron-right"></i></button>
+            </div>
+        </nav>
     </div>
 </section>
 
@@ -75,33 +117,10 @@
     <div id="ad-detail-content" class="ad-detail-content"></div>
 </aside>
 
-<section class="metric-grid agent-install-metrics">
-    <article class="metric-card command-metric">
-        <span class="metric-icon security"><i data-lucide="key-round"></i></span>
-        <span class="metric-label">Tokens ativos</span>
-        <strong class="metric-value">{{ active_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon warning"><i data-lucide="clock"></i></span>
-        <span class="metric-label">Tokens expirados</span>
-        <strong class="metric-value">{{ expired_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon"><i data-lucide="activity"></i></span>
-        <span class="metric-label">Usos nas &uacute;ltimas 24h</span>
-        <strong class="metric-value">{{ uses_24h_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon success"><i data-lucide="check-circle"></i></span>
-        <span class="metric-label">Instala&ccedil;&otilde;es com sucesso</span>
-        <strong class="metric-value">{{ success_24h_count }}</strong>
-    </article>
-    <article class="metric-card command-metric">
-        <span class="metric-icon critical"><i data-lucide="triangle-alert"></i></span>
-        <span class="metric-label">Instala&ccedil;&otilde;es com falha</span>
-        <strong class="metric-value">{{ failure_24h_count }}</strong>
-    </article>
-</section>
+<div class="agent-install-section-heading">
+    <div><span class="section-kicker">Tokens e comandos</span><h2>Instalação manual</h2></div>
+    <span class="agent-install-manual-meta">{{ expired_count }} tokens expirados · {{ uses_24h_count }} usos nas últimas 24h</span>
+</div>
 
 {% if created_token %}
 <section class="panel enrollment-created-panel">

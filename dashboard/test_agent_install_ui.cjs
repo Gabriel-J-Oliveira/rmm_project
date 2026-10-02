@@ -1,0 +1,187 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const vm = require('node:vm');
+
+const script = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'agent_install_discovery.js'), 'utf8');
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+function computer(number, overrides = {}) {
+    return {
+        hostname: `pc${number}`, fqdn: `pc${number}.control.local`, distinguished_name: `CN=pc${number},DC=control,DC=local`,
+        ou_dn: 'OU=Lab,DC=control,DC=local', ou: 'Lab', operating_system: 'Windows',
+        enabled: true, correlation_status: 'UNMANAGED', selectable: true, dns_status: 'RESOLVED',
+        ...overrides,
+    };
+}
+
+function setup(initial) {
+    const ids = new Map();
+    const nodes = [];
+    const filterButtons = ['enabled', 'unmanaged', 'managed', 'disabled', 'conflict', 'all'].map((name) => {
+        const node = new Node('button');
+        node.dataset.adFilter = name;
+        return node;
+    });
+    let scans = 0;
+    let preflights = 0;
+    let nextScan;
+    function Node(tag) {
+        this.tag = tag;
+        this.children = [];
+        this.listeners = {};
+        this.dataset = {};
+        this.value = '';
+        this.hidden = false;
+        nodes.push(this);
+    }
+    Object.defineProperty(Node.prototype, 'textContent', {
+        get() { return this.text || this.children.map((child) => child.textContent).join(''); },
+        set(value) { this.text = String(value); },
+    });
+    Object.defineProperty(Node.prototype, 'firstElementChild', { get() { return this.children[0]; } });
+    Node.prototype.appendChild = function (child) { this.children.push(child); return child; };
+    Node.prototype.append = function (...children) { this.children.push(...children); };
+    Node.prototype.replaceChildren = function (...children) { this.children = children.filter(Boolean); };
+    Node.prototype.addEventListener = function (type, callback) { this.listeners[type] = callback; };
+    Node.prototype.setAttribute = function (name, value) { this[name] = value; };
+    Node.prototype.querySelector = function () { return { value: 'synthetic-csrf' }; };
+    Node.prototype.focus = function () {};
+    const document = {
+        getElementById(id) { if (!ids.has(id)) ids.set(id, new Node(id)); return ids.get(id); },
+        createElement(tag) { return new Node(tag); },
+        addEventListener(type, callback) { this[type] = callback; },
+        querySelectorAll(query) { return query === '[data-ad-filter]' ? filterButtons : []; },
+    };
+    const root = document.getElementById('ad-discovery');
+    root.dataset.scanUrl = '/scan/';
+    root.dataset.preflightUrl = '/preflight/';
+    ids.set('ad-ou-filter', new Node('select'));
+    ids.get('ad-ou-filter').appendChild(new Node('option'));
+    ids.set('ad-os-filter', new Node('select'));
+    ids.get('ad-os-filter').appendChild(new Node('option'));
+    ids.set('ad-page-size', new Node('select'));
+    ids.get('ad-page-size').value = '10';
+    vm.runInNewContext(script, {
+        document, window: { lucide: { createIcons() {} } },
+        fetch: async (url) => {
+            if (url === '/preflight/') { preflights++; return { ok: true, json: async () => ({ status: 'READY', checks: {} }) }; }
+            scans++;
+            if (nextScan) return nextScan();
+            return { ok: true, json: async () => ({ computers: initial, summary: summary(initial) }) };
+        },
+    });
+    document.DOMContentLoaded();
+    return {
+        ids, nodes, filterButtons, get scans() { return scans; }, get preflights() { return preflights; },
+        setNextScan(callback) { nextScan = callback; },
+        refresh() { ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} }); },
+        rows() { return ids.get('ad-computer-rows').children; },
+        clickFilter(name) { filterButtons.find((button) => button.dataset.adFilter === name).listeners.click(); },
+    };
+}
+
+function summary(items) {
+    return { total: items.length, unmanaged: items.filter((item) => item.correlation_status === 'UNMANAGED').length,
+        managed: items.filter((item) => item.correlation_status === 'MANAGED').length };
+}
+
+test('auto scan, refresh guard and previous data preservation', async () => {
+    const app = setup([computer(1)]);
+    await tick();
+    assert.equal(app.scans, 1);
+    assert.equal(app.rows().length, 1);
+    assert.equal(app.ids.get('ad-kpi-total').textContent, '1');
+    let finish;
+    app.setNextScan(() => new Promise((resolve) => { finish = resolve; }));
+    app.refresh();
+    app.refresh();
+    assert.equal(app.scans, 2);
+    assert.equal(app.rows().length, 1);
+    assert.equal(app.ids.get('ad-scan-button').disabled, true);
+    finish({ ok: true, json: async () => ({ computers: [computer(2), computer(3)], summary: summary([computer(2), computer(3)]) }) });
+    await tick();
+    assert.equal(app.rows().length, 2);
+    assert.equal(app.ids.get('ad-kpi-total').textContent, '2');
+    app.setNextScan(() => Promise.resolve({ ok: false }));
+    app.refresh();
+    await tick();
+    assert.equal(app.rows().length, 2);
+    assert.match(app.ids.get('ad-scan-status').textContent, /dados anteriores/);
+});
+
+test('pagination follows whole-dataset filters and search', async () => {
+    const items = Array.from({ length: 55 }, (_, index) => computer(index + 1));
+    const app = setup(items);
+    await tick();
+    assert.equal(app.rows().length, 10);
+    assert.match(app.ids.get('ad-page-summary').textContent, /1-10 de 55/);
+    app.ids.get('ad-page-next').listeners.click();
+    assert.match(app.ids.get('ad-page-summary').textContent, /11-20 de 55/);
+    app.ids.get('ad-page-size').value = '20';
+    app.ids.get('ad-page-size').listeners.change();
+    assert.equal(app.rows().length, 20);
+    assert.match(app.ids.get('ad-page-summary').textContent, /1-20 de 55/);
+    app.ids.get('ad-page-size').value = '50';
+    app.ids.get('ad-page-size').listeners.change();
+    assert.equal(app.rows().length, 50);
+    app.ids.get('ad-page-next').listeners.click();
+    assert.equal(app.rows().length, 5);
+    app.ids.get('ad-search').value = 'pc55';
+    app.ids.get('ad-search').listeners.input();
+    assert.equal(app.rows().length, 1);
+    assert.match(app.ids.get('ad-page-summary').textContent, /1-1 de 1/);
+    app.ids.get('ad-search').value = '';
+    app.ids.get('ad-search').listeners.input();
+    app.clickFilter('managed');
+    assert.equal(app.ids.get('ad-visible-count').textContent, '0 de 55 computadores');
+    app.clickFilter('all');
+    assert.equal(app.rows().length, 50);
+});
+
+test('selection is eligible, current-page only, persistent and single-target only', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => computer(index + 1));
+    items[1] = computer(2, { correlation_status: 'MANAGED', selectable: false });
+    items[2] = computer(3, { enabled: false, selectable: false });
+    items[3] = computer(4, { correlation_status: 'CONFLICT', selectable: false });
+    const app = setup(items);
+    await tick();
+    app.clickFilter('all');
+    assert.deepEqual(app.rows().slice(1, 4).map((row) => row.children[0].children[0].disabled), [true, true, true]);
+    app.ids.get('ad-select-visible').checked = true;
+    app.ids.get('ad-select-visible').listeners.change();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '7 selecionados');
+    assert.equal(app.ids.get('ad-prepare-button').disabled, true);
+    assert.match(app.ids.get('ad-selection-note').textContent, /individual/);
+    app.ids.get('ad-prepare-button').listeners.click();
+    assert.equal(app.preflights, 0);
+    app.ids.get('ad-page-next').listeners.click();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '7 selecionados');
+    app.ids.get('ad-select-visible').checked = true;
+    app.ids.get('ad-select-visible').listeners.change();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '9 selecionados');
+    app.ids.get('ad-page-prev').listeners.click();
+    app.ids.get('ad-select-visible').checked = false;
+    app.ids.get('ad-select-visible').listeners.change();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '2 selecionados');
+    app.ids.get('ad-page-next').listeners.click();
+    app.rows()[0].children[0].children[0].checked = false;
+    app.rows()[0].children[0].children[0].listeners.change();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '1 selecionado');
+    assert.equal(app.ids.get('ad-prepare-button').disabled, false);
+    app.ids.get('ad-prepare-button').listeners.click();
+    assert.ok(app.nodes.some((node) => node.className === 'ad-preflight-form'));
+    assert.equal(app.preflights, 0);
+    app.setNextScan(() => Promise.resolve({ ok: true, json: async () => ({
+        computers: [computer(12, { correlation_status: 'MANAGED', selectable: false })],
+        summary: summary([computer(12, { correlation_status: 'MANAGED', selectable: false })]),
+    }) }));
+    app.refresh();
+    await tick();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '0 selecionados');
+    app.setNextScan(() => Promise.resolve({ ok: true, json: async () => ({ computers: [computer(1)], summary: summary([computer(1)]) }) }));
+    app.refresh();
+    await tick();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '0 selecionados');
+});
