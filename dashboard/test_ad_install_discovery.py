@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -13,6 +14,32 @@ from django.utils import timezone
 from access_inventory.models import ADUser
 from agents.models import AgentMachine
 from dashboard import ad_install_discovery as discovery
+
+
+class TrackingSlots:
+    def __init__(self):
+        self.semaphore = threading.BoundedSemaphore(discovery.DNS_MAX_INFLIGHT)
+        self.lock = threading.Lock()
+        self.idle = threading.Event()
+        self.idle.set()
+        self.active = 0
+        self.peak = 0
+
+    def acquire(self, timeout):
+        acquired = self.semaphore.acquire(timeout=timeout)
+        if acquired:
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+                self.idle.clear()
+        return acquired
+
+    def release(self):
+        with self.lock:
+            self.active -= 1
+            if self.active == 0:
+                self.idle.set()
+        self.semaphore.release()
 
 
 def computer(hostname='lab-01', fqdn='lab-01.control.local', **changes):
@@ -151,7 +178,18 @@ class InstallDiscoveryTests(TestCase):
     @mock.patch.object(discovery.socket, 'getaddrinfo', return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('192.0.2.8', 0))])
     def test_dns_success(self, lookup):
         self.assertEqual(discovery._lookup_ipv4('lab-01.control.local')['primary_ipv4'], '192.0.2.8')
-        lookup.assert_called_once()
+        lookup.assert_called_once_with('lab-01.control.local', None, socket.AF_INET, socket.SOCK_STREAM)
+
+    @mock.patch.object(discovery.socket, 'getaddrinfo', return_value=[
+        (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('192.0.2.9', 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('192.0.2.8', 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('192.0.2.8', 0)),
+    ])
+    def test_dns_deduplicates_ipv4_addresses(self, lookup):
+        result = discovery._lookup_ipv4('lab-01.control.local')
+        self.assertEqual(result['primary_ipv4'], '192.0.2.8')
+        self.assertEqual(result['ipv4_addresses'], ['192.0.2.8', '192.0.2.9'])
+        lookup.assert_called_once_with('lab-01.control.local', None, socket.AF_INET, socket.SOCK_STREAM)
 
     @mock.patch.object(discovery.socket, 'getaddrinfo', side_effect=socket.gaierror())
     def test_dns_failure_is_best_effort(self, _lookup):
@@ -210,6 +248,75 @@ class InstallDiscoveryTests(TestCase):
             self.assertEqual(len({thread.name for thread in discovery.DNS_EXECUTOR._threads}), len(discovery.DNS_EXECUTOR._threads))
         finally:
             release.set()
+
+    def test_dns_304_names_are_progressively_admitted(self):
+        slots = TrackingSlots()
+        names = [computer(f'lab-{index:03}', f'lab-{index:03}.control.local') for index in range(304)]
+        answer = {'dns_status': 'RESOLVED', 'primary_ipv4': '192.0.2.8', 'ipv4_addresses': ['192.0.2.8']}
+        with override_settings(AD_AUTH_CONFIG={'DOMAIN': 'control.local'}), \
+                mock.patch.object(discovery, 'DNS_SLOTS', slots), \
+                mock.patch.object(discovery, '_lookup_ipv4', return_value=answer) as lookup:
+            result = discovery.resolve_computer_dns(names)
+        self.assertEqual(len(result), 304)
+        self.assertTrue(all(item['dns_status'] == 'RESOLVED' for item in result.values()))
+        self.assertEqual(lookup.call_count, 304)
+        self.assertLessEqual(slots.peak, discovery.DNS_MAX_INFLIGHT)
+        self.assertTrue(slots.idle.wait(3))
+        self.assertEqual(slots.active, 0)
+
+    def test_dns_global_backpressure_across_concurrent_scans(self):
+        slots = TrackingSlots()
+        release = threading.Event()
+        names = [computer(f'lab-{index:03}', f'lab-{index:03}.control.local') for index in range(100)]
+        submitted = []
+        real_submit = discovery.DNS_EXECUTOR.submit
+
+        def submit(*args, **kwargs):
+            future = real_submit(*args, **kwargs)
+            submitted.append(future)
+            return future
+
+        def blocked(_name):
+            release.wait(3)
+            return {'dns_status': 'RESOLVED', 'primary_ipv4': '192.0.2.8', 'ipv4_addresses': ['192.0.2.8']}
+
+        try:
+            with override_settings(AD_AUTH_CONFIG={'DOMAIN': 'control.local'}), \
+                    mock.patch.object(discovery, 'DNS_SLOTS', slots), \
+                    mock.patch.object(discovery, '_lookup_ipv4', side_effect=blocked), \
+                    mock.patch.object(discovery.DNS_EXECUTOR, 'submit', side_effect=submit), \
+                    mock.patch.object(discovery, 'DNS_DEADLINE_SECONDS', 0.15):
+                start = time.monotonic()
+                with ThreadPoolExecutor(max_workers=3) as requests:
+                    responses = list(requests.map(discovery.resolve_computer_dns, [names] * 3))
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 1)
+                self.assertEqual([len(response) for response in responses], [100] * 3)
+                self.assertTrue(all(item['dns_status'] == 'ERROR' for response in responses for item in response.values()))
+                self.assertLess(len(submitted), 100)
+                self.assertTrue(any(future.cancelled() for future in submitted))
+                self.assertGreater(slots.active, 0)
+                self.assertLessEqual(slots.peak, discovery.DNS_MAX_INFLIGHT)
+                release.set()
+                done, pending = wait(submitted, timeout=3)
+                self.assertFalse(pending)
+                self.assertTrue(slots.idle.wait(3))
+                self.assertEqual(slots.active, 0)
+                with mock.patch.object(discovery, '_lookup_ipv4', return_value={
+                        'dns_status': 'RESOLVED', 'primary_ipv4': '192.0.2.8', 'ipv4_addresses': ['192.0.2.8']}):
+                    self.assertEqual(discovery.resolve_computer_dns(names[:2])[names[0]['fqdn']]['dns_status'], 'RESOLVED')
+                self.assertEqual(slots.active, 0)
+        finally:
+            release.set()
+
+    def test_dns_submit_failure_releases_slot(self):
+        slots = TrackingSlots()
+        with override_settings(AD_AUTH_CONFIG={'DOMAIN': 'control.local'}), \
+                mock.patch.object(discovery, 'DNS_SLOTS', slots), \
+                mock.patch.object(discovery.DNS_EXECUTOR, 'submit', side_effect=RuntimeError('synthetic failure')):
+            result = discovery.resolve_computer_dns([computer()])
+        self.assertEqual(result['lab-01.control.local']['dns_status'], 'ERROR')
+        self.assertEqual(slots.active, 0)
 
     def test_scan_route_requires_auth_post_and_csrf(self):
         url = reverse('agent-install-ad-scan')

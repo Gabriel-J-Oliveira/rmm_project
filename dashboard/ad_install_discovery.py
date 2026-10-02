@@ -2,6 +2,8 @@
 
 import ipaddress
 import socket
+import threading
+import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
@@ -15,8 +17,10 @@ from config import ad_ldap
 
 
 DNS_WORKERS = 12
+DNS_MAX_INFLIGHT = 24
 DNS_DEADLINE_SECONDS = 20
 DNS_EXECUTOR = ThreadPoolExecutor(max_workers=DNS_WORKERS, thread_name_prefix='nightowl-ad-dns')
+DNS_SLOTS = threading.BoundedSemaphore(DNS_MAX_INFLIGHT)
 
 
 def _domain_for_computer(computer):
@@ -132,19 +136,41 @@ def resolve_computer_dns(computers):
     names = {name for name in names if name.endswith(f'.{domain}')}
     if not names:
         return {}
-    results = {}
-    futures = {DNS_EXECUTOR.submit(_lookup_ipv4, name): name for name in names}
-    done, pending = wait(futures, timeout=DNS_DEADLINE_SECONDS)
+    error = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
+    results = {name: error for name in names}
+    futures = {}
+    deadline = time.monotonic() + DNS_DEADLINE_SECONDS
+
+    def lookup(name):
+        result = _lookup_ipv4(name)
+        return time.monotonic(), result
+
+    for name in names:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not DNS_SLOTS.acquire(timeout=remaining):
+            break
+        if time.monotonic() >= deadline:
+            DNS_SLOTS.release()
+            break
+        try:
+            future = DNS_EXECUTOR.submit(lookup, name)
+        except Exception:
+            DNS_SLOTS.release()
+            continue
+        future.add_done_callback(lambda _future, slots=DNS_SLOTS: slots.release())
+        futures[future] = name
+    done, pending = wait(futures, timeout=max(0, deadline - time.monotonic()))
     for future in done:
         name = futures[future]
         try:
-            results[name] = future.result()
+            completed_at, result = future.result()
+            if completed_at <= deadline:
+                results[name] = result
         except Exception:
-            results[name] = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
+            pass
     for future in pending:
-        # Running getaddrinfo calls cannot be cancelled; the shared pool bounds them per process.
+        # Running getaddrinfo calls cannot be cancelled; their slots return on completion.
         future.cancel()
-        results[futures[future]] = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
     return results
 
 
