@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -72,6 +73,47 @@ class InstallDiscoveryTests(TestCase):
         self.assertIsNone(row['endpoint_id'])
         self.assertFalse(row['selectable'])
 
+    def test_fqdn_domain_compatibility(self):
+        machine = self.machine(domain=' CONTROL.LOCAL. ', fqdn='LAB-01.CONTROL.LOCAL.')
+        row = self.project([computer()])['computers'][0]
+        self.assertEqual(row['correlation_status'], 'MANAGED')
+        self.assertEqual(row['endpoint_id'], str(machine.id))
+        machine.domain = ''
+        machine.save(update_fields=['domain'])
+        self.assertEqual(self.project([computer()])['computers'][0]['correlation_status'], 'MANAGED')
+
+    def test_contradictory_domain_fails_closed(self):
+        self.machine(domain='other.local')
+        row = self.project([computer()])['computers'][0]
+        self.assertEqual(row['correlation_status'], 'CONFLICT')
+        self.assertEqual(row['correlation_method'], 'DOMAIN_MISMATCH')
+        self.assertIsNone(row['endpoint_id'])
+        self.assertFalse(row['selectable'])
+
+    def test_normalized_duplicate_fqdns_conflict(self):
+        self.machine()
+        self.machine(fqdn=' LAB-01.CONTROL.LOCAL. ')
+        row = self.project([computer()])['computers'][0]
+        self.assertEqual(row['correlation_status'], 'CONFLICT')
+        self.assertIsNone(row['endpoint_id'])
+
+    def test_terminal_lifecycle_does_not_block_reinstall(self):
+        for lifecycle in ('uninstalled', 'purged'):
+            with self.subTest(lifecycle=lifecycle):
+                AgentMachine.objects.all().delete()
+                self.machine(agent_lifecycle_status=lifecycle)
+                row = self.project([computer()])['computers'][0]
+                self.assertEqual(row['correlation_status'], 'UNMANAGED')
+                self.assertTrue(row['selectable'])
+                self.assertIsNone(row['endpoint_id'])
+
+    def test_terminal_and_active_match_only_active(self):
+        self.machine(agent_lifecycle_status='purged')
+        active = self.machine()
+        row = self.project([computer()])['computers'][0]
+        self.assertEqual(row['correlation_status'], 'MANAGED')
+        self.assertEqual(row['endpoint_id'], str(active.id))
+
     def test_unmanaged_disabled_and_dns_failure_remain_visible(self):
         payload = self.project([computer(enabled=False), computer(hostname='other', fqdn='other.control.local')])
         self.assertEqual(payload['summary']['unmanaged'], 2)
@@ -132,6 +174,42 @@ class InstallDiscoveryTests(TestCase):
             result = discovery.resolve_computer_dns([computer('external', 'external.other.test'), computer()])
         self.assertEqual(list(result), ['lab-01.control.local'])
         lookup.assert_called_once_with('lab-01.control.local')
+
+    def test_dns_deadline_cancels_queued_work_without_growing_threads(self):
+        release = threading.Event()
+        started = threading.Event()
+        names = [computer(f'lab-{index:03}', f'lab-{index:03}.control.local') for index in range(30)]
+        futures = []
+        real_submit = discovery.DNS_EXECUTOR.submit
+
+        def submit(*args, **kwargs):
+            future = real_submit(*args, **kwargs)
+            futures.append(future)
+            return future
+
+        def blocked(_name):
+            started.set()
+            release.wait(3)
+            return {'dns_status': 'UNRESOLVED', 'primary_ipv4': None, 'ipv4_addresses': []}
+
+        try:
+            with override_settings(AD_AUTH_CONFIG={'DOMAIN': 'control.local'}), \
+                    mock.patch.object(discovery, '_lookup_ipv4', side_effect=blocked), \
+                    mock.patch.object(discovery.DNS_EXECUTOR, 'submit', side_effect=submit), \
+                    mock.patch.object(discovery, 'DNS_DEADLINE_SECONDS', 0.05):
+                start = time.monotonic()
+                first = discovery.resolve_computer_dns(names)
+                self.assertTrue(started.is_set())
+                second = discovery.resolve_computer_dns(names)
+                self.assertLess(time.monotonic() - start, 1)
+            self.assertEqual(len(first), 30)
+            self.assertEqual(len(second), 30)
+            self.assertTrue(all(item['dns_status'] == 'ERROR' for item in first.values()))
+            self.assertTrue(any(future.cancelled() for future in futures))
+            self.assertLessEqual(len(discovery.DNS_EXECUTOR._threads), discovery.DNS_WORKERS)
+            self.assertEqual(len({thread.name for thread in discovery.DNS_EXECUTOR._threads}), len(discovery.DNS_EXECUTOR._threads))
+        finally:
+            release.set()
 
     def test_scan_route_requires_auth_post_and_csrf(self):
         url = reverse('agent-install-ad-scan')

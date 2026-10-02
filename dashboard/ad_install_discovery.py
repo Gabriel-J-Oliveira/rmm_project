@@ -16,6 +16,7 @@ from config import ad_ldap
 
 DNS_WORKERS = 12
 DNS_DEADLINE_SECONDS = 20
+DNS_EXECUTOR = ThreadPoolExecutor(max_workers=DNS_WORKERS, thread_name_prefix='nightowl-ad-dns')
 
 
 def _domain_for_computer(computer):
@@ -75,8 +76,10 @@ def _enrich_user(username, maps):
 def _machine_maps():
     fqdn = defaultdict(list)
     hostname_domain = defaultdict(list)
-    fields = ('id', 'hostname', 'domain', 'fqdn', 'status', 'agent_version', 'last_seen_at', 'last_logged_user')
+    fields = ('id', 'hostname', 'domain', 'fqdn', 'status', 'agent_lifecycle_status', 'agent_version', 'last_seen_at', 'last_logged_user')
     for machine in AgentMachine.objects.only(*fields):
+        if machine.has_terminal_lifecycle:
+            continue
         name = _machine_fqdn(machine)
         if name:
             fqdn[name].append(machine)
@@ -93,7 +96,13 @@ def _match_machine(computer, maps):
     display_hostname = normalize_hostname(fqdn) if '.' in fqdn else normalize_hostname(computer.get('hostname'))
     if '.' in fqdn and fqdn in by_fqdn:
         matches = by_fqdn[fqdn]
-        return (matches[0], 'MANAGED', 'FQDN') if len(matches) == 1 else (None, 'CONFLICT', 'FQDN')
+        if len(matches) != 1:
+            return None, 'CONFLICT', 'FQDN'
+        machine = matches[0]
+        machine_domain = normalize_fqdn(machine.domain)
+        if machine_domain and machine_domain != fqdn.split('.', 1)[1]:
+            return None, 'CONFLICT', 'DOMAIN_MISMATCH'
+        return machine, 'MANAGED', 'FQDN'
     domain = _domain_for_computer(computer)
     candidates = by_hostname_domain.get((display_hostname, domain), []) if domain else []
     matches = [machine for machine in candidates if not fqdn or not machine.fqdn or normalize_fqdn(machine.fqdn) == fqdn]
@@ -124,21 +133,18 @@ def resolve_computer_dns(computers):
     if not names:
         return {}
     results = {}
-    pool = ThreadPoolExecutor(max_workers=DNS_WORKERS)
-    try:
-        futures = {pool.submit(_lookup_ipv4, name): name for name in names}
-        done, pending = wait(futures, timeout=DNS_DEADLINE_SECONDS)
-        for future in done:
-            name = futures[future]
-            try:
-                results[name] = future.result()
-            except Exception:
-                results[name] = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
-        for future in pending:
-            future.cancel()
-            results[futures[future]] = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+    futures = {DNS_EXECUTOR.submit(_lookup_ipv4, name): name for name in names}
+    done, pending = wait(futures, timeout=DNS_DEADLINE_SECONDS)
+    for future in done:
+        name = futures[future]
+        try:
+            results[name] = future.result()
+        except Exception:
+            results[name] = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
+    for future in pending:
+        # Running getaddrinfo calls cannot be cancelled; the shared pool bounds them per process.
+        future.cancel()
+        results[futures[future]] = {'dns_status': 'ERROR', 'primary_ipv4': None, 'ipv4_addresses': []}
     return results
 
 
