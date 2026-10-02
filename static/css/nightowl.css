@@ -4230,6 +4230,48 @@ body.page-tickets .desk-category-drawer.is-open {
     padding: 4px 20px 24px;
 }
 
+.ad-preflight-form {
+    display: grid;
+    gap: 12px;
+    padding: 18px 0;
+}
+
+.ad-preflight-form label {
+    display: grid;
+    gap: 6px;
+    font-weight: 600;
+}
+
+.ad-preflight-form input {
+    width: 100%;
+    min-width: 0;
+}
+
+.ad-preflight-form button {
+    justify-self: start;
+}
+
+.ad-preflight-feedback {
+    margin: 0;
+    font-weight: 600;
+}
+
+.ad-preflight-checks {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    margin: 0;
+}
+
+.ad-preflight-checks dt,
+.ad-preflight-checks dd {
+    margin: 0;
+}
+
+.ad-preflight-checks dd {
+    font-weight: 600;
+}
+
 .ad-detail-section {
     padding: 18px 0;
     border-bottom: 1px solid var(--border);

@@ -78,7 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateSelection(visible) {
         selectedCount.textContent = `${selected.size} selecionado${selected.size === 1 ? '' : 's'}`;
-        prepareButton.disabled = selected.size === 0;
+        prepareButton.disabled = selected.size !== 1;
         const eligible = visible.filter(({ computer }) => computer.selectable);
         selectVisible.disabled = eligible.length === 0;
         selectVisible.checked = eligible.length > 0 && eligible.every(({ index }) => selected.has(index));
@@ -258,12 +258,94 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     prepareButton.addEventListener('click', () => {
         drawerContent.replaceChildren();
-        const selectedNames = [...selected].map((index) => computers[index].hostname);
-        section('Seleção', [['Computadores', selectedNames.join(', ')]]);
-        drawerContent.appendChild(element('p', 'ad-preview-note', 'Deploy remoto será habilitado na próxima etapa.'));
-        openDrawer(`${selected.size} selecionado${selected.size === 1 ? '' : 's'}`);
+        if (selected.size !== 1) {
+            drawerContent.appendChild(element('p', 'ad-preview-note', 'Selecione um computador para o preflight.'));
+            openDrawer('Preflight de instalação');
+            return;
+        }
+        const computer = computers[[...selected][0]];
+        section('Alvo', [['Computador', computer.hostname], ['FQDN', computer.fqdn],
+            ['IP', computer.primary_ipv4 || 'Sem DNS'], ['SO', computer.operating_system]]);
+        drawerContent.appendChild(element('p', 'ad-preview-note',
+            'A credencial será utilizada somente nesta operação e não será armazenada pelo NightOwl.'));
+        const preflightForm = element('form', 'ad-preflight-form');
+        const userLabel = element('label', '', 'Usuário administrativo');
+        const userInput = element('input');
+        userInput.type = 'text';
+        userInput.required = true;
+        userInput.autocomplete = 'off';
+        userLabel.appendChild(userInput);
+        const passwordLabel = element('label', '', 'Senha');
+        const passwordInput = element('input');
+        passwordInput.type = 'password';
+        passwordInput.required = true;
+        passwordInput.autocomplete = 'off';
+        passwordLabel.appendChild(passwordInput);
+        const submit = element('button', '', 'Executar preflight');
+        submit.type = 'submit';
+        const feedback = element('p', 'ad-preflight-feedback');
+        feedback.setAttribute('role', 'status');
+        const checks = element('dl', 'ad-preflight-checks');
+        preflightForm.append(userLabel, passwordLabel, submit, feedback, checks);
+        preflightForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            submit.disabled = true;
+            feedback.textContent = 'Executando preflight...';
+            checks.replaceChildren();
+            try {
+                const response = await fetch(root.dataset.preflightUrl, {
+                    method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                    headers: { 'Content-Type': 'application/json',
+                        'X-CSRFToken': form.querySelector('[name=csrfmiddlewaretoken]').value },
+                    body: JSON.stringify({ fqdn: computer.fqdn, username: userInput.value, password: passwordInput.value }),
+                });
+                if (!response.ok) throw new Error('preflight failed');
+                const data = await response.json();
+                const labels = {
+                    TARGET: 'Alvo válido', DNS: 'DNS', REMOTE_TRANSPORT: 'WinRM',
+                    AUTHENTICATION: 'Autenticação', ADMIN_PRIVILEGE: 'Administrador local',
+                    WINDOWS_COMPATIBILITY: 'Windows compatível', NIGHTOWL_ABSENCE: 'NightOwl não detectado',
+                };
+                const reasons = {
+                    INVALID_TARGET: 'Alvo inválido', AD_DISCOVERY_UNAVAILABLE: 'AD indisponível',
+                    TARGET_NOT_UNIQUE_OR_MISSING: 'Alvo ausente ou duplicado',
+                    AD_COMPUTER_DISABLED: 'Computador desabilitado',
+                    CORRELATION_UNAVAILABLE: 'Correlação indisponível',
+                    TARGET_MANAGED_OR_CONFLICT: 'Gerenciado ou em conflito',
+                    DNS_UNRESOLVED: 'DNS não resolveu', WINRM_UNAVAILABLE: 'WinRM indisponível',
+                    WINRM_CLIENT_UNAVAILABLE: 'Cliente WinRM indisponível',
+                    REMOTE_TIMEOUT: 'Tempo esgotado', REMOTE_PROBE_FAILED: 'Probe remoto falhou',
+                    REMOTE_OUTPUT_INVALID: 'Resposta remota inválida',
+                    CREDENTIAL_REQUIRED: 'Credencial obrigatória', AUTHENTICATION_FAILED: 'Autenticação falhou',
+                    ADMIN_REQUIRED: 'Administrador local obrigatório',
+                    WINDOWS_INCOMPATIBLE_OR_IDENTITY_MISMATCH: 'Windows incompatível ou identidade divergente',
+                    NIGHTOWL_INSTALLATION_DETECTED: 'NightOwl já instalado',
+                    NIGHTOWL_STATE_UNKNOWN: 'Estado do NightOwl desconhecido',
+                };
+                for (const [key, label] of Object.entries(labels)) {
+                    const check = data.checks?.[key];
+                    checks.appendChild(element('dt', '', label));
+                    checks.appendChild(element('dd', '', check?.status === 'PASS' ? 'OK' :
+                        check?.status === 'FAIL' ? (reasons[check.code] || 'Falhou') : 'Não executado'));
+                }
+                feedback.textContent = data.status === 'READY' ? 'PRONTO PARA INSTALAÇÃO' : 'NÃO PRONTO PARA INSTALAÇÃO';
+            } catch (_error) {
+                feedback.textContent = 'Não foi possível concluir o preflight.';
+            } finally {
+                passwordInput.value = '';
+                submit.disabled = false;
+            }
+        });
+        drawerContent.appendChild(preflightForm);
+        drawerContent.appendChild(element('p', 'ad-preview-note', 'Instalação remota ainda não está disponível.'));
+        openDrawer('Preflight de instalação');
     });
-    function closeDrawer() { drawer.hidden = true; backdrop.hidden = true; }
+    function closeDrawer() {
+        const password = drawerContent.querySelector('input[type="password"]');
+        if (password) password.value = '';
+        drawer.hidden = true;
+        backdrop.hidden = true;
+    }
     closeButton.addEventListener('click', closeDrawer);
     backdrop.addEventListener('click', closeDrawer);
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !drawer.hidden) closeDrawer(); });

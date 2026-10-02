@@ -78,6 +78,7 @@ urlpatterns = [
     path('maintenance/email-outbox/<uuid:pk>/pending/', dashboard_views.email_outbox_pending, name='email-outbox-pending'),
     path('agent-install/', dashboard_views.agent_install, name='agent-install'),
     path('agent-install/ad-computers/scan/', ad_install_views.scan_ad_computers, name='agent-install-ad-scan'),
+    path('agent-install/ad-computers/preflight/', ad_install_views.preflight_ad_computer, name='agent-install-ad-preflight'),
     path('agents/download/', dashboard_views.agent_install, name='agent-download'),
     path('agent-releases/', dashboard_views.agent_releases, name='agent-releases'),
     path('agent-releases/<uuid:pk>/action/', dashboard_views.agent_release_action, name='agent-release-action'),

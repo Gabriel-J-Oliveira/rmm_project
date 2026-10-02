@@ -20,6 +20,7 @@ test('AD values render as text in table and details', async () => {
         get textContent() { return this.text || this.children.map((child) => child.textContent).join(''); }
         set innerHTML(_value) { throw new Error('Untrusted HTML insertion'); }
         appendChild(child) { this.children.push(child); return child; }
+        append(...children) { this.children.push(...children); }
         replaceChildren(...children) { this.children = children.filter(Boolean); }
         addEventListener(type, callback) { this.listeners[type] = callback; }
         setAttribute(name, value) { this[name] = value; }
@@ -52,10 +53,19 @@ test('AD values render as text in table and details', async () => {
         dns_unresolved: 1, conflicts: 0, old_ad_activity: 0,
     };
     const script = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'agent_install_discovery.js'), 'utf8');
+    let preflightBody;
+    ids.set('ad-discovery', new Node('ad-discovery'));
+    ids.get('ad-discovery').dataset.preflightUrl = '/agent-install/ad-computers/preflight/';
     vm.runInNewContext(script, {
         document,
         window: { lucide: { createIcons() {} } },
-        fetch: async () => ({ ok: true, json: async () => ({ computers: [computer], summary }) }),
+        fetch: async (url, options) => {
+            if (url === '/agent-install/ad-computers/preflight/') {
+                preflightBody = JSON.parse(options.body);
+                return { ok: true, json: async () => ({ status: 'NOT_READY', checks: {} }) };
+            }
+            return { ok: true, json: async () => ({ computers: [computer], summary }) };
+        },
     });
     document.DOMContentLoaded();
     await ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} });
@@ -68,4 +78,20 @@ test('AD values render as text in table and details', async () => {
         assert.ok(rendered.includes(value), `${value} was not rendered as text`);
     }
     assert.equal(nodes.some((node) => ['img', 'script', 'b'].includes(node.tag)), false);
+
+    ids.get('ad-select-visible').checked = true;
+    ids.get('ad-select-visible').listeners.change();
+    ids.get('ad-prepare-button').listeners.click();
+    const preflightForm = nodes.find((node) => node.tag === 'form' && node.className === 'ad-preflight-form');
+    assert.ok(preflightForm);
+    const password = nodes.find((node) => node.tag === 'input' && node.type === 'password');
+    const username = nodes.find((node) => node.tag === 'input' && node.type === 'text');
+    assert.ok(password);
+    username.value = 'SyntheticAdmin';
+    password.value = 'SUPER_SECRET_TEST_PASSWORD_91827';
+    await preflightForm.listeners.submit({ preventDefault() {} });
+    assert.equal(preflightBody.password, 'SUPER_SECRET_TEST_PASSWORD_91827');
+    assert.equal(password.value, '');
+    assert.equal(nodes.some((node) => ['img', 'script', 'b'].includes(node.tag)), false);
+    assert.ok(nodes.some((node) => node.text === 'NÃO PRONTO PARA INSTALAÇÃO'));
 });
