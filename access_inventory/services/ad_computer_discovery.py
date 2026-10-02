@@ -18,9 +18,14 @@ ATTRIBUTES = (
 FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 
 
-def _text(value):
+def _single_ldap_value(value):
     if isinstance(value, (list, tuple)):
-        value = value[0] if value else ''
+        return value[0] if value else None
+    return value
+
+
+def _text(value):
+    value = _single_ldap_value(value)
     return str(value).strip() if value is not None else ''
 
 
@@ -47,6 +52,7 @@ def project_ou(distinguished_name):
 
 
 def _filetime_iso(value):
+    value = _single_ldap_value(value)
     if isinstance(value, datetime):
         moment = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
         return moment.isoformat() if moment > FILETIME_EPOCH else None
@@ -116,19 +122,25 @@ def discover_ad_computers():
             result = conn.result or {}
             if result.get('result') != 0:
                 raise ad_ldap.ActiveDirectoryUnavailable('Busca de computadores AD falhou.')
+            controls = result.get('controls') or {}
+            control = controls.get(PAGED_RESULTS_OID) if isinstance(controls, dict) else None
+            control_value = control.get('value') if isinstance(control, dict) else None
+            if not isinstance(control_value, dict) or 'cookie' not in control_value:
+                raise ad_ldap.ActiveDirectoryUnavailable('Controle de paginacao AD ausente.')
+            next_cookie = control_value['cookie']
+            if not isinstance(next_cookie, (bytes, str)):
+                raise ad_ldap.ActiveDirectoryUnavailable('Cookie de paginacao AD invalido.')
             page_entries = conn.entries
             for entry in page_entries:
                 computers.append(_computer(entry))
                 if len(computers) >= limit:
                     return computers
-            cookie = (result.get('controls') or {}).get(PAGED_RESULTS_OID, {}).get('value', {}).get('cookie')
-            if not cookie:
-                if len(page_entries) >= page_size:
-                    raise ad_ldap.ActiveDirectoryUnavailable('Paginacao AD nao confirmada.')
+            if not next_cookie:
                 return computers
-            if cookie in seen_cookies:
+            if next_cookie in seen_cookies:
                 raise ad_ldap.ActiveDirectoryUnavailable('Paginacao AD invalida.')
-            seen_cookies.add(cookie)
+            seen_cookies.add(next_cookie)
+            cookie = next_cookie
         raise ad_ldap.ActiveDirectoryUnavailable('Limite de paginas AD excedido.')
     except Exception:
         raise ad_ldap.ActiveDirectoryUnavailable('Busca de computadores AD falhou.') from None

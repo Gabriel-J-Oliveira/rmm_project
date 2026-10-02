@@ -45,11 +45,13 @@ class FakeConnection:
 
     def search(self, **kwargs):
         self.search_calls.append(kwargs)
-        entries, cookie, code = self.pages.pop(0)
+        page = self.pages.pop(0)
+        entries, cookie, code = page[:3]
+        include_control = page[3] if len(page) == 4 else True
         self.entries = entries
         self.result = {
             'result': code,
-            'controls': {PAGED_RESULTS_OID: {'value': {'cookie': cookie}}},
+            'controls': {PAGED_RESULTS_OID: {'value': {'cookie': cookie}}} if include_control else {},
         }
 
     def unbind(self):
@@ -114,12 +116,46 @@ class ADComputerDiscoveryTests(SimpleTestCase):
         self.assertTrue(conn.unbound)
 
     def test_server_without_confirmed_pagination_fails_closed(self):
-        conn = FakeConnection([([computer(f'LAB-{index}') for index in range(100)], b'', 0)])
-        with override_settings(AD_AUTH_CONFIG={**CONFIG, 'COMPUTER_DISCOVERY_LIMIT': 101}):
-            with mock.patch.object(ad_ldap, 'service_connection', return_value=conn):
-                with self.assertRaises(ad_ldap.ActiveDirectoryUnavailable):
-                    discover_ad_computers()
+        cases = [
+            ([computer('ONE')], 10),
+            ([computer(f'LAB-{index}') for index in range(100)], 101),
+            ([computer('ONE')], 1),
+        ]
+        for entries, limit in cases:
+            conn = FakeConnection([(entries, b'', 0, False)])
+            with override_settings(AD_AUTH_CONFIG={**CONFIG, 'COMPUTER_DISCOVERY_LIMIT': limit}):
+                with mock.patch.object(ad_ldap, 'service_connection', return_value=conn):
+                    with self.assertRaises(ad_ldap.ActiveDirectoryUnavailable):
+                        discover_ad_computers()
+            self.assertTrue(conn.unbound)
+
+    def test_missing_control_on_later_page_fails_closed(self):
+        conn = FakeConnection([([computer('ONE')], b'next', 0),
+                               ([computer('TWO')], b'', 0, False)])
+        with mock.patch.object(ad_ldap, 'service_connection', return_value=conn):
+            with self.assertRaises(ad_ldap.ActiveDirectoryUnavailable):
+                discover_ad_computers()
+        self.assertEqual(len(conn.search_calls), 2)
         self.assertTrue(conn.unbound)
+
+    def test_single_value_last_logon_shapes(self):
+        moment = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        entries = [
+            computer('SCALAR', lastLogonTimestamp=moment),
+            computer('LIST', lastLogonTimestamp=[moment]),
+            computer('TUPLE', lastLogonTimestamp=(moment,)),
+            computer('EMPTY', lastLogonTimestamp=[]),
+            computer('NONE', lastLogonTimestamp=None),
+            computer('INVALID', lastLogonTimestamp=['invalid']),
+            computer('FILETIME', lastLogonTimestamp=['132537600000000000']),
+        ]
+        result, _ = self.discover([(entries, b'', 0)])
+        self.assertEqual(result[0]['last_logon_at'], '2026-01-01T00:00:00+00:00')
+        self.assertEqual(result[1]['last_logon_at'], result[0]['last_logon_at'])
+        self.assertEqual(result[2]['last_logon_at'], result[0]['last_logon_at'])
+        for item in result[3:6]:
+            self.assertIsNone(item['last_logon_at'])
+        self.assertEqual(result[6]['last_logon_at'], '2020-12-30T00:00:00+00:00')
 
     def test_ldap_failure_is_sanitized_and_unbinds(self):
         conn = FakeConnection([([], b'', 51)])
