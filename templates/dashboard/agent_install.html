@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Instala&ccedil;&atilde;o do Agente | Night Owl{% endblock %}
 {% block body_class %}page-agent-install{% endblock %}
@@ -20,6 +21,59 @@
         <span class="badge badge-muted module-badge">v{{ recommended_agent_version }}</span>
     </div>
 </section>
+
+<section class="ad-discovery" id="ad-discovery" data-scan-url="{% url 'agent-install-ad-scan' %}">
+    <div class="ad-discovery-heading">
+        <div>
+            <span class="section-kicker">Active Directory</span>
+            <h2>Computadores do dom&iacute;nio</h2>
+        </div>
+        <form id="ad-discovery-form" method="post">
+            {% csrf_token %}
+            <button type="submit" id="ad-scan-button"><i data-lucide="scan-search"></i>Escanear Active Directory</button>
+        </form>
+    </div>
+    <p class="ad-scan-status" id="ad-scan-status" role="status" aria-live="polite"></p>
+    <div id="ad-discovery-results" hidden>
+        <div class="metric-grid ad-discovery-metrics" id="ad-discovery-metrics"></div>
+        <div class="ad-discovery-toolbar">
+            <label class="filter-field ad-search-field"><span>Busca</span><input id="ad-search" type="search" placeholder="Hostname, FQDN, IP ou usu&aacute;rio"></label>
+            <label class="filter-field"><span>OU</span><select id="ad-ou-filter"><option value="">Todas</option></select></label>
+            <label class="filter-field"><span>Sistema</span><select id="ad-os-filter"><option value="">Todos</option></select></label>
+        </div>
+        <div class="ad-quick-filters" role="group" aria-label="Filtrar computadores">
+            <button type="button" data-ad-filter="enabled" aria-pressed="true">Habilitados</button>
+            <button type="button" data-ad-filter="unmanaged" aria-pressed="false">Sem NightOwl</button>
+            <button type="button" data-ad-filter="managed" aria-pressed="false">Gerenciados</button>
+            <button type="button" data-ad-filter="no-dns" aria-pressed="false">Sem DNS</button>
+            <button type="button" data-ad-filter="disabled" aria-pressed="false">Desabilitados</button>
+            <button type="button" data-ad-filter="conflict" aria-pressed="false">Conflitos</button>
+            <button type="button" data-ad-filter="old" aria-pressed="false">Atividade antiga</button>
+            <button type="button" data-ad-filter="all" aria-pressed="false">Todos</button>
+        </div>
+        <div class="ad-discovery-selection">
+            <span id="ad-visible-count"></span>
+            <div><strong id="ad-selected-count">0 selecionados</strong><button type="button" id="ad-prepare-button" disabled><i data-lucide="list-checks"></i>Preparar instala&ccedil;&atilde;o</button></div>
+        </div>
+        <div class="table-wrap">
+            <table class="endpoint-table ad-computer-table">
+                <thead><tr>
+                    <th scope="col"><input id="ad-select-visible" type="checkbox" aria-label="Selecionar eleg&iacute;veis vis&iacute;veis"></th>
+                    <th scope="col">Computador</th><th scope="col">IP</th><th scope="col">SO</th><th scope="col">OU</th>
+                    <th scope="col">Usu&aacute;rio reportado</th><th scope="col">Atividade AD</th><th scope="col">NightOwl</th>
+                    <th scope="col">Agent</th><th scope="col">&Uacute;ltimo contato</th><th scope="col">A&ccedil;&atilde;o</th>
+                </tr></thead>
+                <tbody id="ad-computer-rows"></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<div id="ad-detail-backdrop" class="ad-detail-backdrop" hidden></div>
+<aside id="ad-detail-drawer" class="ad-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="ad-detail-title" hidden>
+    <div class="ad-detail-header"><h2 id="ad-detail-title"></h2><button type="button" id="ad-detail-close" aria-label="Fechar detalhes" title="Fechar detalhes"><i data-lucide="x"></i></button></div>
+    <div id="ad-detail-content" class="ad-detail-content"></div>
+</aside>
 
 <section class="metric-grid agent-install-metrics">
     <article class="metric-card command-metric">
@@ -395,6 +449,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{% static 'js/agent_install_discovery.js' %}" defer></script>
 <script>
     window.addEventListener("DOMContentLoaded", function () {
         if (window.lucide && typeof window.lucide.createIcons === "function") {

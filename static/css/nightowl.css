@@ -4075,6 +4075,203 @@ body.page-tickets .desk-category-drawer.is-open {
     margin-bottom: 18px;
 }
 
+.ad-discovery {
+    margin-bottom: 22px;
+}
+
+.ad-discovery-heading,
+.ad-discovery-selection,
+.ad-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.ad-discovery-heading h2 {
+    margin: 3px 0 0;
+    font-size: 1.2rem;
+}
+
+.ad-scan-status {
+    min-height: 1.4em;
+    margin: 8px 0 12px;
+    color: var(--text-muted);
+}
+
+.ad-discovery-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    margin-bottom: 16px;
+}
+
+.ad-discovery-toolbar {
+    display: grid;
+    grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.ad-quick-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.ad-quick-filters button {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--text-secondary);
+    padding: 7px 10px;
+}
+
+.ad-quick-filters button[aria-pressed="true"] {
+    border-color: var(--online);
+    color: var(--text-primary);
+}
+
+.ad-discovery-selection {
+    margin-bottom: 10px;
+    color: var(--text-muted);
+}
+
+.ad-discovery-selection > div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ad-computer-table {
+    min-width: 1250px;
+}
+
+.ad-computer-table td {
+    vertical-align: top;
+}
+
+.ad-computer-table td strong,
+.ad-computer-table td small {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.ad-computer-table td small {
+    color: var(--text-muted);
+}
+
+.ad-detail-link {
+    display: inline-block;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--info);
+    font-size: 0.75rem;
+    text-decoration: underline;
+}
+
+.ad-install-unavailable:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.ad-endpoint-link {
+    color: var(--info);
+    text-decoration: underline;
+}
+
+.ad-detail-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.ad-detail-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 81;
+    width: min(440px, 100vw);
+    height: 100vh;
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+    background: var(--card);
+    box-shadow: -12px 0 40px rgba(0, 0, 0, 0.3);
+}
+
+.ad-detail-backdrop[hidden],
+.ad-detail-drawer[hidden] {
+    display: none;
+}
+
+.ad-detail-header {
+    position: sticky;
+    top: 0;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+}
+
+.ad-detail-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    overflow-wrap: anywhere;
+}
+
+.ad-detail-header button {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex: 0 0 auto;
+}
+
+.ad-detail-content {
+    padding: 4px 20px 24px;
+}
+
+.ad-detail-section {
+    padding: 18px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.ad-detail-section h3 {
+    margin: 0 0 10px;
+    font-size: 0.9rem;
+}
+
+.ad-detail-section dl {
+    display: grid;
+    grid-template-columns: minmax(110px, 1fr) minmax(0, 1.5fr);
+    gap: 8px 12px;
+    margin: 0;
+}
+
+.ad-detail-section dt {
+    color: var(--text-muted);
+}
+
+.ad-detail-section dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+    .ad-discovery-metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ad-discovery-heading,
+    .ad-discovery-selection {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .ad-discovery-toolbar {
+        grid-template-columns: 1fr;
+    }
+}
+
 .agent-install-hero {
     align-items: center;
 }

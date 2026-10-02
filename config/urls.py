@@ -20,6 +20,7 @@ from django.conf.urls.static import static
 from django.urls import include, path
 
 from dashboard import views as dashboard_views
+from dashboard import ad_install_views
 from dashboard import capacity_views
 from dashboard import fleet_views
 from config import views as config_views
@@ -76,6 +77,7 @@ urlpatterns = [
     path('maintenance/email-outbox/<uuid:pk>/cancel/', dashboard_views.email_outbox_cancel, name='email-outbox-cancel'),
     path('maintenance/email-outbox/<uuid:pk>/pending/', dashboard_views.email_outbox_pending, name='email-outbox-pending'),
     path('agent-install/', dashboard_views.agent_install, name='agent-install'),
+    path('agent-install/ad-computers/scan/', ad_install_views.scan_ad_computers, name='agent-install-ad-scan'),
     path('agents/download/', dashboard_views.agent_install, name='agent-download'),
     path('agent-releases/', dashboard_views.agent_releases, name='agent-releases'),
     path('agent-releases/<uuid:pk>/action/', dashboard_views.agent_release_action, name='agent-release-action'),
