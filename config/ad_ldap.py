@@ -113,6 +113,13 @@ def parse_ad_server_uri(server_uri, require_tls=False):
     )
 
 
+def require_secure_ad_transport():
+    endpoint = parse_ad_server_uri(_config_value('SERVER_URI'), bool(ad_config().get('REQUIRE_TLS')))
+    if not endpoint.secure_transport:
+        raise ActiveDirectoryConfigError('Descoberta AD requer LDAPS ou StartTLS.')
+    return endpoint
+
+
 def _server():
     validate_ad_config(require_bind=False)
     endpoint = parse_ad_server_uri(_config_value('SERVER_URI'), bool(ad_config().get('REQUIRE_TLS')))
