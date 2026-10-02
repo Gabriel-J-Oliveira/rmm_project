@@ -3,7 +3,7 @@
 
 {% block title %}Night Owl | Capacidade &amp; Planejamento{% endblock %}
 {% block body_class %}page-capacity{% endblock %}
-{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=m6-1-1">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=m6-2-1">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -12,7 +12,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="capacity-page" data-capacity-root data-overview-url="{% url 'api-capacity-overview' %}" data-detail-template="{% url 'api-capacity-detail' '00000000-0000-4000-8000-000000000000' %}" data-demo="{% if demo %}1{% else %}0{% endif %}">
+<div class="capacity-page" data-capacity-root data-overview-url="{% url 'api-capacity-overview' %}" data-detail-template="{% url 'api-capacity-detail' '00000000-0000-4000-8000-000000000000' %}" data-series-template="{% url 'api-capacity-series' '00000000-0000-4000-8000-000000000000' %}" data-demo="{% if demo %}1{% else %}0{% endif %}">
     <header class="capacity-header page-header">
         <div class="capacity-heading">
             <span class="page-header-icon"><i data-lucide="chart-no-axes-combined"></i></span>
@@ -41,7 +41,7 @@
 
     <div class="capacity-visual-row">
         <section class="capacity-section capacity-visual" aria-labelledby="capacity-distribution-title">
-            <div class="capacity-section-heading"><div><h2 id="capacity-distribution-title">Distribuição</h2><p>Classificação prioritária por endpoint.</p></div></div>
+            <div class="capacity-section-heading"><div><h2 id="capacity-distribution-title">Situação dos endpoints</h2><p>Classificação prioritária por endpoint. Clique para filtrar.</p></div></div>
             <div data-distribution class="capacity-distribution"></div>
         </section>
         <section class="capacity-section capacity-visual" aria-labelledby="capacity-scatter-title">
@@ -49,6 +49,11 @@
             <div class="capacity-scatter-wrap"><div class="capacity-scatter" data-scatter role="group" aria-label="Dispersão de CPU e RAM"></div><span class="capacity-axis-x">CPU p95 (%)</span><span class="capacity-axis-y">RAM p95 (%)</span></div>
             <div class="capacity-chart-note" data-scatter-note></div>
         </section>
+    </div>
+
+    <div class="capacity-visual-row capacity-secondary-row">
+        <section class="capacity-section" aria-labelledby="capacity-problems-title"><div class="capacity-section-heading"><div><h2 id="capacity-problems-title">Problemas por categoria</h2><p>Quantidade de endpoints, não de eventos.</p></div></div><div class="capacity-distribution" data-problems></div></section>
+        <section class="capacity-section" aria-labelledby="capacity-hardware-title"><div class="capacity-section-heading"><div><h2 id="capacity-hardware-title">Perfil do parque</h2><p>Distribuições do último inventário.</p></div></div><div class="capacity-profiles"><div><h3>Memória física</h3><div data-ram-distribution></div></div><div><h3>CPU · cores físicos</h3><div data-cpu-distribution></div></div><div><h3>Sistemas operacionais</h3><div data-os-distribution></div></div><div><h3>Alertas críticos por tipo</h3><div data-alert-types></div></div></div></section>
     </div>
 
     <section class="capacity-section" aria-labelledby="capacity-workload-title">
@@ -74,10 +79,12 @@
     <div class="capacity-popover" data-popover role="tooltip" hidden></div>
     <aside class="capacity-drawer" data-drawer aria-label="Detalhes de capacidade" aria-modal="true" role="dialog" hidden>
         <header class="capacity-drawer-header"><div><span class="capacity-drawer-kicker">CAPACIDADE DO ENDPOINT</span><h2 data-drawer-title>Endpoint</h2><span data-drawer-subtitle></span></div><button type="button" class="capacity-icon-button" data-close-drawer aria-label="Fechar detalhes" title="Fechar"><i data-lucide="x"></i></button></header>
+        <div class="capacity-drawer-insight" data-drawer-insight></div>
+        <div class="capacity-quick-facts" data-quick-facts></div>
         <nav class="capacity-tabs" aria-label="Seções do detalhe" data-tabs></nav>
         <div class="capacity-drawer-content" data-drawer-content></div>
         <footer class="capacity-drawer-actions"><a data-drawer-endpoint href="#"><i data-lucide="external-link"></i>Abrir endpoint completo</a><a data-drawer-alerts href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i>Ver alertas</a></footer>
     </aside>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=m6-1-1" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=m6-2-1" defer></script>{% endblock %}

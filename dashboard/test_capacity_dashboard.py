@@ -1,5 +1,6 @@
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -27,6 +28,7 @@ class CapacityDashboardTests(TestCase):
         self.endpoint = self.make_endpoint('LAB-CAPACITY')
         self.overview_url = reverse('api-capacity-overview')
         self.detail_url = reverse('api-capacity-detail', args=[self.endpoint.pk])
+        self.series_url = reverse('api-capacity-series', args=[self.endpoint.pk])
 
     def make_endpoint(self, hostname):
         return AgentMachine.objects.create(
@@ -65,12 +67,14 @@ class CapacityDashboardTests(TestCase):
     def test_authentication_and_permissions_precede_endpoint_lookup(self):
         self.assertEqual(self.client.get(reverse('capacity-page')).status_code, 302)
         self.assertEqual(self.client.get(self.overview_url).status_code, 302)
+        self.assertEqual(self.client.get(self.series_url).status_code, 302)
         self.login()
         self.user.user_permissions.clear()
         self.user = get_user_model().objects.get(pk=self.user.pk)
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(self.overview_url).status_code, 403)
         self.assertEqual(self.client.get(reverse('api-capacity-detail', args=[uuid.uuid4()])).status_code, 403)
+        self.assertEqual(self.client.get(reverse('api-capacity-series', args=[uuid.uuid4()])).status_code, 403)
 
     def test_page_uses_existing_navigation_and_endpoint_link(self):
         self.login()
@@ -100,6 +104,9 @@ class CapacityDashboardTests(TestCase):
         self.assertEqual(row['endpoint_url'], reverse('endpoint-detail', args=[self.endpoint.pk]))
         self.assertEqual(row['cpu_name'], 'Synthetic CPU')
         self.assertEqual(row['alerts_critical'], 1)
+        self.assertEqual(row['alert_types'][0]['alert_type'], 'synthetic')
+        self.assertEqual(row['alerts_warning'], 0)
+        self.assertFalse(row['inventory_stale'])
         self.assertEqual(row['cpu_capacity'], 'NOT_EVALUATED')
         self.assertNotIn('series', row)
         self.assertEqual(before, (AgentJob.objects.count(), EndpointPerformanceSample.objects.count(), InventorySnapshot.objects.count()))
@@ -152,10 +159,20 @@ class CapacityDashboardTests(TestCase):
         self.assertEqual(diagnostics['diagnostics']['cpu']['status'], 'NOT_EVALUATED')
         self.assertEqual(diagnostics['diagnostics']['memory']['status'], 'NOT_EVALUATED')
 
+    def test_postgresql_decimal_statistics_are_numeric_for_frontend(self):
+        end = timezone.now()
+        projected = _compact_summary(self.endpoint, end - timedelta(hours=24), end, {
+            'received': 1, 'cpu_avg': Decimal('12.5'), 'cpu_p95': Decimal('18.2'),
+            'cpu_p99': Decimal('19.3'),
+        })
+        self.assertIsInstance(projected['cpu']['usage_percent']['avg'], float)
+        self.assertEqual(projected['cpu']['usage_percent']['p95'], 18.2)
+
     def test_detail_is_lazy_and_exposes_only_selected_endpoint(self):
         self.login()
         self.snapshot()
         self.sample()
+        self.sample(collected_at=timezone.now() - timedelta(minutes=10))
         other = self.make_endpoint('LAB-OTHER')
         self.sample(endpoint=other, cpu_percent=97)
         with CaptureQueriesContext(connection) as queries:
@@ -163,8 +180,11 @@ class CapacityDashboardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['endpoint']['id'], str(self.endpoint.pk))
-        self.assertEqual(len(data['series']), 1)
-        self.assertEqual(data['series'][0]['cpu'], 25)
+        self.assertNotIn('series', data)
+        self.assertTrue(data['series_ranges']['24h'])
+        series = self.client.get(self.series_url).json()['series']
+        self.assertEqual(len(series), 2)
+        self.assertEqual(series[0]['cpu'], 25)
         self.assertEqual(data['applications'][0]['name'], 'Synthetic App')
         self.assertEqual(data['processes'][0]['name'], 'synthetic-worker')
         self.assertEqual(data['hardware']['memory']['slots_free'], 1)
@@ -180,7 +200,9 @@ class CapacityDashboardTests(TestCase):
         self.assertIsNone(row['cpu_name'])
         detail = self.client.get(self.detail_url).json()
         self.assertEqual(detail['capacity']['hardware_context']['cpu']['status'], 'MISSING')
-        self.assertEqual(detail['series'], [])
+        self.assertNotIn('series', detail)
+        self.assertFalse(detail['series_ranges']['7d'])
+        self.assertEqual(self.client.get(self.series_url).json()['series'], [])
 
     def test_demo_is_opt_in_and_cannot_activate_outside_debug(self):
         self.login()
@@ -211,3 +233,67 @@ class CapacityDashboardTests(TestCase):
         row = self.client.get(self.overview_url).json()['endpoints'][0]
         self.assertEqual(row['processes'], [])
         self.assertNotIn('applications', row)
+
+    def test_alert_categories_count_endpoints_and_no_alerts_remain_zero(self):
+        self.login()
+        EndpointAlert.objects.create(endpoint=self.endpoint, alert_type='agent.update.failed',
+                                     severity=EndpointAlert.SEVERITY_CRITICAL,
+                                     title='Synthetic update', description='Synthetic only')
+        EndpointAlert.objects.create(endpoint=self.endpoint, alert_type='agent.update.failed',
+                                     severity=EndpointAlert.SEVERITY_CRITICAL,
+                                     title='Synthetic second update', description='Synthetic only')
+        EndpointAlert.objects.create(endpoint=self.endpoint, alert_type='antivirus_disabled',
+                                     severity=EndpointAlert.SEVERITY_SECURITY,
+                                     title='Synthetic security', description='Synthetic only')
+        second = self.make_endpoint('LAB-NO-ALERTS')
+        rows = {item['id']: item for item in self.client.get(self.overview_url).json()['endpoints']}
+        self.assertEqual(rows[str(self.endpoint.pk)]['alerts_critical'], 2)
+        self.assertTrue(rows[str(self.endpoint.pk)]['security_alert'])
+        self.assertTrue(rows[str(self.endpoint.pk)]['agent_update_alert'])
+        self.assertEqual(rows[str(second.pk)]['alerts_total'], 0)
+
+    def test_alert_summary_counts_all_records_when_timeline_is_limited(self):
+        self.login()
+        for index in range(31):
+            EndpointAlert.objects.create(
+                endpoint=self.endpoint, alert_type='synthetic',
+                severity=EndpointAlert.SEVERITY_CRITICAL,
+                title=f'Synthetic alert {index}', description='Synthetic only',
+            )
+        detail = self.client.get(self.detail_url).json()
+        self.assertEqual(detail['alert_counts']['critical'], 31)
+        self.assertEqual(len(detail['alerts']), 30)
+
+    def test_disk_association_requires_confidence(self):
+        self.login()
+        self.snapshot(hardware={
+            'cpu': {'name': 'Synthetic CPU', 'physical_cores': 4, 'logical_processors': 8},
+            'memory_total_bytes': 17179869184,
+            'memory': {'total_bytes': 17179869184},
+            'physical_disks': [
+                {'model': 'Synthetic SSD', 'size_bytes': 1000, 'drive_letters': ['C:'],
+                 'association_confidence': 'none', 'health_status': None},
+                {'model': 'Synthetic HDD', 'size_bytes': 2000, 'drive_letters': ['D:'],
+                 'association_confidence': 'high', 'is_system_disk': False},
+            ],
+        })
+        disks = self.client.get(self.detail_url).json()['disks']
+        self.assertEqual(disks[0]['drive_letters'], [])
+        self.assertIsNone(disks[0]['is_system_disk'])
+        self.assertEqual(disks[1]['drive_letters'], ['D:'])
+
+    def test_series_is_lazy_bounded_and_read_only(self):
+        self.login()
+        self.sample()
+        with CaptureQueriesContext(connection) as detail_queries:
+            detail = self.client.get(self.detail_url)
+        self.assertNotIn('series', detail.json())
+        self.assertFalse(any('process_consumers' in q['sql'].lower() and 'cpu_percent' in q['sql'].lower()
+                             for q in detail_queries))
+        with CaptureQueriesContext(connection) as series_queries:
+            response = self.client.get(self.series_url, {'period': '6h'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()['series']), 1)
+        self.assertFalse(any(q['sql'].lstrip().upper().startswith(('INSERT ', 'UPDATE ', 'DELETE '))
+                             for q in series_queries))
+        self.assertEqual(self.client.get(self.series_url, {'period': 'all'}).status_code, 400)

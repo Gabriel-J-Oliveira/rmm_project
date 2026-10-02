@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from django.conf import settings
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import connection
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Count, Min, OuterRef, Q, Subquery
 from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -104,7 +104,17 @@ def _classification(capacity, endpoint, critical_count):
     }
 
 
-def _row(endpoint, snapshot, primary, context, alerts, processes):
+def _alert_categories(alerts):
+    types = alerts.get('types') or []
+    return {
+        'security': any(item['severity'] == EndpointAlert.SEVERITY_SECURITY or
+                        any(term in item['alert_type'].lower() for term in ('security', 'antivirus', 'defender'))
+                        for item in types),
+        'agent_update': any(any(term in item['alert_type'].lower() for term in ('agent', 'update')) for item in types),
+    }
+
+
+def _row(endpoint, snapshot, primary, context, alerts, processes, now):
     primary_evidence = build_telemetry_evidence(primary)
     primary_diagnostics = build_resource_diagnostics(primary)
     context_diagnostics = build_resource_diagnostics(context)
@@ -113,6 +123,8 @@ def _row(endpoint, snapshot, primary, context, alerts, processes):
     hardware = capacity['hardware_context']
     os_name = (snapshot.os_name if snapshot else None) or endpoint.os_name or None
     os_version = (snapshot.os_version if snapshot else None) or endpoint.os_version or None
+    categories = _alert_categories(alerts)
+    snapshot_at = snapshot.received_at if snapshot else None
     return {
         'id': str(endpoint.pk), 'hostname': endpoint.hostname, 'status': endpoint.status,
         'last_seen': endpoint.last_seen_at.isoformat() if endpoint.last_seen_at else None,
@@ -124,11 +136,19 @@ def _row(endpoint, snapshot, primary, context, alerts, processes):
         'memory_inventory_status': hardware['memory']['status'],
         'cpu_p95': primary['cpu']['usage_percent']['p95'],
         'memory_p95': primary['memory']['used_percent']['p95'],
+        'context_coverage': context['quality']['coverage_percent'],
         'coverage': primary['quality']['coverage_percent'],
+        'received_samples': primary['quality']['received_samples'],
+        'expected_samples': primary['quality']['expected_samples'],
         'evidence': primary_evidence['evidence']['overall']['status'],
         'cpu_capacity': capacity['capacity']['cpu']['status'],
         'memory_capacity': capacity['capacity']['memory']['status'],
         'alerts_total': alerts.get('total', 0), 'alerts_critical': critical,
+        'alerts_warning': alerts.get('warning', 0),
+        'security_alert': categories['security'], 'agent_update_alert': categories['agent_update'],
+        'inventory_stale': snapshot_at is not None and snapshot_at < now - timedelta(days=7),
+        'inventory_at': snapshot_at.isoformat() if snapshot_at else None,
+        'alert_types': alerts.get('types') or [],
         'classifications': _classification(capacity, endpoint, critical),
         'processes': processes, 'endpoint_url': reverse('endpoint-detail', args=[endpoint.pk]),
         'alerts_url': reverse('alerts-list') + '?' + urlencode({'q': endpoint.hostname}),
@@ -171,9 +191,14 @@ def _demo_rows():
             'memory_inventory_status': 'PARTIAL' if index == 6 else 'AVAILABLE',
             'cpu_p95': None if insufficient else [91, 22, 78, 24][(index - 1) % 4],
             'memory_p95': None if insufficient else [42, 83, 94, 36][(index - 1) % 4],
-            'coverage': 0 if insufficient else 98, 'evidence': 'INSUFFICIENT' if insufficient else 'SUFFICIENT',
+            'coverage': 0 if insufficient else 98, 'context_coverage': 0 if insufficient else 40,
+            'received_samples': 0 if insufficient else 283, 'expected_samples': 288,
+            'evidence': 'INSUFFICIENT' if insufficient else 'SUFFICIENT',
             'cpu_capacity': cpu, 'memory_capacity': memory,
-            'alerts_total': critical, 'alerts_critical': critical,
+            'alerts_total': critical, 'alerts_critical': critical, 'alerts_warning': 0,
+            'security_alert': False, 'agent_update_alert': False,
+            'inventory_stale': False, 'inventory_at': None,
+            'alert_types': [{'alert_type': 'demo', 'severity': 'critical', 'count': critical}] if critical else [],
             'classifications': {'insufficient': insufficient, 'sustained': sustained,
                                 'observe': observe, 'offline': status != 'online',
                                 'attention': insufficient or sustained or observe or status != 'online' or critical > 0},
@@ -233,8 +258,10 @@ def _compact_summary(endpoint, start, end, aggregate):
     expected = math.ceil((end - start).total_seconds() / 300)
     received = data.get('received') or 0
     def stats(prefix):
-        return {'avg': data.get(f'{prefix}_avg'), 'p95': data.get(f'{prefix}_p95'),
-                'p99': data.get(f'{prefix}_p99')}
+        return {
+            key: float(data[f'{prefix}_{key}']) if data.get(f'{prefix}_{key}') is not None else None
+            for key in ('avg', 'p95', 'p99')
+        }
     return {
         'schema_version': 1, 'endpoint_id': str(endpoint.pk),
         'window': {'start': start.isoformat(), 'end': end.isoformat(),
@@ -272,11 +299,22 @@ def _overview(now, hours):
     snapshots = {item.machine_id: item for item in
                  InventorySnapshot.objects.only(
                      'id', 'machine_id', 'os_name', 'os_version', 'windows_build',
-                     'cpu', 'memory_total_bytes', 'raw_payload',
+                     'cpu', 'memory_total_bytes', 'raw_payload', 'received_at',
                  ).filter(pk=Subquery(latest_pk), machine_id__in=[e.pk for e in endpoints])}
-    alert_map = {item['endpoint_id']: item for item in
-                 EndpointAlert.objects.filter(endpoint_id__in=[e.pk for e in endpoints], status__in=ACTIVE_ALERT_STATUSES)
-                 .values('endpoint_id').annotate(total=Count('pk'), critical=Count('pk', filter=Q(severity=EndpointAlert.SEVERITY_CRITICAL)))}
+    alert_map = {}
+    alert_types = EndpointAlert.objects.filter(
+        endpoint_id__in=[e.pk for e in endpoints], status__in=ACTIVE_ALERT_STATUSES,
+    ).values('endpoint_id', 'alert_type', 'severity').annotate(count=Count('pk'))
+    for item in alert_types:
+        aggregate = alert_map.setdefault(item['endpoint_id'], {'total': 0, 'critical': 0, 'warning': 0, 'types': []})
+        aggregate['total'] += item['count']
+        if item['severity'] == EndpointAlert.SEVERITY_CRITICAL:
+            aggregate['critical'] += item['count']
+        if item['severity'] == EndpointAlert.SEVERITY_WARNING:
+            aggregate['warning'] += item['count']
+        aggregate['types'].append({
+            'alert_type': item['alert_type'], 'severity': item['severity'], 'count': item['count'],
+        })
     primary_start = now - timedelta(hours=hours)
     context_start = now - timedelta(days=7)
     if connection.vendor == 'postgresql':
@@ -302,7 +340,7 @@ def _overview(now, hours):
             primary = build_endpoint_telemetry_summary(endpoint, primary_start, now, sample_rows=primary_rows)
             context = build_endpoint_telemetry_summary(endpoint, context_start, now, sample_rows=samples)
         result.append(_row(endpoint, snapshots.get(endpoint.pk), primary, context,
-                           alert_map.get(endpoint.pk, {}), _latest_processes(endpoint.obz_last_processes)))
+                           alert_map.get(endpoint.pk, {}), _latest_processes(endpoint.obz_last_processes), now))
     return result
 
 
@@ -343,7 +381,7 @@ def capacity_detail(request, pk):
             raise Http404
         return JsonResponse({'demo': True, 'endpoint': row, 'primary': None,
                              'context': None, 'capacity': None, 'hardware': None,
-                             'alerts': [], 'applications': [], 'processes': [], 'series': []})
+                             'alerts': [], 'applications': [], 'processes': [], 'series_ranges': {}})
     endpoint = AgentMachine.objects.only(
         'id', 'hostname', 'status', 'last_seen_at', 'agent_version',
         'os_name', 'os_version', 'windows_build',
@@ -362,14 +400,41 @@ def capacity_detail(request, pk):
     ).filter(machine=endpoint).order_by('-received_at', '-pk').first()
     hardware = _hardware(snapshot)
     capacity = build_capacity_assessment(primary_diagnostics, context_diagnostics, hardware)
-    alerts = list(EndpointAlert.objects.filter(endpoint=endpoint, status__in=ACTIVE_ALERT_STATUSES)
-                  .order_by('-last_seen_at').values('title', 'severity', 'status', 'last_seen_at')[:20])
-    samples = list(EndpointPerformanceSample.objects.filter(endpoint=endpoint, collected_at__gte=now - timedelta(hours=hours))
-                   .order_by('-collected_at').values('collected_at', 'cpu_percent', 'memory_used_percent',
-                                                    'process_consumers', 'uptime_seconds')[:288])
-    series = [{'at': item['collected_at'].isoformat(), 'cpu': item['cpu_percent'],
-               'memory': item['memory_used_percent']} for item in reversed(samples)]
-    processes = _latest_processes(samples[0]['process_consumers']) if samples else []
+    alert_queryset = EndpointAlert.objects.filter(endpoint=endpoint).filter(
+        Q(status__in=ACTIVE_ALERT_STATUSES) |
+        Q(status=EndpointAlert.STATUS_RESOLVED, resolved_at__gte=now - timedelta(days=7)),
+    )
+    alert_counts = alert_queryset.aggregate(
+        critical=Count('pk', filter=Q(status__in=ACTIVE_ALERT_STATUSES, severity=EndpointAlert.SEVERITY_CRITICAL)),
+        warning=Count('pk', filter=Q(status__in=ACTIVE_ALERT_STATUSES, severity=EndpointAlert.SEVERITY_WARNING)),
+        open=Count('pk', filter=Q(status=EndpointAlert.STATUS_OPEN)),
+        resolved=Count('pk', filter=Q(status=EndpointAlert.STATUS_RESOLVED)),
+        other=Count('pk', filter=Q(status__in=ACTIVE_ALERT_STATUSES) &
+                    ~Q(severity__in=(EndpointAlert.SEVERITY_CRITICAL, EndpointAlert.SEVERITY_WARNING))),
+    )
+    alerts = list(alert_queryset.order_by('-last_seen_at').values(
+        'alert_type', 'title', 'severity', 'status', 'last_seen_at',
+    )[:30])
+    last_sample = (EndpointPerformanceSample.objects.filter(
+        endpoint=endpoint, collected_at__gte=now - timedelta(days=7), collected_at__lt=now,
+    )
+                   .order_by('-collected_at', '-pk').values('process_consumers', 'uptime_seconds').first())
+    processes = _latest_processes(last_sample['process_consumers']) if last_sample else []
+    sample_ranges = EndpointPerformanceSample.objects.filter(
+        endpoint=endpoint, collected_at__gte=now - timedelta(days=7), collected_at__lt=now,
+    ).aggregate(**{
+        f'{field}_{key}': aggregate('collected_at' if field == 'first' else 'pk', filter=Q(
+            collected_at__gte=now - timedelta(hours=duration),
+        ))
+        for key, duration in (('6h', 6), ('24h', 24), ('3d', 72), ('7d', 168))
+        for field, aggregate in (('first', Min), ('count', Count))
+    })
+    series_ranges = {
+        key: bool(sample_ranges[f'count_{key}'] >= 2 and (duration <= 24 or (
+            sample_ranges[f'first_{key}'] <= now - timedelta(hours=duration * 0.75)
+            and sample_ranges[f'count_{key}'] >= duration * 12 * 0.5)))
+        for key, duration in (('6h', 6), ('24h', 24), ('3d', 72), ('7d', 168))
+    }
     raw = snapshot.raw_payload if snapshot and isinstance(snapshot.raw_payload, dict) else {}
     collections = raw.get('collections') if isinstance(raw.get('collections'), dict) else {}
     apps = snapshot.installed_software if snapshot and isinstance(snapshot.installed_software, list) else []
@@ -379,8 +444,21 @@ def capacity_detail(request, pk):
             name = app.get('name') or app.get('display_name')
             if isinstance(name, str) and name:
                 applications.append({'name': name[:160], 'version': str(app.get('version') or '')[:60]})
-    disk = collections.get('disk') if isinstance(collections.get('disk'), dict) else {}
-    disks = disk.get('disks') if isinstance(disk.get('disks'), list) else snapshot.disks if snapshot and isinstance(snapshot.disks, list) else []
+    hardware_raw = collections.get('hardware') if isinstance(collections.get('hardware'), dict) else {}
+    disks = hardware_raw.get('physical_disks') if isinstance(hardware_raw.get('physical_disks'), list) else []
+    disk_rows = []
+    for item in disks[:8]:
+        if not isinstance(item, dict):
+            continue
+        confident = item.get('association_confidence') in ('high', 'confirmed')
+        disk_rows.append({
+            'model': str(item.get('model') or '')[:120], 'size_bytes': item.get('size_bytes'),
+            'media_type': item.get('media_type'), 'bus_type': item.get('bus_type'),
+            'health_status': item.get('health_status'), 'operational_status': item.get('operational_status'),
+            'is_system_disk': item.get('is_system_disk') if confident else None,
+            'drive_letters': item.get('drive_letters') if confident and isinstance(item.get('drive_letters'), list) else [],
+            'association_confidence': item.get('association_confidence'),
+        })
     return JsonResponse({
         'demo': False,
         'endpoint': {
@@ -389,15 +467,38 @@ def capacity_detail(request, pk):
             'os_name': (snapshot.os_name if snapshot else None) or endpoint.os_name,
             'os_version': (snapshot.os_version if snapshot else None) or endpoint.os_version,
             'os_build': (snapshot.windows_build if snapshot else None) or endpoint.windows_build,
-            'uptime_seconds': samples[0]['uptime_seconds'] if samples else (snapshot.uptime_seconds if snapshot else None),
+            'uptime_seconds': last_sample['uptime_seconds'] if last_sample else (snapshot.uptime_seconds if snapshot else None),
             'endpoint_url': reverse('endpoint-detail', args=[endpoint.pk]),
             'alerts_url': reverse('alerts-list') + '?' + urlencode({'q': endpoint.hostname}),
         },
         'primary': {'quality': primary['quality'], 'stats': _stats(primary), 'diagnostics': primary_diagnostics},
         'context': {'quality': context['quality'], 'stats': _stats(context), 'diagnostics': context_diagnostics},
         'capacity': capacity, 'hardware': capacity['hardware_context'],
-        'alerts': alerts, 'applications': applications, 'processes': processes,
-        'disks': [{'model': str(item.get('model') or '')[:120], 'size_bytes': item.get('size_bytes')}
-                  for item in disks[:8] if isinstance(item, dict)],
-        'series': series,
+        'alerts': alerts, 'alert_counts': alert_counts,
+        'applications': applications, 'processes': processes,
+        'disks': disk_rows, 'series_ranges': series_ranges,
     })
+
+
+@login_required
+@permission_required(CAPACITY_PERMISSIONS, raise_exception=True)
+@require_GET
+def capacity_series(request, pk):
+    period = request.GET.get('period', '24h')
+    hours = {'6h': 6, '24h': 24, '3d': 72, '7d': 168}.get(period)
+    if hours is None:
+        return JsonResponse({'error': 'invalid_period'}, status=400)
+    if settings.DEBUG and request.GET.get('demo') == '1':
+        if not any(row['id'] == str(pk) for row in _demo_rows()):
+            raise Http404
+        return JsonResponse({'demo': True, 'series': []})
+    if not AgentMachine.objects.filter(pk=pk).exists():
+        raise Http404
+    end = timezone.now()
+    samples = (EndpointPerformanceSample.objects.filter(
+        endpoint_id=pk, collected_at__gte=end - timedelta(hours=hours), collected_at__lt=end,
+    ).order_by('-collected_at').values('collected_at', 'cpu_percent', 'memory_used_percent')[:2100])
+    return JsonResponse({'demo': False, 'series': [
+        {'at': item['collected_at'].isoformat(), 'cpu': item['cpu_percent'], 'memory': item['memory_used_percent']}
+        for item in reversed(list(samples))
+    ]})

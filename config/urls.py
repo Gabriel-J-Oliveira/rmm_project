@@ -65,6 +65,7 @@ urlpatterns = [
     path('capacity/', capacity_views.capacity_page, name='capacity-page'),
     path('api/capacity/overview/', capacity_views.capacity_overview, name='api-capacity-overview'),
     path('api/capacity/<uuid:pk>/', capacity_views.capacity_detail, name='api-capacity-detail'),
+    path('api/capacity/<uuid:pk>/series/', capacity_views.capacity_series, name='api-capacity-series'),
     path('events/', dashboard_views.events_list, name='events-list'),
     path('jobs/', dashboard_views.jobs_list, name='jobs-list'),
     path('maintenance/', dashboard_views.maintenance_list, name='maintenance-list'),
