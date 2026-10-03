@@ -4421,16 +4421,25 @@ def agent_install(request):
     created_manual_validation = None
     created_command = ''
     now = timezone.now()
+    ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+    def token_response(payload, status=200):
+        response = JsonResponse(payload, status=status)
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        return response
+
+    def token_error(message):
+        if ajax:
+            return token_response({'ok': False, 'error': message}, status=400)
+        messages.warning(request, message)
+        return None
 
     if request.method == 'POST':
         action = request.POST.get('action', 'enrollment').strip()
         name = request.POST.get('name', '').strip()
         allowed_domain = request.POST.get('allowed_domain', '').strip().lower()
         notes = request.POST.get('notes', '').strip()
-        try:
-            expires_hours = int(request.POST.get('expires_hours') or 168)
-        except ValueError:
-            expires_hours = 168
         max_uses_raw = request.POST.get('max_uses', '').strip()
         max_uses = None
         if max_uses_raw:
@@ -4446,7 +4455,9 @@ def agent_install(request):
             except ValueError:
                 expires_minutes = 30
             if expires_minutes <= 0:
-                messages.warning(request, 'A validade do token manual deve ser maior que zero.')
+                error_response = token_error('A validade do token manual deve ser maior que zero.')
+                if error_response:
+                    return error_response
             else:
                 created_manual_validation, created_manual_token = AgentManualValidationToken.create_with_token(
                     name=manual_name,
@@ -4464,37 +4475,65 @@ def agent_install(request):
                     },
                     request=request,
                 )
+                if ajax:
+                    return token_response({
+                        'ok': True, 'kind': 'manual_validation', 'token': created_manual_token,
+                        'name': created_manual_validation.name,
+                        'expires_at': created_manual_validation.expires_at.isoformat(),
+                    })
                 messages.success(request, 'Token de validacao manual criado. Copie agora; ele nao sera exibido novamente.')
-        elif not name:
-            messages.warning(request, 'Informe um nome para o token.')
-        elif expires_hours <= 0:
-            messages.warning(request, 'A validade deve ser maior que zero.')
-        elif max_uses is not None and max_uses <= 0:
-            messages.warning(request, 'O limite de usos deve ser maior que zero.')
         else:
-            enrollment, created_token = AgentEnrollmentToken.create_with_token(
-                name=name,
-                expires_at=now + timedelta(hours=expires_hours),
-                max_uses=max_uses,
-                allowed_domain=allowed_domain,
-                notes=notes,
-            )
-            created_enrollment = enrollment
-            created_command = build_agent_install_command()
-            create_audit_event(
-                event_type='agent.enrollment_token_created',
-                title='Enrollment token criado',
-                description=f'Enrollment token criado: {enrollment.name}.',
-                severity=AuditEvent.SEVERITY_INFO,
-                metadata={
-                    'enrollment_token_id': str(enrollment.id),
-                    'prefix': enrollment.prefix,
-                    'allowed_domain': enrollment.allowed_domain,
-                    'max_uses': enrollment.max_uses,
-                },
-                request=request,
-            )
-            messages.success(request, 'Enrollment token criado. Copie o token agora; ele nao sera exibido novamente.')
+            raw_hours = request.POST.get('expires_hours', '').strip() or '2'
+            try:
+                expires_hours = int(raw_hours)
+            except ValueError:
+                expires_hours = None
+            if not name:
+                validation_message = 'Informe um nome para o token.'
+            elif expires_hours is None or not 1 <= expires_hours <= 72:
+                validation_message = 'A validade deve ser entre 1 e 72 horas.'
+            elif max_uses is not None and max_uses <= 0:
+                validation_message = 'O limite de usos deve ser maior que zero.'
+            else:
+                validation_message = ''
+            if validation_message:
+                error_response = token_error(validation_message)
+                if error_response:
+                    return error_response
+            else:
+                enrollment, created_token = AgentEnrollmentToken.create_with_token(
+                    name=name,
+                    expires_at=now + timedelta(hours=expires_hours),
+                    max_uses=max_uses,
+                    allowed_domain=allowed_domain,
+                    notes=notes,
+                )
+                created_enrollment = enrollment
+                created_command = build_agent_install_command()
+                create_audit_event(
+                    event_type='agent.enrollment_token_created',
+                    title='Enrollment token criado',
+                    description=f'Enrollment token criado: {enrollment.name}.',
+                    severity=AuditEvent.SEVERITY_INFO,
+                    metadata={
+                        'enrollment_token_id': str(enrollment.id),
+                        'prefix': enrollment.prefix,
+                        'allowed_domain': enrollment.allowed_domain,
+                        'max_uses': enrollment.max_uses,
+                    },
+                    request=request,
+                )
+                if ajax:
+                    return token_response({
+                        'ok': True, 'kind': 'enrollment', 'token': created_token,
+                        'id': str(enrollment.id), 'prefix': enrollment.prefix,
+                        'name': enrollment.name, 'allowed_domain': enrollment.allowed_domain,
+                        'expires_at': enrollment.expires_at.isoformat(),
+                        'created_at': enrollment.created_at.isoformat(), 'max_uses': enrollment.max_uses,
+                        'revoke_url': reverse('agent-enrollment-revoke', args=[enrollment.id]),
+                        'command': created_command,
+                    })
+                messages.success(request, 'Enrollment token criado. Copie o token agora; ele nao sera exibido novamente.')
 
     tokens = AgentEnrollmentToken.objects.order_by('-created_at')
     token_rows = []
@@ -4560,7 +4599,10 @@ def agent_install(request):
         ).count(),
         'default_allowed_domain': 'control.local',
     }
-    return render(request, 'dashboard/agent_install.html', context)
+    response = render(request, 'dashboard/agent_install.html', context)
+    if created_token or created_manual_token:
+        response['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return response
 
 
 @require_POST

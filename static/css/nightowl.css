@@ -4103,6 +4103,149 @@ body.page-tickets .desk-category-drawer.is-open {
     margin-bottom: 18px;
 }
 
+.agent-token-column {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    min-width: 0;
+}
+
+.agent-token-column:first-child .agent-form-panel { overflow: visible; }
+
+.page-agent-install .agent-secondary-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 14px;
+    border: 1px solid rgba(var(--module-accent-rgb), 0.42);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text-primary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.page-agent-install .agent-secondary-button:hover:not(:disabled) {
+    border-color: var(--module-accent);
+    background: var(--card-hover);
+}
+
+.page-agent-install .agent-secondary-button:focus-visible,
+.page-agent-install .agent-help-button:focus-visible,
+.page-agent-install .agent-token-page-controls button:focus-visible {
+    outline: 2px solid var(--module-accent);
+    outline-offset: 2px;
+}
+
+.page-agent-install .agent-secondary-button:disabled {
+    opacity: 0.58;
+    cursor: wait;
+}
+
+.page-agent-install .agent-secondary-button svg { width: 16px; height: 16px; }
+
+.agent-help-wrap { position: relative; flex: 0 0 auto; }
+
+.agent-help-button {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.agent-help-button:hover,
+.agent-help-button[aria-expanded="true"] {
+    border-color: var(--module-accent);
+    color: var(--text-primary);
+}
+
+.agent-help-button svg { width: 17px; height: 17px; }
+
+.agent-help-popover {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 8px);
+    right: 0;
+    width: min(360px, calc(100vw - 32px));
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.36);
+    color: var(--text-primary);
+}
+
+.agent-help-popover[hidden] { display: none; }
+.agent-help-popover h3 { margin: 0 0 10px; font-size: 0.98rem; }
+.agent-help-popover ol { display: grid; gap: 7px; margin: 0; padding-left: 20px; color: var(--text-secondary); }
+.agent-help-popover code { color: var(--text-primary); }
+
+.agent-token-error {
+    margin: 0;
+    color: #fca5a5;
+    font-size: 0.9rem;
+}
+
+.agent-token-error[hidden],
+.agent-token-result[hidden] { display: none; }
+
+.agent-token-form .agent-form-actions button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+    box-shadow: none;
+}
+
+.agent-token-column .agent-token-result { margin: 0; }
+.agent-token-result-meta { margin: 12px 18px 0; color: var(--text-secondary); font-size: 0.88rem; }
+.agent-token-result > :last-child { margin-bottom: 18px; }
+
+.agent-token-pagination,
+.agent-token-page-controls,
+#agent-token-page-numbers {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.agent-token-pagination {
+    justify-content: space-between;
+    padding: 14px 18px 18px;
+    color: var(--text-secondary);
+}
+
+.agent-token-pagination select { margin-left: 6px; }
+
+.agent-token-page-controls button {
+    min-width: 34px;
+    min-height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.agent-token-page-controls button[aria-current="page"] { border-color: var(--module-accent); }
+.agent-token-page-controls button:disabled { opacity: 0.45; cursor: default; }
+.agent-token-page-ellipsis { padding: 0 4px; }
+
+.page-agent-install .agent-token-table td,
+.page-agent-install .agent-token-table td strong,
+.page-agent-install .copy-value-content code,
+.page-agent-install .agent-settings-list dd { color: var(--text-primary); }
+
+.page-agent-install .agent-token-table td small,
+.page-agent-install .agent-token-table td code,
+.page-agent-install .copy-value-content span { color: var(--text-secondary); }
+
 .ad-discovery {
     margin-bottom: 22px;
 }
@@ -4628,9 +4771,7 @@ body.page-tickets .desk-category-drawer.is-open {
 .enrollment-created-panel {
     margin-bottom: 18px;
     border-color: rgba(192, 132, 252, 0.34);
-    background:
-        radial-gradient(circle at 0% 0%, rgba(124, 58, 237, 0.13), transparent 32%),
-        var(--card);
+    background: var(--card);
 }
 
 .created-token-box,
@@ -6865,6 +7006,11 @@ body.page-agent-install {
 @media (max-width: 760px) {
     body.page-agent-install .agent-install-metrics {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    body.page-agent-install .agent-token-pagination {
+        align-items: flex-start;
+        flex-direction: column;
     }
 }
 

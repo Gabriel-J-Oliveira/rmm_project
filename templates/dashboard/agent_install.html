@@ -64,7 +64,7 @@
         <form id="ad-discovery-form" method="post" class="ad-refresh-form">
             {% csrf_token %}
             <span id="ad-last-updated">Última atualização: --</span>
-            <button type="submit" id="ad-scan-button"><i data-lucide="refresh-cw"></i>Atualizar</button>
+            <button type="submit" id="ad-scan-button" class="agent-secondary-button"><i data-lucide="refresh-cw"></i>Atualizar</button>
         </form>
     </div>
     <p class="ad-scan-status" id="ad-scan-status" role="status" aria-live="polite">Carregando computadores do domínio...</p>
@@ -122,61 +122,8 @@
     <span class="agent-install-manual-meta">{{ expired_count }} tokens expirados · {{ uses_24h_count }} usos nas últimas 24h</span>
 </div>
 
-{% if created_token %}
-<section class="panel enrollment-created-panel">
-    <div class="panel-heading">
-        <div>
-            <span class="section-kicker">Token criado</span>
-            <h2>Copie este token agora</h2>
-            <p>O token completo aparece apenas uma vez. Depois, somente o prefixo fica vis&iacute;vel.</p>
-        </div>
-        {% if created_enrollment %}
-        <form method="post" action="{% url 'agent-enrollment-revoke' created_enrollment.id %}">
-            {% csrf_token %}
-            <div class="agent-created-actions">
-                <a class="copy-button" href="#agent-command-generator"><i data-lucide="terminal"></i>Gerar novo comando</a>
-                <button class="danger-subtle" type="submit"><i data-lucide="ban"></i>Revogar token</button>
-            </div>
-        </form>
-        {% endif %}
-    </div>
-    <div class="created-token-box" data-copy-value="{{ created_token }}">
-        <div class="copy-value-content">
-            <span>Enrollment token</span>
-            <code>{{ created_token }}</code>
-        </div>
-        <button class="copy-button" type="button" data-copy-target=".created-token-box"><i data-lucide="copy"></i>Copiar token</button>
-    </div>
-    <div class="terminal-block created-command-block" data-copy-value="{{ created_command }}">
-        <div class="copy-value-content">
-            <span>Comando PowerShell recomendado</span>
-            <code>{{ created_command }}</code>
-        </div>
-        <button class="copy-button" type="button" data-copy-target=".created-command-block"><i data-lucide="copy"></i>Copiar comando</button>
-    </div>
-</section>
-{% endif %}
-
-{% if created_manual_token %}
-<section class="panel enrollment-created-panel">
-    <div class="panel-heading">
-        <div>
-            <span class="section-kicker">Token manual criado</span>
-            <h2>Copie o token de valida&ccedil;&atilde;o manual</h2>
-            <p>Use este token apenas em m&aacute;quinas confi&aacute;veis. Ele expira e possui uso &uacute;nico.</p>
-        </div>
-    </div>
-    <div class="created-token-box" data-copy-value="{{ created_manual_token }}">
-        <div class="copy-value-content">
-            <span>Manual validation token</span>
-            <code>{{ created_manual_token }}</code>
-        </div>
-        <button class="copy-button" type="button" data-copy-target=".created-token-box"><i data-lucide="copy"></i>Copiar token manual</button>
-    </div>
-</section>
-{% endif %}
-
 <section class="agent-install-grid">
+    <div class="agent-token-column">
     <article class="panel agent-form-panel">
         <div class="panel-heading">
             <div>
@@ -184,8 +131,22 @@
                 <h2>Gerar enrollment token</h2>
                 <p>Opcional para legado ou lotes controlados. O comando padr&atilde;o j&aacute; tenta auto-enrollment sem token em linha de comando.</p>
             </div>
+            <div class="agent-help-wrap">
+                <button type="button" id="agent-help-button" class="agent-help-button" aria-label="Ajuda para instalação guiada" aria-controls="agent-help-popover" aria-expanded="false" title="Ajuda para instalação guiada"><i data-lucide="info"></i></button>
+                <div id="agent-help-popover" class="agent-help-popover" role="region" aria-label="Instalação guiada" hidden>
+                    <h3>Instala&ccedil;&atilde;o guiada</h3>
+                    <ol>
+                        <li>Escolha a URL p&uacute;blica do servidor NightOwl.</li>
+                        <li>Copie o comando PowerShell sem token sens&iacute;vel.</li>
+                        <li>Execute como administrador no endpoint.</li>
+                        <li>No dom&iacute;nio autorizado, a ativa&ccedil;&atilde;o &eacute; autom&aacute;tica.</li>
+                        <li>Fora do dom&iacute;nio, gere um token manual e cole na janela NightOwl do instalador.</li>
+                        <li>Valide em <code>Endpoints &gt; Detalhe &gt; Agente</code>.</li>
+                    </ol>
+                </div>
+            </div>
         </div>
-        <form method="post" class="agent-token-form">
+        <form method="post" class="agent-token-form" id="enrollment-token-form">
             {% csrf_token %}
             <input type="hidden" name="action" value="enrollment">
             <label class="filter-field">
@@ -199,7 +160,7 @@
             <div class="agent-form-row">
                 <label class="filter-field">
                     <span>Validade em horas</span>
-                    <input name="expires_hours" type="number" min="1" value="168">
+                    <input name="expires_hours" type="number" min="1" max="72" value="2" required>
                 </label>
                 <label class="filter-field">
                     <span>Limite de usos</span>
@@ -213,9 +174,26 @@
             <div class="agent-form-actions">
                 <button type="submit"><i data-lucide="plus"></i>Gerar token</button>
             </div>
+            <p class="agent-token-error" role="alert" hidden></p>
         </form>
     </article>
+    <section class="panel enrollment-created-panel agent-token-result" id="enrollment-token-result" aria-live="polite" {% if not created_token %}hidden{% endif %}>
+        {% if created_token %}
+        <div class="panel-heading">
+            <div><span class="section-kicker">Token criado</span><h2>Copie este token agora</h2><p>O token completo aparece apenas uma vez. Depois, somente o prefixo fica vis&iacute;vel.</p></div>
+            <div class="agent-created-actions">
+                <a class="copy-button" href="#agent-command-generator"><i data-lucide="terminal"></i>Gerar novo comando</a>
+                <form method="post" action="{% url 'agent-enrollment-revoke' created_enrollment.id %}">{% csrf_token %}<button class="danger-subtle" type="submit"><i data-lucide="ban"></i>Revogar token</button></form>
+            </div>
+        </div>
+        <p class="agent-token-result-meta">Domínio: {{ created_enrollment.allowed_domain|default:"Qualquer" }} · Expira em: {{ created_enrollment.expires_at|date:"d/m/Y H:i" }}</p>
+        <div class="created-token-box"><div class="copy-value-content"><span>Enrollment token</span><code id="created-enrollment-token">{{ created_token }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-token"><i data-lucide="copy"></i>Copiar token</button></div>
+        <div class="terminal-block created-command-block"><div class="copy-value-content"><span>Comando PowerShell recomendado</span><code id="created-enrollment-command">{{ created_command }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-command"><i data-lucide="copy"></i>Copiar comando</button></div>
+        {% endif %}
+    </section>
+    </div>
 
+    <div class="agent-token-column">
     <article class="panel agent-form-panel">
         <div class="panel-heading">
             <div>
@@ -224,7 +202,7 @@
                 <p>Use quando o instalador avisar que a m&aacute;quina n&atilde;o pertence ao dom&iacute;nio autorizado.</p>
             </div>
         </div>
-        <form method="post" class="agent-token-form">
+        <form method="post" class="agent-token-form" id="manual-token-form">
             {% csrf_token %}
             <input type="hidden" name="action" value="manual_validation">
             <label class="filter-field">
@@ -242,26 +220,17 @@
             <div class="agent-form-actions">
                 <button type="submit"><i data-lucide="shield-check"></i>Gerar token de valida&ccedil;&atilde;o manual</button>
             </div>
+            <p class="agent-token-error" role="alert" hidden></p>
         </form>
     </article>
-
-    <aside class="panel how-to-panel">
-        <div class="panel-heading">
-            <div>
-                <span class="section-kicker">Como usar</span>
-                <h2>Instala&ccedil;&atilde;o guiada</h2>
-            </div>
-        </div>
-
-        <div class="how-to-steps" aria-label="Passos de instala&ccedil;&atilde;o">
-            <div class="how-to-step"><span>1</span><p>Escolha a URL p&uacute;blica do servidor NightOwl.</p></div>
-            <div class="how-to-step"><span>2</span><p>Copie o comando PowerShell sem token sens&iacute;vel.</p></div>
-            <div class="how-to-step"><span>3</span><p>Execute como administrador no endpoint.</p></div>
-            <div class="how-to-step"><span>4</span><p>Se a m&aacute;quina estiver no dom&iacute;nio autorizado, a ativa&ccedil;&atilde;o &eacute; autom&aacute;tica.</p></div>
-            <div class="how-to-step"><span>5</span><p>Fora do dom&iacute;nio, gere um token manual e cole na janela NightOwl do instalador.</p></div>
-            <div class="how-to-step"><span>6</span><p>Valide em <code>Endpoints &gt; Detalhe &gt; Agente</code>.</p></div>
-        </div>
-    </aside>
+    <section class="panel enrollment-created-panel agent-token-result" id="manual-token-result" aria-live="polite" {% if not created_manual_token %}hidden{% endif %}>
+        {% if created_manual_token %}
+        <div class="panel-heading"><div><span class="section-kicker">Token manual criado</span><h2>Copie o token de valida&ccedil;&atilde;o manual</h2><p>Use este token apenas em m&aacute;quinas confi&aacute;veis. Ele expira e possui uso &uacute;nico.</p></div></div>
+        <p class="agent-token-result-meta">Expira em: {{ created_manual_validation.expires_at|date:"d/m/Y H:i" }}</p>
+        <div class="created-token-box"><div class="copy-value-content"><span>Manual validation token</span><code id="created-manual-token">{{ created_manual_token }}</code></div><button class="copy-button" type="button" data-copy-target="#created-manual-token"><i data-lucide="copy"></i>Copiar token manual</button></div>
+        {% endif %}
+    </section>
+    </div>
 </section>
 
 <section class="agent-command-layout" id="agent-command-generator">
@@ -413,9 +382,9 @@
                     <th>A&ccedil;&otilde;es</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="agent-token-history-rows">
                 {% for row in rows %}
-                <tr>
+                <tr data-token-row>
                     <td>
                         <strong>{{ row.token.name }}</strong>
                         {% if row.token.notes %}<small>{{ row.token.notes|truncatechars:60 }}</small>{% endif %}
@@ -455,13 +424,22 @@
                     </td>
                 </tr>
                 {% empty %}
-                <tr>
+                <tr data-token-empty>
                     <td colspan="9">Nenhum enrollment token criado ainda.</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
+    <nav class="agent-token-pagination" aria-label="Páginas de enrollment tokens">
+        <span id="agent-token-page-summary"></span>
+        <label>Por página <select id="agent-token-page-size"><option value="5" selected>5</option><option value="10">10</option><option value="20">20</option></select></label>
+        <div class="agent-token-page-controls">
+            <button type="button" id="agent-token-page-prev" aria-label="Página anterior" title="Página anterior"><i data-lucide="chevron-left"></i></button>
+            <span id="agent-token-page-numbers"></span>
+            <button type="button" id="agent-token-page-next" aria-label="Próxima página" title="Próxima página"><i data-lucide="chevron-right"></i></button>
+        </div>
+    </nav>
 </section>
 
 <div id="copy-feedback" class="copy-feedback" hidden>Copiado</div>
@@ -469,6 +447,7 @@
 
 {% block scripts %}
 <script src="{% static 'js/agent_install_discovery.js' %}" defer></script>
+<script src="{% static 'js/agent_install_workflow.js' %}" defer></script>
 <script>
     window.addEventListener("DOMContentLoaded", function () {
         if (window.lucide && typeof window.lucide.createIcons === "function") {
