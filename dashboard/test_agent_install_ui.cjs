@@ -26,6 +26,8 @@ function setup(initial) {
     });
     let scans = 0;
     let preflights = 0;
+    let installs = 0;
+    let installBody;
     let nextScan;
     function Node(tag) {
         this.tag = tag;
@@ -41,12 +43,18 @@ function setup(initial) {
         set(value) { this.text = String(value); },
     });
     Object.defineProperty(Node.prototype, 'firstElementChild', { get() { return this.children[0]; } });
-    Node.prototype.appendChild = function (child) { this.children.push(child); return child; };
-    Node.prototype.append = function (...children) { this.children.push(...children); };
-    Node.prototype.replaceChildren = function (...children) { this.children = children.filter(Boolean); };
+    Node.prototype.appendChild = function (child) { this.children.push(child); child.parent = this; return child; };
+    Node.prototype.append = function (...children) { children.forEach((child) => this.appendChild(child)); };
+    Node.prototype.replaceChildren = function (...children) { this.children = []; this.append(...children.filter(Boolean)); };
+    Node.prototype.remove = function () { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); };
     Node.prototype.addEventListener = function (type, callback) { this.listeners[type] = callback; };
     Node.prototype.setAttribute = function (name, value) { this[name] = value; };
     Node.prototype.querySelector = function () { return { value: 'synthetic-csrf' }; };
+    Node.prototype.querySelectorAll = function (selector) {
+        return this.children.flatMap((child) => [
+            ...(selector === 'input' && child.tag === 'input' ? [child] : []), ...child.querySelectorAll(selector),
+        ]);
+    };
     Node.prototype.focus = function () {};
     const document = {
         getElementById(id) { if (!ids.has(id)) ids.set(id, new Node(id)); return ids.get(id); },
@@ -57,6 +65,7 @@ function setup(initial) {
     const root = document.getElementById('ad-discovery');
     root.dataset.scanUrl = '/scan/';
     root.dataset.preflightUrl = '/preflight/';
+    root.dataset.installUrl = '/install/';
     ids.set('ad-ou-filter', new Node('select'));
     ids.get('ad-ou-filter').appendChild(new Node('option'));
     ids.set('ad-os-filter', new Node('select'));
@@ -64,9 +73,12 @@ function setup(initial) {
     ids.set('ad-page-size', new Node('select'));
     ids.get('ad-page-size').value = '10';
     vm.runInNewContext(script, {
-        document, window: { lucide: { createIcons() {} } },
-        fetch: async (url) => {
+        document, window: { lucide: { createIcons() {} }, setTimeout() { return 1; }, clearTimeout() {} },
+        FormData: class { constructor() { this.fields = {}; } append(key, value) { this.fields[key] = value; } },
+        fetch: async (url, options) => {
             if (url === '/preflight/') { preflights++; return { ok: true, json: async () => ({ status: 'READY', checks: {} }) }; }
+            if (url === '/install/') { installs++; installBody = options.body.fields; return { ok: true, json: async () => ({ status_url: '/agent-install/install-jobs/synthetic/' }) }; }
+            if (url === '/agent-install/install-jobs/synthetic/') return { ok: true, json: async () => ({ status: 'COMPLETED', first_heartbeat_at: '2026-10-03T12:00:00Z', endpoint_url: '/endpoints/synthetic/' }) };
             scans++;
             if (nextScan) return nextScan();
             return { ok: true, json: async () => ({ computers: initial, summary: summary(initial) }) };
@@ -75,6 +87,7 @@ function setup(initial) {
     document.DOMContentLoaded();
     return {
         ids, nodes, filterButtons, get scans() { return scans; }, get preflights() { return preflights; },
+        get installs() { return installs; }, get installBody() { return installBody; },
         setNextScan(callback) { nextScan = callback; },
         refresh() { ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} }); },
         rows() { return ids.get('ad-computer-rows').children; },
@@ -184,4 +197,34 @@ test('selection is eligible, current-page only, persistent and single-target onl
     app.refresh();
     await tick();
     assert.equal(app.ids.get('ad-selected-count').textContent, '0 selecionados');
+});
+
+test('install requires READY, a second credential, and follows sanitized job status', async () => {
+    const app = setup([computer(1)]);
+    await tick();
+    app.rows()[0].children[0].children[0].checked = true;
+    app.rows()[0].children[0].children[0].listeners.change();
+    app.ids.get('ad-prepare-button').listeners.click();
+    const drawer = app.ids.get('ad-detail-content');
+    assert.equal(app.nodes.some((node) => node.text === 'Instalar NightOwl'), false);
+    const preflight = drawer.children.find((node) => node.className === 'ad-preflight-form');
+    const preflightPassword = preflight.children[1].children[0];
+    preflightPassword.value = 'synthetic-preflight-secret';
+    await preflight.listeners.submit({ preventDefault() {} });
+    assert.equal(preflightPassword.value, '');
+    const installButton = drawer.children.find((node) => node.text === 'Instalar NightOwl');
+    assert.ok(installButton);
+    installButton.listeners.click();
+    const installForm = drawer.children.find((node) => node.className === 'ad-preflight-form');
+    const installUser = installForm.children[0].children[0];
+    const installPassword = installForm.children[1].children[0];
+    installUser.value = 'synthetic-admin';
+    installPassword.value = 'synthetic-second-secret';
+    await installForm.listeners.submit({ preventDefault() {} });
+    await tick();
+    assert.equal(app.installs, 1);
+    assert.equal(app.installBody.password, 'synthetic-second-secret');
+    assert.equal(installPassword.value, '');
+    assert.match(drawer.textContent, /NightOwl instalado com sucesso/);
+    assert.equal(app.nodes.some((node) => node.tag === 'a' && node.href === '/endpoints/synthetic/'), true);
 });

@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
@@ -169,3 +170,25 @@ class TaskReminderLog(models.Model):
 
     def __str__(self):
         return f'{self.task} - {self.reminder_type} - {self.sent_to}'
+
+
+class RemoteInstallJob(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    target_hostname = models.CharField(max_length=255)
+    target_fqdn = models.CharField(max_length=512)
+    target_ad_dn = models.CharField(max_length=1024)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    status = models.CharField(max_length=32, default='QUEUED')
+    stage = models.CharField(max_length=32, default='QUEUED')
+    error_code = models.CharField(max_length=64, blank=True)
+    active_slot = models.CharField(max_length=16, unique=True, null=True, blank=True)
+    endpoint = models.ForeignKey('agents.AgentMachine', null=True, blank=True, on_delete=models.SET_NULL)
+    runner_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['target_fqdn', '-created_at'])]

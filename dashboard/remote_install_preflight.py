@@ -123,10 +123,21 @@ def _block_redirects(session):
     session.send = send_without_redirects
 
 
+def _new_winrm_protocol(fqdn, username, password):
+    from winrm.protocol import Protocol
+
+    protocol = Protocol(
+        endpoint=f'https://{fqdn}:{WINRM_PORT}/wsman', transport='ntlm',
+        username=username, password=password, server_cert_validation='validate',
+        proxy=None, operation_timeout_sec=3, read_timeout_sec=5,
+    )
+    _block_redirects(protocol.transport.build_session())
+    return protocol
+
+
 def _winrm_probe(fqdn, username, password):
     try:
         from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
-        from winrm.protocol import Protocol
     except ImportError:
         raise ProbeFailure('WINRM_CLIENT_UNAVAILABLE') from None
 
@@ -134,12 +145,7 @@ def _winrm_probe(fqdn, username, password):
     shell_id = None
     command_id = None
     try:
-        protocol = Protocol(
-            endpoint=f'https://{fqdn}:{WINRM_PORT}/wsman', transport='ntlm',
-            username=username, password=password, server_cert_validation='validate',
-            proxy=None, operation_timeout_sec=3, read_timeout_sec=5,
-        )
-        _block_redirects(protocol.transport.build_session())
+        protocol = _new_winrm_protocol(fqdn, username, password)
         deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
         shell_id = protocol.open_shell()
         encoded = base64.b64encode(_READ_ONLY_PROBE.encode('utf-16-le')).decode('ascii')
