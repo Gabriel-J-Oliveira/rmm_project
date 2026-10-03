@@ -233,12 +233,16 @@
     </div>
 </section>
 
-<section class="agent-command-layout" id="agent-command-generator">
-    <article class="panel agent-command-panel">
+<section class="agent-install-advanced" id="agent-command-generator" aria-label="Instalação manual avançada">
+    <button type="button" class="agent-advanced-toggle" id="agent-advanced-toggle" aria-expanded="false" aria-controls="agent-advanced-content">
+        <span><strong>Instalação manual avançada</strong><small>Gerador PowerShell, pacote do agente e informações técnicas.</small></span>
+        <i data-lucide="chevron-down" aria-hidden="true"></i>
+    </button>
+    <div class="agent-advanced-content" id="agent-advanced-content" hidden>
+    <section class="agent-command-panel" aria-labelledby="agent-command-title">
         <div class="panel-heading">
             <div>
-                <span class="section-kicker">Configura&ccedil;&atilde;o do comando</span>
-                <h2>Gerador PowerShell</h2>
+                <h2 id="agent-command-title">Gerador PowerShell</h2>
                 <p>Configure o modo de instala&ccedil;&atilde;o conforme o endpoint e copie o comando final.</p>
             </div>
             <div class="agent-mode-badges">
@@ -296,16 +300,16 @@
         </div>
 
         <div class="agent-context-alerts">
-            <div class="note-box" data-warning-localhost>
+            <div class="agent-advanced-note agent-advanced-warning" data-warning-localhost>
                 <strong>Ambiente:</strong> <code>127.0.0.1</code> s&oacute; deve ser usado quando o backend estiver na pr&oacute;pria m&aacute;quina.
             </div>
-            <div class="note-box">
+            <div class="agent-advanced-note">
                 Para instalar em outros endpoints, use DNS/IP acess&iacute;vel do servidor NightOwl. Caminho local s&oacute; funciona na pr&oacute;pria m&aacute;quina; para rede, use UNC ou HTTPS quando dispon&iacute;vel.
             </div>
-            <div class="note-box">
+            <div class="agent-advanced-note">
                 O modo servi&ccedil;o exige PowerShell como administrador. Para m&aacute;quinas fora do dom&iacute;nio, use HTTPS com certificado p&uacute;blico confi&aacute;vel.
             </div>
-            <div class="note-box">
+            <div class="agent-advanced-note">
                 O comando padr&atilde;o n&atilde;o inclui token. Se o backend exigir valida&ccedil;&atilde;o manual, o instalador abre uma janela local para colar o token gerado nesta tela.
             </div>
         </div>
@@ -317,16 +321,15 @@
             </div>
             <button class="copy-button" type="button" data-copy-target=".generated-command-block"><i data-lucide="copy"></i>Copiar comando</button>
         </div>
-    </article>
+    </section>
 
-    <aside class="panel agent-package-panel">
+    <section class="agent-package-panel" aria-labelledby="agent-package-title">
         <div class="panel-heading">
             <div>
-                <span class="section-kicker">Pacote</span>
-                <h2>Arquivos esperados</h2>
-                <p>Checklist informativo do pacote do agente.</p>
+                <h2 id="agent-package-title">Informações do pacote</h2>
             </div>
         </div>
+        <h3 class="agent-package-subheading">Arquivos esperados</h3>
         <ul class="agent-package-checklist">
             <li><i data-lucide="check"></i><span>NightOwl.Agent.Windows.zip</span></li>
             <li><i data-lucide="check"></i><span>Install-NightOwlAgentDotNet.ps1</span></li>
@@ -356,7 +359,8 @@
                 <dd>C:\RMM / RMM-Agent-Heartbeat</dd>
             </div>
         </dl>
-    </aside>
+    </section>
+    </div>
 </section>
 
 <section class="panel agent-token-list-panel">
@@ -448,6 +452,7 @@
 {% block scripts %}
 <script src="{% static 'js/agent_install_discovery.js' %}" defer></script>
 <script src="{% static 'js/agent_install_workflow.js' %}" defer></script>
+<script src="{% static 'js/agent_install_advanced.js' %}" defer></script>
 <script>
     window.addEventListener("DOMContentLoaded", function () {
         if (window.lucide && typeof window.lucide.createIcons === "function") {

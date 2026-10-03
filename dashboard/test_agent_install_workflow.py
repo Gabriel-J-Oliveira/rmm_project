@@ -32,6 +32,16 @@ class AgentInstallTokenTests(TestCase):
         self.assertContains(response, 'id="ad-scan-button" class="agent-secondary-button"')
         self.assertNotContains(response, 'class="panel how-to-panel"')
 
+    def test_advanced_manual_installation_is_collapsed_with_existing_controls(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="agent-advanced-toggle" aria-expanded="false" aria-controls="agent-advanced-content"')
+        self.assertContains(response, 'id="agent-advanced-content" hidden')
+        self.assertContains(response, 'js/agent_install_advanced.js')
+        self.assertContains(response, 'id="generated-install-command"')
+        self.assertContains(response, 'data-copy-target=".generated-command-block"')
+        self.assertContains(response, 'NightOwl.Agent.Windows.zip')
+
     def test_default_one_and_72_hours_are_accepted(self):
         for hours, expected in [(None, 2), ('1', 1), ('72', 72)]:
             before = timezone.now()
