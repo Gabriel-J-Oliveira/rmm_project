@@ -46,7 +46,8 @@ def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None):
     if endpoint is not None:
         fields['endpoint'] = endpoint
     if status in TERMINAL:
-        fields['active_slot'] = None
+        if status != 'OUTCOME_UNKNOWN':
+            fields['active_slot'] = None
         fields['finished_at'] = timezone.now()
     RemoteInstallJob.objects.filter(pk=job_id, active_slot='global').update(**fields)
 

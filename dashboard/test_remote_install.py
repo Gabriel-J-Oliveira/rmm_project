@@ -191,6 +191,8 @@ class RemoteInstallJobTests(TestCase):
                 remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
             job.refresh_from_db()
             self.assertEqual(job.status, expected)
+            self.assertEqual(job.active_slot, 'global' if expected == 'OUTCOME_UNKNOWN' else None)
+            job.delete()
 
     @override_settings(NIGHTOWL_AGENT_PUBLIC_SERVER_URL='https://nightowl.example.test',
                        NIGHTOWL_AGENT_INSTALLER_URL='https://nightowl.example.test/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1')
