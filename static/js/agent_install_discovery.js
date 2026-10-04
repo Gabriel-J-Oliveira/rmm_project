@@ -19,7 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const visibleCount = document.getElementById('ad-visible-count');
     const selectedCount = document.getElementById('ad-selected-count');
     const selectionNote = document.getElementById('ad-selection-note');
-    const selectVisible = document.getElementById('ad-select-visible');
     const prepareButton = document.getElementById('ad-prepare-button');
     const pageSummary = document.getElementById('ad-page-summary');
     const pageSizeInput = document.getElementById('ad-page-size');
@@ -46,6 +45,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function isEligible(computer) {
         return computer.selectable === true && computer.enabled === true &&
             computer.correlation_status === 'UNMANAGED';
+    }
+
+    function unavailableReason(computer) {
+        if (computer.correlation_status === 'MANAGED') return 'Já gerenciado';
+        if (computer.correlation_status === 'CONFLICT') return 'Correlação ambígua';
+        if (computer.enabled === false) return 'Desabilitado no AD';
+        return 'Indisponível para instalação';
     }
 
     function element(tag, className, value) {
@@ -100,14 +106,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return td;
     }
 
-    function updateSelection(visible) {
+    function updateSelection() {
         selectedCount.textContent = `${selected.size} selecionado${selected.size === 1 ? '' : 's'}`;
         prepareButton.disabled = selected.size !== 1;
-        selectionNote.textContent = selected.size > 1 ? 'Preflight individual nesta versão.' : '';
-        const eligible = visible.filter(isEligible);
-        selectVisible.disabled = eligible.length === 0;
-        selectVisible.checked = eligible.length > 0 && eligible.every((computer) => selected.has(selectionKey(computer)));
-        selectVisible.indeterminate = eligible.some((computer) => selected.has(selectionKey(computer))) && !selectVisible.checked;
+        selectionNote.textContent = '';
     }
 
     function renderPagination(total, pages, pageSize) {
@@ -146,14 +148,18 @@ document.addEventListener('DOMContentLoaded', () => {
             checkbox.disabled = !isEligible(computer);
             checkbox.checked = selected.has(selectionKey(computer));
             checkbox.setAttribute('aria-label', `Selecionar ${computer.hostname || computer.fqdn}`);
-            checkbox.title = isEligible(computer) ? 'Selecionar' : 'Somente computadores habilitados, sem NightOwl e sem conflito';
+            checkbox.title = isEligible(computer) ? 'Selecionar' : unavailableReason(computer);
             checkbox.addEventListener('change', () => {
                 if (!isEligible(computer)) return;
-                if (checkbox.checked) selected.add(selectionKey(computer));
+                if (checkbox.checked) {
+                    selected.clear();
+                    selected.add(selectionKey(computer));
+                }
                 else selected.delete(selectionKey(computer));
-                updateSelection(visible);
+                render();
             });
             selectCell.appendChild(checkbox);
+            if (!isEligible(computer)) selectCell.appendChild(element('small', 'ad-selection-reason', unavailableReason(computer)));
             tr.appendChild(selectCell);
             const nameCell = cell(tr, computer.hostname, computer.fqdn || computer.ad_name);
             const detailButton = element('button', 'ad-detail-link', 'Detalhes');
@@ -175,13 +181,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 link.href = computer.endpoint_url;
                 action.appendChild(link);
             } else if (isEligible(computer)) {
-                const install = element('button', 'ad-install-unavailable', 'Instalar');
-                install.type = 'button';
-                install.disabled = true;
-                install.title = 'Deploy remoto será habilitado na próxima etapa';
-                action.appendChild(install);
+                const prepare = element('button', 'agent-secondary-button', 'Preparar');
+                prepare.type = 'button';
+                prepare.addEventListener('click', () => {
+                    selected.clear();
+                    selected.add(selectionKey(computer));
+                    render();
+                    prepareButton.click();
+                });
+                action.appendChild(prepare);
             } else {
-                action.appendChild(element('span', '', '—'));
+                action.appendChild(element('span', '', unavailableReason(computer)));
             }
             tr.appendChild(action);
             table.appendChild(tr);
@@ -193,7 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.appendChild(td);
             table.appendChild(tr);
         }
-        updateSelection(visible);
+        updateSelection();
         renderPagination(filtered.length, pages, pageSize);
     }
 
@@ -301,16 +311,6 @@ document.addEventListener('DOMContentLoaded', () => {
     pageSizeInput.addEventListener('change', () => { page = 1; render(); });
     pagePrev.addEventListener('click', () => { if (page > 1) { page--; render(); } });
     pageNext.addEventListener('click', () => { page++; render(); });
-    selectVisible.addEventListener('change', () => {
-        const pageSize = Number(pageSizeInput.value) || 10;
-        for (const computer of visibleItems().slice((page - 1) * pageSize, page * pageSize)) {
-            if (isEligible(computer)) {
-                if (selectVisible.checked) selected.add(selectionKey(computer));
-                else selected.delete(selectionKey(computer));
-            }
-        }
-        render();
-    });
     prepareButton.addEventListener('click', () => {
         drawerContent.replaceChildren();
         if (selected.size !== 1) {

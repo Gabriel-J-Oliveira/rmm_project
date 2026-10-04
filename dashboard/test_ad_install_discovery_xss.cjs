@@ -79,8 +79,9 @@ test('AD values render as text in table and details', async () => {
     }
     assert.equal(nodes.some((node) => ['img', 'script', 'b'].includes(node.tag)), false);
 
-    ids.get('ad-select-visible').checked = true;
-    ids.get('ad-select-visible').listeners.change();
+    const checkbox = ids.get('ad-computer-rows').children[0].children[0].children[0];
+    checkbox.checked = true;
+    checkbox.listeners.change();
     ids.get('ad-prepare-button').listeners.click();
     const preflightForm = nodes.find((node) => node.tag === 'form' && node.className === 'ad-preflight-form');
     assert.ok(preflightForm);

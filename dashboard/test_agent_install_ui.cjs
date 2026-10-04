@@ -56,6 +56,7 @@ function setup(initial) {
         ]);
     };
     Node.prototype.focus = function () {};
+    Node.prototype.click = function () { if (!this.disabled) this.listeners.click?.({ preventDefault() {} }); };
     const document = {
         getElementById(id) { if (!ids.has(id)) ids.set(id, new Node(id)); return ids.get(id); },
         createElement(tag) { return new Node(tag); },
@@ -153,7 +154,7 @@ test('pagination follows whole-dataset filters and search', async () => {
     assert.equal(app.rows().length, 50);
 });
 
-test('selection is eligible, current-page only, persistent and single-target only', async () => {
+test('selection stays unitary and explains unavailable targets', async () => {
     const items = Array.from({ length: 12 }, (_, index) => computer(index + 1));
     items[1] = computer(2, { correlation_status: 'MANAGED', selectable: false });
     items[2] = computer(3, { enabled: false, selectable: false });
@@ -162,28 +163,21 @@ test('selection is eligible, current-page only, persistent and single-target onl
     await tick();
     app.clickFilter('all');
     assert.deepEqual(app.rows().slice(1, 4).map((row) => row.children[0].children[0].disabled), [true, true, true]);
-    app.ids.get('ad-select-visible').checked = true;
-    app.ids.get('ad-select-visible').listeners.change();
-    assert.equal(app.ids.get('ad-selected-count').textContent, '7 selecionados');
-    assert.equal(app.ids.get('ad-prepare-button').disabled, true);
-    assert.match(app.ids.get('ad-selection-note').textContent, /individual/);
-    app.ids.get('ad-prepare-button').listeners.click();
-    assert.equal(app.preflights, 0);
-    app.ids.get('ad-page-next').listeners.click();
-    assert.equal(app.ids.get('ad-selected-count').textContent, '7 selecionados');
-    app.ids.get('ad-select-visible').checked = true;
-    app.ids.get('ad-select-visible').listeners.change();
-    assert.equal(app.ids.get('ad-selected-count').textContent, '9 selecionados');
-    app.ids.get('ad-page-prev').listeners.click();
-    app.ids.get('ad-select-visible').checked = false;
-    app.ids.get('ad-select-visible').listeners.change();
-    assert.equal(app.ids.get('ad-selected-count').textContent, '2 selecionados');
-    app.ids.get('ad-page-next').listeners.click();
-    app.rows()[0].children[0].children[0].checked = false;
+    assert.match(app.rows()[1].children[0].textContent, /Já gerenciado/);
+    assert.match(app.rows()[2].children[0].textContent, /Desabilitado no AD/);
+    assert.match(app.rows()[3].children[0].textContent, /Correlação ambígua/);
+    app.rows()[0].children[0].children[0].checked = true;
     app.rows()[0].children[0].children[0].listeners.change();
     assert.equal(app.ids.get('ad-selected-count').textContent, '1 selecionado');
     assert.equal(app.ids.get('ad-prepare-button').disabled, false);
-    app.ids.get('ad-prepare-button').listeners.click();
+    app.rows()[4].children[0].children[0].checked = true;
+    app.rows()[4].children[0].children[0].listeners.change();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '1 selecionado');
+    assert.equal(app.rows()[0].children[0].children[0].checked, false);
+    assert.equal(app.rows()[4].children[0].children[0].checked, true);
+    app.ids.get('ad-page-next').listeners.click();
+    assert.equal(app.ids.get('ad-selected-count').textContent, '1 selecionado');
+    app.rows()[0].children[10].children[0].click();
     assert.ok(app.nodes.some((node) => node.className === 'ad-preflight-form'));
     assert.equal(app.preflights, 0);
     app.setNextScan(() => Promise.resolve({ ok: true, json: async () => ({
