@@ -89,7 +89,7 @@ class RemoteInstallJobTests(TestCase):
         self.assertEqual(job.active_slot, 'global')
         with mock.patch.object(remote_install, '_ad_target', side_effect=lambda fqdn: {
                 **COMPUTER, 'fqdn': fqdn}):
-            with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_ALREADY_ATTEMPTED'):
+            with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_ALREADY_RUNNING'):
                 remote_install.create_remote_install_job(COMPUTER['fqdn'], self.user)
             with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_ALREADY_RUNNING'):
                 remote_install.create_remote_install_job('another.control.local', self.user)

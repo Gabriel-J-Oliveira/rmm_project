@@ -83,7 +83,7 @@ def install_ad_computer(request):
     if not username.strip() or not password or len(username) > 256 or len(password) > 512:
         return JsonResponse({'error_code': 'CREDENTIAL_REQUIRED'}, status=400)
     try:
-        job = create_remote_install_job(fqdn, request.user)
+        job = create_remote_install_job(fqdn, request.user, username=username, password=password)
         start_remote_install(job, username, password)
     except (ProbeFailure, InstallFailure) as exc:
         return JsonResponse({'error_code': exc.code}, status=409)

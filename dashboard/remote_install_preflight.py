@@ -300,4 +300,10 @@ def run_remote_install_preflight(fqdn, username, password):
     windows = {'hostname': hostname[:120], 'name': name, 'build': build,
                'architecture': architecture if architecture in ('x64', 'x86') else 'unknown',
                'powershell_major': ps_major}
-    return _result(checks, target=target, windows=windows)
+    result = _result(checks, target=target, windows=windows)
+    result['nightowl_absence'] = {
+        'service_present': service_present if type(service_present) is bool else None,
+        'directory_present': directory_present if type(directory_present) is bool else None,
+        'correlation': correlation,
+    }
+    return result

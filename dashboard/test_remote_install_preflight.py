@@ -102,6 +102,9 @@ class RemoteInstallPreflightTests(TestCase):
         result = self.run_probe()
         self.assertEqual(result['status'], 'READY')
         self.assertTrue(all(item['status'] == 'PASS' for item in result['checks'].values()))
+        self.assertEqual(result['nightowl_absence'], {
+            'service_present': False, 'directory_present': False, 'correlation': 'UNMANAGED',
+        })
         self.assertNotIn(SENTINEL, json.dumps(result))
         self.remote_mock.assert_called_once_with('lab-01.control.local', 'CONTROL\\Admin', SENTINEL)
 

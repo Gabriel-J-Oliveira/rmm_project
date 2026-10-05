@@ -22,7 +22,7 @@ from dashboard.models import RemoteInstallJob
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
-    ProbeFailure, _ad_target, _new_winrm_protocol, run_remote_install_preflight,
+    CHECKS, ProbeFailure, _ad_target, _new_winrm_protocol, run_remote_install_preflight,
 )
 
 
@@ -110,21 +110,82 @@ def reconcile_stale_jobs():
     )
 
 
-def create_remote_install_job(fqdn, actor):
+HISTORICAL_BLOCKERS = ('COMPLETED', 'INSTALLED_UNVERIFIED', 'OUTCOME_UNKNOWN')
+
+
+def _absence_proof(computer, username, password):
+    if not username or not password:
+        raise InstallFailure('INSTALL_RECONCILIATION_REQUIRED')
+    try:
+        proof = run_remote_install_preflight(computer['fqdn'], username, password)
+    except Exception:
+        raise InstallFailure('INSTALL_RECONCILIATION_FAILED') from None
+    if not isinstance(proof, dict):
+        raise InstallFailure('INSTALL_RECONCILIATION_FAILED')
+    checks = proof.get('checks')
+    absence = proof.get('nightowl_absence')
+    target = proof.get('target')
+    if (proof.get('status') != 'READY' or not isinstance(checks, dict)
+            or any(not isinstance(checks.get(key), dict) or checks[key].get('status') != 'PASS'
+                   for key in CHECKS)
+            or not isinstance(absence, dict)
+            or absence.get('service_present') is not False
+            or absence.get('directory_present') is not False
+            or absence.get('correlation') != 'UNMANAGED'
+            or not isinstance(target, dict)
+            or normalize_fqdn(target.get('fqdn')) != normalize_fqdn(computer['fqdn'])):
+        raise InstallFailure('INSTALL_RECONCILIATION_FAILED')
+    # A fresh AD lookup also rechecks current endpoint correlation. Do not
+    # let credentials/probe output enter the persisted reconciliation record.
+    current = _ad_target(computer['fqdn'])
+    if any(current.get(key) != computer.get(key)
+           for key in ('fqdn', 'hostname', 'distinguished_name', 'sid')):
+        raise InstallFailure('TARGET_CHANGED')
+
+
+def create_remote_install_job(fqdn, actor, *, username=None, password=None):
     computer = _ad_target(fqdn)
     reconcile_stale_jobs()
     normalized = normalize_fqdn(computer['fqdn'])
-    if RemoteInstallJob.objects.filter(target_fqdn=normalized,
-                                       status__in=('COMPLETED', 'INSTALLED_UNVERIFIED', 'OUTCOME_UNKNOWN')).exists():
-        raise InstallFailure('INSTALL_ALREADY_ATTEMPTED')
+    if RemoteInstallJob.objects.filter(Q(active_slot='global') | Q(status__in=('QUEUED', 'RUNNING'))).exists():
+        raise InstallFailure('INSTALL_ALREADY_RUNNING')
+    historical = RemoteInstallJob.objects.filter(target_fqdn=normalized, status__in=HISTORICAL_BLOCKERS)
+    blocker_snapshot = dict(historical.values_list('pk', 'updated_at'))
+    if blocker_snapshot:
+        _absence_proof(computer, username, password)
     try:
         with transaction.atomic():
-            return RemoteInstallJob.objects.create(
+            blockers = list(historical.select_for_update().order_by('pk'))
+            if {job.pk: job.updated_at for job in blockers} != blocker_snapshot:
+                raise InstallFailure('INSTALL_RECONCILIATION_REQUIRED')
+            if blockers:
+                try:
+                    _, correlation, _ = _match_machine(computer, _machine_maps())
+                except Exception:
+                    raise InstallFailure('CORRELATION_UNAVAILABLE') from None
+                if correlation != 'UNMANAGED':
+                    raise InstallFailure('TARGET_MANAGED_OR_CONFLICT')
+            # The unique global slot is the final admission gate, including
+            # requests whose absence probes completed concurrently.
+            job = RemoteInstallJob.objects.create(
                 target_hostname=computer['hostname'], target_fqdn=normalized,
                 target_ad_dn=computer['distinguished_name'], requested_by=actor,
                 active_slot='global', runner_heartbeat_at=timezone.now(),
                 diagnostics=_initial_diagnostics(),
             )
+            for previous in blockers:
+                data = dict(previous.diagnostics or {})
+                reconciliation = {
+                    'status': 'TARGET_ABSENCE_CONFIRMED',
+                    'reconciled_at': timezone.now().isoformat(),
+                    'reconciled_by_user_id': actor.pk,
+                    'new_job_id': str(job.pk),
+                }
+                data['reconciliation'] = reconciliation
+                data['reconciliation_history'] = [*data.get('reconciliation_history', []), reconciliation]
+                previous.diagnostics = data
+                previous.save(update_fields=['diagnostics', 'updated_at'])
+            return job
     except IntegrityError:
         raise InstallFailure('INSTALL_ALREADY_RUNNING') from None
 
