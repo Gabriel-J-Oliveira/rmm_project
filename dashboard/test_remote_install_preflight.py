@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import socket
 import ssl
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from base64 import b64encode
@@ -12,7 +14,7 @@ import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from requests.adapters import BaseAdapter
 from requests.models import Response
 from requests_ntlm import HttpNtlmAuth
@@ -346,19 +348,113 @@ class WinRMTrustTests(TestCase):
                             preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
                         protocol.assert_not_called()
 
-    def test_no_ca_or_only_expired_or_future_ca_fails_closed(self):
-        dates = (
-            [],
-            [{'notBefore': 'Jan  1 00:00:00 2000 GMT', 'notAfter': 'Jan  1 00:00:00 2001 GMT'}],
-            [{'notBefore': 'Jan  1 00:00:00 2090 GMT', 'notAfter': 'Jan  1 00:00:00 2091 GMT'}],
+    def test_no_loadable_ca_fails_closed(self):
+        with mock.patch.object(preflight.ssl, 'SSLContext') as context, \
+                mock.patch('winrm.protocol.Protocol') as protocol:
+            context.return_value.get_ca_certs.return_value = []
+            with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+            protocol.assert_not_called()
+
+    def make_ca(self, name, expired=False):
+        key = ec.generate_private_key(ec.SECP256R1())
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+        now = datetime.now(timezone.utc)
+        certificate = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                       .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                       .not_valid_before(now - timedelta(days=30))
+                       .not_valid_after(now + timedelta(days=-1 if expired else 30))
+                       .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                       .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
+                                                   key_encipherment=False, data_encipherment=False,
+                                                   key_agreement=False, key_cert_sign=True, crl_sign=True,
+                                                   encipher_only=False, decipher_only=False), critical=True)
+                       .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+                       .sign(key, hashes.SHA256()))
+        return key, certificate
+
+    def test_unrelated_expired_roots_are_accepted(self):
+        for valid_count, expired_count in ((1, 1), (2, 2)):
+            with self.subTest(valid=valid_count, expired=expired_count), TemporaryDirectory() as directory:
+                roots = [self.make_ca(f'valid-{i}')[1] for i in range(valid_count)]
+                roots += [self.make_ca(f'expired-{i}', expired=True)[1] for i in range(expired_count)]
+                bundle = Path(directory) / 'mixed-roots.pem'
+                bundle.write_bytes(b''.join(c.public_bytes(serialization.Encoding.PEM) for c in roots))
+                with override_settings(WINRM_CA_TRUST_PATH=str(bundle)):
+                    self.assertEqual(preflight._winrm_ca_trust_path(), str(bundle.resolve()))
+                    context = ssl.create_default_context(cafile=str(bundle))
+                    self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+                    self.assertTrue(context.check_hostname)
+
+    def test_tls_runtime_validates_server_chain_hostname_and_expiration(self):
+        trusted_key, trusted_ca = self.make_ca('trusted-root')
+        other_key, other_ca = self.make_ca('untrusted-root')
+        expired_root = self.make_ca('unused-expired-root', expired=True)[1]
+        cases = (
+            ('trusted', trusted_key, trusted_ca, 'lab-01.control.local', False, None),
+            ('untrusted', other_key, other_ca, 'lab-01.control.local', False, 20),
+            ('hostname', trusted_key, trusted_ca, 'other.control.local', False, 62),
+            ('expired', trusted_key, trusted_ca, 'lab-01.control.local', True, 10),
         )
-        for certificates in dates:
-            with self.subTest(certificates=certificates), mock.patch.object(preflight.ssl, 'SSLContext') as context, \
-                    mock.patch('winrm.protocol.Protocol') as protocol:
-                context.return_value.get_ca_certs.return_value = certificates
-                with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
-                    preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
-                protocol.assert_not_called()
+        for label, issuer_key, issuer, hostname, expired, error_code in cases:
+            with self.subTest(case=label), TemporaryDirectory() as directory:
+                key = ec.generate_private_key(ec.SECP256R1())
+                now = datetime.now(timezone.utc)
+                leaf = (x509.CertificateBuilder()
+                        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)]))
+                        .issuer_name(issuer.subject).public_key(key.public_key())
+                        .serial_number(x509.random_serial_number())
+                        .not_valid_before(now - timedelta(days=2))
+                        .not_valid_after(now + timedelta(days=-1 if expired else 1))
+                        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()), critical=False)
+                        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                        .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname)]), critical=False)
+                        .sign(issuer_key, hashes.SHA256()))
+                root = Path(directory) / 'ca.pem'
+                cert = Path(directory) / 'server.pem'
+                private = Path(directory) / 'server-key.pem'
+                root.write_bytes(trusted_ca.public_bytes(serialization.Encoding.PEM)
+                                 + expired_root.public_bytes(serialization.Encoding.PEM))
+                cert.write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
+                private.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                                      serialization.PrivateFormat.PKCS8,
+                                                      serialization.NoEncryption()))
+                with override_settings(WINRM_CA_TRUST_PATH=str(root)):
+                    client_context = ssl.create_default_context(cafile=preflight._winrm_ca_trust_path())
+                server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                server_context.load_cert_chain(str(cert), str(private))
+                client_socket, server_socket = socket.socketpair()
+                client_socket.settimeout(3)
+                server_socket.settimeout(3)
+                errors = []
+
+                def serve():
+                    try:
+                        with server_socket, server_context.wrap_socket(server_socket, server_side=True) as secured:
+                            if secured.recv(1) == b'1':
+                                secured.sendall(b'1')
+                    except (ssl.SSLError, ConnectionResetError):
+                        pass  # The client rejects the intentionally invalid certificate.
+                    except Exception as exc:
+                        errors.append(type(exc).__name__)
+
+                thread = threading.Thread(target=serve)
+                thread.start()
+                try:
+                    with client_socket:
+                        if error_code is None:
+                            with client_context.wrap_socket(client_socket, server_hostname='lab-01.control.local') as secured:
+                                secured.sendall(b'1')
+                                self.assertEqual(secured.recv(1), b'1')
+                        else:
+                            with self.assertRaises(ssl.SSLCertVerificationError) as raised:
+                                client_context.wrap_socket(client_socket, server_hostname='lab-01.control.local')
+                            self.assertEqual(raised.exception.verify_code, error_code)
+                finally:
+                    thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
 
     def test_bundle_with_non_certificate_content_fails_closed(self):
         with TemporaryDirectory() as directory:
