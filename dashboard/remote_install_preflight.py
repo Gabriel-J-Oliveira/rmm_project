@@ -137,9 +137,18 @@ def _winrm_ca_trust_path():
         if not path.is_absolute() or not path.is_file():
             raise OSError()
         with path.open('rb') as bundle:
-            if not bundle.read(1):
+            contents = bundle.read()
+            certificates = re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', contents, re.S)
+            remainder = re.sub(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', b'', contents, flags=re.S)
+            remainder = re.sub(rb'(?m)^[ \t]*#[^\r\n]*', b'', remainder)
+            if not certificates or remainder.strip():
                 raise OSError()
-        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cafile=str(path))
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cafile=str(path))
+        now = time.time()
+        if not any(ssl.cert_time_to_seconds(ca['notBefore']) <= now < ssl.cert_time_to_seconds(ca['notAfter'])
+                   for ca in context.get_ca_certs()):
+            raise ValueError()
     except (OSError, ssl.SSLError, ValueError):
         raise ProbeFailure('WINRM_CA_TRUST_INVALID') from None
     return os.path.realpath(path)

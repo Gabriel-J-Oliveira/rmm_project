@@ -304,6 +304,39 @@ class WinRMProbeTests(TestCase):
 
 @override_settings(WINRM_CA_TRUST_PATH=requests.certs.where())
 class WinRMTrustTests(TestCase):
+    def test_dedicated_public_pem_bundle_is_used_without_network(self):
+        with TemporaryDirectory() as directory:
+            bundle = Path(directory) / 'corporate-current.pem'
+            bundle.write_bytes(Path(requests.certs.where()).read_bytes())
+            with override_settings(WINRM_CA_TRUST_PATH=str(bundle)):
+                protocol = preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+                self.assertEqual(protocol.transport.session.verify, str(bundle.resolve()))
+                self.assertEqual(protocol.transport.server_cert_validation, 'validate')
+                protocol.transport.session.close()
+
+    def test_no_ca_or_only_expired_or_future_ca_fails_closed(self):
+        dates = (
+            [],
+            [{'notBefore': 'Jan  1 00:00:00 2000 GMT', 'notAfter': 'Jan  1 00:00:00 2001 GMT'}],
+            [{'notBefore': 'Jan  1 00:00:00 2090 GMT', 'notAfter': 'Jan  1 00:00:00 2091 GMT'}],
+        )
+        for certificates in dates:
+            with self.subTest(certificates=certificates), mock.patch.object(preflight.ssl, 'SSLContext') as context, \
+                    mock.patch('winrm.protocol.Protocol') as protocol:
+                context.return_value.get_ca_certs.return_value = certificates
+                with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                    preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+                protocol.assert_not_called()
+
+    def test_bundle_with_non_certificate_content_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            bundle = Path(directory) / 'mixed.pem'
+            bundle.write_bytes(Path(requests.certs.where()).read_bytes() + b'UNEXPECTED_CONTENT')
+            with override_settings(WINRM_CA_TRUST_PATH=str(bundle)), mock.patch('winrm.protocol.Protocol') as protocol:
+                with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                    preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+                protocol.assert_not_called()
+
     def test_real_pywinrm_session_uses_explicit_bundle_and_validation(self):
         protocol = preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
         session = protocol.transport.session
