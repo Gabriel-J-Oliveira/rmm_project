@@ -434,8 +434,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         const response = await fetch(root.dataset.installUrl, {
                             method: 'POST', credentials: 'same-origin', cache: 'no-store', body,
                         });
-                        const data = await response.json();
-                        if (!response.ok || !data.status_url || !data.status_url.startsWith('/agent-install/install-jobs/')) {
+                        let data;
+                        try {
+                            data = await response.json();
+                        } catch (_parseError) {
+                            progress.textContent = 'Não foi possível iniciar ou confirmar a instalação. Consulte o operador antes de repetir.';
+                            return;
+                        }
+                        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                            progress.textContent = 'Não foi possível iniciar ou confirmar a instalação. Consulte o operador antes de repetir.';
+                            return;
+                        }
+                        if (!response.ok || typeof data.status_url !== 'string' || !data.status_url.startsWith('/agent-install/install-jobs/')) {
                             progress.textContent = data.error_code || 'Instalação não iniciada.';
                             confirm.disabled = false;
                             return;

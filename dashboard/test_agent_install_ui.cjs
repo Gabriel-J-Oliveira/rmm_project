@@ -29,6 +29,7 @@ function setup(initial) {
     let installs = 0;
     let installBody;
     let nextScan;
+    let nextInstall;
     function Node(tag) {
         this.tag = tag;
         this.children = [];
@@ -78,7 +79,11 @@ function setup(initial) {
         FormData: class { constructor() { this.fields = {}; } append(key, value) { this.fields[key] = value; } },
         fetch: async (url, options) => {
             if (url === '/preflight/') { preflights++; return { ok: true, json: async () => ({ status: 'READY', checks: {} }) }; }
-            if (url === '/install/') { installs++; installBody = options.body.fields; return { ok: true, json: async () => ({ status_url: '/agent-install/install-jobs/synthetic/' }) }; }
+            if (url === '/install/') {
+                installs++; installBody = options.body.fields;
+                if (nextInstall) return nextInstall();
+                return { ok: true, json: async () => ({ status_url: '/agent-install/install-jobs/synthetic/' }) };
+            }
             if (url === '/agent-install/install-jobs/synthetic/') return { ok: true, json: async () => ({ status: 'COMPLETED', first_heartbeat_at: '2026-10-03T12:00:00Z', endpoint_url: '/endpoints/synthetic/' }) };
             scans++;
             if (nextScan) return nextScan();
@@ -90,6 +95,7 @@ function setup(initial) {
         ids, nodes, filterButtons, get scans() { return scans; }, get preflights() { return preflights; },
         get installs() { return installs; }, get installBody() { return installBody; },
         setNextScan(callback) { nextScan = callback; },
+        setNextInstall(callback) { nextInstall = callback; },
         refresh() { ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} }); },
         rows() { return ids.get('ad-computer-rows').children; },
         clickFilter(name) { filterButtons.find((button) => button.dataset.adFilter === name).listeners.click(); },
@@ -221,4 +227,35 @@ test('install requires READY, a second credential, and follows sanitized job sta
     assert.equal(installPassword.value, '');
     assert.match(drawer.textContent, /NightOwl instalado com sucesso/);
     assert.equal(app.nodes.some((node) => node.tag === 'a' && node.href === '/endpoints/synthetic/'), true);
+});
+
+test('install handles non-JSON and malformed responses without exposing HTML or credentials', async () => {
+    for (const response of [
+        { ok: false, json: async () => { throw new SyntaxError('<html>PRIVATE_TRACE</html>'); } },
+        { ok: false, json: async () => null },
+        { ok: true, json: async () => ['unexpected'] },
+        { ok: true, json: async () => ({ status_url: 123 }) },
+    ]) {
+        const app = setup([computer(1)]);
+        await tick();
+        const checkbox = app.rows()[0].children[0].children[0];
+        checkbox.checked = true; checkbox.listeners.change();
+        app.ids.get('ad-prepare-button').listeners.click();
+        const drawer = app.ids.get('ad-detail-content');
+        const preflight = drawer.children.find((node) => node.className === 'ad-preflight-form');
+        await preflight.listeners.submit({ preventDefault() {} });
+        drawer.children.find((node) => node.text === 'Instalar NightOwl').listeners.click();
+        const form = drawer.children.find((node) => node.className === 'ad-preflight-form');
+        form.children[0].children[0].value = 'synthetic-admin';
+        const password = form.children[1].children[0];
+        password.value = 'SUPER_SECRET_REMOTE_INSTALL_91827';
+        app.setNextInstall(() => response);
+        await form.listeners.submit({ preventDefault() {} });
+        assert.equal(app.installs, 1);
+        assert.equal(password.value, '');
+        assert.match(drawer.textContent, /instalação/i);
+        assert.equal(drawer.textContent.includes('PRIVATE_TRACE'), false);
+        assert.equal(drawer.textContent.includes('SUPER_SECRET_REMOTE_INSTALL_91827'), false);
+        assert.equal(drawer.textContent.includes('NightOwl instalado com sucesso'), false);
+    }
 });

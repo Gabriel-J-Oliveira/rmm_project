@@ -6,6 +6,9 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
+from django.middleware.csrf import _get_new_csrf_string
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 
@@ -237,6 +240,88 @@ class RemoteInstallRouteTests(TestCase):
         self.url = reverse('agent-install-ad-install')
         self.data = {'csrfmiddlewaretoken': 'synthetic-csrf', 'fqdn': COMPUTER['fqdn'],
                      'username': 'admin', 'password': SENTINEL}
+
+    def csrf_client(self):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.user)
+        token = _get_new_csrf_string()
+        client.cookies['csrftoken'] = token
+        return client, {**self.data, 'csrfmiddlewaretoken': token}
+
+    @override_settings(ALLOWED_HOSTS=['testserver'], CSRF_TRUSTED_ORIGINS=['https://testserver'])
+    def test_real_multipart_csrf_creates_job_and_returns_json_without_secret(self):
+        client, data = self.csrf_client()
+        with mock.patch('dashboard.remote_install._ad_target', return_value=COMPUTER), \
+                mock.patch('dashboard.ad_install_views.start_remote_install') as runner, \
+                mock.patch.object(cache, 'set') as cache_set, self.assertNoLogs(level='ERROR'):
+            response = client.post(self.url, data, secure=True, HTTP_ORIGIN='https://testserver')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.wsgi_request.content_type, 'multipart/form-data')
+        # Accessing body here would still fail: success proves the view did not re-read it.
+        from django.http.request import RawPostDataException
+        with self.assertRaises(RawPostDataException):
+            _ = response.wsgi_request.body
+        job = RemoteInstallJob.objects.get()
+        runner.assert_called_once_with(job, 'admin', SENTINEL)
+        self.assertEqual(response.json()['job_id'], str(job.pk))
+        self.assertEqual(response.json()['status_url'], reverse('agent-install-job-status', args=[job.pk]))
+        self.assertNotIn(SENTINEL, response.content.decode())
+        self.assertNotIn(SENTINEL, json.dumps(dict(client.session)))
+        self.assertNotIn(SENTINEL, json.dumps(list(RemoteInstallJob.objects.values()), default=str))
+        cache_set.assert_not_called()
+
+    @override_settings(ALLOWED_HOSTS=['testserver'], CSRF_TRUSTED_ORIGINS=['https://testserver'])
+    def test_invalid_multipart_fields_return_json_4xx_without_job(self):
+        client, data = self.csrf_client()
+        variants = [
+            {k: v for k, v in data.items() if k != 'username'},
+            {**data, 'fqdn': '127.0.0.1'}, {**data, 'fqdn': 'x' * 254},
+            {**data, 'password': ''}, {**data, 'password': 'x' * 513},
+            {**data, 'username': 'x' * 257}, {**data, 'extra': 'x' * 5000},
+            {**data, 'username': ['admin', 'another']},
+            {**data, 'file': SimpleUploadedFile('unexpected.txt', b'synthetic')},
+        ]
+        with mock.patch('dashboard.ad_install_views.create_remote_install_job') as create, \
+                mock.patch('dashboard.ad_install_views.start_remote_install') as runner:
+            for body in variants:
+                with self.subTest(fields=tuple(body)):
+                    response = client.post(self.url, body, secure=True, HTTP_ORIGIN='https://testserver')
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIsInstance(response.json(), dict)
+                    self.assertNotIn(SENTINEL, response.content.decode())
+            create.assert_not_called()
+            runner.assert_not_called()
+        self.assertEqual(RemoteInstallJob.objects.count(), 0)
+
+    def test_content_length_is_defensive_and_field_limits_are_independent(self):
+        from django.test import RequestFactory
+        from dashboard.ad_install_views import install_ad_computer
+        for length in ('', '-1', 'abc', '4097', '0', '9' * 100):
+            request = RequestFactory().post(self.url, self.data, secure=True)
+            request.user = self.user
+            request._dont_enforce_csrf_checks = True
+            request.META['CONTENT_LENGTH'] = length
+            with mock.patch('dashboard.ad_install_views.create_remote_install_job') as create:
+                response = install_ad_computer(request)
+            self.assertEqual(response.status_code, 400)
+            self.assertNotIn(SENTINEL, response.content.decode())
+            create.assert_not_called()
+        request = RequestFactory().post(self.url, {**self.data, 'password': 'x' * 513}, secure=True)
+        # Simulate already-parsed data with a forged short header; field limits still reject it.
+        _ = request.POST
+        request.META['CONTENT_LENGTH'] = '1'
+        request.user = self.user
+        request._dont_enforce_csrf_checks = True
+        with mock.patch('dashboard.ad_install_views.create_remote_install_job') as create:
+            self.assertEqual(install_ad_computer(request).status_code, 400)
+        create.assert_not_called()
+
+    def test_internal_error_is_sanitized_json(self):
+        with mock.patch('dashboard.ad_install_views.create_remote_install_job', side_effect=RuntimeError(SENTINEL)):
+            response = self.client.post(self.url, self.data, secure=True)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {'error_code': 'INSTALL_UNAVAILABLE'})
+        self.assertNotIn(SENTINEL, response.content.decode())
 
     def test_authorization_csrf_method_and_no_batch(self):
         self.assertEqual(self.client.get(self.url).status_code, 405)

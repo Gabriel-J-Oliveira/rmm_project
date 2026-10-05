@@ -1,4 +1,5 @@
 import json
+import ipaddress
 
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -11,7 +12,7 @@ from config.authz import is_nightowl_technical_user
 from dashboard.ad_install_discovery import build_install_discovery
 from dashboard.remote_install_preflight import run_remote_install_preflight
 from dashboard.remote_install import InstallFailure, create_remote_install_job, reconcile_stale_jobs, start_remote_install
-from dashboard.remote_install_preflight import ProbeFailure
+from dashboard.remote_install_preflight import ProbeFailure, _valid_fqdn
 from dashboard.models import RemoteInstallJob
 
 
@@ -60,12 +61,25 @@ def install_ad_computer(request):
     if not request.is_secure():
         return JsonResponse({'error_code': 'HTTPS_REQUIRED'}, status=403)
     fields = {'csrfmiddlewaretoken', 'fqdn', 'username', 'password'}
-    if (len(request.body) > 4096 or set(request.POST) != fields or
+    # CSRF has already parsed multipart data; never re-read the consumed stream.
+    content_length = request.META.get('CONTENT_LENGTH', '')
+    if (not isinstance(content_length, str) or not content_length.isascii() or
+            not content_length.isdecimal() or len(content_length) > 10 or
+            not 0 < int(content_length) <= 4096 or
+            request.content_type not in ('multipart/form-data', 'application/x-www-form-urlencoded') or
+            request.FILES or set(request.POST) != fields or
             any(len(request.POST.getlist(field)) != 1 for field in fields)):
         return JsonResponse({'error': 'Requisicao invalida.'}, status=400)
     fqdn = request.POST.get('fqdn', '')
     username = request.POST.get('username', '')
     password = request.POST.get('password', '')
+    try:
+        ipaddress.ip_address(fqdn.strip().rstrip('.'))
+        target_is_ip = True
+    except ValueError:
+        target_is_ip = False
+    if target_is_ip or len(fqdn) > 253 or not _valid_fqdn(fqdn) or len(request.POST['csrfmiddlewaretoken']) > 128:
+        return JsonResponse({'error_code': 'INVALID_TARGET_OR_REQUEST'}, status=400)
     if not username.strip() or not password or len(username) > 256 or len(password) > 512:
         return JsonResponse({'error_code': 'CREDENTIAL_REQUIRED'}, status=400)
     try:
