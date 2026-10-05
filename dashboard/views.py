@@ -4599,6 +4599,8 @@ def agent_install(request):
         ).count(),
         'default_allowed_domain': 'control.local',
     }
+    from dashboard.remote_install_release import installation_release_display
+    context['remote_install_release'] = installation_release_display()
     response = render(request, 'dashboard/agent_install.html', context)
     if created_token or created_manual_token:
         response['Cache-Control'] = 'no-store, no-cache, must-revalidate'

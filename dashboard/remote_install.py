@@ -19,7 +19,8 @@ from access_inventory.services.ad_computer_discovery import normalize_fqdn
 from agents.models import AgentEnrollmentToken
 from dashboard.ad_install_discovery import _machine_maps, _match_machine
 from dashboard.models import RemoteInstallJob
-from dashboard.installer_contract import InstallerContractFailure, validate_published_installer
+from dashboard.installer_contract import InstallerContractFailure
+from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
     ProbeFailure, _ad_target, _new_winrm_protocol, run_remote_install_preflight,
 )
@@ -236,10 +237,26 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
                 pass
 
 
-def _installer_script(installer_sha256):
+def _installer_script(contract):
+    installer_sha256 = contract['installer_sha256']
     if not re.fullmatch(r'[a-f0-9]{64}', installer_sha256):
         raise InstallFailure('INSTALLER_CONTRACT_MISMATCH')
-    base, installer = _trusted_urls()
+    base = str(settings.NIGHTOWL_AGENT_PUBLIC_SERVER_URL).rstrip('/')
+    parsed = urlsplit(base)
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or
+            parsed.query or parsed.fragment or any(c in base for c in "'\"`\r\n ")):
+        raise InstallFailure('INSTALL_RELEASE_INVALID')
+    installer = contract['installer_source']
+    package = contract['package_url']
+    for url in (installer, package):
+        if (not url.startswith(base + '/downloads/nightowl-agent/releases/') or
+                any(c in url for c in "'\"`\r\n ")):
+            raise InstallFailure('INSTALL_RELEASE_INVALID')
+    for name, pattern in (('version', r'[A-Za-z0-9.+-]{1,50}'), ('channel', r'(development|pilot|stable)'),
+                          ('package_sha256', r'[a-f0-9]{64}'), ('git_commit', r'[a-f0-9]{40}')):
+        if not re.fullmatch(pattern, contract[name]):
+            raise InstallFailure('INSTALL_RELEASE_INVALID')
+    trust = base64.b64encode(json.dumps(contract['trusted_public_keys']).encode()).decode('ascii')
     return f"""
 $ErrorActionPreference = 'Stop'
 function Stop-BeforeInstaller([int]$Code) {{
@@ -255,16 +272,18 @@ try {{
     try {{ Invoke-WebRequest -Uri '{installer}' -OutFile $script -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 30 }}
     catch {{ Stop-BeforeInstaller 26 }}
     if ((Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant() -ne '{installer_sha256}') {{ Stop-BeforeInstaller 27 }}
+    $trust = Join-Path $dir 'trusted-public-keys.json'
+    [System.IO.File]::WriteAllBytes($trust, [Convert]::FromBase64String('{trust}'))
     $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$errors)
     if ($errors.Count -or -not $ast.ParamBlock) {{ Stop-BeforeInstaller 28 }}
     $names = @($ast.ParamBlock.Parameters | ForEach-Object {{ $_.Name.VariablePath.UserPath }})
-    foreach ($name in @('ServerUrl', 'InstallAsService', 'RunCheck', 'NoGui', 'NonInteractive')) {{
+    foreach ($name in @('ServerUrl', 'InstallAsService', 'RunCheck', 'NoGui', 'NonInteractive', 'PackageUrl', 'TrustedPublicKeysPath', 'ExpectedVersion', 'ExpectedChannel', 'ExpectedPackageSha256', 'ExpectedGitCommit')) {{
         if ($names -notcontains $name) {{ Stop-BeforeInstaller 28 }}
     }}
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = Join-Path $PSHOME 'powershell.exe'
-    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '" -ServerUrl "{base}" -InstallAsService -RunCheck -NoGui -NonInteractive'
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '" -ServerUrl "{base}" -PackageUrl "{package}" -TrustedPublicKeysPath "' + $trust + '" -ExpectedVersion "{contract['version']}" -ExpectedChannel "{contract['channel']}" -ExpectedPackageSha256 "{contract['package_sha256']}" -ExpectedGitCommit "{contract['git_commit']}" -InstallAsService -RunCheck -NoGui -NonInteractive'
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
@@ -346,10 +365,13 @@ def run_remote_install(job_id, username, password):
             'installer_started_at': None, 'installer_finished_at': None, 'installer_exit_code': None,
             'service_present': 'UNKNOWN', 'service_state': 'UNKNOWN', 'service_validation_status': 'NOT_CHECKED'})
         try:
-            contract = validate_published_installer()
+            contract = validate_install_release()
         except InstallerContractFailure as exc:
             raise InstallFailure(exc.code) from None
-        _update(job_id, stage, diagnostic=contract)
+        _update(job_id, stage, diagnostic={name: contract[name] for name in (
+            'release_id', 'version', 'channel', 'package_sha256', 'installer_sha256',
+            'installer_contract_valid', 'release_validated', 'installer_source', 'signing_key_id',
+            'git_commit', 'build_id')})
         stage = 'CONNECTING'
         _update(job_id, 'CONNECTING')
         preflight = run_remote_install_preflight(job.target_fqdn, username, password)
@@ -372,7 +394,10 @@ def run_remote_install(job_id, username, password):
         _update(job_id, stage)
         if _matching_endpoint(computer):
             raise InstallFailure('ALREADY_MANAGED')
-        installer_script = _installer_script(contract['installer_sha256'])
+        revalidated = validate_install_release()
+        if revalidated != contract:
+            raise InstallFailure('INSTALL_RELEASE_INVALID')
+        installer_script = _installer_script(contract)
         stage = 'INSTALLING'
         _update(job_id, 'INSTALLING')
         invocation_attempted = True

@@ -38,7 +38,7 @@ def preflight_ad_computer(request):
         return JsonResponse({'error': 'Requisicao invalida.'}, status=400)
     try:
         data = json.loads(request.body)
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or set(data) != {'fqdn', 'username', 'password'}:
             raise ValueError
         result = run_remote_install_preflight(data.get('fqdn'), data.get('username'), data.get('password'))
     except (ValueError, UnicodeError):

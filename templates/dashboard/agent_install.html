@@ -56,6 +56,9 @@
 </section>
 
 <section class="ad-discovery" id="ad-discovery" data-scan-url="{% url 'agent-install-ad-scan' %}" data-preflight-url="{% url 'agent-install-ad-preflight' %}" data-install-url="{% url 'agent-install-ad-install' %}">
+    <p>Instalação remota · Selecionada pelo servidor:
+        {% if remote_install_release %}<strong>{{ remote_install_release.version }}</strong> · {{ remote_install_release.channel }}{% else %}Nenhuma release configurada{% endif %}
+    </p>
     <div class="ad-discovery-heading">
         <div>
             <span class="section-kicker">Active Directory</span>

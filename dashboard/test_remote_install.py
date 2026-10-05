@@ -11,6 +11,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
+from django.conf import settings
 
 from agents.models import AgentMachine
 from dashboard.models import RemoteInstallJob
@@ -24,6 +25,15 @@ COMPUTER = {
     'distinguished_name': 'CN=lab-01,OU=Lab,DC=control,DC=local',
 }
 READY = {'status': 'READY', 'checks': {}}
+CONTRACT = {
+    'release_id': '49deaa29-b916-4691-99db-732e477e80f7',
+    'version': '0.1.1.0-rc44', 'channel': 'development', 'package_sha256': 'c' * 64,
+    'git_commit': 'a' * 40, 'build_id': 'd' * 32, 'installer_sha256': 'b' * 64,
+    'installer_contract_valid': True, 'release_validated': True,
+    'installer_source': 'https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc44/Install-NightOwlAgentDotNet.ps1',
+    'package_url': 'https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc44/NightOwl.Agent.Windows.zip',
+    'signing_key_id': 'synthetic', 'trusted_public_keys': {'keys': []},
+}
 
 
 def recorded_outputs(outputs):
@@ -40,8 +50,11 @@ def recorded_outputs(outputs):
 class RemoteInstallJobTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user('install-admin', password='synthetic', is_staff=True)
-        contract = mock.patch.object(remote_install, 'validate_published_installer', return_value={
-            'installer_sha256': 'a' * 64, 'installer_contract_valid': True})
+        def selected_contract():
+            base = settings.NIGHTOWL_AGENT_PUBLIC_SERVER_URL.rstrip('/')
+            return {**CONTRACT, 'installer_source': base + '/downloads/nightowl-agent/releases/0.1.1.0-rc44/Install-NightOwlAgentDotNet.ps1',
+                    'package_url': base + '/downloads/nightowl-agent/releases/0.1.1.0-rc44/NightOwl.Agent.Windows.zip'}
+        contract = mock.patch.object(remote_install, 'validate_install_release', side_effect=selected_contract)
         contract.start()
         self.addCleanup(contract.stop)
 

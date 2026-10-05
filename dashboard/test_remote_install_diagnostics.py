@@ -13,12 +13,11 @@ from agents.models import AgentMachine
 from dashboard import remote_install as runner
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.models import RemoteInstallJob
-from dashboard.test_remote_install import COMPUTER, READY, recorded_outputs
+from dashboard.test_remote_install import COMPUTER, READY, CONTRACT, recorded_outputs
 
 
 PASSWORD = 'SUPER_SECRET_REMOTE_INSTALL_91827'
 TOKEN = 'SUPER_SECRET_ENROLLMENT_TOKEN_73192'
-CONTRACT = {'installer_sha256': 'b' * 64, 'installer_contract_valid': True}
 
 
 class InstallDiagnosticTests(TestCase):
@@ -30,7 +29,7 @@ class InstallDiagnosticTests(TestCase):
             requested_by=self.user, active_slot='global', runner_heartbeat_at=timezone.now())
 
     def run_job(self, outputs, **patches):
-        defaults = {'_ad_target': COMPUTER, 'validate_published_installer': CONTRACT,
+        defaults = {'_ad_target': COMPUTER, 'validate_install_release': CONTRACT,
                     'run_remote_install_preflight': READY, '_enrollment_available': True,
                     '_matching_endpoint': None, 'ENROLLMENT_TIMEOUT': 0}
         with ExitStack() as stack:
@@ -52,7 +51,7 @@ class InstallDiagnosticTests(TestCase):
     def test_contract_failures_open_no_remote_connection_and_are_retry_safe(self):
         for error in ('INSTALLER_CONTRACT_MISMATCH', 'INSTALLER_DOWNLOAD_FAILED'):
             with self.subTest(error=error):
-                command = self.run_job([], validate_published_installer=InstallerContractFailure(error))
+                command = self.run_job([], validate_install_release=InstallerContractFailure(error))
                 command.assert_not_called()
                 self.assertEqual(self.job.stage, 'VALIDATING_INSTALLER')
                 self.assertEqual(self.job.status, 'FAILED')
@@ -120,7 +119,7 @@ class InstallDiagnosticTests(TestCase):
         values = iter([None, machine, machine])
         with mock.patch.object(runner.threading, 'Thread'), \
                 mock.patch.object(runner, '_ad_target', return_value=COMPUTER), \
-                mock.patch.object(runner, 'validate_published_installer', return_value=CONTRACT), \
+                mock.patch.object(runner, 'validate_install_release', return_value=CONTRACT), \
                 mock.patch.object(runner, 'run_remote_install_preflight', return_value=READY), \
                 mock.patch.object(runner, '_enrollment_available', return_value=True), \
                 mock.patch.object(runner, '_matching_endpoint', side_effect=lambda *a, **kw: next(values)), \
@@ -162,7 +161,7 @@ class InstallDiagnosticTests(TestCase):
             self.assertNotIn(sentinel, persisted)
             self.assertNotIn(sentinel, response.content.decode())
             self.assertNotIn(sentinel, json.dumps(dict(self.client.session)))
-            self.assertNotIn(sentinel, runner._installer_script('a' * 64))
+            self.assertNotIn(sentinel, runner._installer_script(CONTRACT))
         self.assertEqual(response.json()['diagnostics']['safe_to_retry'], 'NO')
 
     def test_status_get_does_not_reconcile_or_rewrite_legacy_job(self):
@@ -190,19 +189,41 @@ class InstallDiagnosticTests(TestCase):
         self.assertNotIn(TOKEN, repr(events))
 
     def test_remote_script_pins_hash_ast_and_real_exit_before_execution(self):
-        script = runner._installer_script('a' * 64)
+        script = runner._installer_script(CONTRACT)
         self.assertLess(script.index('Get-FileHash'), script.index('$process.Start()'))
         self.assertLess(script.index('ParseFile'), script.index('$process.Start()'))
         self.assertIn('-MaximumRedirection 0', script)
         self.assertIn('exit $code', script)
         self.assertNotIn('exit 1', script)
         self.assertIn('Stream]::Null', script)
+        self.assertIn(CONTRACT['installer_source'], script)
+        self.assertIn(CONTRACT['package_url'], script)
+        self.assertIn('-TrustedPublicKeysPath', script)
+        self.assertIn('-ExpectedVersion "0.1.1.0-rc44"', script)
+        self.assertIn('-ExpectedPackageSha256', script)
+        self.assertNotIn('-AllowReleaseBundledTrustForLab', script)
+
+    def test_release_changed_before_invocation_fails_without_remote_command(self):
+        with mock.patch.object(runner.threading, 'Thread'), \
+                mock.patch.object(runner, '_ad_target', return_value=COMPUTER), \
+                mock.patch.object(runner, 'validate_install_release', side_effect=[CONTRACT, {**CONTRACT, 'installer_sha256': 'c' * 64}]), \
+                mock.patch.object(runner, 'run_remote_install_preflight', return_value=READY), \
+                mock.patch.object(runner, '_enrollment_available', return_value=True), \
+                mock.patch.object(runner, '_matching_endpoint', return_value=None), \
+                mock.patch.object(runner, '_remote_script') as command:
+            runner.run_remote_install(self.job.pk, 'admin', PASSWORD)
+        command.assert_not_called()
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.error_code, 'INSTALL_RELEASE_INVALID')
+        self.assertEqual(self.job.status, 'FAILED')
+        self.assertEqual(self.job.diagnostics['release_id'], CONTRACT['release_id'])
+        self.assertNotIn('trusted_public_keys', self.job.diagnostics)
 
     @skipUnless(os.name == 'nt', 'PowerShell AST is validated on the Windows build host')
     def test_generated_wrapper_parses_without_execution(self):
         command = "$s = [Console]::In.ReadToEnd(); $e = $null; [System.Management.Automation.Language.Parser]::ParseInput($s, [ref]$null, [ref]$e) | Out-Null; if ($e.Count) { exit 1 }; exit 0"
         result = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', command],
-            input=runner._installer_script('a' * 64), text=True, capture_output=True, timeout=15)
+            input=runner._installer_script(CONTRACT), text=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, 'Generated remote wrapper must parse')
 
     def test_stale_new_runner_preserves_stage_and_retry_safety(self):

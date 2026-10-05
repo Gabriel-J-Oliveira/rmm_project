@@ -173,7 +173,7 @@ class RemoteInstallPreflightTests(TestCase):
         self.tcp_mock.assert_not_called()
         self.remote_mock.assert_not_called()
 
-    def test_browser_ip_is_ignored(self):
+    def test_browser_ip_is_rejected(self):
         user = get_user_model().objects.create_user(username='preflight-ip-test', password='synthetic-test-only', is_staff=True)
         client = Client()
         client.force_login(user)
@@ -181,9 +181,9 @@ class RemoteInstallPreflightTests(TestCase):
             'fqdn': 'lab-01.control.local', 'ip': '127.0.0.1', 'url': 'http://localhost/',
             'username': 'Admin', 'password': SENTINEL,
         }), content_type='application/json')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['status'], 'READY')
-        self.tcp_mock.assert_called_once_with('192.168.104.20')
+        self.assertEqual(response.status_code, 400)
+        self.tcp_mock.assert_not_called()
+        self.remote_mock.assert_not_called()
 
     def test_authentication_and_timeout_fail_closed(self):
         for code, check in [('AUTHENTICATION_FAILED', 'AUTHENTICATION'),
