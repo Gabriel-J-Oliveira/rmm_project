@@ -38,7 +38,7 @@ class HistoricalInstallReconciliationTests(TestCase):
         return RemoteInstallJob.objects.create(
             target_hostname=COMPUTER['hostname'], target_fqdn=COMPUTER['fqdn'],
             target_ad_dn=COMPUTER['distinguished_name'], requested_by=self.actor,
-            status=status, stage=status, error_code='INSTALLER_FAILED', active_slot=None,
+            status=status, stage=status, error_code='INSTALLER_FAILED', active_slot=fields.pop('active_slot', None),
             diagnostics=fields.pop('diagnostics', {}), **fields,
         )
 
@@ -142,6 +142,62 @@ class HistoricalInstallReconciliationTests(TestCase):
         with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_ALREADY_RUNNING'):
             self.create()
         self.probe.assert_not_called()
+
+    def test_unknown_global_slot_transferred_only_after_fresh_absence(self):
+        old = self.historical(active_slot='global')
+        new = self.create()
+        old.refresh_from_db()
+        self.assertEqual(old.status, 'OUTCOME_UNKNOWN')
+        self.assertEqual(old.error_code, 'INSTALLER_FAILED')
+        self.assertIsNone(old.active_slot)
+        self.assertEqual(old.diagnostics['reconciliation']['new_job_id'], str(new.pk))
+        self.assertEqual(RemoteInstallJob.objects.filter(active_slot='global').count(), 1)
+
+    def test_unknown_global_slot_without_absence_stays_reserved(self):
+        old = self.historical(active_slot='global')
+        self.probe.return_value = {'status': 'NOT_READY'}
+        self.probe.side_effect = None
+        with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_RECONCILIATION_FAILED'):
+            self.create()
+        old.refresh_from_db()
+        self.assertEqual(old.active_slot, 'global')
+        self.assertEqual(old.diagnostics, {})
+        self.assertEqual(RemoteInstallJob.objects.count(), 1)
+
+    def test_old_legacy_unknown_slot_is_not_released_before_proof(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        old = self.historical(active_slot='global')
+        RemoteInstallJob.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - remote_install.UNKNOWN_SLOT_HOLD - timedelta(minutes=1),
+            runner_heartbeat_at=timezone.now() - remote_install.UNKNOWN_SLOT_HOLD - timedelta(minutes=1))
+        self.probe.return_value = {'status': 'NOT_READY'}
+        self.probe.side_effect = None
+        with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_RECONCILIATION_FAILED'):
+            self.create()
+        old.refresh_from_db()
+        self.assertEqual(old.active_slot, 'global')
+        self.assertEqual(old.diagnostics, {})
+
+    def test_unknown_other_target_slot_remains_blocking(self):
+        self.historical()
+        old = RemoteInstallJob.objects.create(target_fqdn='other.control.local', requested_by=self.actor,
+                                             status='OUTCOME_UNKNOWN', active_slot='global')
+        with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_ALREADY_RUNNING'):
+            self.create()
+        self.probe.assert_not_called()
+        old.refresh_from_db()
+        self.assertEqual(old.active_slot, 'global')
+
+    def test_failed_admission_restores_unknown_global_slot(self):
+        from django.db import IntegrityError
+        old = self.historical(active_slot='global')
+        with mock.patch.object(RemoteInstallJob.objects, 'create', side_effect=IntegrityError):
+            with self.assertRaisesMessage(remote_install.InstallFailure, 'INSTALL_ALREADY_RUNNING'):
+                self.create()
+        old.refresh_from_db()
+        self.assertEqual(old.active_slot, 'global')
+        self.assertEqual(old.diagnostics, {})
 
     def test_current_database_correlation_rechecked_in_transaction(self):
         old = self.historical()
@@ -255,11 +311,17 @@ class HistoricalInstallReconciliationTests(TestCase):
 
 class ConcurrentInstallReconciliationTests(TransactionTestCase):
     def test_concurrent_proofs_admit_only_one_job(self):
+        self.run_concurrent_proofs(active_slot=None)
+
+    def test_concurrent_proofs_transfer_unknown_global_slot_only_once(self):
+        self.run_concurrent_proofs(active_slot='global')
+
+    def run_concurrent_proofs(self, active_slot):
         actor = get_user_model().objects.create_user('concurrent-reconcile-admin', is_staff=True)
         old = RemoteInstallJob.objects.create(
             target_hostname=COMPUTER['hostname'], target_fqdn=COMPUTER['fqdn'],
             target_ad_dn=COMPUTER['distinguished_name'], requested_by=actor,
-            status='OUTCOME_UNKNOWN', stage='OUTCOME_UNKNOWN', active_slot=None, diagnostics={})
+            status='OUTCOME_UNKNOWN', stage='OUTCOME_UNKNOWN', active_slot=active_slot, diagnostics={})
         barrier = threading.Barrier(2)
         def probe(*args):
             barrier.wait(timeout=5)
@@ -284,7 +346,7 @@ class ConcurrentInstallReconciliationTests(TransactionTestCase):
                 ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(request) for _ in range(2)]
             results = [future.result(timeout=10) for future in futures]
-        admitted = RemoteInstallJob.objects.filter(active_slot='global')
+        admitted = RemoteInstallJob.objects.filter(active_slot='global').exclude(pk=old.pk)
         self.assertLessEqual(admitted.count(), 1)
         # A contention failure must not leave historical reconciliation alone.
         old.refresh_from_db()

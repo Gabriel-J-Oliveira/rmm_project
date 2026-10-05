@@ -37,6 +37,7 @@ HEARTBEAT_INTERVAL = 5
 INSTALL_TIMEOUT = settings.NIGHTOWL_REMOTE_INSTALL_TIMEOUT_SECONDS
 ENROLLMENT_TIMEOUT = settings.NIGHTOWL_REMOTE_ENROLLMENT_TIMEOUT_SECONDS
 FIRST_HEARTBEAT_TIMEOUT = settings.NIGHTOWL_REMOTE_FIRST_HEARTBEAT_TIMEOUT_SECONDS
+MAX_REMOTE_SCRIPT_BYTES = 32 * 1024
 UNKNOWN_SLOT_HOLD = timedelta(seconds=INSTALL_TIMEOUT + ENROLLMENT_TIMEOUT + FIRST_HEARTBEAT_TIMEOUT + 300)
 
 
@@ -84,7 +85,7 @@ def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None, di
         RemoteInstallJob.objects.filter(pk=job.pk).update(**fields)
 
 
-def reconcile_stale_jobs():
+def reconcile_stale_jobs(*, preserve_unknown_slots=False):
     cutoff = timezone.now() - STALE_AFTER
     stale = RemoteInstallJob.objects.filter(active_slot='global').filter(
         Q(runner_heartbeat_at__lt=cutoff) |
@@ -99,8 +100,9 @@ def reconcile_stale_jobs():
                         error_code='RUNNER_INTERRUPTED', diagnostic={'safe_to_retry': 'NO' if attempted else 'YES'})
     # Preserve the legacy reconciliation contract for jobs without new diagnostics.
     stale = stale.filter(diagnostics={})
-    stale.filter(status='OUTCOME_UNKNOWN', created_at__lt=timezone.now() - UNKNOWN_SLOT_HOLD).update(
-        active_slot=None, updated_at=timezone.now())
+    if not preserve_unknown_slots:
+        stale.filter(status='OUTCOME_UNKNOWN', created_at__lt=timezone.now() - UNKNOWN_SLOT_HOLD).update(
+            active_slot=None, updated_at=timezone.now())
     stale.filter(status='RUNNING', stage__in=INSTALL_STARTED_STAGES).update(
         status='OUTCOME_UNKNOWN', stage='OUTCOME_UNKNOWN', error_code='RUNNER_INTERRUPTED_DURING_INSTALL',
         finished_at=timezone.now(), updated_at=timezone.now())
@@ -145,9 +147,10 @@ def _absence_proof(computer, username, password):
 
 def create_remote_install_job(fqdn, actor, *, username=None, password=None):
     computer = _ad_target(fqdn)
-    reconcile_stale_jobs()
+    reconcile_stale_jobs(preserve_unknown_slots=True)
     normalized = normalize_fqdn(computer['fqdn'])
-    if RemoteInstallJob.objects.filter(Q(active_slot='global') | Q(status__in=('QUEUED', 'RUNNING'))).exists():
+    active = RemoteInstallJob.objects.filter(Q(active_slot='global') | Q(status__in=('QUEUED', 'RUNNING')))
+    if active.exclude(status='OUTCOME_UNKNOWN', target_fqdn=normalized).exists():
         raise InstallFailure('INSTALL_ALREADY_RUNNING')
     historical = RemoteInstallJob.objects.filter(target_fqdn=normalized, status__in=HISTORICAL_BLOCKERS)
     blocker_snapshot = dict(historical.values_list('pk', 'updated_at'))
@@ -158,6 +161,10 @@ def create_remote_install_job(fqdn, actor, *, username=None, password=None):
             blockers = list(historical.select_for_update().order_by('pk'))
             if {job.pk: job.updated_at for job in blockers} != blocker_snapshot:
                 raise InstallFailure('INSTALL_RECONCILIATION_REQUIRED')
+            active_jobs = list(active.select_for_update().order_by('pk'))
+            if any(previous.status != 'OUTCOME_UNKNOWN' or previous.target_fqdn != normalized
+                   or previous.pk not in blocker_snapshot for previous in active_jobs):
+                raise InstallFailure('INSTALL_ALREADY_RUNNING')
             if blockers:
                 try:
                     _, correlation, _ = _match_machine(computer, _machine_maps())
@@ -165,8 +172,13 @@ def create_remote_install_job(fqdn, actor, *, username=None, password=None):
                     raise InstallFailure('CORRELATION_UNAVAILABLE') from None
                 if correlation != 'UNMANAGED':
                     raise InstallFailure('TARGET_MANAGED_OR_CONFLICT')
-            # The unique global slot is the final admission gate, including
-            # requests whose absence probes completed concurrently.
+            # Transfer only this target's unknown slot after fresh proof. A
+            # failed insert rolls the release back with the reconciliation.
+            for previous in blockers:
+                if previous.active_slot == 'global':
+                    previous.active_slot = None
+                    previous.save(update_fields=['active_slot'])
+            # The unique global slot remains the final admission gate.
             job = RemoteInstallJob.objects.create(
                 target_hostname=computer['hostname'], target_fqdn=normalized,
                 target_ad_dn=computer['distinguished_name'], requested_by=actor,
@@ -238,6 +250,14 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
     from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
 
     try:
+        # One block prevents stdin's line-by-line parser from executing pieces
+        # of a multiline wrapper before it has received the whole statement.
+        payload = ('& {\n' + script.replace('\r\n', '\n') + '\n}\n\n').encode('ascii')
+        if not script.strip() or len(payload) > MAX_REMOTE_SCRIPT_BYTES:
+            raise ValueError()
+    except (AttributeError, UnicodeError, ValueError):
+        raise InstallFailure('REMOTE_SCRIPT_INVALID', command_attempted=False) from None
+    try:
         protocol = _new_winrm_protocol(fqdn, username, password)
     except ProbeFailure as exc:
         raise InstallFailure(exc.code, command_attempted=False) from None
@@ -247,10 +267,12 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
     attempted = False
     try:
         shell_id = protocol.open_shell()
-        encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
-        attempted = True
         command_id = protocol.run_command(shell_id, 'powershell.exe',
-                                          ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded])
+                                          ['-NoProfile', '-NonInteractive', '-Command', '-'])
+        if not command_id:
+            raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False)
+        attempted = True
+        protocol.send_command_input(shell_id, command_id, payload, end=True)
         deadline = time.monotonic() + timeout
         pending = b''
         while time.monotonic() < deadline:
