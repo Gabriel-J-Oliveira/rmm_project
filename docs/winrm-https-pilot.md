@@ -30,6 +30,17 @@ Audit prints the WinRM listeners, listening ports, certificate suitability,
 firewall scope, and `READY_FOR_NIGHTOWL_PREFLIGHT`. It makes no changes and
 does not require elevation.
 
+Each read has its own `*_STATUS` (`PASS`, `FAIL`, or `UNKNOWN`). A failed read
+does not stop the other checks. `ERROR_CODE` names the first failed component,
+`AUDIT_ERRORS` lists all failed components, and each `*_ERROR` reports a
+sanitized cause such as `ACCESS_DENIED` or `READ_FAILED`. An unread value is
+shown as `UNKNOWN`; readiness stays `NO`. Certificate candidates are assessed
+one by one, so a failed chain assessment does not hide other certificates.
+The audit never installs a certificate, creates a listener, or changes a rule.
+If a read is denied, review local permissions and policy before running Apply;
+Apply still requires Administrator and stops before changes when required
+reads fail.
+
 Apply only after reviewing that output:
 
 ```powershell

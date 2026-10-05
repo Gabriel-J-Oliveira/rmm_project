@@ -25,7 +25,9 @@ foreach ($forbiddenText in @('AllowUnencrypted', 'TrustedHosts', 'Basic=true', '
 }
 
 foreach ($requiredText in @(
-        "if (`$mode -eq 'AUDIT') { return `$summary }",
+        "if (`$mode -eq 'AUDIT') {",
+        'Get-AuditSnapshot $source',
+        'Add-AuditDiagnostics $summary $snapshot.Components',
         'if (-not (Test-Administrator))',
         'CERT_ENROLLMENT_ATTEMPTED',
         'certreq.exe -enroll -machine',

@@ -129,7 +129,12 @@ function Get-CertificateAssessment($Certificate, [string]$Fqdn) {
                 $root = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
                 $rootMatch = ([string]$root.Thumbprint).Replace(' ', '').ToUpperInvariant() -eq $script:ExpectedRootThumbprint
             }
-        } catch { $chainValid = $false }
+        } catch {
+            if ((Get-SafeAuditError $_) -eq 'ACCESS_DENIED') {
+                throw 'CERTIFICATE_CHAIN_EVALUATION_FAILED_ACCESS_DENIED'
+            }
+            throw 'CERTIFICATE_CHAIN_EVALUATION_FAILED'
+        }
         finally { $chain.Dispose() }
     }
     [pscustomobject]@{
@@ -165,10 +170,122 @@ function Get-BootstrapSnapshot([string]$SourceIp) {
         ListenerReadFailed = [bool]$script:ListenerReadFailed
         NetworkProfiles = $profiles; Http = $http; Https = $https; Rules = $rules
         Rule = $rule; ActiveRuleValid = [bool]$activeRuleValid; Certificates = $certificates
-        Suitable = $suitable
-        Port5985 = @(Get-NetTCPConnection -State Listen -LocalPort 5985 -ErrorAction SilentlyContinue).Count -gt 0
-        Port5986 = @(Get-NetTCPConnection -State Listen -LocalPort 5986 -ErrorAction SilentlyContinue).Count -gt 0
+        Suitable = $suitable; Components = $null
+        Port5985 = Get-ListeningPort 5985
+        Port5986 = Get-ListeningPort 5986
     }
+}
+
+function Get-ListeningPort([int]$Port) {
+    try { return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop).Count -gt 0 }
+    catch {
+        # A missing listener is a valid observation; all other failures must remain visible.
+        if ($_.FullyQualifiedErrorId -like 'NoMatchingMSFT_NetTCPConnection*') { return $false }
+        throw
+    }
+}
+
+function Get-SafeAuditError($ErrorRecord) {
+    $message = [string]$ErrorRecord.Exception.Message
+    if ($ErrorRecord.Exception -is [UnauthorizedAccessException] -or
+        $message -match '_ACCESS_DENIED$' -or
+        $message -match '(?i)access.*denied|accesso negado|acesso negado|permission denied') {
+        return 'ACCESS_DENIED'
+    }
+    return 'READ_FAILED'
+}
+
+function New-AuditComponentMap {
+    $map = [ordered]@{}
+    foreach ($name in @('LOCAL_IDENTITY', 'WINRM_SERVICE', 'WINRM_LISTENERS',
+            'NETWORK_PROFILE', 'FIREWALL_PERSISTENT_RULE', 'FIREWALL_ACTIVE_RULE',
+            'CERTIFICATE_STORE', 'CERTIFICATE_CHAIN', 'PORT_5985', 'PORT_5986')) {
+        $map[$name] = [ordered]@{ Status = 'UNKNOWN'; Error = ''; Code = '' }
+    }
+    return $map
+}
+
+function Set-AuditFailure($Components, [string]$Name, [string]$Code, $ErrorRecord) {
+    $Components[$Name].Status = 'FAIL'
+    $Components[$Name].Error = Get-SafeAuditError $ErrorRecord
+    $Components[$Name].Code = $Code
+}
+
+function Get-AuditSnapshot([string]$SourceIp) {
+    $components = New-AuditComponentMap
+    $snapshot = [pscustomobject]@{
+        Identity = [pscustomobject]@{ Hostname = 'UNKNOWN'; Fqdn = 'UNKNOWN'; DomainJoined = $false }
+        Service = 'UNKNOWN'; ServiceStartType = 'UNKNOWN'; ListenerReadFailed = $true
+        NetworkProfiles = @(); Http = @(); Https = @(); Rules = @(); Rule = $null
+        ActiveRuleValid = $false; Certificates = @(); Suitable = @()
+        Port5985 = $null; Port5986 = $null; Components = $components
+    }
+
+    try {
+        $snapshot.Identity = Get-LocalIdentity
+        $components.LOCAL_IDENTITY.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'LOCAL_IDENTITY' 'LOCAL_IDENTITY_READ_FAILED' $_ }
+    try {
+        $service = Get-Service WinRM -ErrorAction Stop
+        $snapshot.Service = [string]$service.Status
+        $snapshot.ServiceStartType = [string]$service.StartType
+        $components.WINRM_SERVICE.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'WINRM_SERVICE' 'WINRM_SERVICE_READ_FAILED' $_ }
+    try {
+        $listeners = @(Get-WSManInstance winrm/config/Listener -Enumerate -ErrorAction Stop)
+        $snapshot.Http = @($listeners | Where-Object { [string]$_.Transport -eq 'HTTP' })
+        $snapshot.Https = @($listeners | Where-Object { [string]$_.Transport -eq 'HTTPS' })
+        $snapshot.ListenerReadFailed = $false
+        $components.WINRM_LISTENERS.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'WINRM_LISTENERS' 'WINRM_LISTENER_READ_FAILED' $_ }
+    try {
+        $snapshot.NetworkProfiles = @(Get-NetConnectionProfile -ErrorAction Stop |
+            Where-Object { $_.IPv4Connectivity -ne 'Disconnected' } |
+            ForEach-Object { [string]$_.NetworkCategory } | Select-Object -Unique)
+        $components.NETWORK_PROFILE.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'NETWORK_PROFILE' 'NETWORK_PROFILE_READ_FAILED' $_ }
+    try {
+        $snapshot.Rules = @(Get-LocalRule)
+        if ($snapshot.Rules.Count -eq 1) { $snapshot.Rule = Get-RuleSnapshot $snapshot.Rules[0] }
+        $components.FIREWALL_PERSISTENT_RULE.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'FIREWALL_PERSISTENT_RULE' 'FIREWALL_RULE_READ_FAILED' $_ }
+    try {
+        $activeRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+            Where-Object { $_.Name -eq $script:RuleName })
+        $snapshot.ActiveRuleValid = $activeRules.Count -eq 1 -and
+            (Test-RuleSnapshot (Get-RuleSnapshot $activeRules[0]) $SourceIp)
+        $components.FIREWALL_ACTIVE_RULE.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'FIREWALL_ACTIVE_RULE' 'FIREWALL_ACTIVE_RULE_READ_FAILED' $_ }
+
+    $rawCertificates = @()
+    try {
+        $rawCertificates = @(Get-ChildItem Cert:\LocalMachine\My -ErrorAction Stop)
+        $components.CERTIFICATE_STORE.Status = 'PASS'
+    } catch { Set-AuditFailure $components 'CERTIFICATE_STORE' 'CERTIFICATE_ENUMERATION_FAILED' $_ }
+    if ($components.CERTIFICATE_STORE.Status -eq 'PASS' -and
+        $components.LOCAL_IDENTITY.Status -eq 'PASS') {
+        $assessments = @()
+        $components.CERTIFICATE_CHAIN.Status = 'PASS'
+        foreach ($certificate in $rawCertificates) {
+            try { $assessments += Get-CertificateAssessment $certificate $snapshot.Identity.Fqdn }
+            catch {
+                $code = if ([string]$_.Exception.Message -like 'CERTIFICATE_CHAIN_EVALUATION_FAILED*') {
+                    'CERTIFICATE_CHAIN_EVALUATION_FAILED'
+                } else { 'CERTIFICATE_ASSESSMENT_FAILED' }
+                Set-AuditFailure $components 'CERTIFICATE_CHAIN' $code $_
+            }
+        }
+        $snapshot.Certificates = $assessments
+        $snapshot.Suitable = @($assessments | Where-Object { $_.Suitable } | Sort-Object NotAfter -Descending)
+    }
+    foreach ($port in @(5985, 5986)) {
+        $name = "PORT_$port"
+        try {
+            $snapshot."Port$port" = Get-ListeningPort $port
+            $components[$name].Status = 'PASS'
+        } catch { Set-AuditFailure $components $name 'PORT_STATE_READ_FAILED' $_ }
+    }
+    return $snapshot
 }
 
 function Protect-StateDirectory([string]$Path) {
@@ -269,19 +386,21 @@ function New-Summary([string]$Mode, $Snapshot, [string]$SourceIp) {
         $Snapshot.Port5986 -and $Snapshot.ActiveRuleValid
     [ordered]@{
         MODE = $Mode; HOSTNAME = $Snapshot.Identity.Hostname; FQDN = $Snapshot.Identity.Fqdn
-        DOMAIN_JOINED = $(if ($Snapshot.Identity.DomainJoined) { 'YES' } else { 'NO' })
+        DOMAIN_JOINED = $(if ($Snapshot.Identity.Fqdn -eq 'UNKNOWN') { 'UNKNOWN' } elseif ($Snapshot.Identity.DomainJoined) { 'YES' } else { 'NO' })
         NETWORK_PROFILE = ($Snapshot.NetworkProfiles -join ',')
         WINRM_SERVICE = $Snapshot.Service
         LISTENER_AUDIT_STATUS = $(if ($Snapshot.ListenerReadFailed) { 'ERROR' } else { 'PASS' })
-        HTTP_LISTENER = $(if ($Snapshot.Http.Count) { 'YES' } else { 'NO' })
+        HTTP_LISTENER = $(if ($Snapshot.ListenerReadFailed) { 'UNKNOWN' } elseif ($Snapshot.Http.Count) { 'YES' } else { 'NO' })
         HTTP_LISTENER_DETAILS = (@($Snapshot.Http | ForEach-Object { "$($_.Address):$($_.Port)" }) -join ',')
-        HTTPS_LISTENER = $(if ($https.Count) { 'YES' } else { 'NO' })
+        HTTPS_LISTENER = $(if ($Snapshot.ListenerReadFailed) { 'UNKNOWN' } elseif ($https.Count) { 'YES' } else { 'NO' })
         HTTPS_LISTENER_DETAILS = (@($https | ForEach-Object { "$($_.Address):$($_.Port)" }) -join ',')
         HTTPS_LISTENER_HOSTNAME = $(if ($https.Count -eq 1) { [string]$https[0].Hostname } else { '' })
         HTTPS_LISTENER_THUMBPRINT = $(if ($https.Count -eq 1) { [string]$https[0].CertificateThumbprint } else { '' })
-        PORT_5985_LISTENING = $(if ($Snapshot.Port5985) { 'YES' } else { 'NO' })
-        PORT_5986_LISTENING = $(if ($Snapshot.Port5986) { 'YES' } else { 'NO' })
-        SUITABLE_CERT_FOUND = $(if ($cert) { 'YES' } else { 'NO' })
+        PORT_5985_LISTENING = $(if ($null -eq $Snapshot.Port5985) { 'UNKNOWN' } elseif ($Snapshot.Port5985) { 'YES' } else { 'NO' })
+        PORT_5986_LISTENING = $(if ($null -eq $Snapshot.Port5986) { 'UNKNOWN' } elseif ($Snapshot.Port5986) { 'YES' } else { 'NO' })
+        SUITABLE_CERT_FOUND = $(if ($Snapshot.Components -and
+                ($Snapshot.Components.CERTIFICATE_STORE.Status -ne 'PASS' -or
+                 $Snapshot.Components.CERTIFICATE_CHAIN.Status -ne 'PASS')) { 'UNKNOWN' } elseif ($cert) { 'YES' } else { 'NO' })
         SUITABLE_CERT_THUMBPRINT = $(if ($cert) { $cert.Thumbprint } else { '' })
         SUITABLE_CERT_NOT_AFTER = $(if ($cert) { $cert.NotAfter } else { '' })
         SUITABLE_CERT_ISSUER = $(if ($cert) { $cert.Issuer } else { '' })
@@ -294,12 +413,69 @@ function New-Summary([string]$Mode, $Snapshot, [string]$SourceIp) {
         CERT_CHAIN_VALID = $(if ($cert -and $cert.ChainValid -and $cert.RootMatch) { 'YES' } else { 'NO' })
         CERT_TEMPLATE = $CertificateTemplate
         CERT_ENROLLMENT_ATTEMPTED = 'NO'; CERT_ENROLLMENT_RESULT = 'NOT_NEEDED'
-        FIREWALL_RULE = $(if ($Snapshot.ActiveRuleValid) { 'PASS' } else { 'MISSING_OR_INVALID' })
+        FIREWALL_RULE = $(if ($Snapshot.Components -and
+                $Snapshot.Components.FIREWALL_ACTIVE_RULE.Status -ne 'PASS') { 'UNKNOWN' } elseif ($Snapshot.ActiveRuleValid) { 'PASS' } else { 'MISSING_OR_INVALID' })
         FIREWALL_PROFILE = $(if ($Snapshot.Rule) { $Snapshot.Rule.Profile } else { '' })
         FIREWALL_REMOTE_ADDRESS = $(if ($Snapshot.Rule) { $Snapshot.Rule.RemoteAddress -join ',' } else { '' })
         CHANGES_MADE = 0; STATE_PATH = ''; ROLLBACK_STATUS = ''; ERROR_CODE = ''
         READY_FOR_NIGHTOWL_PREFLIGHT = $(if ($ready) { 'YES' } else { 'NO' })
     }
+}
+
+function Add-AuditDiagnostics($Summary, $Components) {
+    $errors = @()
+    foreach ($name in $Components.Keys) {
+        $component = $Components[$name]
+        $Summary["${name}_STATUS"] = $component.Status
+        $Summary["${name}_ERROR"] = $component.Error
+        if ($component.Code) { $errors += $component.Code }
+    }
+    $Summary.LOCAL_IDENTITY_STATUS = $Components.LOCAL_IDENTITY.Status
+    $Summary.WINRM_SERVICE_STATUS = $Components.WINRM_SERVICE.Status
+    $Summary.WINRM_LISTENER_AUDIT_STATUS = $Components.WINRM_LISTENERS.Status
+    $Summary.NETWORK_PROFILE_STATUS = $Components.NETWORK_PROFILE.Status
+    $Summary.FIREWALL_AUDIT_STATUS = $(if ($Components.FIREWALL_PERSISTENT_RULE.Status -eq 'PASS' -and
+        $Components.FIREWALL_ACTIVE_RULE.Status -eq 'PASS') { 'PASS' } elseif (
+        $Components.FIREWALL_PERSISTENT_RULE.Status -eq 'FAIL' -or
+        $Components.FIREWALL_ACTIVE_RULE.Status -eq 'FAIL') { 'FAIL' } else { 'UNKNOWN' })
+    $Summary.CERTIFICATE_AUDIT_STATUS = $(if ($Components.CERTIFICATE_STORE.Status -eq 'PASS' -and
+        $Components.CERTIFICATE_CHAIN.Status -eq 'PASS') { 'PASS' } elseif (
+        $Components.CERTIFICATE_STORE.Status -eq 'FAIL' -or
+        $Components.CERTIFICATE_CHAIN.Status -eq 'FAIL') { 'FAIL' } else { 'UNKNOWN' })
+    $Summary.PORT_AUDIT_STATUS = $(if ($Components.PORT_5985.Status -eq 'PASS' -and
+        $Components.PORT_5986.Status -eq 'PASS') { 'PASS' } elseif (
+        $Components.PORT_5985.Status -eq 'FAIL' -or
+        $Components.PORT_5986.Status -eq 'FAIL') { 'FAIL' } else { 'UNKNOWN' })
+    $Summary.LISTENER_AUDIT_STATUS = $Components.WINRM_LISTENERS.Status
+    $Summary.ERROR_CODE = $(if ($errors.Count) { $errors[0] } else { '' })
+    $Summary.AUDIT_ERRORS = $errors -join ','
+    if (@($Components.Values | Where-Object { $_.Status -ne 'PASS' }).Count) {
+        $Summary.READY_FOR_NIGHTOWL_PREFLIGHT = 'NO'
+    }
+    return $Summary
+}
+
+function New-MinimalSummary([string]$Mode, [string]$Code) {
+    $summary = [ordered]@{
+        MODE = $Mode; HOSTNAME = 'UNKNOWN'; FQDN = 'UNKNOWN'
+        LOCAL_IDENTITY_STATUS = 'UNKNOWN'; WINRM_SERVICE_STATUS = 'UNKNOWN'
+        WINRM_LISTENER_AUDIT_STATUS = 'UNKNOWN'; NETWORK_PROFILE_STATUS = 'UNKNOWN'
+        FIREWALL_AUDIT_STATUS = 'UNKNOWN'; CERTIFICATE_AUDIT_STATUS = 'UNKNOWN'
+        PORT_AUDIT_STATUS = 'UNKNOWN'; HTTP_LISTENER = 'UNKNOWN'; HTTPS_LISTENER = 'UNKNOWN'
+        PORT_5985_LISTENING = 'UNKNOWN'; PORT_5986_LISTENING = 'UNKNOWN'
+        SUITABLE_CERT_FOUND = 'UNKNOWN'; FIREWALL_RULE = 'UNKNOWN'
+        CERT_ENROLLMENT_ATTEMPTED = 'NO'; CERT_ENROLLMENT_RESULT = 'NOT_NEEDED'
+        CHANGES_MADE = 0; STATE_PATH = ''; ERROR_CODE = $Code
+        READY_FOR_NIGHTOWL_PREFLIGHT = 'NO'
+    }
+    return $summary
+}
+
+function Get-SafeOperationCode($ErrorRecord) {
+    $message = [string]$ErrorRecord.Exception.Message
+    if ($message -cmatch '^[A-Z][A-Z0-9_]+$') { return $message }
+    if ((Get-SafeAuditError $ErrorRecord) -eq 'ACCESS_DENIED') { return 'ACCESS_DENIED' }
+    return 'BOOTSTRAP_OPERATION_FAILED'
 }
 
 function Write-Summary($Summary) {
@@ -371,13 +547,18 @@ function Invoke-Rollback($Backup, $Snapshot) {
 function Invoke-Main {
     $mode = if ($Apply) { 'APPLY' } elseif ($Rollback) { 'ROLLBACK' } else { 'AUDIT' }
     $source = if ($Rollback) { '' } else { $NightOwlSourceIp }
-    if (-not $Rollback) { Assert-SourceIp $source }
-    $snapshot = Get-BootstrapSnapshot $source
-    $summary = New-Summary $mode $snapshot $source
+    $summary = New-MinimalSummary $mode ''
     $backup = $null
     try {
-        if ($mode -eq 'AUDIT') { return $summary }
+        if (-not $Rollback) { Assert-SourceIp $source }
+        if ($mode -eq 'AUDIT') {
+            $snapshot = Get-AuditSnapshot $source
+            $summary = New-Summary $mode $snapshot $source
+            return Add-AuditDiagnostics $summary $snapshot.Components
+        }
         if (-not (Test-Administrator)) { throw 'ADMINISTRATOR_REQUIRED' }
+        $snapshot = Get-BootstrapSnapshot $source
+        $summary = New-Summary $mode $snapshot $source
         if (-not $snapshot.Identity.DomainJoined) { throw 'DOMAIN_MEMBERSHIP_REQUIRED' }
         if ($snapshot.ListenerReadFailed) { throw 'WINRM_LISTENER_READ_FAILED' }
         if ($mode -eq 'ROLLBACK') {
@@ -473,7 +654,7 @@ function Invoke-Main {
         $backup.State.Status = 'APPLIED'
         Save-State $backup.State $backup.Path
     } catch {
-        $summary.ERROR_CODE = [string]$_.Exception.Message
+        $summary.ERROR_CODE = Get-SafeOperationCode $_
         if ($summary.CERT_ENROLLMENT_ATTEMPTED -eq 'YES') { $summary.CERT_ENROLLMENT_RESULT = 'FAILED' }
         $summary.READY_FOR_NIGHTOWL_PREFLIGHT = 'NO'
     }
@@ -485,10 +666,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     try { $result = Invoke-Main }
     catch {
         $mode = if ($Apply) { 'APPLY' } elseif ($Rollback) { 'ROLLBACK' } else { 'AUDIT' }
-        Write-Output "MODE=$mode"
-        Write-Output 'ERROR_CODE=AUDIT_COLLECTION_FAILED'
-        Write-Output 'READY_FOR_NIGHTOWL_PREFLIGHT=NO'
-        exit 1
+        $result = New-MinimalSummary $mode 'BOOTSTRAP_UNEXPECTED_FAILURE'
     }
     Write-Summary $result
     if ($result.ERROR_CODE) { exit 1 }
