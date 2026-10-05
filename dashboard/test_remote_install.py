@@ -103,9 +103,11 @@ class RemoteInstallJobTests(TestCase):
         self.assertNotIn(SENTINEL, repr(protocol.run_command.call_args))
         protocol.cleanup_command.assert_called_once()
         protocol.close_shell.assert_called_once()
-        with mock.patch.object(remote_install, '_new_winrm_protocol', side_effect=ProbeFailure('WINRM_REDIRECT_BLOCKED')):
-            with self.assertRaisesMessage(remote_install.InstallFailure, 'WINRM_REDIRECT_BLOCKED'):
-                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+        for code in ('WINRM_REDIRECT_BLOCKED', 'WINRM_CA_TRUST_INVALID'):
+            with self.subTest(code=code), mock.patch.object(
+                    remote_install, '_new_winrm_protocol', side_effect=ProbeFailure(code)):
+                with self.assertRaisesMessage(remote_install.InstallFailure, code):
+                    remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
 
     def test_failed_revalidation_never_invokes_installer(self):
         job = self.job()

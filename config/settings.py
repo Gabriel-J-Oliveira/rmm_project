@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import environ
+import ssl
 
 from pathlib import Path
 
@@ -330,6 +331,7 @@ NIGHTOWL_AGENT_INSTALLER_URL = env(
     default=f'{NIGHTOWL_PUBLIC_URL}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1',
 ).strip()
 NIGHTOWL_REMOTE_INSTALL_TIMEOUT_SECONDS = env.int('NIGHTOWL_REMOTE_INSTALL_TIMEOUT_SECONDS', default=600)
+WINRM_CA_TRUST_PATH = env('WINRM_CA_TRUST_PATH', default=ssl.get_default_verify_paths().cafile or '').strip()
 NIGHTOWL_REMOTE_ENROLLMENT_TIMEOUT_SECONDS = env.int('NIGHTOWL_REMOTE_ENROLLMENT_TIMEOUT_SECONDS', default=120)
 NIGHTOWL_REMOTE_FIRST_HEARTBEAT_TIMEOUT_SECONDS = env.int('NIGHTOWL_REMOTE_FIRST_HEARTBEAT_TIMEOUT_SECONDS', default=180)
 NIGHTOWL_AGENT_SOURCE_PATH = env(

@@ -1,6 +1,10 @@
 import json
 import logging
+import os
+import ssl
+from pathlib import Path
 from base64 import b64encode
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 import requests
@@ -68,7 +72,7 @@ class SyntheticWinRMAdapter(BaseAdapter):
         pass
 
 
-@override_settings(AD_AUTH_CONFIG=DOMAIN_CONFIG)
+@override_settings(AD_AUTH_CONFIG=DOMAIN_CONFIG, WINRM_CA_TRUST_PATH=requests.certs.where())
 class RemoteInstallPreflightTests(TestCase):
     def setUp(self):
         self.ad = mock.patch.object(preflight, 'discover_ad_computers', return_value=[computer()])
@@ -93,6 +97,14 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertTrue(all(item['status'] == 'PASS' for item in result['checks'].values()))
         self.assertNotIn(SENTINEL, json.dumps(result))
         self.remote_mock.assert_called_once_with('lab-01.control.local', 'CONTROL\\Admin', SENTINEL)
+
+    @override_settings(WINRM_CA_TRUST_PATH='')
+    def test_invalid_ca_bundle_fails_before_tcp_or_authentication(self):
+        result = self.run_probe()
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'WINRM_CA_TRUST_INVALID')
+        self.tcp_mock.assert_not_called()
+        self.remote_mock.assert_not_called()
+        self.assertNotIn(SENTINEL, json.dumps(result))
 
     def test_disabled_or_missing_target_never_connects(self):
         for items in ([computer(enabled=False)], []):
@@ -240,6 +252,7 @@ class RemoteInstallPreflightTests(TestCase):
         self.remote_mock.assert_not_called()
 
 
+@override_settings(WINRM_CA_TRUST_PATH=requests.certs.where())
 class WinRMProbeTests(TestCase):
     @mock.patch('winrm.protocol.Protocol')
     def test_https_tls_timeouts_read_only_command_and_cleanup(self, protocol_class):
@@ -253,6 +266,7 @@ class WinRMProbeTests(TestCase):
         self.assertEqual(kwargs['endpoint'], 'https://lab-01.control.local:5986/wsman')
         self.assertEqual(kwargs['transport'], 'ntlm')
         self.assertEqual(kwargs['server_cert_validation'], 'validate')
+        self.assertEqual(kwargs['ca_trust_path'], os.path.realpath(requests.certs.where()))
         self.assertEqual(kwargs['proxy'], None)
         self.assertEqual(kwargs['password'], SENTINEL)
         self.assertGreater(kwargs['read_timeout_sec'], kwargs['operation_timeout_sec'])
@@ -262,6 +276,16 @@ class WinRMProbeTests(TestCase):
         self.assertNotIn(SENTINEL, str(command))
         protocol.cleanup_command.assert_called_once()
         protocol.close_shell.assert_called_once()
+
+    def test_untrusted_certificate_and_hostname_mismatch_fail_closed(self):
+        for reason in ('untrusted certificate', 'hostname mismatch'):
+            with self.subTest(reason=reason), mock.patch('winrm.protocol.Protocol') as protocol_class:
+                protocol_class.return_value.open_shell.side_effect = ssl.SSLError(reason + SENTINEL)
+                with self.assertRaises(preflight.ProbeFailure) as raised:
+                    preflight._winrm_probe('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+                self.assertEqual(raised.exception.code, 'WINRM_UNAVAILABLE')
+                self.assertNotIn(SENTINEL, str(raised.exception))
+                protocol_class.return_value.run_command.assert_not_called()
 
     @mock.patch('winrm.protocol.Protocol')
     def test_timeout_and_raw_error_never_escape(self, protocol_class):
@@ -278,6 +302,42 @@ class WinRMProbeTests(TestCase):
         protocol.close_shell.assert_called_once()
 
 
+@override_settings(WINRM_CA_TRUST_PATH=requests.certs.where())
+class WinRMTrustTests(TestCase):
+    def test_real_pywinrm_session_uses_explicit_bundle_and_validation(self):
+        protocol = preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+        session = protocol.transport.session
+        self.assertEqual(session.verify, os.path.realpath(requests.certs.where()))
+        self.assertEqual(protocol.transport.server_cert_validation, 'validate')
+        self.assertTrue(protocol.transport.endpoint.startswith('https://'))
+        session.close()
+
+    def test_missing_unreadable_empty_and_invalid_bundle_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            missing = Path(directory) / 'missing.pem'
+            empty = Path(directory) / 'empty.pem'
+            invalid = Path(directory) / 'invalid.pem'
+            empty.write_bytes(b'')
+            invalid.write_bytes(b'not a certificate')
+            for path in (missing, empty, invalid, Path('relative.pem')):
+                with self.subTest(path=path), override_settings(WINRM_CA_TRUST_PATH=str(path)):
+                    with mock.patch('winrm.protocol.Protocol') as protocol_class:
+                        with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                            preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+                        protocol_class.assert_not_called()
+            with override_settings(WINRM_CA_TRUST_PATH=requests.certs.where()), \
+                    mock.patch.object(Path, 'open', side_effect=PermissionError):
+                with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                    preflight._winrm_ca_trust_path()
+
+    @override_settings(WINRM_CA_TRUST_PATH='')
+    def test_empty_config_does_not_fall_back_to_certifi(self):
+        with mock.patch('winrm.protocol.Protocol') as protocol_class:
+            with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+            protocol_class.assert_not_called()
+
+@override_settings(WINRM_CA_TRUST_PATH=requests.certs.where())
 class RedirectProtectionTests(TestCase):
     def session_with_adapter(self, adapter):
         session = requests.Session()

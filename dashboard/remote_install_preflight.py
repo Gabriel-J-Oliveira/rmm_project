@@ -3,9 +3,14 @@
 import base64
 import ipaddress
 import json
+import os
 import re
 import socket
+import ssl
 import time
+from pathlib import Path
+
+from django.conf import settings
 
 from access_inventory.services.ad_computer_discovery import discover_ad_computers, normalize_fqdn
 from config import ad_ldap
@@ -123,12 +128,31 @@ def _block_redirects(session):
     session.send = send_without_redirects
 
 
+def _winrm_ca_trust_path():
+    configured = getattr(settings, 'WINRM_CA_TRUST_PATH', '')
+    if not isinstance(configured, str) or not configured.strip():
+        raise ProbeFailure('WINRM_CA_TRUST_INVALID')
+    path = Path(configured.strip())
+    try:
+        if not path.is_absolute() or not path.is_file():
+            raise OSError()
+        with path.open('rb') as bundle:
+            if not bundle.read(1):
+                raise OSError()
+        ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cafile=str(path))
+    except (OSError, ssl.SSLError, ValueError):
+        raise ProbeFailure('WINRM_CA_TRUST_INVALID') from None
+    return os.path.realpath(path)
+
+
 def _new_winrm_protocol(fqdn, username, password):
+    ca_trust_path = _winrm_ca_trust_path()
     from winrm.protocol import Protocol
 
     protocol = Protocol(
         endpoint=f'https://{fqdn}:{WINRM_PORT}/wsman', transport='ntlm',
         username=username, password=password, server_cert_validation='validate',
+        ca_trust_path=ca_trust_path,
         proxy=None, operation_timeout_sec=3, read_timeout_sec=5,
     )
     _block_redirects(protocol.transport.build_session())
@@ -211,6 +235,10 @@ def run_remote_install_preflight(fqdn, username, password):
         return _fail(checks, 'DNS', 'UNSAFE_TARGET_ADDRESS', target)
     target['ip'] = address
     checks['DNS'] = {'status': 'PASS'}
+    try:
+        _winrm_ca_trust_path()
+    except ProbeFailure as exc:
+        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target)
     if not _tcp_available(address):
         return _fail(checks, 'REMOTE_TRANSPORT', 'WINRM_UNAVAILABLE', target)
     checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
