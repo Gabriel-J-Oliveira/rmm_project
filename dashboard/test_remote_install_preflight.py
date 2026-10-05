@@ -2,12 +2,17 @@ import json
 import logging
 import os
 import ssl
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from base64 import b64encode
 from tempfile import TemporaryDirectory
 from unittest import mock
 
 import requests
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from requests.adapters import BaseAdapter
 from requests.models import Response
 from requests_ntlm import HttpNtlmAuth
@@ -313,6 +318,33 @@ class WinRMTrustTests(TestCase):
                 self.assertEqual(protocol.transport.session.verify, str(bundle.resolve()))
                 self.assertEqual(protocol.transport.server_cert_validation, 'validate')
                 protocol.transport.session.close()
+
+    def test_non_ca_certificate_and_private_key_fail_closed(self):
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'test-only')])
+        now = datetime.now(timezone.utc)
+        certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+                       .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                       .not_valid_before(now - timedelta(days=1))
+                       .not_valid_after(now + timedelta(days=1))
+                       .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                       .sign(key, hashes.SHA256()))
+        leaf_pem = certificate.public_bytes(serialization.Encoding.PEM)
+        private_key = key.private_bytes(serialization.Encoding.PEM,
+                                        serialization.PrivateFormat.PKCS8,
+                                        serialization.NoEncryption())
+        with TemporaryDirectory() as directory:
+            for name, contents in (
+                    ('non-ca.pem', leaf_pem),
+                    ('private-key.pem', Path(requests.certs.where()).read_bytes() + private_key)):
+                with self.subTest(name=name):
+                    bundle = Path(directory) / name
+                    bundle.write_bytes(contents)
+                    with override_settings(WINRM_CA_TRUST_PATH=str(bundle)), \
+                            mock.patch('winrm.protocol.Protocol') as protocol:
+                        with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_CA_TRUST_INVALID'):
+                            preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+                        protocol.assert_not_called()
 
     def test_no_ca_or_only_expired_or_future_ca_fails_closed(self):
         dates = (

@@ -8,8 +8,10 @@ import re
 import socket
 import ssl
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
+from cryptography import x509
 from django.conf import settings
 
 from access_inventory.services.ad_computer_discovery import discover_ad_computers, normalize_fqdn
@@ -143,13 +145,19 @@ def _winrm_ca_trust_path():
             remainder = re.sub(rb'(?m)^[ \t]*#[^\r\n]*', b'', remainder)
             if not certificates or remainder.strip():
                 raise OSError()
+            now_utc = datetime.now(timezone.utc)
+            for pem in certificates:
+                certificate = x509.load_pem_x509_certificate(pem)
+                constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value
+                if not constraints.ca or not certificate.not_valid_before_utc <= now_utc < certificate.not_valid_after_utc:
+                    raise ValueError()
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.load_verify_locations(cafile=str(path))
         now = time.time()
         if not any(ssl.cert_time_to_seconds(ca['notBefore']) <= now < ssl.cert_time_to_seconds(ca['notAfter'])
                    for ca in context.get_ca_certs()):
             raise ValueError()
-    except (OSError, ssl.SSLError, ValueError):
+    except (OSError, ssl.SSLError, ValueError, x509.ExtensionNotFound):
         raise ProbeFailure('WINRM_CA_TRUST_INVALID') from None
     return os.path.realpath(path)
 
