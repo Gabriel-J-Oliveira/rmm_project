@@ -948,6 +948,9 @@ function Invoke-NightOwlEnrollment($BaseUrl, $EnrollmentTokenValue, $ManualToken
 
         $tokenToUse = $ManualTokenValue
         if ([string]::IsNullOrWhiteSpace($tokenToUse)) {
+            if ($NonInteractive) {
+                throw "INSTALL_MANUAL_VALIDATION_REQUIRED: manual validation requires an explicit token in noninteractive mode."
+            }
             if ($NoGuiMode) {
                 $tokenToUse = Read-Host "Informe o token de validacao manual NightOwl"
             }

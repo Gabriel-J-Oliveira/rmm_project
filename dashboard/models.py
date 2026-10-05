@@ -181,6 +181,7 @@ class RemoteInstallJob(models.Model):
     status = models.CharField(max_length=32, default='QUEUED')
     stage = models.CharField(max_length=32, default='QUEUED')
     error_code = models.CharField(max_length=64, blank=True)
+    diagnostics = models.JSONField(default=dict, blank=True)
     active_slot = models.CharField(max_length=16, unique=True, null=True, blank=True)
     endpoint = models.ForeignKey('agents.AgentMachine', null=True, blank=True, on_delete=models.SET_NULL)
     runner_heartbeat_at = models.DateTimeField(null=True, blank=True)

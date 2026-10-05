@@ -11,7 +11,7 @@ from django.views.decorators.http import require_GET, require_POST
 from config.authz import is_nightowl_technical_user
 from dashboard.ad_install_discovery import build_install_discovery
 from dashboard.remote_install_preflight import run_remote_install_preflight
-from dashboard.remote_install import InstallFailure, create_remote_install_job, reconcile_stale_jobs, start_remote_install
+from dashboard.remote_install import InstallFailure, create_remote_install_job, start_remote_install
 from dashboard.remote_install_preflight import ProbeFailure, _valid_fqdn
 from dashboard.models import RemoteInstallJob
 
@@ -103,12 +103,12 @@ def install_ad_computer(request):
 def remote_install_status(request, pk):
     if not request.user.is_active or not (request.user.is_staff or request.user.is_superuser):
         return JsonResponse({'error': 'Acesso negado.'}, status=403)
-    reconcile_stale_jobs()
     try:
         job = RemoteInstallJob.objects.select_related('endpoint').get(pk=pk)
     except RemoteInstallJob.DoesNotExist:
         return JsonResponse({'error': 'Operacao nao encontrada.'}, status=404)
     data = {'id': str(job.pk), 'status': job.status, 'stage': job.stage,
+            'diagnostics': job.diagnostics,
             'error_code': job.error_code, 'created_at': job.created_at.isoformat(),
             'started_at': job.started_at.isoformat() if job.started_at else None,
             'finished_at': job.finished_at.isoformat() if job.finished_at else None,

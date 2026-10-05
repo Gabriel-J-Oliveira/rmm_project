@@ -17,6 +17,7 @@ function computer(number, overrides = {}) {
 }
 
 function setup(initial) {
+    let nextStatus;
     const ids = new Map();
     const nodes = [];
     const filterButtons = ['enabled', 'unmanaged', 'managed', 'disabled', 'conflict', 'all'].map((name) => {
@@ -84,7 +85,10 @@ function setup(initial) {
                 if (nextInstall) return nextInstall();
                 return { ok: true, json: async () => ({ status_url: '/agent-install/install-jobs/synthetic/' }) };
             }
-            if (url === '/agent-install/install-jobs/synthetic/') return { ok: true, json: async () => ({ status: 'COMPLETED', first_heartbeat_at: '2026-10-03T12:00:00Z', endpoint_url: '/endpoints/synthetic/' }) };
+            if (url === '/agent-install/install-jobs/synthetic/') {
+                if (nextStatus) return nextStatus();
+                return { ok: true, json: async () => ({ status: 'COMPLETED', first_heartbeat_at: '2026-10-03T12:00:00Z', endpoint_url: '/endpoints/synthetic/' }) };
+            }
             scans++;
             if (nextScan) return nextScan();
             return { ok: true, json: async () => ({ computers: initial, summary: summary(initial) }) };
@@ -96,6 +100,7 @@ function setup(initial) {
         get installs() { return installs; }, get installBody() { return installBody; },
         setNextScan(callback) { nextScan = callback; },
         setNextInstall(callback) { nextInstall = callback; },
+        setNextStatus(callback) { nextStatus = callback; },
         refresh() { ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} }); },
         rows() { return ids.get('ad-computer-rows').children; },
         clickFilter(name) { filterButtons.find((button) => button.dataset.adFilter === name).listeners.click(); },
@@ -258,4 +263,32 @@ test('install handles non-JSON and malformed responses without exposing HTML or 
         assert.equal(drawer.textContent.includes('SUPER_SECRET_REMOTE_INSTALL_91827'), false);
         assert.equal(drawer.textContent.includes('NightOwl instalado com sucesso'), false);
     }
+});
+
+test('terminal diagnostics are plain text, preserve retry warning and never render credential', async () => {
+    const app = setup([computer(1)]);
+    await tick();
+    const checkbox = app.rows()[0].children[0].children[0];
+    checkbox.checked = true; checkbox.listeners.change();
+    app.ids.get('ad-prepare-button').listeners.click();
+    const drawer = app.ids.get('ad-detail-content');
+    const preflight = drawer.children.find((node) => node.className === 'ad-preflight-form');
+    await preflight.listeners.submit({ preventDefault() {} });
+    drawer.children.find((node) => node.text === 'Instalar NightOwl').listeners.click();
+    const form = drawer.children.find((node) => node.className === 'ad-preflight-form');
+    form.children[0].children[0].value = 'synthetic-admin';
+    form.children[1].children[0].value = 'SUPER_SECRET_REMOTE_INSTALL_91827';
+    app.setNextStatus(() => ({ ok: true, json: async () => ({ status: 'OUTCOME_UNKNOWN',
+        stage: 'INSTALLER_FINISHED', diagnostics: { installer_exit_code: 73, safe_to_retry: 'NO',
+            safe_error_code: '<img src=x onerror=alert(1)>' } }) }));
+    await form.listeners.submit({ preventDefault() {} });
+    await tick();
+    assert.match(drawer.textContent, /Exit code: 73/);
+    assert.match(drawer.textContent, /Não repita sem revisão/);
+    assert.ok(drawer.textContent.includes('<img src=x onerror=alert(1)>'));
+    assert.equal(app.nodes.some((node) => node.tag === 'img'), false);
+    assert.equal(form.children[1].children[0].value, '');
+    assert.equal(drawer.textContent.includes('SUPER_SECRET_REMOTE_INSTALL_91827'), false);
+    assert.equal(drawer.textContent.includes('SUPER_SECRET_ENROLLMENT_TOKEN_73192'), false);
+    assert.equal(app.installs, 1);
 });

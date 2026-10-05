@@ -385,10 +385,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (!response.ok) throw new Error('status unavailable');
                         const job = await response.json();
                         const stages = {
-                            QUEUED: 'Preparando', VALIDATING_TARGET: 'Validando alvo', CONNECTING: 'Conectando',
+                            QUEUED: 'Preparando', VALIDATING_TARGET: 'Validando alvo',
+                            VALIDATING_INSTALLER: 'Validando contrato do instalador', CONNECTING: 'Conectando',
                             AUTHENTICATED: 'Autenticado',
                             PREFLIGHT_OK: 'Autenticado e validado', PREPARING_ENROLLMENT: 'Preparando enrollment',
-                            INSTALLING: 'Instalando agente', VALIDATING_SERVICE: 'Validando serviço',
+                            INSTALLING: 'Preparando instalador remoto', INSTALLER_STARTED: 'Instalador iniciado',
+                            INSTALLER_FINISHED: 'Instalador concluído', VALIDATING_SERVICE: 'Validando serviço',
                             WAITING_ENROLLMENT: 'Aguardando enrollment', WAITING_HEARTBEAT: 'Aguardando heartbeat',
                         };
                         const failures = {
@@ -414,6 +416,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else {
                             progress.textContent = stages[job.stage] || 'Preparando';
                             installPollTimer = window.setTimeout(() => poll(url), 2000);
+                        }
+                        if (job.diagnostics && typeof job.diagnostics === 'object') {
+                            const d = job.diagnostics;
+                            const parts = [];
+                            if (Number.isInteger(d.installer_exit_code)) parts.push('Exit code: ' + d.installer_exit_code);
+                            if (d.safe_error_code) parts.push('Código: ' + d.safe_error_code);
+                            if (['YES', 'NO', 'UNKNOWN'].includes(d.safe_to_retry)) {
+                                parts.push(d.safe_to_retry === 'YES' ? 'Sem execução do instalador confirmada; nova tentativa requer revisão.' : 'Não repita sem revisão do endpoint.');
+                            }
+                            if (parts.length) progress.textContent += ' ' + parts.join(' ');
                         }
                     } catch (_error) {
                         progress.textContent = 'Não foi possível consultar o progresso. Reabra o painel antes de tentar novamente.';

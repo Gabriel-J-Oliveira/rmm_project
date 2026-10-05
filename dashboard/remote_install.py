@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -18,13 +19,18 @@ from access_inventory.services.ad_computer_discovery import normalize_fqdn
 from agents.models import AgentEnrollmentToken
 from dashboard.ad_install_discovery import _machine_maps, _match_machine
 from dashboard.models import RemoteInstallJob
+from dashboard.installer_contract import InstallerContractFailure, validate_published_installer
 from dashboard.remote_install_preflight import (
     ProbeFailure, _ad_target, _new_winrm_protocol, run_remote_install_preflight,
 )
 
 
 TERMINAL = {'COMPLETED', 'INSTALLED_UNVERIFIED', 'OUTCOME_UNKNOWN', 'FAILED', 'INTERRUPTED'}
-INSTALL_STARTED_STAGES = {'INSTALLING', 'VALIDATING_SERVICE', 'WAITING_ENROLLMENT', 'WAITING_HEARTBEAT'}
+INSTALL_STARTED_STAGES = {'INSTALLING', 'INSTALLER_STARTED', 'INSTALLER_FINISHED', 'VALIDATING_SERVICE', 'WAITING_ENROLLMENT', 'WAITING_HEARTBEAT'}
+STAGES = INSTALL_STARTED_STAGES | {'QUEUED', 'VALIDATING_TARGET', 'VALIDATING_INSTALLER',
+    'CONNECTING', 'AUTHENTICATED', 'PREFLIGHT_OK', 'PREPARING_ENROLLMENT', 'COMPLETED', 'INTERRUPTED'}
+OUTCOMES = {'COMPLETED': 'SUCCESS', 'INSTALLED_UNVERIFIED': 'INSTALLED_UNVERIFIED',
+            'OUTCOME_UNKNOWN': 'UNKNOWN', 'FAILED': 'FAILED', 'INTERRUPTED': 'INTERRUPTED'}
 STALE_AFTER = timedelta(seconds=45)
 HEARTBEAT_INTERVAL = 5
 INSTALL_TIMEOUT = settings.NIGHTOWL_REMOTE_INSTALL_TIMEOUT_SECONDS
@@ -34,13 +40,25 @@ UNKNOWN_SLOT_HOLD = timedelta(seconds=INSTALL_TIMEOUT + ENROLLMENT_TIMEOUT + FIR
 
 
 class InstallFailure(Exception):
-    def __init__(self, code, *, installed=False):
+    def __init__(self, code, *, installed=False, command_attempted=None):
         self.code = code
         self.installed = installed
+        self.command_attempted = command_attempted
         super().__init__(code)
 
 
-def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None):
+def _initial_diagnostics():
+    return {'installer_sha256': '', 'installer_contract_valid': False,
+            'installer_started_at': None, 'installer_finished_at': None, 'installer_exit_code': None,
+            'service_present': 'UNKNOWN', 'service_state': 'UNKNOWN',
+            'service_validation_status': 'NOT_CHECKED', 'safe_to_retry': 'UNKNOWN'}
+
+
+def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None, diagnostic=None):
+    if stage not in STAGES:
+        raise ValueError('Invalid install stage')
+    if error_code and not re.fullmatch(r'[A-Z_]{1,64}', error_code):
+        error_code = 'RUNNER_INTERRUPTED'
     fields = {'status': status, 'stage': stage, 'error_code': error_code,
               'runner_heartbeat_at': timezone.now(), 'updated_at': timezone.now()}
     if endpoint is not None:
@@ -49,7 +67,20 @@ def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None):
         if status != 'OUTCOME_UNKNOWN':
             fields['active_slot'] = None
         fields['finished_at'] = timezone.now()
-    RemoteInstallJob.objects.filter(pk=job_id, active_slot='global').update(**fields)
+    with transaction.atomic():
+        job = RemoteInstallJob.objects.select_for_update().filter(pk=job_id, active_slot='global').first()
+        if not job:
+            return
+        data = {**_initial_diagnostics(), **job.diagnostics}
+        data.update(diagnostic or {})
+        data['outcome'] = OUTCOMES.get(status, 'RUNNING')
+        data['safe_error_code'] = error_code
+        # Only fixed codes, timestamps and factual scalars enter diagnostics.
+        data['safe_diagnostic'] = error_code or stage
+        data['stage_history'] = [*data.get('stage_history', []),
+            {'stage': stage, 'at': timezone.now().isoformat(), 'outcome': data['outcome']}][-32:]
+        fields['diagnostics'] = data
+        RemoteInstallJob.objects.filter(pk=job.pk).update(**fields)
 
 
 def reconcile_stale_jobs():
@@ -57,6 +88,16 @@ def reconcile_stale_jobs():
     stale = RemoteInstallJob.objects.filter(active_slot='global').filter(
         Q(runner_heartbeat_at__lt=cutoff) |
         Q(runner_heartbeat_at__isnull=True, created_at__lt=cutoff))
+    for pk in list(stale.exclude(diagnostics={}).values_list('pk', flat=True)):
+        with transaction.atomic():
+            job = RemoteInstallJob.objects.select_for_update().get(pk=pk)
+            last_activity = job.runner_heartbeat_at or job.created_at
+            if job.status in ('QUEUED', 'RUNNING') and last_activity < cutoff:
+                attempted = job.diagnostics.get('safe_to_retry') == 'NO'
+                _update(pk, job.stage, status='OUTCOME_UNKNOWN' if attempted else 'INTERRUPTED',
+                        error_code='RUNNER_INTERRUPTED', diagnostic={'safe_to_retry': 'NO' if attempted else 'YES'})
+    # Preserve the legacy reconciliation contract for jobs without new diagnostics.
+    stale = stale.filter(diagnostics={})
     stale.filter(status='OUTCOME_UNKNOWN', created_at__lt=timezone.now() - UNKNOWN_SLOT_HOLD).update(
         active_slot=None, updated_at=timezone.now())
     stale.filter(status='RUNNING', stage__in=INSTALL_STARTED_STAGES).update(
@@ -81,6 +122,7 @@ def create_remote_install_job(fqdn, actor):
                 target_hostname=computer['hostname'], target_fqdn=normalized,
                 target_ad_dn=computer['distinguished_name'], requested_by=actor,
                 active_slot='global', runner_heartbeat_at=timezone.now(),
+                diagnostics=_initial_diagnostics(),
             )
     except IntegrityError:
         raise InstallFailure('INSTALL_ALREADY_RUNNING') from None
@@ -98,7 +140,8 @@ def start_remote_install(job, username, password):
         process.stdin.write(payload)
         process.stdin.close()
     except Exception:
-        _update(job.pk, 'INTERRUPTED', status='INTERRUPTED', error_code='RUNNER_START_FAILED')
+        _update(job.pk, 'INTERRUPTED', status='INTERRUPTED', error_code='RUNNER_START_FAILED',
+                diagnostic={'safe_to_retry': 'YES'})
         if process and process.stdin and not process.stdin.closed:
             process.stdin.close()
         raise InstallFailure('RUNNER_START_FAILED') from None
@@ -122,47 +165,64 @@ def _trusted_urls():
     parsed_base, parsed_installer = urlsplit(base), urlsplit(installer)
     for parsed in (parsed_base, parsed_installer):
         if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
-                or parsed.query or parsed.fragment or "'" in parsed.geturl()):
+                or parsed.query or parsed.fragment or any(c in parsed.geturl() for c in "'\"`\r\n ")):
             raise InstallFailure('INSTALLER_URL_INVALID')
     if parsed_base.netloc != parsed_installer.netloc or not parsed_installer.path.endswith('/Install-NightOwlAgentDotNet.ps1'):
         raise InstallFailure('INSTALLER_URL_INVALID')
     return base, installer
 
 
-def _remote_script(fqdn, username, password, script, timeout):
+def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
     from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
 
     try:
         protocol = _new_winrm_protocol(fqdn, username, password)
     except ProbeFailure as exc:
-        raise InstallFailure(exc.code) from None
+        raise InstallFailure(exc.code, command_attempted=False) from None
     except Exception:
-        raise InstallFailure('WINRM_UNAVAILABLE') from None
+        raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False) from None
     shell_id = command_id = None
+    attempted = False
     try:
         shell_id = protocol.open_shell()
         encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
+        attempted = True
         command_id = protocol.run_command(shell_id, 'powershell.exe',
                                           ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded])
         deadline = time.monotonic() + timeout
+        pending = b''
         while time.monotonic() < deadline:
             try:
-                _stdout, _stderr, exit_code, done = protocol.get_command_output_raw(shell_id, command_id)
+                stdout, _stderr, exit_code, done = protocol.get_command_output_raw(shell_id, command_id)
             except WinRMOperationTimeoutError:
                 continue
+            if on_event:
+                # A wrapper emits only these tiny frames; never store raw output/errors.
+                pending = (pending + stdout)[-4096:]
+                while b'\n' in pending:
+                    line, pending = pending.split(b'\n', 1)
+                    match = re.fullmatch(rb'NIGHTOWL_INSTALL:(STARTED|FINISHED|NOT_STARTED)(?::(-?\d{1,10}))?\r?', line)
+                    if match:
+                        event = match[1].decode('ascii')
+                        code = int(match[2]) if match[2] else None
+                        if ((event == 'STARTED' and code is None) or
+                                (event == 'FINISHED' and code is not None and -2147483648 <= code <= 2147483647) or
+                                (event == 'NOT_STARTED' and code in (25, 26, 27, 28, 29))):
+                            on_event(event, code)
             if done:
                 return exit_code
         raise InstallFailure('REMOTE_COMMAND_TIMEOUT')
     except InstallFailure:
         raise
     except ProbeFailure as exc:
-        raise InstallFailure(exc.code) from None
+        raise InstallFailure(exc.code, command_attempted=attempted) from None
     except AuthenticationError:
-        raise InstallFailure('AUTHENTICATION_FAILED') from None
+        raise InstallFailure('AUTHENTICATION_FAILED', command_attempted=attempted) from None
     except WinRMTransportError as exc:
-        raise InstallFailure('AUTHENTICATION_FAILED' if exc.code in (401, 403) else 'WINRM_UNAVAILABLE') from None
+        raise InstallFailure('AUTHENTICATION_FAILED' if exc.code in (401, 403) else 'WINRM_UNAVAILABLE',
+                             command_attempted=attempted) from None
     except Exception:
-        raise InstallFailure('WINRM_UNAVAILABLE') from None
+        raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=attempted) from None
     finally:
         if shell_id:
             if command_id:
@@ -176,19 +236,54 @@ def _remote_script(fqdn, username, password, script, timeout):
                 pass
 
 
-def _installer_script():
+def _installer_script(installer_sha256):
+    if not re.fullmatch(r'[a-f0-9]{64}', installer_sha256):
+        raise InstallFailure('INSTALLER_CONTRACT_MISMATCH')
     base, installer = _trusted_urls()
     return f"""
 $ErrorActionPreference = 'Stop'
+function Stop-BeforeInstaller([int]$Code) {{
+    [Console]::WriteLine('NIGHTOWL_INSTALL:NOT_STARTED:' + $Code)
+    exit $Code
+}}
 if ((Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue) -or
-    (Test-Path -LiteralPath (Join-Path $env:ProgramData 'NightOwl'))) {{ exit 25 }}
+    (Test-Path -LiteralPath (Join-Path $env:ProgramData 'NightOwl'))) {{ Stop-BeforeInstaller 25 }}
 $dir = Join-Path $env:TEMP ('NightOwlRemoteInstall-' + [guid]::NewGuid().ToString('N'))
 try {{
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $script = Join-Path $dir 'Install-NightOwlAgentDotNet.ps1'
-    Invoke-WebRequest -Uri '{installer}' -OutFile $script -UseBasicParsing
-    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -ServerUrl '{base}' -InstallAsService -RunCheck -NoGui -NonInteractive
-    if ($LASTEXITCODE -ne 0) {{ exit 1 }}
+    try {{ Invoke-WebRequest -Uri '{installer}' -OutFile $script -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 30 }}
+    catch {{ Stop-BeforeInstaller 26 }}
+    if ((Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant() -ne '{installer_sha256}') {{ Stop-BeforeInstaller 27 }}
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$errors)
+    if ($errors.Count -or -not $ast.ParamBlock) {{ Stop-BeforeInstaller 28 }}
+    $names = @($ast.ParamBlock.Parameters | ForEach-Object {{ $_.Name.VariablePath.UserPath }})
+    foreach ($name in @('ServerUrl', 'InstallAsService', 'RunCheck', 'NoGui', 'NonInteractive')) {{
+        if ($names -notcontains $name) {{ Stop-BeforeInstaller 28 }}
+    }}
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = Join-Path $PSHOME 'powershell.exe'
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '" -ServerUrl "{base}" -InstallAsService -RunCheck -NoGui -NonInteractive'
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $info
+    try {{ if (-not $process.Start()) {{ Stop-BeforeInstaller 29 }} }}
+    catch {{ Stop-BeforeInstaller 29 }}
+    [Console]::WriteLine('NIGHTOWL_INSTALL:STARTED')
+    # Drain both streams concurrently, but never send installer output to the backend.
+    $out = $process.StandardOutput.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+    $err = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+    $process.WaitForExit()
+    $out.Wait()
+    $err.Wait()
+    $code = $process.ExitCode
+    [Console]::WriteLine('NIGHTOWL_INSTALL:FINISHED:' + $code)
+    $process.Dispose()
+    exit $code
 }} finally {{ Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }}
 """
 
@@ -215,6 +310,27 @@ def run_remote_install(job_id, username, password):
     pulse.start()
     installed = False
     install_started = False
+    stage = 'VALIDATING_TARGET'
+    installer_finished = False
+    installer_exit_code = None
+    not_started_code = None
+    def installer_event(event, code):
+        nonlocal stage, install_started, installer_finished, installer_exit_code, not_started_code
+        if event == 'NOT_STARTED' and not install_started and code in (25, 26, 27, 28, 29):
+            not_started_code = code
+            return
+        if event == 'STARTED' and not install_started:
+            install_started = True
+            stage = 'INSTALLER_STARTED'
+            _update(job_id, stage, diagnostic={'installer_started_at': timezone.now().isoformat(),
+                                              'safe_to_retry': 'NO'})
+        elif event == 'FINISHED' and install_started and not installer_finished:
+            installer_finished = True
+            installer_exit_code = code
+            stage = 'INSTALLER_FINISHED'
+            _update(job_id, stage, diagnostic={'installer_finished_at': timezone.now().isoformat(),
+                                              'installer_exit_code': code})
+    invocation_attempted = False
     try:
         job = RemoteInstallJob.objects.get(pk=job_id, active_slot='global')
         RemoteInstallJob.objects.filter(pk=job_id).update(started_at=timezone.now())
@@ -225,6 +341,16 @@ def run_remote_install(job_id, username, password):
             raise InstallFailure(exc.code) from None
         if computer['distinguished_name'] != job.target_ad_dn:
             raise InstallFailure('TARGET_CHANGED')
+        stage = 'VALIDATING_INSTALLER'
+        _update(job_id, stage, diagnostic={'safe_to_retry': 'YES', 'installer_contract_valid': False,
+            'installer_started_at': None, 'installer_finished_at': None, 'installer_exit_code': None,
+            'service_present': 'UNKNOWN', 'service_state': 'UNKNOWN', 'service_validation_status': 'NOT_CHECKED'})
+        try:
+            contract = validate_published_installer()
+        except InstallerContractFailure as exc:
+            raise InstallFailure(exc.code) from None
+        _update(job_id, stage, diagnostic=contract)
+        stage = 'CONNECTING'
         _update(job_id, 'CONNECTING')
         preflight = run_remote_install_preflight(job.target_fqdn, username, password)
         if preflight['status'] != 'READY':
@@ -236,26 +362,51 @@ def run_remote_install(job_id, username, password):
             raise InstallFailure(exc.code) from None
         if computer['distinguished_name'] != job.target_ad_dn:
             raise InstallFailure('TARGET_CHANGED')
-        _update(job_id, 'AUTHENTICATED')
-        _update(job_id, 'PREFLIGHT_OK')
+        stage = 'AUTHENTICATED'
+        _update(job_id, stage)
+        stage = 'PREFLIGHT_OK'
+        _update(job_id, stage)
         if not _enrollment_available(job.target_fqdn):
             raise InstallFailure('ENROLLMENT_UNAVAILABLE')
-        _update(job_id, 'PREPARING_ENROLLMENT')
+        stage = 'PREPARING_ENROLLMENT'
+        _update(job_id, stage)
         if _matching_endpoint(computer):
             raise InstallFailure('ALREADY_MANAGED')
-        installer_script = _installer_script()
+        installer_script = _installer_script(contract['installer_sha256'])
+        stage = 'INSTALLING'
         _update(job_id, 'INSTALLING')
-        install_started = True
-        code = _remote_script(job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT)
+        invocation_attempted = True
+        _update(job_id, stage, diagnostic={'safe_to_retry': 'NO'})
+        code = _remote_script(job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT,
+                              on_event=installer_event)
+        if not install_started:
+            # Reserved wrapper codes prove failure before Process.Start. An absent frame
+            # alone never proves that the child did not start (transport can be lost).
+            early = {25: 'NIGHTOWL_INSTALLATION_DETECTED', 26: 'INSTALLER_DOWNLOAD_FAILED',
+                     27: 'INSTALLER_CONTRACT_MISMATCH', 28: 'INSTALLER_CONTRACT_MISMATCH',
+                     29: 'INSTALLER_NOT_STARTED'}
+            if code == not_started_code and code in early:
+                invocation_attempted = False
+                raise InstallFailure(early[code])
+            raise InstallFailure('INSTALLER_RESULT_UNKNOWN')
+        if not installer_finished or code != installer_exit_code:
+            raise InstallFailure('INSTALLER_RESULT_UNKNOWN')
         if code == 25:
             raise InstallFailure('NIGHTOWL_INSTALLATION_DETECTED')
         if code != 0:
-            raise InstallFailure('INSTALLER_FAILED')
+            raise InstallFailure('INSTALLER_EXIT_NONZERO')
         installed = True
+        stage = 'VALIDATING_SERVICE'
         _update(job_id, 'VALIDATING_SERVICE')
-        service_check = "if ((Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue).Status -eq 'Running') { exit 0 } else { exit 1 }"
-        if _remote_script(job.target_fqdn, username, password, service_check, 30) != 0:
-            raise InstallFailure('SERVICE_NOT_RUNNING', installed=True)
+        service_check = "$s = Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue; if (-not $s) { exit 2 }; if ($s.Status -eq 'Running') { exit 0 }; if ($s.Status -eq 'Stopped') { exit 3 }; exit 4"
+        service_code = _remote_script(job.target_fqdn, username, password, service_check, 30)
+        _update(job_id, stage, diagnostic={'service_present': 'NO' if service_code == 2 else
+            'YES' if service_code in (0, 3, 4) else 'UNKNOWN',
+            'service_state': {0: 'RUNNING', 3: 'STOPPED'}.get(service_code, 'UNKNOWN'),
+            'service_validation_status': 'PASS' if service_code == 0 else 'FAIL'})
+        if service_code != 0:
+            raise InstallFailure('SERVICE_NOT_FOUND' if service_code == 2 else 'SERVICE_NOT_RUNNING', installed=True)
+        stage = 'WAITING_ENROLLMENT'
         _update(job_id, 'WAITING_ENROLLMENT')
         deadline = time.monotonic() + ENROLLMENT_TIMEOUT
         machine = None
@@ -266,22 +417,29 @@ def run_remote_install(job_id, username, password):
             time.sleep(3)
         if not machine:
             raise InstallFailure('ENROLLMENT_TIMEOUT', installed=True)
+        stage = 'WAITING_HEARTBEAT'
         _update(job_id, 'WAITING_HEARTBEAT', endpoint=machine)
         deadline = time.monotonic() + FIRST_HEARTBEAT_TIMEOUT
         while time.monotonic() < deadline:
             machine = _matching_endpoint(computer, installed=True)
             if machine and machine.last_seen_at and machine.last_seen_at >= job.created_at and machine.status == 'online':
-                _update(job_id, 'COMPLETED', status='COMPLETED', endpoint=machine)
+                _update(job_id, 'COMPLETED', status='COMPLETED', endpoint=machine,
+                        diagnostic={'safe_to_retry': 'NO'})
                 return
             time.sleep(3)
         raise InstallFailure('HEARTBEAT_TIMEOUT', installed=True)
     except InstallFailure as exc:
+        if exc.command_attempted is False and not install_started:
+            invocation_attempted = False
         state = ('INSTALLED_UNVERIFIED' if exc.installed or installed else
-                 'OUTCOME_UNKNOWN' if install_started else 'FAILED')
-        _update(job_id, state, status=state, error_code=exc.code)
+                 'OUTCOME_UNKNOWN' if invocation_attempted else 'FAILED')
+        _update(job_id, stage, status=state, error_code=exc.code,
+                diagnostic={'safe_to_retry': 'NO' if installed or invocation_attempted or
+                    exc.code == 'NIGHTOWL_INSTALLATION_DETECTED' else 'YES'})
     except Exception:
-        state = 'OUTCOME_UNKNOWN' if install_started else 'INTERRUPTED'
-        _update(job_id, state, status=state, error_code='RUNNER_INTERRUPTED')
+        state = 'OUTCOME_UNKNOWN' if invocation_attempted else 'INTERRUPTED'
+        _update(job_id, stage, status=state, error_code='RUNNER_INTERRUPTED',
+                diagnostic={'safe_to_retry': 'NO' if invocation_attempted else 'YES'})
     finally:
         stop.set()
         pulse.join(timeout=2)

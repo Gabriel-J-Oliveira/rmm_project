@@ -26,9 +26,24 @@ COMPUTER = {
 READY = {'status': 'READY', 'checks': {}}
 
 
+def recorded_outputs(outputs):
+    values = iter(outputs)
+    def command(*args, **kwargs):
+        code = next(values)
+        if kwargs.get('on_event'):
+            kwargs['on_event']('STARTED', None)
+            kwargs['on_event']('FINISHED', code)
+        return code
+    return command
+
+
 class RemoteInstallJobTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user('install-admin', password='synthetic', is_staff=True)
+        contract = mock.patch.object(remote_install, 'validate_published_installer', return_value={
+            'installer_sha256': 'a' * 64, 'installer_contract_valid': True})
+        contract.start()
+        self.addCleanup(contract.stop)
 
     def job(self, **changes):
         fields = dict(target_hostname='lab-01', target_fqdn=COMPUTER['fqdn'],
@@ -173,7 +188,7 @@ class RemoteInstallJobTests(TestCase):
                 mock.patch.object(remote_install, 'run_remote_install_preflight', return_value=READY), \
                 mock.patch.object(remote_install, '_enrollment_available', return_value=True), \
                 mock.patch.object(remote_install, '_matching_endpoint', side_effect=[None, machine, machine]), \
-                mock.patch.object(remote_install, '_remote_script', side_effect=[0, 0]) as command:
+                mock.patch.object(remote_install, '_remote_script', side_effect=recorded_outputs([0, 0])) as command:
             remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
         job.refresh_from_db()
         self.assertEqual(job.status, 'COMPLETED')
@@ -192,7 +207,7 @@ class RemoteInstallJobTests(TestCase):
                     mock.patch.object(remote_install, 'run_remote_install_preflight', return_value=READY), \
                     mock.patch.object(remote_install, '_enrollment_available', return_value=True), \
                     mock.patch.object(remote_install, '_matching_endpoint', return_value=None), \
-                    mock.patch.object(remote_install, '_remote_script', side_effect=outputs):
+                    mock.patch.object(remote_install, '_remote_script', side_effect=recorded_outputs(outputs)):
                 remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
             job.refresh_from_db()
             self.assertEqual(job.status, expected)
@@ -208,7 +223,7 @@ class RemoteInstallJobTests(TestCase):
                 mock.patch.object(remote_install, 'run_remote_install_preflight', return_value=READY), \
                 mock.patch.object(remote_install, '_enrollment_available', return_value=True), \
                 mock.patch.object(remote_install, '_matching_endpoint', return_value=None), \
-                mock.patch.object(remote_install, '_remote_script', side_effect=[0, 0]), \
+                mock.patch.object(remote_install, '_remote_script', side_effect=recorded_outputs([0, 0])), \
                 mock.patch.object(remote_install, 'ENROLLMENT_TIMEOUT', 0):
             remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
         job.refresh_from_db()
@@ -225,7 +240,7 @@ class RemoteInstallJobTests(TestCase):
                 mock.patch.object(remote_install, 'run_remote_install_preflight', return_value=READY), \
                 mock.patch.object(remote_install, '_enrollment_available', return_value=True), \
                 mock.patch.object(remote_install, '_matching_endpoint', side_effect=[None, machine]), \
-                mock.patch.object(remote_install, '_remote_script', side_effect=[0, 0]), \
+                mock.patch.object(remote_install, '_remote_script', side_effect=recorded_outputs([0, 0])), \
                 mock.patch.object(remote_install, 'FIRST_HEARTBEAT_TIMEOUT', 0):
             remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
         job.refresh_from_db()
