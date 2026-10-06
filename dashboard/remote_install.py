@@ -19,6 +19,7 @@ from access_inventory.services.ad_computer_discovery import normalize_fqdn
 from agents.models import AgentEnrollmentToken
 from dashboard.ad_install_discovery import _machine_maps, _match_machine
 from dashboard.models import RemoteInstallJob
+from dashboard.remote_install_admission import install_admission
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
@@ -32,7 +33,7 @@ STAGES = INSTALL_STARTED_STAGES | {'QUEUED', 'VALIDATING_TARGET', 'VALIDATING_IN
     'CONNECTING', 'AUTHENTICATED', 'PREFLIGHT_OK', 'PREPARING_ENROLLMENT', 'COMPLETED', 'INTERRUPTED'}
 OUTCOMES = {'COMPLETED': 'SUCCESS', 'INSTALLED_UNVERIFIED': 'INSTALLED_UNVERIFIED',
             'OUTCOME_UNKNOWN': 'UNKNOWN', 'FAILED': 'FAILED', 'INTERRUPTED': 'INTERRUPTED'}
-STALE_AFTER = timedelta(seconds=45)
+STALE_AFTER = timedelta(seconds=120)
 HEARTBEAT_INTERVAL = 5
 INSTALL_TIMEOUT = settings.NIGHTOWL_REMOTE_INSTALL_TIMEOUT_SECONDS
 ENROLLMENT_TIMEOUT = settings.NIGHTOWL_REMOTE_ENROLLMENT_TIMEOUT_SECONDS
@@ -49,11 +50,15 @@ class InstallFailure(Exception):
         super().__init__(code)
 
 
+class InstallLeaseLost(Exception):
+    """A reconciled runner must not resume dispatch or rewrite terminal history."""
+
+
 def _initial_diagnostics():
     return {'installer_sha256': '', 'installer_contract_valid': False,
             'installer_started_at': None, 'installer_finished_at': None, 'installer_exit_code': None,
             'service_present': 'UNKNOWN', 'service_state': 'UNKNOWN',
-            'service_validation_status': 'NOT_CHECKED', 'safe_to_retry': 'UNKNOWN'}
+            'service_validation_status': 'NOT_CHECKED', 'safe_to_retry': 'YES'}
 
 
 def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None, diagnostic=None):
@@ -72,7 +77,7 @@ def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None, di
     with transaction.atomic():
         job = RemoteInstallJob.objects.select_for_update().filter(pk=job_id, active_slot='global').first()
         if not job:
-            return
+            raise InstallLeaseLost()
         data = {**_initial_diagnostics(), **job.diagnostics}
         data.update(diagnostic or {})
         data['outcome'] = OUTCOMES.get(status, 'RUNNING')
@@ -87,7 +92,7 @@ def _update(job_id, stage, *, status='RUNNING', error_code='', endpoint=None, di
 
 def reconcile_stale_jobs(*, preserve_unknown_slots=False):
     cutoff = timezone.now() - STALE_AFTER
-    stale = RemoteInstallJob.objects.filter(active_slot='global').filter(
+    stale = RemoteInstallJob.objects.filter(active_slot='global', remoteinstallbatchitem__isnull=True).filter(
         Q(runner_heartbeat_at__lt=cutoff) |
         Q(runner_heartbeat_at__isnull=True, created_at__lt=cutoff))
     for pk in list(stale.exclude(diagnostics={}).values_list('pk', flat=True)):
@@ -95,7 +100,7 @@ def reconcile_stale_jobs(*, preserve_unknown_slots=False):
             job = RemoteInstallJob.objects.select_for_update().get(pk=pk)
             last_activity = job.runner_heartbeat_at or job.created_at
             if job.status in ('QUEUED', 'RUNNING') and last_activity < cutoff:
-                attempted = job.diagnostics.get('safe_to_retry') == 'NO'
+                attempted = not job_is_retry_safe(job)
                 _update(pk, job.stage, status='OUTCOME_UNKNOWN' if attempted else 'INTERRUPTED',
                         error_code='RUNNER_INTERRUPTED', diagnostic={'safe_to_retry': 'NO' if attempted else 'YES'})
     # Preserve the legacy reconciliation contract for jobs without new diagnostics.
@@ -145,7 +150,16 @@ def _absence_proof(computer, username, password):
         raise InstallFailure('TARGET_CHANGED')
 
 
-def create_remote_install_job(fqdn, actor, *, username=None, password=None):
+def job_is_retry_safe(job):
+    return (job.diagnostics.get('safe_to_retry') == 'YES'
+            and not job.diagnostics.get('installer_started_at')
+            and not job.diagnostics.get('invocation_attempted')
+            and (job.stage not in INSTALL_STARTED_STAGES or
+                 (job.status in ('FAILED', 'INTERRUPTED') and
+                  job.diagnostics.get('invocation_attempted') is False)))
+
+
+def create_remote_install_job(fqdn, actor, *, username=None, password=None, batch_item_id=None):
     computer = _ad_target(fqdn)
     reconcile_stale_jobs(preserve_unknown_slots=True)
     normalized = normalize_fqdn(computer['fqdn'])
@@ -157,7 +171,20 @@ def create_remote_install_job(fqdn, actor, *, username=None, password=None):
     if blocker_snapshot:
         _absence_proof(computer, username, password)
     try:
-        with transaction.atomic():
+        with install_admission():
+            from dashboard.models import RemoteInstallBatch, RemoteInstallBatchItem
+            batch = RemoteInstallBatch.objects.select_for_update().filter(active_slot='global').first()
+            item = None
+            if batch_item_id:
+                item = RemoteInstallBatchItem.objects.select_for_update().filter(
+                    pk=batch_item_id, batch=batch, status='PREFLIGHT', remote_install_job__isnull=True,
+                    position=batch.current_index if batch else -1).first()
+                if not item or batch.status != 'RUNNING' or item.target_fqdn != normalized:
+                    raise InstallFailure('BATCH_LEASE_LOST')
+                if item.target_ad_dn != computer['distinguished_name']:
+                    raise InstallFailure('TARGET_CHANGED')
+            elif batch:
+                raise InstallFailure('INSTALL_ALREADY_RUNNING')
             blockers = list(historical.select_for_update().order_by('pk'))
             if {job.pk: job.updated_at for job in blockers} != blocker_snapshot:
                 raise InstallFailure('INSTALL_RECONCILIATION_REQUIRED')
@@ -185,6 +212,10 @@ def create_remote_install_job(fqdn, actor, *, username=None, password=None):
                 active_slot='global', runner_heartbeat_at=timezone.now(),
                 diagnostics=_initial_diagnostics(),
             )
+            if item:
+                item.remote_install_job = job
+                item.status = 'INSTALLING'
+                item.save(update_fields=['remote_install_job', 'status', 'updated_at'])
             for previous in blockers:
                 data = dict(previous.diagnostics or {})
                 reconciliation = {
@@ -246,7 +277,7 @@ def _trusted_urls():
     return base, installer
 
 
-def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
+def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None):
     from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
 
     try:
@@ -271,6 +302,8 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
                                           ['-NoProfile', '-NonInteractive', '-Command', '-'])
         if not command_id:
             raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False)
+        if before_send:
+            before_send()
         attempted = True
         protocol.send_command_input(shell_id, command_id, payload, end=True)
         deadline = time.monotonic() + timeout
@@ -296,7 +329,7 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None):
             if done:
                 return exit_code
         raise InstallFailure('REMOTE_COMMAND_TIMEOUT')
-    except InstallFailure:
+    except (InstallFailure, InstallLeaseLost):
         raise
     except ProbeFailure as exc:
         raise InstallFailure(exc.code, command_attempted=attempted) from None
@@ -482,11 +515,11 @@ def run_remote_install(job_id, username, password):
             raise InstallFailure('INSTALL_RELEASE_INVALID')
         installer_script = _installer_script(contract)
         stage = 'INSTALLING'
-        _update(job_id, 'INSTALLING')
         invocation_attempted = True
-        _update(job_id, stage, diagnostic={'safe_to_retry': 'NO'})
+        _update(job_id, stage, diagnostic={'safe_to_retry': 'NO', 'invocation_attempted': True})
         code = _remote_script(job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT,
-                              on_event=installer_event)
+                              on_event=installer_event,
+                              before_send=lambda: _assert_install_lease(job_id))
         if not install_started:
             # Reserved wrapper codes prove failure before Process.Start. An absent frame
             # alone never proves that the child did not start (transport can be lost).
@@ -536,19 +569,29 @@ def run_remote_install(job_id, username, password):
                 return
             time.sleep(3)
         raise InstallFailure('HEARTBEAT_TIMEOUT', installed=True)
+    except InstallLeaseLost:
+        return
     except InstallFailure as exc:
         if exc.command_attempted is False and not install_started:
             invocation_attempted = False
         state = ('INSTALLED_UNVERIFIED' if exc.installed or installed else
                  'OUTCOME_UNKNOWN' if invocation_attempted else 'FAILED')
-        _update(job_id, stage, status=state, error_code=exc.code,
-                diagnostic={'safe_to_retry': 'NO' if installed or invocation_attempted or
-                    exc.code == 'NIGHTOWL_INSTALLATION_DETECTED' else 'YES'})
+        if RemoteInstallJob.objects.filter(pk=job_id, active_slot='global').exists():
+            _update(job_id, stage, status=state, error_code=exc.code,
+                    diagnostic={'safe_to_retry': 'NO' if installed or invocation_attempted or
+                        exc.code == 'NIGHTOWL_INSTALLATION_DETECTED' else 'YES',
+                        'invocation_attempted': invocation_attempted})
     except Exception:
         state = 'OUTCOME_UNKNOWN' if invocation_attempted else 'INTERRUPTED'
-        _update(job_id, stage, status=state, error_code='RUNNER_INTERRUPTED',
-                diagnostic={'safe_to_retry': 'NO' if invocation_attempted else 'YES'})
+        if RemoteInstallJob.objects.filter(pk=job_id, active_slot='global').exists():
+            _update(job_id, stage, status=state, error_code='RUNNER_INTERRUPTED',
+                    diagnostic={'safe_to_retry': 'NO' if invocation_attempted else 'YES'})
     finally:
         stop.set()
         pulse.join(timeout=2)
         close_old_connections()
+
+
+def _assert_install_lease(job_id):
+    if not RemoteInstallJob.objects.filter(pk=job_id, active_slot='global', status='RUNNING').exists():
+        raise InstallLeaseLost()

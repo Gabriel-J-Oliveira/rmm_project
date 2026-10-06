@@ -193,3 +193,51 @@ class RemoteInstallJob(models.Model):
     class Meta:
         ordering = ['-created_at']
         indexes = [models.Index(fields=['target_fqdn', '-created_at'])]
+
+
+class RemoteInstallBatch(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    status = models.CharField(max_length=32, default='QUEUED')
+    active_slot = models.CharField(max_length=16, unique=True, null=True, blank=True)
+    total_count = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    failure_count = models.PositiveIntegerField(default=0)
+    review_count = models.PositiveIntegerField(default=0)
+    waiting_count = models.PositiveIntegerField(default=0)
+    current_index = models.PositiveIntegerField(default=0)
+    runner_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    parent_batch = models.ForeignKey('self', null=True, blank=True, on_delete=models.PROTECT)
+    diagnostics = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+
+
+class RemoteInstallBatchItem(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch = models.ForeignKey(RemoteInstallBatch, related_name='items', on_delete=models.CASCADE)
+    target_hostname = models.CharField(max_length=255)
+    target_fqdn = models.CharField(max_length=512)
+    target_ad_dn = models.CharField(max_length=1024)
+    position = models.PositiveIntegerField()
+    status = models.CharField(max_length=32, default='WAITING')
+    stage = models.CharField(max_length=32, default='WAITING')
+    error_code = models.CharField(max_length=64, blank=True)
+    progress_percentage = models.PositiveSmallIntegerField(default=0)
+    progress_message = models.CharField(max_length=160, blank=True)
+    remote_install_job = models.OneToOneField(RemoteInstallJob, null=True, blank=True, on_delete=models.PROTECT)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['position']
+        constraints = [
+            models.UniqueConstraint(fields=['batch', 'target_fqdn'], name='remote_batch_target_unique'),
+            models.UniqueConstraint(fields=['batch', 'position'], name='remote_batch_position_unique'),
+        ]

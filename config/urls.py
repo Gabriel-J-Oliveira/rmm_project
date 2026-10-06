@@ -21,6 +21,7 @@ from django.urls import include, path
 
 from dashboard import views as dashboard_views
 from dashboard import ad_install_views
+from dashboard import remote_install_batch_views
 from dashboard import capacity_views
 from dashboard import fleet_views
 from config import views as config_views
@@ -81,6 +82,10 @@ urlpatterns = [
     path('agent-install/ad-computers/preflight/', ad_install_views.preflight_ad_computer, name='agent-install-ad-preflight'),
     path('agent-install/ad-computers/install/', ad_install_views.install_ad_computer, name='agent-install-ad-install'),
     path('agent-install/install-jobs/<uuid:pk>/', ad_install_views.remote_install_status, name='agent-install-job-status'),
+    path('agent-install/install-batches/', remote_install_batch_views.batches, name='agent-install-batches'),
+    path('agent-install/install-batches/<uuid:pk>/', remote_install_batch_views.batch_detail, name='agent-install-batch-detail'),
+    path('agent-install/install-batches/<uuid:pk>/retry/', remote_install_batch_views.batch_retry, name='agent-install-batch-retry'),
+    path('agent-install/install-batches/<uuid:pk>/mark-stalled/', remote_install_batch_views.batch_mark_stalled, name='agent-install-batch-mark-stalled'),
     path('agents/download/', dashboard_views.agent_install, name='agent-download'),
     path('agent-releases/', dashboard_views.agent_releases, name='agent-releases'),
     path('agent-releases/<uuid:pk>/action/', dashboard_views.agent_release_action, name='agent-release-action'),
