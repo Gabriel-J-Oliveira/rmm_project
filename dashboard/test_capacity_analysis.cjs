@@ -1,0 +1,150 @@
+// Synthetic API fixtures only: real DOM, no AD, endpoints or production requests.
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('playwright');
+const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+const now = '2026-10-06T18:00:00Z';
+let browser;
+test.before(async () => { browser = await chromium.launch({headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || undefined}); });
+test.after(async () => { await browser?.close(); });
+function rows(count = 80) {
+  return Array.from({length: count}, (_, i) => ({
+    id: String(i), hostname: `PC-${String(i).padStart(3, '0')}`, fqdn: `pc-${i}.example.test`,
+    last_ip: `192.0.2.${i + 1}`, last_logged_user: `user-${i}`, agent_version: 'rc45',
+    os_name: i % 2 ? 'Windows 11' : 'Windows 10', os_version: '10', os_build: '19045',
+    manufacturer: 'Maker', model: 'Model', cpu_name: 'Synthetic CPU', cpu_cores: 4,
+    memory_total_bytes: (i % 2 ? 16 : 8) * 1073741824,
+    cpu_p95: 20, memory_p95: 40, coverage: 95, received_samples: 273,
+    cpu_capacity: 'NO_PRESSURE_OBSERVED', memory_capacity: 'NO_PRESSURE_OBSERVED',
+    evidence: 'SUFFICIENT', alerts_critical: i === 0 ? 2 : 0, alerts_total: i === 0 ? 2 : 0,
+    status: 'online', classifications: {attention: i === 0, sustained: false, observe: false, offline: false, insufficient: false},
+    alert_types: [], processes: [], last_seen: now, first_seen: new Date(Date.parse(now) - (i + 1) * 3600000).toISOString(),
+    inventory_at: now, telemetry_last_at: now, system_disk_used_percent: i % 2 ? 50 : 90,
+    max_disk_used_percent: i % 2 ? 50 : 90, min_disk_free_bytes: 100 * 1073741824,
+    endpoint_url: `/endpoints/${i}/`, alerts_url: '/alerts/'
+  }));
+}
+async function setup(t, values = rows(), width = 1440) {
+  const page = await browser.newPage({viewport: {width, height: 1000}});
+  t.after(() => page.close());
+  const errors = []; page.on('pageerror', e => errors.push(e.message));
+  let template = read('templates/dashboard/capacity.html').split('{% block content %}')[1].split('{% endblock %}')[0];
+  template = template.replace(/{% if demo %}[\s\S]*?{% endif %}/g, '').replace(/{% url 'api-capacity-overview' %}/g, '/overview/').replace(/{%[^%]*%}/g, '');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>${read('static/css/nightowl.css')}${read('static/css/capacity.css')}body{padding:24px}</style></head><body>${template}<script>${read('static/js/capacity.js')}</script></body></html>`;
+  await page.route('https://capacity.test/**', route => route.request().isNavigationRequest() ? route.fulfill({contentType: 'text/html', body: html}) : route.fulfill({json: {demo: false, generated_at: now, endpoints: values, counts: {}}}));
+  await page.goto('https://capacity.test/');
+  await page.waitForFunction(() => document.querySelector('[data-filter-count]').textContent.includes('endpoints'));
+  t.after(() => assert.deepEqual(errors, []));
+  return page;
+}
+async function add(page, field, operator, value, end) {
+  await page.locator('[data-filter-field]').selectOption(field);
+  await page.locator('[data-filter-operator]').selectOption({label: operator});
+  await page.locator('[data-filter-value]').fill(String(value));
+  if (end !== undefined) await page.locator('[data-filter-end]').fill(String(end));
+  await page.locator('[data-filter-form] button[type=submit]').click();
+}
+test('global search covers identity, IP, user, OS and hardware', async t => {
+  const page = await setup(t);
+  for (const [query, count] of [['PC-013', 1], ['192.0.2.14', 1], ['user-13', 1], ['Windows 10', 40], ['Maker', 80], ['pc-13.example.test', 1]]) {
+    await page.locator('[data-search]').fill(query);
+    assert.equal(await page.locator('[data-filter-count]').textContent(), `${count} de 80 endpoints`);
+    assert.equal(await page.locator('[data-kpis] [data-filter=monitored] strong').textContent(), String(count));
+    assert.equal(await page.locator('.capacity-dot').count(), count);
+    assert.equal(await page.locator('[data-table-body] tr').count(), Math.min(25, count));
+    assert.equal(await page.locator('[data-ram-distribution] strong').evaluateAll(nodes => nodes.reduce((sum, n) => sum + Number(n.textContent), 0)), count);
+    assert.equal(await page.locator('[data-distribution] strong').evaluateAll(nodes => nodes.reduce((sum, n) => sum + Number(n.textContent), 0)), count);
+  }
+});
+test('numeric filters AND, ranges, chips, clearing and missing values', async t => {
+  const values = rows(); values[0].memory_total_bytes = null; values[2].max_disk_used_percent = null;
+  const page = await setup(t, values);
+  await add(page, 'ram', '<', 12);
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^39 /);
+  await add(page, 'disk', '>', 85);
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^38 /);
+  await add(page, 'os', 'contém', 'Windows 11');
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^0 /);
+  await page.locator('[data-remove-filter="2"]').click();
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^38 /);
+  await page.locator('[data-clear-analysis]').click();
+  await add(page, 'ram', '>=', 16);
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^40 /);
+  await page.locator('[data-clear-analysis]').click();
+  await add(page, 'ram', 'entre', 8, 16);
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^79 /);
+});
+test('invalid numeric range does not create a filter', async t => {
+  const page = await setup(t);
+  await add(page, 'ram', 'entre', 16, 8);
+  assert.equal(await page.locator('[data-remove-filter]').count(), 0);
+  assert.match(await page.locator('[data-filter-error]').textContent(), /válido/);
+});
+test('pagination bounds DOM and filters reset page', async t => {
+  const page = await setup(t);
+  assert.equal(await page.locator('[data-table-body] tr').count(), 25);
+  await page.locator('[data-page="2"]').first().click();
+  assert.equal(await page.locator('[aria-current=page]').textContent(), '2');
+  await add(page, 'ram', '>=', 16);
+  assert.equal(await page.locator('[aria-current=page]').textContent(), '1');
+  await page.locator('[data-clear-analysis]').click();
+  await page.locator('[data-page-size]').selectOption('50');
+  assert.equal(await page.locator('[data-table-body] tr').count(), 50);
+  await page.locator('[data-page-size]').selectOption('100');
+  assert.equal(await page.locator('[data-table-body] tr').count(), 80);
+});
+test('category filters reach every widget, empty values remain absent', async t => {
+  const values = rows(3);
+  values[0].status = 'offline'; values[0].classifications.offline = true;
+  values[0].cpu_p95 = null; values[0].memory_p95 = null;
+  values[0].max_disk_used_percent = null; values[0].system_disk_used_percent = null;
+  const page = await setup(t, values);
+  await page.locator('[data-kpis] [data-filter=offline]').click();
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^1 /);
+  assert.equal(await page.locator('[data-attention] article').count(), 1);
+  assert.equal(await page.locator('[data-recent] article').count(), 1);
+  assert.equal(await page.locator('.capacity-dot').count(), 0);
+  assert.match(await page.locator('[data-table-body]').textContent(), /—/);
+  await page.locator('[data-clear-filter]').click();
+  await add(page, 'status', 'igual', 'online');
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^2 /);
+  await page.locator('[data-clear-analysis]').click();
+  await add(page, 'last_seen', '<=', 1);
+  assert.match(await page.locator('[data-filter-count]').textContent(), /^3 /);
+});
+test('recent ordering, badges, inventory and telemetry states', async t => {
+  const values = rows(4); values[0].telemetry_last_at = null; values[0].inventory_at = null;
+  values[1].first_seen = '2026-10-04T18:00:00Z'; values[1].telemetry_last_at = '2026-10-04T18:00:00Z';
+  values[3].first_seen = '2026-09-01T18:00:00Z';
+  const page = await setup(t, values);
+  assert.equal(await page.locator('[data-recent] article').count(), 3);
+  assert.match(await page.locator('[data-recent] article').first().textContent(), /PC-000.*NOVO.*Aguardando.*Sem amostras/s);
+  assert.match(await page.locator('[data-recent] article').last().textContent(), /PC-001.*RECENTE.*Desatualizada/s);
+  await page.locator('[data-search]').fill('PC-003');
+  assert.equal(await page.locator('[data-recent-section]').isVisible(), false);
+});
+test('XSS values remain text in cards, table, charts and chips', async t => {
+  const values = rows(1); values[0].hostname = '<img src=x onerror=alert(1)>'; values[0].last_logged_user = '<script>alert(1)</script>'; values[0].os_name = '<b>Financeiro</b>';
+  const page = await setup(t, values);
+  assert.equal(await page.locator('[data-capacity-root] img, [data-capacity-root] script, [data-os-distribution] b').count(), 0);
+  assert.match(await page.locator('[data-table-body]').textContent(), /<img src=x/);
+  await add(page, 'user', 'contém', '<script>');
+  assert.match(await page.locator('[data-filter-chips]').textContent(), /<script>/);
+  assert.equal(await page.locator('[data-filter-chips] script').count(), 0);
+});
+test('desktop/mobile carousels are single-row and page fits viewport', async t => {
+  for (const width of [1440, 390]) {
+    const values = rows(); values.forEach(r => { r.alerts_critical = 1; });
+    const page = await setup(t, values, width);
+    assert.equal(await page.locator('[data-grid]').count(), 0);
+    const tops = await page.locator('[data-attention] article').evaluateAll(nodes => new Set(nodes.map(n => Math.round(n.getBoundingClientRect().top))).size);
+    assert.equal(tops, 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.emulateMedia({reducedMotion: 'reduce'});
+    await page.locator('[data-scroll=attention][data-direction="1"]').click();
+    assert.ok(await page.locator('[data-attention]').evaluate(n => n.scrollLeft) > 0);
+    await page.screenshot({path: path.join(process.env.TEMP || '/tmp', `capacity-analysis-${width}.png`), fullPage: true});
+  }
+});

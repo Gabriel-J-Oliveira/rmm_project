@@ -14,7 +14,7 @@ from django.utils import timezone
 from agents.models import AgentJob, AgentMachine, EndpointAlert, EndpointPerformanceSample, InventorySnapshot, hash_agent_token
 from agents.telemetry_analytics import build_endpoint_telemetry_summary
 from agents.telemetry_diagnostics import build_resource_diagnostics
-from .capacity_views import CAPACITY_PERMISSIONS, _compact_summary, _overview
+from .capacity_views import CAPACITY_PERMISSIONS, _compact_summary, _overview, _disk_usage
 
 
 class CapacityDashboardTests(TestCase):
@@ -136,6 +136,66 @@ class CapacityDashboardTests(TestCase):
         )
         self.assertEqual(batched, expected)
 
+    def test_overview_identity_inventory_and_last_telemetry(self):
+        now = timezone.now()
+        self.endpoint.first_seen_at = now - timedelta(hours=2)
+        self.endpoint.last_ip = '192.0.2.12'
+        self.endpoint.last_logged_user = 'synthetic-user'
+        self.endpoint.fqdn = 'lab.example.test'
+        self.endpoint.save()
+        snapshot = self.snapshot()
+        snapshot.manufacturer = 'Synthetic maker'
+        snapshot.model = 'Synthetic model'
+        snapshot.disks = [{'name': 'C:\\', 'size_bytes': 1000, 'free_bytes': 200},
+                          {'name': 'D:', 'size_bytes': 2000, 'free_bytes': 100}]
+        snapshot.save()
+        # Old samples remain visible even outside the selected/context windows.
+        sample = self.sample(collected_at=now - timedelta(days=9))
+        row = _overview(now, 24)[0]
+        self.assertEqual(row['first_seen'], self.endpoint.first_seen_at.isoformat())
+        self.assertEqual(row['last_ip'], '192.0.2.12')
+        self.assertEqual(row['last_logged_user'], 'synthetic-user')
+        self.assertEqual(row['fqdn'], 'lab.example.test')
+        self.assertEqual(row['manufacturer'], 'Synthetic maker')
+        self.assertEqual(row['model'], 'Synthetic model')
+        self.assertEqual(row['inventory_at'], snapshot.received_at.isoformat())
+        self.assertEqual(row['telemetry_last_at'], sample.collected_at.isoformat())
+        self.assertEqual(row['received_samples'], 0)
+        self.assertEqual(row['system_disk_used_percent'], 80)
+        self.assertEqual(row['max_disk_used_percent'], 95)
+        self.assertEqual(row['min_disk_free_bytes'], 100)
+        self.assertEqual(row['disk_count'], 2)
+
+    def test_invalid_disks_never_fabricate_zero(self):
+        snapshot = self.snapshot()
+        for disks in (None, [], {}, [{'name': 'C:', 'size_bytes': 0, 'free_bytes': 0}],
+                      [{'name': 'C:', 'size_bytes': 100, 'free_bytes': 101}],
+                      [{'name': 'C:', 'size_bytes': 100, 'free_bytes': -1}],
+                      [{'name': 'C:', 'size_bytes': True, 'free_bytes': 0}],
+                      [{'name': 'C:', 'size_bytes': '100', 'free_bytes': 0}],
+                      [{'name': 'C:', 'size_bytes': float('nan'), 'free_bytes': 0}]):
+            with self.subTest(disks=disks):
+                snapshot.disks = disks
+                self.assertTrue(all(v is None for v in _disk_usage(snapshot).values()))
+        snapshot.disks = [{'name': 'Recovery', 'size_bytes': 100, 'free_bytes': 100}]
+        facts = _disk_usage(snapshot)
+        self.assertIsNone(facts['system_disk_used_percent'])
+        self.assertEqual(facts['max_disk_used_percent'], 0)
+
+    def test_overview_queries_do_not_grow_with_fleet(self):
+        now = timezone.now()
+        self.snapshot()
+        self.sample()
+        with CaptureQueriesContext(connection) as small:
+            _overview(now, 24)
+        for i in range(40):
+            self.make_endpoint(f'SYNTHETIC-{i}')
+        with CaptureQueriesContext(connection) as fleet:
+            rows = _overview(now, 24)
+        self.assertEqual(len(rows), 41)
+        self.assertEqual(len(small), len(fleet))
+        self.assertLessEqual(len(fleet), 5)
+
     def test_compact_aggregate_projection_preserves_m5_facts(self):
         sample = self.sample(cpu_percent=72, memory_used_percent=82,
                              memory_committed_percent=84, telemetry_errors_count=1)
@@ -148,8 +208,11 @@ class CapacityDashboardTests(TestCase):
             'committed_valid': 1, 'committed_avg': 84, 'committed_p95': 84, 'committed_p99': 84,
             'gaps': 0, 'negative_lags': expected['quality']['negative_lag_samples'],
             'error_samples': 1, 'total_errors': 1,
+            'first_sample_at': sample.collected_at, 'last_sample_at': sample.collected_at,
         }
         projected = _compact_summary(self.endpoint, start, end, aggregate)
+        self.assertEqual(projected['quality']['first_sample_at'], expected['quality']['first_sample_at'])
+        self.assertEqual(projected['quality']['last_sample_at'], expected['quality']['last_sample_at'])
         self.assertEqual(build_resource_diagnostics(projected), build_resource_diagnostics(expected))
 
     def test_compact_projection_without_samples_is_not_evaluated(self):

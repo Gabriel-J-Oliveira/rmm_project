@@ -4,7 +4,7 @@
   if (!root) return;
   const $ = selector => root.querySelector(selector);
   const demo = root.dataset.demo === '1';
-  const state = { rows: [], counts: {}, filter: 'all', query: '', sort: 'priority', period: '24h', detail: null, tab: 'summary', range: '24h', series: null, seriesRequest: 0, lastFocus: null, request: 0, detailRequest: 0 };
+  const state = { rows: [], counts: {}, filter: 'all', query: '', filters: [], page: 1, pageSize: 25, now: Date.now(), sort: 'priority', period: '24h', detail: null, tab: 'summary', range: '24h', series: null, seriesRequest: 0, lastFocus: null, request: 0, detailRequest: 0 };
   const labels = { NOT_EVALUATED: 'Sem evidência', NO_PRESSURE_OBSERVED: 'Sem pressão', OBSERVE: 'Observar', SUSTAINED_PRESSURE: 'Pressão sustentada', SUFFICIENT: 'Suficiente', PARTIAL: 'Parcial', INSUFFICIENT: 'Insuficiente', AVAILABLE: 'Disponível', MISSING: 'Ausente' };
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const label = value => labels[value] || value || 'Não disponível';
@@ -20,13 +20,49 @@
   const statusText = value => ({ PRESSURE: 'Pressão', ELEVATED: 'Elevado', SPIKY: 'Picos', NO_PRESSURE: 'Sem pressão', NOT_EVALUATED: 'Não avaliado' })[value] || label(value);
   const reasonText = key => ({ primary_not_evaluated: 'Janela principal sem evidência suficiente', primary_no_pressure_observed: 'Sem pressão observada na janela principal', historical_signal_present: 'Há sinal no contexto histórico', primary_spiky: 'Picos na janela principal', primary_elevated: 'Uso elevado na janela principal', primary_pressure: 'Pressão na janela principal', context_corroborates_pressure: 'Contexto histórico corrobora a pressão', context_not_corroborated: 'Contexto não corrobora a pressão', context_window_unavailable: 'Contexto indisponível', context_not_evaluated: 'Contexto ainda não avaliado' })[key] || key.replaceAll('_', ' ');
   const icons = () => { if (window.lucide && window.lucide.createIcons) window.lucide.createIcons(); };
-  const priority = row => row.classifications.sustained ? 5 : row.alerts_critical ? 4 : row.classifications.observe ? 3 : row.classifications.offline ? 2 : row.classifications.insufficient ? 1 : 0;
-  const issue = row => row.classifications.sustained ? `Pressão sustentada de ${row.cpu_capacity === 'SUSTAINED_PRESSURE' && row.memory_capacity === 'SUSTAINED_PRESSURE' ? 'CPU e memória' : row.cpu_capacity === 'SUSTAINED_PRESSURE' ? 'CPU' : 'memória'}` : row.alerts_critical ? `${row.alerts_critical} alerta(s) crítico(s)` : row.classifications.observe ? 'Recurso em observação' : row.classifications.offline ? 'Endpoint offline' : 'Evidência insuficiente';
+  function attentionReasons(row) {
+    const reasons = [];
+    if (row.alerts_critical > 0) reasons.push(`${row.alerts_critical} ALERTA(S) CRÍTICO(S)`);
+    if (row.classifications.offline) reasons.push('ENDPOINT OFFLINE');
+    if (row.memory_capacity === 'SUSTAINED_PRESSURE') reasons.push('PRESSÃO DE MEMÓRIA');
+    if (row.cpu_capacity === 'SUSTAINED_PRESSURE') reasons.push('PRESSÃO DE CPU');
+    if (row.classifications.observe) reasons.push('OBSERVAR CPU / RAM');
+    if (row.classifications.insufficient) reasons.push('SEM EVIDÊNCIA SUFICIENTE');
+    if (row.inventory_stale) reasons.push('INVENTÁRIO DESATUALIZADO');
+    if (row.security_alert) reasons.push('ALERTA DE SEGURANÇA');
+    if (row.agent_update_alert) reasons.push('ALERTA DO AGENTE');
+    return reasons;
+  }
+  const priority = row => row.alerts_critical ? 7 : row.classifications.offline ? 6 : row.classifications.sustained ? 5 : row.classifications.observe ? 4 : row.classifications.insufficient ? 3 : row.inventory_stale ? 2 : 1;
+  const issue = row => attentionReasons(row)[0] || 'ACOMPANHAR';
+  const age = (value, unit) => { const at = typeof value === 'string' ? Date.parse(value) : NaN; return Number.isFinite(at) ? Math.max(0, state.now - at) / unit : null; };
+  const fields = {
+    status: ['Estado', 'enum', r => r.status], last_ip: ['IP', 'text', r => r.last_ip],
+    user: ['Usuário', 'text', r => r.last_logged_user], os: ['SO', 'text', r => [r.os_name, r.os_version, r.os_build].filter(v => typeof v === 'string').join(' ')],
+    agent: ['Versão do agente', 'text', r => r.agent_version], ram: ['RAM instalada (GB)', 'number', r => Number.isFinite(r.memory_total_bytes) ? r.memory_total_bytes / 1073741824 : null],
+    cores: ['CPU cores físicos', 'number', r => r.cpu_cores], system_disk: ['Disco C: utilizado (%)', 'number', r => r.system_disk_used_percent],
+    disk: ['Maior uso de disco (%)', 'number', r => r.max_disk_used_percent], free_disk: ['Menor espaço livre (GB)', 'number', r => Number.isFinite(r.min_disk_free_bytes) ? r.min_disk_free_bytes / 1073741824 : null],
+    cpu: ['CPU p95 (%)', 'number', r => r.cpu_p95], memory: ['RAM p95 (%)', 'number', r => r.memory_p95],
+    coverage: ['Cobertura (%)', 'number', r => r.coverage], samples: ['Quantidade de amostras', 'number', r => r.received_samples],
+    critical: ['Alertas críticos', 'number', r => r.alerts_critical], alerts: ['Alertas totais', 'number', r => r.alerts_total],
+    last_seen: ['Horas desde last seen', 'number', r => age(r.last_seen, 3600000)], first_seen: ['Dias desde first seen', 'number', r => age(r.first_seen, 86400000)]
+  };
+  const operators = { number: ['>', '>=', '<', '<=', '=', 'entre'], text: ['contém', 'não contém', 'igual'], enum: ['igual'] };
+  function filterMatches(row, f) {
+    const [, type, read] = fields[f.field], value = read(row);
+    if (type !== 'number') {
+      if (typeof value !== 'string' || !value) return false;
+      const text = value.toLocaleLowerCase(), wanted = f.value.toLocaleLowerCase();
+      return f.operator === 'igual' ? text === wanted : f.operator === 'contém' ? text.includes(wanted) : !text.includes(wanted);
+    }
+    if (!Number.isFinite(value)) return false;
+    return ({ '>': () => value > f.value, '>=': () => value >= f.value, '<': () => value < f.value, '<=': () => value <= f.value, '=': () => value === f.value, entre: () => value >= f.value && value <= f.end })[f.operator]();
+  }
   const matches = (row, filter) => filter === 'all' || filter === 'monitored' || (filter === 'critical' ? row.alerts_critical > 0 : filter === 'no_pressure' ? !row.classifications.insufficient && !row.classifications.sustained && !row.classifications.observe : filter === 'cpu_problem' ? ['OBSERVE', 'SUSTAINED_PRESSURE'].includes(row.cpu_capacity) : filter === 'ram_problem' ? ['OBSERVE', 'SUSTAINED_PRESSURE'].includes(row.memory_capacity) : Boolean(row.classifications[filter] ?? row[filter]));
 
-  function filtered() {
-    let rows = state.rows.filter(row => matches(row, state.filter));
-    if (state.query) rows = rows.filter(row => `${row.hostname} ${row.os_name || ''} ${row.os_version || ''}`.toLocaleLowerCase().includes(state.query));
+  function analysisRows() {
+    let rows = state.rows.filter(row => matches(row, state.filter) && state.filters.every(f => filterMatches(row, f)));
+    if (state.query) rows = rows.filter(row => ['hostname', 'fqdn', 'last_ip', 'last_logged_user', 'os_name', 'os_version', 'os_build', 'windows_build', 'cpu_name', 'manufacturer', 'model', 'agent_version'].some(key => typeof row[key] === 'string' && row[key].toLocaleLowerCase().includes(state.query)));
     const sorters = {
       priority: (a, b) => priority(b) - priority(a), hostname: (a, b) => a.hostname.localeCompare(b.hostname),
       cpu: (a, b) => (b.cpu_p95 ?? -1) - (a.cpu_p95 ?? -1), memory: (a, b) => (b.memory_p95 ?? -1) - (a.memory_p95 ?? -1),
@@ -40,24 +76,35 @@
       ['sustained', 'Pressão sustentada', '--cap-red'], ['observe', 'Observar', '--cap-amber'],
       ['insufficient', 'Sem evidência', '--cap-blue'], ['offline', 'Offline', '--cap-red'], ['critical', 'Alerta crítico', '--cap-red']
     ];
-    $('[data-kpis]').innerHTML = items.map(([key, title, color]) => `<button type="button" class="capacity-kpi ${state.filter === key ? 'is-active' : ''}" style="--cap-accent:var(${color})" data-filter="${key}" aria-pressed="${state.filter === key}"><span>${esc(title)}</span><strong>${state.counts[key] || 0}</strong></button>`).join('');
+    const rows = analysisRows();
+    $('[data-kpis]').innerHTML = items.map(([key, title, color]) => `<button type="button" class="capacity-kpi ${state.filter === key ? 'is-active' : ''}" style="--cap-accent:var(${color})" data-filter="${key}" aria-pressed="${state.filter === key}"><span>${esc(title)}</span><strong>${rows.filter(row => matches(row, key)).length}</strong></button>`).join('');
     $('[data-clear-filter]').hidden = state.filter === 'all';
   }
-  function card(row, spotlight) {
-    const name = spotlight && row.endpoint_url ? `<a href="${esc(row.endpoint_url)}">${esc(row.hostname)}</a>` : esc(row.hostname);
-    const parts = `<div class="capacity-card-top"><strong>${name}</strong>${stateBadge(row.status)}</div>${spotlight ? `<p class="capacity-card-cause">${esc(issue(row))}</p>` : ''}<div class="capacity-card-facts"><div><small>CPU</small><b>${chip(row.cpu_capacity)}</b></div><div><small>Memória</small><b>${chip(row.memory_capacity)}</b></div><div><small>CPU p95</small><b>${percent(row.cpu_p95)}</b></div><div><small>RAM p95</small><b>${percent(row.memory_p95)}</b></div></div><span class="capacity-card-meta">Cobertura ${percent(row.coverage)} · ${esc(label(row.evidence))} · ${row.alerts_critical} crítico(s)</span><span class="capacity-card-meta">${esc(row.os_name || 'SO não informado')} · ${esc(row.cpu_name || 'CPU não informada')} · ${bytes(row.memory_total_bytes)}</span>`;
-    if (!spotlight) return `<button type="button" class="capacity-tile" data-open="${esc(row.id)}" title="${esc(row.hostname)}: ${esc(label(row.cpu_capacity))} CPU; ${esc(label(row.memory_capacity))} memória. Abrir detalhes.">${parts}</button>`;
+  function card(row) {
+    const name = row.endpoint_url ? `<a href="${esc(row.endpoint_url)}">${esc(row.hostname)}</a>` : esc(row.hostname);
+    const parts = `<div class="capacity-card-top"><strong>${name}</strong>${stateBadge(row.status)}</div><p class="capacity-card-cause">${esc(issue(row))}</p><span class="capacity-card-meta">${esc(attentionReasons(row).slice(1).join(' · '))}</span><div class="capacity-card-facts"><div><small>CPU p95</small><b>${percent(row.cpu_p95)}</b></div><div><small>RAM p95</small><b>${percent(row.memory_p95)}</b></div></div><span class="capacity-card-meta">Cobertura ${percent(row.coverage)} · ${esc(label(row.evidence))}</span>`;
     return `<article class="capacity-spotlight">${parts}<div class="capacity-card-actions"><button type="button" data-open="${esc(row.id)}">Abrir detalhes</button>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}">Abrir endpoint</a>` : ''}<a href="${esc(row.alerts_url)}">Ver alertas</a></div></article>`;
   }
   function renderAttention() {
-    const rows = [...state.rows].filter(row => row.classifications.attention).sort((a, b) => priority(b) - priority(a)).slice(0, 6);
-    $('[data-attention]').innerHTML = rows.length ? rows.map(row => card(row, true)).join('') : empty('Nenhum endpoint requer atenção neste período.');
+    const rows = analysisRows().filter(row => attentionReasons(row).length).sort((a, b) => priority(b) - priority(a));
+    $('[data-attention]').innerHTML = rows.length ? rows.map(card).join('') : empty('Nenhum endpoint requer atenção neste período.');
+  }
+  function renderRecent() {
+    const rows = analysisRows().filter(row => { const days = age(row.first_seen, 86400000); return days !== null && days <= 7; }).sort((a, b) => Date.parse(b.first_seen) - Date.parse(a.first_seen));
+    $('[data-recent-section]').hidden = !rows.length;
+    // Hourly flush can lag sampling: two hours is a display tolerance, not a new alert SLA.
+    $('[data-recent]').innerHTML = rows.map(row => {
+      const hours = age(row.first_seen, 3600000), telemetryAge = age(row.telemetry_last_at, 3600000);
+      const telemetry = telemetryAge === null ? 'Sem amostras' : telemetryAge <= 2 ? 'Recebendo' : 'Desatualizada';
+      return `<article class="capacity-recent-card"><div class="capacity-card-top"><strong>${esc(row.hostname)}</strong>${stateBadge(row.status)}</div><span class="capacity-recent-badge">${hours <= 24 ? 'NOVO' : 'RECENTE'} · há ${number(hours < 24 ? hours : hours / 24)} ${hours < 24 ? 'h' : 'd'}</span><p>${esc(row.last_ip || '—')}<br>${esc(row.last_logged_user || '—')}</p><dl><dt>Agente</dt><dd>${esc(row.agent_version || '—')}</dd><dt>Inventário</dt><dd>${row.inventory_at ? 'Recebido' : 'Aguardando'}</dd><dt>Telemetria</dt><dd>${telemetry}</dd><dt>Amostras (${esc(state.period)})</dt><dd>${number(row.received_samples)}</dd></dl><div class="capacity-card-actions"><button data-open="${esc(row.id)}">Detalhes</button>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}">Endpoint</a>` : ''}</div></article>`;
+    }).join('');
   }
   function renderDistribution() {
     const kinds = [['no_pressure', 'Sem pressão'], ['observe', 'Observar'], ['sustained', 'Pressão sustentada'], ['insufficient', 'Sem evidência']];
     const values = Object.fromEntries(kinds.map(([key]) => [key, 0]));
-    state.rows.forEach(row => { const c = row.classifications; values[c.insufficient ? 'insufficient' : c.sustained ? 'sustained' : c.observe ? 'observe' : 'no_pressure']++; });
-    $('[data-distribution]').innerHTML = kinds.map(([key, text]) => `<button type="button" class="capacity-dist-row" data-filter="${key === 'no_pressure' ? 'no_pressure' : key}" data-kind="${key}"><span>${esc(text)}</span><span class="capacity-dist-track" role="img" aria-label="${esc(text)}: ${values[key]}"><span class="capacity-dist-fill" style="width:${state.rows.length ? values[key] / state.rows.length * 100 : 0}%"></span></span><strong>${values[key]}</strong></button>`).join('');
+    const rows = analysisRows();
+    rows.forEach(row => { const c = row.classifications; values[c.insufficient ? 'insufficient' : c.sustained ? 'sustained' : c.observe ? 'observe' : 'no_pressure']++; });
+    $('[data-distribution]').innerHTML = kinds.map(([key, text]) => `<button type="button" class="capacity-dist-row" data-filter="${key}" data-kind="${key}"><span>${esc(text)}</span><span class="capacity-dist-track" role="img" aria-label="${esc(text)}: ${values[key]}"><span class="capacity-dist-fill" style="width:${rows.length ? values[key] / rows.length * 100 : 0}%"></span></span><strong>${values[key]}</strong></button>`).join('');
   }
   function renderProblems() {
     const categories = [
@@ -66,9 +113,9 @@
       ['inventory_stale', 'Inventário desatualizado'], ['security_alert', 'Segurança / antivírus'],
       ['agent_update_alert', 'Agent / update']
     ];
-    const max = Math.max(1, state.rows.length);
+    const rows = analysisRows(), max = Math.max(1, rows.length);
     $('[data-problems]').innerHTML = categories.map(([key, title]) => {
-      const count = state.rows.filter(row => matches(row, key)).length;
+      const count = rows.filter(row => matches(row, key)).length;
       return `<button type="button" class="capacity-dist-row" data-filter="${key}"><span>${esc(title)}</span><span class="capacity-dist-track"><span class="capacity-dist-fill" style="width:${count / max * 100}%"></span></span><strong>${count}</strong></button>`;
     }).join('');
   }
@@ -76,7 +123,7 @@
     return `<div class="capacity-profile-row"><span>${esc(title)}</span><span class="capacity-dist-track"><span class="capacity-dist-fill" style="width:${total ? count / total * 100 : 0}%"></span></span><strong>${count}</strong></div>`;
   }
   function renderProfiles() {
-    const rows = state.rows;
+    const rows = analysisRows();
     const ram = [['≤8 GB', 0], ['>8–16 GB', 0], ['>16–32 GB', 0], ['>32 GB', 0]];
     const cpu = [['≤4 cores', 0], ['5–8 cores', 0], ['9–16 cores', 0], ['>16 cores', 0]];
     const os = new Map(), alerts = new Map();
@@ -93,28 +140,46 @@
     render('[data-alert-types]', [...alerts].sort((a, b) => b[1] - a[1]).slice(0, 6), Math.max(1, [...alerts.values()].reduce((a, b) => a + b, 0)), 0);
   }
   function renderScatter() {
-    const rows = state.rows.filter(row => Number.isFinite(row.cpu_p95) && Number.isFinite(row.memory_p95));
+    const rows = analysisRows().filter(row => Number.isFinite(row.cpu_p95) && Number.isFinite(row.memory_p95));
     $('[data-scatter]').innerHTML = rows.map(row => {
       const kind = row.classifications.sustained ? 'sustained' : row.classifications.observe ? 'observe' : '';
       return `<button type="button" class="capacity-dot ${kind}" data-open="${esc(row.id)}" style="left:${Math.max(2, Math.min(98, row.cpu_p95))}%;bottom:${Math.max(2, Math.min(98, row.memory_p95))}%" aria-label="${esc(row.hostname)}: CPU p95 ${percent(row.cpu_p95)}, RAM p95 ${percent(row.memory_p95)}" title="${esc(row.hostname)} · CPU ${percent(row.cpu_p95)} · RAM ${percent(row.memory_p95)} · ${esc(row.cpu_name || 'Hardware não informado')} · ${bytes(row.memory_total_bytes)} · ${esc(label(row.cpu_capacity))}/${esc(label(row.memory_capacity))} · evidência ${esc(label(row.evidence))}"></button>`;
     }).join('');
-    $('[data-scatter-note]').textContent = `${rows.length} endpoint(s) com CPU e RAM p95 disponíveis.`;
+    $('[data-scatter-note]').textContent = `${rows.length} endpoint(s) do conjunto filtrado possuem CPU e RAM p95.`;
   }
   function renderWorkloads() {
-    const entries = state.rows.flatMap(row => row.processes.map(item => ({ ...item, hostname: row.hostname })));
+    const entries = analysisRows().flatMap(row => row.processes.map(item => ({ ...item, hostname: row.hostname })));
     entries.sort((a, b) => (b.cpu_percent ?? 0) - (a.cpu_percent ?? 0));
     $('[data-workloads]').innerHTML = entries.length ? entries.slice(0, 6).map(item => `<div class="capacity-workload" title="Observado na última amostra de ${esc(item.hostname)}. Não implica impacto causal."><strong>${esc(item.name)}</strong><small>${esc(item.hostname)} · ${esc(item.category)} · CPU ${percent(item.cpu_percent)} · RAM ${bytes(item.working_set_bytes)}</small></div>`).join('') : empty('Dados ainda não disponíveis para esta análise.');
   }
   function renderTable(rows) {
-    $('[data-table-body]').innerHTML = rows.length ? rows.map(row => `<tr data-open="${esc(row.id)}" tabindex="0" aria-label="Abrir detalhes de ${esc(row.hostname)}"><td>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}" data-endpoint-link>${esc(row.hostname)}</a>` : esc(row.hostname)}</td><td>${stateBadge(row.status)}</td><td>${esc(row.os_name || '—')}<span class="sub">${esc(row.os_build || '')}</span></td><td>${esc(row.cpu_name || '—')}<span class="sub">${number(row.cpu_cores)} cores</span></td><td>${bytes(row.memory_total_bytes)}</td><td>${percent(row.cpu_p95)}</td><td>${percent(row.memory_p95)}</td><td>${esc(label(row.evidence))}<span class="sub">${percent(row.coverage)}</span></td><td>${chip(row.cpu_capacity)}</td><td>${chip(row.memory_capacity)}</td><td>${row.alerts_critical}</td><td>${stamp(row.last_seen)}</td></tr>`).join('') : '<tr><td colspan="12">Nenhum endpoint corresponde ao filtro.</td></tr>';
+    const pages = Math.max(1, Math.ceil(rows.length / state.pageSize));
+    state.page = Math.max(1, Math.min(pages, state.page));
+    const offset = (state.page - 1) * state.pageSize;
+    $('[data-table-body]').innerHTML = rows.length ? rows.slice(offset, offset + state.pageSize).map(row => `<tr data-open="${esc(row.id)}" tabindex="0" aria-label="Abrir detalhes de ${esc(row.hostname)}"><td>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}" data-endpoint-link>${esc(row.hostname)}</a>` : esc(row.hostname)}</td><td>${stateBadge(row.status)}</td><td>${esc(row.last_ip || '—')}</td><td>${esc(row.last_logged_user || '—')}</td><td>${esc(row.os_name || '—')}<span class="sub">${esc(row.os_build || '')}</span></td><td>${esc(row.cpu_name || '—')}<span class="sub">${number(row.cpu_cores)} cores</span></td><td>${bytes(row.memory_total_bytes)}</td><td>${Number.isFinite(row.system_disk_used_percent) ? `C: ${percent(row.system_disk_used_percent)}` : Number.isFinite(row.max_disk_used_percent) ? `Máx. ${percent(row.max_disk_used_percent)}` : '—'}</td><td>${percent(row.cpu_p95)}</td><td>${percent(row.memory_p95)}</td><td>${esc(label(row.evidence))}<span class="sub">${percent(row.coverage)}</span></td><td>${number(row.alerts_critical)}</td><td>${stamp(row.last_seen)}</td></tr>`).join('') : '<tr><td colspan="13">Nenhum endpoint corresponde ao filtro.</td></tr>';
+    const visible = new Set([1, pages, state.page - 1, state.page, state.page + 1]);
+    let previous = 0;
+    const buttons = [...visible].filter(n => n > 0 && n <= pages).sort((a, b) => a - b).map(n => {
+      const gap = previous && n - previous > 1 ? '<span>…</span>' : ''; previous = n;
+      return `${gap}<button data-page="${n}" ${n === state.page ? 'aria-current="page"' : ''}>${n}</button>`;
+    }).join('');
+    $('[data-pagination]').innerHTML = `<span>Mostrando ${rows.length ? offset + 1 : 0}–${Math.min(offset + state.pageSize, rows.length)} de ${rows.length}</span><button data-page="${state.page - 1}" aria-label="Página anterior" ${state.page === 1 ? 'disabled' : ''}>‹</button>${buttons}<button data-page="${state.page + 1}" aria-label="Próxima página" ${state.page === pages ? 'disabled' : ''}>›</button>`;
   }
   function renderList() {
-    const rows = filtered();
-    $('[data-filter-count]').textContent = `${rows.length} de ${state.rows.length}`;
-    $('[data-grid]').innerHTML = rows.length ? rows.map(row => card(row, false)).join('') : empty('Nenhum endpoint corresponde ao filtro.');
+    const rows = analysisRows();
+    $('[data-filter-count]').textContent = `${rows.length} de ${state.rows.length} endpoints`;
+    $('[data-filter-chips]').innerHTML = state.filters.map((f, i) => `<button class="capacity-action" data-remove-filter="${i}" aria-label="Remover filtro ${esc(fields[f.field][0])}">${esc(fields[f.field][0])} ${esc(f.operator)} ${esc(f.value)}${f.operator === 'entre' ? `–${esc(f.end)}` : ''} <i data-lucide="x"></i></button>`).join('');
     renderTable(rows); renderKpis();
   }
-  function renderAll() { renderAttention(); renderDistribution(); renderProblems(); renderProfiles(); renderScatter(); renderWorkloads(); renderList(); icons(); }
+  function renderAll() { renderAttention(); renderRecent(); renderDistribution(); renderProblems(); renderProfiles(); renderScatter(); renderWorkloads(); renderList(); icons(); requestAnimationFrame(updateCarousels); }
+  function updateCarousels() {
+    ['attention', 'recent'].forEach(key => {
+      const box = $(`[data-${key}]`), controls = $(`[data-carousel-controls="${key}"]`);
+      controls.hidden = box.scrollWidth <= box.clientWidth + 1;
+      controls.querySelector('[data-direction="-1"]').disabled = box.scrollLeft <= 1;
+      controls.querySelector('[data-direction="1"]').disabled = box.scrollLeft + box.clientWidth >= box.scrollWidth - 1;
+    });
+  }
   async function load() {
     const seq = ++state.request;
     $('[data-error]').hidden = true; $('[data-updated]').textContent = 'Atualizando capacidade…';
@@ -127,6 +192,7 @@
       const payload = await response.json();
       if (seq !== state.request) return;
       state.rows = payload.endpoints; state.counts = payload.counts;
+      state.now = Date.parse(payload.generated_at); state.page = 1;
       $('[data-updated]').textContent = `Atualizado ${stamp(payload.generated_at)} · ${state.period} + contexto 7d`;
       renderAll();
     } catch (error) {
@@ -288,27 +354,34 @@
     popover.hidden = false;
   }
   root.addEventListener('pointerover', event => {
-    const target = event.target.closest('.capacity-tile[data-open],.capacity-dot[data-open]');
+    const target = event.target.closest('.capacity-dot[data-open]');
     if (target) showPopover(target);
   });
   root.addEventListener('pointerout', event => {
-    const target = event.target.closest('.capacity-tile[data-open],.capacity-dot[data-open]');
+    const target = event.target.closest('.capacity-dot[data-open]');
     if (target && !target.contains(event.relatedTarget)) $('[data-popover]').hidden = true;
   });
   root.addEventListener('focusin', event => {
-    const target = event.target.closest('.capacity-tile[data-open],.capacity-dot[data-open]');
+    const target = event.target.closest('.capacity-dot[data-open]');
     if (target) showPopover(target);
   });
   root.addEventListener('focusout', event => {
-    if (event.target.closest('.capacity-tile[data-open],.capacity-dot[data-open]')) $('[data-popover]').hidden = true;
+    if (event.target.closest('.capacity-dot[data-open]')) $('[data-popover]').hidden = true;
   });
   root.addEventListener('click', event => {
     if (event.target.closest('[data-endpoint-link]')) return;
     const opener = event.target.closest('[data-open]');
     if (opener) { openDrawer(opener.dataset.open); return; }
     const filter = event.target.closest('[data-filter]');
-    if (filter) { state.filter = state.filter === filter.dataset.filter ? 'all' : filter.dataset.filter; renderList(); return; }
-    if (event.target.closest('[data-clear-filter]')) { state.filter = 'all'; renderList(); return; }
+    if (filter) { state.filter = state.filter === filter.dataset.filter ? 'all' : filter.dataset.filter; state.page = 1; renderAll(); return; }
+    if (event.target.closest('[data-clear-filter]')) { state.filter = 'all'; state.page = 1; renderAll(); return; }
+    if (event.target.closest('[data-clear-analysis]')) { state.filter = 'all'; state.query = ''; state.filters = []; state.page = 1; $('[data-search]').value = ''; $('[data-filter-error]').textContent = ''; renderAll(); return; }
+    const remove = event.target.closest('[data-remove-filter]');
+    if (remove) { state.filters.splice(Number(remove.dataset.removeFilter), 1); state.page = 1; renderAll(); return; }
+    const page = event.target.closest('[data-page]');
+    if (page) { state.page = Number(page.dataset.page); renderList(); return; }
+    const scroll = event.target.closest('[data-scroll]');
+    if (scroll) { const box = $(`[data-${scroll.dataset.scroll}]`); box.scrollBy({ left: Number(scroll.dataset.direction) * box.clientWidth * 0.8, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); return; }
     if (event.target.closest('[data-refresh]')) { load(); return; }
     if (event.target.closest('[data-close-drawer]') || event.target.closest('[data-drawer-backdrop]')) { closeDrawer(); return; }
     const tab = event.target.closest('[data-tab]');
@@ -351,8 +424,35 @@
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
   });
-  $('[data-search]').addEventListener('input', event => { state.query = event.target.value.trim().toLocaleLowerCase(); renderList(); });
+  $('[data-search]').addEventListener('input', event => { state.query = event.target.value.trim().toLocaleLowerCase(); state.page = 1; renderAll(); });
   $('[data-sort]').addEventListener('change', event => { state.sort = event.target.value; renderList(); });
+  $('[data-page-size]').addEventListener('change', event => { state.pageSize = Number(event.target.value); state.page = 1; renderList(); });
+  $('[data-filter-field]').innerHTML = Object.entries(fields).map(([key, [name]]) => `<option value="${key}">${esc(name)}</option>`).join('');
+  function configureOperator() {
+    const type = fields[$('[data-filter-field]').value][1];
+    $('[data-filter-operator]').innerHTML = operators[type].map(op => `<option>${esc(op)}</option>`).join('');
+    $('[data-filter-value]').value = ''; $('[data-filter-value]').type = type === 'number' ? 'number' : 'text';
+    $('[data-filter-value]').step = 'any'; $('[data-filter-end]').type = 'number'; $('[data-filter-end]').step = 'any';
+    configureRange();
+  }
+  function configureRange() { const range = $('[data-filter-operator]').value === 'entre'; $('[data-filter-end-label]').hidden = !range; $('[data-filter-end]').required = range; }
+  $('[data-filter-field]').addEventListener('change', configureOperator);
+  $('[data-filter-operator]').addEventListener('change', configureRange);
+  $('[data-filter-form]').addEventListener('submit', event => {
+    event.preventDefault();
+    const field = $('[data-filter-field]').value, operator = $('[data-filter-operator]').value;
+    const raw = $('[data-filter-value]').value.trim(), rawEnd = $('[data-filter-end]').value.trim();
+    const type = fields[field][1], value = type === 'number' ? Number(raw) : raw, end = Number(rawEnd);
+    if (!raw || (type === 'number' && (!Number.isFinite(value) || value < 0)) ||
+        (operator === 'entre' && (!rawEnd || !Number.isFinite(end) || end < value)) ||
+        (type === 'enum' && !['online', 'offline', 'unknown', 'uninstalled'].includes(raw.toLowerCase()))) {
+      $('[data-filter-error]').textContent = 'Informe um valor válido para o filtro.'; return;
+    }
+    $('[data-filter-error]').textContent = ''; state.filters.push({ field, operator, value, end }); state.page = 1; renderAll();
+  });
+  ['attention', 'recent'].forEach(key => $(`[data-${key}]`).addEventListener('scroll', updateCarousels, { passive: true }));
+  window.addEventListener('resize', updateCarousels);
+  configureOperator();
   $('[data-capacity-period]').addEventListener('change', event => { state.period = event.target.value; load(); });
   $('[data-kpis]').innerHTML = Array.from({ length: 7 }, () => '<span class="capacity-kpi" aria-hidden="true"><span>Carregando</span><strong>—</strong></span>').join('');
   load();

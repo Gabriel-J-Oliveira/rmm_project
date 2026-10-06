@@ -25,11 +25,32 @@
 .capacity-kpi:hover, .capacity-kpi.is-active { border-color: var(--cap-accent, var(--cap-blue)); background: var(--card-hover); }
 .capacity-kpi span { color: var(--text-secondary); font-size: 11px; line-height: 1.25; }
 .capacity-kpi strong { margin-top: auto; font-size: 29px; line-height: 1; font-variant-numeric: tabular-nums; }
-.capacity-attention, .capacity-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 236px), 1fr)); gap: 10px; }
-.capacity-spotlight, .capacity-tile { min-width: 0; border-radius: 6px; background: var(--cap-surface); border: 1px solid var(--cap-line); padding: 12px; }
+.capacity-carousel { display: flex; flex-wrap: nowrap; gap: 12px; overflow-x: auto; padding-bottom: 10px; scroll-snap-type: x proximity; }
+.capacity-carousel > article { flex: 0 0 min(310px, 90%); scroll-snap-align: start; }
+.capacity-carousel-controls { display: flex; gap: 6px; }
+.capacity-spotlight { min-width: 0; border-radius: 6px; background: var(--cap-surface); border: 1px solid var(--cap-line); padding: 14px; }
+.capacity-recent > article { flex-basis: min(270px, 90%); }
+.capacity-recent-card { padding: 12px; border: 1px solid var(--cap-line); border-top: 2px solid var(--cap-teal); border-radius: 6px; background: var(--cap-surface); font-size: 12px; overflow-wrap: anywhere; }
+.capacity-recent-card p { color: var(--text-secondary); line-height: 1.6; }
+.capacity-recent-badge { display: block; margin-top: 8px; color: var(--cap-teal); font-size: 11px; }
+.capacity-recent-card dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; font-size: 11px; }
+.capacity-recent-card dt { color: var(--cap-muted); }
+.capacity-recent-card dd { margin: 0; text-align: right; }
+.capacity-analysis > .capacity-search { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.capacity-analysis input, .capacity-analysis select { background: var(--cap-surface); color: var(--text-primary); border: 1px solid var(--cap-line); border-radius: 6px; padding: 8px; font: inherit; min-width: 0; max-width: 100%; }
+.capacity-filter-builder { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.capacity-filter-builder label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; flex: 1 1 150px; }
+.capacity-filter-chips { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+.capacity-filter-chips svg { width: 14px; height: 14px; }
+.capacity-pagination { display: flex; align-items: center; justify-content: end; gap: 6px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
+.capacity-pagination > span:first-child { margin-right: auto; color: var(--cap-muted); }
+.capacity-pagination button { width: 32px; height: 32px; background: var(--cap-surface); border: 1px solid var(--cap-line); color: var(--text-primary); border-radius: 4px; cursor: pointer; }
+.capacity-pagination [aria-current] { border-color: var(--cap-teal); color: var(--cap-teal); }
+.capacity-page button:disabled { opacity: .4; cursor: default; }
+.capacity-page button:focus-visible, .capacity-page a:focus-visible, .capacity-carousel:focus-visible, .capacity-page input:focus-visible, .capacity-page select:focus-visible { outline: 2px solid var(--cap-teal); outline-offset: 2px; }
 .capacity-spotlight { border-left: 3px solid var(--cap-amber); }
 .capacity-card-cause { margin: 9px 0 2px; color: var(--cap-amber); font-size: 12px; font-weight: 700; }
-.capacity-spotlight:hover, .capacity-tile:hover { border-color: var(--cap-teal); }
+.capacity-spotlight:hover { border-color: var(--cap-teal); }
 .capacity-card-top { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
 .capacity-card-top strong { overflow-wrap: anywhere; font-size: 13px; }
 .capacity-state { display: inline-flex; align-items: center; gap: 5px; color: var(--cap-muted); font-size: 11px; white-space: nowrap; }
@@ -81,8 +102,6 @@ button.capacity-dist-row:hover, button.capacity-dist-row:focus-visible { backgro
 .capacity-workload strong { font-size: 12px; }
 .capacity-workload small { color: var(--cap-muted); font-size: 10px; margin-top: 4px; }
 .capacity-filter-count { color: var(--cap-muted); font-size: 11px; }
-.capacity-tile { cursor: pointer; text-align: left; color: var(--text-primary); font: inherit; }
-.capacity-tile:focus-visible { outline: 2px solid var(--cap-teal); outline-offset: 2px; }
 .capacity-table-controls { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .capacity-search { position: relative; flex: 1 1 240px; max-width: 400px; }
 .capacity-search svg { width: 14px; height: 14px; position: absolute; left: 10px; }

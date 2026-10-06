@@ -72,6 +72,31 @@ def _stats(summary):
     }
 
 
+def _disk_usage(snapshot):
+    result = dict(system_disk_used_percent=None, max_disk_used_percent=None,
+                  min_disk_free_bytes=None, disk_count=None)
+    volumes = snapshot.disks if snapshot and isinstance(snapshot.disks, list) else []
+    valid = []
+    for item in volumes:
+        if not isinstance(item, dict):
+            continue
+        size, free = item.get('size_bytes'), item.get('free_bytes')
+        if (isinstance(size, bool) or isinstance(free, bool) or
+                not isinstance(size, (int, float)) or not isinstance(free, (int, float)) or
+                not math.isfinite(size) or not math.isfinite(free) or
+                size <= 0 or not 0 <= free <= size):
+            continue
+        used = (size - free) / size * 100
+        valid.append((used, free))
+        name = item.get('name')
+        if isinstance(name, str) and name.strip().upper().rstrip('\\/') == 'C:':
+            result['system_disk_used_percent'] = used
+    if valid:
+        result.update(max_disk_used_percent=max(x[0] for x in valid),
+                      min_disk_free_bytes=min(x[1] for x in valid), disk_count=len(valid))
+    return result
+
+
 def _latest_processes(process_consumers):
     if not isinstance(process_consumers, dict):
         return []
@@ -127,6 +152,14 @@ def _row(endpoint, snapshot, primary, context, alerts, processes, now):
     snapshot_at = snapshot.received_at if snapshot else None
     return {
         'id': str(endpoint.pk), 'hostname': endpoint.hostname, 'status': endpoint.status,
+        'fqdn': endpoint.fqdn or None,
+        'first_seen': endpoint.first_seen_at.isoformat() if endpoint.first_seen_at else None,
+        'last_ip': endpoint.last_ip, 'last_logged_user': endpoint.last_logged_user or None,
+        'manufacturer': (snapshot.manufacturer if snapshot else None) or endpoint.manufacturer or None,
+        'model': (snapshot.model if snapshot else None) or endpoint.model or None,
+        'telemetry_last_at': (endpoint.obz_last_telemetry.isoformat() if getattr(endpoint, 'obz_last_telemetry', None)
+                              else context['quality'].get('last_sample_at')),
+        **_disk_usage(snapshot),
         'last_seen': endpoint.last_seen_at.isoformat() if endpoint.last_seen_at else None,
         'agent_version': endpoint.agent_version or None, 'os_name': os_name,
         'os_version': os_version, 'os_build': (snapshot.windows_build if snapshot else None) or endpoint.windows_build or None,
@@ -183,6 +216,12 @@ def _demo_rows():
         observe = 'OBSERVE' in (cpu, memory)
         rows.append({
             'id': f'00000000-0000-4000-8000-{index:012d}', 'hostname': hostname,
+            'fqdn': hostname.lower() + '.example.test', 'first_seen': (timezone.now() - timedelta(hours=index * 10)).isoformat(),
+            'last_ip': f'192.0.2.{index}', 'last_logged_user': 'demo',
+            'manufacturer': 'Demo', 'model': 'Demo',
+            'telemetry_last_at': None if insufficient else timezone.now().isoformat(),
+            'system_disk_used_percent': 40, 'max_disk_used_percent': 40,
+            'min_disk_free_bytes': 60000000000, 'disk_count': 1,
             'status': status, 'last_seen': None, 'agent_version': 'demo',
             'os_name': 'Windows Server' if index < 5 else None, 'os_version': None,
             'os_build': None, 'cpu_name': 'CPU demonstrativa' if index < 6 else None,
@@ -243,7 +282,8 @@ def _aggregate_window(start, end):
                    EXTRACT(EPOCH FROM collected_at - previous_at) > 420) AS gaps,
                COUNT(*) FILTER (WHERE created_at < collected_at) AS negative_lags,
                COUNT(*) FILTER (WHERE telemetry_errors_count > 0) AS error_samples,
-               SUM(telemetry_errors_count) AS total_errors
+               SUM(telemetry_errors_count) AS total_errors,
+               MIN(collected_at) AS first_sample_at, MAX(collected_at) AS last_sample_at
         FROM ordered GROUP BY endpoint_id
     """
     with connection.cursor() as cursor:
@@ -268,6 +308,8 @@ def _compact_summary(endpoint, start, end, aggregate):
                    'duration_seconds': (end - start).total_seconds()},
         'quality': {
             'expected_samples': expected, 'received_samples': received,
+            'first_sample_at': data['first_sample_at'].isoformat() if data.get('first_sample_at') else None,
+            'last_sample_at': data['last_sample_at'].isoformat() if data.get('last_sample_at') else None,
             'coverage_percent': received / expected * 100 if expected else None,
             'gaps_over_threshold_count': data.get('gaps') or 0,
             'negative_lag_samples': data.get('negative_lags') or 0,
@@ -290,8 +332,12 @@ def _overview(now, hours):
                               .order_by('-collected_at', '-id').values('process_consumers')[:1])
     endpoints = list(AgentMachine.objects.only(
         'id', 'hostname', 'status', 'last_seen_at', 'agent_version',
-        'os_name', 'os_version', 'windows_build',
-    ).annotate(obz_last_processes=Subquery(latest_processes_query)).order_by('hostname', 'pk'))
+        'os_name', 'os_version', 'windows_build', 'first_seen_at', 'fqdn',
+        'last_ip', 'last_logged_user', 'manufacturer', 'model',
+    ).annotate(obz_last_processes=Subquery(latest_processes_query),
+               obz_last_telemetry=Subquery(EndpointPerformanceSample.objects.filter(
+                   endpoint_id=OuterRef('pk'), collected_at__lt=now).order_by('-collected_at', '-id')
+                   .values('collected_at')[:1])).order_by('hostname', 'pk'))
     if not endpoints:
         return []
     latest_pk = (InventorySnapshot.objects.filter(machine_id=OuterRef('machine_id'))
@@ -299,7 +345,7 @@ def _overview(now, hours):
     snapshots = {item.machine_id: item for item in
                  InventorySnapshot.objects.only(
                      'id', 'machine_id', 'os_name', 'os_version', 'windows_build',
-                     'cpu', 'memory_total_bytes', 'raw_payload', 'received_at',
+                     'cpu', 'memory_total_bytes', 'raw_payload', 'received_at', 'disks', 'manufacturer', 'model',
                  ).filter(pk=Subquery(latest_pk), machine_id__in=[e.pk for e in endpoints])}
     alert_map = {}
     alert_types = EndpointAlert.objects.filter(

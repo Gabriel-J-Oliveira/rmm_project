@@ -3,7 +3,7 @@
 
 {% block title %}Night Owl | Capacidade &amp; Planejamento{% endblock %}
 {% block body_class %}page-capacity{% endblock %}
-{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=m6-2-1">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=capacity-analysis-1">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -35,8 +35,13 @@
     </section>
 
     <section class="capacity-section" aria-labelledby="capacity-attention-title">
-        <div class="capacity-section-heading"><div><h2 id="capacity-attention-title">Merecem atenção</h2><p>Pressão, evidência incompleta, indisponibilidade e alertas críticos.</p></div></div>
-        <div class="capacity-attention" data-attention></div>
+        <div class="capacity-section-heading"><div><h2 id="capacity-attention-title">Merecem atenção</h2></div><div class="capacity-carousel-controls" data-carousel-controls="attention"><button class="capacity-icon-button" data-scroll="attention" data-direction="-1" aria-label="Atenção: anteriores"><i data-lucide="chevron-left"></i></button><button class="capacity-icon-button" data-scroll="attention" data-direction="1" aria-label="Atenção: próximos"><i data-lucide="chevron-right"></i></button></div></div>
+        <div class="capacity-carousel capacity-attention" data-attention tabindex="0" aria-label="Endpoints que merecem atenção"></div>
+    </section>
+
+    <section class="capacity-section" data-recent-section hidden aria-labelledby="capacity-recent-title">
+        <div class="capacity-section-heading"><h2 id="capacity-recent-title">Adicionados recentemente</h2><div class="capacity-carousel-controls" data-carousel-controls="recent"><button class="capacity-icon-button" data-scroll="recent" data-direction="-1" aria-label="Recentes: anteriores"><i data-lucide="chevron-left"></i></button><button class="capacity-icon-button" data-scroll="recent" data-direction="1" aria-label="Recentes: próximos"><i data-lucide="chevron-right"></i></button></div></div>
+        <div class="capacity-carousel capacity-recent" data-recent tabindex="0" aria-label="Endpoints recentes"></div>
     </section>
 
     <div class="capacity-visual-row">
@@ -61,18 +66,28 @@
         <div class="capacity-workloads" data-workloads></div>
     </section>
 
-    <section class="capacity-section" aria-labelledby="capacity-grid-title">
-        <div class="capacity-section-heading"><div><h2 id="capacity-grid-title">Mapa da frota</h2><p>Selecione um endpoint para abrir o detalhe.</p></div><span class="capacity-filter-count" data-filter-count></span></div>
-        <div class="capacity-grid" data-grid></div>
+    <section class="capacity-section capacity-analysis" aria-labelledby="capacity-analysis-title">
+        <div class="capacity-section-heading"><h2 id="capacity-analysis-title">Analisar parque</h2><span class="capacity-filter-count" data-filter-count aria-live="polite"></span></div>
+        <label class="capacity-search">Pesquisar <input type="search" data-search placeholder="Endpoint, IP, usuário, SO..." aria-label="Pesquisar no parque"></label>
+        <form class="capacity-filter-builder" data-filter-form>
+            <label>Campo <select data-filter-field></select></label>
+            <label>Operador <select data-filter-operator></select></label>
+            <label>Valor <input data-filter-value required></label>
+            <label data-filter-end-label hidden>Até <input data-filter-end></label>
+            <button class="capacity-action" type="submit"><i data-lucide="plus"></i>Adicionar</button>
+            <button class="capacity-action" type="button" data-clear-analysis><i data-lucide="filter-x"></i>Limpar</button>
+        </form>
+        <div data-filter-error role="alert"></div><div class="capacity-filter-chips" data-filter-chips></div>
     </section>
 
     <section class="capacity-section" aria-labelledby="capacity-table-title">
         <div class="capacity-section-heading"><div><h2 id="capacity-table-title">Tabela analítica</h2><p>Ordene ou pesquise para comparar equipamentos.</p></div></div>
         <div class="capacity-table-controls">
-            <label class="capacity-search"><i data-lucide="search"></i><input type="search" data-search placeholder="Buscar endpoint ou sistema operacional" aria-label="Buscar endpoints"></label>
+            <label>Por página <select data-page-size><option>25</option><option>50</option><option>100</option></select></label>
             <label>Ordenar <select data-sort><option value="priority">Prioridade</option><option value="hostname">Endpoint</option><option value="cpu">CPU p95</option><option value="memory">RAM p95</option><option value="coverage">Cobertura</option><option value="last_seen">Última atividade</option></select></label>
         </div>
-        <div class="capacity-table-scroll"><table class="capacity-table"><thead><tr><th>Endpoint</th><th>Estado</th><th>SO</th><th>CPU / cores</th><th>RAM</th><th>CPU p95</th><th>RAM p95</th><th>Evidência</th><th>CPU</th><th>Memória</th><th>Críticos</th><th>Last seen</th></tr></thead><tbody data-table-body></tbody></table></div>
+        <div class="capacity-table-scroll"><table class="capacity-table"><thead><tr><th>Endpoint</th><th>Estado</th><th>IP</th><th>Usuário</th><th>SO</th><th>CPU / cores</th><th>RAM</th><th>Disco</th><th>CPU p95</th><th>RAM p95</th><th>Evidência</th><th>Críticos</th><th>Last seen</th></tr></thead><tbody data-table-body></tbody></table></div>
+        <nav class="capacity-pagination" data-pagination aria-label="Paginação da tabela"></nav>
     </section>
 
     <div class="capacity-drawer-backdrop" data-drawer-backdrop hidden></div>
@@ -87,4 +102,4 @@
     </aside>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=m6-2-1" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=capacity-analysis-1" defer></script>{% endblock %}
