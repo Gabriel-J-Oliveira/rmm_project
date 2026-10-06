@@ -389,8 +389,10 @@ function Stop-BeforeInstaller([int]$Code) {{
     [Console]::WriteLine('NIGHTOWL_INSTALL:NOT_STARTED:' + $Code)
     exit $Code
 }}
+$nightOwlRoot = Join-Path $env:ProgramData 'NightOwl'
+$agentInstall = Join-Path $nightOwlRoot 'AgentDotNet'
 if ((Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue) -or
-    (Test-Path -LiteralPath (Join-Path $env:ProgramData 'NightOwl'))) {{ Stop-BeforeInstaller 25 }}
+    (Test-Path -LiteralPath $agentInstall)) {{ Stop-BeforeInstaller 25 }}
 $dir = Join-Path $env:TEMP ('NightOwlRemoteInstall-' + [guid]::NewGuid().ToString('N'))
 try {{
     New-Item -ItemType Directory -Force -Path $dir | Out-Null

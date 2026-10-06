@@ -1,11 +1,13 @@
 import io
 import json
+import os
+import subprocess
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest import mock
+from unittest import mock, skipUnless
 
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.middleware.csrf import _get_new_csrf_string
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.cache import cache
@@ -153,6 +155,28 @@ class RemoteInstallJobTests(TestCase):
         self.assertEqual(job.status, 'FAILED')
         self.assertEqual(job.error_code, 'AUTHENTICATION_FAILED')
 
+    def test_wrapper_code_25_proves_installer_not_started(self):
+        job = self.job()
+        def blocked(*args, **kwargs):
+            kwargs['on_event']('NOT_STARTED', 25)
+            return 25
+        with mock.patch.object(remote_install.threading, 'Thread'), \
+                mock.patch.object(remote_install, '_ad_target', return_value=COMPUTER), \
+                mock.patch.object(remote_install, 'run_remote_install_preflight', return_value=READY), \
+                mock.patch.object(remote_install, '_enrollment_available', return_value=True), \
+                mock.patch.object(remote_install, '_matching_endpoint', return_value=None), \
+                mock.patch.object(remote_install, '_remote_script', side_effect=blocked) as command:
+            remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
+        self.assertEqual(command.call_count, 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, 'FAILED')
+        self.assertEqual(job.error_code, 'NIGHTOWL_INSTALLATION_DETECTED')
+        self.assertFalse(job.diagnostics['invocation_attempted'])
+        self.assertIsNone(job.diagnostics['installer_started_at'])
+        self.assertIsNone(job.diagnostics['installer_finished_at'])
+        self.assertIsNone(job.diagnostics['installer_exit_code'])
+        self.assertEqual(job.diagnostics['safe_to_retry'], 'NO')
+
     def test_target_and_preflight_gates_never_invoke_installer(self):
         failures = ('AD_COMPUTER_DISABLED', 'TARGET_MANAGED_OR_CONFLICT',
                     'UNSAFE_TARGET_ADDRESS', 'ADMIN_REQUIRED', 'NIGHTOWL_INSTALLATION_DETECTED')
@@ -259,6 +283,62 @@ class RemoteInstallJobTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.status, 'INSTALLED_UNVERIFIED')
         self.assertEqual(job.error_code, 'HEARTBEAT_TIMEOUT')
+
+
+@override_settings(NIGHTOWL_AGENT_PUBLIC_SERVER_URL='https://nightowl.controlsul.com.br')
+class InstallerGuardTests(SimpleTestCase):
+    def test_guard_uses_canonical_directory_before_any_mutation(self):
+        script = remote_install._installer_script(CONTRACT)
+        self.assertIn("$nightOwlRoot = Join-Path $env:ProgramData 'NightOwl'", script)
+        self.assertIn("$agentInstall = Join-Path $nightOwlRoot 'AgentDotNet'", script)
+        self.assertIn('(Test-Path -LiteralPath $agentInstall)) { Stop-BeforeInstaller 25 }', script)
+        self.assertNotIn("Test-Path -LiteralPath (Join-Path $env:ProgramData 'NightOwl')", script)
+        self.assertLess(script.index('Stop-BeforeInstaller 25'), script.index('New-Item'))
+        self.assertLess(script.index('Stop-BeforeInstaller 25'), script.index('$process.Start()'))
+        self.assertIn("NIGHTOWL_INSTALL:NOT_STARTED:", script)
+        for check in ('-MaximumRedirection 0', 'Get-FileHash', 'ParseFile', '$ast.ParamBlock',
+                      '-TrustedPublicKeysPath', '-ExpectedVersion', '-ExpectedChannel',
+                      '-ExpectedPackageSha256', '-ExpectedGitCommit',
+                      'NIGHTOWL_INSTALL:STARTED', 'NIGHTOWL_INSTALL:FINISHED:'):
+            self.assertIn(check, script)
+        for check in ('Get-FileHash', 'ParseFile', '$names -notcontains'):
+            self.assertLess(script.index(check), script.index('$process.Start()'))
+
+    @skipUnless(os.name == 'nt', 'Isolated PowerShell guard runs on the Windows build host')
+    def test_real_guard_with_synthetic_bootstrap_directory_and_service(self):
+        # Execute only the generated read-only guard, never the wrapper's installer body.
+        guard = remote_install._installer_script(CONTRACT).split('$dir =', 1)[0]
+        for service, agent_directory, expected in ((False, False, 0), (False, True, 25), (True, False, 25)):
+            with self.subTest(service=service, agent_directory=agent_directory):
+                mocks = r'''
+$env:ProgramData = 'C:\SyntheticProgramData'
+$script:ExistingPaths = @('C:\SyntheticProgramData\NightOwl',
+    'C:\SyntheticProgramData\NightOwl\Bootstrap', 'C:\SyntheticProgramData\NightOwl\Logs',
+    'C:\SyntheticProgramData\NightOwl\Config', 'C:\SyntheticProgramData\NightOwl\Identity',
+    'C:\SyntheticProgramData\NightOwl\State', 'C:\SyntheticProgramData\NightOwl\Trust',
+    'C:\SyntheticProgramData\NightOwl\Diagnostics', 'C:\SyntheticProgramData\NightOwl\Updates')
+function Get-Service {
+    param($Name, $ErrorAction)
+    if ($Name -ne 'NightOwlAgentDotNet') { throw 'Unexpected service query' }
+    if ($script:ServicePresent) { [pscustomobject]@{Name=$Name} }
+}
+function Test-Path {
+    param($LiteralPath)
+    if ($LiteralPath -ne 'C:\SyntheticProgramData\NightOwl\AgentDotNet') { throw 'Unexpected directory query' }
+    return $script:ExistingPaths -contains $LiteralPath
+}
+'''
+                mocks += '\n$script:ServicePresent = $' + str(service).lower() + '\n'
+                if agent_directory:
+                    mocks += "$script:ExistingPaths += 'C:\\SyntheticProgramData\\NightOwl\\AgentDotNet'\n"
+                command = mocks + guard + "\n[Console]::WriteLine('GUARD_PASSED'); exit 0\n"
+                result = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command',
+                                         '[ScriptBlock]::Create([Console]::In.ReadToEnd()).Invoke()'],
+                                        input=command, text=True, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertIn('GUARD_PASSED' if expected == 0 else 'NIGHTOWL_INSTALL:NOT_STARTED:25',
+                              result.stdout)
+                self.assertNotIn('NIGHTOWL_INSTALL:STARTED', result.stdout)
 
 
 class RemoteInstallRouteTests(TestCase):
