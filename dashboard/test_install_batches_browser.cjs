@@ -116,6 +116,7 @@ test('XSS-safe item tooltip, authorized stall confirmation, retry opens new batc
     await page.locator('#install-detail-refresh').click();
     await page.waitForFunction(()=>document.querySelector('#install-item-rows').textContent.includes('83s'));
     await page.getByRole('button',{name:'Marcar como travada e seguir',exact:true}).click();
+    assert.equal(await page.evaluate(()=>document.activeElement.textContent),'Confirmar e seguir');
     await page.getByRole('button',{name:'Confirmar e seguir',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#install-action-feedback').textContent.includes('Resultado registrado'));
     const stall=state.requests.find(r=>r.url.endsWith('mark-stalled/'));assert.deepEqual(JSON.parse(stall.body),{item_id:ITEM});
@@ -154,6 +155,7 @@ test('stall never appears without backend authorization and modal Escape restore
     const {page,state}=await setup(t,{initial:batch({status:'COMPLETED_WITH_ERRORS',items:[{...batch().items[0],is_stalled:true,stale_seconds:200,status:'FAILED',retry_eligible:true}]})});
     assert.equal(await page.getByRole('button',{name:'Marcar como travada e seguir',exact:true}).count(),0);
     await page.locator('#install-batch-retry').click();
+    if(process.env.NIGHTOWL_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.NIGHTOWL_SCREENSHOT_DIR,'credential-modal.png')});
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.install-credential-modal').count(),0);
     assert.equal(await page.locator('#install-batch-drawer').isVisible(),true);

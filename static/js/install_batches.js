@@ -142,8 +142,14 @@
         if (item.is_stalled && currentBatch.manual_stall_action_available) {
             action.append(el('small', 'install-review-text', `Runner sem atualização há ${n(item.stale_seconds)}s · intervenção manual disponível`));
             const confirm = el('button', 'install-button', confirmation === item.id ? 'Confirmar e seguir' : 'Marcar como travada e seguir'); confirm.type = 'button'; confirm.disabled = actionInFlight;
+            confirm.setAttribute('aria-label', confirm.textContent);
+            confirm.setAttribute('data-stall-confirm', '');
             confirm.addEventListener('click', async () => {
-                if (confirmation !== item.id) { confirmation = item.id; drawItem(row, item); return; }
+                if (confirmation !== item.id) {
+                    confirmation = item.id; drawItem(row, item);
+                    row.querySelector('[data-stall-confirm]')?.focus({ preventScroll: true });
+                    return;
+                }
                 if (actionInFlight) return;
                 actionInFlight = true; confirm.disabled = true;
                 try { await api.request(api.url(currentId, 'mark-stalled/'), { item_id: item.id }); toast('Resultado registrado. O backend seguirá o lote.'); }
@@ -154,6 +160,7 @@
             if (confirmation === item.id) {
                 action.append(el('small', 'install-muted', 'O resultado pode exigir revisão; isto não cancela um instalador já iniciado.'));
                 const cancel = el('button', 'install-button', 'Cancelar'); cancel.type = 'button';
+                cancel.setAttribute('aria-label', 'Cancelar intervenção');
                 cancel.addEventListener('click', () => { confirmation = null; drawItem(row, item); }); action.append(cancel);
             }
         }
