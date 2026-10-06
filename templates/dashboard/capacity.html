@@ -3,7 +3,7 @@
 
 {% block title %}Night Owl | Capacidade &amp; Planejamento{% endblock %}
 {% block body_class %}page-capacity{% endblock %}
-{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=capacity-analysis-1">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/capacity.css' %}?v=capacity-executive-1">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -42,6 +42,21 @@
     <section class="capacity-section" data-recent-section hidden aria-labelledby="capacity-recent-title">
         <div class="capacity-section-heading"><h2 id="capacity-recent-title">Adicionados recentemente</h2><div class="capacity-carousel-controls" data-carousel-controls="recent"><button class="capacity-icon-button" data-scroll="recent" data-direction="-1" aria-label="Recentes: anteriores"><i data-lucide="chevron-left"></i></button><button class="capacity-icon-button" data-scroll="recent" data-direction="1" aria-label="Recentes: próximos"><i data-lucide="chevron-right"></i></button></div></div>
         <div class="capacity-carousel capacity-recent" data-recent tabindex="0" aria-label="Endpoints recentes"></div>
+    </section>
+
+    <section class="capacity-section" aria-labelledby="capacity-executive-title">
+        <div class="capacity-section-heading"><h2 id="capacity-executive-title">Visão executiva da frota</h2></div>
+        <div class="capacity-executive-donuts">
+            <article class="capacity-executive-chart" aria-labelledby="capacity-status-chart-title"><h3 id="capacity-status-chart-title">Status da frota</h3><div data-executive-status></div></article>
+            <article class="capacity-executive-chart" aria-labelledby="capacity-ram-chart-title"><h3 id="capacity-ram-chart-title">Memória instalada</h3><div data-executive-ram></div></article>
+            <article class="capacity-executive-chart" aria-labelledby="capacity-disk-chart-title"><h3 id="capacity-disk-chart-title">Uso de disco</h3><p>C: ou maior uso conhecido</p><div data-executive-disk></div></article>
+            <article class="capacity-executive-chart" aria-labelledby="capacity-os-chart-title"><h3 id="capacity-os-chart-title">Sistemas operacionais</h3><div data-executive-os></div></article>
+        </div>
+        <div class="capacity-executive-bars">
+            <article class="capacity-executive-chart" aria-labelledby="capacity-makers-chart-title"><h3 id="capacity-makers-chart-title">Fabricantes</h3><div data-executive-makers></div></article>
+            <article class="capacity-executive-chart" aria-labelledby="capacity-models-chart-title"><h3 id="capacity-models-chart-title">Modelos</h3><div data-executive-models></div></article>
+            <article class="capacity-executive-chart" aria-labelledby="capacity-upgrade-chart-title"><h3 id="capacity-upgrade-chart-title">Critérios de upgrade</h3><p>Critérios independentes · não somar</p><div data-executive-upgrade></div></article>
+        </div>
     </section>
 
     <div class="capacity-visual-row">
@@ -102,4 +117,4 @@
     </aside>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=capacity-analysis-1" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/capacity.js' %}?v=capacity-executive-1" defer></script>{% endblock %}

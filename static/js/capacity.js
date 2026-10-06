@@ -171,7 +171,68 @@
     $('[data-filter-chips]').innerHTML = state.filters.map((f, i) => `<button class="capacity-action" data-remove-filter="${i}" aria-label="Remover filtro ${esc(fields[f.field][0])}">${esc(fields[f.field][0])} ${esc(f.operator)} ${esc(f.value)}${f.operator === 'entre' ? `–${esc(f.end)}` : ''} <i data-lucide="x"></i></button>`).join('');
     renderTable(rows); renderKpis();
   }
-  function renderAll() { renderAttention(); renderRecent(); renderDistribution(); renderProblems(); renderProfiles(); renderScatter(); renderWorkloads(); renderList(); icons(); requestAnimationFrame(updateCarousels); }
+  const chartColors = ['#34d3b3', '#75b8fa', '#f5bd62', '#fa7777', '#a5adbb'];
+  const validDisk = value => Number.isFinite(value) && value >= 0 && value <= 100;
+  const diskValue = row => validDisk(row.system_disk_used_percent) ? row.system_disk_used_percent : validDisk(row.max_disk_used_percent) ? row.max_disk_used_percent : null;
+  function donut(selector, entries, total, available = total, colors = chartColors) {
+    const box = $(selector);
+    if (!total || !available) { box.innerHTML = empty(!total ? 'Nenhum endpoint no conjunto filtrado' : 'Sem dados suficientes') + (total ? `<p class="capacity-chart-note">${total} endpoint(s) sem dados.</p>` : ''); return; }
+    let offset = 0;
+    const stops = entries.map(([, count], i) => { const start = offset; offset += count / total * 100; return `${colors[i % colors.length]} ${start}% ${offset}%`; });
+    // Numeric-only conic gradient; the complete distribution is also readable text.
+    const description = entries.map(([name, count]) => `${name}: ${count}`).join('; ');
+    box.innerHTML = `<div class="capacity-donut" role="img" aria-label="${esc(`${total} endpoints. ${description}`)}" style="background:conic-gradient(${stops.join(',')})"><div class="capacity-donut-center"><strong>${total}</strong><span>endpoints</span></div></div><ul class="capacity-chart-legend">${entries.map(([name, count], i) => `<li><span class="swatch" aria-hidden="true" style="background:${colors[i % colors.length]}"></span><span>${esc(name)}</span><strong>${count}</strong><small>${percent(count / total * 100)}</small></li>`).join('')}</ul>`;
+  }
+  function executiveBars(selector, entries, total, available = total) {
+    const box = $(selector);
+    if (!total || !available) { box.innerHTML = empty(!total ? 'Nenhum endpoint no conjunto filtrado' : 'Inventário indisponível'); return; }
+    const max = Math.max(1, ...entries.map(([, n]) => n));
+    box.innerHTML = entries.map(([name, count, known = total]) => `<div class="capacity-executive-bar"><span>${esc(name)}</span><strong>${known ? count : '—'}<small>${known ? percent(count / known * 100) : 'Sem dados'}</small></strong><span class="capacity-dist-track" aria-hidden="true"><span class="capacity-dist-fill" style="width:${known ? count / max * 100 : 0}%"></span></span>${known < total ? `<small class="capacity-chart-note">${known} com dados · ${total - known} sem dados</small>` : ''}</div>`).join('');
+  }
+  function topInventory(rows, key) {
+    const counts = new Map(); let missing = 0;
+    rows.forEach(row => { const name = typeof row[key] === 'string' ? row[key].trim() : ''; if (!name) { missing++; return; } counts.set(name, (counts.get(name) || 0) + 1); });
+    const ordered = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const top = ordered.slice(0, 8), others = ordered.slice(8).reduce((n, entry) => n + entry[1], 0);
+    if (others) top.push(['Outros', others]);
+    if (missing) top.push(['Não informado', missing]);
+    return { entries: top, available: rows.length - missing };
+  }
+  function renderExecutive() {
+    const rows = analysisRows(), total = rows.length;
+    const status = [['Online', 0], ['Offline', 0], ['Atenção (online)', 0], ['Desconhecido / outros', 0]];
+    const ram = [['< 8 GB', 0], ['8–15 GB', 0], ['16–31 GB', 0], ['32+ GB', 0], ['Não informado', 0]];
+    const disks = [['< 70%', 0], ['70–84%', 0], ['85–94%', 0], ['95%+', 0], ['Não informado', 0]];
+    const os = [['Windows 10', 0], ['Windows 11', 0], ['Windows Server', 0], ['Outros / desconhecido', 0]];
+    let ramKnown = 0, diskKnown = 0;
+    rows.forEach(row => {
+      // Mutually exclusive: offline is never counted again as attention/online.
+      status[row.status === 'offline' ? 1 : row.status === 'online' ? row.classifications.attention ? 2 : 0 : 3][1]++;
+      const gb = Number.isFinite(row.memory_total_bytes) && row.memory_total_bytes > 0 ? row.memory_total_bytes / 1073741824 : null;
+      if (gb !== null) ramKnown++;
+      ram[gb === null ? 4 : gb < 8 ? 0 : gb < 16 ? 1 : gb < 32 ? 2 : 3][1]++;
+      const disk = diskValue(row); if (disk !== null) diskKnown++;
+      disks[disk === null ? 4 : disk < 70 ? 0 : disk < 85 ? 1 : disk < 95 ? 2 : 3][1]++;
+      const system = [row.os_name, row.os_version].filter(v => typeof v === 'string').join(' ').toLowerCase();
+      os[/windows.*server|server.*windows/.test(system) ? 2 : /windows\s+11\b/.test(system) ? 1 : /windows\s+10\b/.test(system) ? 0 : 3][1]++;
+    });
+    donut('[data-executive-status]', status, total, total, ['#34d3b3', '#fa7777', '#f5bd62', '#a5adbb']);
+    donut('[data-executive-ram]', ram, total, ramKnown);
+    donut('[data-executive-disk]', disks, total, diskKnown);
+    donut('[data-executive-os]', os, total);
+    ['manufacturer', 'model'].forEach((key, i) => { const data = topInventory(rows, key); executiveBars(i ? '[data-executive-models]' : '[data-executive-makers]', data.entries, total, data.available); });
+    const upgrades = [
+      ['RAM < 12 GB', rows.filter(r => Number.isFinite(r.memory_total_bytes) && r.memory_total_bytes > 0 && r.memory_total_bytes < 12 * 1073741824).length, ramKnown],
+      ['RAM < 16 GB', rows.filter(r => Number.isFinite(r.memory_total_bytes) && r.memory_total_bytes > 0 && r.memory_total_bytes < 16 * 1073741824).length, ramKnown],
+      ['Disco > 85%', rows.filter(r => diskValue(r) !== null && diskValue(r) > 85).length, diskKnown],
+      ['Disco > 95%', rows.filter(r => diskValue(r) !== null && diskValue(r) > 95).length, diskKnown],
+      ['Offline', rows.filter(r => r.status === 'offline').length],
+      ['Sem telemetria suficiente', rows.filter(r => r.classifications.insufficient).length],
+      ['Sem inventário', rows.filter(r => !r.inventory_at).length]
+    ];
+    executiveBars('[data-executive-upgrade]', upgrades, total);
+  }
+  function renderAll() { renderAttention(); renderRecent(); renderExecutive(); renderDistribution(); renderProblems(); renderProfiles(); renderScatter(); renderWorkloads(); renderList(); icons(); requestAnimationFrame(updateCarousels); }
   function updateCarousels() {
     ['attention', 'recent'].forEach(key => {
       const box = $(`[data-${key}]`), controls = $(`[data-carousel-controls="${key}"]`);

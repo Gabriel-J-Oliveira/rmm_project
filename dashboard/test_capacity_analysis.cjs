@@ -148,3 +148,67 @@ test('desktop/mobile carousels are single-row and page fits viewport', async t =
     await page.screenshot({path: path.join(process.env.TEMP || '/tmp', `capacity-analysis-${width}.png`), fullPage: true});
   }
 });
+
+async function legend(page, chart) {
+  return page.locator(`[data-executive-${chart}] .capacity-chart-legend li`).evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.querySelector('span:not(.swatch)').textContent, Number(n.querySelector('strong').textContent)])));
+}
+test('executive RAM/disk boundaries, C preference and OS grouping', async t => {
+  const values = rows(6);
+  [4, 8, 15.9, 16, 32, null].forEach((gb, i) => { values[i].memory_total_bytes = gb === null ? null : gb * 1073741824; });
+  [69, 70, 85, 95, null, null].forEach((n, i) => { values[i].system_disk_used_percent = n; values[i].max_disk_used_percent = i === 4 ? 94 : i === 5 ? null : 99; });
+  ['Microsoft Windows 10 Pro', 'Windows 11', 'Windows Server 2022', 'Linux', null, 'Windows 10'].forEach((name, i) => { values[i].os_name = name; });
+  const page = await setup(t, values);
+  assert.deepEqual(await legend(page, 'ram'), {'< 8 GB': 1, '8–15 GB': 2, '16–31 GB': 1, '32+ GB': 1, 'Não informado': 1});
+  assert.deepEqual(await legend(page, 'disk'), {'< 70%': 1, '70–84%': 1, '85–94%': 2, '95%+': 1, 'Não informado': 1});
+  assert.deepEqual(await legend(page, 'os'), {'Windows 10': 2, 'Windows 11': 1, 'Windows Server': 1, 'Outros / desconhecido': 2});
+});
+test('exclusive status, upgrade counts and all executive charts follow AND/search', async t => {
+  const values = rows(4);
+  values[0].status = 'offline'; values[0].classifications.offline = true;
+  values[1].classifications.attention = true;
+  values[2].classifications.insufficient = true;
+  values[2].classifications.attention = true;
+  values[2].inventory_at = null;
+  const page = await setup(t, values);
+  assert.deepEqual(await legend(page, 'status'), {'Online': 1, 'Offline': 1, 'Atenção (online)': 2, 'Desconhecido / outros': 0});
+  const counts = await page.locator('[data-executive-upgrade] .capacity-executive-bar > strong').evaluateAll(nodes => nodes.map(n => Number(n.firstChild.textContent)));
+  assert.deepEqual(counts, [2, 2, 2, 0, 1, 1, 1]);
+  await add(page, 'ram', '<', 12); await add(page, 'os', 'contém', 'Windows 10');
+  for (const chart of ['status', 'ram', 'disk', 'os']) assert.equal(await page.locator(`[data-executive-${chart}] .capacity-donut-center strong`).textContent(), '2');
+  await page.locator('[data-search]').fill('PC-000');
+  for (const chart of ['status', 'ram', 'disk', 'os']) assert.equal(await page.locator(`[data-executive-${chart}] .capacity-donut-center strong`).textContent(), '1');
+  for (const chart of ['makers', 'models']) assert.equal(await page.locator(`[data-executive-${chart}] .capacity-executive-bar > strong`).first().evaluate(n => n.firstChild.textContent), '1');
+});
+test('missing inventory is not zero, empty filters clear every chart', async t => {
+  const values = rows(2); values.forEach(r => { r.memory_total_bytes = null; r.system_disk_used_percent = null; r.max_disk_used_percent = null; r.manufacturer = null; r.model = null; });
+  const page = await setup(t, values);
+  for (const chart of ['ram', 'disk']) { assert.equal(await page.locator(`[data-executive-${chart}] .capacity-donut`).count(), 0); assert.match(await page.locator(`[data-executive-${chart}]`).textContent(), /Sem dados suficientes/); }
+  assert.match(await page.locator('[data-executive-upgrade] .capacity-executive-bar').first().textContent(), /—.*Sem dados/);
+  await page.locator('[data-search]').fill('no-match');
+  for (const chart of ['status', 'ram', 'disk', 'os', 'makers', 'models', 'upgrade']) assert.match(await page.locator(`[data-executive-${chart}]`).textContent(), /Nenhum endpoint/);
+});
+test('top inventory is bounded, quantities preserved, untrusted labels escaped', async t => {
+  const values = rows(12); values.forEach((r, i) => { r.manufacturer = `Maker ${i}`; r.model = `Model ${i}`; });
+  values[0].manufacturer = '<img src=x onerror=alert(1)>'; values[0].model = '<script>alert(1)</script>';
+  const page = await setup(t, values);
+  for (const chart of ['makers', 'models']) {
+    assert.equal(await page.locator(`[data-executive-${chart}] .capacity-executive-bar`).count(), 9);
+    assert.match(await page.locator(`[data-executive-${chart}]`).textContent(), /Outros/);
+    assert.equal(await page.locator(`[data-executive-${chart}] img, [data-executive-${chart}] script`).count(), 0);
+    assert.equal(await page.locator(`[data-executive-${chart}] .capacity-executive-bar > strong`).evaluateAll(nodes => nodes.reduce((n, node) => n + Number(node.firstChild.textContent), 0)), 12);
+  }
+});
+test('scrollbars hidden with native overflow, keyboard navigation remains available', async t => {
+  const values = rows(30); values.forEach(r => { r.alerts_critical = 1; });
+  const page = await setup(t, values);
+  for (const key of ['attention', 'recent']) {
+    const carousel = page.locator(`[data-${key}]`);
+    assert.equal(await carousel.evaluate(n => getComputedStyle(n).scrollbarWidth), 'none');
+    assert.equal(await carousel.evaluate(n => getComputedStyle(n, '::-webkit-scrollbar').display), 'none');
+    await page.emulateMedia({reducedMotion: 'reduce'});
+    const next = page.locator(`[data-scroll=${key}][data-direction="1"]`);
+    await next.focus(); await page.keyboard.press('Enter');
+    assert.ok(await carousel.evaluate(n => n.scrollLeft) > 0);
+    await carousel.focus(); assert.equal(await carousel.evaluate(n => document.activeElement === n), true);
+  }
+});
