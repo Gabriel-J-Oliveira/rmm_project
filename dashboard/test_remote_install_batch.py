@@ -1,3 +1,5 @@
+import ast
+import inspect
 import io
 import json
 import threading
@@ -16,6 +18,7 @@ from dashboard import remote_install as install
 from dashboard import remote_install_batch as batch
 from dashboard.models import RemoteInstallBatch, RemoteInstallBatchItem, RemoteInstallJob
 from dashboard.remote_install_preflight import ProbeFailure
+from dashboard import remote_install_preflight as preflight
 from dashboard.test_remote_install import COMPUTER, SENTINEL
 
 
@@ -163,6 +166,64 @@ class BatchTests(TestCase):
         self.assertEqual(order, self.names[1:])
         self.assertEqual(result.failure_count, 1)
         self.assertEqual(result.success_count, 1)
+
+    def test_preflight_codes_have_safe_operator_messages(self):
+        tree = ast.parse(inspect.getsource(preflight))
+        codes = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                args = node.args[:1] if node.func.id == 'ProbeFailure' else node.args[2:3] if node.func.id == '_fail' else []
+                codes.update(arg.value for arg in args if isinstance(arg, ast.Constant) and isinstance(arg.value, str))
+            if isinstance(node, ast.Dict):
+                codes.update(value.value for key, value in zip(node.keys, node.values)
+                             if isinstance(key, ast.Constant) and key.value == 'code'
+                             and isinstance(value, ast.Constant) and isinstance(value.value, str))
+        # Conditional transport/authentication codes are also exercised by preflight regressions.
+        codes.update({'AUTHENTICATION_FAILED', 'WINRM_UNAVAILABLE'})
+        self.assertTrue(codes)
+        for code in codes:
+            with self.subTest(code=code):
+                self.assertEqual(batch.safe_code(code), code)
+                self.assertIn(code, batch.ERRORS)
+                self.assertNotIn(SENTINEL, batch.ERRORS[code])
+
+    def test_preflight_failure_uses_official_order_and_fails_closed(self):
+        self.assertEqual(batch._preflight_failure_code({'checks': {
+            'NIGHTOWL_ABSENCE': {'status': 'FAIL', 'code': 'NIGHTOWL_STATE_UNKNOWN'},
+            'REMOTE_TRANSPORT': {'status': 'FAIL', 'code': 'WINRM_UNAVAILABLE'},
+        }}), 'WINRM_UNAVAILABLE')
+        for result in (None, {}, {'checks': []}, {'checks': {'DNS': SENTINEL}},
+                       {'checks': {'DNS': {'status': 'FAIL', 'code': SENTINEL}}},
+                       {'checks': {'DNS': {'status': 'FAIL'}}},
+                       {'checks': {'DNS': {'status': 'PASS', 'code': 'DNS_UNRESOLVED'}}},
+                       {'checks': {'UNRECOGNIZED': {'status': 'FAIL', 'code': 'DNS_UNRESOLVED'}}}):
+            with self.subTest(result=result):
+                self.assertEqual(batch._preflight_failure_code(result), 'PREFLIGHT_FAILED')
+
+    def test_batch_preserves_safe_preflight_code_without_payload_or_credential(self):
+        for code, expected in (('WINRM_UNAVAILABLE', 'WINRM_UNAVAILABLE'),
+                               ('unexpected-' + SENTINEL, 'PREFLIGHT_FAILED')):
+            with self.subTest(code=code):
+                result = self.create([self.names[0]])
+                raw_marker = 'RAW_PREFLIGHT_PAYLOAD_MUST_NOT_BE_PERSISTED'
+                failed = {'status': 'NOT_READY', 'checks': {'REMOTE_TRANSPORT': {
+                    'status': 'FAIL', 'code': code, 'raw': raw_marker}},
+                    'password': SENTINEL, 'username': 'synthetic-admin', 'diagnostics': raw_marker}
+                with mock.patch.object(batch.threading, 'Thread'), \
+                        mock.patch.object(batch, 'run_remote_install_preflight', return_value=failed), \
+                        mock.patch.object(install, 'create_remote_install_job') as create_job, \
+                        mock.patch.object(install, 'start_remote_install') as start:
+                    batch.run_batch(result.pk, 'synthetic-admin', SENTINEL)
+                create_job.assert_not_called()
+                start.assert_not_called()
+                item = result.items.get()
+                self.assertEqual(item.status, 'FAILED')
+                self.assertEqual(item.error_code, expected)
+                for model in (RemoteInstallBatch, RemoteInstallBatchItem, RemoteInstallJob):
+                    persisted = json.dumps(list(model.objects.values()), default=str)
+                    for secret in (SENTINEL, 'synthetic-admin', raw_marker):
+                        self.assertNotIn(secret, persisted)
+                self.assertEqual(RemoteInstallJob.objects.count(), 0)
 
     def test_failure_and_ambiguity_continue_without_clearing_target_blocker(self):
         for state, expected in [('FAILED', 'FAILED'), ('INTERRUPTED', 'FAILED'),

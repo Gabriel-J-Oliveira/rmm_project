@@ -34,6 +34,7 @@ $ErrorActionPreference = 'Stop'
 $os = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 $principal = [Security.Principal.WindowsPrincipal]([Security.Principal.WindowsIdentity]::GetCurrent())
 $root = Join-Path $env:ProgramData 'NightOwl'
+$agentInstall = Join-Path $root 'AgentDotNet'
 [pscustomobject]@{
     hostname = [string]$env:COMPUTERNAME
     windows_name = [string]$os.ProductName
@@ -42,7 +43,7 @@ $root = Join-Path $env:ProgramData 'NightOwl'
     powershell_major = [int]$PSVersionTable.PSVersion.Major
     admin = [bool]$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     nightowl_service_present = [bool](Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue)
-    nightowl_directory_present = [bool](Test-Path -LiteralPath $root)
+    nightowl_directory_present = [bool](Test-Path -LiteralPath $agentInstall)
 } | ConvertTo-Json -Compress
 '''
 

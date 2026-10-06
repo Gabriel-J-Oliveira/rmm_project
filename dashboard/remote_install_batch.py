@@ -17,7 +17,7 @@ from django.views.decorators.debug import sensitive_variables
 from dashboard import remote_install as install
 from dashboard.models import RemoteInstallBatch, RemoteInstallBatchItem, RemoteInstallJob
 from dashboard.remote_install_admission import install_admission
-from dashboard.remote_install_preflight import ProbeFailure, _ad_target, _valid_fqdn, run_remote_install_preflight
+from dashboard.remote_install_preflight import CHECKS, ProbeFailure, _ad_target, _valid_fqdn, run_remote_install_preflight
 
 MAX_TARGETS = 50
 MANUAL_STALL_SECONDS = 60
@@ -40,6 +40,19 @@ PROGRESS = {
     'COMPLETED': (100, 'NightOwl instalado e gerenciado'),
 }
 ERRORS = {
+    'DNS_UNRESOLVED': 'Nao foi possivel resolver o computador pelo DNS.',
+    'WINDOWS_INCOMPATIBLE_OR_IDENTITY_MISMATCH': 'O Windows remoto nao e compativel ou a identidade nao corresponde ao alvo.',
+    'NIGHTOWL_STATE_UNKNOWN': 'Nao foi possivel confirmar com seguranca a ausencia do NightOwl.',
+    'REMOTE_TIMEOUT': 'O computador nao respondeu ao preflight dentro do tempo esperado.',
+    'WINRM_CLIENT_UNAVAILABLE': 'O cliente WinRM nao esta disponivel no servidor NightOwl.',
+    'REMOTE_OUTPUT_INVALID': 'A resposta do preflight remoto nao pode ser validada com seguranca.',
+    'REMOTE_PROBE_FAILED': 'O diagnostico remoto do preflight nao foi concluido com sucesso.',
+    'INVALID_TARGET': 'O alvo nao corresponde a um computador valido do dominio configurado.',
+    'AD_DISCOVERY_UNAVAILABLE': 'Nao foi possivel consultar os computadores do Active Directory.',
+    'TARGET_NOT_UNIQUE_OR_MISSING': 'Computador ausente ou ambiguo no Active Directory; operacao bloqueada.',
+    'AD_COMPUTER_DISABLED': 'O computador esta desabilitado no Active Directory.',
+    'CORRELATION_UNAVAILABLE': 'Nao foi possivel confirmar a correlacao do computador no NightOwl.',
+    'CREDENTIAL_REQUIRED': 'Informe uma credencial administrativa valida para o preflight.',
     'WINRM_UNAVAILABLE': 'WinRM HTTPS indisponivel; verifique conectividade e listener 5986.',
     'WINRM_REDIRECT_BLOCKED': 'O servidor redirecionou a conexao WinRM; acesso bloqueado por seguranca.',
     'WINRM_CA_TRUST_INVALID': 'O bundle de CAs do WinRM nao pode ser validado pelo NightOwl.',
@@ -86,6 +99,16 @@ SAFE_CODES = set(ERRORS) | {
 def safe_code(code):
     # Codes are identifiers only, never remote error text.
     return code if isinstance(code, str) and code in SAFE_CODES else 'PREFLIGHT_FAILED'
+
+
+def _preflight_failure_code(result):
+    checks = result.get('checks') if isinstance(result, dict) else None
+    if isinstance(checks, dict):
+        for name in CHECKS:
+            check = checks.get(name)
+            if isinstance(check, dict) and check.get('status') == 'FAIL':
+                return safe_code(check.get('code'))
+    return 'PREFLIGHT_FAILED'
 
 
 def _target_name(value):
@@ -319,7 +342,7 @@ def run_batch(batch_id, username, password):
                     raise install.InstallFailure('TARGET_CHANGED')
                 result = run_remote_install_preflight(item.target_fqdn, username, password)
                 if result.get('status') != 'READY':
-                    raise install.InstallFailure('PREFLIGHT_FAILED')
+                    raise install.InstallFailure(_preflight_failure_code(result))
                 job = install.create_remote_install_job(item.target_fqdn, batch.requested_by,
                     username=username, password=password, batch_item_id=item.pk)
                 install.start_remote_install(job, username, password)

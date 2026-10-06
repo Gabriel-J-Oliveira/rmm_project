@@ -217,6 +217,28 @@ class RemoteInstallPreflightTests(TestCase):
                 self.assertEqual(result['status'], 'NOT_READY')
                 self.assertEqual(result['checks'][check]['status'], 'FAIL')
 
+    def test_bootstrap_only_is_not_an_installation_probe_contract(self):
+        probe = preflight._READ_ONLY_PROBE
+        self.assertIn("$agentInstall = Join-Path $root 'AgentDotNet'", probe)
+        self.assertIn('nightowl_directory_present = [bool](Test-Path -LiteralPath $agentInstall)', probe)
+        self.assertNotIn('Test-Path -LiteralPath $root)', probe)
+        self.assertIn("Get-Service -Name 'NightOwlAgentDotNet'", probe)
+        # Synthetic paths model the exact Test-Path operand; no Windows target is contacted.
+        root = r'C:\ProgramData\NightOwl'
+        paths = {root, root + r'\Bootstrap'}
+        self.remote_mock.return_value = {**REMOTE_OK,
+            'nightowl_directory_present': root + r'\AgentDotNet' in paths}
+        self.assertEqual(self.run_probe()['status'], 'READY')
+
+    def test_agent_directory_or_service_blocks_installation(self):
+        for field in ('nightowl_directory_present', 'nightowl_service_present'):
+            with self.subTest(field=field):
+                self.remote_mock.return_value = {**REMOTE_OK, field: True}
+                result = self.run_probe()
+                self.assertEqual(result['status'], 'NOT_READY')
+                self.assertEqual(result['checks']['NIGHTOWL_ABSENCE']['code'],
+                                 'NIGHTOWL_INSTALLATION_DETECTED')
+
     def test_backend_correlation_is_rechecked_before_ready(self):
         with mock.patch.object(preflight, '_match_machine', side_effect=[
             (None, 'UNMANAGED', 'NONE'), (None, 'MANAGED', 'FQDN'),
