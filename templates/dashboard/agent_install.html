@@ -55,7 +55,7 @@
     </article>
 </section>
 
-<section class="ad-discovery" id="ad-discovery" data-scan-url="{% url 'agent-install-ad-scan' %}" data-preflight-url="{% url 'agent-install-ad-preflight' %}" data-install-url="{% url 'agent-install-ad-install' %}">
+<section class="ad-discovery" id="ad-discovery" data-scan-url="{% url 'agent-install-ad-scan' %}">
     <p>Instalação remota · Selecionada pelo servidor:
         {% if remote_install_release %}<strong>{{ remote_install_release.version }}</strong> · {{ remote_install_release.channel }}{% else %}Nenhuma release configurada{% endif %}
     </p>
@@ -89,7 +89,7 @@
         </div>
         <div class="ad-discovery-selection">
             <span id="ad-visible-count"></span>
-            <div><span id="ad-selection-note"></span><strong id="ad-selected-count"></strong><button type="button" id="ad-prepare-button" disabled><i data-lucide="list-checks"></i>Preparar instala&ccedil;&atilde;o</button></div>
+            <div><span id="ad-selection-note" role="status" aria-live="polite"></span><strong id="ad-selected-count"></strong><button type="button" id="ad-prepare-button" disabled>Selecione computadores</button></div>
         </div>
         <div class="table-wrap">
             <table class="endpoint-table ad-computer-table">
@@ -450,9 +450,11 @@
 </section>
 
 <div id="copy-feedback" class="copy-feedback" hidden>Copiado</div>
+<div id="install-credential-host"></div>
 {% endblock %}
 
 {% block scripts %}
+<script src="{% static 'js/install_batch_client.js' %}"></script>
 <script src="{% static 'js/agent_install_discovery.js' %}" defer></script>
 <script src="{% static 'js/agent_install_workflow.js' %}" defer></script>
 <script src="{% static 'js/agent_install_advanced.js' %}" defer></script>

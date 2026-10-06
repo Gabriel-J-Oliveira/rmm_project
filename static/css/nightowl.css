@@ -31,6 +31,100 @@
     --critical: #ef4444;
 }
 
+/* Installation batches share the existing theme and progress vocabulary. */
+.install-toolbar, .install-header-actions, .install-pagination, .install-credential-modal footer {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.install-toolbar { padding: 18px 0; }
+.install-toolbar h2 { margin: 0; font-size: 18px; }
+.install-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 36px; padding: 8px 12px; background: var(--card); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font: inherit; font-size: 13px;
+}
+.install-button svg { width: 17px; height: 17px; flex-shrink: 0; }
+.install-button:hover:not(:disabled) { background: var(--card-hover); border-color: var(--soft-purple); }
+.install-button:disabled { opacity: .55; cursor: wait; }
+.install-button:focus-visible, .install-credential-modal input:focus-visible { outline: 2px solid var(--soft-purple); outline-offset: 2px; }
+.install-primary { background: var(--owl-purple); border-color: var(--owl-purple); }
+.install-muted { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+.install-feedback { font-size: 13px; color: var(--unknown); min-height: 20px; margin: 8px 0; overflow-wrap: anywhere; }
+.install-batch-table { width: 100%; }
+.install-batch-table th:nth-child(2) { width: 190px; }
+.install-batch-table th:last-child { width: 280px; }
+.install-batch-table td, .install-batch-item-table td { vertical-align: top; }
+.install-batch-row { cursor: pointer; }
+.install-batch-row:hover { background: var(--card-hover); }
+.install-batch-row td:first-child .install-button { margin: 8px 0 0; }
+.install-batch-table small, .install-batch-item-table small { display: block; margin-top: 6px; overflow-wrap: anywhere; }
+.install-batch-status {
+    display: inline-flex; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 650;
+    background: rgba(148,163,184,.12); color: var(--text-secondary); margin-bottom: 6px;
+}
+.install-batch-status.running { color: #c4b5fd; background: rgba(124,58,237,.17); }
+.install-batch-status.success, .install-success-text { color: var(--online); }
+.install-batch-status.failed, .install-count.failed { color: var(--critical); }
+.install-batch-status.review, .install-review-text, .install-count.review { color: var(--unknown); }
+.install-batch-status.preflight { color: var(--info); }
+.install-progress-line { display: flex; align-items: center; gap: 10px; min-width: 110px; margin-top: 8px; }
+.install-progress-line strong { width: 42px; font-size: 12px; text-align: right; flex-shrink: 0; }
+.install-batch-progress { flex: 1; height: 6px; overflow: hidden; border-radius: 4px; background: rgba(148,163,184,.18); }
+.install-batch-progress span { display: block; height: 100%; background: var(--text-muted); transition: width .25s ease; }
+.install-batch-progress.running span { background: var(--owl-purple); animation: install-pulse 2s ease-in-out infinite; }
+.install-batch-progress.success span { background: var(--online); }
+.install-batch-progress.review span { background: var(--unknown); }
+.install-batch-progress.failed span { background: var(--critical); }
+.install-batch-progress.preflight span { background: var(--info); }
+.install-pagination { justify-content: flex-end; padding: 16px 0; color: var(--text-muted); font-size: 13px; }
+#install-active-count { background: var(--owl-purple); color: white; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
+.install-batch-backdrop, .install-credential-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 110; }
+.install-batch-drawer {
+    position: fixed; inset: 0 0 0 auto; width: min(1000px, calc(100vw - 24px)); height: 100dvh;
+    display: flex; flex-direction: column; overflow: hidden; z-index: 111;
+    background: var(--card); border-left: 1px solid var(--border); box-shadow: -16px 0 48px rgba(0,0,0,.4);
+}
+.install-batch-drawer[hidden], .install-batch-backdrop[hidden], .install-batch-drawer footer[hidden] { display: none; }
+.install-batch-drawer > header { display: flex; justify-content: space-between; gap: 12px; padding: 20px 24px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.install-batch-drawer h2 { margin: 0; font-size: 20px; }
+.install-batch-drawer > header p { margin-bottom: 0; }
+.install-batch-drawer-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 24px 28px; }
+.install-batch-drawer > footer { padding: 14px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; flex-shrink: 0; }
+.install-counts { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 16px 0 20px; }
+.install-count { border-bottom: 2px solid var(--border); padding: 8px 0 12px; }
+.install-count span { display: block; color: var(--text-muted); font-size: 13px; }
+.install-count strong { display: block; margin-top: 8px; font-size: 24px; }
+.install-count.success { color: var(--online); }
+.install-overall-label { display: block; font-size: 16px; }
+.install-final-message { padding: 12px 0; font-size: 14px; border-bottom: 1px solid var(--border); }
+.install-batch-item-table { width: 100%; margin-top: 20px; table-layout: fixed; }
+.install-batch-item-table th:nth-child(1) { width: 22%; }
+.install-batch-item-table th:nth-child(2) { width: 16%; }
+.install-batch-item-table th:nth-child(3) { width: 26%; }
+.install-batch-item-table th:nth-child(4) { width: 16%; }
+.install-batch-item-table td { overflow-wrap: anywhere; font-size: 13px; padding: 14px 10px; }
+.install-batch-item-table .install-button { font-size: 12px; margin-top: 6px; }
+.install-batch-tooltip { position: fixed; max-width: min(320px, calc(100vw - 16px)); z-index: 130; background: var(--card-hover); border: 1px solid var(--border); border-radius: 6px; padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); overflow-wrap: anywhere; font-size: 13px; pointer-events: none; }
+.install-batch-tooltip small { display: block; margin-top: 8px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+.install-credential-overlay { z-index: 120; display: grid; place-items: center; padding: 16px; }
+.install-credential-modal { width: min(480px,100%); max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+.install-credential-modal h2 { font-size: 20px; margin: 0 0 12px; }
+.install-credential-modal form { display: grid; gap: 16px; }
+.install-credential-modal label { display: grid; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+.install-credential-modal input { width: 100%; min-width: 0; padding: 11px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--night-black); color: var(--text-primary); font: inherit; }
+.install-credential-modal input::placeholder { color: var(--text-muted); }
+.install-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 140; padding: 12px 18px; max-width: calc(100vw - 32px); border: 1px solid var(--border); border-radius: 6px; background: var(--card-hover); color: var(--text-primary); font-size: 13px; }
+@keyframes install-pulse { 50% { opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { .install-batch-progress span { animation: none; transition: none; } }
+@media (max-width: 640px) {
+    .install-batch-drawer { width: 100vw; }
+    .install-batch-drawer > header, .install-batch-drawer-body, .install-batch-drawer > footer { padding: 14px; }
+    .install-batch-drawer > header { flex-wrap: wrap; }
+    .install-batch-item-table { min-width: 760px; }
+    .install-counts { gap: 8px; }
+    .install-credential-modal { padding: 20px; }
+    .install-credential-modal footer { flex-wrap: wrap; }
+}
+
 body.page-endpoints .deployment-modal-backdrop {
     position: fixed;
     inset: 0;
@@ -33747,3 +33841,14 @@ body.page-endpoint-detail .endpoint-quick-action-button:disabled {
         grid-template-columns: 1fr;
     }
 }
+
+body.page-jobs .install-batch-item-table td,
+body.page-jobs .install-batch-item-table td small,
+body.page-jobs .install-batch-item-table td strong,
+body.page-jobs .install-batch-table td small {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+}
+body.page-jobs .install-batch-item-table td small { line-height: 1.5; }
+body.page-jobs .install-batch-item-table .install-batch-status { white-space: nowrap; }

@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let filter = 'enabled';
     let page = 1;
     let scanInFlight = false;
-    let installPollTimer = null;
+    let drawerFocus = null;
     const selected = new Set();
 
     function selectionKey(computer) {
@@ -108,7 +108,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateSelection() {
         selectedCount.textContent = `${selected.size} selecionado${selected.size === 1 ? '' : 's'}`;
-        prepareButton.disabled = selected.size !== 1;
+        prepareButton.disabled = selected.size < 1;
+        prepareButton.textContent = selected.size === 0 ? 'Selecione computadores' :
+            `Instalar selecionado${selected.size === 1 ? '' : 's'} (${selected.size})`;
         selectionNote.textContent = '';
     }
 
@@ -152,7 +154,11 @@ document.addEventListener('DOMContentLoaded', () => {
             checkbox.addEventListener('change', () => {
                 if (!isEligible(computer)) return;
                 if (checkbox.checked) {
-                    selected.clear();
+                    if (selected.size >= 50 && !selected.has(selectionKey(computer))) {
+                        checkbox.checked = false;
+                        selectionNote.textContent = 'Um lote pode conter no máximo 50 computadores.';
+                        return;
+                    }
                     selected.add(selectionKey(computer));
                 }
                 else selected.delete(selectionKey(computer));
@@ -181,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 link.href = computer.endpoint_url;
                 action.appendChild(link);
             } else if (isEligible(computer)) {
-                const prepare = element('button', 'agent-secondary-button', 'Preparar');
+                const prepare = element('button', 'agent-secondary-button', 'Instalar');
                 prepare.type = 'button';
                 prepare.addEventListener('click', () => {
                     selected.clear();
@@ -220,6 +226,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function openDrawer(title) {
+        drawerFocus = document.activeElement;
+        document.body.classList.add('drawer-open');
         drawerTitle.textContent = title;
         drawer.hidden = false;
         backdrop.hidden = false;
@@ -312,227 +320,21 @@ document.addEventListener('DOMContentLoaded', () => {
     pagePrev.addEventListener('click', () => { if (page > 1) { page--; render(); } });
     pageNext.addEventListener('click', () => { page++; render(); });
     prepareButton.addEventListener('click', () => {
-        drawerContent.replaceChildren();
-        if (selected.size !== 1) {
-            drawerContent.appendChild(element('p', 'ad-preview-note', 'Selecione um computador para o preflight.'));
-            openDrawer('Preflight de instalação');
-            return;
-        }
-        const computer = computers.find((item) => isEligible(item) && selectionKey(item) === [...selected][0]);
-        if (!computer) return;
-        section('Alvo', [['Computador', computer.hostname], ['FQDN', computer.fqdn],
-            ['IP', computer.primary_ipv4 || 'Sem DNS'], ['SO', computer.operating_system]]);
-        drawerContent.appendChild(element('p', 'ad-preview-note',
-            'A credencial será utilizada somente nesta operação e não será armazenada pelo NightOwl.'));
-        const preflightForm = element('form', 'ad-preflight-form');
-        const userLabel = element('label', '', 'Usuário administrativo');
-        const userInput = element('input');
-        userInput.type = 'text';
-        userInput.required = true;
-        userInput.autocomplete = 'off';
-        userLabel.appendChild(userInput);
-        const passwordLabel = element('label', '', 'Senha');
-        const passwordInput = element('input');
-        passwordInput.type = 'password';
-        passwordInput.required = true;
-        passwordInput.autocomplete = 'off';
-        passwordLabel.appendChild(passwordInput);
-        const submit = element('button', '', 'Executar preflight');
-        submit.type = 'submit';
-        const feedback = element('p', 'ad-preflight-feedback');
-        feedback.setAttribute('role', 'status');
-        const checks = element('dl', 'ad-preflight-checks');
-        preflightForm.append(userLabel, passwordLabel, submit, feedback, checks);
-        let installButton = null;
-
-        function showInstallConfirmation(preflight) {
-            if (installButton) return;
-            installButton = element('button', 'agent-secondary-button', 'Instalar NightOwl');
-            installButton.type = 'button';
-            drawerContent.appendChild(installButton);
-            installButton.addEventListener('click', () => {
-                installButton.remove();
-                preflightForm.remove();
-                section(`Instalar NightOwl em ${computer.hostname}?`, [
-                    ['Hostname', computer.hostname], ['FQDN', computer.fqdn],
-                    ['IP', preflight.target?.ip], ['Windows', preflight.windows?.name],
-                    ['Status AD', 'Habilitado'], ['NightOwl', 'Não instalado'],
-                ]);
-                const installForm = element('form', 'ad-preflight-form');
-                const installUserLabel = element('label', '', 'Usuário administrativo');
-                const installUser = element('input');
-                installUser.type = 'text';
-                installUser.required = true;
-                installUser.autocomplete = 'off';
-                installUserLabel.appendChild(installUser);
-                const installPasswordLabel = element('label', '', 'Senha');
-                const installPassword = element('input');
-                installPassword.type = 'password';
-                installPassword.required = true;
-                installPassword.autocomplete = 'off';
-                installPasswordLabel.appendChild(installPassword);
-                const confirm = element('button', '', 'Confirmar instalação');
-                confirm.type = 'submit';
-                const progress = element('p', 'ad-preflight-feedback');
-                progress.setAttribute('role', 'status');
-                installForm.append(installUserLabel, installPasswordLabel, confirm, progress);
-                drawerContent.appendChild(installForm);
-
-                async function poll(url) {
-                    if (drawer.hidden) return;
-                    try {
-                        const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
-                        if (!response.ok) throw new Error('status unavailable');
-                        const job = await response.json();
-                        const stages = {
-                            QUEUED: 'Preparando', VALIDATING_TARGET: 'Validando alvo',
-                            VALIDATING_INSTALLER: 'Validando contrato do instalador', CONNECTING: 'Conectando',
-                            AUTHENTICATED: 'Autenticado',
-                            PREFLIGHT_OK: 'Autenticado e validado', PREPARING_ENROLLMENT: 'Preparando enrollment',
-                            INSTALLING: 'Preparando instalador remoto', INSTALLER_STARTED: 'Instalador iniciado',
-                            INSTALLER_FINISHED: 'Instalador concluído', VALIDATING_SERVICE: 'Validando serviço',
-                            WAITING_ENROLLMENT: 'Aguardando enrollment', WAITING_HEARTBEAT: 'Aguardando heartbeat',
-                        };
-                        const failures = {
-                            WINRM_UNAVAILABLE: 'WinRM HTTPS indisponível', AUTHENTICATION_FAILED: 'Credencial inválida',
-                            ADMIN_REQUIRED: 'Credencial sem privilégio administrativo', INSTALLER_FAILED: 'Instalador retornou falha',
-                            SERVICE_NOT_RUNNING: 'Serviço não iniciou', ENROLLMENT_TIMEOUT: 'Enrollment não confirmado',
-                            HEARTBEAT_TIMEOUT: 'Heartbeat não recebido', RUNNER_INTERRUPTED: 'Operação interrompida',
-                        };
-                        if (job.status === 'COMPLETED') {
-                            progress.textContent = 'NightOwl instalado com sucesso. Primeiro heartbeat: ' + date(job.first_heartbeat_at);
-                            if (job.endpoint_url) {
-                                const link = element('a', 'ad-endpoint-link', 'Abrir endpoint');
-                                link.href = job.endpoint_url;
-                                drawerContent.appendChild(link);
-                            }
-                            scan();
-                        } else if (['FAILED', 'INTERRUPTED', 'INSTALLED_UNVERIFIED', 'OUTCOME_UNKNOWN'].includes(job.status)) {
-                            progress.textContent = job.status === 'OUTCOME_UNKNOWN' ?
-                                'Resultado da instalação desconhecido. Não repita sem revisão do endpoint.' :
-                                job.status === 'INSTALLED_UNVERIFIED' ?
-                                'Instalação executada, mas gerenciamento ainda não confirmado. Não repita sem revisão.' :
-                                (failures[job.error_code] || `Falha em ${job.stage || 'instalação'}: ${job.error_code || 'verifique o estado'}`);
-                        } else {
-                            progress.textContent = stages[job.stage] || 'Preparando';
-                            installPollTimer = window.setTimeout(() => poll(url), 2000);
-                        }
-                        if (job.diagnostics && typeof job.diagnostics === 'object') {
-                            const d = job.diagnostics;
-                            const parts = [];
-                            if (Number.isInteger(d.installer_exit_code)) parts.push('Exit code: ' + d.installer_exit_code);
-                            if (d.safe_error_code) parts.push('Código: ' + d.safe_error_code);
-                            if (['YES', 'NO', 'UNKNOWN'].includes(d.safe_to_retry)) {
-                                parts.push(d.safe_to_retry === 'YES' ? 'Sem execução do instalador confirmada; nova tentativa requer revisão.' : 'Não repita sem revisão do endpoint.');
-                            }
-                            if (parts.length) progress.textContent += ' ' + parts.join(' ');
-                        }
-                    } catch (_error) {
-                        progress.textContent = 'Não foi possível consultar o progresso. Reabra o painel antes de tentar novamente.';
-                    }
-                }
-
-                installForm.addEventListener('submit', async (event) => {
-                    event.preventDefault();
-                    confirm.disabled = true;
-                    progress.textContent = 'Preparando instalação...';
-                    const body = new FormData();
-                    body.append('csrfmiddlewaretoken', form.querySelector('[name=csrfmiddlewaretoken]').value);
-                    body.append('fqdn', computer.fqdn);
-                    body.append('username', installUser.value);
-                    body.append('password', installPassword.value);
-                    installPassword.value = '';
-                    try {
-                        const response = await fetch(root.dataset.installUrl, {
-                            method: 'POST', credentials: 'same-origin', cache: 'no-store', body,
-                        });
-                        let data;
-                        try {
-                            data = await response.json();
-                        } catch (_parseError) {
-                            progress.textContent = 'Não foi possível iniciar ou confirmar a instalação. Consulte o operador antes de repetir.';
-                            return;
-                        }
-                        if (!data || typeof data !== 'object' || Array.isArray(data)) {
-                            progress.textContent = 'Não foi possível iniciar ou confirmar a instalação. Consulte o operador antes de repetir.';
-                            return;
-                        }
-                        if (!response.ok || typeof data.status_url !== 'string' || !data.status_url.startsWith('/agent-install/install-jobs/')) {
-                            progress.textContent = data.error_code || 'Instalação não iniciada.';
-                            confirm.disabled = false;
-                            return;
-                        }
-                        installForm.querySelectorAll('input').forEach((input) => { input.value = ''; });
-                        confirm.remove();
-                        poll(data.status_url);
-                    } catch (_error) {
-                        progress.textContent = 'Instalação não iniciada ou estado desconhecido. Consulte o operador antes de repetir.';
-                    }
-                });
-            });
-        }
-        preflightForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            submit.disabled = true;
-            feedback.textContent = 'Executando preflight...';
-            checks.replaceChildren();
-            try {
-                const response = await fetch(root.dataset.preflightUrl, {
-                    method: 'POST', credentials: 'same-origin', cache: 'no-store',
-                    headers: { 'Content-Type': 'application/json',
-                        'X-CSRFToken': form.querySelector('[name=csrfmiddlewaretoken]').value },
-                    body: JSON.stringify({ fqdn: computer.fqdn, username: userInput.value, password: passwordInput.value }),
-                });
-                if (!response.ok) throw new Error('preflight failed');
-                const data = await response.json();
-                const labels = {
-                    TARGET: 'Alvo válido', DNS: 'DNS', REMOTE_TRANSPORT: 'WinRM',
-                    AUTHENTICATION: 'Autenticação', ADMIN_PRIVILEGE: 'Administrador local',
-                    WINDOWS_COMPATIBILITY: 'Windows compatível', NIGHTOWL_ABSENCE: 'NightOwl não detectado',
-                };
-                const reasons = {
-                    INVALID_TARGET: 'Alvo inválido', AD_DISCOVERY_UNAVAILABLE: 'AD indisponível',
-                    TARGET_NOT_UNIQUE_OR_MISSING: 'Alvo ausente ou duplicado',
-                    AD_COMPUTER_DISABLED: 'Computador desabilitado',
-                    CORRELATION_UNAVAILABLE: 'Correlação indisponível',
-                    TARGET_MANAGED_OR_CONFLICT: 'Gerenciado ou em conflito',
-                    DNS_UNRESOLVED: 'DNS não resolveu', UNSAFE_TARGET_ADDRESS: 'Endereço do alvo inseguro',
-                    WINRM_UNAVAILABLE: 'WinRM indisponível',
-                    WINRM_CLIENT_UNAVAILABLE: 'Cliente WinRM indisponível',
-                    WINRM_REDIRECT_BLOCKED: 'Redirecionamento WinRM bloqueado',
-                    REMOTE_TIMEOUT: 'Tempo esgotado', REMOTE_PROBE_FAILED: 'Probe remoto falhou',
-                    REMOTE_OUTPUT_INVALID: 'Resposta remota inválida',
-                    CREDENTIAL_REQUIRED: 'Credencial obrigatória', AUTHENTICATION_FAILED: 'Autenticação falhou',
-                    ADMIN_REQUIRED: 'Administrador local obrigatório',
-                    WINDOWS_INCOMPATIBLE_OR_IDENTITY_MISMATCH: 'Windows incompatível ou identidade divergente',
-                    NIGHTOWL_INSTALLATION_DETECTED: 'NightOwl já instalado',
-                    NIGHTOWL_STATE_UNKNOWN: 'Estado do NightOwl desconhecido',
-                };
-                for (const [key, label] of Object.entries(labels)) {
-                    const check = data.checks?.[key];
-                    checks.appendChild(element('dt', '', label));
-                    checks.appendChild(element('dd', '', check?.status === 'PASS' ? 'OK' :
-                        check?.status === 'FAIL' ? (reasons[check.code] || 'Falhou') : 'Não executado'));
-                }
-                feedback.textContent = data.status === 'READY' ? 'PRONTO PARA INSTALAÇÃO' : 'NÃO PRONTO PARA INSTALAÇÃO';
-                if (data.status === 'READY') showInstallConfirmation(data);
-                else if (installButton) { installButton.remove(); installButton = null; }
-            } catch (_error) {
-                feedback.textContent = 'Não foi possível concluir o preflight.';
-            } finally {
-                passwordInput.value = '';
-                submit.disabled = false;
-            }
+        const targets = computers.filter(item => isEligible(item) && selected.has(selectionKey(item))).map(item => item.fqdn);
+        if (!targets.length || targets.length > 50) return;
+        window.NightOwlInstallBatch.modal({
+            title: 'Instalar NightOwl',
+            description: `${targets.length} computador${targets.length === 1 ? '' : 'es'} selecionado${targets.length === 1 ? '' : 's'}. O NightOwl verificará cada computador antes da instalação. Falhas no preflight serão registradas e o lote continuará.`,
+            submitLabel: 'Confirmar instalação',
+            perform: credentials => window.NightOwlInstallBatch.request(window.NightOwlInstallBatch.BASE, { targets, ...credentials }),
+            accepted: id => { window.location.href = '/jobs/?tab=installations&batch=' + encodeURIComponent(id); },
         });
-        drawerContent.appendChild(preflightForm);
-        openDrawer('Preflight de instalação');
     });
     function closeDrawer() {
-        if (installPollTimer) window.clearTimeout(installPollTimer);
-        const password = drawerContent.querySelector('input[type="password"]');
-        if (password) password.value = '';
         drawer.hidden = true;
         backdrop.hidden = true;
+        if (!document.getElementById('install-credential-host')?.hasChildNodes()) document.body.classList.remove('drawer-open');
+        drawerFocus?.focus();
     }
     closeButton.addEventListener('click', closeDrawer);
     backdrop.addEventListener('click', closeDrawer);

@@ -17,7 +17,8 @@ function computer(number, overrides = {}) {
 }
 
 function setup(initial) {
-    let nextStatus;
+    let modalOptions;
+    const location = { href: '/agent-install/' };
     const ids = new Map();
     const nodes = [];
     const filterButtons = ['enabled', 'unmanaged', 'managed', 'disabled', 'conflict', 'all'].map((name) => {
@@ -64,6 +65,7 @@ function setup(initial) {
         createElement(tag) { return new Node(tag); },
         addEventListener(type, callback) { this[type] = callback; },
         querySelectorAll(query) { return query === '[data-ad-filter]' ? filterButtons : []; },
+        body: { classList: { add() {}, remove() {} } },
     };
     const root = document.getElementById('ad-discovery');
     root.dataset.scanUrl = '/scan/';
@@ -76,7 +78,7 @@ function setup(initial) {
     ids.set('ad-page-size', new Node('select'));
     ids.get('ad-page-size').value = '10';
     vm.runInNewContext(script, {
-        document, window: { lucide: { createIcons() {} }, setTimeout() { return 1; }, clearTimeout() {} },
+        document, window: { location, NightOwlInstallBatch: { BASE: '/batches/', modal(options) { modalOptions = options; }, request(url, data) { installs++; installBody = data; return Promise.resolve({ batch_id: 'synthetic' }); } }, lucide: { createIcons() {} }, setTimeout() { return 1; }, clearTimeout() {} },
         FormData: class { constructor() { this.fields = {}; } append(key, value) { this.fields[key] = value; } },
         fetch: async (url, options) => {
             if (url === '/preflight/') { preflights++; return { ok: true, json: async () => ({ status: 'READY', checks: {} }) }; }
@@ -96,7 +98,7 @@ function setup(initial) {
     });
     document.DOMContentLoaded();
     return {
-        ids, nodes, filterButtons, get scans() { return scans; }, get preflights() { return preflights; },
+        ids, nodes, filterButtons, location, get modal() { return modalOptions; }, get scans() { return scans; }, get preflights() { return preflights; },
         get installs() { return installs; }, get installBody() { return installBody; },
         setNextScan(callback) { nextScan = callback; },
         setNextInstall(callback) { nextInstall = callback; },
@@ -165,7 +167,7 @@ test('pagination follows whole-dataset filters and search', async () => {
     assert.equal(app.rows().length, 50);
 });
 
-test('selection stays unitary and explains unavailable targets', async () => {
+test('selection is multiple, preserves pages and explains unavailable targets', async () => {
     const items = Array.from({ length: 12 }, (_, index) => computer(index + 1));
     items[1] = computer(2, { correlation_status: 'MANAGED', selectable: false });
     items[2] = computer(3, { enabled: false, selectable: false });
@@ -183,13 +185,13 @@ test('selection stays unitary and explains unavailable targets', async () => {
     assert.equal(app.ids.get('ad-prepare-button').disabled, false);
     app.rows()[4].children[0].children[0].checked = true;
     app.rows()[4].children[0].children[0].listeners.change();
-    assert.equal(app.ids.get('ad-selected-count').textContent, '1 selecionado');
-    assert.equal(app.rows()[0].children[0].children[0].checked, false);
+    assert.equal(app.ids.get('ad-selected-count').textContent, '2 selecionados');
+    assert.equal(app.rows()[0].children[0].children[0].checked, true);
     assert.equal(app.rows()[4].children[0].children[0].checked, true);
     app.ids.get('ad-page-next').listeners.click();
-    assert.equal(app.ids.get('ad-selected-count').textContent, '1 selecionado');
+    assert.equal(app.ids.get('ad-selected-count').textContent, '2 selecionados');
     app.rows()[0].children[10].children[0].click();
-    assert.ok(app.nodes.some((node) => node.className === 'ad-preflight-form'));
+    assert.ok(app.modal);
     assert.equal(app.preflights, 0);
     app.setNextScan(() => Promise.resolve({ ok: true, json: async () => ({
         computers: [computer(12, { correlation_status: 'MANAGED', selectable: false })],
@@ -204,91 +206,33 @@ test('selection stays unitary and explains unavailable targets', async () => {
     assert.equal(app.ids.get('ad-selected-count').textContent, '0 selecionados');
 });
 
-test('install requires READY, a second credential, and follows sanitized job status', async () => {
-    const app = setup([computer(1)]);
-    await tick();
-    app.rows()[0].children[0].children[0].checked = true;
-    app.rows()[0].children[0].children[0].listeners.change();
-    app.ids.get('ad-prepare-button').listeners.click();
-    const drawer = app.ids.get('ad-detail-content');
-    assert.equal(app.nodes.some((node) => node.text === 'Instalar NightOwl'), false);
-    const preflight = drawer.children.find((node) => node.className === 'ad-preflight-form');
-    const preflightPassword = preflight.children[1].children[0];
-    preflightPassword.value = 'synthetic-preflight-secret';
-    await preflight.listeners.submit({ preventDefault() {} });
-    assert.equal(preflightPassword.value, '');
-    const installButton = drawer.children.find((node) => node.text === 'Instalar NightOwl');
-    assert.ok(installButton);
-    installButton.listeners.click();
-    const installForm = drawer.children.find((node) => node.className === 'ad-preflight-form');
-    const installUser = installForm.children[0].children[0];
-    const installPassword = installForm.children[1].children[0];
-    installUser.value = 'synthetic-admin';
-    installPassword.value = 'synthetic-second-secret';
-    await installForm.listeners.submit({ preventDefault() {} });
-    await tick();
-    assert.equal(app.installs, 1);
-    assert.equal(app.installBody.password, 'synthetic-second-secret');
-    assert.equal(installPassword.value, '');
-    assert.match(drawer.textContent, /NightOwl instalado com sucesso/);
-    assert.equal(app.nodes.some((node) => node.tag === 'a' && node.href === '/endpoints/synthetic/'), true);
-});
 
-test('install handles non-JSON and malformed responses without exposing HTML or credentials', async () => {
-    for (const response of [
-        { ok: false, json: async () => { throw new SyntaxError('<html>PRIVATE_TRACE</html>'); } },
-        { ok: false, json: async () => null },
-        { ok: true, json: async () => ['unexpected'] },
-        { ok: true, json: async () => ({ status_url: 123 }) },
-    ]) {
-        const app = setup([computer(1)]);
-        await tick();
-        const checkbox = app.rows()[0].children[0].children[0];
-        checkbox.checked = true; checkbox.listeners.change();
-        app.ids.get('ad-prepare-button').listeners.click();
-        const drawer = app.ids.get('ad-detail-content');
-        const preflight = drawer.children.find((node) => node.className === 'ad-preflight-form');
-        await preflight.listeners.submit({ preventDefault() {} });
-        drawer.children.find((node) => node.text === 'Instalar NightOwl').listeners.click();
-        const form = drawer.children.find((node) => node.className === 'ad-preflight-form');
-        form.children[0].children[0].value = 'synthetic-admin';
-        const password = form.children[1].children[0];
-        password.value = 'SUPER_SECRET_REMOTE_INSTALL_91827';
-        app.setNextInstall(() => response);
-        await form.listeners.submit({ preventDefault() {} });
-        assert.equal(app.installs, 1);
-        assert.equal(password.value, '');
-        assert.match(drawer.textContent, /instalação/i);
-        assert.equal(drawer.textContent.includes('PRIVATE_TRACE'), false);
-        assert.equal(drawer.textContent.includes('SUPER_SECRET_REMOTE_INSTALL_91827'), false);
-        assert.equal(drawer.textContent.includes('NightOwl instalado com sucesso'), false);
-    }
-});
-
-test('terminal diagnostics are plain text, preserve retry warning and never render credential', async () => {
-    const app = setup([computer(1)]);
+test('51st selection rejected and modal posts FQDNs only then navigates', async () => {
+    const app = setup(Array.from({length: 51}, (_,i) => computer(i+1)));
     await tick();
-    const checkbox = app.rows()[0].children[0].children[0];
-    checkbox.checked = true; checkbox.listeners.change();
+    app.ids.get('ad-page-size').value = '50'; app.ids.get('ad-page-size').listeners.change();
+    for(let i=0;i<50;i++) { const box=app.rows()[i].children[0].children[0]; box.checked=true; box.listeners.change(); }
+    assert.equal(app.ids.get('ad-selected-count').textContent,'50 selecionados');
+    app.ids.get('ad-page-next').listeners.click();
+    const box=app.rows()[0].children[0].children[0];box.checked=true;box.listeners.change();
+    assert.equal(box.checked,false);
+    assert.match(app.ids.get('ad-selection-note').textContent,/máximo 50/);
     app.ids.get('ad-prepare-button').listeners.click();
-    const drawer = app.ids.get('ad-detail-content');
-    const preflight = drawer.children.find((node) => node.className === 'ad-preflight-form');
-    await preflight.listeners.submit({ preventDefault() {} });
-    drawer.children.find((node) => node.text === 'Instalar NightOwl').listeners.click();
-    const form = drawer.children.find((node) => node.className === 'ad-preflight-form');
-    form.children[0].children[0].value = 'synthetic-admin';
-    form.children[1].children[0].value = 'SUPER_SECRET_REMOTE_INSTALL_91827';
-    app.setNextStatus(() => ({ ok: true, json: async () => ({ status: 'OUTCOME_UNKNOWN',
-        stage: 'INSTALLER_FINISHED', diagnostics: { installer_exit_code: 73, safe_to_retry: 'NO',
-            safe_error_code: '<img src=x onerror=alert(1)>' } }) }));
-    await form.listeners.submit({ preventDefault() {} });
-    await tick();
-    assert.match(drawer.textContent, /Exit code: 73/);
-    assert.match(drawer.textContent, /Não repita sem revisão/);
-    assert.ok(drawer.textContent.includes('<img src=x onerror=alert(1)>'));
-    assert.equal(app.nodes.some((node) => node.tag === 'img'), false);
-    assert.equal(form.children[1].children[0].value, '');
-    assert.equal(drawer.textContent.includes('SUPER_SECRET_REMOTE_INSTALL_91827'), false);
-    assert.equal(drawer.textContent.includes('SUPER_SECRET_ENROLLMENT_TOKEN_73192'), false);
-    assert.equal(app.installs, 1);
+    assert.match(app.modal.description,/50/);
+    await app.modal.perform({username:'synthetic',password:'synthetic-secret'});
+    assert.deepEqual(Object.keys(app.installBody).sort(),['password','targets','username']);
+    assert.equal(app.installBody.targets.length,50);
+    assert.ok(app.installBody.targets.every(v=>typeof v==='string' && v.endsWith('.control.local')));
+    app.modal.accepted('abc');
+    assert.equal(app.location.href,'/jobs/?tab=installations&batch=abc');
+    assert.equal(app.preflights,0);
+});
+test('row install uses the same modal with one target', async () => {
+    const app=setup([computer(1),computer(2)]);await tick();
+    for(let i=0;i<2;i++){const b=app.rows()[i].children[0].children[0];b.checked=true;b.listeners.change();}
+    app.ids.get('ad-prepare-button').listeners.click();assert.match(app.modal.description,/2/);
+    app.rows()[0].children[10].children[0].click();
+    assert.equal(app.ids.get('ad-selected-count').textContent,'1 selecionado');
+    await app.modal.perform({username:'test',password:'test'});
+    assert.deepEqual(Array.from(app.installBody.targets),['pc1.control.local']);
 });

@@ -1,7 +1,11 @@
 # Remote Installation Batch v1
 
-Backend only; the existing installation screen remains single-target until its
-separate frontend migration. Batch admission and legacy admission share one
+The installation screen dispatches 1-50 selected targets through one credential
+modal and opens `/jobs/?tab=installations&batch=<uuid>` for persistent tracking.
+List and drawer have independent, non-overlapping GET polling; closing either
+does not stop the backend. Credentials are cleared at dispatch and never stored
+in browser storage or URLs. Retry uses fresh credentials and a new child batch.
+Batch admission and legacy admission share one
 PostgreSQL advisory transaction lock and unique global slots. Concurrency is 1
 across batches and legacy jobs. Up to 50 normalized, unique AD FQDNs per batch.
 
@@ -66,7 +70,8 @@ be re-entered for a new retry. No scheduler/timer is installed in this delivery.
 ## Operations
 
 Apply dashboard migration 0004 before restarting the backend. No Agent,
-Updater, release, campaign, enrollment policy or frontend assets change.
+Updater, release, campaign or enrollment policy changes. The batch UI deployment
+also requires collectstatic for its JS/CSS assets; no additional migration.
 Production smoke must exercise only list/detail/auth/route/schema checks,
 never POST creation/retry or real WinRM. PostgreSQL is the production admission
 backend; SQLite is supported for local tests, not production orchestration.

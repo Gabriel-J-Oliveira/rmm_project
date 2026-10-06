@@ -28,7 +28,8 @@
 
     var currentJob = null;
     var currentTask = null;
-    var activeTab = "agenda";
+    var requestedTab = new URLSearchParams(window.location.search).get('tab');
+    var activeTab = ['agenda', 'list', 'jobs', 'installations', 'templates'].includes(requestedTab) ? requestedTab : 'agenda';
     var calendarDate = new Date();
 
     var allJobs = [];

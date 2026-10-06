@@ -37,6 +37,7 @@ test('AD values render as text in table and details', async () => {
         createElement(tag) { return new Node(tag); },
         addEventListener(type, callback) { this[type] = callback; },
         querySelectorAll() { return []; },
+        body: { classList: { add() {}, remove() {} } },
     };
     const hostname = '<img src=x onerror=alert(1)>';
     const displayName = '<script>alert(1)</script>';
@@ -53,7 +54,7 @@ test('AD values render as text in table and details', async () => {
         dns_unresolved: 1, conflicts: 0, old_ad_activity: 0,
     };
     const script = fs.readFileSync(path.join(__dirname, '..', 'static', 'js', 'agent_install_discovery.js'), 'utf8');
-    let preflightBody;
+
     ids.set('ad-discovery', new Node('ad-discovery'));
     ids.get('ad-discovery').dataset.preflightUrl = '/agent-install/ad-computers/preflight/';
     vm.runInNewContext(script, {
@@ -79,20 +80,4 @@ test('AD values render as text in table and details', async () => {
     }
     assert.equal(nodes.some((node) => ['img', 'script', 'b'].includes(node.tag)), false);
 
-    const checkbox = ids.get('ad-computer-rows').children[0].children[0].children[0];
-    checkbox.checked = true;
-    checkbox.listeners.change();
-    ids.get('ad-prepare-button').listeners.click();
-    const preflightForm = nodes.find((node) => node.tag === 'form' && node.className === 'ad-preflight-form');
-    assert.ok(preflightForm);
-    const password = nodes.find((node) => node.tag === 'input' && node.type === 'password');
-    const username = nodes.find((node) => node.tag === 'input' && node.type === 'text');
-    assert.ok(password);
-    username.value = 'SyntheticAdmin';
-    password.value = 'SUPER_SECRET_TEST_PASSWORD_91827';
-    await preflightForm.listeners.submit({ preventDefault() {} });
-    assert.equal(preflightBody.password, 'SUPER_SECRET_TEST_PASSWORD_91827');
-    assert.equal(password.value, '');
-    assert.equal(nodes.some((node) => ['img', 'script', 'b'].includes(node.tag)), false);
-    assert.ok(nodes.some((node) => node.text === 'NÃO PRONTO PARA INSTALAÇÃO'));
 });

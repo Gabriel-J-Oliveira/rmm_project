@@ -34,6 +34,7 @@
         <button class="is-active" type="button" data-task-tab="agenda"><i data-lucide="calendar-days"></i>Agenda</button>
         <button type="button" data-task-tab="list"><i data-lucide="list-checks"></i>Lista</button>
         <button type="button" data-task-tab="jobs"><i data-lucide="terminal-square"></i>Jobs t&eacute;cnicos</button>
+        <button type="button" data-task-tab="installations"><i data-lucide="hard-drive-download"></i>Instalações <span id="install-active-count" hidden></span></button>
         <button type="button" data-task-tab="templates"><i data-lucide="clipboard-list"></i>Modelos</button>
     </nav>
 
@@ -211,6 +212,8 @@
     </section>
     </section>
 
+    {% include 'dashboard/_install_batches.html' %}
+
     <section class="jobs-tab-panel" data-task-tab-panel="templates" hidden>
         <section class="panel task-template-panel">
             <div class="section-heading">
@@ -359,4 +362,6 @@
 {% block scripts %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/jobs.js' %}"></script>
+<script src="{% static 'js/install_batch_client.js' %}"></script>
+<script src="{% static 'js/install_batches.js' %}"></script>
 {% endblock %}

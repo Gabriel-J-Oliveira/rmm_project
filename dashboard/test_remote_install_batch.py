@@ -25,6 +25,24 @@ def target(name):
 
 
 class BatchTests(TestCase):
+    def test_operator_messages_are_fixed_safe_strings(self):
+        expected = {'WINRM_UNAVAILABLE', 'WINRM_REDIRECT_BLOCKED', 'WINRM_CA_TRUST_INVALID',
+            'AUTHENTICATION_FAILED', 'ADMIN_REQUIRED', 'UNSAFE_TARGET_ADDRESS', 'PREFLIGHT_FAILED',
+            'TARGET_CHANGED', 'INSTALLER_CONTRACT_MISMATCH', 'INSTALL_RELEASE_INVALID',
+            'INSTALLER_EXIT_NONZERO', 'INSTALLER_RESULT_UNKNOWN', 'INSTALLER_NOT_STARTED',
+            'INSTALLER_DOWNLOAD_FAILED', 'NIGHTOWL_INSTALLATION_DETECTED', 'ENROLLMENT_UNAVAILABLE',
+            'ENROLLMENT_TIMEOUT', 'HEARTBEAT_TIMEOUT', 'SERVICE_NOT_FOUND', 'SERVICE_NOT_RUNNING',
+            'REMOTE_COMMAND_TIMEOUT', 'RUNNER_INTERRUPTED', 'TARGET_MANAGED_OR_CONFLICT',
+            'INSTALL_RECONCILIATION_REQUIRED', 'INSTALL_RECONCILIATION_FAILED'}
+        self.assertTrue(expected.issubset(batch.ERRORS))
+        for code in expected:
+            message = batch.ERRORS[code]
+            self.assertIsInstance(message, str)
+            self.assertGreater(len(message), 15)
+            for unsafe in (SENTINEL, '<script', 'Traceback', 'password=', 'token='):
+                self.assertNotIn(unsafe, message)
+        self.assertEqual(batch.safe_code(SENTINEL), 'PREFLIGHT_FAILED')
+
     def setUp(self):
         self.actor = get_user_model().objects.create_user('batch-admin', is_staff=True)
         for module in (batch, install):

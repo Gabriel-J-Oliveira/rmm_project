@@ -1,0 +1,42 @@
+<section class="jobs-tab-panel" data-task-tab-panel="installations" id="install-batches" hidden>
+    <div class="install-toolbar">
+        <h2>Instalações NightOwl</h2>
+        <button type="button" class="install-button" id="install-list-refresh"><i data-lucide="refresh-cw"></i>Atualizar</button>
+    </div>
+    <p id="install-list-feedback" class="install-feedback" role="status" aria-live="polite"></p>
+    <div class="table-wrap">
+        <table class="endpoint-table install-batch-table">
+            <thead><tr><th>Tarefa</th><th>Quantidade de Endpoints</th><th>Sucesso</th><th>Falha</th><th>Status</th></tr></thead>
+            <tbody id="install-batch-rows"><tr><td colspan="5">Carregando instalações...</td></tr></tbody>
+        </table>
+    </div>
+    <nav class="install-pagination" aria-label="Páginas de instalações">
+        <button type="button" class="install-button" id="install-list-prev" aria-label="Página anterior"><i data-lucide="chevron-left"></i></button>
+        <span id="install-list-page"></span>
+        <button type="button" class="install-button" id="install-list-next" aria-label="Próxima página"><i data-lucide="chevron-right"></i></button>
+    </nav>
+</section>
+<div id="install-batch-backdrop" class="install-batch-backdrop" hidden></div>
+<aside id="install-batch-drawer" class="install-batch-drawer" role="dialog" aria-modal="true" aria-labelledby="install-batch-title" hidden>
+    <header>
+        <div><h2 id="install-batch-title">Instalação NightOwl</h2><p id="install-detail-meta" class="install-muted"></p></div>
+        <div class="install-header-actions">
+            <button type="button" class="install-button" id="install-detail-refresh" aria-label="Atualizar instalação" title="Atualizar"><i data-lucide="refresh-cw"></i></button>
+            <button type="button" class="install-button" id="install-detail-close" aria-label="Fechar instalação" title="Fechar"><i data-lucide="x"></i></button>
+        </div>
+    </header>
+    <div class="install-batch-drawer-body">
+        <p id="install-detail-feedback" class="install-feedback" role="status" aria-live="polite"></p>
+        <div id="install-detail-summary"></div>
+        <div class="table-wrap">
+            <table class="endpoint-table install-batch-item-table">
+                <thead><tr><th>Endpoint</th><th>Status</th><th>Etapa</th><th>Progresso</th><th>Ação</th></tr></thead>
+                <tbody id="install-item-rows"></tbody>
+            </table>
+        </div>
+    </div>
+    <footer id="install-detail-footer" hidden><button type="button" class="install-button install-primary" id="install-batch-retry"><i data-lucide="rotate-cw"></i>Repetir falhas</button></footer>
+</aside>
+<div id="install-credential-host"></div>
+<div id="install-action-feedback" class="install-toast" role="status" aria-live="polite" hidden></div>
+<form hidden>{% csrf_token %}</form>
