@@ -277,7 +277,7 @@ def _trusted_urls():
     return base, installer
 
 
-def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None):
+def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None, lease_job_id=None):
     from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
 
     try:
@@ -305,7 +305,17 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
         if before_send:
             before_send()
         attempted = True
-        protocol.send_command_input(shell_id, command_id, payload, end=True)
+        if lease_job_id:
+            # Keep the row lock across the bounded stdin send: a stall resolver
+            # cannot release admission between lease verification and dispatch.
+            with transaction.atomic():
+                lease = RemoteInstallJob.objects.select_for_update().filter(
+                    pk=lease_job_id, active_slot='global', status='RUNNING').first()
+                if not lease:
+                    raise InstallLeaseLost()
+                protocol.send_command_input(shell_id, command_id, payload, end=True)
+        else:
+            protocol.send_command_input(shell_id, command_id, payload, end=True)
         deadline = time.monotonic() + timeout
         pending = b''
         while time.monotonic() < deadline:
@@ -519,7 +529,7 @@ def run_remote_install(job_id, username, password):
         _update(job_id, stage, diagnostic={'safe_to_retry': 'NO', 'invocation_attempted': True})
         code = _remote_script(job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT,
                               on_event=installer_event,
-                              before_send=lambda: _assert_install_lease(job_id))
+                              lease_job_id=job_id)
         if not install_started:
             # Reserved wrapper codes prove failure before Process.Start. An absent frame
             # alone never proves that the child did not start (transport can be lost).

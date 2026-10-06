@@ -303,6 +303,23 @@ class BatchTests(TestCase):
             install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5,
                                    before_send=lambda: install._assert_install_lease(job.pk))
         protocol.send_command_input.assert_not_called()
+        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), self.assertRaises(install.InstallLeaseLost):
+            install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5, lease_job_id=job.pk)
+        protocol.send_command_input.assert_not_called()
+
+    def test_real_stdin_send_holds_job_transaction_lock(self):
+        from django.db import connection
+        result, item, job = self.active()
+        protocol = mock.Mock()
+        protocol.get_command_output_raw.return_value = (b'', b'', 0, True)
+        seen = []
+        def send(*args, **kwargs):
+            seen.append(connection.in_atomic_block)
+            self.assertEqual(RemoteInstallJob.objects.get(pk=job.pk).active_slot, 'global')
+        protocol.send_command_input.side_effect = send
+        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol):
+            install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5, lease_job_id=job.pk)
+        self.assertEqual(seen, [True])
 
     def test_retry_new_parent_and_new_credentials(self):
         result, _ = self.run_simulated(['FAILED', 'COMPLETED'])
