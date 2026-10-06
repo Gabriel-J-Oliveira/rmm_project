@@ -291,7 +291,9 @@ class InstallerGuardTests(SimpleTestCase):
         script = remote_install._installer_script(CONTRACT)
         self.assertIn("$nightOwlRoot = Join-Path $env:ProgramData 'NightOwl'", script)
         self.assertIn("$agentInstall = Join-Path $nightOwlRoot 'AgentDotNet'", script)
-        self.assertIn('(Test-Path -LiteralPath $agentInstall)) { Stop-BeforeInstaller 25 }', script)
+        self.assertIn("$agentExe = Join-Path $agentInstall 'NightOwl.Agent.Windows.exe'", script)
+        self.assertIn('(Test-Path -LiteralPath $agentExe -PathType Leaf)) { Stop-BeforeInstaller 25 }', script)
+        self.assertNotIn('Test-Path -LiteralPath $agentInstall)', script)
         self.assertNotIn("Test-Path -LiteralPath (Join-Path $env:ProgramData 'NightOwl')", script)
         self.assertLess(script.index('Stop-BeforeInstaller 25'), script.index('New-Item'))
         self.assertLess(script.index('Stop-BeforeInstaller 25'), script.index('$process.Start()'))
@@ -313,6 +315,7 @@ class InstallerGuardTests(SimpleTestCase):
                 mocks = r'''
 $env:ProgramData = 'C:\SyntheticProgramData'
 $script:ExistingPaths = @('C:\SyntheticProgramData\NightOwl',
+    'C:\SyntheticProgramData\NightOwl\AgentDotNet',
     'C:\SyntheticProgramData\NightOwl\Bootstrap', 'C:\SyntheticProgramData\NightOwl\Logs',
     'C:\SyntheticProgramData\NightOwl\Config', 'C:\SyntheticProgramData\NightOwl\Identity',
     'C:\SyntheticProgramData\NightOwl\State', 'C:\SyntheticProgramData\NightOwl\Trust',
@@ -323,14 +326,14 @@ function Get-Service {
     if ($script:ServicePresent) { [pscustomobject]@{Name=$Name} }
 }
 function Test-Path {
-    param($LiteralPath)
-    if ($LiteralPath -ne 'C:\SyntheticProgramData\NightOwl\AgentDotNet') { throw 'Unexpected directory query' }
+    param($LiteralPath, $PathType)
+    if ($LiteralPath -ne 'C:\SyntheticProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Windows.exe' -or $PathType -ne 'Leaf') { throw 'Unexpected executable query' }
     return $script:ExistingPaths -contains $LiteralPath
 }
 '''
                 mocks += '\n$script:ServicePresent = $' + str(service).lower() + '\n'
                 if agent_directory:
-                    mocks += "$script:ExistingPaths += 'C:\\SyntheticProgramData\\NightOwl\\AgentDotNet'\n"
+                    mocks += "$script:ExistingPaths += 'C:\\SyntheticProgramData\\NightOwl\\AgentDotNet\\NightOwl.Agent.Windows.exe'\n"
                 command = mocks + guard + "\n[Console]::WriteLine('GUARD_PASSED'); exit 0\n"
                 result = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command',
                                          '[ScriptBlock]::Create([Console]::In.ReadToEnd()).Invoke()'],

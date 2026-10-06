@@ -100,6 +100,7 @@ $script:LifecycleErrorCodes = @(
     "INSTALL_ENROLLMENT_FAILED",
     "INSTALL_HEALTHCHECK_FAILED",
     "INSTALL_BINARY_REPLACE_FAILED",
+    "INSTALL_ACL_APPLY_FAILED",
     "REPAIR_UPDATE_IN_PROGRESS",
     "REPAIR_CONFIG_INVALID",
     "REPAIR_IDENTITY_INVALID",
@@ -331,23 +332,34 @@ function Assert-ForceRecoveryAllowed {
 function Set-NightOwlSecureAcl([string[]]$Paths, [switch]$AllowUsersRead) {
     foreach ($path in $Paths) {
         try {
-            if (-not (Test-Path $path)) { continue }
-            & icacls.exe $path /inheritance:r | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "icacls /inheritance:r retornou $LASTEXITCODE" }
-            & icacls.exe $path /remove:g "*S-1-1-0" "*S-1-5-11" "*S-1-5-32-545" | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "icacls /remove:g retornou $LASTEXITCODE" }
+            if (-not (Test-Path -LiteralPath $path -ErrorAction Stop)) { continue }
+            $acl = Get-Acl -LiteralPath $path -ErrorAction Stop
+            # Build the complete protected DACL in memory before its single persistent write.
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
+                $acl.RemoveAccessRuleSpecific($rule)
+            }
+            $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+            $propagation = [Security.AccessControl.PropagationFlags]::None
+            $allow = [Security.AccessControl.AccessControlType]::Allow
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+                $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity,
+                    [Security.AccessControl.FileSystemRights]::FullControl, $inheritance, $propagation, $allow)
+                $acl.AddAccessRule($rule)
+            }
             if ($AllowUsersRead) {
-                & icacls.exe $path /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(RX)" | Out-Null
+                $identity = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')
+                $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity,
+                    [Security.AccessControl.FileSystemRights]::ReadAndExecute, $inheritance, $propagation, $allow)
+                $acl.AddAccessRule($rule)
             }
-            else {
-                & icacls.exe $path /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" | Out-Null
-            }
-            if ($LASTEXITCODE -ne 0) { throw "icacls /grant:r retornou $LASTEXITCODE" }
-            Write-InstallLog "path.acl.applied" "ACL segura aplicada." @{ path = $path }
+            Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop
         }
         catch {
-            Write-InstallLog "path.acl.failed" "Falha ao aplicar ACL." @{ path = $path; error = $_.Exception.Message }
+            throw "INSTALL_ACL_APPLY_FAILED: nao foi possivel aplicar a ACL segura."
         }
+        Write-InstallLog "path.acl.applied" "ACL segura aplicada." @{ path = $path }
     }
 }
 

@@ -61,6 +61,8 @@ Assert-True (Test-Path $install) "Install script not found."
 Assert-True (Test-Path $uninstall) "Uninstall script not found."
 Assert-ParseOk $install
 Assert-ParseOk $uninstall
+& (Join-Path $ScriptsPath 'Test-NightOwlInstallerAcl.ps1') -InstallerPath $install
+if (-not $?) { throw 'Installer ACL regression failed' }
 Test-LocalizedTrayTaskValidationRegression
 
 $installText = Get-Content -Path $install -Raw
@@ -76,6 +78,7 @@ foreach ($required in @(
     "REPAIR_UPDATE_IN_PROGRESS",
     "REINSTALL_UPDATE_IN_PROGRESS",
     "INSTALL_BINARY_REPLACE_FAILED",
+    "INSTALL_ACL_APPLY_FAILED",
     "REPAIR_FORCE_RECOVERY_REQUIRED",
     "pending-results",
     "update-state.json",

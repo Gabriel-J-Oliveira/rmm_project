@@ -220,14 +220,15 @@ class RemoteInstallPreflightTests(TestCase):
     def test_bootstrap_only_is_not_an_installation_probe_contract(self):
         probe = preflight._READ_ONLY_PROBE
         self.assertIn("$agentInstall = Join-Path $root 'AgentDotNet'", probe)
-        self.assertIn('nightowl_directory_present = [bool](Test-Path -LiteralPath $agentInstall)', probe)
+        self.assertIn("$agentExe = Join-Path $agentInstall 'NightOwl.Agent.Windows.exe'", probe)
+        self.assertIn('nightowl_directory_present = [bool](Test-Path -LiteralPath $agentExe -PathType Leaf)', probe)
         self.assertNotIn('Test-Path -LiteralPath $root)', probe)
         self.assertIn("Get-Service -Name 'NightOwlAgentDotNet'", probe)
         # Synthetic paths model the exact Test-Path operand; no Windows target is contacted.
         root = r'C:\ProgramData\NightOwl'
-        paths = {root, root + r'\Bootstrap'}
+        paths = {root, root + r'\Bootstrap', root + r'\AgentDotNet'}
         self.remote_mock.return_value = {**REMOTE_OK,
-            'nightowl_directory_present': root + r'\AgentDotNet' in paths}
+            'nightowl_directory_present': root + r'\AgentDotNet\NightOwl.Agent.Windows.exe' in paths}
         self.assertEqual(self.run_probe()['status'], 'READY')
 
     def test_agent_directory_or_service_blocks_installation(self):

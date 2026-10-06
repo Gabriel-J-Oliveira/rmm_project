@@ -35,6 +35,7 @@ $os = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\Current
 $principal = [Security.Principal.WindowsPrincipal]([Security.Principal.WindowsIdentity]::GetCurrent())
 $root = Join-Path $env:ProgramData 'NightOwl'
 $agentInstall = Join-Path $root 'AgentDotNet'
+$agentExe = Join-Path $agentInstall 'NightOwl.Agent.Windows.exe'
 [pscustomobject]@{
     hostname = [string]$env:COMPUTERNAME
     windows_name = [string]$os.ProductName
@@ -43,7 +44,8 @@ $agentInstall = Join-Path $root 'AgentDotNet'
     powershell_major = [int]$PSVersionTable.PSVersion.Major
     admin = [bool]$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     nightowl_service_present = [bool](Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue)
-    nightowl_directory_present = [bool](Test-Path -LiteralPath $agentInstall)
+    # Legacy JSON field now represents installed executable evidence, not a partial directory.
+    nightowl_directory_present = [bool](Test-Path -LiteralPath $agentExe -PathType Leaf)
 } | ConvertTo-Json -Compress
 '''
 
