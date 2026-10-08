@@ -148,9 +148,14 @@
     $('[data-scatter-note]').textContent = `${rows.length} endpoint(s) do conjunto filtrado possuem CPU e RAM p95.`;
   }
   function renderWorkloads() {
-    const entries = analysisRows().flatMap(row => row.processes.map(item => ({ ...item, hostname: row.hostname })));
+    const entries = analysisRows().flatMap(row => row.processes.map(item => ({ ...item, hostname: row.hostname, endpointMemory: row.memory_total_bytes })));
     entries.sort((a, b) => (b.cpu_percent ?? 0) - (a.cpu_percent ?? 0));
-    $('[data-workloads]').innerHTML = entries.length ? entries.slice(0, 6).map(item => `<div class="capacity-workload" title="Observado na última amostra de ${esc(item.hostname)}. Não implica impacto causal."><strong>${esc(item.name)}</strong><small>${esc(item.hostname)} · ${esc(item.category)} · CPU ${percent(item.cpu_percent)} · RAM ${bytes(item.working_set_bytes)}</small></div>`).join('') : empty('Dados ainda não disponíveis para esta análise.');
+    $('[data-workloads]').innerHTML = entries.length ? entries.slice(0, 6).map(item => {
+      const cpu = Number.isFinite(item.cpu_percent) && item.cpu_percent >= 0 ? item.cpu_percent : null;
+      const ram = Number.isFinite(item.working_set_bytes) && item.working_set_bytes >= 0 && Number.isFinite(item.endpointMemory) && item.endpointMemory > 0 ? item.working_set_bytes / item.endpointMemory * 100 : null;
+      const meter = (kind, value, caption) => `<div class="capacity-workload-meter ${kind}" role="img" aria-label="${esc(caption)}"><span style="width:${value === null ? 0 : Math.max(0, Math.min(100, value))}%"></span></div>`;
+      return `<article class="capacity-workload" title="Observado na última amostra de ${esc(item.hostname)}. Não implica impacto causal."><strong class="capacity-workload-name">${esc(item.name)}</strong><span class="capacity-workload-host">${esc(item.hostname)}</span><small class="capacity-workload-category">${esc(item.category)}</small><div class="capacity-workload-metric"><div><span>CPU</span><strong>${percent(item.cpu_percent)}</strong></div>${meter('cpu', cpu, `CPU: ${percent(item.cpu_percent)}`)}</div><div class="capacity-workload-metric"><div><span>RAM</span><strong>${bytes(item.working_set_bytes)}</strong></div>${meter('ram', ram, ram === null ? 'RAM: proporção indisponível' : `RAM: ${percent(ram)} da memória física do endpoint`)}<small>${ram === null ? 'Proporção indisponível' : `${percent(ram)} da RAM física`}</small></div></article>`;
+    }).join('') : empty('Dados ainda não disponíveis para esta análise.');
   }
   function renderTable(rows) {
     const pages = Math.max(1, Math.ceil(rows.length / state.pageSize));

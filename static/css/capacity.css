@@ -252,3 +252,23 @@ button.capacity-dist-row:hover, button.capacity-dist-row:focus-visible { backgro
 .capacity-profile-row strong, .capacity-dist-row strong { font-size: 17px; }
 .capacity-chart-legend li > span:not(.swatch) { overflow-wrap: anywhere; }
 .capacity-mini-hist > div { grid-template-columns: 80px minmax(0, 1fr) 40px; }
+.capacity-attention, .capacity-recent, [data-problems], .capacity-profiles { font-size: 16px; }
+.capacity-attention .capacity-spotlight, .capacity-recent-card { font-size: 16px; }
+.capacity-attention :is(.capacity-card-top strong, .capacity-state, .capacity-card-cause, .capacity-card-facts small, .capacity-card-facts b, .capacity-card-meta, .capacity-card-actions button, .capacity-card-actions a, .capacity-chip),
+.capacity-recent :is(.capacity-card-top strong, .capacity-state, .capacity-recent-badge, dl, .capacity-card-actions a, .capacity-card-actions button),
+[data-problems] :is(.capacity-dist-row, .capacity-dist-row strong),
+.capacity-profiles :is(.capacity-profile-row, .capacity-profile-row strong, .capacity-chart-note) { font-size: 16px; }
+.capacity-workloads { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.capacity-workload { padding: 16px; background: #090A0C; }
+.capacity-workload .capacity-workload-name { font-size: 20px; line-height: 1.3; min-height: 52px; }
+.capacity-workload-host { display: block; font-size: 16px; margin-top: 6px; overflow-wrap: anywhere; }
+.capacity-workload .capacity-workload-category { font-size: 16px; margin-top: 3px; }
+.capacity-workload-metric { margin-top: 16px; }
+.capacity-workload-metric > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 16px; }
+.capacity-workload-metric strong { font-size: 16px; text-align: right; }
+.capacity-workload-metric small { font-size: 16px; }
+.capacity-workload-meter { height: 10px; background: #30394B; border-radius: 3px; overflow: hidden; margin-top: 7px; }
+.capacity-workload-meter > span { display: block; height: 100%; background: #22E6A7; }
+.capacity-workload-meter.ram > span { background: #FFC857; }
+@media (max-width: 1220px) { .capacity-workloads { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .capacity-workloads { grid-template-columns: minmax(0, 1fr); } }

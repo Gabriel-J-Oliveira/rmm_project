@@ -46,6 +46,25 @@ async function add(page, field, operator, value, end) {
   if (end !== undefined) await page.locator('[data-filter-end]').fill(String(end));
   await page.locator('[data-filter-form] button[type=submit]').click();
 }
+test('workload cards retain selection, show safe meters and handle absent RAM reference', async t => {
+  const values = rows(2);
+  values[0].processes = Array.from({length: 7}, (_, i) => ({name: i === 0 ? '<img src=x onerror=alert(1)>' : `Process ${i}`, category: '<b>Category</b>', cpu_percent: 90 - i * 10, working_set_bytes: 1073741824}));
+  values[1].memory_total_bytes = null;
+  values[1].processes = [{name: 'Unknown RAM', category: 'Other', cpu_percent: 95, working_set_bytes: 1234}];
+  const page = await setup(t, values, 1920);
+  const cards = page.locator('[data-workloads] .capacity-workload');
+  assert.equal(await cards.count(), 6);
+  assert.equal(await cards.first().locator('.capacity-workload-name').textContent(), 'Unknown RAM');
+  assert.equal(await cards.first().locator('.capacity-workload-meter.cpu span').evaluate(n => n.style.width), '95%');
+  assert.match(await cards.first().textContent(), /Proporção indisponível/);
+  assert.equal(await cards.nth(1).locator('.capacity-workload-meter.ram span').evaluate(n => n.style.width), '12.5%');
+  assert.match(await cards.nth(1).locator('.capacity-workload-meter.ram').getAttribute('aria-label'), /memória física/);
+  assert.equal(await page.locator('[data-workloads] img, [data-workloads] b').count(), 0);
+  await page.locator('[data-search]').fill('PC-001');
+  assert.equal(await cards.count(), 1);
+  await page.locator('[data-search]').fill('not-found');
+  assert.equal(await cards.count(), 0);
+});
 test('global search covers identity, IP, user, OS and hardware', async t => {
   const page = await setup(t);
   for (const [query, count] of [['PC-013', 1], ['192.0.2.14', 1], ['user-13', 1], ['Windows 10', 40], ['Maker', 80], ['pc-13.example.test', 1]]) {
