@@ -171,7 +171,7 @@
     $('[data-filter-chips]').innerHTML = state.filters.map((f, i) => `<button class="capacity-action" data-remove-filter="${i}" aria-label="Remover filtro ${esc(fields[f.field][0])}">${esc(fields[f.field][0])} ${esc(f.operator)} ${esc(f.value)}${f.operator === 'entre' ? `–${esc(f.end)}` : ''} <i data-lucide="x"></i></button>`).join('');
     renderTable(rows); renderKpis();
   }
-  const chartColors = ['#34d3b3', '#75b8fa', '#f5bd62', '#fa7777', '#a5adbb'];
+  const chartColors = ['#22E6A7', '#63A9FF', '#FFC857', '#FF5D73', '#B8C1D6'];
   const validDisk = value => Number.isFinite(value) && value >= 0 && value <= 100;
   const diskValue = row => validDisk(row.system_disk_used_percent) ? row.system_disk_used_percent : validDisk(row.max_disk_used_percent) ? row.max_disk_used_percent : null;
   function donut(selector, entries, total, available = total, colors = chartColors) {
@@ -216,7 +216,7 @@
       const system = [row.os_name, row.os_version].filter(v => typeof v === 'string').join(' ').toLowerCase();
       os[/windows.*server|server.*windows/.test(system) ? 2 : /windows\s+11\b/.test(system) ? 1 : /windows\s+10\b/.test(system) ? 0 : 3][1]++;
     });
-    donut('[data-executive-status]', status, total, total, ['#34d3b3', '#fa7777', '#f5bd62', '#a5adbb']);
+    donut('[data-executive-status]', status, total, total, ['#22E6A7', '#FF5D73', '#FFC857', '#B8C1D6']);
     donut('[data-executive-ram]', ram, total, ramKnown);
     donut('[data-executive-disk]', disks, total, diskKnown);
     donut('[data-executive-os]', os, total);
@@ -273,7 +273,7 @@
     };
     const bins = key => [0, 0, 0, 0].map((_, index) => series.filter(item => Number.isFinite(item[key]) && Math.min(3, Math.floor(item[key] / 25)) === index).length);
     const distribution = (title, key) => `<div class="capacity-mini-hist"><strong>${title}</strong>${bins(key).map((count, index) => `<div><small>${index * 25}–${(index + 1) * 25}%</small><span class="capacity-dist-track"><span class="capacity-dist-fill" style="width:${series.length ? count / series.length * 100 : 0}%"></span></span><b>${count}</b></div>`).join('')}</div>`;
-    return `<div class="capacity-series-wrap"><span>100%</span><svg class="capacity-series" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" tabindex="0" aria-label="Série de CPU e memória no período; use as setas para explorar amostras"><path d="${path('cpu')}" fill="none" stroke="#34d3b3" stroke-width="1.6" vector-effect="non-scaling-stroke"/><path d="${path('memory')}" fill="none" stroke="#f5bd62" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg><span>0%</span></div><div class="capacity-series-legend"><span>● CPU</span><span>● RAM</span><small>${stamp(series[0].at)} – ${stamp(series[series.length - 1].at)}</small></div><div class="capacity-series-hover" data-series-hover aria-live="polite">Toque ou mova o cursor no gráfico para ver uma amostra.</div><div class="capacity-histograms">${distribution('CPU', 'cpu')}${distribution('Memória', 'memory')}</div>`;
+    return `<div class="capacity-series-wrap"><span>100%</span><svg class="capacity-series" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" tabindex="0" aria-label="Série de CPU e memória no período; use as setas para explorar amostras"><path d="${path('cpu')}" fill="none" stroke="#22E6A7" stroke-width="1.6" vector-effect="non-scaling-stroke"/><path d="${path('memory')}" fill="none" stroke="#FFC857" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg><span>0%</span></div><div class="capacity-series-legend"><span>● CPU</span><span>● RAM</span><small>${stamp(series[0].at)} – ${stamp(series[series.length - 1].at)}</small></div><div class="capacity-series-hover" data-series-hover aria-live="polite">Toque ou mova o cursor no gráfico para ver uma amostra.</div><div class="capacity-histograms">${distribution('CPU', 'cpu')}${distribution('Memória', 'memory')}</div>`;
   }
   function assessmentStatus(cap) {
     const statuses = [cap.capacity.cpu.status, cap.capacity.memory.status];
