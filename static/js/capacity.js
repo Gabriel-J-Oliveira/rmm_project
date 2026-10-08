@@ -171,7 +171,7 @@
     $('[data-filter-chips]').innerHTML = state.filters.map((f, i) => `<button class="capacity-action" data-remove-filter="${i}" aria-label="Remover filtro ${esc(fields[f.field][0])}">${esc(fields[f.field][0])} ${esc(f.operator)} ${esc(f.value)}${f.operator === 'entre' ? `–${esc(f.end)}` : ''} <i data-lucide="x"></i></button>`).join('');
     renderTable(rows); renderKpis();
   }
-  const chartColors = ['#22E6A7', '#63A9FF', '#FFC857', '#FF5D73', '#B8C1D6'];
+  const chartColors = ['#008139', '#2A0081', '#F5D600', '#BA0001', '#B8C1D6'];
   const validDisk = value => Number.isFinite(value) && value >= 0 && value <= 100;
   const diskValue = row => validDisk(row.system_disk_used_percent) ? row.system_disk_used_percent : validDisk(row.max_disk_used_percent) ? row.max_disk_used_percent : null;
   function donut(selector, entries, total, available = total, colors = chartColors) {
@@ -216,7 +216,7 @@
       const system = [row.os_name, row.os_version].filter(v => typeof v === 'string').join(' ').toLowerCase();
       os[/windows.*server|server.*windows/.test(system) ? 2 : /windows\s+11\b/.test(system) ? 1 : /windows\s+10\b/.test(system) ? 0 : 3][1]++;
     });
-    donut('[data-executive-status]', status, total, total, ['#22E6A7', '#FF5D73', '#FFC857', '#B8C1D6']);
+    donut('[data-executive-status]', status, total, total, ['#008139', '#BA0001', '#F5D600', '#B8C1D6']);
     donut('[data-executive-ram]', ram, total, ramKnown);
     donut('[data-executive-disk]', disks, total, diskKnown);
     donut('[data-executive-os]', os, total);
