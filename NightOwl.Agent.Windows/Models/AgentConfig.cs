@@ -31,13 +31,13 @@ public sealed class AgentConfig
     public string TelemetryUrl { get; set; } = "";
 
     [JsonPropertyName("telemetryEnabled")]
-    public bool TelemetryEnabled { get; set; } = false;
+    public bool TelemetryEnabled { get; set; } = true;
 
     [JsonPropertyName("telemetrySampleSeconds")]
     public int TelemetrySampleSeconds { get; set; } = 300;
 
     [JsonPropertyName("telemetryFlushSeconds")]
-    public int TelemetryFlushSeconds { get; set; } = 3600;
+    public int TelemetryFlushSeconds { get; set; } = 900;
 
     [JsonPropertyName("telemetryBufferMaxSamples")]
     public int TelemetryBufferMaxSamples { get; set; } = 2304;

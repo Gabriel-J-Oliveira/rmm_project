@@ -994,6 +994,18 @@ function Save-AgentConfig($Path, $Config) {
     $Config | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
 }
 
+function Get-TelemetryConfig($ExistingConfig) {
+    $enabled = $null -eq $ExistingConfig
+    if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetryEnabled') {
+        $enabled = $ExistingConfig.telemetryEnabled -is [bool] -and $ExistingConfig.telemetryEnabled
+    }
+    return [ordered]@{
+        telemetryEnabled = [bool]$enabled
+        telemetrySampleSeconds = if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetrySampleSeconds') { $ExistingConfig.telemetrySampleSeconds } else { 300 }
+        telemetryFlushSeconds = if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetryFlushSeconds') { $ExistingConfig.telemetryFlushSeconds } elseif ($null -ne $ExistingConfig) { 3600 } else { 900 }
+    }
+}
+
 function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTokenValue, [string]$MachineIdValue, [string]$ServerBaseValue, [string]$VersionValue) {
     $checkpoint = [ordered]@{
         agentToken = $AgentTokenValue
@@ -1019,6 +1031,8 @@ function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTo
             $checkpoint.agentVersion = $existingVersion
         }
     }
+    $telemetry = Get-TelemetryConfig $ExistingConfig
+    foreach ($key in $telemetry.Keys) { $checkpoint[$key] = $telemetry[$key] }
     Save-AgentConfig -Path $Path -Config $checkpoint
     $reloaded = Read-JsonFile $Path
     $reloadedToken = Get-ConfigAgentToken $reloaded
@@ -1877,6 +1891,8 @@ $config = [ordered]@{
     jobsPath = [string]$script:NightOwlPaths.StateDir
     allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent")
 }
+$telemetry = Get-TelemetryConfig $preservedConfig
+foreach ($key in $telemetry.Keys) { $config[$key] = $telemetry[$key] }
 Save-AgentConfig -Path $configPath -Config $config
 if (-not $existingInstallation -and (Test-Path $legacyConfigPath)) {
     Remove-Item -Path $legacyConfigPath -Force

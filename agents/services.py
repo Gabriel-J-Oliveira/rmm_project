@@ -1433,6 +1433,7 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
         )
 
     snapshot_raw_payload = _raw_payload_with_previous_collections(machine, raw_payload)
+    snapshot_raw_payload['snapshot_source'] = 'heartbeat'
 
     return InventorySnapshot.objects.create(
         machine=machine,
@@ -1528,6 +1529,7 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
         collections['patches'] = patches
     raw_payload['collections'] = collections
     raw_payload['latest_collection_type'] = collection_type
+    raw_payload['snapshot_source'] = 'collection'
     raw_payload['latest_collection_received_at'] = timezone.now().isoformat()
     data['raw_payload'] = raw_payload
 

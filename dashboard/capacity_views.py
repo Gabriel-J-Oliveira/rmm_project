@@ -13,6 +13,7 @@ from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET
 
 from agents.models import AgentMachine, EndpointAlert, EndpointPerformanceSample, InventorySnapshot
@@ -36,6 +37,45 @@ SAMPLE_FIELDS = (
     'agent_working_set_bytes', 'telemetry_errors_count',
 )
 ACTIVE_ALERT_STATUSES = (EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED)
+
+
+def _inventory_map(endpoint_ids):
+    # Legacy snapshots also inherit heartbeat keys. Match the actual full collect,
+    # not merely the presence of an inherited collection reference.
+    result = {}
+    candidates = InventorySnapshot.objects.filter(machine_id__in=endpoint_ids).filter(
+        Q(raw_payload__snapshot_source__isnull=True) | ~Q(raw_payload__snapshot_source='heartbeat'),
+    ).filter(Q(raw_payload__latest_collection_type='full_inventory') | Q(
+        raw_payload__latest_collection_type__isnull=True, raw_payload__collections__has_key='hardware',
+    )).order_by('-received_at', '-pk')
+    for snapshot in candidates.iterator(chunk_size=200):
+        if snapshot.machine_id in result:
+            continue
+        raw = snapshot.raw_payload or {}
+        full = (raw.get('collections') or {}).get('full_inventory') or {}
+        if raw.get('snapshot_source') != 'collection' and raw.get('latest_collection_type'):
+            try:
+                collected = parse_datetime(full.get('collected_at') or '')
+            except (ValueError, TypeError):
+                continue
+            if collected != snapshot.collected_at:
+                continue
+        result[snapshot.machine_id] = snapshot
+        if len(result) == len(endpoint_ids):
+            break
+    return result
+
+
+def _inventory_provenance(snapshot):
+    if snapshot is None:
+        return {'collected_at': None, 'received_at': None, 'sections': {}}
+    collections = (snapshot.raw_payload or {}).get('collections') or {}
+    return {
+        'snapshot_id': str(snapshot.pk), 'collected_at': snapshot.collected_at.isoformat(),
+        'received_at': snapshot.received_at.isoformat(),
+        'sections': {name: value.get('collected_at') for name, value in collections.items()
+                     if name in ('hardware', 'system', 'disk', 'software') and isinstance(value, dict)},
+    }
 
 
 def _hardware(snapshot):
@@ -149,14 +189,14 @@ def _row(endpoint, snapshot, primary, context, alerts, processes, now):
     os_name = (snapshot.os_name if snapshot else None) or endpoint.os_name or None
     os_version = (snapshot.os_version if snapshot else None) or endpoint.os_version or None
     categories = _alert_categories(alerts)
-    snapshot_at = snapshot.received_at if snapshot else None
+    snapshot_at = snapshot.collected_at if snapshot else None
     return {
         'id': str(endpoint.pk), 'hostname': endpoint.hostname, 'status': endpoint.status,
         'fqdn': endpoint.fqdn or None,
         'first_seen': endpoint.first_seen_at.isoformat() if endpoint.first_seen_at else None,
         'last_ip': endpoint.last_ip, 'last_logged_user': endpoint.last_logged_user or None,
-        'manufacturer': (snapshot.manufacturer if snapshot else None) or endpoint.manufacturer or None,
-        'model': (snapshot.model if snapshot else None) or endpoint.model or None,
+        'manufacturer': (snapshot.manufacturer if snapshot else None) or None,
+        'model': (snapshot.model if snapshot else None) or None,
         'telemetry_last_at': (endpoint.obz_last_telemetry.isoformat() if getattr(endpoint, 'obz_last_telemetry', None)
                               else context['quality'].get('last_sample_at')),
         **_disk_usage(snapshot),
@@ -181,6 +221,10 @@ def _row(endpoint, snapshot, primary, context, alerts, processes, now):
         'security_alert': categories['security'], 'agent_update_alert': categories['agent_update'],
         'inventory_stale': snapshot_at is not None and snapshot_at < now - timedelta(days=7),
         'inventory_at': snapshot_at.isoformat() if snapshot_at else None,
+        'inventory_provenance': _inventory_provenance(snapshot),
+        'os_provenance': {'source': 'inventory' if snapshot and snapshot.os_name else 'heartbeat',
+                          'observed_at': snapshot_at.isoformat() if snapshot and snapshot.os_name else
+                          (endpoint.last_seen_at.isoformat() if endpoint.last_seen_at else None)},
         'alert_types': alerts.get('types') or [],
         'classifications': _classification(capacity, endpoint, critical),
         'processes': processes, 'endpoint_url': reverse('endpoint-detail', args=[endpoint.pk]),
@@ -340,13 +384,7 @@ def _overview(now, hours):
                    .values('collected_at')[:1])).order_by('hostname', 'pk'))
     if not endpoints:
         return []
-    latest_pk = (InventorySnapshot.objects.filter(machine_id=OuterRef('machine_id'))
-                 .order_by('-received_at', '-pk').values('pk')[:1])
-    snapshots = {item.machine_id: item for item in
-                 InventorySnapshot.objects.only(
-                     'id', 'machine_id', 'os_name', 'os_version', 'windows_build',
-                     'cpu', 'memory_total_bytes', 'raw_payload', 'received_at', 'disks', 'manufacturer', 'model',
-                 ).filter(pk=Subquery(latest_pk), machine_id__in=[e.pk for e in endpoints])}
+    snapshots = _inventory_map([e.pk for e in endpoints])
     alert_map = {}
     alert_types = EndpointAlert.objects.filter(
         endpoint_id__in=[e.pk for e in endpoints], status__in=ACTIVE_ALERT_STATUSES,
@@ -439,11 +477,7 @@ def capacity_detail(request, pk):
     context = build_endpoint_telemetry_summary(endpoint, now - timedelta(days=7), now)
     primary_diagnostics = build_resource_diagnostics(primary)
     context_diagnostics = build_resource_diagnostics(context)
-    snapshot = InventorySnapshot.objects.only(
-        'id', 'machine_id', 'os_name', 'os_version', 'windows_build',
-        'cpu', 'memory_total_bytes', 'raw_payload', 'installed_software',
-        'disks', 'uptime_seconds',
-    ).filter(machine=endpoint).order_by('-received_at', '-pk').first()
+    snapshot = _inventory_map([endpoint.pk]).get(endpoint.pk)
     hardware = _hardware(snapshot)
     capacity = build_capacity_assessment(primary_diagnostics, context_diagnostics, hardware)
     alert_queryset = EndpointAlert.objects.filter(endpoint=endpoint).filter(
@@ -520,9 +554,10 @@ def capacity_detail(request, pk):
         'primary': {'quality': primary['quality'], 'stats': _stats(primary), 'diagnostics': primary_diagnostics},
         'context': {'quality': context['quality'], 'stats': _stats(context), 'diagnostics': context_diagnostics},
         'capacity': capacity, 'hardware': capacity['hardware_context'],
+        'inventory_provenance': _inventory_provenance(snapshot),
         'alerts': alerts, 'alert_counts': alert_counts,
         'applications': applications, 'processes': processes,
-        'disks': disk_rows, 'series_ranges': series_ranges,
+        'disks': disk_rows, 'disk_count': len(disk_rows) if disk_rows else None, 'series_ranges': series_ranges,
     })
 
 

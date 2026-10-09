@@ -169,3 +169,17 @@ foreach ($forbidden in @(
 }
 
 Write-Host "NightOwl lifecycle script tests passed."
+
+# Execute only the pure configuration helper, never the installer entrypoint.
+$installerAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $ScriptsPath 'Install-NightOwlAgentDotNet.ps1'), [ref]$null, [ref]$null)
+$helper = $installerAst.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-TelemetryConfig' }, $true)
+Assert-True ($null -ne $helper) 'Telemetry installer configuration helper is required.'
+. ([scriptblock]::Create($helper.Extent.Text))
+$freshTelemetry = Get-TelemetryConfig $null
+Assert-True ($freshTelemetry.telemetryEnabled -and $freshTelemetry.telemetrySampleSeconds -eq 300 -and $freshTelemetry.telemetryFlushSeconds -eq 900) 'Fresh installation must enable telemetry.'
+foreach ($existing in @([pscustomobject]@{}, [pscustomobject]@{telemetryEnabled=$false})) {
+    Assert-True (-not (Get-TelemetryConfig $existing).telemetryEnabled) 'Legacy and explicit opt-out must be preserved.'
+}
+$existing = Get-TelemetryConfig ([pscustomobject]@{telemetryEnabled=$true;telemetrySampleSeconds=600;telemetryFlushSeconds=3600})
+Assert-True ($existing.telemetryEnabled -and $existing.telemetrySampleSeconds -eq 600 -and $existing.telemetryFlushSeconds -eq 3600) 'Explicit settings must be preserved.'
+Write-Host 'Telemetry installer configuration tests passed.'

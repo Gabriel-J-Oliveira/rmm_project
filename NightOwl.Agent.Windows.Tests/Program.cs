@@ -11,6 +11,21 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--telemetry-only", StringComparer.Ordinal))
+    {
+        TestTelemetryInstallationDefaults();
+        TestTelemetryDefaultsAndLegacyConfig();
+        TestTelemetryCollectorAndCpuMath();
+        TestTelemetryNetworkInterfaceDeltas();
+        TestTelemetryMemorySurvivesCpuIdentityFailure();
+        TestTelemetryBufferAndOfflineRetry();
+        TestTelemetryBufferStartupRecovery();
+        TestTelemetryPipelineIsolation();
+        TestTelemetryTimeoutAndShutdown();
+        TestTelemetryCollectionCost();
+        Console.WriteLine("Telemetry focused tests passed (10 groups).");
+        return;
+    }
     if (args.Contains("--handshake-only", StringComparer.Ordinal))
     {
         await UpdateHealthCheckHandshakeTests.RunAsync();
@@ -18,6 +33,7 @@ try
         return;
     }
     await UpdateHealthCheckHandshakeTests.RunAsync();
+    TestTelemetryInstallationDefaults();
     TestNewConfigContainsTrustedReleaseKeys();
     TestLegacyDefaultConfigReceivesTrustedReleaseKeys();
     TestMigrationIsIdempotent();
@@ -103,6 +119,24 @@ static AgentConfig LegacyConfig()
             "restart_agent"
         }
     };
+}
+
+static void TestTelemetryInstallationDefaults()
+{
+    AgentConfig fresh = new();
+    Require(fresh.TelemetryEnabled && fresh.TelemetrySampleSeconds == 300 && fresh.TelemetryFlushSeconds == 900,
+        "Fresh agents must sample every five minutes and flush every fifteen minutes.");
+    Require(fresh.Intervals.HeartbeatSeconds == 300 && fresh.Intervals.CollectSeconds == 3600,
+        "Operational heartbeat and inventory intervals must remain unchanged.");
+    foreach (string json in new[] { "{}", "{\"telemetryEnabled\":false}" })
+    {
+        AgentConfig existing = ConfigService.DeserializeExistingConfig(json);
+        ConfigService.ApplyConfigMigrations(existing);
+        Require(!existing.TelemetryEnabled, "Legacy absence or explicit disable must never become consent.");
+        Require(existing.ConfigMigrationVersion == 5, "Telemetry defaults policy must be versioned.");
+    }
+    AgentConfig enabled = ConfigService.DeserializeExistingConfig("{\"telemetryEnabled\":true,\"telemetryFlushSeconds\":3600}");
+    Require(enabled.TelemetryEnabled && enabled.TelemetryFlushSeconds == 3600, "Existing explicit telemetry settings must survive.");
 }
 
 static void TestHardwareInventoryV2()
@@ -411,11 +445,11 @@ static void TestHardwareEnrichmentIsolation()
 
 static void TestTelemetryDefaultsAndLegacyConfig()
 {
-    AgentConfig legacy = JsonSerializer.Deserialize<AgentConfig>("{\"machineId\":\"synthetic-machine\",\"agentToken\":\"synthetic-token\"}")!;
+    AgentConfig legacy = ConfigService.DeserializeExistingConfig("{\"machineId\":\"synthetic-machine\",\"agentToken\":\"synthetic-token\"}");
     Require(!legacy.TelemetryEnabled, "Legacy config must keep telemetry disabled.");
     Require(legacy.TelemetrySampleSeconds == 300 && legacy.TelemetryFlushSeconds == 3600, "Telemetry cadence defaults must be safe.");
     Require(legacy.TelemetryBufferMaxSamples == 2304 && legacy.TelemetryBufferMaxAgeHours == 192, "Buffer defaults must cover eight days.");
-    Require(!new AgentConfig().TelemetryEnabled, "New config must be opt-in.");
+    Require(new AgentConfig().TelemetryEnabled, "Fresh config must enable telemetry.");
     Require(TelemetryPipeline.NextFlushDelay(3600, delivered: true, backlog: false) == TimeSpan.FromHours(1),
         "Normal sampling must not send one request per sample.");
     Require(TelemetryPipeline.NextFlushDelay(3600, delivered: true, backlog: true) == TimeSpan.FromMinutes(1),

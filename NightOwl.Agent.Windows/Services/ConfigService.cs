@@ -9,7 +9,7 @@ namespace NightOwl.Agent.Windows.Services;
 
 public sealed class ConfigService
 {
-    internal const int CurrentConfigMigrationVersion = 4;
+    internal const int CurrentConfigMigrationVersion = 5;
     private const string UpdateTrustedReleaseKeysJobType = "update_trusted_release_keys";
     private const string UninstallAgentJobType = "uninstall_agent";
     private const string RepairAgentJobType = "repair_agent";
@@ -30,7 +30,7 @@ public sealed class ConfigService
         if (File.Exists(configPath))
         {
             string json = File.ReadAllText(configPath);
-            config = JsonSerializer.Deserialize<AgentConfig>(json, JsonOptions) ?? new AgentConfig();
+            config = DeserializeExistingConfig(json);
         }
         else
         {
@@ -83,6 +83,21 @@ public sealed class ConfigService
         {
             return fallback;
         }
+    }
+
+    internal static AgentConfig DeserializeExistingConfig(string json)
+    {
+        AgentConfig config = JsonSerializer.Deserialize<AgentConfig>(json, JsonOptions) ?? new AgentConfig();
+        using JsonDocument document = JsonDocument.Parse(json);
+        // A missing legacy flag is not consent to start collecting telemetry.
+        bool hasTelemetryFlag = document.RootElement.ValueKind == JsonValueKind.Object &&
+            document.RootElement.EnumerateObject().Any(property =>
+                property.Name.Equals("telemetryEnabled", StringComparison.OrdinalIgnoreCase));
+        if (!hasTelemetryFlag) config.TelemetryEnabled = false;
+        if (document.RootElement.ValueKind == JsonValueKind.Object && !document.RootElement.EnumerateObject().Any(property =>
+            property.Name.Equals("telemetryFlushSeconds", StringComparison.OrdinalIgnoreCase)))
+            config.TelemetryFlushSeconds = 3600;
+        return config;
     }
 
     private static string ResolveConfigPath()

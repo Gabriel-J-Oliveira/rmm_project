@@ -26,9 +26,10 @@ function rows(count = 80) {
     endpoint_url: `/endpoints/${i}/`, alerts_url: '/alerts/'
   }));
 }
-async function setup(t, values = rows(), width = 1440) {
+async function setup(t, values = rows(), width = 1440, clock = false) {
   const page = await browser.newPage({viewport: {width, height: 1000}});
   t.after(() => page.close());
+  if (clock) await page.clock.install({ time: new Date(now) });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   let template = read('templates/dashboard/capacity.html').split('{% block content %}')[1].split('{% endblock %}')[0];
   template = template.replace(/{% if demo %}[\s\S]*?{% endif %}/g, '').replace(/{% url 'api-capacity-overview' %}/g, '/overview/').replace(/{%[^%]*%}/g, '');
@@ -230,4 +231,79 @@ test('scrollbars hidden with native overflow, keyboard navigation remains availa
     assert.ok(await carousel.evaluate(n => n.scrollLeft) > 0);
     await carousel.focus(); assert.equal(await carousel.evaluate(n => document.activeElement === n), true);
   }
+});
+
+test('automatic and manual refresh preserve filters, ordering and pagination', async t => {
+  const values = rows();
+  const page = await setup(t, values, 1920, true);
+  await page.locator('[data-sort]').selectOption('hostname');
+  await page.locator('[data-page="2"]').first().click();
+  let requests = 0;
+  page.on('request', request => { if (request.url().includes('/overview/')) requests++; });
+  values[25].cpu_p95 = 66;
+  await page.clock.fastForward(300001);
+  await page.waitForFunction(() => document.querySelector('[data-table-body]').textContent.includes('66%'));
+  assert.equal(requests, 1);
+  assert.equal(await page.locator('[data-pagination] [aria-current=page]').textContent(), '2');
+  assert.equal(await page.locator('[data-sort]').inputValue(), 'hostname');
+  await page.locator('[data-search]').fill('PC-025');
+  await page.locator('[data-refresh]').first().click();
+  await page.waitForFunction(() => document.querySelector('[data-updated]').textContent.startsWith('Atualizado'));
+  assert.equal(await page.locator('[data-search]').inputValue(), 'PC-025');
+  assert.equal(await page.locator('[data-table-body] tr').count(), 1);
+});
+
+test('hidden tabs pause refresh and visibility return updates stale data', async t => {
+  const page = await setup(t, rows(), 1440, true);
+  let requests = 0;
+  page.on('request', request => { if (request.url().includes('/overview/')) requests++; });
+  await page.evaluate(() => Object.defineProperty(document, 'hidden', {configurable: true, value: true}));
+  await page.clock.fastForward(600001);
+  assert.equal(requests, 0);
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', {configurable: true, value: false}); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForFunction(() => document.querySelector('[data-updated]').textContent.startsWith('Atualizado'));
+  assert.equal(requests, 1);
+});
+
+test('overlapping refresh clicks are serialized and stale periods discarded', async t => {
+  const page = await setup(t);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let inflight = 0, peak = 0, calls = 0;
+  await page.route('**/overview/**', async route => {
+    calls++; inflight++; peak = Math.max(peak, inflight);
+    if (calls === 1) await gate;
+    inflight--;
+    await route.fulfill({json: {generated_at: now, endpoints: rows(calls === 1 ? 1 : 3), counts: {}}});
+  });
+  await page.locator('[data-refresh]').first().click();
+  await page.locator('[data-refresh]').first().click();
+  await page.locator('[data-capacity-period]').selectOption('48h');
+  release();
+  await page.waitForFunction(() => document.querySelector('[data-filter-count]').textContent === '3 de 3 endpoints');
+  assert.equal(peak, 1);
+  assert.equal(calls, 2);
+});
+
+test('refresh keeps the selected drawer endpoint and tab, close ignores late detail', async t => {
+  const page = await setup(t, rows(2), 1440, true);
+  await page.evaluate(() => { document.querySelector('[data-capacity-root]').dataset.detailTemplate = '/detail/00000000-0000-4000-8000-000000000000/'; });
+  let detailCalls = 0;
+  await page.route('**/detail/**', route => {
+    detailCalls++;
+    return route.fulfill({json: {endpoint: rows(2)[0], primary: null}});
+  });
+  await page.locator('[data-table-body] tr').first().click();
+  await page.waitForFunction(() => document.querySelector('[data-drawer-title]').textContent === 'PC-000');
+  await page.locator('[data-tab=hardware]').click();
+  await page.clock.fastForward(300001);
+  await page.waitForFunction(() => document.querySelector('[data-updated]').textContent.startsWith('Atualizado'));
+  assert.equal(detailCalls, 2);
+  assert.equal(await page.locator('[data-drawer]').isVisible(), true);
+  assert.equal(await page.locator('[data-tab=hardware]').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('[data-drawer-title]').textContent(), 'PC-000');
+  await page.locator('[data-close-drawer]').click();
+  await page.clock.fastForward(300001);
+  assert.equal(detailCalls, 2);
+  assert.equal(await page.locator('[data-drawer]').isVisible(), false);
 });

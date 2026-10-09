@@ -4,6 +4,9 @@
   if (!root) return;
   const $ = selector => root.querySelector(selector);
   const demo = root.dataset.demo === '1';
+  const refreshMs = 5 * 60 * 1000;
+  let loading = false, reloadRequested = false, lastRefresh = 0, selectedId = null;
+  let detailController = null, seriesController = null;
   const state = { rows: [], counts: {}, filter: 'all', query: '', filters: [], page: 1, pageSize: 25, now: Date.now(), sort: 'priority', period: '24h', detail: null, tab: 'summary', range: '24h', series: null, seriesRequest: 0, lastFocus: null, request: 0, detailRequest: 0 };
   const labels = { NOT_EVALUATED: 'Sem evidência', NO_PRESSURE_OBSERVED: 'Sem pressão', OBSERVE: 'Observar', SUSTAINED_PRESSURE: 'Pressão sustentada', SUFFICIENT: 'Suficiente', PARTIAL: 'Parcial', INSUFFICIENT: 'Insuficiente', AVAILABLE: 'Disponível', MISSING: 'Ausente' };
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -247,22 +250,31 @@
     });
   }
   async function load() {
+    if (loading) { reloadRequested = true; return; }
+    loading = true;
+    reloadRequested = false;
+    const period = state.period;
     const seq = ++state.request;
     $('[data-error]').hidden = true; $('[data-updated]').textContent = 'Atualizando capacidade…';
     const url = new URL(root.dataset.overviewUrl, location.origin);
     url.searchParams.set('period', state.period);
     if (demo) url.searchParams.set('demo', '1');
     try {
-      const response = await fetch(url, { credentials: 'same-origin' });
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
       if (!response.ok) throw new Error();
       const payload = await response.json();
-      if (seq !== state.request) return;
+      if (seq !== state.request || period !== state.period) return;
       state.rows = payload.endpoints; state.counts = payload.counts;
-      state.now = Date.parse(payload.generated_at); state.page = 1;
+      state.now = Date.parse(payload.generated_at);
+      lastRefresh = Date.now();
       $('[data-updated]').textContent = `Atualizado ${stamp(payload.generated_at)} · ${state.period} + contexto 7d`;
       renderAll();
+      if (selectedId && !$('[data-drawer]').hidden) await openDrawer(selectedId, { refresh: true });
     } catch (error) {
       if (seq === state.request) { $('[data-error]').hidden = false; $('[data-updated]').textContent = 'Dados indisponíveis'; }
+    } finally {
+      loading = false;
+      if (reloadRequested && !document.hidden) load();
     }
   }
   const tabs = [['summary', 'Resumo'], ['performance', 'Desempenho'], ['impact', 'Impacto'], ['hardware', 'SO & Hardware'], ['alerts', 'Alertas'], ['applications', 'Aplicações']];
@@ -339,7 +351,7 @@
       box.innerHTML = `<h3>Dados demonstrativos</h3><div class="capacity-detail-grid">${fact('CPU', label(endpoint.cpu_capacity))}${fact('Memória', label(endpoint.memory_capacity))}${fact('Inventário CPU', endpoint.cpu_inventory_status)}${fact('Inventário RAM', endpoint.memory_inventory_status)}</div>${empty('Este detalhe é sintético e não usa telemetria real.')}`;
     } else if (state.tab === 'summary') {
       const quality = primary.quality, history = context.quality;
-      box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><div class="capacity-assess-grid"><div><small>CPU ${why('cpu', data)}</small>${chip(cap.capacity.cpu.status)}<strong>P95 ${percent(primary.stats.cpu.p95)}</strong><p>${esc(cap.capacity.cpu.reasons.map(reasonText).join('; '))}</p></div><div><small>Memória ${why('memory', data)}</small>${chip(cap.capacity.memory.status)}<strong>P95 ${percent(primary.stats.memory_used.p95)}</strong><p>${esc(cap.capacity.memory.reasons.map(reasonText).join('; '))}</p></div></div></section><section class="capacity-summary-group"><h3>Evidência</h3><div class="capacity-evidence-line"><strong>${quality.received_samples} / ${quality.expected_samples}</strong><span>${percent(quality.coverage_percent)} · ${esc(label(primary.diagnostics.evidence.overall.status))}</span></div><div class="capacity-dist-track"><div class="capacity-dist-fill" style="width:${Math.max(0, Math.min(100, quality.coverage_percent || 0))}%"></div></div></section><section class="capacity-summary-group"><h3>Contexto histórico · 7d</h3><div class="capacity-evidence-line"><strong>${history.received_samples} / ${history.expected_samples}</strong><span>${percent(history.coverage_percent)} · CPU ${esc(statusText(context.diagnostics.diagnostics.cpu.status))} · RAM ${esc(statusText(context.diagnostics.diagnostics.memory.status))}</span></div><div class="capacity-dist-track"><div class="capacity-dist-fill" style="width:${Math.max(0, Math.min(100, history.coverage_percent || 0))}%"></div></div></section><div class="capacity-summary-columns"><section><h3>Hardware</h3><div class="capacity-detail-grid">${fact('Cores físicos', number(hardware.cpu.physical_cores))}${fact('RAM', bytes(hardware.memory.total_bytes))}${fact('Discos', data.disks.length)}</div></section><section><h3>Operação</h3><div class="capacity-detail-grid">${fact('Estado', endpoint.status)}${fact('Uptime', Number.isFinite(endpoint.uptime_seconds) ? `${number(endpoint.uptime_seconds / 3600)} h` : '—')}${fact('Agent', endpoint.agent_version)}${fact('Última atividade', stamp(endpoint.last_seen))}</div></section></div><section class="capacity-summary-group"><h3>Problemas ativos</h3><div class="capacity-detail-grid">${fact('Críticos', data.alert_counts.critical)}${fact('Warnings', data.alert_counts.warning)}${fact('Capacidade', [cap.capacity.cpu.status, cap.capacity.memory.status].filter(s => s === 'OBSERVE' || s === 'SUSTAINED_PRESSURE').length)}${fact('Outros alertas', data.alert_counts.other)}</div></section>`;
+box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><div class="capacity-assess-grid"><div><small>CPU ${why('cpu', data)}</small>${chip(cap.capacity.cpu.status)}<strong>P95 ${percent(primary.stats.cpu.p95)}</strong><p>${esc(cap.capacity.cpu.reasons.map(reasonText).join('; '))}</p></div><div><small>Memória ${why('memory', data)}</small>${chip(cap.capacity.memory.status)}<strong>P95 ${percent(primary.stats.memory_used.p95)}</strong><p>${esc(cap.capacity.memory.reasons.map(reasonText).join('; '))}</p></div></div></section><section class="capacity-summary-group"><h3>Evidência</h3><div class="capacity-evidence-line"><strong>${quality.received_samples} / ${quality.expected_samples}</strong><span>${percent(quality.coverage_percent)} · ${esc(label(primary.diagnostics.evidence.overall.status))}</span></div><div class="capacity-dist-track"><div class="capacity-dist-fill" style="width:${Math.max(0, Math.min(100, quality.coverage_percent || 0))}%"></div></div></section><section class="capacity-summary-group"><h3>Contexto histórico · 7d</h3><div class="capacity-evidence-line"><strong>${history.received_samples} / ${history.expected_samples}</strong><span>${percent(history.coverage_percent)} · CPU ${esc(statusText(context.diagnostics.diagnostics.cpu.status))} · RAM ${esc(statusText(context.diagnostics.diagnostics.memory.status))}</span></div><div class="capacity-dist-track"><div class="capacity-dist-fill" style="width:${Math.max(0, Math.min(100, history.coverage_percent || 0))}%"></div></div></section><div class="capacity-summary-columns"><section><h3>Hardware</h3><div class="capacity-detail-grid">${fact('Cores físicos', number(hardware.cpu.physical_cores))}${fact('RAM', bytes(hardware.memory.total_bytes))}${fact('Discos', data.disk_count)}</div></section><section><h3>Operação</h3><div class="capacity-detail-grid">${fact('Estado', endpoint.status)}${fact('Uptime', Number.isFinite(endpoint.uptime_seconds) ? `${number(endpoint.uptime_seconds / 3600)} h` : '—')}${fact('Agent', endpoint.agent_version)}${fact('Última atividade', stamp(endpoint.last_seen))}</div></section></div><section class="capacity-summary-group"><h3>Problemas ativos</h3><div class="capacity-detail-grid">${fact('Críticos', data.alert_counts.critical)}${fact('Warnings', data.alert_counts.warning)}${fact('Capacidade', [cap.capacity.cpu.status, cap.capacity.memory.status].filter(s => s === 'OBSERVE' || s === 'SUSTAINED_PRESSURE').length)}${fact('Outros alertas', data.alert_counts.other)}</div></section>`;
     } else if (state.tab === 'performance') {
       const c = primary.stats.cpu, m = primary.stats.memory_used, mc = primary.stats.memory_committed;
       box.innerHTML = `<h3>Período principal</h3><div class="capacity-detail-grid">${fact('CPU · média / p95 / p99', `${percent(c.avg)} / ${percent(c.p95)} / ${percent(c.p99)}`)}${fact('RAM · média / p95 / p99', `${percent(m.avg)} / ${percent(m.p95)} / ${percent(m.p99)}`)}${fact('Memória comprometida p95', percent(mc.p95))}${fact('Cobertura', `${primary.quality.received_samples} / ${primary.quality.expected_samples}`)}</div><div class="capacity-section-heading"><h3>Série temporal</h3><div class="capacity-range" role="group" aria-label="Período da série">${['6h', '24h', '3d', '7d'].map(range => `<button type="button" data-range="${range}" aria-pressed="${state.range === range}" ${data.series_ranges[range] ? '' : 'disabled title="Sem dados suficientes"'}>${range}</button>`).join('')}</div></div><div data-series-body>${!data.series_ranges[state.range] ? empty('Sem dados suficientes neste período.') : state.series ? seriesChart(state.series) : empty('Carregando série temporal…')}</div><h3>Contexto 7d</h3><div class="capacity-detail-grid">${fact('CPU', statusText(context.diagnostics.diagnostics.cpu.status))}${fact('Memória', statusText(context.diagnostics.diagnostics.memory.status))}${fact('Cobertura', percent(context.quality.coverage_percent))}${fact('Amostras', `${context.quality.received_samples} / ${context.quality.expected_samples}`)}</div>`;
@@ -356,18 +368,19 @@
     }
     icons();
   }
-  async function loadSeries() {
+  async function loadSeries({ refresh = false } = {}) {
     if (!state.detail || state.tab !== 'performance' || !state.detail.primary || !state.detail.series_ranges[state.range]) return;
     const seq = ++state.seriesRequest;
-    state.series = null;
-    state.chartIndex = 0;
+    if (seriesController) seriesController.abort();
+    seriesController = new AbortController();
+    if (!refresh) { state.series = null; state.chartIndex = 0; }
     const body = $('[data-series-body]');
-    if (body) body.innerHTML = '<div class="capacity-series-skeleton" aria-label="Carregando série temporal"></div>';
+    if (body && !refresh) body.innerHTML = '<div class="capacity-series-skeleton" aria-label="Carregando série temporal"></div>';
     const url = new URL(root.dataset.seriesTemplate.replace('00000000-0000-4000-8000-000000000000', state.detail.endpoint.id), location.origin);
     url.searchParams.set('period', state.range);
     if (demo) url.searchParams.set('demo', '1');
     try {
-      const response = await fetch(url, { credentials: 'same-origin' });
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: seriesController.signal });
       if (!response.ok) throw new Error();
       const payload = await response.json();
       if (seq !== state.seriesRequest || state.tab !== 'performance') return;
@@ -377,33 +390,44 @@
       if (seq === state.seriesRequest) { const target = $('[data-series-body]'); if (target) target.innerHTML = empty('Não foi possível carregar a série temporal.'); }
     }
   }
-  async function openDrawer(id) {
+  async function openDrawer(id, { refresh = false } = {}) {
     const seq = ++state.detailRequest;
-    state.lastFocus = document.activeElement; state.tab = 'summary'; state.range = '24h'; state.series = null; state.seriesRequest++; state.detail = null;
-    $('[data-drawer-backdrop]').hidden = false; $('[data-drawer]').hidden = false;
-    document.body.style.overflow = 'hidden';
-    $('[data-drawer-title]').textContent = 'Carregando…';
-    $('[data-drawer-insight]').innerHTML = '<div class="capacity-series-skeleton" aria-hidden="true"></div>';
-    $('[data-quick-facts]').innerHTML = '';
-    $('[data-drawer-content]').innerHTML = '<p class="capacity-empty">Carregando detalhe…</p>';
-    $('[data-close-drawer]').focus();
+    const period = state.period;
+    if (detailController) detailController.abort();
+    detailController = new AbortController();
+    if (!refresh) {
+      selectedId = id;
+      state.lastFocus = document.activeElement; state.tab = 'summary'; state.range = '24h'; state.series = null; state.seriesRequest++; state.detail = null;
+      $('[data-drawer-backdrop]').hidden = false; $('[data-drawer]').hidden = false;
+      document.body.style.overflow = 'hidden';
+      $('[data-drawer-title]').textContent = 'Carregando…';
+      $('[data-drawer-insight]').innerHTML = '<div class="capacity-series-skeleton" aria-hidden="true"></div>';
+      $('[data-quick-facts]').innerHTML = '';
+      $('[data-drawer-content]').innerHTML = '<p class="capacity-empty">Carregando detalhe…</p>';
+      $('[data-close-drawer]').focus();
+    }
     const url = new URL(root.dataset.detailTemplate.replace('00000000-0000-4000-8000-000000000000', id), location.origin);
     url.searchParams.set('period', state.period);
     if (demo) url.searchParams.set('demo', '1');
     try {
-      const response = await fetch(url, { credentials: 'same-origin' });
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: detailController.signal });
       if (!response.ok) throw new Error();
       const detail = await response.json();
-      if (seq !== state.detailRequest) return;
+      if (seq !== state.detailRequest || selectedId !== id || period !== state.period) return;
       state.detail = detail;
       if (!$('[data-drawer]').hidden) renderDrawer();
+      if (refresh && state.tab === 'performance') await loadSeries({ refresh: true });
     } catch (error) {
       if (seq !== state.detailRequest) return;
+      if (refresh) return;
       $('[data-drawer-content]').innerHTML = empty('Não foi possível carregar este endpoint.');
       $('[data-drawer-title]').textContent = 'Detalhe indisponível';
     }
   }
   function closeDrawer() {
+    selectedId = null;
+    if (detailController) detailController.abort();
+    if (seriesController) seriesController.abort();
     state.detailRequest++; state.seriesRequest++;
     $('[data-drawer]').hidden = true; $('[data-drawer-backdrop]').hidden = true;
     document.body.style.overflow = '';
@@ -522,4 +546,8 @@
   $('[data-capacity-period]').addEventListener('change', event => { state.period = event.target.value; load(); });
   $('[data-kpis]').innerHTML = Array.from({ length: 7 }, () => '<span class="capacity-kpi" aria-hidden="true"><span>Carregando</span><strong>—</strong></span>').join('');
   load();
+  setInterval(() => { if (!document.hidden && !loading) load(); }, refreshMs);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && (reloadRequested || Date.now() - lastRefresh >= refreshMs)) load();
+  });
 })();

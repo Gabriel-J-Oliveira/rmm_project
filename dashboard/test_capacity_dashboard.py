@@ -158,7 +158,7 @@ class CapacityDashboardTests(TestCase):
         self.assertEqual(row['fqdn'], 'lab.example.test')
         self.assertEqual(row['manufacturer'], 'Synthetic maker')
         self.assertEqual(row['model'], 'Synthetic model')
-        self.assertEqual(row['inventory_at'], snapshot.received_at.isoformat())
+        self.assertEqual(row['inventory_at'], snapshot.collected_at.isoformat())
         self.assertEqual(row['telemetry_last_at'], sample.collected_at.isoformat())
         self.assertEqual(row['received_samples'], 0)
         self.assertEqual(row['system_disk_used_percent'], 80)
@@ -360,3 +360,43 @@ class CapacityDashboardTests(TestCase):
         self.assertFalse(any(q['sql'].lstrip().upper().startswith(('INSERT ', 'UPDATE ', 'DELETE '))
                              for q in series_queries))
         self.assertEqual(self.client.get(self.series_url, {'period': 'all'}).status_code, 400)
+
+    def test_detailed_inventory_survives_heartbeat_and_preserves_collection_date(self):
+        from agents.services import record_collection, record_heartbeat
+        self.login()
+        collected = timezone.now() - timedelta(hours=2)
+        payload = {'hostname': self.endpoint.hostname, 'collected_at': collected.isoformat(),
+            'hardware': {'cpu': {'name': 'Inventory CPU', 'physical_cores': 6, 'logical_processors': 12},
+                         'memory_total_bytes': 17179869184, 'manufacturer': 'Inventory Maker',
+                         'memory': {'total_bytes': 17179869184, 'slots_total': 2, 'slots_used': 1, 'slots_free': 1, 'modules': [{}]}},
+            'disk': [{'name': 'C:', 'size_bytes': 1000, 'free_bytes': 200}],
+            'system': {'os': {'name': 'Inventory OS'}}}
+        snapshot = record_collection(self.endpoint, 'full_inventory', payload)
+        # Exercise legacy snapshots too: inherited heartbeat keys are not a source marker.
+        raw = snapshot.raw_payload; raw.pop('snapshot_source'); raw['heartbeat_at'] = (collected - timedelta(minutes=1)).isoformat()
+        snapshot.raw_payload = raw; snapshot.save(update_fields=['raw_payload'])
+        heartbeat = {'hostname': self.endpoint.hostname, 'heartbeat_at': timezone.now().isoformat(),
+                     'hardware': {'cpu': 'Heartbeat CPU'}, 'disks': []}
+        record_heartbeat(self.endpoint, heartbeat, heartbeat)
+        rows = self.client.get(self.overview_url).json()['endpoints']
+        row = next(item for item in rows if item['id'] == str(self.endpoint.pk))
+        self.assertEqual(row['cpu_name'], 'Inventory CPU')
+        self.assertEqual(row['cpu_cores'], 6)
+        self.assertEqual(row['disk_count'], 1)
+        self.assertEqual(row['system_disk_used_percent'], 80)
+        self.assertEqual(row['inventory_at'], collected.isoformat())
+        detail = self.client.get(self.detail_url).json()
+        self.assertEqual(detail['hardware']['memory']['slots_total'], 2)
+        self.assertEqual(detail['inventory_provenance']['snapshot_id'], str(snapshot.pk))
+        self.assertEqual(detail['inventory_provenance']['collected_at'], collected.isoformat())
+        self.assertEqual(InventorySnapshot.objects.filter(machine=self.endpoint).count(), 2)
+
+    def test_heartbeat_only_is_not_full_inventory(self):
+        from agents.services import record_heartbeat
+        self.login()
+        payload = {'hostname': self.endpoint.hostname, 'hardware': {'cpu': 'Heartbeat CPU'}}
+        record_heartbeat(self.endpoint, payload, payload)
+        row = self.client.get(self.overview_url).json()['endpoints'][0]
+        self.assertIsNone(row['inventory_at'])
+        self.assertIsNone(row['disk_count'])
+        self.assertIsNone(row['memory_total_bytes'])
