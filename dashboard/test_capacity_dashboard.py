@@ -401,6 +401,19 @@ class CapacityDashboardTests(TestCase):
         self.assertIsNone(row['disk_count'])
         self.assertIsNone(row['memory_total_bytes'])
 
+    def test_new_endpoint_without_lifecycle_or_telemetry_is_in_overview_api(self):
+        self.login()
+        self.snapshot()
+        self.endpoint.agent_lifecycle_status = ''
+        self.endpoint.save(update_fields=['agent_lifecycle_status'])
+        row = next(r for r in self.client.get(self.overview_url).json()['endpoints']
+                   if r['id'] == str(self.endpoint.pk))
+        self.assertEqual(row['received_samples'], 0)
+        self.assertIsNone(row['cpu_p95'])
+        self.assertIsNone(row['memory_p95'])
+        self.assertEqual(row['memory_total_bytes'], 17179869184)
+        self.assertIsNotNone(row['inventory_at'])
+
     def test_full_inventory_reference_survives_partial_collect_and_legacy_heartbeat(self):
         from agents.services import record_collection, record_heartbeat
         collected = timezone.now() - timedelta(hours=2)

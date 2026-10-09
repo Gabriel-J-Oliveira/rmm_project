@@ -11,7 +11,9 @@ from unittest import mock, skipUnless
 from django.contrib.auth import get_user_model
 from django.test import TestCase, SimpleTestCase, Client
 from django.utils import timezone
-from agents.models import AgentDeploymentToken, AgentEnrollmentToken, AgentMachine, AgentRelease
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+from agents.models import AgentDeploymentToken, AgentEnrollmentToken, AgentMachine, AgentRelease, InventorySnapshot
 from dashboard.models import RemoteInstallJob
 from dashboard import remote_install as runner
 from dashboard.test_remote_install import COMPUTER, READY, CONTRACT
@@ -32,7 +34,7 @@ class RemoteDeploymentEnrollmentTests(TestCase):
         payload.update(changes)
         return Client().post('/api/agent/enroll/', data=json.dumps(payload), content_type='application/json')
 
-    def run_attempt(self, command):
+    def run_attempt(self, command, sleep=None):
         with ExitStack() as stack:
             for name, value in [('_ad_target', COMPUTER), ('validate_install_release', CONTRACT),
                                 ('run_remote_install_preflight', READY)]:
@@ -40,7 +42,7 @@ class RemoteDeploymentEnrollmentTests(TestCase):
             stack.enter_context(mock.patch.object(runner.threading, 'Thread'))
             stack.enter_context(mock.patch.object(runner, '_remote_script', side_effect=command))
             stack.enter_context(mock.patch.object(runner, 'ENROLLMENT_TIMEOUT', 0.03))
-            stack.enter_context(mock.patch.object(runner.time, 'sleep'))
+            stack.enter_context(mock.patch.object(runner.time, 'sleep', side_effect=sleep))
             runner.run_remote_install(self.job.pk, 'synthetic-admin', 'synthetic-password')
         self.job.refresh_from_db()
 
@@ -54,7 +56,11 @@ class RemoteDeploymentEnrollmentTests(TestCase):
                 response = self.enroll(token)
                 self.assertEqual(response.status_code, 200, response.content)
                 machine = AgentMachine.objects.get(machine_id='synthetic-deployment-machine')
-                machine.status = 'online'; machine.last_seen_at = timezone.now(); machine.save()
+                # A real heartbeat need not wait for the periodic status updater.
+                machine.last_seen_at = timezone.now(); machine.save()
+                InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname,
+                    collected_at=timezone.now(), raw_payload={'snapshot_source': 'heartbeat',
+                    'machine_id': machine.machine_id, 'agent_version': CONTRACT['version']})
                 kwargs['on_event']('STARTED', None); kwargs['on_event']('FINISHED', 0)
             return 0
         self.run_attempt(command)
@@ -118,6 +124,73 @@ class RemoteDeploymentEnrollmentTests(TestCase):
                 mock.patch.object(runner.threading, 'Thread'):
             runner.run_remote_install(self.job.pk, 'synthetic-admin', 'synthetic-password')
         self.assertFalse(AgentDeploymentToken.objects.exists())
+
+    def test_collection_or_last_seen_alone_cannot_confirm_installation(self):
+        deployment, token = runner._prepare_deployment(self.job, CONTRACT)
+        self.assertEqual(self.enroll(token).status_code, 200)
+        deployment.refresh_from_db()
+        machine = deployment.endpoint
+        machine.last_seen_at = timezone.now(); machine.status = 'online'; machine.save()
+        InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname,
+            collected_at=timezone.now(), raw_payload={'snapshot_source': 'collection',
+            'machine_id': machine.machine_id, 'agent_version': CONTRACT['version']})
+        self.assertIsNone(runner._deployment_heartbeat(deployment, machine, CONTRACT['version']))
+
+    def test_first_heartbeat_after_300_seconds_completes_without_cached_online_status(self):
+        clock = {'seconds': 0, 'machine': None}
+        def command(*args, **kwargs):
+            if 'enrollment_token' in kwargs:
+                self.assertEqual(self.enroll(kwargs['enrollment_token']).status_code, 200)
+                clock['machine'] = AgentMachine.objects.get(machine_id='synthetic-deployment-machine')
+                kwargs['on_event']('STARTED', None); kwargs['on_event']('FINISHED', 0)
+            return 0
+        def sleep(seconds):
+            clock['seconds'] += seconds
+            if clock['seconds'] == 300:
+                machine = clock['machine']
+                InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname,
+                    collected_at=timezone.now(), raw_payload={'snapshot_source': 'heartbeat',
+                    'machine_id': machine.machine_id, 'agent_version': CONTRACT['version']})
+        with mock.patch.object(runner.time, 'monotonic', side_effect=lambda: clock['seconds']), \
+                mock.patch.object(runner, 'FIRST_HEARTBEAT_TIMEOUT', 420):
+            self.run_attempt(command, sleep=sleep)
+        self.assertEqual(clock['seconds'], 300)
+        self.assertEqual(self.job.status, 'COMPLETED')
+        self.assertEqual(self.job.endpoint.agent_lifecycle_status, 'installed')
+
+    def test_confirmation_preview_preserves_failed_history_and_requires_strong_heartbeat(self):
+        deployment, token = runner._prepare_deployment(self.job, CONTRACT)
+        self.assertEqual(self.enroll(token).status_code, 200)
+        deployment.refresh_from_db(); machine = deployment.endpoint
+        deployment.mark_failed('remote_install_unverified')
+        self.job.endpoint = machine; self.job.status = 'INSTALLED_UNVERIFIED'
+        self.job.error_code = 'HEARTBEAT_TIMEOUT'; self.job.finished_at = timezone.now()
+        self.job.diagnostics = {'deployment_id': str(deployment.pk),
+            'release_id': str(self.release.pk), 'version': self.release.version,
+            'installer_exit_code': 0, 'installer_started_at': timezone.now().isoformat(),
+            'installer_finished_at': timezone.now().isoformat(),
+            'service_state': 'RUNNING', 'service_validation_status': 'PASS'}
+        self.job.save()
+        snapshot = InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname,
+            collected_at=timezone.now(), raw_payload={'snapshot_source': 'heartbeat',
+            'machine_id': machine.machine_id, 'agent_version': CONTRACT['version']})
+        with CaptureQueriesContext(connection) as queries:
+            preview = runner.preview_install_confirmation(self.job.pk)
+        self.assertTrue(preview['eligible'], preview)
+        self.assertFalse(any(q['sql'].lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')) for q in queries))
+        self.job.refresh_from_db(); deployment.refresh_from_db(); machine.refresh_from_db()
+        self.assertEqual(self.job.status, 'INSTALLED_UNVERIFIED')
+        self.assertEqual(deployment.status, 'failed')
+        self.assertEqual(machine.agent_lifecycle_status, '')
+        for changes in ({'snapshot_source': 'collection'}, {'machine_id': 'other'},
+                        {'agent_version': 'wrong'}):
+            original = dict(snapshot.raw_payload)
+            snapshot.raw_payload.update(changes); snapshot.save()
+            self.assertFalse(runner.preview_install_confirmation(self.job.pk)['eligible'])
+            snapshot.raw_payload = original
+        snapshot.save()
+        self.job.diagnostics['service_state'] = 'UNKNOWN'; self.job.save()
+        self.assertFalse(runner.preview_install_confirmation(self.job.pk)['eligible'])
 
     def test_unknown_outcome_remains_blocked_and_credential_revoked(self):
         def command(*args, **kwargs):

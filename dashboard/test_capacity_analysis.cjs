@@ -47,6 +47,26 @@ async function add(page, field, operator, value, end) {
   if (end !== undefined) await page.locator('[data-filter-end]').fill(String(end));
   await page.locator('[data-filter-form] button[type=submit]').click();
 }
+test('new endpoints without telemetry remain visible and absence differs from partial evidence', async t => {
+  const values = rows(3);
+  values[0] = {...values[0], hostname: 'CS-CVEL-0253', received_samples: 0,
+    telemetry_last_at: null, cpu_p95: null, memory_p95: null, coverage: 0,
+    evidence: 'INSUFFICIENT', classifications: {...values[0].classifications, insufficient: true}};
+  values[1] = {...values[1], hostname: 'CS-CVEL-0254', received_samples: 2, evidence: 'PARTIAL'};
+  values[2] = {...values[2], received_samples: 0, evidence: 'INSUFFICIENT'};
+  const page = await setup(t, values, 1920);
+  const table = page.locator('[data-table-body]');
+  assert.match(await table.textContent(), /CS-CVEL-0253/);
+  assert.match(await table.textContent(), /Aguardando amostras de desempenho/);
+  assert.match(await table.textContent(), /Parcial/);
+  assert.match(await table.textContent(), /Sem amostras no período/);
+  await page.locator('[data-search]').fill('CS-CVEL-0253');
+  assert.equal(await table.locator('tr').count(), 1);
+  const cells = await table.locator('tr td').allTextContents();
+  assert.equal(cells[8], '—'); assert.equal(cells[9], '—');
+  assert.match(cells[6], /GB/);
+  assert.doesNotMatch(await table.textContent(), /desabilitada/i);
+});
 test('workload cards retain selection, show safe meters and handle absent RAM reference', async t => {
   const values = rows(2);
   values[0].processes = Array.from({length: 7}, (_, i) => ({name: i === 0 ? '<img src=x onerror=alert(1)>' : `Process ${i}`, category: '<b>Category</b>', cpu_percent: 90 - i * 10, working_set_bytes: 1073741824}));

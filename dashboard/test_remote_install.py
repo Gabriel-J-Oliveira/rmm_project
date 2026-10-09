@@ -2,6 +2,7 @@ import io
 import json
 import os
 import subprocess
+import uuid
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest import mock, skipUnless
@@ -15,7 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.conf import settings
 
-from agents.models import AgentMachine, AgentDeploymentToken, AgentRelease
+from agents.models import AgentMachine, AgentDeploymentToken, AgentRelease, InventorySnapshot
 from dashboard.models import RemoteInstallJob
 from dashboard import remote_install
 from dashboard.remote_install_preflight import ProbeFailure
@@ -46,9 +47,13 @@ def recorded_outputs(outputs, endpoint=None):
             if endpoint is not None:
                 deployment = AgentDeploymentToken.objects.get(metadata__remote_install_job_id=str(kwargs['lease_job_id']))
                 deployment.mark_enrolled(endpoint)
+                endpoint.machine_id = endpoint.machine_id or str(uuid.uuid4())
                 endpoint.agent_version = CONTRACT['version']
                 endpoint.last_seen_at = timezone.now() + timedelta(seconds=1)
                 endpoint.save()
+                InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname,
+                    collected_at=timezone.now(), raw_payload={'snapshot_source': 'heartbeat',
+                    'machine_id': endpoint.machine_id, 'agent_version': CONTRACT['version']})
             kwargs['on_event']('STARTED', None)
             kwargs['on_event']('FINISHED', code)
         return code

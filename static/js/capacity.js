@@ -11,6 +11,7 @@
   const labels = { NOT_EVALUATED: 'Sem evidência', NO_PRESSURE_OBSERVED: 'Sem pressão', OBSERVE: 'Observar', SUSTAINED_PRESSURE: 'Pressão sustentada', SUFFICIENT: 'Suficiente', PARTIAL: 'Parcial', INSUFFICIENT: 'Insuficiente', AVAILABLE: 'Disponível', MISSING: 'Ausente' };
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const label = value => labels[value] || value || 'Não disponível';
+  const evidenceText = row => row.received_samples === 0 ? (row.telemetry_last_at ? 'Sem amostras no período' : 'Aguardando amostras de desempenho') : label(row.evidence);
   const number = value => Number.isFinite(value) ? new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(value) : '—';
   const percent = value => Number.isFinite(value) ? `${number(value)}%` : '—';
   const bytes = value => Number.isFinite(value) ? `${number(value / 1073741824)} GB` : '—';
@@ -30,7 +31,7 @@
     if (row.memory_capacity === 'SUSTAINED_PRESSURE') reasons.push('PRESSÃO DE MEMÓRIA');
     if (row.cpu_capacity === 'SUSTAINED_PRESSURE') reasons.push('PRESSÃO DE CPU');
     if (row.classifications.observe) reasons.push('OBSERVAR CPU / RAM');
-    if (row.classifications.insufficient) reasons.push('SEM EVIDÊNCIA SUFICIENTE');
+    if (row.classifications.insufficient) reasons.push(row.received_samples === 0 ? evidenceText(row).toLocaleUpperCase() : 'SEM EVIDÊNCIA SUFICIENTE');
     if (row.inventory_stale) reasons.push('INVENTÁRIO DESATUALIZADO');
     if (row.security_alert) reasons.push('ALERTA DE SEGURANÇA');
     if (row.agent_update_alert) reasons.push('ALERTA DO AGENTE');
@@ -85,7 +86,7 @@
   }
   function card(row) {
     const name = row.endpoint_url ? `<a href="${esc(row.endpoint_url)}">${esc(row.hostname)}</a>` : esc(row.hostname);
-    const parts = `<div class="capacity-card-top"><strong>${name}</strong>${stateBadge(row.status)}</div><p class="capacity-card-cause">${esc(issue(row))}</p><span class="capacity-card-meta">${esc(attentionReasons(row).slice(1).join(' · '))}</span><div class="capacity-card-facts"><div><small>CPU p95</small><b>${percent(row.cpu_p95)}</b></div><div><small>RAM p95</small><b>${percent(row.memory_p95)}</b></div></div><span class="capacity-card-meta">Cobertura ${percent(row.coverage)} · ${esc(label(row.evidence))}</span>`;
+    const parts = `<div class="capacity-card-top"><strong>${name}</strong>${stateBadge(row.status)}</div><p class="capacity-card-cause">${esc(issue(row))}</p><span class="capacity-card-meta">${esc(attentionReasons(row).slice(1).join(' · '))}</span><div class="capacity-card-facts"><div><small>CPU p95</small><b>${percent(row.cpu_p95)}</b></div><div><small>RAM p95</small><b>${percent(row.memory_p95)}</b></div></div><span class="capacity-card-meta">Cobertura ${percent(row.coverage)} · ${esc(evidenceText(row))}</span>`;
     return `<article class="capacity-spotlight">${parts}<div class="capacity-card-actions"><button type="button" data-open="${esc(row.id)}">Abrir detalhes</button>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}">Abrir endpoint</a>` : ''}<a href="${esc(row.alerts_url)}">Ver alertas</a></div></article>`;
   }
   function renderAttention() {
@@ -164,7 +165,7 @@
     const pages = Math.max(1, Math.ceil(rows.length / state.pageSize));
     state.page = Math.max(1, Math.min(pages, state.page));
     const offset = (state.page - 1) * state.pageSize;
-    $('[data-table-body]').innerHTML = rows.length ? rows.slice(offset, offset + state.pageSize).map(row => `<tr data-open="${esc(row.id)}" tabindex="0" aria-label="Abrir detalhes de ${esc(row.hostname)}"><td>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}" data-endpoint-link>${esc(row.hostname)}</a>` : esc(row.hostname)}</td><td>${stateBadge(row.status)}</td><td>${esc(row.last_ip || '—')}</td><td>${esc(row.last_logged_user || '—')}</td><td>${esc(row.os_name || '—')}<span class="sub">${esc(row.os_build || '')}</span></td><td>${esc(row.cpu_name || '—')}<span class="sub">${number(row.cpu_cores)} cores</span></td><td>${bytes(row.memory_total_bytes)}</td><td>${Number.isFinite(row.system_disk_used_percent) ? `C: ${percent(row.system_disk_used_percent)}` : Number.isFinite(row.max_disk_used_percent) ? `Máx. ${percent(row.max_disk_used_percent)}` : '—'}</td><td>${percent(row.cpu_p95)}</td><td>${percent(row.memory_p95)}</td><td>${esc(label(row.evidence))}<span class="sub">${percent(row.coverage)}</span></td><td>${number(row.alerts_critical)}</td><td>${stamp(row.last_seen)}</td></tr>`).join('') : '<tr><td colspan="13">Nenhum endpoint corresponde ao filtro.</td></tr>';
+    $('[data-table-body]').innerHTML = rows.length ? rows.slice(offset, offset + state.pageSize).map(row => `<tr data-open="${esc(row.id)}" tabindex="0" aria-label="Abrir detalhes de ${esc(row.hostname)}"><td>${row.endpoint_url ? `<a href="${esc(row.endpoint_url)}" data-endpoint-link>${esc(row.hostname)}</a>` : esc(row.hostname)}</td><td>${stateBadge(row.status)}</td><td>${esc(row.last_ip || '—')}</td><td>${esc(row.last_logged_user || '—')}</td><td>${esc(row.os_name || '—')}<span class="sub">${esc(row.os_build || '')}</span></td><td>${esc(row.cpu_name || '—')}<span class="sub">${number(row.cpu_cores)} cores</span></td><td>${bytes(row.memory_total_bytes)}</td><td>${Number.isFinite(row.system_disk_used_percent) ? `C: ${percent(row.system_disk_used_percent)}` : Number.isFinite(row.max_disk_used_percent) ? `Máx. ${percent(row.max_disk_used_percent)}` : '—'}</td><td>${percent(row.cpu_p95)}</td><td>${percent(row.memory_p95)}</td><td>${esc(evidenceText(row))}<span class="sub">${percent(row.coverage)}</span></td><td>${number(row.alerts_critical)}</td><td>${stamp(row.last_seen)}</td></tr>`).join('') : '<tr><td colspan="13">Nenhum endpoint corresponde ao filtro.</td></tr>';
     const visible = new Set([1, pages, state.page - 1, state.page, state.page + 1]);
     let previous = 0;
     const buttons = [...visible].filter(n => n > 0 && n <= pages).sort((a, b) => a - b).map(n => {
@@ -365,6 +366,13 @@ box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><di
       box.innerHTML = `<h3>Resumo de alertas</h3><div class="capacity-detail-grid">${fact('Críticos', data.alert_counts.critical)}${fact('Warnings', data.alert_counts.warning)}${fact('Abertos', data.alert_counts.open)}${fact('Resolvidos recentes', data.alert_counts.resolved)}</div><h3>Atividade recente</h3><div class="capacity-alert-timeline">${data.alerts.length ? data.alerts.map(item => `<div><time>${stamp(item.last_seen_at)}</time><strong>${esc(item.title)}</strong><small>${esc(item.alert_type)} · ${esc(item.severity)} · ${esc(item.status)}</small></div>`).join('') : empty('Nenhum alerta recente para este endpoint.')}</div><a class="capacity-inline-link" href="${esc(endpoint.alerts_url)}">Ver todos na Central de Alertas</a>`;
     } else {
       box.innerHTML = `<h3>Aplicações instaladas</h3><p class="capacity-chart-note">Aplicação instalada não significa aplicação responsável por consumo.</p>${data.applications.length ? data.applications.map(item => `<div class="capacity-detail-fact"><small>${esc(item.version)}</small><strong>${esc(item.name)}</strong></div>`).join('') : empty('Inventário de aplicações não disponível.')}<h3>Observadas em execução</h3>${data.processes.length ? [...new Set(data.processes.map(item => item.name))].map(name => `<div class="capacity-detail-fact"><strong>${esc(name)}</strong></div>`).join('') : empty('Processos observados ainda não disponíveis.')}<h3>Serviços</h3>${empty('Dados de serviços ainda não disponíveis nesta análise.')}`;
+    }
+    if (primary && state.tab === 'summary') {
+      const provenance = data.inventory_provenance || {};
+      const grid = box.querySelector('.capacity-summary-columns .capacity-detail-grid');
+      grid.insertAdjacentHTML('beforeend', fact('Inventário coletado', stamp(provenance.collected_at)) + fact('Inventário recebido', stamp(provenance.received_at)));
+      const evidence = box.querySelector('.capacity-evidence-line span');
+      if (primary.quality.received_samples === 0) evidence.textContent = context.quality.received_samples > 0 ? 'Sem amostras no período' : 'Aguardando amostras de desempenho';
     }
     icons();
   }

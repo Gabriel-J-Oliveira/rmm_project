@@ -16,7 +16,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from access_inventory.services.ad_computer_discovery import normalize_fqdn
-from agents.models import AgentDeploymentToken, AgentMachine
+from agents.models import AgentDeploymentToken, AgentMachine, InventorySnapshot
 from dashboard.ad_install_discovery import _machine_maps, _match_machine
 from dashboard.models import RemoteInstallJob
 from dashboard.remote_install_admission import install_admission
@@ -492,6 +492,66 @@ def _matching_endpoint(computer, *, installed=False):
     return machine
 
 
+def _deployment_heartbeat(deployment, machine, version, *, fresh=False):
+    if not deployment.used_at or not machine.machine_id:
+        return None
+    snapshots = InventorySnapshot.objects.filter(
+        machine=machine, received_at__gte=deployment.used_at,
+        raw_payload__snapshot_source='heartbeat',
+        raw_payload__machine_id=machine.machine_id,
+        raw_payload__agent_version=version,
+    )
+    if fresh:
+        snapshots = snapshots.filter(received_at__gte=timezone.now() - timedelta(seconds=FIRST_HEARTBEAT_TIMEOUT))
+    return snapshots.order_by('received_at', 'pk').first()
+
+
+def preview_install_confirmation(job_id):
+    """Read-only evidence preview. Never repairs a historical job or deployment."""
+    job = RemoteInstallJob.objects.get(pk=job_id)
+    diagnostics = job.diagnostics or {}
+    result = {'eligible': False, 'job_id': str(job.pk), 'reasons': [],
+              'original_status': job.status, 'original_error_code': job.error_code}
+    deployment = AgentDeploymentToken.objects.select_related('release', 'endpoint').filter(
+        pk=diagnostics.get('deployment_id'),
+    ).first()
+    if (job.status != 'INSTALLED_UNVERIFIED' or job.error_code != 'HEARTBEAT_TIMEOUT' or
+            not job.finished_at or diagnostics.get('installer_exit_code') != 0 or
+            not diagnostics.get('installer_started_at') or not diagnostics.get('installer_finished_at') or
+            diagnostics.get('service_state') != 'RUNNING' or
+            diagnostics.get('service_validation_status') != 'PASS'):
+        result['reasons'].append('installation_proof_missing')
+    if (not deployment or deployment.status != AgentDeploymentToken.STATUS_FAILED or
+            deployment.failure_code != 'remote_install_unverified' or
+            not deployment.used_at or not deployment.endpoint_id or
+            deployment.endpoint_id != job.endpoint_id or
+            str(deployment.release_id) != diagnostics.get('release_id') or
+            deployment.release.version != diagnostics.get('version') or
+            deployment.metadata.get('remote_install_job_id') != str(job.pk) or
+            normalize_fqdn(deployment.metadata.get('target_fqdn')) != normalize_fqdn(job.target_fqdn)):
+        result['reasons'].append('deployment_binding_invalid')
+        return result
+    machine = deployment.endpoint
+    try:
+        matched = _matching_endpoint({'fqdn': job.target_fqdn, 'hostname': job.target_hostname})
+    except InstallFailure:
+        matched = None
+    if (not matched or matched.pk != machine.pk or not machine.machine_id or
+            AgentMachine.objects.filter(machine_id=machine.machine_id).count() != 1 or
+            machine.has_terminal_lifecycle or machine.agent_version != deployment.release.version):
+        result['reasons'].append('endpoint_identity_or_version_conflict')
+    heartbeat = _deployment_heartbeat(deployment, machine, deployment.release.version)
+    if not heartbeat:
+        result['reasons'].append('confirmed_heartbeat_missing')
+    result.update(deployment_id=str(deployment.pk), endpoint_id=str(machine.pk),
+                  machine_id=machine.machine_id, release_id=str(deployment.release_id),
+                  enrollment_at=deployment.used_at.isoformat(),
+                  heartbeat_received_at=heartbeat.received_at.isoformat() if heartbeat else None,
+                  heartbeat_snapshot_id=str(heartbeat.pk) if heartbeat else None)
+    result['eligible'] = not result['reasons']
+    return result
+
+
 def run_remote_install(job_id, username, password):
     stop = threading.Event()
     pulse = threading.Thread(target=_heartbeat, args=(job_id, stop), daemon=True)
@@ -617,7 +677,7 @@ def run_remote_install(job_id, username, password):
         deadline = time.monotonic() + FIRST_HEARTBEAT_TIMEOUT
         while time.monotonic() < deadline:
             machine = _deployment_endpoint(deployment, computer)
-            if machine and machine.last_seen_at and machine.last_seen_at >= deployment.used_at and machine.status == 'online' and machine.agent_version == contract['version']:
+            if machine and machine.agent_version == contract['version'] and _deployment_heartbeat(deployment, machine, contract['version'], fresh=True):
                 from agents.views import mark_machine_installed_from_deployment
                 from agents.audit import create_audit_event
                 with transaction.atomic():
@@ -626,8 +686,8 @@ def run_remote_install(job_id, username, password):
                     machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
                     if (deployment.status != AgentDeploymentToken.STATUS_INSTALLING or deployment.is_expired or
                             deployment.endpoint_id != machine.pk or not deployment.used_at or
-                            not machine.last_seen_at or machine.last_seen_at < deployment.used_at or
-                            machine.status != 'online' or machine.agent_version != contract['version']):
+                            not _deployment_heartbeat(deployment, machine, contract['version'], fresh=True) or
+                            machine.agent_version != contract['version']):
                         raise InstallFailure('DEPLOYMENT_INVALID', installed=True)
                     deployment.mark_completed(machine)
                     mark_machine_installed_from_deployment(machine, deployment)
