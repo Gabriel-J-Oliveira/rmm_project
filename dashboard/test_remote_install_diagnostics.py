@@ -9,7 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from agents.models import AgentMachine
+from agents.models import AgentMachine, AgentRelease
 from dashboard import remote_install as runner
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.models import RemoteInstallJob
@@ -23,6 +23,7 @@ TOKEN = 'SUPER_SECRET_ENROLLMENT_TOKEN_73192'
 class InstallDiagnosticTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user('diagnostic-admin', is_staff=True)
+        AgentRelease.objects.create(id=CONTRACT['release_id'], version=CONTRACT['version'], channel=CONTRACT['channel'], package_url=CONTRACT['package_url'], sha256=CONTRACT['package_sha256'])
         self.client.force_login(self.user)
         self.job = RemoteInstallJob.objects.create(target_hostname=COMPUTER['hostname'],
             target_fqdn=COMPUTER['fqdn'], target_ad_dn=COMPUTER['distinguished_name'],
@@ -30,7 +31,7 @@ class InstallDiagnosticTests(TestCase):
 
     def run_job(self, outputs, **patches):
         defaults = {'_ad_target': COMPUTER, 'validate_install_release': CONTRACT,
-                    'run_remote_install_preflight': READY, '_enrollment_available': True,
+                    'run_remote_install_preflight': READY,
                     '_matching_endpoint': None, 'ENROLLMENT_TIMEOUT': 0}
         with ExitStack() as stack:
             stack.enter_context(mock.patch.object(runner.threading, 'Thread'))
@@ -121,9 +122,8 @@ class InstallDiagnosticTests(TestCase):
                 mock.patch.object(runner, '_ad_target', return_value=COMPUTER), \
                 mock.patch.object(runner, 'validate_install_release', return_value=CONTRACT), \
                 mock.patch.object(runner, 'run_remote_install_preflight', return_value=READY), \
-                mock.patch.object(runner, '_enrollment_available', return_value=True), \
                 mock.patch.object(runner, '_matching_endpoint', side_effect=lambda *a, **kw: next(values)), \
-                mock.patch.object(runner, '_remote_script', side_effect=recorded_outputs([0, 0])):
+                mock.patch.object(runner, '_remote_script', side_effect=recorded_outputs([0, 0], machine)):
             runner.run_remote_install(self.job.pk, 'admin', PASSWORD)
         self.job.refresh_from_db()
         self.assertEqual(self.job.status, 'COMPLETED')
@@ -199,7 +199,7 @@ class InstallDiagnosticTests(TestCase):
         self.assertIn(CONTRACT['installer_source'], script)
         self.assertIn(CONTRACT['package_url'], script)
         self.assertIn('-TrustedPublicKeysPath', script)
-        self.assertIn('-ExpectedVersion "0.1.1.0-rc44"', script)
+        self.assertIn("-ExpectedVersion '0.1.1.0-rc44'", script)
         self.assertIn('-ExpectedPackageSha256', script)
         self.assertNotIn('-AllowReleaseBundledTrustForLab', script)
 
@@ -208,7 +208,6 @@ class InstallDiagnosticTests(TestCase):
                 mock.patch.object(runner, '_ad_target', return_value=COMPUTER), \
                 mock.patch.object(runner, 'validate_install_release', side_effect=[CONTRACT, {**CONTRACT, 'installer_sha256': 'c' * 64}]), \
                 mock.patch.object(runner, 'run_remote_install_preflight', return_value=READY), \
-                mock.patch.object(runner, '_enrollment_available', return_value=True), \
                 mock.patch.object(runner, '_matching_endpoint', return_value=None), \
                 mock.patch.object(runner, '_remote_script') as command:
             runner.run_remote_install(self.job.pk, 'admin', PASSWORD)

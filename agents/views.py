@@ -493,6 +493,8 @@ class AgentDeploymentCompleteView(APIView):
         deployment = AgentDeploymentToken.objects.select_for_update().select_related('release').filter(pk=deployment_id).first()
         if deployment is None:
             return Response({'error': 'deployment_not_found', 'detail': 'Deployment nao encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        if deployment.metadata.get('remote_install_job_id'):
+            return Response({'error': 'remote_install_confirmation_required'}, status=status.HTTP_409_CONFLICT)
 
         machine = None
         try:
@@ -2020,6 +2022,19 @@ class AgentEnrollView(APIView):
                 status.HTTP_403_FORBIDDEN,
                 metadata={'deployment_id': str(deployment_token.id), 'platform': deployment_token.platform},
             )
+        target = deployment_token.metadata.get('target_fqdn') if deployment_token.metadata.get('remote_install_job_id') else None
+        if target:
+            hostname = str(payload.get('hostname') or '').strip().rstrip('.').casefold()
+            domain = str(payload.get('domain') or '').strip().rstrip('.').casefold()
+            reported = hostname if '.' in hostname else f'{hostname}.{domain}'
+            expected_hostname = str(deployment_token.metadata.get('target_hostname') or '').casefold()
+            fqdn = str(payload.get('fqdn') or '').strip().rstrip('.').casefold()
+            if (reported != str(target).rstrip('.').casefold() or
+                    hostname.split('.', 1)[0] != expected_hostname or
+                    (fqdn and fqdn != str(target).rstrip('.').casefold()) or
+                    str(payload.get('agent_version') or '') != deployment_token.release.version):
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_target_mismatch', 'Deployment target mismatch.', status.HTTP_403_FORBIDDEN)
         return deployment_token, None
 
     def _validate_enrollment_token_state(self, request, payload, enrollment_token):

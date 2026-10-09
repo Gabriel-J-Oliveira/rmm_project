@@ -16,7 +16,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from access_inventory.services.ad_computer_discovery import normalize_fqdn
-from agents.models import AgentEnrollmentToken
+from agents.models import AgentDeploymentToken, AgentMachine
 from dashboard.ad_install_discovery import _machine_maps, _match_machine
 from dashboard.models import RemoteInstallJob
 from dashboard.remote_install_admission import install_admission
@@ -277,7 +277,7 @@ def _trusted_urls():
     return base, installer
 
 
-def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None, lease_job_id=None):
+def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None, lease_job_id=None, enrollment_token=None):
     from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
 
     try:
@@ -286,6 +286,16 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
         payload = ('& {\n' + script.replace('\r\n', '\n') + '\n}\n\n').encode('ascii')
         if not script.strip() or len(payload) > MAX_REMOTE_SCRIPT_BYTES:
             raise ValueError()
+        arguments = ['-NoProfile', '-NonInteractive', '-Command', '-']
+        if enrollment_token is not None:
+            if not re.fullmatch(r'deploy_[A-Za-z0-9_-]{20,200}', enrollment_token):
+                raise ValueError()
+            # A fixed launcher reads code and credential as separate stdin records.
+            # The credential is never interpolated into PowerShell source or argv.
+            launcher = "$code = [Console]::In.ReadLine(); & ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($code))))"
+            arguments = ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+                         base64.b64encode(launcher.encode('utf-16-le')).decode('ascii')]
+            payload = base64.b64encode(script.encode('ascii')) + b'\n' + enrollment_token.encode('ascii') + b'\n'
     except (AttributeError, UnicodeError, ValueError):
         raise InstallFailure('REMOTE_SCRIPT_INVALID', command_attempted=False) from None
     try:
@@ -298,8 +308,7 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
     attempted = False
     try:
         shell_id = protocol.open_shell()
-        command_id = protocol.run_command(shell_id, 'powershell.exe',
-                                          ['-NoProfile', '-NonInteractive', '-Command', '-'])
+        command_id = protocol.run_command(shell_id, 'powershell.exe', arguments)
         if not command_id:
             raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False)
         if before_send:
@@ -407,16 +416,27 @@ try {{
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$null, [ref]$errors)
     if ($errors.Count -or -not $ast.ParamBlock) {{ Stop-BeforeInstaller 28 }}
     $names = @($ast.ParamBlock.Parameters | ForEach-Object {{ $_.Name.VariablePath.UserPath }})
-    foreach ($name in @('ServerUrl', 'InstallAsService', 'RunCheck', 'NoGui', 'NonInteractive', 'PackageUrl', 'TrustedPublicKeysPath', 'ExpectedVersion', 'ExpectedChannel', 'ExpectedPackageSha256', 'ExpectedGitCommit')) {{
+    foreach ($name in @('ServerUrl', 'EnrollmentToken', 'InstallAsService', 'RunCheck', 'NoGui', 'NonInteractive', 'PackageUrl', 'TrustedPublicKeysPath', 'ExpectedVersion', 'ExpectedChannel', 'ExpectedPackageSha256', 'ExpectedGitCommit')) {{
         if ($names -notcontains $name) {{ Stop-BeforeInstaller 28 }}
     }}
+    $enrollmentToken = [Console]::In.ReadLine()
+    if ($enrollmentToken -notmatch '^deploy_[A-Za-z0-9_-]{{20,200}}$') {{ Stop-BeforeInstaller 28 }}
+    $childScript = @'
+$ErrorActionPreference = 'Stop'
+$token = [Console]::In.ReadLine()
+if ($token -notmatch '^deploy_[A-Za-z0-9_-]{{20,200}}$') {{ exit 28 }}
+& '__INSTALLER_PATH__' -EnrollmentToken $token -ServerUrl '{base}' -PackageUrl '{package}' -TrustedPublicKeysPath '__TRUST_PATH__' -ExpectedVersion '{contract['version']}' -ExpectedChannel '{contract['channel']}' -ExpectedPackageSha256 '{contract['package_sha256']}' -ExpectedGitCommit '{contract['git_commit']}' -InstallAsService -RunCheck -NoGui -NonInteractive
+exit $LASTEXITCODE
+'@
+    $childScript = $childScript.Replace('__INSTALLER_PATH__', $script.Replace("'", "''")).Replace('__TRUST_PATH__', $trust.Replace("'", "''"))
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = Join-Path $PSHOME 'powershell.exe'
-    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $script + '" -ServerUrl "{base}" -PackageUrl "{package}" -TrustedPublicKeysPath "' + $trust + '" -ExpectedVersion "{contract['version']}" -ExpectedChannel "{contract['channel']}" -ExpectedPackageSha256 "{contract['package_sha256']}" -ExpectedGitCommit "{contract['git_commit']}" -InstallAsService -RunCheck -NoGui -NonInteractive'
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
+    $info.RedirectStandardInput = $true
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $info
     try {{ if (-not $process.Start()) {{ Stop-BeforeInstaller 29 }} }}
@@ -425,6 +445,9 @@ try {{
     # Drain both streams concurrently, but never send installer output to the backend.
     $out = $process.StandardOutput.BaseStream.CopyToAsync([System.IO.Stream]::Null)
     $err = $process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
+    $process.StandardInput.WriteLine($enrollmentToken)
+    $process.StandardInput.Close()
+    $enrollmentToken = $null
     $process.WaitForExit()
     $out.Wait()
     $err.Wait()
@@ -436,13 +459,30 @@ try {{
 """
 
 
-def _enrollment_available(fqdn):
-    from django.db.models import F, Q
+def _prepare_deployment(job, contract):
+    with transaction.atomic():
+        lease = RemoteInstallJob.objects.select_for_update().get(pk=job.pk)
+        if lease.active_slot != 'global' or lease.status != 'RUNNING':
+            raise InstallLeaseLost()
+        deployment, token = AgentDeploymentToken.create_with_token(
+            release_id=contract['release_id'], channel=contract['channel'], created_by=job.requested_by,
+            expires_at=timezone.now() + timedelta(seconds=INSTALL_TIMEOUT + ENROLLMENT_TIMEOUT + FIRST_HEARTBEAT_TIMEOUT + 300),
+            metadata={'remote_install_job_id': str(job.pk), 'target_fqdn': job.target_fqdn,
+                      'target_hostname': job.target_hostname, 'target_ad_dn': job.target_ad_dn})
+        _update(job.pk, 'PREPARING_ENROLLMENT', diagnostic={'deployment_id': str(deployment.pk)})
+        return deployment, token
 
-    domain = fqdn.split('.', 1)[1]
-    return AgentEnrollmentToken.objects.filter(is_active=True, allowed_domain__iexact=domain).filter(
-        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()),
-    ).filter(Q(max_uses__isnull=True) | Q(used_count__lt=F('max_uses'))).exists()
+
+def _deployment_endpoint(deployment, computer):
+    deployment.refresh_from_db()
+    if not deployment.endpoint_id or not deployment.used_at:
+        return None
+    if deployment.status != AgentDeploymentToken.STATUS_INSTALLING or deployment.is_expired:
+        raise InstallFailure('DEPLOYMENT_INVALID', installed=True)
+    machine = _matching_endpoint(computer, installed=True)
+    if not machine or machine.pk != deployment.endpoint_id:
+        raise InstallFailure('DEPLOYMENT_ENDPOINT_MISMATCH', installed=True)
+    return machine
 
 
 def _matching_endpoint(computer, *, installed=False):
@@ -462,6 +502,7 @@ def run_remote_install(job_id, username, password):
     installer_finished = False
     installer_exit_code = None
     not_started_code = None
+    deployment = None
     def installer_event(event, code):
         nonlocal stage, install_started, installer_finished, installer_exit_code, not_started_code
         if event == 'NOT_STARTED' and not install_started and code in (25, 26, 27, 28, 29):
@@ -517,8 +558,6 @@ def run_remote_install(job_id, username, password):
         _update(job_id, stage)
         stage = 'PREFLIGHT_OK'
         _update(job_id, stage)
-        if not _enrollment_available(job.target_fqdn):
-            raise InstallFailure('ENROLLMENT_UNAVAILABLE')
         stage = 'PREPARING_ENROLLMENT'
         _update(job_id, stage)
         if _matching_endpoint(computer):
@@ -527,12 +566,14 @@ def run_remote_install(job_id, username, password):
         if revalidated != contract:
             raise InstallFailure('INSTALL_RELEASE_INVALID')
         installer_script = _installer_script(contract)
+        deployment, enrollment_token = _prepare_deployment(job, contract)
         stage = 'INSTALLING'
         invocation_attempted = True
         _update(job_id, stage, diagnostic={'safe_to_retry': 'NO', 'invocation_attempted': True})
         code = _remote_script(job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT,
                               on_event=installer_event,
-                              lease_job_id=job_id)
+                              lease_job_id=job_id, enrollment_token=enrollment_token)
+        enrollment_token = None
         if not install_started:
             # Reserved wrapper codes prove failure before Process.Start. An absent frame
             # alone never proves that the child did not start (transport can be lost).
@@ -565,7 +606,7 @@ def run_remote_install(job_id, username, password):
         deadline = time.monotonic() + ENROLLMENT_TIMEOUT
         machine = None
         while time.monotonic() < deadline:
-            machine = _matching_endpoint(computer, installed=True)
+            machine = _deployment_endpoint(deployment, computer)
             if machine:
                 break
             time.sleep(3)
@@ -575,11 +616,28 @@ def run_remote_install(job_id, username, password):
         _update(job_id, 'WAITING_HEARTBEAT', endpoint=machine)
         deadline = time.monotonic() + FIRST_HEARTBEAT_TIMEOUT
         while time.monotonic() < deadline:
-            machine = _matching_endpoint(computer, installed=True)
-            if machine and machine.last_seen_at and machine.last_seen_at >= job.created_at and machine.status == 'online':
-                _update(job_id, 'COMPLETED', status='COMPLETED', endpoint=machine,
-                        diagnostic={'safe_to_retry': 'NO'})
-                return
+            machine = _deployment_endpoint(deployment, computer)
+            if machine and machine.last_seen_at and machine.last_seen_at >= deployment.used_at and machine.status == 'online' and machine.agent_version == contract['version']:
+                from agents.views import mark_machine_installed_from_deployment
+                from agents.audit import create_audit_event
+                with transaction.atomic():
+                    _assert_install_lease(job_id)
+                    deployment = AgentDeploymentToken.objects.select_for_update().select_related('release').get(pk=deployment.pk)
+                    machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+                    if (deployment.status != AgentDeploymentToken.STATUS_INSTALLING or deployment.is_expired or
+                            deployment.endpoint_id != machine.pk or not deployment.used_at or
+                            not machine.last_seen_at or machine.last_seen_at < deployment.used_at or
+                            machine.status != 'online' or machine.agent_version != contract['version']):
+                        raise InstallFailure('DEPLOYMENT_INVALID', installed=True)
+                    deployment.mark_completed(machine)
+                    mark_machine_installed_from_deployment(machine, deployment)
+                    create_audit_event(event_type='agent.deployment.completed', title='Remote deployment completed',
+                        description='Service, enrollment and heartbeat confirmed.', endpoint=machine,
+                        metadata={'deployment_id': str(deployment.pk), 'remote_install_job_id': str(job_id),
+                                  'release_id': str(deployment.release_id)})
+                    _update(job_id, 'COMPLETED', status='COMPLETED', endpoint=machine,
+                            diagnostic={'safe_to_retry': 'NO'})
+                    return
             time.sleep(3)
         raise InstallFailure('HEARTBEAT_TIMEOUT', installed=True)
     except InstallLeaseLost:
@@ -600,9 +658,17 @@ def run_remote_install(job_id, username, password):
             _update(job_id, stage, status=state, error_code='RUNNER_INTERRUPTED',
                     diagnostic={'safe_to_retry': 'NO' if invocation_attempted else 'YES'})
     finally:
-        stop.set()
-        pulse.join(timeout=2)
-        close_old_connections()
+        try:
+            if deployment is not None:
+                # Never leave an unconsumed credential reusable after this attempt ends.
+                with transaction.atomic():
+                    current = AgentDeploymentToken.objects.select_for_update().get(pk=deployment.pk)
+                    if current.status in (current.STATUS_WAITING, current.STATUS_INSTALLING):
+                        current.mark_failed('remote_install_unverified')
+        finally:
+            stop.set()
+            pulse.join(timeout=2)
+            close_old_connections()
 
 
 def _assert_install_lease(job_id):
