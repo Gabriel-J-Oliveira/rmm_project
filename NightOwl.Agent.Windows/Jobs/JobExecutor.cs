@@ -14,12 +14,15 @@ public sealed class JobExecutor
     private readonly WindowsInventoryCollector _collector;
     private readonly JsonlLogger _logger;
     private readonly JobExecutionPolicy _policy;
+    private readonly TelemetryConfigurationService? _telemetryConfiguration;
 
-    public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger, JobExecutionPolicy policy)
+    public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger, JobExecutionPolicy policy,
+        TelemetryConfigurationService? telemetryConfiguration = null)
     {
         _collector = collector;
         _logger = logger;
         _policy = policy;
+        _telemetryConfiguration = telemetryConfiguration;
     }
 
     public async Task<JobExecutionResult> ExecuteAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
@@ -64,6 +67,13 @@ public sealed class JobExecutor
 
         try
         {
+            if (job.Type == "configure_telemetry")
+            {
+                if (_telemetryConfiguration is null) throw new InvalidOperationException("Telemetry configuration unavailable.");
+                JobExecutionResult configured = await _telemetryConfiguration.ConfigureAsync(config, job, jobToken);
+                _policy.MarkFinal(config, job, configured, ExtractErrorCode(configured));
+                return configured;
+            }
             if (job.Type == "update_agent")
             {
                 JobExecutionResult updateResult = await StartUpdateAgentAsync(config, job, started, stopwatch, jobToken);
@@ -123,6 +133,19 @@ public sealed class JobExecutor
             _policy.MarkFinal(config, job, completed);
             await _logger.LogAsync("job.completed", "Job completed.", BuildJobLog(job, completed.Status, "", completed.DurationSeconds, decision.TimeoutSeconds), ct);
             return completed;
+        }
+        catch (Exception) when (job.Type == "configure_telemetry")
+        {
+            // The journal owns recovery if persistence/readiness or rollback was interrupted.
+            var unconfirmed = new JobExecutionResult
+            {
+                JobId = job.Id, Status = _telemetryConfiguration?.RecoveryPending == true ? "running" : "failed", StartedAt = started,
+                FinishedAt = DateTimeOffset.UtcNow, ExitCode = 1,
+                Result = new { type = "configure_telemetry", error_code = "TELEMETRY_APPLY_UNCONFIRMED",
+                    confirmed = false, machine_id = config.MachineId }
+            };
+            if (unconfirmed.Status == "failed") _policy.MarkFinal(config, job, unconfirmed, "TELEMETRY_APPLY_UNCONFIRMED");
+            return unconfirmed;
         }
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {

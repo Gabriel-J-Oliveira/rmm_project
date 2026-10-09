@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Models;
+using NightOwl.Agent.Windows.Services;
 
 namespace NightOwl.Agent.Windows.Jobs;
 
@@ -23,7 +24,8 @@ public sealed class JobExecutionPolicy
         "update_agent",
         "update_trusted_release_keys",
         "repair_agent",
-        "uninstall_agent"
+        "uninstall_agent",
+        "configure_telemetry"
     };
 
     private readonly JobStore _store;
@@ -152,6 +154,9 @@ public sealed class JobExecutionPolicy
         Dictionary<string, object?> p = job.Payload;
         switch (job.Type)
         {
+            case "configure_telemetry":
+                TelemetrySettings.Parse(p);
+                break;
             case "ping":
                 EnsureAllowedFields(p, "target");
                 string target = GetString(p, "target", "");

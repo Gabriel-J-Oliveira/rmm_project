@@ -89,7 +89,8 @@ public sealed class AgentConfig
         "update_trusted_release_keys",
         "repair_agent",
         "uninstall_agent",
-        "restart_agent"
+        "restart_agent",
+        "configure_telemetry"
     };
 
     [JsonIgnore]

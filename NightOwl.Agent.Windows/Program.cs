@@ -19,6 +19,8 @@ builder.Services.AddSingleton<AgentApiClient>();
 builder.Services.AddSingleton<WindowsInventoryCollector>();
 builder.Services.AddSingleton<TelemetryCollector>();
 builder.Services.AddSingleton<TelemetryPipeline>();
+builder.Services.AddSingleton<TelemetryRuntime>();
+builder.Services.AddSingleton<TelemetryConfigurationService>();
 builder.Services.AddSingleton<JobExecutionPolicy>();
 builder.Services.AddSingleton(_ => new PendingResultQueue(NightOwlPaths.Current.PendingResultsDir));
 builder.Services.AddSingleton<JobExecutionCoordinator>();

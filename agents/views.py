@@ -1214,6 +1214,26 @@ class AgentJobsPullView(APIView):
         jobs = list(machine.jobs.filter(status=AgentJob.STATUS_QUEUED).order_by('queued_at')[:5])
         response_jobs = []
         for job in jobs:
+            if job.job_type == AgentJob.TYPE_CONFIGURE_TELEMETRY:
+                from .telemetry_configuration import telemetry_capability, validate_configuration
+                try:
+                    compatible, _ = telemetry_capability(machine)
+                    validate_configuration(job.payload)
+                    if not compatible:
+                        raise ValueError('Unsupported telemetry configuration.')
+                except ValueError:
+                    job.status = AgentJob.STATUS_UNSUPPORTED
+                    job.error_code = 'TELEMETRY_CONFIGURATION_UNSUPPORTED'
+                    job.finished_at = now
+                    job.save(update_fields=['status', 'error_code', 'finished_at', 'updated_at'])
+                    create_audit_event(
+                        event_type='job.unsupported', title='Configuracao de telemetria bloqueada',
+                        description='Agente sem capacidade ou payload de telemetria invalido.',
+                        severity=AuditEvent.SEVERITY_WARNING, actor_type=AuditEvent.ACTOR_AGENT,
+                        actor_name='NightOwlAgent', endpoint=machine,
+                        metadata={'job_id': str(job.id), 'job_type': job.job_type},
+                    )
+                    continue
             job.status = AgentJob.STATUS_SENT
             job.dispatched_at = now
             job.started_at = now
@@ -1440,6 +1460,12 @@ class AgentJobsResultView(APIView):
                     )
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
+            if job.job_type == AgentJob.TYPE_CONFIGURE_TELEMETRY and incoming_status == AgentJob.STATUS_COMPLETED:
+                from .telemetry_configuration import validate_completion
+                try:
+                    validate_completion(job, _payload_result(payload))
+                except ValueError:
+                    return Response({'error': 'telemetry_confirmation_invalid'}, status=status.HTTP_400_BAD_REQUEST)
             if job.status in RESULT_FINAL_STATUSES and not (
                 _is_update_interrupted_resolution(job, incoming_status) or late_rollback
             ):

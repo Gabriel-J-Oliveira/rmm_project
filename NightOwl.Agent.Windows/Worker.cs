@@ -21,6 +21,8 @@ public sealed class Worker : BackgroundService
     private readonly JobExecutionCoordinator _jobCoordinator;
     private readonly PendingResultQueue _resultQueue;
     private readonly TelemetryPipeline _telemetry;
+    private readonly TelemetryRuntime _telemetryRuntime;
+    private readonly TelemetryConfigurationService? _telemetryConfiguration;
     private readonly Func<AgentConfig> _loadConfig;
     private readonly string _updateStatePath;
 
@@ -33,7 +35,9 @@ public sealed class Worker : BackgroundService
         JobExecutor jobExecutor,
         JobExecutionCoordinator jobCoordinator,
         PendingResultQueue resultQueue,
-        TelemetryPipeline telemetry)
+        TelemetryPipeline telemetry,
+        TelemetryRuntime? telemetryRuntime = null,
+        TelemetryConfigurationService? telemetryConfiguration = null)
     {
         _stateService = stateService;
         _logger = logger;
@@ -43,6 +47,8 @@ public sealed class Worker : BackgroundService
         _jobCoordinator = jobCoordinator;
         _resultQueue = resultQueue;
         _telemetry = telemetry;
+        _telemetryRuntime = telemetryRuntime ?? new TelemetryRuntime(telemetry);
+        _telemetryConfiguration = telemetryConfiguration;
         _loadConfig = configService.Load;
         _updateStatePath = NightOwlPaths.Current.UpdateStatePath;
     }
@@ -77,13 +83,20 @@ public sealed class Worker : BackgroundService
         }, stoppingToken);
         await _logger.LogAsync("service.starting", "NightOwl .NET agent starting.", new { config.AgentVersion }, stoppingToken);
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
-        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken, _updateStatePath);
         using CancellationTokenSource handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         Task updateHandshakeTask = RunPendingUpdateHandshakeAsync(config, handshakeCancellation.Token);
+        try
+        {
+            await _telemetryRuntime.StartAsync(config, stoppingToken);
+            if (_telemetryConfiguration is not null)
+                await _telemetryConfiguration.RecoverAsync(config, stoppingToken);
+        }
+        catch (Exception) when (!stoppingToken.IsCancellationRequested)
+        {
+            await _logger.LogAsync("telemetry.startup.not_ready", "Telemetry initialization/recovery pending.", null, stoppingToken, "warning");
+        }
+        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken, _updateStatePath);
         TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
-        Task telemetryTask = config.TelemetryEnabled && config.HasValidToken
-            ? _telemetry.RunAsync(config, stoppingToken)
-            : Task.CompletedTask;
 
         try
         {
@@ -104,6 +117,19 @@ public sealed class Worker : BackgroundService
                     }
 
                     DateTimeOffset now = DateTimeOffset.UtcNow;
+
+                    if (_telemetryConfiguration?.RecoveryPending == true)
+                    {
+                        try
+                        {
+                            await _telemetryConfiguration.RecoverAsync(config, stoppingToken);
+                            await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken, _updateStatePath);
+                        }
+                        catch (Exception) when (!stoppingToken.IsCancellationRequested)
+                        {
+                            await _logger.LogAsync("telemetry.recovery.pending", "Telemetry recovery not yet confirmed.", null, stoppingToken, "warning");
+                        }
+                    }
 
                     await FlushPendingResultsAsync(config, stoppingToken);
 
@@ -142,7 +168,7 @@ public sealed class Worker : BackgroundService
         {
             handshakeCancellation.Cancel();
             await updateHandshakeTask;
-            try { await telemetryTask.WaitAsync(TimeSpan.FromSeconds(3)); }
+            try { await _telemetryRuntime.StopAsync(); }
             catch (TimeoutException)
             {
                 try
@@ -551,6 +577,10 @@ public sealed class Worker : BackgroundService
     private async Task SendHeartbeatAsync(AgentConfig config, AgentState state, DateTimeOffset now, CancellationToken ct)
     {
         AgentHeartbeatPayload payload = _collector.BuildHeartbeat(config);
+        payload.Agent["capabilities"] = config.AllowedJobTypes.Contains("configure_telemetry", StringComparer.OrdinalIgnoreCase)
+            ? new[] { "configure_telemetry" } : Array.Empty<string>();
+        if (_telemetryRuntime.Effective is not null)
+            payload.Agent["telemetry_configuration"] = _telemetryRuntime.Effective.Report();
         try
         {
             await _api.PostHeartbeatAsync(config, payload, ct);
@@ -631,7 +661,10 @@ public sealed class Worker : BackgroundService
             try
             {
                 string jobType = InferJobType(result, job.Type);
-                PendingResultRecord queued = _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType));
+                PendingResultRecord queued = jobType == "configure_telemetry"
+                    ? _resultQueue.LoadAll().FirstOrDefault(item => item.JobId == result.JobId)
+                        ?? _resultQueue.Enqueue(jobType, result, true)
+                    : _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType));
                 await _logger.LogAsync("job.result.queued", "Job result persisted before send.", new
                 {
                     job.Id,

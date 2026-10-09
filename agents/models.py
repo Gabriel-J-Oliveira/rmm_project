@@ -1499,6 +1499,7 @@ class AgentJob(models.Model):
     TYPE_REPAIR_AGENT = 'repair_agent'
     TYPE_UNINSTALL_AGENT = 'uninstall_agent'
     TYPE_RESTART_AGENT = 'restart_agent'
+    TYPE_CONFIGURE_TELEMETRY = 'configure_telemetry'
     TYPE_CHOICES = [
         (TYPE_FORCE_INVENTORY, 'Force inventory'),
         (TYPE_COLLECT_DISKS, 'Collect disks'),
@@ -1512,6 +1513,7 @@ class AgentJob(models.Model):
         (TYPE_REPAIR_AGENT, 'Repair agent'),
         (TYPE_UNINSTALL_AGENT, 'Uninstall agent'),
         (TYPE_RESTART_AGENT, 'Restart agent'),
+        (TYPE_CONFIGURE_TELEMETRY, 'Configure telemetry'),
     ]
 
     STATUS_QUEUED = 'queued'

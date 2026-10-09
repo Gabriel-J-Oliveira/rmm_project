@@ -49,6 +49,9 @@ public sealed class JobExecutionCoordinator
 
         foreach (JobStateRecord record in _policy.Store.LoadAll().Where(record => record.Status.Equals("running", StringComparison.OrdinalIgnoreCase)))
         {
+            if (record.JobType == "configure_telemetry"
+                && File.Exists(Path.Combine(NightOwlPaths.Current.StateDir, "telemetry-configuration.json")))
+                continue;
             if (pendingResultJobIds.Contains(record.JobId))
             {
                 await _logger.LogAsync("job.interrupted.recovery_skipped", "Running job has a pending final result; interrupted recovery skipped.", new
@@ -398,7 +401,8 @@ public sealed class JobExecutionCoordinator
         {
             return JobCategories.Light;
         }
-        if (jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
+        if (jobType.Equals("configure_telemetry", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase)
@@ -411,7 +415,8 @@ public sealed class JobExecutionCoordinator
 
     public static bool IsCritical(string jobType)
     {
-        return jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
+        return jobType.Equals("configure_telemetry", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("uninstall_agent", StringComparison.OrdinalIgnoreCase)

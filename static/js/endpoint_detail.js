@@ -78,7 +78,8 @@
         update_trusted_release_keys: "Sincronizar chaves de confianca",
         repair_agent: "Reparar agente",
         uninstall_agent: "Desinstalar agente",
-        restart_agent: "Reiniciar agente"
+        restart_agent: "Reiniciar agente",
+        configure_telemetry: "Configurar telemetria"
     };
 
     if (realPayloadScript && realPayloadScript.textContent) {
@@ -1211,6 +1212,8 @@
     function renderActivePanel() {
         if (!endpointDetail) return;
         renderOverviewSlots(endpointDetail);
+        const monitoring = panel("monitoring");
+        if (monitoring && window.NightOwlMonitoring) monitoring.innerHTML = window.NightOwlMonitoring.render(realEndpointPayload && realEndpointPayload.monitoring);
         const renderers = {
             inventory: renderInventory,
             software: renderSoftware,
@@ -1352,6 +1355,7 @@
         const id = root.dataset.endpointId || "";
         const body = new URLSearchParams();
         body.set("action", action || "");
+        if (options.configuration) body.set("configuration", JSON.stringify(options.configuration));
         if (options.releaseId) {
             body.set("release_id", options.releaseId);
         }
@@ -2282,6 +2286,31 @@
             return reloadEndpoint();
         });
     }
+
+    root.addEventListener("submit", function (event) {
+        const form = event.target.closest("[data-telemetry-form]");
+        if (!form) return;
+        event.preventDefault();
+        const state = realEndpointPayload && realEndpointPayload.monitoring;
+        if (!state || !state.compatible || !form.reportValidity()) return;
+        if (!window.confirm("Aplicar esta configuracao de telemetria pelo agente?")) return;
+        const fields = form.elements;
+        const configuration = {
+            telemetryEnabled: fields.telemetryEnabled.checked,
+            telemetrySampleSeconds: Number(fields.telemetrySampleSeconds.value),
+            telemetryFlushSeconds: Number(fields.telemetryFlushSeconds.value)
+        };
+        const submit = form.querySelector('[type="submit"]');
+        submit.disabled = true;
+        createRealJob("configure_telemetry", { configuration: configuration }).then(function () {
+            showToast("Configuracao enfileirada. Aguardando confirmacao do agente.");
+            schedulePolling();
+            return reloadEndpoint(false);
+        }).catch(function (error) {
+            showToast(error.message);
+            submit.disabled = false;
+        });
+    });
 
     root.addEventListener("click", function (event) {
         const tab = event.target.closest("[data-endpoint-tab]");

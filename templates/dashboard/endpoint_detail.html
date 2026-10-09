@@ -48,6 +48,7 @@
     <nav class="endpoint-tabs" aria-label="Se&ccedil;&otilde;es do endpoint">
         <button class="is-active" type="button" data-endpoint-tab="overview"><i data-lucide="layout-dashboard"></i>Vis&atilde;o geral</button>
         <button type="button" data-endpoint-tab="inventory"><i data-lucide="cpu"></i>Invent&aacute;rio</button>
+        <button type="button" data-endpoint-tab="monitoring"><i data-lucide="activity"></i>Monitoramento</button>
         <button type="button" data-endpoint-tab="software"><i data-lucide="package"></i>Softwares</button>
         <button type="button" data-endpoint-tab="security"><i data-lucide="shield"></i>Seguran&ccedil;a</button>
         <button type="button" data-endpoint-tab="patches"><i data-lucide="badge-check"></i>Patches</button>
@@ -171,6 +172,8 @@
             </section>
         </div>
     </section>
+
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="monitoring" data-dynamic-endpoint-panel hidden></section>
 
     <section class="endpoint-tab-panel" data-endpoint-tab-panel="inventory" data-dynamic-endpoint-panel hidden>
         <div class="endpoint-inventory-grid">
@@ -355,5 +358,6 @@
 
 {% block scripts %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}"></script>
+<script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-1"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=telemetry-management-1"></script>
 {% endblock %}

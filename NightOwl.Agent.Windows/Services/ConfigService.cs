@@ -9,7 +9,7 @@ namespace NightOwl.Agent.Windows.Services;
 
 public sealed class ConfigService
 {
-    internal const int CurrentConfigMigrationVersion = 5;
+    internal const int CurrentConfigMigrationVersion = 6;
     private const string UpdateTrustedReleaseKeysJobType = "update_trusted_release_keys";
     private const string UninstallAgentJobType = "uninstall_agent";
     private const string RepairAgentJobType = "repair_agent";
@@ -203,6 +203,15 @@ public sealed class ConfigService
             workingVersion = 4;
         }
 
+        if (workingVersion < 6)
+        {
+            if (!config.AllowedJobTypes.Contains("configure_telemetry", StringComparer.OrdinalIgnoreCase))
+            {
+                config.AllowedJobTypes.Add("configure_telemetry");
+                addedAllowedJobTypes.Add("configure_telemetry");
+            }
+            workingVersion = 6;
+        }
         config.ConfigMigrationVersion = Math.Max(workingVersion, CurrentConfigMigrationVersion);
         return new ConfigMigrationResult(
             Applied: fromVersion < config.ConfigMigrationVersion || addedAllowedJobTypes.Count > 0,
@@ -303,6 +312,23 @@ public sealed class ConfigService
             errorMessage = ex.GetType().Name;
             return false;
         }
+    }
+
+    internal static void PersistTelemetry(string configPath, TelemetrySettings settings)
+    {
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(configPath))?.AsObject()
+            ?? throw new InvalidOperationException("Telemetry configuration unavailable.");
+        root["telemetryEnabled"] = settings.Enabled;
+        root["telemetrySampleSeconds"] = settings.SampleSeconds;
+        root["telemetryFlushSeconds"] = settings.FlushSeconds;
+        string temp = Path.Combine(Path.GetDirectoryName(configPath)!, $".telemetry-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(temp, root.ToJsonString(JsonOptions), new UTF8Encoding(false));
+            // Replace retains the destination security descriptor on Windows.
+            File.Replace(temp, configPath, null);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 
     private static void WriteConfigAtomic(string configPath, AgentConfig config)

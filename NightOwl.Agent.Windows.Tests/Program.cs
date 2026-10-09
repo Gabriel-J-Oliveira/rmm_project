@@ -11,6 +11,12 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--telemetry-configuration-only", StringComparer.Ordinal))
+    {
+        await TelemetryConfigurationTests.RunAsync();
+        return;
+    }
+    await TelemetryConfigurationTests.RunAsync();
     if (args.Contains("--telemetry-only", StringComparer.Ordinal))
     {
         TestTelemetryInstallationDefaults();
@@ -133,7 +139,7 @@ static void TestTelemetryInstallationDefaults()
         AgentConfig existing = ConfigService.DeserializeExistingConfig(json);
         ConfigService.ApplyConfigMigrations(existing);
         Require(!existing.TelemetryEnabled, "Legacy absence or explicit disable must never become consent.");
-        Require(existing.ConfigMigrationVersion == 5, "Telemetry defaults policy must be versioned.");
+        Require(existing.ConfigMigrationVersion == ConfigService.CurrentConfigMigrationVersion, "Telemetry defaults policy must be versioned.");
     }
     AgentConfig enabled = ConfigService.DeserializeExistingConfig("{\"telemetryEnabled\":true,\"telemetryFlushSeconds\":3600}");
     Require(enabled.TelemetryEnabled && enabled.TelemetryFlushSeconds == 3600, "Existing explicit telemetry settings must survive.");

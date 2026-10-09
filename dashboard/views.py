@@ -57,6 +57,7 @@ from agents.job_progress import (
 )
 from config.authz import can_purge_agent, can_uninstall_agent, is_nightowl_technical_user
 from agents.audit import create_audit_event, get_client_ip
+from agents.telemetry_configuration import monitoring_summary
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
     build_repair_agent_job_payload,
@@ -3229,6 +3230,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'agent_update_policy': update_decision.as_panel_payload(),
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
         'trusted_release_keys_bundle': _trust_bundle_payload(latest_trust_bundle),
+        'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
         'uninstall_request': serialize_uninstall_request(uninstall_request),
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
@@ -3717,6 +3719,7 @@ def endpoint_job_create(request, pk):
         'update_trusted_release_keys': AgentJob.TYPE_UPDATE_TRUSTED_RELEASE_KEYS,
         'repair_agent': AgentJob.TYPE_REPAIR_AGENT,
         'restart_agent': AgentJob.TYPE_RESTART_AGENT,
+        'configure_telemetry': AgentJob.TYPE_CONFIGURE_TELEMETRY,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
     allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES}
@@ -3733,6 +3736,8 @@ def endpoint_job_create(request, pk):
         AgentJob.TYPE_UPDATE_AGENT,
         AgentJob.TYPE_REPAIR_AGENT,
         AgentJob.TYPE_UNINSTALL_AGENT,
+        AgentJob.TYPE_CONFIGURE_TELEMETRY,
+        AgentJob.TYPE_RESTART_AGENT,
     }
     if selected_type in lifecycle_types:
         from agents.lifecycle_jobs import lock_lifecycle_endpoint
@@ -3752,7 +3757,16 @@ def endpoint_job_create(request, pk):
             )
 
     payload = {}
-    if selected_type == AgentJob.TYPE_PING:
+    if selected_type == AgentJob.TYPE_CONFIGURE_TELEMETRY:
+        from agents.telemetry_configuration import telemetry_capability, validate_configuration
+        compatible, _ = telemetry_capability(endpoint)
+        if not compatible:
+            return JsonResponse({'error': 'telemetry_configuration_unsupported'}, status=409)
+        try:
+            payload = validate_configuration(json.loads(request.POST.get('configuration') or '{}'))
+        except (ValueError, TypeError):
+            return JsonResponse({'error': 'invalid_telemetry_configuration'}, status=400)
+    elif selected_type == AgentJob.TYPE_PING:
         payload['target'] = request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname)
         payload['count'] = 2
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:

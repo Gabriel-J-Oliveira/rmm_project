@@ -43,12 +43,13 @@ public sealed class TelemetryPipeline
         _shutdownGrace = shutdownGrace;
     }
 
-    public async Task RunAsync(AgentConfig config, CancellationToken ct)
+    public async Task RunAsync(AgentConfig config, CancellationToken ct, Action? ready = null)
     {
         if (!config.TelemetryEnabled) return;
         try
         {
             TelemetryBuffer buffer = await LoadBufferWithRetryAsync(config, ct);
+            ready?.Invoke();
             DateTimeOffset nextSample = DateTimeOffset.UtcNow;
             DateTimeOffset nextFlush = DateTimeOffset.UtcNow.Add(
                 buffer.Count >= 24 ? TimeSpan.FromMinutes(1) : TimeSpan.FromSeconds(config.TelemetryFlushSeconds));

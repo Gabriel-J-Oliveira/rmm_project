@@ -3,7 +3,7 @@ from django.db import connection
 
 from .models import AgentJob, AgentMachine
 
-LIFECYCLE_TYPES = ('update_agent', 'repair_agent', 'uninstall_agent')
+LIFECYCLE_TYPES = ('update_agent', 'repair_agent', 'uninstall_agent', 'configure_telemetry', 'restart_agent')
 ACTIVE_STATUSES = ('queued', 'sent', 'running')
 
 
