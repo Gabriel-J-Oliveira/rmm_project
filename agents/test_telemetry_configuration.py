@@ -74,6 +74,20 @@ class TelemetryConfigurationTests(TestCase):
         self.machine.inventory_snapshots.all().delete()
         self.assertEqual(self.create().status_code, 409)
 
+    def test_real_heartbeat_contract_preserves_capability_and_effective_report(self):
+        self.machine.inventory_snapshots.all().delete()
+        response = self.client.post('/api/agent/heartbeat/', {
+            'machine_id': self.machine.machine_id, 'hostname': self.machine.hostname,
+            'agent_version': self.machine.agent_version, 'heartbeat_at': timezone.now().isoformat(),
+            'agent': {'capabilities': ['configure_telemetry'], 'telemetry_configuration': self.config},
+        }, content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        summary = monitoring_summary(self.machine)
+        self.assertTrue(summary['compatible'])
+        self.assertEqual(summary['effective'], self.config)
+        self.assertEqual(self.create().status_code, 201)
+
     def test_compatible_job_is_bounded_and_audited(self):
         job = self.job()
         self.assertEqual(job.payload, self.config)

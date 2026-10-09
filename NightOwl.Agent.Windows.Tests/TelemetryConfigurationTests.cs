@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Security.AccessControl;
 using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Jobs;
+using NightOwl.Agent.Windows.Collectors;
 using NightOwl.Agent.Windows.Models;
 using NightOwl.Agent.Windows.Services;
 
@@ -114,6 +115,23 @@ internal static class TelemetryConfigurationTests
             blocked.AllowedJobTypes.Remove("configure_telemetry");
             Check(!policy.Prepare(blocked, new AgentJobRequest { Id = Guid.NewGuid().ToString(), Type = "configure_telemetry", Payload = Payload(requested) }).ShouldExecute,
                 "Local allowlist ignored.");
+            var logger = new JsonlLogger(Path.Combine(root, "agent.jsonl"));
+            var executor = new JobExecutor(new WindowsInventoryCollector(logger), logger, policy, service);
+            var dispatched = new AgentJobRequest { Id = Guid.NewGuid().ToString(), Type = "configure_telemetry", Payload = Payload(new(true, 180, 900)) };
+            Check((await executor.ExecuteAsync(config, dispatched, CancellationToken.None)).Status == "completed",
+                "JobExecutor did not apply configuration.");
+            Check(policy.Store.Load(dispatched.Id)?.Status == "completed", "JobExecutor did not finalize applied job.");
+            var badQueue = new PendingResultQueue(Path.Combine(root, "queue-failure"), maxPayloadBytes: 1);
+            var interrupted = new TelemetryConfigurationService(runtime, badQueue, path, journalPath);
+            executor = new JobExecutor(new WindowsInventoryCollector(logger), logger, policy, interrupted);
+            var durableJob = new AgentJobRequest { Id = Guid.NewGuid().ToString(), Type = "configure_telemetry", Payload = Payload(requested) };
+            Check((await executor.ExecuteAsync(config, durableJob, CancellationToken.None)).Status == "running" && File.Exists(journalPath),
+                "Pending result persistence failure must retain recoverable journal.");
+            before = reloads;
+            await service.RecoverAsync(config, CancellationToken.None);
+            Check(reloads == before && !File.Exists(journalPath), "Durable confirmed result was incorrectly re-applied.");
+            await coordinator.RecoverInterruptedJobsAsync(config, queue, CancellationToken.None);
+            Check(policy.Store.Load(durableJob.Id)?.Status == "completed", "Recovered result did not finalize local job.");
             await runtime.StopAsync();
             Console.WriteLine("Telemetry configuration tests passed: validation, atomic persistence, runtime reload, rollback, recovery, identity, buffer, exclusivity, idempotency.");
         }
