@@ -14,7 +14,7 @@ from django.utils import timezone
 from agents.models import AgentJob, AgentMachine, EndpointAlert, EndpointPerformanceSample, InventorySnapshot, hash_agent_token
 from agents.telemetry_analytics import build_endpoint_telemetry_summary
 from agents.telemetry_diagnostics import build_resource_diagnostics
-from .capacity_views import CAPACITY_PERMISSIONS, _compact_summary, _overview, _disk_usage
+from .capacity_views import CAPACITY_PERMISSIONS, _compact_summary, _overview, _disk_usage, _inventory_map
 
 
 class CapacityDashboardTests(TestCase):
@@ -400,3 +400,40 @@ class CapacityDashboardTests(TestCase):
         self.assertIsNone(row['inventory_at'])
         self.assertIsNone(row['disk_count'])
         self.assertIsNone(row['memory_total_bytes'])
+
+    def test_full_inventory_reference_survives_partial_collect_and_legacy_heartbeat(self):
+        from agents.services import record_collection, record_heartbeat
+        collected = timezone.now() - timedelta(hours=2)
+        timestamp = collected.isoformat().replace('+00:00', '7+00:00')
+        snapshot = record_collection(self.endpoint, 'full_inventory', {
+            'hostname': self.endpoint.hostname, 'collected_at': timestamp,
+            'hardware': {'cpu': {'name': 'Detailed CPU'}},
+            'disk': [{'name': 'C:', 'size_bytes': 1000, 'free_bytes': 100}],
+        })
+        record_collection(self.endpoint, 'patches', {
+            'hostname': self.endpoint.hostname, 'collected_at': timezone.now().isoformat(),
+            'pending_updates_count': 0,
+        })
+        payload = {'hostname': self.endpoint.hostname, 'heartbeat_at': timezone.now().isoformat()}
+        heartbeat = record_heartbeat(self.endpoint, payload, payload)
+        heartbeat.raw_payload.pop('snapshot_source')
+        heartbeat.save(update_fields=['raw_payload'])
+        with CaptureQueriesContext(connection) as queries:
+            inventory = _inventory_map([self.endpoint.pk])
+        self.assertEqual(inventory[self.endpoint.pk].pk, snapshot.pk)
+        self.assertEqual(inventory[self.endpoint.pk].collected_at, collected)
+        self.assertEqual(len(inventory[self.endpoint.pk].disks), 1)
+        self.assertEqual(len(queries), 2)
+        self.assertNotIn('raw_payload', queries[-1]['sql'].split('WHERE')[-1])
+
+    def test_invalid_full_reference_does_not_scan_or_promote_heartbeat_history(self):
+        from agents.services import record_heartbeat
+        for timestamp in ('invalid', '2026-99-99T00:00:00Z', None, '2026-01-01T00:00:00'):
+            with self.subTest(timestamp=timestamp):
+                payload = {'hostname': self.endpoint.hostname,
+                           'collections': {'full_inventory': {'collected_at': timestamp}},
+                           'latest_collection_type': 'full_inventory'}
+                record_heartbeat(self.endpoint, payload, payload)
+                with CaptureQueriesContext(connection) as queries:
+                    self.assertEqual(_inventory_map([self.endpoint.pk]), {})
+                self.assertEqual(len(queries), 1)

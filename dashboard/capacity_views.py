@@ -40,29 +40,41 @@ ACTIVE_ALERT_STATUSES = (EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWL
 
 
 def _inventory_map(endpoint_ids):
-    # Legacy snapshots also inherit heartbeat keys. Match the actual full collect,
-    # not merely the presence of an inherited collection reference.
+    # Heartbeats retain the full-collect reference, not its detailed columns.
+    # Resolve that reference using scalar dates before loading historical JSON.
     result = {}
-    candidates = InventorySnapshot.objects.filter(machine_id__in=endpoint_ids).filter(
-        Q(raw_payload__snapshot_source__isnull=True) | ~Q(raw_payload__snapshot_source='heartbeat'),
-    ).filter(Q(raw_payload__latest_collection_type='full_inventory') | Q(
-        raw_payload__latest_collection_type__isnull=True, raw_payload__collections__has_key='hardware',
-    )).order_by('-received_at', '-pk')
-    for snapshot in candidates.iterator(chunk_size=200):
-        if snapshot.machine_id in result:
-            continue
+    latest_pk = InventorySnapshot.objects.filter(machine_id=OuterRef('pk')).order_by(
+        '-received_at', '-pk',
+    ).values('pk')[:1]
+    latest_ids = AgentMachine.objects.filter(pk__in=endpoint_ids).annotate(
+        capacity_snapshot_id=Subquery(latest_pk),
+    ).values('capacity_snapshot_id')
+    references = {}
+    for snapshot in InventorySnapshot.objects.filter(pk__in=Subquery(latest_ids)):
         raw = snapshot.raw_payload or {}
         full = (raw.get('collections') or {}).get('full_inventory') or {}
-        if raw.get('snapshot_source') != 'collection' and raw.get('latest_collection_type'):
+        if full:
             try:
                 collected = parse_datetime(full.get('collected_at') or '')
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 continue
-            if collected != snapshot.collected_at:
+            if collected is None or timezone.is_naive(collected):
                 continue
-        result[snapshot.machine_id] = snapshot
-        if len(result) == len(endpoint_ids):
-            break
+            references[snapshot.machine_id] = collected
+        elif (raw.get('snapshot_source') != 'heartbeat' and
+              not raw.get('heartbeat_at') and not raw.get('latest_collection_type') and
+              isinstance((raw.get('collections') or {}).get('hardware'), dict)):
+            result[snapshot.machine_id] = snapshot
+    if references:
+        wanted = Q(pk__in=[])
+        for machine_id, collected in references.items():
+            wanted |= Q(machine_id=machine_id, collected_at=collected)
+        for snapshot in InventorySnapshot.objects.filter(wanted).order_by('-received_at', '-pk'):
+            raw = snapshot.raw_payload or {}
+            if (snapshot.machine_id not in result and
+                    raw.get('snapshot_source') != 'heartbeat' and
+                    raw.get('latest_collection_type') == 'full_inventory'):
+                result[snapshot.machine_id] = snapshot
     return result
 
 
