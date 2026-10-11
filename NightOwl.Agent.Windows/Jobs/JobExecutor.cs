@@ -830,7 +830,7 @@ public sealed class JobExecutor
         script.AppendLine("            enrollment_performed = $false");
         script.AppendLine("            service_status = $(if ($service) { [string]$service.Status } else { 'NotFound' })");
         script.AppendLine("            tray_task_status = $(if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' })");
-        script.AppendLine("            canonical_config_ok = [bool](Test-Path " + QuotePsSingle(Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json")) + ")");
+        script.AppendLine("            canonical_config_ok = [bool](Test-Path " + QuotePsSingle(Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json")) + " -ErrorAction SilentlyContinue)");
         script.AppendLine("            health_ok = [bool]$healthOk");
         script.AppendLine("            error_code = $(if ($Status -eq 'completed') { '' } else { 'REPAIR_FAILED' })");
         script.AppendLine("            error_message = $ErrorMessage");
