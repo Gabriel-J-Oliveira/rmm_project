@@ -1,6 +1,202 @@
 ﻿# Night Owl - Deploy Linux
 
-Este guia prepara o Night Owl para rodar em um servidor Linux com Django, Gunicorn e Nginx. Ele ainda nao configura systemd, Nginx, HTTPS ou PostgreSQL em producao; esses passos ficam para a etapa de infraestrutura.
+Este documento preserva o guia inicial e o historico operacional do NightOwl.
+A producao atual ja utiliza systemd, Nginx, HTTPS e PostgreSQL. As instrucoes
+iniciais abaixo nao devem ser interpretadas como estado atual da infraestrutura.
+
+## Atualizacao operacional - 2026-10-11
+
+Este registro complementa o estado de 2026-10-05 abaixo. Ele separa o codigo
+implantado do trabalho ainda local e nao autoriza release, rollout, instalacao
+ou alteracao de configuracao em endpoints.
+
+### Codigo e producao
+
+- Producao e `origin/main` continuam referenciados no commit
+  `72d7a5920febd390bac8bdde6083b0c4291ee6fc` no inicio desta atualizacao.
+- O branch de trabalho e `codex/agent-telemetry-management`. Nele estao os
+  commits `d856996` (gerenciamento autenticado de telemetria), `72d7a59`
+  (testes de dispatch/confirmacao), ja presentes no branch remoto, e
+  `9a3bf6e` (fix do repair runner), ainda local neste registro. Nenhum desses
+  commits deve ser tratado como codigo em `main`/producao.
+- A correcao `9a3bf6e` altera somente
+  `NightOwl.Agent.Windows/Jobs/JobExecutor.cs`: o probe observacional
+  `Test-Path` do caminho canonico de configuracao agora tolera acesso negado.
+  Antes, essa excecao podia interromper a montagem do resultado depois da
+  execucao do installer e deixar o teste de persistencia em estado `failed`.
+  Os gates reais de health do servico nao foram enfraquecidos.
+
+### Telemetria remota e RC46
+
+- `configure_telemetry` foi implementado para alterar somente `telemetryEnabled`,
+  `telemetrySampleSeconds` e `telemetryFlushSeconds`, usando o fluxo autenticado
+  de jobs existente. A aplicacao e confirmada pelo agente separadamente da
+  chegada de amostras; o frontend apresenta estado reportado e estado do job.
+- A RC45 nao suporta esse tipo de job. O trabalho depende de uma nova RC46
+  assinada antes de qualquer homologacao por endpoint. A release continua
+  pendente: nao foi construida/assinada/registrada/publicada nesta etapa; nenhum
+  job `configure_telemetry`, update ou rollout foi iniciado.
+- No incidente do builder, `TestRepairRunnerScriptPersistsCompletedResult`
+  falhava porque um `Test-Path` da configuracao canonica podia lancar
+  `UnauthorizedAccessException` sob a conta de teste. O fix local trata a
+  verificacao inacessivel como nao confirmada (`false`), sem mudar a verificacao
+  independente de servico/health. A suite Windows final e os testes de Shared,
+  Updater, Uninstaller e scripts PowerShell executados passaram. A execucao
+  completa do builder oficial, especialmente sua etapa de pacote/assinatura,
+  permanece pendente; nao declarar o gate de release aprovado ate executa-la.
+
+### Roadmap vigente
+
+| Etapa | Estado registrado em 2026-10-11 | Proximo gate |
+| --- | --- | --- |
+| M1 | Inventario enriquecido e persistencia de resultados implementados; validacoes anteriores registradas | Manter regressao e qualidade do inventario |
+| M2 | Telemetria implementada e operada em endpoints de laboratorio; gerenciamento remoto aguarda agente compativel | Validar RC46 e um canario autorizado, sem rollout automatico |
+| M3 | Backend, armazenamento e retencao existem; decisoes de retencao/rollup permanecem governadas pelos registros M3/M4 | Preservar dados e validar politicas antes de coleta ampla |
+| M4 | Agregacoes, qualidade e summary API implementadas | Manter validacao de cobertura/tendencias |
+| M5 | Evidence, diagnosticos CPU/RAM e capacity assessment; validacao real documentada | Nao converter evidencia em sizing/decisao financeira sem etapa propria |
+| M6 | Tela Capacidade & Planejamento e contexto por endpoint | Evoluir UX sem alterar contratos analiticos sem review |
+| M7 | Piloto controlado | Definir canarios, criterios de aceite e janela antes de expandir |
+| M8 | Deploy da frota | Somente apos gate do piloto e rollout explicitamente aprovado |
+| M9 | Janela de sete dias | Confirmar continuidade, cobertura e qualidade do dataset |
+| M10 | Fechamento do MVP | Relatorio final com limitacoes e evidencias reproduziveis |
+
+O detalhe historico do roadmap esta em `deployMVP.md`; alguns estados ali
+refletem marcos anteriores e devem ser lidos junto aos registros datados deste
+arquivo. O fix do repair runner e a funcionalidade de telemetria remota ainda
+nao devem ser apresentados como implantados enquanto seus commits nao estiverem
+integrados e o deploy correspondente nao tiver sido validado.
+
+### Operacao remota / instalacao
+
+O discovery AD e os fluxos P3/P4 permanecem limitados por identidade forte,
+WinRM HTTPS validado e reconciliacao do historico de outcome desconhecido.
+Preflight nao equivale a instalacao; uma tentativa com resultado desconhecido
+nao pode ser repetida automaticamente nem liberada apagando historico. Antes de
+um proximo piloto, seguir o gate de reconciliacao e registrar autorizacao
+unitaria. Nao houve execucao remota nesta atualizacao.
+
+## Estado operacional consolidado - 2026-10-05 (historico)
+
+Esta secao atualiza o contexto posterior ao registro da 6E.3B de 2026-09-24.
+Os registros anteriores permanecem como evidencia historica; nao presumir que
+seus HEADs, contagens ou estados de Campaign ainda sejam os atuais. Esta
+atualizacao nao declara encerramento da Fase 6 nem autoriza rollout.
+
+### Base e producao
+
+- Repositorio: `Gabriel-J-Oliveira/rmm_project`.
+- `origin/main` e checkout de producao validados:
+  `67afff528532546114bc12bec7a90a0ba29d9af0`.
+- Host: CS-HOST-INFRA; checkout `/opt/nightowl`, detached HEAD; ambiente
+  `/opt/nightowl/.venv`; servico `nightowl.service`, usuario `nightowl`.
+- HTTPS: `https://nightowl.controlsul.com.br`; health PASS.
+- A main local divergente `3ca1dcdd3bf245c0bf0a8e3e522c33b11d571dc1`
+  foi preservada. Integracoes recentes usaram fast-forward remoto, sem force.
+
+### Evolucao desde a ultima atualizacao
+
+| Bloco | Entrega / marco | Situacao documentada |
+| --- | --- | --- |
+| Jobs stale-running | `6ef0378`, teste PostgreSQL `d6ab7a7` | Reconciliacao segura e validacao de locking com transacoes reais |
+| Base RC41 | `a00e05a` | Backup-manifest e telemetria leve integrados; backend e migration agents.0034 implantados em etapas controladas |
+| Hardware M1 | Inventario enriquecido e isolamento de falhas | CPU, RAM, discos fisicos e bateria; incidente RC42 investigado separadamente |
+| Recovery RC43 / ponte RC44 | `be4e24d`, `79c1812` | Hardening de recovery e compatibilidade de healthcheck com updater legado |
+| Persistencia M1 | `8fa977a`, `ed204da`, `962fa0e` | Materializacao de resultados de inventario e validacao semantica de patches |
+| M4.1 / M4.2 / M4.3 | `39f8222`, `a19eb08`, `91711f2` | Agregacoes, qualidade e API summary; deploy backend e validacao com dados reais |
+| M5.1 / M5.2 / M5.3 | `02cba9e`, `f5a0a49`, `ae7d330` | Evidence, diagnosticos CPU/RAM e capacity multi-window; deploy e gate real M5.4 |
+| M6 | `ba02854`, `8d66d70` | Dashboard Capacidade & Planejamento e drawer de endpoint |
+| AD P1 / P2 | `12fdd3b`, `bff70e4`, `8a32aba`, `66e1d3e`, `4597f54` | Discovery LDAP compartilhado, correlacao/UI e DNS com backpressure global |
+| Remote P3 / P4 | `17f9977`, `3503efc`, `a25de2e` | Preflight seguro e instalacao unitaria com observabilidade; piloto operacional ainda aberto |
+| UI instalacao | `d343671`, `d36514f`, `094793e`, `8de8842` | Reorganizacao, tokens, instalacao manual avancada e selecao unitaria |
+
+Reviews/testes globais de M4/M5 mantiveram os mesmos 49 problemas conhecidos
+de access_inventory (32 FAIL / 17 ERROR, 28 skipped), sem novas falhas nesses
+gates. Isso nao equivale a suite global totalmente verde. O roadmap em
+`deployMVP.md` conserva registros antigos de RC42: nao usar seus proximos
+passos historicos como autorizacao para nova release ou execucao.
+
+### Instalacao remota: contrato e incidente em aberto
+
+O POST multipart foi corrigido em `558da90`. `102044f` acrescentou validacao
+do contrato do installer publicado e diagnosticos sanitizados.
+`4168522` separou o contrato da release instalavel do pacote stable/default:
+selecao server-side, assinatura/hash, installer congelado e parametros
+compativeis, sem aceitar release/URL arbitraria enviada pelo browser.
+
+Configuracao operacional registrada: `REMOTE_INSTALL_RELEASE_ID` aponta para
+a RC44 `49deaa29-b916-4691-99db-732e477e80f7` (0.1.1.0-rc44), derivada de
+`79c1812502abcbd41871e3126c03554880826855`, build
+`38f45ff38df44211b908c821a69e9b9a`. A selecao nao promove nem despausa a
+release e nao altera stable/latest. Artefatos congelados nao devem ser rebuildados
+para corrigir backend. Nenhuma release foi modificada no ultimo deploy de trust.
+
+A auditoria read-only de CS-RDP-02 encontrou o job
+`ee2fd6d4-e8cb-4553-8f89-ee345e62cdf5`, criado em
+2026-10-05T15:21:02.705224Z, terminado em 15:21:10.066388Z:
+`OUTCOME_UNKNOWN`, `INSTALLER_FAILED`, diagnostics vazio, endpoint e active_slot
+nulos. Nao havia AgentMachine/enrollment correlacionado nas evidencias consultadas.
+Ausencia no backend nao prova que o Windows ficou sem arquivos ou servico.
+
+Dois POSTs de install retornaram 409 em 19:06:33Z e 19:06:58Z. O bloqueio
+`INSTALL_ALREADY_ATTEMPTED` decorre do historico terminal por FQDN, nao de job
+ativo: COMPLETED, INSTALLED_UNVERIFIED e OUTCOME_UNKNOWN impedem nova tentativa
+mesmo sem active_slot. Os logs de rota nao permitem provar double-click ou alvo
+individual de cada POST. A auditoria nao alterou o job e nao executou retry.
+
+### WinRM HTTPS e system CA trust: deploy concluido
+
+- `2f60e88`: bootstrap piloto; `dcba917`: AUDIT parcial/read-only com falhas
+  por componente, sem exigir elevacao; Apply/Rollback permanecem fail-closed.
+- `67afff528532546114bc12bec7a90a0ba29d9af0`: corrige o gate incorreto que
+  rejeitava o CA bundle inteiro por uma raiz expirada nao relacionada.
+- Arquivo configurado deve ser absoluto, regular, legivel, nao vazio, conter
+  certificados publicos CA e carregar em Python/OpenSSL. PEM invalido, chave
+  privada e ausencia de material CA continuam rejeitados com erro sanitizado.
+- A validade do certificado do servidor e da cadeia escolhida permanece sob
+  validacao TLS normal, juntamente com hostname. Nenhum verify=False,
+  server_cert_validation=ignore, fallback HTTP ou fallback para certifi.
+- Fonte efetiva: `/opt/nightowl/.env`; unico campo operacional alterado:
+  `WINRM_CA_TRUST_PATH=/etc/ssl/certs/ca-certificates.crt`.
+- Bundle dedicado `/etc/nightowl/trust/control-DC01-CA-current.pem` preservado.
+  O default do codigo permanece dedicado; a producao usa override explicito.
+- CA antiga SHA1 `EB90E51A745BCBABB75FC594AE525CA6BE01D1D6` e renovada SHA1
+  `0FB43130DE8CD5DDB99BE63D1B2C16107CBD4D60` presentes no system bundle.
+  Limpeza de certificados antigos exige tarefa separada.
+- Backup restrito: `/opt/nightowl/backups/winrm-system-bundle-20261005T194500Z.env`.
+  Contem configuracao sensivel: nao copiar seu conteudo para docs/logs.
+- Restart apenas nightowl.service em 2026-10-05T19:45:00Z (16:45 -03):
+  PID 1205261 -> 1224316; active e HTTPS PASS; zero erros criticos encontrados
+  no journal consultado apos restart. Sem migration ou collectstatic nesta etapa.
+- Validacao sob usuario do servico: path aceito e passado explicitamente ao
+  pywinrm, server_cert_validation=validate; pagina de instalacao renderizada;
+  discovery AD read-only retornou 304 computadores.
+- cs-rdp-02.control.local:5986 OPEN; handshake com system bundle, cadeia e
+  hostname PASS, sem autenticacao. Porta 5985 tambem havia sido observada OPEN;
+  nao e usada como fallback. Nenhum NTLM, comando Windows ou installer executado.
+- Gates: 136/136 Django (P1/P2/P3/P4), 15/15 UI/XSS; check, makemigrations
+  --check --dry-run e diff --check PASS. Testes TLS sinteticos locais provaram
+  aceita bundle misto e rejeita servidor nao confiavel, expirado ou hostname
+  divergente. Aviso de depreciacao sobre serial de uma raiz do sistema foi
+  observado; nao bloqueou o runtime atual e nao motivou remocao de certificados.
+
+### Agora e proximos gates
+
+1. Infraestrutura TLS pronta para preflight manual pelo operador, sem contornar
+   validacao de certificado. Isso nao significa autorizacao automatica de retry.
+2. Obter evidencia local autorizada sobre o efeito do job OUTCOME_UNKNOWN:
+   identidade/config sanitizada, servico, arquivos e logs do installer. Nao
+   inferir ausencia de instalacao apenas pela falta de heartbeat.
+3. Definir e autorizar reconciliacao administrativa auditada do job antigo;
+   preservar historico, nao apagar/resetar o job para liberar tentativa.
+4. Somente depois desse gate, operador executar preflight autenticado e uma
+   instalacao unitaria explicitamente autorizada no frontend. Credenciais nunca
+   devem ir para chat, documento ou log. Nao executar retry automatico.
+5. Validar identidade unica, enrollment/heartbeat/inventario e diagnosticos de
+   instalacao. Nao habilitar telemetry, rollout ou instalacao em lote implicitamente.
+
+STATUS_ATUAL=WINRM_SYSTEM_TRUST_DEPLOYED; PILOTO_REMOTE_INSTALL=PENDING;
+OUTCOME_UNKNOWN_RECONCILIATION=PENDING. Nenhum fechamento do piloto ou da Fase 6
+e declarado por esta atualizacao documental.
 
 ## 1. Clonar o repositÃ³rio
 

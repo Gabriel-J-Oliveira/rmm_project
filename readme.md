@@ -1,4 +1,122 @@
-# NightOwl Desk - contexto atual do modulo de chamados
+# NightOwl RMM - Contexto Atual
+
+O NightOwl integra gestao de endpoints Windows, releases/jobs, Asset
+Intelligence / OBZ, discovery Active Directory, instalacao do agente e Desk.
+O contexto do Desk abaixo foi preservado; nao descreve sozinho o repositorio.
+
+## Atualizacao de 2026-10-11
+
+Estado de referencia: backend/producao permanece em `72d7a5920febd390bac8bdde6083b0c4291ee6fc`.
+O branch `codex/agent-telemetry-management` contem trabalho local mais recente;
+seus commits ainda nao significam deploy em producao. A correcao do repair
+runner passou a suite Windows apos diagnostico de um `Test-Path` negado em
+`ProgramData`; RC46 ainda nao foi empacotada, assinada, registrada ou publicada.
+
+- **Telemetria remota:** o trabalho no branch permite configurar, por job
+  autenticado `configure_telemetry`, somente habilitacao e os intervalos de
+  amostragem/envio. O agente persiste a configuracao e confirma o estado
+  efetivamente aplicado; a UI do endpoint distingue aplicacao de recebimento
+  posterior de amostras. RC45 nao suporta esse job. Nao foram despachados jobs
+  de configuracao nem iniciado rollout.
+- **Gate RC46:** a causa do teste `TestRepairRunnerScriptPersistsCompletedResult`
+  foi uma leitura observacional do caminho canonico de configuracao que podia
+  lancar `UnauthorizedAccessException` e impedir a persistencia do resultado.
+  O ajuste trata somente essa leitura inacessivel como ausencia; os gates de
+  health do servico permanecem. A suite Windows final, testes compartilhados,
+  updater, uninstaller e scripts PowerShell executados passaram. O builder
+  oficial completo (incluindo etapa de pacote/assinatura) ainda nao foi rodado;
+  portanto o gate de release nao deve ser considerado completo.
+- **Roadmap OBZ:** M1–M6 possuem implementacao/backend/UI e validacoes
+  registradas nas secoes historicas abaixo e em `DEPLOY.md`. O proximo ciclo e
+  piloto controlado M7; ampliar coleta (M8), observar dataset de sete dias (M9)
+  e fechar o MVP com relatorio confiavel (M10) continuam gates futuros, nao
+  autorizacoes implicitas de rollout.
+- **Instalacao remota / AD:** discovery P1/P2, preflight P3 e instalacao unitaria
+  P4 permanecem sujeitos ao historico de operacoes com resultado desconhecido.
+  A documentacao operacional deve ser consultada antes de qualquer nova
+  tentativa; nao inferir que uma ausencia de heartbeat prova que instalacao
+  nenhuma ocorreu.
+
+Este resumo nao declara RC46 publicada, telemetria habilitada em frota,
+encerramento do piloto de instalacao remota ou conclusao do MVP OBZ.
+
+## Base operacional registrada em 2026-10-05 (historico)
+
+Base funcional implantada e validada:
+`67afff528532546114bc12bec7a90a0ba29d9af0`.
+Producao em CS-HOST-INFRA, `/opt/nightowl`, Django/PostgreSQL, Gunicorn,
+Nginx/HTTPS e `nightowl.service`. Os resultados abaixo sao gates datados,
+nao uma promessa de estado perpetuo do ambiente.
+
+### Asset Intelligence / OBZ
+
+- Telemetria leve RC41 e inventario hardware M1 enriquecido; core isolado de
+  falhas de enriquecimento. Recovery RC43 e ponte RC44 trataram problemas de
+  healthcheck com updater legado encontrados no laboratorio.
+- Persistencia backend de jobs de inventario endurecida, incluindo rejeicao
+  de patches contendo somente metadata, sem rejeitar scan vazio legitimo.
+- M4: agregacoes, fatos de qualidade e API summary.
+- M5: evidence, diagnosticos CPU/RAM e capacity multi-window; gate real M5.4.
+  Primary e obrigatoria, context nao a substitui; hardware e contexto, nao gate.
+  Assessment tecnico nao constitui sizing, compra, downgrade ou decisao financeira.
+- M6: tela Capacidade & Planejamento e drawer com contexto do endpoint.
+
+### Instalacao do Agente / AD
+
+P1 reutiliza `config/ad_ldap.py` para bind/TLS/timeout e busca de computadores
+com base separada da busca de usuarios. Discovery e read-only, paginado,
+sanitizado e efemero, sem ADComputer model ou segundo conjunto de credenciais.
+P2 acrescenta correlacao exata, exclui lifecycle terminal da correlacao ativa
+e falha fechado em ambiguidades/domain mismatch. DNS usa executor global com
+12 workers e admission global de 24 tarefas; a UI possui testes XSS permanentes.
+ADUser pode enriquecer username confiavel, nao inferir sessao ativa.
+
+P3/P4 oferecem preflight e instalacao remota unitaria, com alvo derivado do AD
+server-side, WinRM HTTPS/5986, validacao TLS, redirects bloqueados e protecoes
+SSRF. Preflight remoto autenticado e instalacao sao operacoes distintas:
+instalacao pode modificar o Windows e criar historico persistente.
+Selecao de release e server-side; o backend valida assinatura/hash e contrato
+do installer congelado. Tokens, instalacao manual avancada e selecao unitaria
+foram reorganizados na UI.
+
+### Trust WinRM implantado
+
+Producao configura explicitamente no `.env`:
+`WINRM_CA_TRUST_PATH=/etc/ssl/certs/ca-certificates.crt`.
+Pywinrm recebe ca_trust_path explicito e server_cert_validation=validate.
+Nao ha fallback para HTTP/certifi nem verificacao TLS desabilitada.
+O bundle dedicado anterior permanece no filesystem e como default do codigo;
+nao confundir esse default com a configuracao efetiva de producao.
+
+O fix `67afff5` aceita um bundle carregavel com raiz expirada nao utilizada,
+sem enfraquecer verificacao da cadeia, validade e hostname do servidor.
+As duas geracoes da CA corporativa continuam no trust. Validacao pos-deploy:
+servico/HTTPS PASS, pagina de instalacao PASS, discovery 304 computadores,
+TCP 5986 e handshake TLS sem autenticacao de CS-RDP-02 PASS.
+Gates: 136 testes Django e 15 UI/XSS PASS; check/makemigrations/diff PASS.
+Nao houve autenticacao WinRM, comando Windows ou instalacao nesse deploy.
+
+### Bloqueio Atual e Proximos Passos
+
+O piloto CS-RDP-02 ainda nao esta encerrado. O job anterior
+`ee2fd6d4-e8cb-4553-8f89-ee345e62cdf5` permanece OUTCOME_UNKNOWN, com
+INSTALLER_FAILED e diagnosticos historicos insuficientes. O bloqueio
+INSTALL_ALREADY_ATTEMPTED vem desse historico terminal, mesmo sem job ativo.
+Ausencia de endpoint no backend nao prova ausencia de alteracoes no Windows.
+
+Proximo gate: evidencia local autorizada e reconciliacao administrativa
+auditada do job antigo; somente depois, preflight manual e eventual instalacao
+unitaria explicitamente autorizada. Nao apagar historico, repetir installer
+automaticamente ou habilitar telemetry/rollout em decorrencia do deploy de trust.
+Validar depois identidade, heartbeat, inventario e resultado real do installer.
+
+Historico, backups e gates: `DEPLOY.md`. Contrato de trust:
+`docs/winrm-ca-trust.md`; bootstrap piloto: `docs/winrm-https-pilot.md`;
+installer: `docs/remote-installer-contract.md`. O roadmap `deployMVP.md` contem
+registros historicos de RC42 ainda nao consolidados; consultar o estado atual
+acima e o DEPLOY antes de executar proximas etapas.
+
+## NightOwl Desk - Contexto do Modulo de Chamados
 
 Este repositório contém o NightOwl Desk, um módulo Django para centralizar atendimento técnico, chamados de helpdesk, contexto de endpoint/RMM, comentários, anexos, auditoria e configurações operacionais do Desk.
 
