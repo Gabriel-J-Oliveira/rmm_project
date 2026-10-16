@@ -14,6 +14,7 @@ from dashboard.remote_install_preflight import run_remote_install_preflight
 from dashboard.remote_install import InstallFailure, create_remote_install_job, start_remote_install
 from dashboard.remote_install_preflight import ProbeFailure, _valid_fqdn
 from dashboard.models import RemoteInstallJob
+from dashboard.remote_install_audit import audited_preflight
 
 
 @login_required
@@ -40,7 +41,8 @@ def preflight_ad_computer(request):
         data = json.loads(request.body)
         if not isinstance(data, dict) or set(data) != {'fqdn', 'username', 'password'}:
             raise ValueError
-        result = run_remote_install_preflight(data.get('fqdn'), data.get('username'), data.get('password'))
+        result = audited_preflight(run_remote_install_preflight, data.get('fqdn'),
+                                   data.get('username'), data.get('password'), actor=request.user)
     except (ValueError, UnicodeError):
         return JsonResponse({'error': 'Requisicao invalida.'}, status=400)
     except Exception:

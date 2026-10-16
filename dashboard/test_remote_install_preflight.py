@@ -146,7 +146,7 @@ class RemoteInstallPreflightTests(TestCase):
         self.remote_mock.assert_not_called()
         self.dns_mock.return_value = DNS_OK
         self.tcp_mock.return_value = False
-        self.assertEqual(self.run_probe()['checks']['REMOTE_TRANSPORT']['code'], 'WINRM_UNAVAILABLE')
+        self.assertEqual(self.run_probe()['checks']['REMOTE_TRANSPORT']['code'], 'TCP_5986_UNAVAILABLE')
         self.remote_mock.assert_not_called()
 
     def test_auth_negotiation_failure_is_reported_in_authentication_check(self):
@@ -278,7 +278,9 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertNotIn(SENTINEL, '\n'.join(logs.output))
         self.assertNotIn(SENTINEL, repr(dict(client.session)))
         cache_set.assert_not_called()
-        self.assertTrue(all(query['sql'].lstrip().upper().startswith('SELECT') for query in queries))
+        writes = [query['sql'] for query in queries if not query['sql'].lstrip().upper().startswith('SELECT')]
+        self.assertEqual(len(writes), 2)
+        self.assertTrue(all(sql.lstrip().upper().startswith('INSERT INTO "AGENTS_AUDITEVENT"') for sql in writes))
         self.assertNotIn(SENTINEL, '\n'.join(query['sql'] for query in queries))
 
     def test_route_rejects_nonstaff_and_does_not_probe(self):
@@ -324,7 +326,7 @@ class WinRMProbeTests(TestCase):
                 protocol_class.return_value.open_shell.side_effect = ssl.SSLError(reason + SENTINEL)
                 with self.assertRaises(preflight.ProbeFailure) as raised:
                     preflight._winrm_probe('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
-                self.assertEqual(raised.exception.code, 'WINRM_UNAVAILABLE')
+                self.assertEqual(raised.exception.code, 'TLS_VALIDATION_FAILED')
                 self.assertNotIn(SENTINEL, str(raised.exception))
                 protocol_class.return_value.run_command.assert_not_called()
 
@@ -343,7 +345,7 @@ class WinRMProbeTests(TestCase):
         protocol_class.return_value.open_shell.side_effect = PermissionError('local access denied ' + SENTINEL)
         with self.assertRaises(preflight.ProbeFailure) as raised:
             preflight._winrm_probe('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
-        self.assertEqual(raised.exception.code, 'WINRM_UNAVAILABLE')
+        self.assertEqual(raised.exception.code, 'WINRM_PROTOCOL_ERROR')
         self.assertNotIn(SENTINEL, str(raised.exception))
 
     @mock.patch('winrm.protocol.Protocol')

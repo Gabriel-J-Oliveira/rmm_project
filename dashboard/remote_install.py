@@ -23,8 +23,9 @@ from dashboard.remote_install_admission import install_admission
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
-    CHECKS, ProbeFailure, _ad_target, _new_winrm_protocol, run_remote_install_preflight,
+    CHECKS, ProbeFailure, _ad_target, _new_winrm_protocol, _winrm_failure, run_remote_install_preflight,
 )
+from dashboard.remote_install_audit import audit_admission, audited_preflight, exception_type, record_execution_failure
 
 
 TERMINAL = {'COMPLETED', 'INSTALLED_UNVERIFIED', 'OUTCOME_UNKNOWN', 'FAILED', 'INTERRUPTED'}
@@ -43,10 +44,12 @@ UNKNOWN_SLOT_HOLD = timedelta(seconds=INSTALL_TIMEOUT + ENROLLMENT_TIMEOUT + FIR
 
 
 class InstallFailure(Exception):
-    def __init__(self, code, *, installed=False, command_attempted=None):
+    def __init__(self, code, *, installed=False, command_attempted=None, stage='', exception=''):
         self.code = code
         self.installed = installed
         self.command_attempted = command_attempted
+        self.stage = stage
+        self.exception_type = exception
         super().__init__(code)
 
 
@@ -159,6 +162,7 @@ def job_is_retry_safe(job):
                   job.diagnostics.get('invocation_attempted') is False)))
 
 
+@audit_admission()
 def create_remote_install_job(fqdn, actor, *, username=None, password=None, batch_item_id=None):
     computer = _ad_target(fqdn)
     reconcile_stale_jobs(preserve_unknown_slots=True)
@@ -278,7 +282,7 @@ def _trusted_urls():
 
 
 def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None, lease_job_id=None, enrollment_token=None):
-    from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
+    from winrm.exceptions import WinRMOperationTimeoutError
 
     try:
         # One block prevents stdin's line-by-line parser from executing pieces
@@ -300,20 +304,23 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
         raise InstallFailure('REMOTE_SCRIPT_INVALID', command_attempted=False) from None
     try:
         protocol = _new_winrm_protocol(fqdn, username, password)
-    except ProbeFailure as exc:
-        raise InstallFailure(exc.code, command_attempted=False) from None
-    except Exception:
-        raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False) from None
+    except Exception as exc:
+        failure = _winrm_failure(exc, 'CA_TRUST')
+        raise InstallFailure(failure.code, command_attempted=False,
+                             stage=failure.stage, exception=failure.exception_type) from None
     shell_id = command_id = None
     attempted = False
+    diagnostic_stage = 'WINRM_SESSION'
     try:
         shell_id = protocol.open_shell()
+        diagnostic_stage = 'REMOTE_EXECUTION'
         command_id = protocol.run_command(shell_id, 'powershell.exe', arguments)
         if not command_id:
-            raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False)
+            raise InstallFailure('WINRM_PROTOCOL_ERROR', command_attempted=False, stage=diagnostic_stage)
         if before_send:
             before_send()
         attempted = True
+        diagnostic_stage = 'REMOTE_INPUT'
         if lease_job_id:
             # Keep the row lock across the bounded stdin send: a stall resolver
             # cannot release admission between lease verification and dispatch.
@@ -327,6 +334,7 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
             protocol.send_command_input(shell_id, command_id, payload, end=True)
         deadline = time.monotonic() + timeout
         pending = b''
+        diagnostic_stage = 'REMOTE_OUTPUT'
         while time.monotonic() < deadline:
             try:
                 stdout, _stderr, exit_code, done = protocol.get_command_output_raw(shell_id, command_id)
@@ -347,22 +355,13 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
                             on_event(event, code)
             if done:
                 return exit_code
-        raise InstallFailure('REMOTE_COMMAND_TIMEOUT')
+        raise InstallFailure('REMOTE_COMMAND_TIMEOUT', stage=diagnostic_stage)
     except (InstallFailure, InstallLeaseLost):
         raise
-    except ProbeFailure as exc:
-        raise InstallFailure(exc.code, command_attempted=attempted) from None
-    except AuthenticationError:
-        raise InstallFailure('AUTHENTICATION_FAILED', command_attempted=attempted) from None
-    except WinRMTransportError as exc:
-        raise InstallFailure('AUTHENTICATION_FAILED' if exc.code in (401, 403) else 'WINRM_UNAVAILABLE',
-                             command_attempted=attempted) from None
-    except PermissionError as exc:
-        if str(exc).startswith('Access denied: Server did not respond with NTLM challenge token'):
-            raise InstallFailure('AUTH_NEGOTIATION_FAILED', command_attempted=attempted) from None
-        raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=attempted) from None
-    except Exception:
-        raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=attempted) from None
+    except Exception as exc:
+        failure = _winrm_failure(exc, diagnostic_stage)
+        raise InstallFailure(failure.code, command_attempted=attempted,
+                             stage=failure.stage, exception=failure.exception_type) from None
     finally:
         if shell_id:
             if command_id:
@@ -567,6 +566,8 @@ def run_remote_install(job_id, username, password):
     installer_exit_code = None
     not_started_code = None
     deployment = None
+    job = None
+    preflight = None
     def installer_event(event, code):
         nonlocal stage, install_started, installer_finished, installer_exit_code, not_started_code
         if event == 'NOT_STARTED' and not install_started and code in (25, 26, 27, 28, 29):
@@ -586,7 +587,8 @@ def run_remote_install(job_id, username, password):
     invocation_attempted = False
     try:
         job = RemoteInstallJob.objects.get(pk=job_id, active_slot='global')
-        RemoteInstallJob.objects.filter(pk=job_id).update(started_at=timezone.now())
+        job.started_at = timezone.now()
+        RemoteInstallJob.objects.filter(pk=job_id).update(started_at=job.started_at)
         _update(job_id, 'VALIDATING_TARGET')
         try:
             computer = _ad_target(job.target_fqdn)
@@ -608,7 +610,8 @@ def run_remote_install(job_id, username, password):
             'git_commit', 'build_id')})
         stage = 'CONNECTING'
         _update(job_id, 'CONNECTING')
-        preflight = run_remote_install_preflight(job.target_fqdn, username, password)
+        preflight = audited_preflight(run_remote_install_preflight, job.target_fqdn, username, password,
+            actor=job.requested_by, correlation_id=job.pk, job_id=str(job.pk))
         if preflight['status'] != 'READY':
             failed = next((item for item in preflight['checks'].values() if item['status'] == 'FAIL'), {})
             raise InstallFailure(failed.get('code', 'PREFLIGHT_FAILED'))
@@ -707,6 +710,9 @@ def run_remote_install(job_id, username, password):
     except InstallLeaseLost:
         return
     except InstallFailure as exc:
+        exc.stage = exc.stage or stage
+        if job is not None and not (isinstance(preflight, dict) and preflight.get('status') == 'NOT_READY'):
+            record_execution_failure(job, exc)
         if exc.command_attempted is False and not install_started:
             invocation_attempted = False
         state = ('INSTALLED_UNVERIFIED' if exc.installed or installed else
@@ -716,8 +722,11 @@ def run_remote_install(job_id, username, password):
                     diagnostic={'safe_to_retry': 'NO' if installed or invocation_attempted or
                         exc.code == 'NIGHTOWL_INSTALLATION_DETECTED' else 'YES',
                         'invocation_attempted': invocation_attempted})
-    except Exception:
+    except Exception as exc:
         state = 'OUTCOME_UNKNOWN' if invocation_attempted else 'INTERRUPTED'
+        if job is not None:
+            record_execution_failure(job, InstallFailure('RUNNER_INTERRUPTED', stage=stage,
+                                                         exception=exception_type(exc)))
         if RemoteInstallJob.objects.filter(pk=job_id, active_slot='global').exists():
             _update(job_id, stage, status=state, error_code='RUNNER_INTERRUPTED',
                     diagnostic={'safe_to_retry': 'NO' if invocation_attempted else 'YES'})

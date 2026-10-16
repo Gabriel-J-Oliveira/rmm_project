@@ -8,7 +8,7 @@
     let listRequestInFlight = false, detailRequestInFlight = false;
     let listTimer, detailTimer, currentId = null, currentBatch = null, previousFocus;
     let page = 1, pages = 1, listFailures = 0, detailFailures = 0, detailPending = false;
-    let confirmation = null, actionInFlight = false;
+    let confirmation = null, actionInFlight = false, closeDiagnostic = null;
     const batchLabels = { QUEUED: 'Aguardando início', RUNNING: 'Em andamento', COMPLETED: 'Concluída',
         COMPLETED_WITH_ERRORS: 'Concluída com falhas', INTERRUPTED: 'Interrompida' };
     const itemLabels = { WAITING: 'Aguardando', PREFLIGHT: 'Verificando', INSTALLING: 'Instalando',
@@ -114,19 +114,75 @@
         }
     }
     function tooltip(trigger, item) {
-        let tip;
-        const hide = () => { tip?.remove(); tip = null; trigger.removeAttribute('aria-describedby'); };
-        const show = () => {
-            hide(); tip = el('div', 'install-batch-tooltip'); tip.id = 'install-error-tooltip'; tip.setAttribute('role', 'tooltip');
-            tip.append(el('strong', '', item.error_message || 'Resultado não comprovado; revisão necessária.'), el('small', '', item.error_code || ''));
-            document.body.append(tip); trigger.setAttribute('aria-describedby', tip.id);
+        let tip, timer, pinned = false, restoring = false;
+        const position = () => {
+            if (!tip) return;
+            tip.style.maxHeight = Math.max(0, window.innerHeight - 16) + 'px';
             const r = trigger.getBoundingClientRect(), t = tip.getBoundingClientRect();
+            const below = Math.max(0, window.innerHeight - r.bottom - 14), above = Math.max(0, r.top - 14);
+            const useBelow = t.height <= below || (t.height > above && below >= above);
+            tip.style.maxHeight = (useBelow ? below : above) + 'px';
             tip.style.left = Math.max(8, Math.min(window.innerWidth - t.width - 8, r.left)) + 'px';
-            tip.style.top = Math.max(8, Math.min(window.innerHeight - t.height - 8, r.bottom + 6)) + 'px';
+            tip.style.top = (useBelow ? r.bottom + 6 : Math.max(8, r.top - tip.getBoundingClientRect().height - 6)) + 'px';
         };
-        trigger.addEventListener('mouseenter', show); trigger.addEventListener('focus', show);
-        trigger.addEventListener('mouseleave', hide); trigger.addEventListener('blur', hide);
-        trigger.addEventListener('click', () => { if (tip) hide(); else show(); });
+        const hide = () => { window.clearTimeout(timer); window.removeEventListener('resize', position); tip?.remove(); tip = null; pinned = false; trigger.removeAttribute('aria-controls'); trigger.setAttribute('aria-expanded', 'false'); if (closeDiagnostic === hide) closeDiagnostic = null; };
+        const restore = () => { hide(); restoring = true; trigger.focus(); restoring = false; };
+        const leave = () => {
+            window.clearTimeout(timer);
+            timer = window.setTimeout(() => {
+                if (!pinned && !tip?.matches(':hover') && !tip?.contains(document.activeElement) && document.activeElement !== trigger) hide();
+            }, 300);
+        };
+        const details = () => {
+            const d = item.diagnostic;
+            const lines = [`Computador: ${item.hostname || item.fqdn}`, `FQDN: ${item.fqdn}`,
+                `Resultado da tarefa: ${item.status}`, `Etapa da tarefa: ${item.stage || 'UNKNOWN'}`,
+                `Codigo da tarefa: ${item.error_code || 'NONE'}`, `Job: ${item.job_id || 'Nao criado'}`];
+            if (d) {
+                for (const [label, key] of [['Correlacao', 'correlation_id'], ['Lote', 'batch_id'],
+                    ['FQDN solicitado', 'requested_fqdn'], ['IP resolvido', 'resolved_ip'],
+                    ['Inicio UTC', 'started_at'], ['Fim UTC', 'finished_at'], ['Fase', 'phase'], ['Resultado do diagnostico', 'result'],
+                    ['Etapa do diagnostico', 'stage'], ['Codigo do diagnostico', 'code'], ['Tipo da excecao', 'exception_type']]) {
+                    lines.push(`${label}: ${d[key] || 'Nao disponivel'}`);
+                }
+                for (const [name, check] of Object.entries(d.checks || {})) {
+                    lines.push(`${name}: ${check.status}${check.code ? ' (' + check.code + ')' : ''}`);
+                }
+            } else lines.push('Sem diagnostico detalhado persistido para esta tentativa antiga.');
+            return lines.join('\n');
+        };
+        const show = () => {
+            window.clearTimeout(timer);
+            if (tip?.isConnected) return;
+            closeDiagnostic?.(); hide(); closeDiagnostic = hide;
+            tip = el('div', 'install-batch-tooltip'); tip.id = 'install-error-tooltip'; tip.setAttribute('role', 'dialog');
+            tip.setAttribute('aria-label', 'Diagnóstico da tentativa');
+            tip.append(el('strong', '', item.error_message || 'Resultado não comprovado; revisão necessária.'), el('small', '', item.error_code || ''));
+            const text = el('textarea', 'install-diagnostic-text'); text.readOnly = true; text.value = details();
+            text.setAttribute('aria-label', 'Diagnóstico copiável');
+            const copy = button('Copiar diagnóstico', 'copy', async () => {
+                try { await navigator.clipboard.writeText(text.value); copy.title = 'Diagnóstico copiado'; }
+                catch (_) { text.focus(); text.select(); document.execCommand('copy'); }
+            });
+            const close = button('Fechar diagnóstico', 'x', restore);
+            const history = el('a', 'install-button'); history.href = '/admin/agents/auditevent/?q=' + encodeURIComponent(item.fqdn || '');
+            history.title = 'Histórico no admin'; history.setAttribute('aria-label', history.title);
+            history.target = '_blank'; history.rel = 'noopener'; history.append(icon('history'));
+            const actions = el('div', 'install-diagnostic-actions'); actions.append(history, copy, close);
+            tip.append(text, actions);
+            tip.addEventListener('mouseenter', () => window.clearTimeout(timer));
+            tip.addEventListener('mouseleave', leave);
+            tip.addEventListener('focusout', leave);
+            tip.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); restore(); } });
+            document.body.append(tip); trigger.setAttribute('aria-controls', tip.id); trigger.setAttribute('aria-expanded', 'true');
+            icons();
+            position(); window.addEventListener('resize', position);
+        };
+        trigger.setAttribute('aria-haspopup', 'dialog'); trigger.setAttribute('aria-expanded', 'false');
+        trigger.addEventListener('mouseenter', show); trigger.addEventListener('focus', () => { if (!restoring) show(); });
+        trigger.addEventListener('mouseleave', leave); trigger.addEventListener('blur', leave);
+        trigger.addEventListener('keydown', event => { if (event.key === 'Tab' && tip && !event.shiftKey) { event.preventDefault(); tip.querySelector('textarea').focus(); } });
+        trigger.addEventListener('click', () => { show(); pinned = true; });
     }
     function drawItem(row, item) {
         row.replaceChildren();
@@ -167,7 +223,7 @@
         row.append(identity, status, stage, p, action);
     }
     function drawDetail(batch) {
-        document.querySelector('.install-batch-tooltip')?.remove();
+        if (document.querySelector('.install-batch-tooltip')) return;
         currentBatch = batch;
         $('install-detail-meta').textContent = `${date(batch.started_at)} · ${duration(batch)} · ${n(batch.total_count)} computadores`;
         const summary = $('install-detail-summary'); summary.replaceChildren();
@@ -187,6 +243,7 @@
     }
     async function refreshDetail() {
         if (!currentId) return;
+        if (document.querySelector('.install-batch-tooltip')) { detailTimer = window.setTimeout(refreshDetail, 2000); return; }
         if (detailRequestInFlight) { detailPending = true; return; }
         window.clearTimeout(detailTimer); detailRequestInFlight = true; detailPending = false;
         const id = currentId;
@@ -221,7 +278,7 @@
         if ($('install-credential-host').hasChildNodes()) return;
         currentId = null; currentBatch = null; confirmation = null; window.clearTimeout(detailTimer);
         drawer.hidden = $('install-batch-backdrop').hidden = true; document.body.classList.remove('drawer-open');
-        document.querySelector('.install-batch-tooltip')?.remove(); previousFocus?.focus();
+        closeDiagnostic?.(); previousFocus?.focus();
     }
     function toast(message) { $('install-action-feedback').textContent = message; $('install-action-feedback').hidden = false; }
     $('install-list-refresh').addEventListener('click', refreshList);

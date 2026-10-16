@@ -170,7 +170,7 @@ class RemoteInstallJobTests(TestCase):
         protocol = mock.Mock()
         protocol.open_shell.side_effect = PermissionError('local access denied ' + SENTINEL)
         with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol):
-            with self.assertRaisesMessage(remote_install.InstallFailure, 'WINRM_UNAVAILABLE') as raised:
+            with self.assertRaisesMessage(remote_install.InstallFailure, 'WINRM_PROTOCOL_ERROR') as raised:
                 remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
         self.assertFalse(raised.exception.command_attempted)
         self.assertNotIn(SENTINEL, str(raised.exception))

@@ -17,6 +17,7 @@ from django.views.decorators.debug import sensitive_variables
 from dashboard import remote_install as install
 from dashboard.models import RemoteInstallBatch, RemoteInstallBatchItem, RemoteInstallJob
 from dashboard.remote_install_admission import install_admission
+from dashboard.remote_install_audit import InstallAttempt, MESSAGES, audit_admission, sanitize_report
 from dashboard.remote_install_preflight import CHECKS, ProbeFailure, _ad_target, _valid_fqdn, run_remote_install_preflight
 
 MAX_TARGETS = 50
@@ -82,6 +83,7 @@ ERRORS = {
     'ALREADY_MANAGED': 'Computador ja gerenciado; nao reinstalado',
     'RUNNER_START_FAILED': 'Nao foi possivel iniciar o runner',
 }
+ERRORS.update(MESSAGES)
 SAFE_CODES = set(ERRORS) | {
     'INVALID_BATCH_TARGETS', 'DUPLICATE_BATCH_TARGETS', 'CREDENTIAL_REQUIRED',
     'INVALID_REQUEST', 'HTTPS_REQUIRED', 'ACTION_NOT_AVAILABLE', 'INSTALL_ALREADY_RUNNING',
@@ -136,6 +138,7 @@ def _counts(batch):
     batch.save(update_fields=['success_count', 'failure_count', 'review_count', 'waiting_count', 'updated_at'])
 
 
+@audit_admission(multiple=True)
 @sensitive_variables('username', 'password')
 def create_batch(targets, actor, *, username, password, parent=None):
     if (not isinstance(targets, list) or not 1 <= len(targets) <= MAX_TARGETS
@@ -338,10 +341,13 @@ def run_batch(batch_id, username, password):
                 item.progress_percentage, item.progress_message = PROGRESS[item.stage]
                 item.save()
             try:
-                computer = _ad_target(item.target_fqdn)
-                if computer['distinguished_name'] != item.target_ad_dn:
-                    raise install.InstallFailure('TARGET_CHANGED')
-                result = run_remote_install_preflight(item.target_fqdn, username, password)
+                with InstallAttempt(item.target_fqdn, batch.requested_by,
+                                    correlation_id=item.pk, batch_id=str(batch_id)) as attempt:
+                    computer = _ad_target(item.target_fqdn)
+                    if computer['distinguished_name'] != item.target_ad_dn:
+                        raise install.InstallFailure('TARGET_CHANGED')
+                    result = run_remote_install_preflight(item.target_fqdn, username, password)
+                    attempt.complete(result)
                 if result.get('status') != 'READY':
                     raise install.InstallFailure(_preflight_failure_code(result))
                 job = install.create_remote_install_job(item.target_fqdn, batch.requested_by,
@@ -405,6 +411,15 @@ def retry_batch(parent, actor, username, password):
 
 def batch_payload(batch, *, detail=False):
     items = list(batch.items.select_related('remote_install_job'))
+    reports = {}
+    if detail:
+        from agents.models import AuditEvent
+        correlations = [str(value) for item in items for value in (item.pk, item.remote_install_job_id) if value]
+        for event in AuditEvent.objects.filter(event_type__in=(
+                'remote_install.preflight.finished', 'remote_install.execution.finished'),
+                metadata__correlation_id__in=correlations).order_by('-created_at'):
+            report = sanitize_report(event.metadata)
+            reports.setdefault(report['correlation_id'], report)
     data = {'id': str(batch.pk), 'status': batch.status, 'total_count': batch.total_count,
         'success_count': batch.success_count, 'failure_count': batch.failure_count,
         'review_count': batch.review_count, 'waiting_count': batch.waiting_count,
@@ -436,6 +451,9 @@ def batch_payload(batch, *, detail=False):
             'is_stalled': stalled, 'stale_seconds': round(seconds),
             'retry_eligible': item.status == 'FAILED' and (job is None or install.job_is_retry_safe(job)),
             'reconciliation_required': item.status == 'REVIEW_REQUIRED'})
+        if detail:
+            projected[-1]['diagnostic'] = (reports.get(str(item.remote_install_job_id)) or
+                                           reports.get(str(item.pk)))
     if detail:
         data['items'] = projected
     return data

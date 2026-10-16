@@ -10,12 +10,14 @@ import ssl
 import time
 from pathlib import Path
 
+import requests
 from cryptography import x509
 from django.conf import settings
 
 from access_inventory.services.ad_computer_discovery import discover_ad_computers, normalize_fqdn
 from config import ad_ldap
 from dashboard.ad_install_discovery import _machine_maps, _match_machine, resolve_computer_dns
+from dashboard.remote_install_audit import exception_type
 
 
 CHECKS = ('TARGET', 'DNS', 'REMOTE_TRANSPORT', 'AUTHENTICATION', 'ADMIN_PRIVILEGE',
@@ -52,8 +54,10 @@ $agentExe = Join-Path $agentInstall 'NightOwl.Agent.Windows.exe'
 
 
 class ProbeFailure(Exception):
-    def __init__(self, code):
+    def __init__(self, code, *, stage='', exception=''):
         self.code = code
+        self.stage = stage
+        self.exception_type = exception
         super().__init__(code)
 
 
@@ -64,8 +68,10 @@ def _result(checks, target=None, windows=None):
     }
 
 
-def _fail(checks, key, code, target=None):
+def _fail(checks, key, code, target=None, *, failure=None):
     checks[key] = {'status': 'FAIL', 'code': code}
+    if failure and (failure.stage or failure.exception_type):
+        checks[key].update(stage=failure.stage or key, exception_type=failure.exception_type)
     return _result(checks, target=target)
 
 
@@ -82,8 +88,8 @@ def _ad_target(value):
         raise ProbeFailure('INVALID_TARGET')
     try:
         matches = [item for item in discover_ad_computers() if normalize_fqdn(item.get('fqdn')) == fqdn]
-    except Exception:
-        raise ProbeFailure('AD_DISCOVERY_UNAVAILABLE') from None
+    except Exception as exc:
+        raise ProbeFailure('AD_DISCOVERY_UNAVAILABLE', stage='TARGET', exception=exception_type(exc)) from None
     if len(matches) != 1 or not _valid_fqdn(matches[0].get('fqdn')):
         raise ProbeFailure('TARGET_NOT_UNIQUE_OR_MISSING')
     computer = matches[0]
@@ -91,8 +97,8 @@ def _ad_target(value):
         raise ProbeFailure('AD_COMPUTER_DISABLED')
     try:
         _, correlation, _ = _match_machine(computer, _machine_maps())
-    except Exception:
-        raise ProbeFailure('CORRELATION_UNAVAILABLE') from None
+    except Exception as exc:
+        raise ProbeFailure('CORRELATION_UNAVAILABLE', stage='TARGET', exception=exception_type(exc)) from None
     if correlation != 'UNMANAGED':
         raise ProbeFailure('TARGET_MANAGED_OR_CONFLICT')
     return computer
@@ -102,8 +108,10 @@ def _tcp_available(address):
     try:
         with socket.create_connection((address, WINRM_PORT), timeout=SOCKET_TIMEOUT_SECONDS):
             return True
-    except OSError:
-        return False
+    except OSError as exc:
+        code = ('TCP_5986_TIMEOUT' if isinstance(exc, TimeoutError) else
+                'TCP_5986_REFUSED' if isinstance(exc, ConnectionRefusedError) else 'TCP_5986_UNAVAILABLE')
+        raise ProbeFailure(code, stage='TCP_5986', exception=exception_type(exc)) from None
 
 
 def _safe_ipv4(value):
@@ -159,8 +167,8 @@ def _winrm_ca_trust_path():
         context.load_verify_locations(cafile=str(path))
         if not context.get_ca_certs():
             raise ValueError()
-    except (OSError, ssl.SSLError, ValueError, x509.ExtensionNotFound):
-        raise ProbeFailure('WINRM_CA_TRUST_INVALID') from None
+    except (OSError, ssl.SSLError, ValueError, x509.ExtensionNotFound) as exc:
+        raise ProbeFailure('WINRM_CA_TRUST_INVALID', stage='CA_TRUST', exception=exception_type(exc)) from None
     return os.path.realpath(path)
 
 
@@ -178,23 +186,53 @@ def _new_winrm_protocol(fqdn, username, password):
     return protocol
 
 
+def _winrm_failure(exc, stage):
+    from winrm.exceptions import AuthenticationError, WinRMTransportError
+    if isinstance(exc, ProbeFailure):
+        exc.stage = exc.stage or stage
+        return exc
+    if isinstance(exc, AuthenticationError):
+        code = 'AUTHENTICATION_FAILED'
+    elif isinstance(exc, WinRMTransportError):
+        code = ('AUTHENTICATION_FAILED' if exc.code == 401 else
+                'WINRM_AUTHORIZATION_DENIED' if exc.code == 403 else 'WINRM_HTTP_ERROR')
+    elif isinstance(exc, (requests.exceptions.SSLError, ssl.SSLError)):
+        text = str(exc).casefold()
+        verification = isinstance(exc, ssl.SSLCertVerificationError) or any(value in text for value in (
+            'certificate_verify_failed', 'certificate verify failed', 'hostname mismatch', 'untrusted certificate'))
+        code = 'TLS_VALIDATION_FAILED' if verification else 'TLS_HANDSHAKE_FAILED'
+    elif isinstance(exc, (requests.exceptions.Timeout, TimeoutError)):
+        code = 'WINRM_REQUEST_TIMEOUT'
+    elif isinstance(exc, requests.exceptions.ConnectionError):
+        code = 'WINRM_CONNECTION_FAILED'
+    elif isinstance(exc, PermissionError) and str(exc).startswith(_NTLM_CHALLENGE_MISSING):
+        code = 'AUTH_NEGOTIATION_FAILED'
+    else:
+        code = 'WINRM_PROTOCOL_ERROR'
+    return ProbeFailure(code, stage=stage, exception=exception_type(exc))
+
+
 def _winrm_probe(fqdn, username, password):
     try:
-        from winrm.exceptions import AuthenticationError, WinRMOperationTimeoutError, WinRMTransportError
+        from winrm.exceptions import WinRMOperationTimeoutError
     except ImportError:
         raise ProbeFailure('WINRM_CLIENT_UNAVAILABLE') from None
 
     protocol = None
     shell_id = None
     command_id = None
+    stage = 'CA_TRUST'
     try:
         protocol = _new_winrm_protocol(fqdn, username, password)
         deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
+        stage = 'WINRM_SESSION'
         shell_id = protocol.open_shell()
         encoded = base64.b64encode(_READ_ONLY_PROBE.encode('utf-16-le')).decode('ascii')
+        stage = 'REMOTE_EXECUTION'
         command_id = protocol.run_command(shell_id, 'powershell.exe',
                                           ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded])
         stdout = bytearray()
+        stage = 'REMOTE_OUTPUT'
         while time.monotonic() < deadline:
             try:
                 out, _err, exit_code, done = protocol.get_command_output_raw(shell_id, command_id)
@@ -214,19 +252,8 @@ def _winrm_probe(fqdn, username, password):
                     raise ProbeFailure('REMOTE_OUTPUT_INVALID')
                 return data
         raise ProbeFailure('REMOTE_TIMEOUT')
-    except ProbeFailure:
-        raise
-    except AuthenticationError:
-        raise ProbeFailure('AUTHENTICATION_FAILED') from None
-    except WinRMTransportError as exc:
-        raise ProbeFailure('AUTHENTICATION_FAILED' if exc.code in (401, 403) else 'WINRM_UNAVAILABLE') from None
-    except PermissionError as exc:
-        # requests-ntlm uses this exact message when the peer omits its NTLM challenge.
-        if str(exc).startswith(_NTLM_CHALLENGE_MISSING):
-            raise ProbeFailure('AUTH_NEGOTIATION_FAILED') from None
-        raise ProbeFailure('WINRM_UNAVAILABLE') from None
-    except Exception:
-        raise ProbeFailure('WINRM_UNAVAILABLE') from None
+    except Exception as exc:
+        raise _winrm_failure(exc, stage) from None
     finally:
         if protocol and shell_id:
             if command_id:
@@ -245,12 +272,16 @@ def run_remote_install_preflight(fqdn, username, password):
     try:
         computer = _ad_target(fqdn)
     except ProbeFailure as exc:
-        return _fail(checks, 'TARGET', exc.code)
+        return _fail(checks, 'TARGET', exc.code, failure=exc)
     checks['TARGET'] = {'status': 'PASS'}
     target = {'hostname': str(computer.get('hostname') or '')[:120],
               'fqdn': normalize_fqdn(computer['fqdn']),
               'operating_system': str(computer.get('operating_system') or '')[:120]}
-    dns = resolve_computer_dns([computer]).get(target['fqdn'], {})
+    try:
+        dns = resolve_computer_dns([computer]).get(target['fqdn'], {})
+    except Exception as exc:
+        failure = ProbeFailure('DNS_UNRESOLVED', stage='DNS', exception=exception_type(exc))
+        return _fail(checks, 'DNS', failure.code, target, failure=failure)
     address = dns.get('primary_ipv4')
     if dns.get('dns_status') != 'RESOLVED' or not address:
         return _fail(checks, 'DNS', 'DNS_UNRESOLVED', target)
@@ -262,9 +293,13 @@ def run_remote_install_preflight(fqdn, username, password):
     try:
         _winrm_ca_trust_path()
     except ProbeFailure as exc:
-        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target)
-    if not _tcp_available(address):
-        return _fail(checks, 'REMOTE_TRANSPORT', 'WINRM_UNAVAILABLE', target)
+        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
+    try:
+        if not _tcp_available(address):
+            return _fail(checks, 'REMOTE_TRANSPORT', 'TCP_5986_UNAVAILABLE', target,
+                         failure=ProbeFailure('TCP_5986_UNAVAILABLE', stage='TCP_5986'))
+    except ProbeFailure as exc:
+        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
     checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
     if not isinstance(username, str) or not username.strip() or len(username) > 256 or not username.isprintable() or \
             not isinstance(password, str) or not password or len(password) > 512 or not password.isprintable():
@@ -275,7 +310,9 @@ def run_remote_install_preflight(fqdn, username, password):
     except ProbeFailure as exc:
         key = 'AUTHENTICATION' if exc.code in (
             'AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED', 'CREDENTIAL_REQUIRED') else 'REMOTE_TRANSPORT'
-        return _fail(checks, key, exc.code, target)
+        if exc.code == 'WINRM_AUTHORIZATION_DENIED':
+            key = 'ADMIN_PRIVILEGE'
+        return _fail(checks, key, exc.code, target, failure=exc)
     checks['AUTHENTICATION'] = {'status': 'PASS'}
     if type(remote.get('admin')) is not bool or not remote['admin']:
         checks['ADMIN_PRIVILEGE'] = {'status': 'FAIL', 'code': 'ADMIN_REQUIRED'}

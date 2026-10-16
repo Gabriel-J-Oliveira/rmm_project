@@ -121,6 +121,38 @@ test('XSS-safe item tooltip, authorized stall confirmation, retry opens new batc
     await page.waitForFunction(()=>document.querySelector('#install-action-feedback').textContent.includes('Resultado registrado'));
     const stall=state.requests.find(r=>r.url.endsWith('mark-stalled/'));assert.deepEqual(JSON.parse(stall.body),{item_id:ITEM});
 });
+
+test('diagnostic hover stays selectable, copyable and safe across polling', async t => {
+    const item = {...batch().items[0], status:'FAILED', error_code:'TLS_VALIDATION_FAILED',
+        error_message:'Certificado TLS recusado.', diagnostic:{correlation_id:ITEM,batch_id:ID,
+            requested_fqdn:'pc01.control.local',resolved_ip:'192.168.104.15',stage:'WINRM_SESSION',
+            result:'NOT_READY',exception_type:'SSLError',code:'TLS_VALIDATION_FAILED',
+            started_at:'2026-10-16T12:00:00Z',finished_at:'2026-10-16T12:00:01Z',
+            checks:{DNS:{status:'PASS'},REMOTE_TRANSPORT:{status:'FAIL',code:'TLS_VALIDATION_FAILED'}}}};
+    const {page} = await setup(t,{initial:batch({status:'COMPLETED_WITH_ERRORS',items:[item]})});
+    await page.evaluate(() => Object.defineProperty(navigator,'clipboard',{configurable:true,
+        value:{writeText:async value=>{window.copiedDiagnostic=value;}}}));
+    const trigger=page.getByRole('button',{name:'Informações sobre o resultado'});
+    await trigger.hover();
+    const report=page.getByRole('textbox',{name:'Diagnóstico copiável'});
+    assert.match(await report.inputValue(), /IP resolvido: 192\.168\.104\.15/);
+    assert.match(await report.inputValue(), /WINRM_SESSION/);
+    assert.match(await report.inputValue(), new RegExp(ITEM));
+    assert.equal(await page.getByRole('link',{name:'Histórico no admin'}).getAttribute('href'),
+        '/admin/agents/auditevent/?q=pc01.control.local');
+    await report.hover(); await page.clock.runFor(5000);
+    assert.equal(await report.isVisible(),true);
+    await page.getByRole('button',{name:'Copiar diagnóstico'}).click();
+    assert.equal(await page.evaluate(()=>window.copiedDiagnostic),await report.inputValue());
+    if (process.env.NIGHTOWL_DIAGNOSTIC_SCREENSHOT) await page.screenshot({path:process.env.NIGHTOWL_DIAGNOSTIC_SCREENSHOT});
+    await page.setViewportSize({width:390,height:844});
+    await page.getByRole('button',{name:'Fechar diagnóstico'}).click();
+    await trigger.hover();
+    const box=await page.locator('.install-batch-tooltip').boundingBox();
+    assert.ok(box.x>=0 && box.x+box.width<=390);
+    await page.getByRole('button',{name:'Fechar diagnóstico'}).click();
+    assert.equal(await page.locator('.install-batch-tooltip').count(),0);
+});
 test('credential modal clears password during pending dispatch, secure FQDN POST and redirect',async t=>{
     const items=[1,2].map(i=>({hostname:'PC'+i,fqdn:'pc'+i+'.control.local',distinguished_name:'CN=pc'+i,enabled:true,selectable:true,correlation_status:'UNMANAGED'}));
     const {page,state}=await setup(t,{agent:true,items,query:''});
