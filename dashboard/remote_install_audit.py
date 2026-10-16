@@ -142,7 +142,8 @@ def audit_admission(*, multiple=False):
         @sensitive_variables('args', 'kwargs')
         def wrapped(targets, actor, *args, **kwargs):
             values = targets[:50] if multiple and isinstance(targets, list) else [targets]
-            attempts = [InstallAttempt(value, actor, phase='admission') for value in values]
+            attempts = [InstallAttempt(value.get('fqdn') if isinstance(value, dict) else value,
+                                       actor, phase='admission') for value in values]
             for attempt in attempts:
                 attempt.__enter__()
             try:
@@ -151,8 +152,11 @@ def audit_admission(*, multiple=False):
                 for attempt in attempts:
                     attempt.__exit__(type(exc), exc, None)
                 raise
-            for attempt in attempts:
+            items = list(result.items.order_by('position')) if multiple else []
+            for index, attempt in enumerate(attempts):
                 attempt.data.update(result='QUEUED', **{'batch_id' if multiple else 'job_id': str(result.pk)})
+                if multiple and index < len(items) and items[index].status == 'FAILED':
+                    attempt.data.update(result='NOT_READY', code=items[index].error_code, stage='TARGET')
                 attempt.__exit__(None, None, None)
             return result
         return wrapped

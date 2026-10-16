@@ -18,7 +18,9 @@ from dashboard import remote_install as install
 from dashboard.models import RemoteInstallBatch, RemoteInstallBatchItem, RemoteInstallJob
 from dashboard.remote_install_admission import install_admission
 from dashboard.remote_install_audit import InstallAttempt, MESSAGES, audit_admission, sanitize_report
-from dashboard.remote_install_preflight import CHECKS, ProbeFailure, _ad_target, _valid_fqdn, run_remote_install_preflight
+from dashboard.remote_install_preflight import (
+    CHECKS, ProbeFailure, _ad_target, _ad_identity_matches, _valid_fqdn, _valid_sid, run_remote_install_preflight,
+)
 
 MAX_TARGETS = 50
 MANUAL_STALL_SECONDS = 60
@@ -78,6 +80,8 @@ ERRORS = {
     'RUNNER_INTERRUPTED': 'Runner sem heartbeat; revisao necessaria',
     'PREFLIGHT_FAILED': 'Computador nao passou no preflight',
     'TARGET_CHANGED': 'Identidade AD mudou; operacao bloqueada',
+    'TARGET_IDENTITY_MISSING': 'SID do computador indisponivel; atualize a descoberta antes de instalar.',
+    'TARGET_ADDRESS_CONFLICT': 'Outro alvo do lote resolveu para o mesmo IP; operacao bloqueada.',
     'INSTALL_RECONCILIATION_REQUIRED': 'Requer nova prova de ausencia do NightOwl',
     'INSTALL_RECONCILIATION_FAILED': 'Ausencia do NightOwl nao comprovada',
     'ALREADY_MANAGED': 'Computador ja gerenciado; nao reinstalado',
@@ -141,29 +145,69 @@ def _counts(batch):
 @audit_admission(multiple=True)
 @sensitive_variables('username', 'password')
 def create_batch(targets, actor, *, username, password, parent=None):
-    if (not isinstance(targets, list) or not 1 <= len(targets) <= MAX_TARGETS
-            or any(not _target_name(value) for value in targets)):
+    if not isinstance(targets, list) or not 1 <= len(targets) <= MAX_TARGETS:
         raise install.InstallFailure('INVALID_BATCH_TARGETS')
-    names = [_valid_fqdn(value) for value in targets]
-    if len(set(names)) != len(names):
+    # Legacy callers may send FQDNs; the discovery UI also pins the selected AD identity.
+    if any(not isinstance(value, (str, dict)) or isinstance(value, dict) and
+           set(value) != {'fqdn', 'sid', 'distinguished_name'} for value in targets):
+        raise install.InstallFailure('INVALID_BATCH_TARGETS')
+    names = [_target_name(value.get('fqdn') if isinstance(value, dict) else value) for value in targets]
+    if not any(names):
+        raise install.InstallFailure('INVALID_BATCH_TARGETS')
+    valid_names = [name for name in names if name]
+    if len(set(valid_names)) != len(valid_names):
         raise install.InstallFailure('DUPLICATE_BATCH_TARGETS')
     if (not isinstance(username, str) or not username.strip() or len(username) > 256
             or not isinstance(password, str) or not password or len(password) > 512):
         raise install.InstallFailure('CREDENTIAL_REQUIRED')
-    computers = [_ad_target(name) for name in names]
+    admitted = []
+    seen_sids = set()
+    for position, (requested, name) in enumerate(zip(targets, names), 1):
+        computer = None
+        code = ''
+        if not name:
+            # Keep a failed item without persisting arbitrary URLs or user-supplied addresses.
+            admitted.append((f'invalid-target-{position}.nightowl.invalid', None, 'INVALID_TARGET'))
+            continue
+        try:
+            computer = _ad_target(name)
+            sid = _valid_sid(computer.get('sid'))
+            if not sid:
+                raise install.InstallFailure('TARGET_IDENTITY_MISSING')
+            if isinstance(requested, dict) and not _ad_identity_matches(
+                    computer, name, requested.get('distinguished_name'), requested.get('sid'), require_sid=True):
+                raise install.InstallFailure('TARGET_CHANGED')
+            if sid in seen_sids:
+                raise install.InstallFailure('TARGET_CHANGED')
+            seen_sids.add(sid)
+        except (install.InstallFailure, ProbeFailure) as exc:
+            # Infrastructure-wide uncertainty must not be disguised as an individual rejection.
+            if exc.code in ('AD_DISCOVERY_UNAVAILABLE', 'CORRELATION_UNAVAILABLE'):
+                raise
+            code = safe_code(exc.code)
+            if isinstance(requested, dict):
+                # A rejected selection must never acquire the identity of a replacement AD object.
+                dn = requested.get('distinguished_name')
+                computer = {'hostname': name.split('.')[0], 'sid': _valid_sid(requested.get('sid')),
+                            'distinguished_name': dn if isinstance(dn, str) and len(dn) <= 1024 else ''}
+        admitted.append((name, computer, code))
     try:
         with install_admission():
             if RemoteInstallBatch.objects.filter(active_slot='global').exists() or RemoteInstallJob.objects.filter(
                     Q(active_slot='global') | Q(status__in=('QUEUED', 'RUNNING'))).exists():
                 raise install.InstallFailure('INSTALL_ALREADY_RUNNING')
             batch = RemoteInstallBatch.objects.create(requested_by=actor, active_slot='global',
-                total_count=len(computers), waiting_count=len(computers), parent_batch=parent,
+                total_count=len(admitted), waiting_count=sum(not code for _, _, code in admitted), parent_batch=parent,
                 runner_heartbeat_at=timezone.now())
             RemoteInstallBatchItem.objects.bulk_create([
-                RemoteInstallBatchItem(batch=batch, position=index, target_hostname=computer['hostname'],
-                    target_fqdn=name, target_ad_dn=computer['distinguished_name'],
-                    progress_message=PROGRESS['WAITING'][1])
-                for index, (name, computer) in enumerate(zip(names, computers), 1)])
+                RemoteInstallBatchItem(batch=batch, position=index, target_hostname=(computer or {}).get('hostname', name.split('.')[0]),
+                    target_fqdn=name, target_ad_dn=(computer or {}).get('distinguished_name', ''),
+                    target_ad_sid=_valid_sid((computer or {}).get('sid')),
+                    status='FAILED' if code else 'WAITING', stage='VALIDATING_TARGET' if code else 'WAITING',
+                    error_code=code, finished_at=timezone.now() if code else None,
+                    progress_message=ERRORS.get(code, PROGRESS['WAITING'][1]))
+                for index, (name, computer, code) in enumerate(admitted, 1)])
+            _counts(batch)
             return batch
     except IntegrityError:
         raise install.InstallFailure('INSTALL_ALREADY_RUNNING') from None
@@ -327,6 +371,7 @@ def run_batch(batch_id, username, password):
     pulse.start()
     try:
         batch = RemoteInstallBatch.objects.select_related('requested_by').get(pk=batch_id)
+        used_addresses = set()
         for item_id in batch.items.filter(status='WAITING').values_list('pk', flat=True):
             with transaction.atomic():
                 current = RemoteInstallBatch.objects.select_for_update().get(pk=batch_id)
@@ -344,10 +389,18 @@ def run_batch(batch_id, username, password):
                 with InstallAttempt(item.target_fqdn, batch.requested_by,
                                     correlation_id=item.pk, batch_id=str(batch_id)) as attempt:
                     computer = _ad_target(item.target_fqdn)
-                    if computer['distinguished_name'] != item.target_ad_dn:
+                    if not _ad_identity_matches(computer, item.target_fqdn, item.target_ad_dn, item.target_ad_sid, require_sid=True):
                         raise install.InstallFailure('TARGET_CHANGED')
                     result = run_remote_install_preflight(item.target_fqdn, username, password)
                     attempt.complete(result)
+                    if result.get('status') == 'READY':
+                        resolved = result.get('target', {})
+                        addresses = set(resolved.get('ipv4_addresses') or [])
+                        if resolved.get('ip'):
+                            addresses.add(resolved['ip'])
+                        if addresses & used_addresses:
+                            raise install.InstallFailure('TARGET_ADDRESS_CONFLICT', stage='DNS')
+                        used_addresses.update(addresses)
                 if result.get('status') != 'READY':
                     raise install.InstallFailure(_preflight_failure_code(result))
                 job = install.create_remote_install_job(item.target_fqdn, batch.requested_by,
@@ -394,15 +447,17 @@ def retry_batch(parent, actor, username, password):
     for item in parent.items.select_related('remote_install_job'):
         if item.status not in ('FAILED', 'REVIEW_REQUIRED'):
             continue
+        if not _valid_sid(item.target_ad_sid) or not item.target_ad_dn:
+            continue
         job = item.remote_install_job
         if item.status == 'FAILED' and job and not install.job_is_retry_safe(job):
             continue
         computer = _ad_target(item.target_fqdn)
-        if computer['distinguished_name'] != item.target_ad_dn:
+        if not _ad_identity_matches(computer, item.target_fqdn, item.target_ad_dn, item.target_ad_sid, require_sid=True):
             raise install.InstallFailure('TARGET_CHANGED')
         if item.status == 'REVIEW_REQUIRED':
             install._absence_proof(computer, username, password)
-        targets.append(item.target_fqdn)
+        targets.append({'fqdn': item.target_fqdn, 'sid': item.target_ad_sid, 'distinguished_name': item.target_ad_dn})
     if not targets:
         raise install.InstallFailure('NO_RETRY_TARGETS')
     # MANAGED/conflict is rejected by _ad_target; prior batch remains immutable.
@@ -415,11 +470,15 @@ def batch_payload(batch, *, detail=False):
     if detail:
         from agents.models import AuditEvent
         correlations = [str(value) for item in items for value in (item.pk, item.remote_install_job_id) if value]
-        for event in AuditEvent.objects.filter(event_type__in=(
-                'remote_install.preflight.finished', 'remote_install.execution.finished'),
-                metadata__correlation_id__in=correlations).order_by('-created_at'):
+        for event in AuditEvent.objects.filter(
+                Q(event_type__in=('remote_install.preflight.finished', 'remote_install.execution.finished'),
+                  metadata__correlation_id__in=correlations) |
+                Q(event_type='remote_install.admission.finished', metadata__batch_id=str(batch.pk))
+                ).order_by('-created_at'):
             report = sanitize_report(event.metadata)
             reports.setdefault(report['correlation_id'], report)
+            if report['phase'] == 'admission':
+                reports.setdefault(report['fqdn'], report)
     data = {'id': str(batch.pk), 'status': batch.status, 'total_count': batch.total_count,
         'success_count': batch.success_count, 'failure_count': batch.failure_count,
         'review_count': batch.review_count, 'waiting_count': batch.waiting_count,
@@ -449,11 +508,12 @@ def batch_payload(batch, *, detail=False):
             'job_id': str(item.remote_install_job_id) if job else None,
             'updated_at': item.updated_at, 'started_at': item.started_at, 'finished_at': item.finished_at,
             'is_stalled': stalled, 'stale_seconds': round(seconds),
-            'retry_eligible': item.status == 'FAILED' and (job is None or install.job_is_retry_safe(job)),
+            'retry_eligible': item.status == 'FAILED' and bool(_valid_sid(item.target_ad_sid) and item.target_ad_dn)
+                              and (job is None or install.job_is_retry_safe(job)),
             'reconciliation_required': item.status == 'REVIEW_REQUIRED'})
         if detail:
             projected[-1]['diagnostic'] = (reports.get(str(item.remote_install_job_id)) or
-                                           reports.get(str(item.pk)))
+                                           reports.get(str(item.pk)) or reports.get(item.target_fqdn))
     if detail:
         data['items'] = projected
     return data

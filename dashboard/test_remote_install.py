@@ -25,6 +25,7 @@ from dashboard.remote_install_preflight import ProbeFailure
 SENTINEL = 'SUPER_SECRET_REMOTE_INSTALL_91827'
 COMPUTER = {
     'hostname': 'lab-01', 'fqdn': 'lab-01.control.local',
+    'sid': 'S-1-5-21-1-2-3-1001',
     'distinguished_name': 'CN=lab-01,OU=Lab,DC=control,DC=local',
 }
 READY = {'status': 'READY', 'checks': {}}
@@ -136,6 +137,21 @@ class RemoteInstallJobTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.status, 'INTERRUPTED')
         self.assertIsNone(job.active_slot)
+
+    def test_runner_revalidates_pinned_sid_after_preflight_before_installer(self):
+        job = self.job(diagnostics={'target_ad_sid': COMPUTER['sid']})
+        changed = {**COMPUTER, 'sid': 'S-1-5-21-1-2-3-999'}
+        with mock.patch.object(remote_install.threading, 'Thread'), \
+                mock.patch.object(remote_install, '_ad_target', side_effect=[COMPUTER, changed]), \
+                mock.patch.object(remote_install, 'run_remote_install_preflight', return_value=READY), \
+                mock.patch.object(remote_install, '_remote_script') as execute, \
+                mock.patch.object(remote_install, '_prepare_deployment') as enrollment:
+            remote_install.run_remote_install(job.pk, 'admin', SENTINEL)
+        execute.assert_not_called()
+        enrollment.assert_not_called()
+        job.refresh_from_db()
+        self.assertEqual(job.error_code, 'TARGET_CHANGED')
+        self.assertFalse(job.diagnostics.get('invocation_attempted'))
 
     def test_remote_command_uses_only_static_script_in_argv(self):
         protocol = mock.Mock()

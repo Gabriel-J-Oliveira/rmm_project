@@ -4398,7 +4398,7 @@ body.page-tickets .desk-category-drawer.is-open {
 
 .ad-discovery-toolbar {
     display: grid;
-    grid-template-columns: minmax(220px, 2fr) repeat(2, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
     gap: 12px;
     margin-bottom: 12px;
 }
@@ -4431,6 +4431,7 @@ body.page-tickets .desk-category-drawer.is-open {
 .ad-discovery-selection > div {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 12px;
 }
 

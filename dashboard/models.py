@@ -224,6 +224,7 @@ class RemoteInstallBatchItem(models.Model):
     target_hostname = models.CharField(max_length=255)
     target_fqdn = models.CharField(max_length=512)
     target_ad_dn = models.CharField(max_length=1024)
+    target_ad_sid = models.CharField(max_length=184, blank=True, default='')
     position = models.PositiveIntegerField()
     status = models.CharField(max_length=32, default='WAITING')
     stage = models.CharField(max_length=32, default='WAITING')

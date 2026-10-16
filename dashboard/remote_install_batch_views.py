@@ -29,15 +29,15 @@ def _authorized(request):
 
 
 @sensitive_variables('data')
-def _body(request, keys):
+def _body(request, keys, *, max_bytes=32768):
     if not request.is_secure():
         raise InstallFailure('HTTPS_REQUIRED')
     length = request.META.get('CONTENT_LENGTH', '')
     if (not length.isascii() or not length.isdecimal() or len(length) > 6
-            or not 0 < int(length) <= 32768 or request.content_type != 'application/json'):
+            or not 0 < int(length) <= max_bytes or request.content_type != 'application/json'):
         raise InstallFailure('INVALID_REQUEST')
     try:
-        if len(request.body) > 32768:
+        if len(request.body) > max_bytes:
             raise ValueError()
         def no_duplicate_keys(pairs):
             result = {}
@@ -79,7 +79,7 @@ def batches(request):
                           'page': result.number, 'pages': result.paginator.num_pages})
     data = None
     try:
-        data = _body(request, {'targets', 'username', 'password'})
+        data = _body(request, {'targets', 'username', 'password'}, max_bytes=96 * 1024)
         batch = create_batch(data['targets'], request.user, username=data['username'], password=data['password'])
         start_batch(batch, data['username'], data['password'])
         return _accepted(batch)

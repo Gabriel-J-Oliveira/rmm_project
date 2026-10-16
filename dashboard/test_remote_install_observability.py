@@ -30,11 +30,10 @@ class AttemptAuditTests(TestCase):
     def setUp(self):
         self.actor = get_user_model().objects.create_user('audit-operator', is_staff=True)
 
-    def test_admission_rejection_is_recorded_without_batch_or_job(self):
+    def test_admission_rejection_is_recorded_as_failed_item_without_install_job(self):
         with mock.patch.object(batch, '_ad_target', side_effect=preflight.ProbeFailure('AD_COMPUTER_DISABLED')):
-            with self.assertRaises(preflight.ProbeFailure):
-                batch.create_batch([COMPUTER['fqdn']], self.actor, username='admin', password=SENTINEL)
-        self.assertFalse(RemoteInstallBatch.objects.exists())
+            operation = batch.create_batch([COMPUTER['fqdn']], self.actor, username='admin', password=SENTINEL)
+        self.assertEqual(operation.items.get().status, 'FAILED')
         self.assertFalse(RemoteInstallJob.objects.exists())
         events = list(AuditEvent.objects.order_by('created_at'))
         self.assertEqual(len(events), 2)
@@ -43,6 +42,9 @@ class AttemptAuditTests(TestCase):
         self.assertEqual(events[1].metadata['requested_fqdn'], COMPUTER['fqdn'])
         self.assertEqual(events[1].actor_name, self.actor.username)
         self.assertNotIn(SENTINEL, json.dumps(list(AuditEvent.objects.values()), default=str))
+        report = batch.batch_payload(operation, detail=True)['items'][0]['diagnostic']
+        self.assertEqual(report['code'], 'AD_COMPUTER_DISABLED')
+        self.assertEqual(report['phase'], 'admission')
 
     def test_single_target_admission_failure_is_also_audited(self):
         with mock.patch.object(install, '_ad_target', side_effect=preflight.ProbeFailure('TARGET_MANAGED_OR_CONFLICT')):

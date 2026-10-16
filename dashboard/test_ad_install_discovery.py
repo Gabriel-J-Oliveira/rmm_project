@@ -77,6 +77,13 @@ class InstallDiscoveryTests(TestCase):
         self.assertEqual(row['nightowl_status'], AgentMachine.STATUS_ONLINE)
         self.assertFalse(row['selectable'])
 
+    def test_discovery_preserves_sid_and_requires_identity_for_selection(self):
+        row = self.project([computer(sid='S-1-5-21-1-2-3-1001')])['computers'][0]
+        self.assertEqual(row['sid'], 'S-1-5-21-1-2-3-1001')
+        self.assertTrue(row['selectable'])
+        row = self.project([computer(sid='')])['computers'][0]
+        self.assertFalse(row['selectable'])
+
     def test_hostname_fallback_requires_domain_and_unique_match(self):
         machine = self.machine(fqdn='')
         with override_settings(AD_AUTH_CONFIG={'DOMAIN': 'control.local'}):

@@ -16,6 +16,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const search = document.getElementById('ad-search');
     const ouFilter = document.getElementById('ad-ou-filter');
     const osFilter = document.getElementById('ad-os-filter');
+    const stateFilter = document.getElementById('ad-state-filter');
+    const agentFilter = document.getElementById('ad-agent-filter');
+    const dnsFilter = document.getElementById('ad-dns-filter');
+    const onlineFilter = document.getElementById('ad-online-filter');
+    const activityFilter = document.getElementById('ad-activity-filter');
+    const filters = [search, ouFilter, osFilter, stateFilter, agentFilter, dnsFilter, onlineFilter, activityFilter];
+    const selectPage = document.getElementById('ad-select-page');
+    const clearSelection = document.getElementById('ad-clear-selection');
+    const hiddenSelection = document.getElementById('ad-hidden-selection');
     const visibleCount = document.getElementById('ad-visible-count');
     const selectedCount = document.getElementById('ad-selected-count');
     const selectionNote = document.getElementById('ad-selection-note');
@@ -31,19 +40,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const drawerContent = document.getElementById('ad-detail-content');
     const closeButton = document.getElementById('ad-detail-close');
     let computers = [];
-    let filter = 'enabled';
     let page = 1;
     let scanInFlight = false;
     let drawerFocus = null;
     const selected = new Set();
 
     function selectionKey(computer) {
-        return String(computer.distinguished_name || computer.fqdn ||
-            `${computer.hostname || ''}|${computer.ou_dn || ''}`).toLocaleLowerCase();
+        return String(computer.sid || '').toLowerCase();
     }
 
     function isEligible(computer) {
-        return computer.selectable === true && computer.enabled === true &&
+        return Boolean(selectionKey(computer)) && computer.selectable === true && computer.enabled === true &&
             computer.correlation_status === 'UNMANAGED';
     }
 
@@ -51,6 +58,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (computer.correlation_status === 'MANAGED') return 'Já gerenciado';
         if (computer.correlation_status === 'CONFLICT') return 'Correlação ambígua';
         if (computer.enabled === false) return 'Desabilitado no AD';
+        if (computer.enabled !== true) return 'Situação AD desconhecida';
+        if (!selectionKey(computer)) return 'SID do objeto AD indisponível';
         return 'Indisponível para instalação';
     }
 
@@ -70,17 +79,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function visibleItems() {
         const query = search.value.trim().toLocaleLowerCase();
         return computers.filter((computer) => {
-            const matches = {
-                enabled: computer.enabled === true,
-                unmanaged: computer.correlation_status === 'UNMANAGED',
-                managed: computer.correlation_status === 'MANAGED',
-                'no-dns': computer.dns_status !== 'RESOLVED',
-                disabled: computer.enabled === false,
-                conflict: computer.correlation_status === 'CONFLICT',
-                old: computer.ad_activity_age === '>365d',
-                all: true,
-            };
-            if (!matches[filter] || (ouFilter.value && computer.ou_dn !== ouFilter.value) ||
+            const adState = computer.enabled === true ? 'enabled' : computer.enabled === false ? 'disabled' : 'unknown';
+            const agent = ['MANAGED', 'UNMANAGED', 'CONFLICT'].includes(computer.correlation_status) ? computer.correlation_status : 'unknown';
+            const dns = ({ RESOLVED: 'resolved', UNRESOLVED: 'unresolved', ERROR: 'error' })[computer.dns_status] || 'unknown';
+            const online = ['online', 'offline'].includes(computer.nightowl_status) ? computer.nightowl_status : 'unknown';
+            const activity = computer.ad_activity_age === '>365d' ? 'old' : computer.ad_activity_age === 'unknown' ? 'unknown' : 'recent';
+            if ((stateFilter.value && stateFilter.value !== adState) ||
+                (agentFilter.value && agentFilter.value !== agent) ||
+                (dnsFilter.value && (dnsFilter.value === 'missing' ? dns === 'resolved' : dnsFilter.value !== dns)) ||
+                (onlineFilter.value && onlineFilter.value !== online) ||
+                (activityFilter.value && activityFilter.value !== activity) ||
+                (ouFilter.value && computer.ou_dn !== ouFilter.value) ||
                 (osFilter.value && computer.operating_system !== osFilter.value)) return false;
             const haystack = [computer.hostname, computer.fqdn, computer.primary_ipv4,
                 ...(computer.ipv4_addresses || []), computer.reported_username,
@@ -92,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function statusLabel(computer) {
         if (computer.correlation_status === 'CONFLICT') return 'Correlação ambígua';
-        if (computer.correlation_status === 'UNMANAGED') return 'NightOwl não instalado';
+        if (computer.correlation_status === 'UNMANAGED') return 'Sem NightOwl correlacionado';
         const labels = { online: 'Online', offline: 'Offline', unknown: 'Desconhecido', uninstalled: 'Desinstalado' };
         return labels[computer.nightowl_status] || 'Desconhecido';
     }
@@ -106,12 +115,19 @@ document.addEventListener('DOMContentLoaded', () => {
         return td;
     }
 
-    function updateSelection() {
+    function updateSelection(filtered, visible) {
         selectedCount.textContent = `${selected.size} selecionado${selected.size === 1 ? '' : 's'}`;
         prepareButton.disabled = selected.size < 1;
         prepareButton.textContent = selected.size === 0 ? 'Selecione computadores' :
             `Instalar selecionado${selected.size === 1 ? '' : 's'} (${selected.size})`;
-        selectionNote.textContent = '';
+        clearSelection.disabled = selected.size === 0;
+        const countSelected = items => new Set(items.map(selectionKey).filter(key => selected.has(key))).size;
+        hiddenSelection.textContent = `${selected.size - countSelected(visible)} fora desta página; ${selected.size - countSelected(filtered)} fora do filtro atual`;
+        const eligible = [...new Set(visible.filter(isEligible).map(selectionKey))];
+        const checked = eligible.filter(key => selected.has(key)).length;
+        selectPage.disabled = eligible.length === 0;
+        selectPage.checked = eligible.length > 0 && checked === eligible.length;
+        selectPage.indeterminate = checked > 0 && checked < eligible.length;
     }
 
     function renderPagination(total, pages, pageSize) {
@@ -153,6 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
             checkbox.title = isEligible(computer) ? 'Selecionar' : unavailableReason(computer);
             checkbox.addEventListener('change', () => {
                 if (!isEligible(computer)) return;
+                selectionNote.textContent = '';
                 if (checkbox.checked) {
                     if (selected.size >= 50 && !selected.has(selectionKey(computer))) {
                         checkbox.checked = false;
@@ -174,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
             nameCell.appendChild(detailButton);
             cell(tr, computer.primary_ipv4, computer.dns_status !== 'RESOLVED' ? 'Sem DNS' : '');
             cell(tr, computer.operating_system, computer.operating_system_version);
-            cell(tr, computer.ou, computer.enabled === false ? 'Desabilitado no AD' : '');
+            cell(tr, computer.ou, computer.enabled === false ? 'Desabilitado no AD' : computer.enabled !== true ? 'Situação AD desconhecida' : '');
             cell(tr, computer.ad_user?.display_name || computer.reported_username || 'Não identificado',
                 computer.ad_user?.sam_account_name || '', computer.reported_user_source || '');
             cell(tr, date(computer.last_logon_at), computer.ad_activity_age === '>365d' ? 'Atividade AD antiga' : '');
@@ -209,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
             tr.appendChild(td);
             table.appendChild(tr);
         }
-        updateSelection();
+        updateSelection(filtered, visible);
         renderPagination(filtered.length, pages, pageSize);
     }
 
@@ -283,8 +300,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             if (!Array.isArray(data.computers) || !data.summary) throw new Error('invalid scan');
             computers = data.computers;
+            const sidCounts = new Map();
+            const fqdnCounts = new Map();
+            for (const computer of computers) {
+                const key = selectionKey(computer);
+                const fqdn = String(computer.fqdn || '').toLowerCase().replace(/\.$/, '');
+                sidCounts.set(key, (sidCounts.get(key) || 0) + 1);
+                fqdnCounts.set(fqdn, (fqdnCounts.get(fqdn) || 0) + 1);
+            }
+            for (const computer of computers) {
+                const fqdn = String(computer.fqdn || '').toLowerCase().replace(/\.$/, '');
+                if (!fqdn || sidCounts.get(selectionKey(computer)) !== 1 || fqdnCounts.get(fqdn) !== 1) computer.selectable = false;
+            }
             const eligibleKeys = new Set(computers.filter(isEligible).map(selectionKey));
+            const before = selected.size;
             for (const key of selected) if (!eligibleKeys.has(key)) selected.delete(key);
+            selectionNote.textContent = before !== selected.size ? `${before - selected.size} seleção(ões) removida(s): alvo indisponível ou ambíguo.` : '';
             fillOptions(ouFilter, computers.map((computer) => computer.ou_dn));
             fillOptions(osFilter, computers.map((computer) => computer.operating_system));
             for (const [index, value] of [data.summary.total, data.summary.unmanaged, data.summary.managed].entries()) {
@@ -309,18 +340,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     form.addEventListener('submit', (event) => { event.preventDefault(); scan(); });
 
-    for (const input of [search, ouFilter, osFilter]) input.addEventListener('input', () => { page = 1; render(); });
-    document.querySelectorAll('[data-ad-filter]').forEach((button) => button.addEventListener('click', () => {
-        filter = button.dataset.adFilter;
+    for (const input of filters) input.addEventListener('input', () => { page = 1; selectionNote.textContent = ''; render(); });
+    document.getElementById('ad-clear-filters').addEventListener('click', () => {
+        for (const input of filters) input.value = '';
         page = 1;
-        document.querySelectorAll('[data-ad-filter]').forEach((item) => item.setAttribute('aria-pressed', item === button ? 'true' : 'false'));
         render();
-    }));
+    });
+    clearSelection.addEventListener('click', () => { selected.clear(); selectionNote.textContent = ''; render(); });
+    selectPage.addEventListener('change', () => {
+        const size = Number(pageSizeInput.value) || 10;
+        const keys = [...new Set(visibleItems().slice((page - 1) * size, page * size).filter(isEligible).map(selectionKey))];
+        const union = new Set([...selected, ...keys]);
+        if (selectPage.checked && union.size > 50) {
+            selectionNote.textContent = 'Esta página excede o limite de 50 selecionados. Nenhuma seleção foi alterada.';
+        } else {
+            for (const key of keys) { if (selectPage.checked) selected.add(key); else selected.delete(key); }
+            selectionNote.textContent = '';
+        }
+        render();
+    });
     pageSizeInput.addEventListener('change', () => { page = 1; render(); });
     pagePrev.addEventListener('click', () => { if (page > 1) { page--; render(); } });
     pageNext.addEventListener('click', () => { page++; render(); });
     prepareButton.addEventListener('click', () => {
-        const targets = computers.filter(item => isEligible(item) && selected.has(selectionKey(item))).map(item => item.fqdn);
+        const targets = computers.filter(item => isEligible(item) && selected.has(selectionKey(item)))
+            .map(item => ({ fqdn: item.fqdn, sid: item.sid, distinguished_name: item.distinguished_name }));
         if (!targets.length || targets.length > 50) return;
         window.NightOwlInstallBatch.modal({
             title: 'Instalar NightOwl',

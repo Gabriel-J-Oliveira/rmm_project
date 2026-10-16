@@ -154,7 +154,7 @@ test('diagnostic hover stays selectable, copyable and safe across polling', asyn
     assert.equal(await page.locator('.install-batch-tooltip').count(),0);
 });
 test('credential modal clears password during pending dispatch, secure FQDN POST and redirect',async t=>{
-    const items=[1,2].map(i=>({hostname:'PC'+i,fqdn:'pc'+i+'.control.local',distinguished_name:'CN=pc'+i,enabled:true,selectable:true,correlation_status:'UNMANAGED'}));
+    const items=[1,2].map(i=>({hostname:'PC'+i,fqdn:'pc'+i+'.control.local',sid:'S-1-5-21-1-2-3-'+i,distinguished_name:'CN=pc'+i,enabled:true,selectable:true,correlation_status:'UNMANAGED'}));
     const {page,state}=await setup(t,{agent:true,items,query:''});
     await page.locator('#ad-computer-rows input[type=checkbox]').nth(0).check();
     await page.locator('#ad-computer-rows input[type=checkbox]').nth(1).check();
@@ -168,11 +168,60 @@ test('credential modal clears password during pending dispatch, secure FQDN POST
     release();state.holdPost=null;
     await page.waitForURL('**/jobs/?tab=installations&batch='+NEXT);
     const post=state.requests.find(r=>r.method==='POST'&&r.url.includes('install-batches'));
-    assert.deepEqual(JSON.parse(post.body),{targets:['pc1.control.local','pc2.control.local'],username:'synthetic-admin',password:'SUPER_SECRET_TEST_PASSWORD_91827'});
+    assert.deepEqual(JSON.parse(post.body),{targets:items.map(({fqdn,sid,distinguished_name})=>({fqdn,sid,distinguished_name})),username:'synthetic-admin',password:'SUPER_SECRET_TEST_PASSWORD_91827'});
     assert.equal(state.requests.some(r=>r.url.includes('/preflight/')),false);
     assert.equal(state.requests.some(r=>r.url.includes('SUPER_SECRET')),false);
     assert.equal(await page.evaluate(()=>Object.keys(localStorage).length+Object.keys(sessionStorage).length),0);
 });
+test('discovery cumulative filters and page selection keep hidden selections in real DOM', async t => {
+    const items=Array.from({length:26},(_,i)=>({hostname:'PC'+i,fqdn:'pc'+i+'.control.local',
+        sid:'S-1-5-21-1-2-3-'+i,distinguished_name:'CN=pc'+i,ou_dn:'OU=Lab',ou:'Lab',
+        operating_system:'Windows',enabled:i!==24,selectable:i!==24,correlation_status:i===25?'MANAGED':'UNMANAGED',
+        dns_status:i===23?'UNRESOLVED':'RESOLVED'}));
+    const {page,state,errors}=await setup(t,{agent:true,items,query:''});
+    await page.selectOption('#ad-agent-filter','UNMANAGED');
+    await page.selectOption('#ad-dns-filter','resolved');
+    assert.equal(await page.locator('#ad-visible-count').textContent(),'23 de 26 computadores');
+    await page.locator('#ad-select-page').check();
+    assert.equal(await page.locator('#ad-selected-count').textContent(),'10 selecionados');
+    await page.locator('#ad-page-next').click();
+    assert.match(await page.locator('#ad-hidden-selection').textContent(),/10 fora desta página; 0 fora do filtro/);
+    await page.locator('#ad-computer-rows input[type=checkbox]').first().check();
+    assert.equal(await page.locator('#ad-select-page').evaluate(n=>n.indeterminate),true);
+    await page.fill('#ad-search','not-present');
+    assert.equal(await page.locator('#ad-select-page').isDisabled(),true);
+    assert.match(await page.locator('#ad-hidden-selection').textContent(),/11 fora do filtro/);
+    await page.locator('#ad-clear-filters').click();
+    assert.equal(await page.locator('#ad-select-page').isChecked(),true);
+    await page.locator('#ad-select-page').uncheck();
+    assert.equal(await page.locator('#ad-selected-count').textContent(),'1 selecionado');
+    await page.locator('#ad-clear-selection').click();
+    assert.equal(await page.locator('#ad-selected-count').textContent(),'0 selecionados');
+    assert.equal(state.requests.some(r=>r.url.includes('install-batches')),false);
+    assert.deepEqual(errors,[]);
+});
+
+test('discovery controls fit desktop and mobile with long untrusted values rendered as text', async t => {
+    const items=[{hostname:'<img src=x onerror=alert(1)>',fqdn:'pc.control.local',sid:'S-1-5-21-1-2-3-1',
+        distinguished_name:'CN=pc',ou_dn:'<b>Financeiro</b>',ou:'<b>Financeiro</b>',operating_system:'Windows',
+        enabled:true,selectable:true,correlation_status:'UNMANAGED',dns_status:'RESOLVED'}];
+    const {page,errors}=await setup(t,{agent:true,items,query:''});
+    for(const viewport of [{width:1920,height:1080},{width:390,height:844}]) {
+        await page.setViewportSize(viewport);
+        await page.locator('#ad-select-page').check();
+        assert.equal(await page.locator('#ad-computer-rows img').count(),0);
+        for(const id of ['ad-clear-filters','ad-clear-selection','ad-prepare-button']) {
+            const bounds=await page.locator('#'+id).boundingBox();
+            assert.ok(bounds.x>=0 && bounds.x+bounds.width<=viewport.width, id+' overflows');
+        }
+        if(process.env.NIGHTOWL_SCREENSHOT_DIR){
+            fs.mkdirSync(process.env.NIGHTOWL_SCREENSHOT_DIR,{recursive:true});
+            await page.screenshot({path:path.join(process.env.NIGHTOWL_SCREENSHOT_DIR,'selection-'+viewport.width+'.png'),fullPage:true});
+        }
+    }
+    assert.deepEqual(errors,[]);
+});
+
 test('visual desktop/mobile fixtures with no remote side effects',async t=>{
     const {page,state}=await setup(t,{initial:batch({status:'COMPLETED_WITH_ERRORS',total_count:20,success_count:13,review_count:7,waiting_count:0,progress_percentage:100,finished_at:'2026-10-06T01:12:00Z',items:Array.from({length:20},(_,i)=>({...batch().items[0],id:`${String(i+4).padStart(8,'0')}-1111-4111-8111-111111111111`,hostname:'PC-'+i,status:i%3?'COMPLETED':'REVIEW_REQUIRED',reconciliation_required:i%3===0,error_message:i%3?'':'Resultado não comprovado',progress_message:i%3?'NightOwl instalado e gerenciado':'Resultado não comprovado',progress_percentage:i%3?100:68}))})});
     if(process.env.NIGHTOWL_SCREENSHOT_DIR){fs.mkdirSync(process.env.NIGHTOWL_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NIGHTOWL_SCREENSHOT_DIR,'batch-desktop.png')});}

@@ -23,7 +23,7 @@ from dashboard.remote_install_admission import install_admission
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
-    CHECKS, ProbeFailure, _ad_target, _new_winrm_protocol, _winrm_failure, run_remote_install_preflight,
+    CHECKS, ProbeFailure, _ad_target, _ad_identity_matches, _new_winrm_protocol, _winrm_failure, run_remote_install_preflight,
 )
 from dashboard.remote_install_audit import audit_admission, audited_preflight, exception_type, record_execution_failure
 
@@ -185,7 +185,7 @@ def create_remote_install_job(fqdn, actor, *, username=None, password=None, batc
                     position=batch.current_index if batch else -1).first()
                 if not item or batch.status != 'RUNNING' or item.target_fqdn != normalized:
                     raise InstallFailure('BATCH_LEASE_LOST')
-                if item.target_ad_dn != computer['distinguished_name']:
+                if not _ad_identity_matches(computer, item.target_fqdn, item.target_ad_dn, item.target_ad_sid, require_sid=True):
                     raise InstallFailure('TARGET_CHANGED')
             elif batch:
                 raise InstallFailure('INSTALL_ALREADY_RUNNING')
@@ -214,7 +214,7 @@ def create_remote_install_job(fqdn, actor, *, username=None, password=None, batc
                 target_hostname=computer['hostname'], target_fqdn=normalized,
                 target_ad_dn=computer['distinguished_name'], requested_by=actor,
                 active_slot='global', runner_heartbeat_at=timezone.now(),
-                diagnostics=_initial_diagnostics(),
+                diagnostics={**_initial_diagnostics(), 'target_ad_sid': computer.get('sid') or ''},
             )
             if item:
                 item.remote_install_job = job
@@ -594,7 +594,7 @@ def run_remote_install(job_id, username, password):
             computer = _ad_target(job.target_fqdn)
         except ProbeFailure as exc:
             raise InstallFailure(exc.code) from None
-        if computer['distinguished_name'] != job.target_ad_dn:
+        if not _ad_identity_matches(computer, job.target_fqdn, job.target_ad_dn, job.diagnostics.get('target_ad_sid', '')):
             raise InstallFailure('TARGET_CHANGED')
         stage = 'VALIDATING_INSTALLER'
         _update(job_id, stage, diagnostic={'safe_to_retry': 'YES', 'installer_contract_valid': False,
@@ -619,7 +619,7 @@ def run_remote_install(job_id, username, password):
             computer = _ad_target(job.target_fqdn)
         except ProbeFailure as exc:
             raise InstallFailure(exc.code) from None
-        if computer['distinguished_name'] != job.target_ad_dn:
+        if not _ad_identity_matches(computer, job.target_fqdn, job.target_ad_dn, job.diagnostics.get('target_ad_sid', '')):
             raise InstallFailure('TARGET_CHANGED')
         stage = 'AUTHENTICATED'
         _update(job_id, stage)

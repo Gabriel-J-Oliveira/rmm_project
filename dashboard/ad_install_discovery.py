@@ -210,6 +210,7 @@ def build_install_discovery():
         address = dns.get(fqdn, {'dns_status': 'UNRESOLVED', 'primary_ipv4': None, 'ipv4_addresses': []})
         rows.append({
             'hostname': display_hostname, 'ad_name': computer.get('hostname') or '',
+            'sid': computer.get('sid') or '',
             'fqdn': fqdn, 'distinguished_name': computer.get('distinguished_name') or '',
             'ou': computer.get('ou_name') or '', 'ou_dn': computer.get('ou_dn') or '',
             'operating_system': computer.get('operating_system') or '',
@@ -226,7 +227,7 @@ def build_install_discovery():
             'reported_username': username or None,
             'reported_user_source': 'AgentMachine.last_logged_user' if username else None,
             'ad_user': _enrich_user(username, users),
-            'selectable': computer.get('enabled') is True and correlation == 'UNMANAGED',
+            'selectable': bool(computer.get('sid') and fqdn) and computer.get('enabled') is True and correlation == 'UNMANAGED',
         })
     counts = Counter(row['correlation_status'] for row in rows)
     summary = {

@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import inspect
 import io
 import json
@@ -24,6 +25,7 @@ from dashboard.test_remote_install import COMPUTER, SENTINEL
 
 def target(name):
     return {**COMPUTER, 'fqdn': name, 'hostname': name.split('.')[0],
+            'sid': 'S-1-5-21-1-2-3-' + str(int(hashlib.sha256(name.encode()).hexdigest()[:8], 16)),
             'distinguished_name': 'CN=' + name.split('.')[0] + ',DC=control,DC=local'}
 
 
@@ -90,11 +92,15 @@ class BatchTests(TestCase):
                 batch.create_batch(names, self.actor, username='admin', password=SENTINEL)
         self.assertEqual(RemoteInstallBatch.objects.count(), 0)
 
-    def test_invalid_ad_target_blocks_before_database_write(self):
+    def test_invalid_ad_target_rejected_individually(self):
         for code in ('AD_COMPUTER_DISABLED', 'TARGET_NOT_UNIQUE_OR_MISSING', 'TARGET_MANAGED_OR_CONFLICT'):
-            with mock.patch.object(batch, '_ad_target', side_effect=ProbeFailure(code)), self.assertRaises(ProbeFailure):
-                self.create()
-        self.assertEqual(RemoteInstallBatch.objects.count(), 0)
+            with mock.patch.object(batch, '_ad_target', side_effect=[ProbeFailure(code), target(self.names[1])]):
+                result = self.create()
+            self.assertEqual(list(result.items.values_list('status', flat=True)), ['FAILED', 'WAITING'])
+            self.assertEqual(result.items.first().error_code, code)
+            self.assertEqual((result.failure_count, result.waiting_count), (1, 1))
+            result.active_slot = None
+            result.save()
 
     def test_global_admission_and_legacy_api_share_gate(self):
         result = self.create()
@@ -108,6 +114,126 @@ class BatchTests(TestCase):
         install.create_remote_install_job(self.names[0], self.actor)
         with self.assertRaisesMessage(install.InstallFailure, 'INSTALL_ALREADY_RUNNING'):
             self.create()
+
+    def test_selected_sid_dn_and_fqdn_are_revalidated_individually(self):
+        for changes in ({'sid': 'S-1-5-21-1-2-3-999'}, {'distinguished_name': 'CN=moved'},
+                        {'fqdn': 'changed.control.local'}, {'sid': ''}):
+            requested = {key: target(self.names[0])[key] for key in ('fqdn', 'sid', 'distinguished_name')}
+            with mock.patch.object(batch, '_ad_target', side_effect=[{**target(self.names[0]), **changes}, target(self.names[1])]):
+                result = self.create([requested, self.names[1]])
+            self.assertEqual(result.items.first().status, 'FAILED')
+            self.assertIn(result.items.first().error_code, ('TARGET_CHANGED', 'TARGET_IDENTITY_MISSING'))
+            self.assertEqual(result.items.last().status, 'WAITING')
+            result.active_slot = None
+            result.save()
+
+    def test_shared_ad_failure_blocks_whole_batch_without_install_records(self):
+        for code in ('AD_DISCOVERY_UNAVAILABLE', 'CORRELATION_UNAVAILABLE'):
+            with mock.patch.object(batch, '_ad_target', side_effect=[target(self.names[0]), ProbeFailure(code)]):
+                with self.assertRaises(ProbeFailure):
+                    self.create()
+        self.assertFalse(RemoteInstallBatch.objects.exists())
+
+    def test_malformed_target_in_mixed_batch_is_rejected_without_network_or_raw_storage(self):
+        with mock.patch.object(batch, '_ad_target', side_effect=target) as lookup:
+            result = self.create(['https://evil.test/?password=' + SENTINEL, self.names[1]])
+        lookup.assert_called_once_with(self.names[1])
+        self.assertEqual(result.items.first().error_code, 'INVALID_TARGET')
+        self.assertEqual(result.items.last().status, 'WAITING')
+        self.assertNotIn(SENTINEL, json.dumps(list(result.items.values()), default=str))
+
+    def test_client_cannot_supply_ip_or_url(self):
+        for value in ({'fqdn': self.names[0], 'sid': target(self.names[0])['sid'],
+                       'distinguished_name': 'CN=pc', 'ip': '127.0.0.1'},
+                      {'fqdn': 'https://evil.test', 'sid': '', 'distinguished_name': ''}):
+            with self.assertRaises(install.InstallFailure):
+                self.create([value])
+        self.assertFalse(RemoteInstallBatch.objects.exists())
+
+    def test_same_sid_cannot_be_enqueued_under_two_names(self):
+        with mock.patch.object(batch, '_ad_target', side_effect=[target(self.names[0]),
+                {**target(self.names[1]), 'sid': target(self.names[0])['sid']}]):
+            result = self.create()
+        self.assertEqual(result.items.last().error_code, 'TARGET_CHANGED')
+        self.assertEqual(result.waiting_count, 1)
+
+    def test_rejected_selection_keeps_requested_identity_not_replacement_for_retry(self):
+        original = target(self.names[0])
+        requested = {key: original[key] for key in ('fqdn', 'sid', 'distinguished_name')}
+        replacement = {**original, 'sid': 'S-1-5-21-1-2-3-999'}
+        with mock.patch.object(batch, '_ad_target', return_value=replacement):
+            result = self.create([requested])
+        self.assertEqual(result.items.get().target_ad_sid, original['sid'])
+        result.status = 'COMPLETED_WITH_ERRORS'
+        result.active_slot = None
+        result.save()
+        with mock.patch.object(batch, '_ad_target', return_value=replacement):
+            with self.assertRaisesMessage(install.InstallFailure, 'TARGET_CHANGED'):
+                batch.retry_batch(result, self.actor, 'admin', SENTINEL)
+
+    def test_all_rejected_complete_without_preflight_or_installer(self):
+        with mock.patch.object(batch, '_ad_target', side_effect=ProbeFailure('AD_COMPUTER_DISABLED')):
+            result = self.create()
+        with mock.patch.object(batch.threading, 'Thread'), mock.patch.object(batch, 'run_remote_install_preflight') as probe, \
+                mock.patch.object(install, 'start_remote_install') as start:
+            batch.run_batch(result.pk, 'admin', SENTINEL)
+        probe.assert_not_called()
+        start.assert_not_called()
+        result.refresh_from_db()
+        self.assertEqual((result.status, result.failure_count), ('COMPLETED_WITH_ERRORS', 2))
+
+    def test_rejected_admission_preserves_per_target_audit(self):
+        from agents.models import AuditEvent
+        with mock.patch.object(batch, '_ad_target', side_effect=[ProbeFailure('AD_COMPUTER_DISABLED'), target(self.names[1])]):
+            result = self.create()
+        events = list(AuditEvent.objects.filter(event_type='remote_install.admission.finished',
+                                               metadata__batch_id=str(result.pk)).order_by('created_at'))
+        self.assertEqual([event.metadata['result'] for event in events], ['NOT_READY', 'QUEUED'])
+        self.assertEqual(events[0].metadata['code'], 'AD_COMPUTER_DISABLED')
+
+    def test_sid_change_or_legacy_missing_sid_blocks_before_preflight(self):
+        for changes in ({'sid': 'S-1-5-21-1-2-3-999'}, {'fqdn': 'renamed.control.local'}, {'sid': ''}):
+            result = self.create([self.names[0]])
+            with mock.patch.object(batch.threading, 'Thread'), \
+                    mock.patch.object(batch, '_ad_target', return_value={**target(self.names[0]), **changes}), \
+                    mock.patch.object(batch, 'run_remote_install_preflight') as probe:
+                batch.run_batch(result.pk, 'admin', SENTINEL)
+            probe.assert_not_called()
+            self.assertEqual(result.items.get().error_code, 'TARGET_CHANGED')
+        result = self.create([self.names[0]])
+        result.items.update(target_ad_sid='')
+        with mock.patch.object(batch.threading, 'Thread'), mock.patch.object(batch, 'run_remote_install_preflight') as probe:
+            batch.run_batch(result.pk, 'admin', SENTINEL)
+        probe.assert_not_called()
+        self.assertEqual(result.items.get().error_code, 'TARGET_CHANGED')
+
+    def test_duplicate_server_resolved_ip_blocks_second_target(self):
+        def finish(job, *_args):
+            RemoteInstallJob.objects.filter(pk=job.pk).update(status='COMPLETED', active_slot=None)
+        for case, targets in enumerate(([{'ip': '192.168.104.15'}] * 2,
+                        [{'ip': '192.168.104.15', 'ipv4_addresses': ['192.168.104.15', '192.168.104.16']},
+                         {'ip': '192.168.104.16'}])):
+            result = self.create([f'case{case}-lab{i}.control.local' for i in range(2)])
+            with mock.patch.object(batch.threading, 'Thread'), \
+                    mock.patch.object(batch, 'run_remote_install_preflight', side_effect=[
+                        {'status': 'READY', 'target': value} for value in targets]), \
+                    mock.patch.object(install, 'start_remote_install', side_effect=finish) as start:
+                batch.run_batch(result.pk, 'admin', SENTINEL)
+            self.assertEqual(start.call_count, 1)
+            self.assertEqual(result.items.last().error_code, 'TARGET_ADDRESS_CONFLICT')
+
+    def test_sid_is_checked_again_when_job_is_created(self):
+        result = self.create([self.names[0]])
+        result.status = 'RUNNING'
+        result.current_index = 1
+        result.save()
+        item = result.items.get()
+        item.status = 'PREFLIGHT'
+        item.save()
+        with mock.patch.object(install, '_ad_target', return_value={**target(self.names[0]), 'sid': 'S-1-5-21-1-2-3-999'}):
+            with self.assertRaisesMessage(install.InstallFailure, 'TARGET_CHANGED'):
+                install.create_remote_install_job(self.names[0], self.actor, batch_item_id=item.pk)
+        self.assertFalse(RemoteInstallJob.objects.exists())
 
     def test_credentials_only_stdin(self):
         result = self.create()
@@ -443,6 +569,22 @@ class BatchRouteTests(BatchTests):
             self.assertEqual(read['Cache-Control'], 'no-store')
         self.assertEqual(snapshot, dict(RemoteInstallBatch.objects.values().get()))
         self.assertNotIn(SENTINEL, json.dumps(dict(self.client.session)))
+
+    def test_fifty_pinned_targets_with_long_dns_fit_bounded_request(self):
+        computers = {f'lab{i}.control.local': {**target(f'lab{i}.control.local'),
+            'distinguished_name': f'CN=lab{i},' + 'OU=LongDepartment,' * 40 + 'DC=control,DC=local'} for i in range(50)}
+        data = {'targets': [{key: value[key] for key in ('fqdn', 'sid', 'distinguished_name')}
+                           for value in computers.values()], 'username': 'admin', 'password': SENTINEL}
+        body = json.dumps(data)
+        self.assertGreater(len(body), 32768)
+        self.assertLess(len(body), 96 * 1024)
+        with mock.patch.object(batch, '_ad_target', side_effect=computers.__getitem__), \
+                mock.patch('dashboard.remote_install_batch_views.start_batch'):
+            response = self.client.post(self.url, body, content_type='application/json', secure=True)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(RemoteInstallBatch.objects.get().waiting_count, 50)
+        self.assertEqual(self.client.post(self.url, ' ' * (96 * 1024 + 1),
+                         content_type='application/json', secure=True).status_code, 409)
 
     def test_auth_csrf_https_and_arbitrary_fields_are_blocked(self):
         data = json.dumps({'targets': self.names, 'username': 'admin', 'password': SENTINEL})

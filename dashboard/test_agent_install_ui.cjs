@@ -10,6 +10,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 function computer(number, overrides = {}) {
     return {
         hostname: `pc${number}`, fqdn: `pc${number}.control.local`, distinguished_name: `CN=pc${number},DC=control,DC=local`,
+        sid: `S-1-5-21-1-2-3-${number}`,
         ou_dn: 'OU=Lab,DC=control,DC=local', ou: 'Lab', operating_system: 'Windows',
         enabled: true, correlation_status: 'UNMANAGED', selectable: true, dns_status: 'RESOLVED',
         ...overrides,
@@ -21,11 +22,6 @@ function setup(initial) {
     const location = { href: '/agent-install/' };
     const ids = new Map();
     const nodes = [];
-    const filterButtons = ['enabled', 'unmanaged', 'managed', 'disabled', 'conflict', 'all'].map((name) => {
-        const node = new Node('button');
-        node.dataset.adFilter = name;
-        return node;
-    });
     let scans = 0;
     let preflights = 0;
     let installs = 0;
@@ -64,7 +60,7 @@ function setup(initial) {
         getElementById(id) { if (!ids.has(id)) ids.set(id, new Node(id)); return ids.get(id); },
         createElement(tag) { return new Node(tag); },
         addEventListener(type, callback) { this[type] = callback; },
-        querySelectorAll(query) { return query === '[data-ad-filter]' ? filterButtons : []; },
+        querySelectorAll() { return []; },
         body: { classList: { add() {}, remove() {} } },
     };
     const root = document.getElementById('ad-discovery');
@@ -77,6 +73,7 @@ function setup(initial) {
     ids.get('ad-os-filter').appendChild(new Node('option'));
     ids.set('ad-page-size', new Node('select'));
     ids.get('ad-page-size').value = '10';
+    document.getElementById('ad-state-filter').value = 'enabled';
     vm.runInNewContext(script, {
         document, window: { location, NightOwlInstallBatch: { BASE: '/batches/', modal(options) { modalOptions = options; }, request(url, data) { installs++; installBody = data; return Promise.resolve({ batch_id: 'synthetic' }); } }, lucide: { createIcons() {} }, setTimeout() { return 1; }, clearTimeout() {} },
         FormData: class { constructor() { this.fields = {}; } append(key, value) { this.fields[key] = value; } },
@@ -98,14 +95,15 @@ function setup(initial) {
     });
     document.DOMContentLoaded();
     return {
-        ids, nodes, filterButtons, location, get modal() { return modalOptions; }, get scans() { return scans; }, get preflights() { return preflights; },
+        ids, nodes, location, get modal() { return modalOptions; }, get scans() { return scans; }, get preflights() { return preflights; },
         get installs() { return installs; }, get installBody() { return installBody; },
         setNextScan(callback) { nextScan = callback; },
         setNextInstall(callback) { nextInstall = callback; },
         setNextStatus(callback) { nextStatus = callback; },
         refresh() { ids.get('ad-discovery-form').listeners.submit({ preventDefault() {} }); },
         rows() { return ids.get('ad-computer-rows').children; },
-        clickFilter(name) { filterButtons.find((button) => button.dataset.adFilter === name).listeners.click(); },
+        setFilter(name, value) { const input = ids.get('ad-' + name + '-filter'); input.value = value; input.listeners.input(); },
+        selectPage(checked) { const box = ids.get('ad-select-page'); box.checked = checked; box.listeners.change(); },
     };
 }
 
@@ -161,9 +159,9 @@ test('pagination follows whole-dataset filters and search', async () => {
     assert.match(app.ids.get('ad-page-summary').textContent, /1-1 de 1/);
     app.ids.get('ad-search').value = '';
     app.ids.get('ad-search').listeners.input();
-    app.clickFilter('managed');
+    app.setFilter('agent', 'MANAGED');
     assert.equal(app.ids.get('ad-visible-count').textContent, '0 de 55 computadores');
-    app.clickFilter('all');
+    app.ids.get('ad-clear-filters').click();
     assert.equal(app.rows().length, 50);
 });
 
@@ -174,7 +172,7 @@ test('selection is multiple, preserves pages and explains unavailable targets', 
     items[3] = computer(4, { correlation_status: 'CONFLICT', selectable: false });
     const app = setup(items);
     await tick();
-    app.clickFilter('all');
+    app.ids.get('ad-clear-filters').click();
     assert.deepEqual(app.rows().slice(1, 4).map((row) => row.children[0].children[0].disabled), [true, true, true]);
     assert.match(app.rows()[1].children[0].textContent, /Já gerenciado/);
     assert.match(app.rows()[2].children[0].textContent, /Desabilitado no AD/);
@@ -207,7 +205,7 @@ test('selection is multiple, preserves pages and explains unavailable targets', 
 });
 
 
-test('51st selection rejected and modal posts FQDNs only then navigates', async () => {
+test('51st selection rejected and modal posts pinned identities without IP then navigates', async () => {
     const app = setup(Array.from({length: 51}, (_,i) => computer(i+1)));
     await tick();
     app.ids.get('ad-page-size').value = '50'; app.ids.get('ad-page-size').listeners.change();
@@ -222,7 +220,7 @@ test('51st selection rejected and modal posts FQDNs only then navigates', async 
     await app.modal.perform({username:'synthetic',password:'synthetic-secret'});
     assert.deepEqual(Object.keys(app.installBody).sort(),['password','targets','username']);
     assert.equal(app.installBody.targets.length,50);
-    assert.ok(app.installBody.targets.every(v=>typeof v==='string' && v.endsWith('.control.local')));
+    assert.ok(app.installBody.targets.every(v=>v.fqdn.endsWith('.control.local') && v.sid && v.distinguished_name && !('ip' in v)));
     app.modal.accepted('abc');
     assert.equal(app.location.href,'/jobs/?tab=installations&batch=abc');
     assert.equal(app.preflights,0);
@@ -234,5 +232,73 @@ test('row install uses the same modal with one target', async () => {
     app.rows()[0].children[10].children[0].click();
     assert.equal(app.ids.get('ad-selected-count').textContent,'1 selecionado');
     await app.modal.perform({username:'test',password:'test'});
-    assert.deepEqual(Array.from(app.installBody.targets),['pc1.control.local']);
+    assert.equal(app.installBody.targets[0].fqdn,'pc1.control.local');
+    assert.equal(app.installBody.targets[0].sid,computer(1).sid);
+});
+
+test('independent AD, agent and DNS filters combine with text, OU and OS', async () => {
+    const app = setup([computer(1), computer(2, {enabled:false}), computer(3, {correlation_status:'MANAGED'}),
+        computer(4, {dns_status:'UNRESOLVED'}), computer(5, {ou_dn:'OU=Other'}), computer(6, {operating_system:'Linux',dns_status:'ERROR'}),
+        computer(7, {enabled:null, dns_status:null, correlation_status:null})]);
+    await tick();
+    app.setFilter('agent','UNMANAGED'); app.setFilter('dns','resolved');
+    app.setFilter('ou','OU=Lab,DC=control,DC=local'); app.setFilter('os','Windows');
+    assert.equal(app.ids.get('ad-visible-count').textContent,'1 de 7 computadores');
+    app.ids.get('ad-search').value='missing'; app.ids.get('ad-search').listeners.input();
+    assert.equal(app.ids.get('ad-visible-count').textContent,'0 de 7 computadores');
+    assert.equal(app.ids.get('ad-select-page').disabled,true);
+    app.ids.get('ad-clear-filters').click();
+    assert.equal(app.ids.get('ad-visible-count').textContent,'7 de 7 computadores');
+    app.setFilter('dns','missing');
+    assert.equal(app.ids.get('ad-visible-count').textContent,'3 de 7 computadores');
+    app.setFilter('dns','error');
+    assert.equal(app.ids.get('ad-visible-count').textContent,'1 de 7 computadores');
+    app.setFilter('state','unknown'); app.setFilter('dns','unknown'); app.setFilter('agent','unknown');
+    assert.equal(app.ids.get('ad-visible-count').textContent,'1 de 7 computadores');
+    assert.equal(app.rows()[0].children[0].children[0].disabled,true);
+});
+
+test('page selection excludes ineligible, persists and shows hidden selections', async () => {
+    const app = setup(Array.from({length:25},(_,i)=>computer(i+1,{selectable:i!==2})));
+    await tick(); app.selectPage(true);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'9 selecionados');
+    assert.equal(app.ids.get('ad-select-page').checked,true);
+    app.selectPage(true);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'9 selecionados');
+    app.ids.get('ad-page-next').click();
+    assert.match(app.ids.get('ad-hidden-selection').textContent,/9 fora desta página; 0 fora do filtro/);
+    app.selectPage(true);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'19 selecionados');
+    app.ids.get('ad-search').value='pc25'; app.ids.get('ad-search').listeners.input();
+    assert.match(app.ids.get('ad-hidden-selection').textContent,/19 fora desta página; 19 fora do filtro/);
+    app.ids.get('ad-clear-filters').click();
+    assert.equal(app.ids.get('ad-select-page').checked,true);
+    app.selectPage(false);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'10 selecionados');
+    app.ids.get('ad-clear-selection').click();
+    assert.equal(app.ids.get('ad-selected-count').textContent,'0 selecionados');
+    assert.equal(app.ids.get('ad-clear-selection').disabled,true);
+});
+
+test('whole page over limit changes nothing and header has partial selection state', async () => {
+    const app = setup(Array.from({length:61},(_,i)=>computer(i+1)));
+    await tick();
+    const first = app.rows()[0].children[0].children[0]; first.checked=true; first.listeners.change();
+    assert.equal(app.ids.get('ad-select-page').indeterminate,true);
+    app.ids.get('ad-page-size').value='50'; app.ids.get('ad-page-size').listeners.change();
+    app.selectPage(true);
+    app.ids.get('ad-page-next').click(); app.selectPage(true);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'50 selecionados');
+    assert.equal(app.ids.get('ad-select-page').checked,false);
+    assert.match(app.ids.get('ad-selection-note').textContent,/Nenhuma seleção foi alterada/);
+    app.ids.get('ad-page-prev').click(); app.selectPage(false);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'0 selecionados');
+});
+
+test('missing or duplicate SID and duplicate FQDN cannot be arbitrarily selected', async () => {
+    const app=setup([computer(1),computer(2,{sid:computer(1).sid}),computer(3,{sid:''}),
+        computer(4),computer(5,{fqdn:computer(4).fqdn.toUpperCase()+'.'})]);
+    await tick(); app.selectPage(true);
+    assert.equal(app.ids.get('ad-selected-count').textContent,'0 selecionados');
+    assert.equal(app.ids.get('ad-select-page').disabled,true);
 });

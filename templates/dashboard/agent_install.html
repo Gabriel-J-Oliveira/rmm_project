@@ -77,24 +77,22 @@
             <label class="filter-field"><span>OU</span><select id="ad-ou-filter"><option value="">Todas</option></select></label>
             <label class="filter-field"><span>Sistema</span><select id="ad-os-filter"><option value="">Todos</option></select></label>
         </div>
-        <div class="ad-quick-filters" role="group" aria-label="Filtrar computadores">
-            <button type="button" data-ad-filter="enabled" aria-pressed="true">Habilitados</button>
-            <button type="button" data-ad-filter="unmanaged" aria-pressed="false">Sem NightOwl</button>
-            <button type="button" data-ad-filter="managed" aria-pressed="false">Gerenciados</button>
-            <button type="button" data-ad-filter="no-dns" aria-pressed="false">Sem DNS</button>
-            <button type="button" data-ad-filter="disabled" aria-pressed="false">Desabilitados</button>
-            <button type="button" data-ad-filter="conflict" aria-pressed="false">Conflitos</button>
-            <button type="button" data-ad-filter="old" aria-pressed="false">Atividade antiga</button>
-            <button type="button" data-ad-filter="all" aria-pressed="false">Todos</button>
+        <div class="ad-discovery-toolbar" role="group" aria-label="Filtrar computadores">
+            <label class="filter-field"><span>Situação no AD</span><select id="ad-state-filter"><option value="">Todas</option><option value="enabled" selected>Habilitado</option><option value="disabled">Desabilitado</option><option value="unknown">Desconhecida</option></select></label>
+            <label class="filter-field"><span>Agente</span><select id="ad-agent-filter"><option value="">Todos</option><option value="UNMANAGED">Sem NightOwl correlacionado</option><option value="MANAGED">Gerenciado</option><option value="CONFLICT">Conflito</option><option value="unknown">Desconhecido</option></select></label>
+            <label class="filter-field"><span>DNS</span><select id="ad-dns-filter"><option value="">Todos</option><option value="resolved">Resolvido</option><option value="missing">Sem DNS confirmado</option><option value="unresolved">Não resolvido</option><option value="error">Erro na consulta</option><option value="unknown">Desconhecido</option></select></label>
+            <label class="filter-field"><span>Estado reportado pelo agente</span><select id="ad-online-filter"><option value="">Todos</option><option value="online">Online</option><option value="offline">Offline</option><option value="unknown">Desconhecido</option></select></label>
+            <label class="filter-field"><span>Atividade AD</span><select id="ad-activity-filter"><option value="">Todas</option><option value="old">Mais de 365 dias</option><option value="unknown">Desconhecida</option></select></label>
+            <button type="button" id="ad-clear-filters" class="agent-secondary-button"><i data-lucide="filter-x"></i>Limpar filtros</button>
         </div>
         <div class="ad-discovery-selection">
             <span id="ad-visible-count"></span>
-            <div><span id="ad-selection-note" role="status" aria-live="polite"></span><strong id="ad-selected-count"></strong><button type="button" id="ad-prepare-button" disabled>Selecione computadores</button></div>
+            <div><span id="ad-selection-note" role="status" aria-live="polite"></span><strong id="ad-selected-count"></strong><span id="ad-hidden-selection" role="status" aria-live="polite"></span><button type="button" id="ad-clear-selection" class="agent-secondary-button" disabled><i data-lucide="list-x"></i>Limpar seleção</button><button type="button" id="ad-prepare-button" disabled>Selecione computadores</button></div>
         </div>
         <div class="table-wrap">
             <table class="endpoint-table ad-computer-table">
                 <thead><tr>
-                    <th scope="col">Alvo</th>
+                    <th scope="col"><input type="checkbox" id="ad-select-page" aria-label="Selecionar elegíveis desta página" title="Selecionar/desmarcar somente os elegíveis desta página"></th>
                     <th scope="col">Computador</th><th scope="col">IP</th><th scope="col">SO</th><th scope="col">OU</th>
                     <th scope="col">Usu&aacute;rio reportado</th><th scope="col">Atividade AD</th><th scope="col">NightOwl</th>
                     <th scope="col">Agent</th><th scope="col">&Uacute;ltimo contato</th><th scope="col">A&ccedil;&atilde;o</th>

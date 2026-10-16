@@ -81,6 +81,19 @@ def _valid_fqdn(value):
     return fqdn if len(fqdn) <= 253 and len(labels) >= 3 and all(_DNS_LABEL.fullmatch(label) for label in labels) else ''
 
 
+def _valid_sid(value):
+    return value.upper() if isinstance(value, str) and len(value) <= 184 and re.fullmatch(r'S-1-(?:\d+-)+\d+', value, re.I) else ''
+
+
+def _ad_identity_matches(computer, fqdn, dn, sid='', *, require_sid=False):
+    if normalize_fqdn(computer.get('fqdn')) != normalize_fqdn(fqdn) or computer.get('distinguished_name') != dn:
+        return False
+    if not (require_sid or sid):
+        return True
+    expected = _valid_sid(sid)
+    return bool(expected) and _valid_sid(computer.get('sid')) == expected
+
+
 def _ad_target(value):
     fqdn = _valid_fqdn(value)
     domain = normalize_fqdn(ad_ldap.ad_config().get('DOMAIN'))
@@ -289,6 +302,7 @@ def run_remote_install_preflight(fqdn, username, password):
     if not isinstance(addresses, (list, tuple)) or not all(_safe_ipv4(item) for item in [address, *addresses]):
         return _fail(checks, 'DNS', 'UNSAFE_TARGET_ADDRESS', target)
     target['ip'] = address
+    target['ipv4_addresses'] = sorted(set([address, *addresses]))
     checks['DNS'] = {'status': 'PASS'}
     try:
         _winrm_ca_trust_path()
