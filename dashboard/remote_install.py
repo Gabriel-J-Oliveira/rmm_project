@@ -357,6 +357,10 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
     except WinRMTransportError as exc:
         raise InstallFailure('AUTHENTICATION_FAILED' if exc.code in (401, 403) else 'WINRM_UNAVAILABLE',
                              command_attempted=attempted) from None
+    except PermissionError as exc:
+        if str(exc).startswith('Access denied: Server did not respond with NTLM challenge token'):
+            raise InstallFailure('AUTH_NEGOTIATION_FAILED', command_attempted=attempted) from None
+        raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=attempted) from None
     except Exception:
         raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=attempted) from None
     finally:

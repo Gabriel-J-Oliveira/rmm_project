@@ -28,6 +28,7 @@ _DNS_LABEL = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
 _CORPORATE_NETWORKS = tuple(ipaddress.IPv4Network(network) for network in (
     '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16',
 ))
+_NTLM_CHALLENGE_MISSING = 'Access denied: Server did not respond with NTLM challenge token'
 
 _READ_ONLY_PROBE = r'''
 $ErrorActionPreference = 'Stop'
@@ -219,6 +220,11 @@ def _winrm_probe(fqdn, username, password):
         raise ProbeFailure('AUTHENTICATION_FAILED') from None
     except WinRMTransportError as exc:
         raise ProbeFailure('AUTHENTICATION_FAILED' if exc.code in (401, 403) else 'WINRM_UNAVAILABLE') from None
+    except PermissionError as exc:
+        # requests-ntlm uses this exact message when the peer omits its NTLM challenge.
+        if str(exc).startswith(_NTLM_CHALLENGE_MISSING):
+            raise ProbeFailure('AUTH_NEGOTIATION_FAILED') from None
+        raise ProbeFailure('WINRM_UNAVAILABLE') from None
     except Exception:
         raise ProbeFailure('WINRM_UNAVAILABLE') from None
     finally:
@@ -267,7 +273,8 @@ def run_remote_install_preflight(fqdn, username, password):
         # WinRM resolves the FQDN again; TLS hostname validation remains required, but DNS is not pinned in this MVP.
         remote = _winrm_probe(target['fqdn'], username.strip(), password)
     except ProbeFailure as exc:
-        key = 'AUTHENTICATION' if exc.code in ('AUTHENTICATION_FAILED', 'CREDENTIAL_REQUIRED') else 'REMOTE_TRANSPORT'
+        key = 'AUTHENTICATION' if exc.code in (
+            'AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED', 'CREDENTIAL_REQUIRED') else 'REMOTE_TRANSPORT'
         return _fail(checks, key, exc.code, target)
     checks['AUTHENTICATION'] = {'status': 'PASS'}
     if type(remote.get('admin')) is not bool or not remote['admin']:

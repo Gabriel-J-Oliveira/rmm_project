@@ -154,6 +154,27 @@ class RemoteInstallJobTests(TestCase):
                 with self.assertRaisesMessage(remote_install.InstallFailure, code):
                     remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
 
+    def test_ntlm_challenge_failure_is_not_reported_as_transport_or_dispatched(self):
+        protocol = mock.Mock()
+        protocol.open_shell.side_effect = PermissionError(
+            'Access denied: Server did not respond with NTLM challenge token ' + SENTINEL)
+        with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol):
+            with self.assertRaisesMessage(remote_install.InstallFailure, 'AUTH_NEGOTIATION_FAILED') as raised:
+                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+        self.assertFalse(raised.exception.command_attempted)
+        self.assertNotIn(SENTINEL, str(raised.exception))
+        protocol.run_command.assert_not_called()
+        protocol.send_command_input.assert_not_called()
+
+    def test_unrelated_permission_error_remains_sanitized_transport_failure(self):
+        protocol = mock.Mock()
+        protocol.open_shell.side_effect = PermissionError('local access denied ' + SENTINEL)
+        with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol):
+            with self.assertRaisesMessage(remote_install.InstallFailure, 'WINRM_UNAVAILABLE') as raised:
+                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+        self.assertFalse(raised.exception.command_attempted)
+        self.assertNotIn(SENTINEL, str(raised.exception))
+
     def test_failed_revalidation_never_invokes_installer(self):
         job = self.job()
         failed = {'status': 'NOT_READY', 'checks': {'AUTHENTICATION': {'status': 'FAIL', 'code': 'AUTHENTICATION_FAILED'}}}

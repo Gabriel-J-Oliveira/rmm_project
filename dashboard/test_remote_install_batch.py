@@ -179,7 +179,7 @@ class BatchTests(TestCase):
                              if isinstance(key, ast.Constant) and key.value == 'code'
                              and isinstance(value, ast.Constant) and isinstance(value.value, str))
         # Conditional transport/authentication codes are also exercised by preflight regressions.
-        codes.update({'AUTHENTICATION_FAILED', 'WINRM_UNAVAILABLE'})
+        codes.update({'AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED', 'WINRM_UNAVAILABLE'})
         self.assertTrue(codes)
         for code in codes:
             with self.subTest(code=code):

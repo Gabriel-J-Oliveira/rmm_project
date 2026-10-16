@@ -149,6 +149,14 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(self.run_probe()['checks']['REMOTE_TRANSPORT']['code'], 'WINRM_UNAVAILABLE')
         self.remote_mock.assert_not_called()
 
+    def test_auth_negotiation_failure_is_reported_in_authentication_check(self):
+        self.remote_mock.side_effect = preflight.ProbeFailure('AUTH_NEGOTIATION_FAILED')
+        result = self.run_probe()
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['status'], 'PASS')
+        self.assertEqual(result['checks']['AUTHENTICATION'], {
+            'status': 'FAIL', 'code': 'AUTH_NEGOTIATION_FAILED'})
+        self.assertEqual(result['status'], 'NOT_READY')
+
     def test_unsafe_dns_addresses_never_connect(self):
         unsafe = ('127.0.0.1', '127.20.30.40', '0.0.0.0', '169.254.169.254',
                   '224.0.0.1', '255.255.255.255', '240.0.0.1', '192.0.2.1', 'not-an-ip')
@@ -319,6 +327,24 @@ class WinRMProbeTests(TestCase):
                 self.assertEqual(raised.exception.code, 'WINRM_UNAVAILABLE')
                 self.assertNotIn(SENTINEL, str(raised.exception))
                 protocol_class.return_value.run_command.assert_not_called()
+
+    @mock.patch('winrm.protocol.Protocol')
+    def test_missing_ntlm_challenge_is_reported_as_auth_negotiation_not_transport(self, protocol_class):
+        protocol_class.return_value.open_shell.side_effect = PermissionError(
+            'Access denied: Server did not respond with NTLM challenge token ' + SENTINEL)
+        with self.assertRaises(preflight.ProbeFailure) as raised:
+            preflight._winrm_probe('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+        self.assertEqual(raised.exception.code, 'AUTH_NEGOTIATION_FAILED')
+        self.assertNotIn(SENTINEL, str(raised.exception))
+        protocol_class.return_value.run_command.assert_not_called()
+
+    @mock.patch('winrm.protocol.Protocol')
+    def test_unrelated_permission_error_remains_sanitized_transport_failure(self, protocol_class):
+        protocol_class.return_value.open_shell.side_effect = PermissionError('local access denied ' + SENTINEL)
+        with self.assertRaises(preflight.ProbeFailure) as raised:
+            preflight._winrm_probe('lab-01.control.local', 'SyntheticAdmin', SENTINEL)
+        self.assertEqual(raised.exception.code, 'WINRM_UNAVAILABLE')
+        self.assertNotIn(SENTINEL, str(raised.exception))
 
     @mock.patch('winrm.protocol.Protocol')
     def test_timeout_and_raw_error_never_escape(self, protocol_class):

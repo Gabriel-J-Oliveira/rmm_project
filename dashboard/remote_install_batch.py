@@ -57,6 +57,7 @@ ERRORS = {
     'WINRM_REDIRECT_BLOCKED': 'O servidor redirecionou a conexao WinRM; acesso bloqueado por seguranca.',
     'WINRM_CA_TRUST_INVALID': 'O bundle de CAs do WinRM nao pode ser validado pelo NightOwl.',
     'AUTHENTICATION_FAILED': 'A credencial nao foi aceita pelo computador.',
+    'AUTH_NEGOTIATION_FAILED': 'O endpoint WinRM nao concluiu a negociacao de autenticacao NTLM/Negotiate.',
     'ADMIN_REQUIRED': 'A credencial nao possui privilegios administrativos suficientes.',
     'UNSAFE_TARGET_ADDRESS': 'O endereco do computador foi bloqueado pelos controles de seguranca.',
     'INSTALLER_CONTRACT_MISMATCH': 'O instalador publicado nao corresponde ao contrato aprovado.',
