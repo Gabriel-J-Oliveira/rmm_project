@@ -87,6 +87,7 @@
 .install-batch-drawer > header { display: flex; justify-content: space-between; gap: 12px; padding: 20px 24px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
 .install-batch-drawer h2 { margin: 0; font-size: 20px; }
 .install-batch-drawer > header p { margin-bottom: 0; }
+.install-header-actions { margin-left: auto; flex-shrink: 0; }
 .install-batch-drawer-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 16px 24px 28px; }
 .install-batch-drawer > footer { padding: 14px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; flex-shrink: 0; }
 .install-counts { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 16px 0 20px; }
@@ -97,6 +98,7 @@
 .install-overall-label { display: block; font-size: 16px; }
 .install-final-message { padding: 12px 0; font-size: 14px; border-bottom: 1px solid var(--border); }
 .install-batch-item-table { width: 100%; margin-top: 20px; table-layout: fixed; }
+.install-batch-item-table td:nth-child(3) { white-space: normal; overflow-wrap: anywhere; }
 .install-batch-item-table th:nth-child(1) { width: 22%; }
 .install-batch-item-table th:nth-child(2) { width: 16%; }
 .install-batch-item-table th:nth-child(3) { width: 26%; }
@@ -115,6 +117,9 @@
 .install-credential-modal input { width: 100%; min-width: 0; padding: 11px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--night-black); color: var(--text-primary); font: inherit; }
 .install-credential-modal input::placeholder { color: var(--text-muted); }
 .install-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 140; padding: 12px 18px; max-width: calc(100vw - 32px); border: 1px solid var(--border); border-radius: 6px; background: var(--card-hover); color: var(--text-primary); font-size: 13px; }
+.install-batch-notification { position: fixed; right: 20px; bottom: 20px; z-index: 90; display: grid; gap: 12px; width: min(360px, calc(100vw - 40px)); padding: 16px; border: 1px solid var(--border); border-left: 3px solid var(--online); border-radius: 6px; background: var(--card); color: var(--text-primary); box-shadow: 0 8px 24px rgba(0,0,0,.3); font-size: 14px; }
+.install-batch-notification[hidden] { display: none; }
+.install-batch-notification .install-button { justify-self: start; }
 @keyframes install-pulse { 50% { opacity: .6; } }
 @media (prefers-reduced-motion: reduce) { .install-batch-progress span { animation: none; transition: none; } }
 @media (max-width: 640px) {

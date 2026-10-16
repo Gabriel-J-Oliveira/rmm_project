@@ -4,6 +4,8 @@
     const api = window.NightOwlInstallBatch;
     const $ = id => document.getElementById(id);
     const drawer = $('install-batch-drawer');
+    const embedded = Boolean($('ad-discovery'));
+    let notificationId = null;
     const listRows = new Map(), itemRows = new Map();
     let listRequestInFlight = false, detailRequestInFlight = false;
     let listTimer, detailTimer, currentId = null, currentBatch = null, previousFocus;
@@ -85,6 +87,7 @@
         row.append(title, el('td', '', n(batch.total_count)), el('td', 'install-success-text', n(batch.success_count)), failures, status);
     }
     async function refreshList() {
+        if (embedded) return;
         if (listRequestInFlight) return;
         window.clearTimeout(listTimer); listRequestInFlight = true;
         $('install-list-refresh').setAttribute('aria-busy', 'true');
@@ -264,12 +267,15 @@
     }
     function openDrawer(id) {
         if (!api.UUID.test(id)) return;
+        const adDrawer = $('ad-detail-drawer');
+        if (adDrawer && !adDrawer.hidden) $('ad-detail-close').click();
         if (drawer.hidden) previousFocus = document.activeElement;
         if (currentId !== id) {
             itemRows.clear(); $('install-item-rows').replaceChildren(); $('install-detail-summary').replaceChildren();
             $('install-detail-footer').hidden = true; $('install-detail-meta').textContent = ''; currentBatch = null;
         }
         currentId = id; confirmation = null;
+        $('install-detail-new-tab').href = '/jobs/?tab=installations&batch=' + encodeURIComponent(id);
         drawer.hidden = $('install-batch-backdrop').hidden = false;
         document.body.classList.add('drawer-open'); $('install-detail-close').focus();
         refreshDetail();
@@ -281,6 +287,16 @@
         closeDiagnostic?.(); previousFocus?.focus();
     }
     function toast(message) { $('install-action-feedback').textContent = message; $('install-action-feedback').hidden = false; }
+    function notify(id, count) {
+        if (!api.UUID.test(id)) return;
+        notificationId = id;
+        $('install-notification-message').textContent = n(count) > 0 ?
+            `Instalação solicitada para ${n(count)} computador${n(count) === 1 ? '' : 'es'}.` : 'Nova tentativa de instalação solicitada.';
+        $('install-batch-notification').hidden = false;
+        icons();
+    }
+    api.notify = notify;
+    $('install-notification-open').addEventListener('click', () => openDrawer(notificationId));
     $('install-list-refresh').addEventListener('click', refreshList);
     $('install-detail-refresh').addEventListener('click', refreshDetail);
     $('install-detail-close').addEventListener('click', closeDrawer);
@@ -294,7 +310,7 @@
         if (drawer.hidden || $('install-credential-host').hasChildNodes()) return;
         if (event.key === 'Escape') closeDrawer();
         if (event.key === 'Tab') {
-            const focusable = [...drawer.querySelectorAll('button')].filter(b => !b.disabled && b.getClientRects().length);
+            const focusable = [...drawer.querySelectorAll('button, a[href]')].filter(b => !b.disabled && b.getClientRects().length);
             const first = focusable[0], last = focusable[focusable.length - 1];
             if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
             else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -305,10 +321,10 @@
         const id = currentId;
         api.modal({ title: 'Repetir falhas', description: 'O backend selecionará as falhas elegíveis. Resultados não comprovados exigem nova prova de ausência do NightOwl.', submitLabel: 'Repetir falhas',
             perform: credentials => api.request(api.url(id, 'retry/'), credentials),
-            accepted: newId => { toast('Retry iniciado'); page = 1; refreshList(); openDrawer(newId); },
+            accepted: newId => { if (embedded) notify(newId); else toast('Retry iniciado'); page = 1; refreshList(); openDrawer(newId); },
         });
     });
     refreshList();
     const initial = new URLSearchParams(window.location.search).get('batch');
-    if (api.UUID.test(initial || '')) openDrawer(initial);
+    if (!embedded && api.UUID.test(initial || '')) openDrawer(initial);
 }());

@@ -448,11 +448,12 @@
 </section>
 
 <div id="copy-feedback" class="copy-feedback" hidden>Copiado</div>
-<div id="install-credential-host"></div>
+{% include 'dashboard/_install_batches.html' %}
 {% endblock %}
 
 {% block scripts %}
 <script src="{% static 'js/install_batch_client.js' %}"></script>
+<script src="{% static 'js/install_batches.js' %}" defer></script>
 <script src="{% static 'js/agent_install_discovery.js' %}" defer></script>
 <script src="{% static 'js/agent_install_workflow.js' %}" defer></script>
 <script src="{% static 'js/agent_install_advanced.js' %}" defer></script>

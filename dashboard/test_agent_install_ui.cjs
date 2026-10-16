@@ -19,6 +19,7 @@ function computer(number, overrides = {}) {
 
 function setup(initial) {
     let modalOptions;
+    let notification;
     const location = { href: '/agent-install/' };
     const ids = new Map();
     const nodes = [];
@@ -75,7 +76,7 @@ function setup(initial) {
     ids.get('ad-page-size').value = '10';
     document.getElementById('ad-state-filter').value = 'enabled';
     vm.runInNewContext(script, {
-        document, window: { location, NightOwlInstallBatch: { BASE: '/batches/', modal(options) { modalOptions = options; }, request(url, data) { installs++; installBody = data; return Promise.resolve({ batch_id: 'synthetic' }); } }, lucide: { createIcons() {} }, setTimeout() { return 1; }, clearTimeout() {} },
+        document, window: { location, NightOwlInstallBatch: { BASE: '/batches/', notify(id, count) { notification = {id, count}; }, modal(options) { modalOptions = options; }, request(url, data) { installs++; installBody = data; return Promise.resolve({ batch_id: 'synthetic' }); } }, lucide: { createIcons() {} }, setTimeout() { return 1; }, clearTimeout() {} },
         FormData: class { constructor() { this.fields = {}; } append(key, value) { this.fields[key] = value; } },
         fetch: async (url, options) => {
             if (url === '/preflight/') { preflights++; return { ok: true, json: async () => ({ status: 'READY', checks: {} }) }; }
@@ -95,7 +96,7 @@ function setup(initial) {
     });
     document.DOMContentLoaded();
     return {
-        ids, nodes, location, get modal() { return modalOptions; }, get scans() { return scans; }, get preflights() { return preflights; },
+        ids, nodes, location, get notification() { return notification; }, get modal() { return modalOptions; }, get scans() { return scans; }, get preflights() { return preflights; },
         get installs() { return installs; }, get installBody() { return installBody; },
         setNextScan(callback) { nextScan = callback; },
         setNextInstall(callback) { nextInstall = callback; },
@@ -205,7 +206,7 @@ test('selection is multiple, preserves pages and explains unavailable targets', 
 });
 
 
-test('51st selection rejected and modal posts pinned identities without IP then navigates', async () => {
+test('51st selection rejected and accepted batch notifies without navigation', async () => {
     const app = setup(Array.from({length: 51}, (_,i) => computer(i+1)));
     await tick();
     app.ids.get('ad-page-size').value = '50'; app.ids.get('ad-page-size').listeners.change();
@@ -222,7 +223,8 @@ test('51st selection rejected and modal posts pinned identities without IP then 
     assert.equal(app.installBody.targets.length,50);
     assert.ok(app.installBody.targets.every(v=>v.fqdn.endsWith('.control.local') && v.sid && v.distinguished_name && !('ip' in v)));
     app.modal.accepted('abc');
-    assert.equal(app.location.href,'/jobs/?tab=installations&batch=abc');
+    assert.equal(app.location.href,'/agent-install/');
+    assert.deepEqual(app.notification,{id:'abc',count:50});
     assert.equal(app.preflights,0);
 });
 test('row install uses the same modal with one target', async () => {

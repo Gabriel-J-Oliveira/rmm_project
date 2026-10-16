@@ -371,7 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
             description: `${targets.length} computador${targets.length === 1 ? '' : 'es'} selecionado${targets.length === 1 ? '' : 's'}. O NightOwl verificará cada computador antes da instalação. Falhas no preflight serão registradas e o lote continuará.`,
             submitLabel: 'Confirmar instalação',
             perform: credentials => window.NightOwlInstallBatch.request(window.NightOwlInstallBatch.BASE, { targets, ...credentials }),
-            accepted: id => { window.location.href = '/jobs/?tab=installations&batch=' + encodeURIComponent(id); },
+            accepted: id => { window.NightOwlInstallBatch.notify(id, targets.length); },
         });
     });
     function closeDrawer() {

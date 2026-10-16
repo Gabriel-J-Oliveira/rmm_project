@@ -21,6 +21,7 @@
     <header>
         <div><h2 id="install-batch-title">Instalação NightOwl</h2><p id="install-detail-meta" class="install-muted"></p></div>
         <div class="install-header-actions">
+            <a class="install-button" id="install-detail-new-tab" target="_blank" rel="noopener noreferrer" aria-label="Abrir instalação em Tarefas em outra aba" title="Abrir em Tarefas em outra aba"><i data-lucide="external-link"></i></a>
             <button type="button" class="install-button" id="install-detail-refresh" aria-label="Atualizar instalação" title="Atualizar"><i data-lucide="refresh-cw"></i></button>
             <button type="button" class="install-button" id="install-detail-close" aria-label="Fechar instalação" title="Fechar"><i data-lucide="x"></i></button>
         </div>
@@ -39,4 +40,8 @@
 </aside>
 <div id="install-credential-host"></div>
 <div id="install-action-feedback" class="install-toast" role="status" aria-live="polite" hidden></div>
+<div id="install-batch-notification" class="install-batch-notification" role="status" aria-live="polite" hidden>
+    <span id="install-notification-message"></span>
+    <button type="button" class="install-button" id="install-notification-open"><i data-lucide="panel-right-open"></i>Acompanhar instalação</button>
+</div>
 <form hidden>{% csrf_token %}</form>

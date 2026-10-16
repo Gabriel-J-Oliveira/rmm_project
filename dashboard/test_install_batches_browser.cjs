@@ -30,12 +30,14 @@ async function setup(t, {agent=false, initial=batch(), query='?tab=installations
     const page = await browser.newPage({viewport:{width:1440,height:950}}); t.after(()=>page.close());
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     const state={value:initial,requests:[],listGets:0,detailGets:0,fail:false,hold:null};
-    const scripts=agent ? ['install_batch_client','agent_install_discovery'] : ['jobs','install_batch_client','install_batches'];
     const lucide=process.env.NIGHTOWL_LUCIDE_FILE ? '<script>'+fs.readFileSync(process.env.NIGHTOWL_LUCIDE_FILE,'utf8')+'</script>' : '';
-    const html='<!doctype html><html><head><meta charset="utf-8"><style>'+read('static/css/nightowl.css')+'</style>'+lucide+'</head><body class="'+(agent?'page-agent-install':'page-jobs')+'">'+content('templates/dashboard/'+(agent?'agent_install':'jobs')+'.html')+scripts.map(s=>'<script>'+read('static/js/'+s+'.js')+'</script>').join('')+'</body></html>';
-    await page.route('https://nightowl.test/**',async route=>{
+    function html(isAgent) {
+        const scripts=isAgent ? ['install_batch_client','install_batches','agent_install_discovery'] : ['jobs','install_batch_client','install_batches'];
+        return '<!doctype html><html><head><meta charset="utf-8"><style>'+read('static/css/nightowl.css')+'</style>'+lucide+'</head><body class="'+(isAgent?'page-agent-install':'page-jobs')+'">'+content('templates/dashboard/'+(isAgent?'agent_install':'jobs')+'.html')+scripts.map(s=>'<script>'+read('static/js/'+s+'.js')+'</script>').join('')+'</body></html>';
+    }
+    await page.context().route('https://nightowl.test/**',async route=>{
         const req=route.request(),url=new URL(req.url());
-        if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:html});
+        if(req.isNavigationRequest())return route.fulfill({contentType:'text/html',body:html(url.pathname==='/agent-install/')});
         state.requests.push({url:req.url(),method:req.method(),body:req.postData(),headers:req.headers()});
         if(url.pathname==='/scan/')return route.fulfill({json:{computers:items,summary:{total:items.length,unmanaged:items.length,managed:0}}});
         if(req.method()==='POST') {
@@ -153,11 +155,13 @@ test('diagnostic hover stays selectable, copyable and safe across polling', asyn
     await page.getByRole('button',{name:'Fechar diagnóstico'}).click();
     assert.equal(await page.locator('.install-batch-tooltip').count(),0);
 });
-test('credential modal clears password during pending dispatch, secure FQDN POST and redirect',async t=>{
+test('accepted batch keeps filters and selection, notification opens local drawer and new tab deep links',async t=>{
     const items=[1,2].map(i=>({hostname:'PC'+i,fqdn:'pc'+i+'.control.local',sid:'S-1-5-21-1-2-3-'+i,distinguished_name:'CN=pc'+i,enabled:true,selectable:true,correlation_status:'UNMANAGED'}));
     const {page,state}=await setup(t,{agent:true,items,query:''});
     await page.locator('#ad-computer-rows input[type=checkbox]').nth(0).check();
     await page.locator('#ad-computer-rows input[type=checkbox]').nth(1).check();
+    await page.selectOption('#ad-agent-filter','UNMANAGED');
+    await page.fill('#ad-search','PC');
     await page.locator('#ad-prepare-button').click();
     await page.locator('.install-credential-modal input[type=text]').fill('synthetic-admin');
     await page.locator('.install-credential-modal input[type=password]').fill('SUPER_SECRET_TEST_PASSWORD_91827');
@@ -166,7 +170,30 @@ test('credential modal clears password during pending dispatch, secure FQDN POST
     await page.waitForFunction(()=>document.querySelector('.install-credential-modal input[type=password]').value==='');
     assert.equal(await page.locator('.install-credential-modal button[type=submit]').isDisabled(),true);
     release();state.holdPost=null;
-    await page.waitForURL('**/jobs/?tab=installations&batch='+NEXT);
+    await page.locator('#install-batch-notification').waitFor({state:'visible'});
+    assert.equal(new URL(page.url()).pathname,'/agent-install/');
+    assert.equal(await page.inputValue('#ad-search'),'PC');
+    assert.equal(await page.inputValue('#ad-agent-filter'),'UNMANAGED');
+    assert.equal(await page.locator('#ad-selected-count').textContent(),'2 selecionados');
+    assert.equal(await page.locator('#install-batch-drawer').isVisible(),false);
+    assert.equal(state.listGets,0);
+    await page.locator('#install-notification-open').click();
+    await page.waitForFunction(()=>document.querySelector('#install-item-rows').children.length>0);
+    assert.equal(await page.locator('#install-batch-drawer').isVisible(),true);
+    const newTab=page.locator('#install-detail-new-tab');
+    assert.equal(await newTab.getAttribute('href'),'/jobs/?tab=installations&batch='+NEXT);
+    assert.equal(await newTab.getAttribute('rel'),'noopener noreferrer');
+    const popupPromise=page.waitForEvent('popup');
+    await newTab.click();
+    const popup=await popupPromise;
+    await popup.waitForSelector('#install-item-rows tr');
+    assert.equal(new URL(popup.url()).search,'?tab=installations&batch='+NEXT);
+    assert.equal(await popup.locator('#install-batch-drawer').isVisible(),true);
+    await popup.close();
+    await page.locator('#install-detail-close').click();
+    assert.equal(await page.inputValue('#ad-search'),'PC');
+    await page.locator('#install-notification-open').click();
+    assert.equal(await page.locator('#install-batch-drawer').isVisible(),true);
     const post=state.requests.find(r=>r.method==='POST'&&r.url.includes('install-batches'));
     assert.deepEqual(JSON.parse(post.body),{targets:items.map(({fqdn,sid,distinguished_name})=>({fqdn,sid,distinguished_name})),username:'synthetic-admin',password:'SUPER_SECRET_TEST_PASSWORD_91827'});
     assert.equal(state.requests.some(r=>r.url.includes('/preflight/')),false);
@@ -206,6 +233,7 @@ test('discovery controls fit desktop and mobile with long untrusted values rende
         distinguished_name:'CN=pc',ou_dn:'<b>Financeiro</b>',ou:'<b>Financeiro</b>',operating_system:'Windows',
         enabled:true,selectable:true,correlation_status:'UNMANAGED',dns_status:'RESOLVED'}];
     const {page,errors}=await setup(t,{agent:true,items,query:''});
+    await page.evaluate(id=>window.NightOwlInstallBatch.notify(id,1),ID);
     for(const viewport of [{width:1920,height:1080},{width:390,height:844}]) {
         await page.setViewportSize(viewport);
         await page.locator('#ad-select-page').check();
@@ -214,10 +242,18 @@ test('discovery controls fit desktop and mobile with long untrusted values rende
             const bounds=await page.locator('#'+id).boundingBox();
             assert.ok(bounds.x>=0 && bounds.x+bounds.width<=viewport.width, id+' overflows');
         }
+        const notification=await page.locator('#install-batch-notification').boundingBox();
+        assert.ok(Math.abs(notification.x+notification.width-(viewport.width-20))<2);
+        assert.ok(Math.abs(notification.y+notification.height-(viewport.height-20))<2);
         if(process.env.NIGHTOWL_SCREENSHOT_DIR){
             fs.mkdirSync(process.env.NIGHTOWL_SCREENSHOT_DIR,{recursive:true});
             await page.screenshot({path:path.join(process.env.NIGHTOWL_SCREENSHOT_DIR,'selection-'+viewport.width+'.png'),fullPage:true});
         }
+        await page.locator('#install-notification-open').click();
+        const link=await page.locator('#install-detail-new-tab').boundingBox();
+        assert.ok(link.x>=0 && link.x+link.width<=viewport.width);
+        if(process.env.NIGHTOWL_SCREENSHOT_DIR) await page.screenshot({path:path.join(process.env.NIGHTOWL_SCREENSHOT_DIR,'drawer-'+viewport.width+'.png')});
+        await page.locator('#install-detail-close').click();
     }
     assert.deepEqual(errors,[]);
 });
