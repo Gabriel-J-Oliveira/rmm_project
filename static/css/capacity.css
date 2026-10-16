@@ -12,8 +12,7 @@
 .capacity-action:hover, .capacity-clear:hover, .capacity-error button:hover { border-color: var(--cap-teal); }
 .capacity-action svg { width: 15px; height: 15px; }
 .capacity-update { min-height: 20px; color: #fff; font-size: 17px; margin: 6px 0 8px; }
-.capacity-demo-banner, .capacity-error { padding: 10px 12px; border-radius: 6px; margin-top: 12px; font-size: 17px; }
-.capacity-demo-banner { display: flex; gap: 8px; align-items: center; color: #fff; border: 1px solid #846526; background: #352911; }
+.capacity-error { padding: 10px 12px; border-radius: 6px; margin-top: 12px; font-size: 17px; }
 .capacity-error { color: #fff; border: 1px solid #873b43; background: #31171c; }
 .capacity-error button { margin-left: 8px; }
 .capacity-section { margin-top: 28px; min-width: 0; }

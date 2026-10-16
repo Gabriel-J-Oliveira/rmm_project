@@ -12,7 +12,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="capacity-page" data-capacity-root data-overview-url="{% url 'api-capacity-overview' %}" data-detail-template="{% url 'api-capacity-detail' '00000000-0000-4000-8000-000000000000' %}" data-series-template="{% url 'api-capacity-series' '00000000-0000-4000-8000-000000000000' %}" data-demo="{% if demo %}1{% else %}0{% endif %}">
+<div class="capacity-page" data-capacity-root data-overview-url="{% url 'api-capacity-overview' %}" data-detail-template="{% url 'api-capacity-detail' '00000000-0000-4000-8000-000000000000' %}" data-series-template="{% url 'api-capacity-series' '00000000-0000-4000-8000-000000000000' %}">
     <header class="capacity-header page-header">
         <div class="capacity-heading">
             <span class="page-header-icon"><i data-lucide="chart-no-axes-combined"></i></span>
@@ -25,7 +25,6 @@
             <a class="capacity-action" href="{% url 'alerts-list' %}"><i data-lucide="alert-triangle"></i><span>Central de Alertas</span></a>
         </div>
     </header>
-    {% if demo %}<div class="capacity-demo-banner" role="status"><i data-lucide="flask-conical"></i>Dados demonstrativos — não representam a frota real.</div>{% endif %}
     <div class="capacity-update" data-updated aria-live="polite">Carregando dados…</div>
     <div class="capacity-error" data-error role="alert" hidden>Não foi possível carregar o painel. <button type="button" data-refresh>Repetir</button></div>
 

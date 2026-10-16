@@ -32,7 +32,7 @@ async function setup(t, values = rows(), width = 1440, clock = false) {
   if (clock) await page.clock.install({ time: new Date(now) });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   let template = read('templates/dashboard/capacity.html').split('{% block content %}')[1].split('{% endblock %}')[0];
-  template = template.replace(/{% if demo %}[\s\S]*?{% endif %}/g, '').replace(/{% url 'api-capacity-overview' %}/g, '/overview/').replace(/{%[^%]*%}/g, '');
+  template = template.replace(/{% url 'api-capacity-overview' %}/g, '/overview/').replace(/{%[^%]*%}/g, '');
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>${read('static/css/nightowl.css')}${read('static/css/capacity.css')}body{padding:24px}</style></head><body>${template}<script>${read('static/js/capacity.js')}</script></body></html>`;
   await page.route('https://capacity.test/**', route => route.request().isNavigationRequest() ? route.fulfill({contentType: 'text/html', body: html}) : route.fulfill({json: {demo: false, generated_at: now, endpoints: values, counts: {}}}));
   await page.goto('https://capacity.test/');
@@ -322,8 +322,29 @@ test('refresh keeps the selected drawer endpoint and tab, close ignores late det
   assert.equal(await page.locator('[data-drawer]').isVisible(), true);
   assert.equal(await page.locator('[data-tab=hardware]').getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('[data-drawer-title]').textContent(), 'PC-000');
+  assert.match(await page.locator('[data-drawer-content]').textContent(), /Detalhes de telemetria indisponíveis/);
+  assert.doesNotMatch(await page.locator('[data-drawer-content]').textContent(), /demonstrativ|sintético/);
   await page.locator('[data-close-drawer]').click();
   await page.clock.fastForward(300001);
   assert.equal(detailCalls, 2);
   assert.equal(await page.locator('[data-drawer]').isVisible(), false);
+});
+
+test('legacy demo query and dataset never select demo APIs or fabricated rows', async t => {
+  const page = await setup(t, rows(1));
+  const requests = [];
+  await page.route('**/overview/**', route => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({json: {generated_at: now, endpoints: [], counts: {}}});
+  });
+  await page.evaluate(() => {
+    history.replaceState(null, '', '?demo=1');
+    document.querySelector('[data-capacity-root]').dataset.demo = '1';
+  });
+  await page.locator('[data-refresh]').first().click();
+  await page.waitForFunction(() => document.querySelector('[data-filter-count]').textContent === '0 de 0 endpoints');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].searchParams.has('demo'), false);
+  assert.equal(await page.locator('[data-table-body] tr[data-open]').count(), 0);
+  assert.doesNotMatch(await page.locator('[data-capacity-root]').textContent(), /LAB-CPU|Dados demonstrativos/);
 });

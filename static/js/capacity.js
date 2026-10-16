@@ -3,7 +3,6 @@
   const root = document.querySelector('[data-capacity-root]');
   if (!root) return;
   const $ = selector => root.querySelector(selector);
-  const demo = root.dataset.demo === '1';
   const refreshMs = 5 * 60 * 1000;
   let loading = false, reloadRequested = false, lastRefresh = 0, selectedId = null;
   let detailController = null, seriesController = null;
@@ -259,7 +258,6 @@
     $('[data-error]').hidden = true; $('[data-updated]').textContent = 'Atualizando capacidade…';
     const url = new URL(root.dataset.overviewUrl, location.origin);
     url.searchParams.set('period', state.period);
-    if (demo) url.searchParams.set('demo', '1');
     try {
       const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
       if (!response.ok) throw new Error();
@@ -310,7 +308,7 @@
   }
   function renderInsight(data) {
     const endpoint = data.endpoint;
-    if (!data.primary) { $('[data-drawer-insight]').innerHTML = `<strong>Dados demonstrativos</strong><p>Sem telemetria real neste detalhe.</p>`; $('[data-quick-facts]').innerHTML = ''; return; }
+    if (!data.primary) { $('[data-drawer-insight]').innerHTML = empty('Evidência de telemetria indisponível.'); $('[data-quick-facts]').innerHTML = ''; return; }
     const cap = data.capacity, primary = data.primary, context = data.context, hardware = data.hardware;
     $('[data-drawer-insight]').innerHTML = `<small>SITUAÇÃO DE CAPACIDADE</small><h3>${esc(assessmentStatus(cap))}</h3><div class="capacity-insight-status"><span>CPU ${chip(cap.capacity.cpu.status)}</span><span>Memória ${chip(cap.capacity.memory.status)}</span><span>Evidência ${primary.quality.received_samples} / ${primary.quality.expected_samples}</span><span>Contexto 7d ${percent(context.quality.coverage_percent)}</span></div><p>${esc(explanation(cap, context))}</p>`;
     const quick = [
@@ -349,7 +347,7 @@
     const box = $('[data-drawer-content]');
     const primary = data.primary, context = data.context, cap = data.capacity, hardware = data.hardware;
     if (!primary) {
-      box.innerHTML = `<h3>Dados demonstrativos</h3><div class="capacity-detail-grid">${fact('CPU', label(endpoint.cpu_capacity))}${fact('Memória', label(endpoint.memory_capacity))}${fact('Inventário CPU', endpoint.cpu_inventory_status)}${fact('Inventário RAM', endpoint.memory_inventory_status)}</div>${empty('Este detalhe é sintético e não usa telemetria real.')}`;
+      box.innerHTML = empty('Detalhes de telemetria indisponíveis.');
     } else if (state.tab === 'summary') {
       const quality = primary.quality, history = context.quality;
 box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><div class="capacity-assess-grid"><div><small>CPU ${why('cpu', data)}</small>${chip(cap.capacity.cpu.status)}<strong>P95 ${percent(primary.stats.cpu.p95)}</strong><p>${esc(cap.capacity.cpu.reasons.map(reasonText).join('; '))}</p></div><div><small>Memória ${why('memory', data)}</small>${chip(cap.capacity.memory.status)}<strong>P95 ${percent(primary.stats.memory_used.p95)}</strong><p>${esc(cap.capacity.memory.reasons.map(reasonText).join('; '))}</p></div></div></section><section class="capacity-summary-group"><h3>Evidência</h3><div class="capacity-evidence-line"><strong>${quality.received_samples} / ${quality.expected_samples}</strong><span>${percent(quality.coverage_percent)} · ${esc(label(primary.diagnostics.evidence.overall.status))}</span></div><div class="capacity-dist-track"><div class="capacity-dist-fill" style="width:${Math.max(0, Math.min(100, quality.coverage_percent || 0))}%"></div></div></section><section class="capacity-summary-group"><h3>Contexto histórico · 7d</h3><div class="capacity-evidence-line"><strong>${history.received_samples} / ${history.expected_samples}</strong><span>${percent(history.coverage_percent)} · CPU ${esc(statusText(context.diagnostics.diagnostics.cpu.status))} · RAM ${esc(statusText(context.diagnostics.diagnostics.memory.status))}</span></div><div class="capacity-dist-track"><div class="capacity-dist-fill" style="width:${Math.max(0, Math.min(100, history.coverage_percent || 0))}%"></div></div></section><div class="capacity-summary-columns"><section><h3>Hardware</h3><div class="capacity-detail-grid">${fact('Cores físicos', number(hardware.cpu.physical_cores))}${fact('RAM', bytes(hardware.memory.total_bytes))}${fact('Discos', data.disk_count)}</div></section><section><h3>Operação</h3><div class="capacity-detail-grid">${fact('Estado', endpoint.status)}${fact('Uptime', Number.isFinite(endpoint.uptime_seconds) ? `${number(endpoint.uptime_seconds / 3600)} h` : '—')}${fact('Agent', endpoint.agent_version)}${fact('Última atividade', stamp(endpoint.last_seen))}</div></section></div><section class="capacity-summary-group"><h3>Problemas ativos</h3><div class="capacity-detail-grid">${fact('Críticos', data.alert_counts.critical)}${fact('Warnings', data.alert_counts.warning)}${fact('Capacidade', [cap.capacity.cpu.status, cap.capacity.memory.status].filter(s => s === 'OBSERVE' || s === 'SUSTAINED_PRESSURE').length)}${fact('Outros alertas', data.alert_counts.other)}</div></section>`;
@@ -374,6 +372,13 @@ box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><di
       const evidence = box.querySelector('.capacity-evidence-line span');
       if (primary.quality.received_samples === 0) evidence.textContent = context.quality.received_samples > 0 ? 'Sem amostras no período' : 'Aguardando amostras de desempenho';
     }
+    if (['summary', 'hardware'].includes(state.tab) && data.inventory_warnings?.includes('MEMORY_SLOT_COUNTS_INCONSISTENT')) {
+      const warning = document.createElement('p');
+      warning.className = 'capacity-chart-note';
+      warning.setAttribute('role', 'status');
+      warning.textContent = 'O inventário reportou contagens de slots de memória inconsistentes. Os slots estão indisponíveis; os demais dados válidos foram preservados.';
+      box.prepend(warning);
+    }
     icons();
   }
   async function loadSeries({ refresh = false } = {}) {
@@ -386,7 +391,6 @@ box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><di
     if (body && !refresh) body.innerHTML = '<div class="capacity-series-skeleton" aria-label="Carregando série temporal"></div>';
     const url = new URL(root.dataset.seriesTemplate.replace('00000000-0000-4000-8000-000000000000', state.detail.endpoint.id), location.origin);
     url.searchParams.set('period', state.range);
-    if (demo) url.searchParams.set('demo', '1');
     try {
       const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: seriesController.signal });
       if (!response.ok) throw new Error();
@@ -416,7 +420,6 @@ box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><di
     }
     const url = new URL(root.dataset.detailTemplate.replace('00000000-0000-4000-8000-000000000000', id), location.origin);
     url.searchParams.set('period', state.period);
-    if (demo) url.searchParams.set('demo', '1');
     try {
       const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: detailController.signal });
       if (!response.ok) throw new Error();

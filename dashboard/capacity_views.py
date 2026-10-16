@@ -5,7 +5,6 @@ from datetime import timedelta
 import math
 from urllib.parse import urlencode
 
-from django.conf import settings
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import connection
 from django.db.models import Count, Min, OuterRef, Q, Subquery
@@ -97,8 +96,16 @@ def _hardware(snapshot):
     collections = raw.get('collections') if isinstance(raw.get('collections'), dict) else {}
     source = collections.get('hardware') if isinstance(collections.get('hardware'), dict) else {}
     cpu = source.get('cpu') if isinstance(source.get('cpu'), dict) else {}
-    memory = source.get('memory') if isinstance(source.get('memory'), dict) else {}
+    memory = dict(source.get('memory')) if isinstance(source.get('memory'), dict) else {}
+    warnings = []
+    slots = [memory.get(key) for key in ('slots_total', 'slots_used', 'slots_free')]
+    if all(type(value) is int for value in slots) and slots[1] + slots[2] != slots[0]:
+        # Preserve the original snapshot; contradictory slot counts are not usable evidence.
+        warnings.append('MEMORY_SLOT_COUNTS_INCONSISTENT')
+        for key in ('slots_total', 'slots_used', 'slots_free'):
+            memory[key] = None
     return {
+        'inventory_warnings': warnings,
         'cpu': {
             'name': cpu.get('name') or snapshot.cpu or None,
             'physical_cores': cpu.get('physical_cores'),
@@ -195,7 +202,8 @@ def _row(endpoint, snapshot, primary, context, alerts, processes, now):
     primary_evidence = build_telemetry_evidence(primary)
     primary_diagnostics = build_resource_diagnostics(primary)
     context_diagnostics = build_resource_diagnostics(context)
-    capacity = build_capacity_assessment(primary_diagnostics, context_diagnostics, _hardware(snapshot))
+    inventory = _hardware(snapshot)
+    capacity = build_capacity_assessment(primary_diagnostics, context_diagnostics, inventory)
     critical = alerts.get('critical', 0)
     hardware = capacity['hardware_context']
     os_name = (snapshot.os_name if snapshot else None) or endpoint.os_name or None
@@ -219,6 +227,7 @@ def _row(endpoint, snapshot, primary, context, alerts, processes, now):
         'memory_total_bytes': hardware['memory']['total_bytes'],
         'cpu_inventory_status': hardware['cpu']['status'],
         'memory_inventory_status': hardware['memory']['status'],
+        'inventory_warnings': (inventory or {}).get('inventory_warnings', []),
         'cpu_p95': primary['cpu']['usage_percent']['p95'],
         'memory_p95': primary['memory']['used_percent']['p95'],
         'context_coverage': context['quality']['coverage_percent'],
@@ -254,52 +263,6 @@ def _counts(rows):
         'offline': sum(row['classifications']['offline'] for row in rows),
         'critical': sum(row['alerts_critical'] > 0 for row in rows),
     }
-
-
-def _demo_rows():
-    states = (
-        ('LAB-CPU', 'online', 'SUSTAINED_PRESSURE', 'NO_PRESSURE_OBSERVED', 1),
-        ('LAB-RAM', 'online', 'NO_PRESSURE_OBSERVED', 'OBSERVE', 0),
-        ('LAB-MISTO', 'online', 'OBSERVE', 'SUSTAINED_PRESSURE', 2),
-        ('LAB-OK', 'online', 'NO_PRESSURE_OBSERVED', 'NO_PRESSURE_OBSERVED', 0),
-        ('LAB-OFFLINE', 'offline', 'NOT_EVALUATED', 'NOT_EVALUATED', 0),
-        ('LAB-PARCIAL', 'online', 'NOT_EVALUATED', 'NO_PRESSURE_OBSERVED', 0),
-    )
-    rows = []
-    for index, (hostname, status, cpu, memory, critical) in enumerate(states, 1):
-        insufficient = 'NOT_EVALUATED' in (cpu, memory)
-        sustained = 'SUSTAINED_PRESSURE' in (cpu, memory)
-        observe = 'OBSERVE' in (cpu, memory)
-        rows.append({
-            'id': f'00000000-0000-4000-8000-{index:012d}', 'hostname': hostname,
-            'fqdn': hostname.lower() + '.example.test', 'first_seen': (timezone.now() - timedelta(hours=index * 10)).isoformat(),
-            'last_ip': f'192.0.2.{index}', 'last_logged_user': 'demo',
-            'manufacturer': 'Demo', 'model': 'Demo',
-            'telemetry_last_at': None if insufficient else timezone.now().isoformat(),
-            'system_disk_used_percent': 40, 'max_disk_used_percent': 40,
-            'min_disk_free_bytes': 60000000000, 'disk_count': 1,
-            'status': status, 'last_seen': None, 'agent_version': 'demo',
-            'os_name': 'Windows Server' if index < 5 else None, 'os_version': None,
-            'os_build': None, 'cpu_name': 'CPU demonstrativa' if index < 6 else None,
-            'cpu_cores': 8 if index < 6 else None, 'memory_total_bytes': 17179869184 if index < 6 else None,
-            'cpu_inventory_status': 'PARTIAL' if index == 6 else 'AVAILABLE',
-            'memory_inventory_status': 'PARTIAL' if index == 6 else 'AVAILABLE',
-            'cpu_p95': None if insufficient else [91, 22, 78, 24][(index - 1) % 4],
-            'memory_p95': None if insufficient else [42, 83, 94, 36][(index - 1) % 4],
-            'coverage': 0 if insufficient else 98, 'context_coverage': 0 if insufficient else 40,
-            'received_samples': 0 if insufficient else 283, 'expected_samples': 288,
-            'evidence': 'INSUFFICIENT' if insufficient else 'SUFFICIENT',
-            'cpu_capacity': cpu, 'memory_capacity': memory,
-            'alerts_total': critical, 'alerts_critical': critical, 'alerts_warning': 0,
-            'security_alert': False, 'agent_update_alert': False,
-            'inventory_stale': False, 'inventory_at': None,
-            'alert_types': [{'alert_type': 'demo', 'severity': 'critical', 'count': critical}] if critical else [],
-            'classifications': {'insufficient': insufficient, 'sustained': sustained,
-                                'observe': observe, 'offline': status != 'online',
-                                'attention': insufficient or sustained or observe or status != 'online' or critical > 0},
-            'processes': [], 'endpoint_url': None, 'alerts_url': reverse('alerts-list'),
-        })
-    return rows
 
 
 def _period_hours(request):
@@ -445,7 +408,7 @@ def _overview(now, hours):
 @require_GET
 def capacity_page(request):
     return render(request, 'dashboard/capacity.html', {
-        'active_nav': 'capacity', 'demo': settings.DEBUG and request.GET.get('demo') == '1',
+        'active_nav': 'capacity',
     })
 
 
@@ -457,9 +420,8 @@ def capacity_overview(request):
         hours = _period_hours(request)
     except ValueError:
         return JsonResponse({'error': 'invalid_period'}, status=400)
-    demo = settings.DEBUG and request.GET.get('demo') == '1'
-    rows = _demo_rows() if demo else _overview(timezone.now(), hours)
-    return JsonResponse({'demo': demo, 'generated_at': timezone.now().isoformat(),
+    rows = _overview(timezone.now(), hours)
+    return JsonResponse({'demo': False, 'generated_at': timezone.now().isoformat(),
                          'counts': _counts(rows), 'endpoints': rows})
 
 
@@ -471,13 +433,6 @@ def capacity_detail(request, pk):
         hours = _period_hours(request)
     except ValueError:
         return JsonResponse({'error': 'invalid_period'}, status=400)
-    if settings.DEBUG and request.GET.get('demo') == '1':
-        row = next((item for item in _demo_rows() if item['id'] == str(pk)), None)
-        if row is None:
-            raise Http404
-        return JsonResponse({'demo': True, 'endpoint': row, 'primary': None,
-                             'context': None, 'capacity': None, 'hardware': None,
-                             'alerts': [], 'applications': [], 'processes': [], 'series_ranges': {}})
     endpoint = AgentMachine.objects.only(
         'id', 'hostname', 'status', 'last_seen_at', 'agent_version',
         'os_name', 'os_version', 'windows_build',
@@ -566,6 +521,7 @@ def capacity_detail(request, pk):
         'primary': {'quality': primary['quality'], 'stats': _stats(primary), 'diagnostics': primary_diagnostics},
         'context': {'quality': context['quality'], 'stats': _stats(context), 'diagnostics': context_diagnostics},
         'capacity': capacity, 'hardware': capacity['hardware_context'],
+        'inventory_warnings': (hardware or {}).get('inventory_warnings', []),
         'inventory_provenance': _inventory_provenance(snapshot),
         'alerts': alerts, 'alert_counts': alert_counts,
         'applications': applications, 'processes': processes,
@@ -581,10 +537,6 @@ def capacity_series(request, pk):
     hours = {'6h': 6, '24h': 24, '3d': 72, '7d': 168}.get(period)
     if hours is None:
         return JsonResponse({'error': 'invalid_period'}, status=400)
-    if settings.DEBUG and request.GET.get('demo') == '1':
-        if not any(row['id'] == str(pk) for row in _demo_rows()):
-            raise Http404
-        return JsonResponse({'demo': True, 'series': []})
     if not AgentMachine.objects.filter(pk=pk).exists():
         raise Http404
     end = timezone.now()

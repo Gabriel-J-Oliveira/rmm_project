@@ -267,22 +267,46 @@ class CapacityDashboardTests(TestCase):
         self.assertFalse(detail['series_ranges']['7d'])
         self.assertEqual(self.client.get(self.series_url).json()['series'], [])
 
-    def test_demo_is_opt_in_and_cannot_activate_outside_debug(self):
+    def test_demo_parameter_never_returns_synthetic_data_even_in_debug(self):
         self.login()
-        with override_settings(DEBUG=True):
-            regular = self.client.get(self.overview_url).json()
-            demo = self.client.get(self.overview_url, {'demo': '1'}).json()
-            self.assertFalse(regular['demo'])
-            self.assertTrue(demo['demo'])
-            self.assertEqual(len(demo['endpoints']), 6)
-            self.assertEqual({row['cpu_capacity'] for row in demo['endpoints']},
-                             {'NO_PRESSURE_OBSERVED', 'OBSERVE', 'SUSTAINED_PRESSURE', 'NOT_EVALUATED'})
-            self.assertContains(self.client.get(reverse('capacity-page') + '?demo=1'), 'Dados demonstrativos')
-        with override_settings(DEBUG=False):
-            response = self.client.get(self.overview_url, {'demo': '1'}).json()
-            self.assertFalse(response['demo'])
-            self.assertEqual(len(response['endpoints']), 1)
-            self.assertNotContains(self.client.get(reverse('capacity-page') + '?demo=1'), 'Dados demonstrativos')
+        for debug in (True, False):
+            with self.subTest(debug=debug), override_settings(DEBUG=debug):
+                response = self.client.get(self.overview_url, {'demo': '1'}).json()
+                self.assertFalse(response['demo'])
+                self.assertEqual([row['id'] for row in response['endpoints']], [str(self.endpoint.pk)])
+                self.assertNotContains(self.client.get(reverse('capacity-page') + '?demo=1'), 'Dados demonstrativos')
+                detail = self.client.get(self.detail_url, {'demo': '1'}).json()
+                self.assertFalse(detail['demo'])
+                self.assertIsNotNone(detail['primary'])
+                self.assertEqual(self.client.get(self.series_url, {'demo': '1'}).json()['series'], [])
+                fake = '00000000-0000-4000-8000-000000000001'
+                self.assertEqual(self.client.get(reverse('api-capacity-detail', args=[fake]), {'demo': '1'}).status_code, 404)
+                self.assertEqual(self.client.get(reverse('api-capacity-series', args=[fake]), {'demo': '1'}).status_code, 404)
+
+    def test_contradictory_slots_do_not_break_fleet_or_rewrite_inventory(self):
+        self.login()
+        snapshot = self.snapshot({'cpu': {'name': 'Real CPU', 'physical_cores': 4, 'logical_processors': 8},
+            'memory_total_bytes': 17179869184, 'memory': {'total_bytes': 17179869184,
+                'slots_total': 1, 'slots_used': 2, 'slots_free': 0, 'modules': [{}, {}]}})
+        original = snapshot.raw_payload
+        other = self.make_endpoint('OTHER-REAL-ENDPOINT')
+        self.sample()
+        self.sample(endpoint=other)
+        data = self.client.get(self.overview_url).json()
+        self.assertEqual(len(data['endpoints']), 2)
+        row = next(row for row in data['endpoints'] if row['id'] == str(self.endpoint.pk))
+        self.assertEqual(row['inventory_warnings'], ['MEMORY_SLOT_COUNTS_INCONSISTENT'])
+        self.assertEqual(row['memory_inventory_status'], 'PARTIAL')
+        self.assertEqual(row['memory_total_bytes'], 17179869184)
+        self.assertEqual(row['cpu_cores'], 4)
+        self.assertEqual(row['cpu_p95'], 25)
+        detail = self.client.get(self.detail_url).json()
+        self.assertEqual(detail['inventory_warnings'], row['inventory_warnings'])
+        self.assertEqual(detail['hardware']['memory']['module_count'], 2)
+        for key in ('slots_total', 'slots_used', 'slots_free'):
+            self.assertIsNone(detail['hardware']['memory'][key])
+        snapshot.refresh_from_db()
+        self.assertEqual(snapshot.raw_payload, original)
 
     def test_invalid_period_and_unknown_endpoint(self):
         self.login()
