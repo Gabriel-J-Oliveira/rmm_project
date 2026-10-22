@@ -171,4 +171,3 @@ class EndpointFailoverTests(TestCase):
         self.assertEqual(probe.call_count, 12)
         self.assertLessEqual(peak, preflight.ENDPOINT_TCP_WORKERS)
         self.assertEqual({entry['tcp_status'] for entry in results.values()}, {'OPEN'})
-
