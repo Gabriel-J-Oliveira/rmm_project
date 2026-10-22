@@ -50,7 +50,7 @@ class RemoteDeploymentEnrollmentTests(TestCase):
         self.assertEqual(AgentEnrollmentToken.objects.count(), 0)
         secrets = []
         def command(*args, **kwargs):
-            if 'enrollment_token' in kwargs:
+            if kwargs.get('enrollment_token') is not None:
                 token = kwargs['enrollment_token']; secrets.append(token)
                 self.assertNotIn(token, args[3])
                 response = self.enroll(token)
@@ -65,7 +65,7 @@ class RemoteDeploymentEnrollmentTests(TestCase):
             return 0
         self.run_attempt(command)
         deployment = AgentDeploymentToken.objects.get()
-        self.assertEqual(self.job.status, 'COMPLETED')
+        self.assertEqual(self.job.status, 'COMPLETED', self.job.diagnostics)
         self.assertEqual(deployment.status, 'completed')
         self.assertEqual(deployment.endpoint_id, self.job.endpoint_id)
         self.assertEqual(deployment.release_id, self.release.pk)
@@ -139,7 +139,7 @@ class RemoteDeploymentEnrollmentTests(TestCase):
     def test_first_heartbeat_after_300_seconds_completes_without_cached_online_status(self):
         clock = {'seconds': 0, 'machine': None}
         def command(*args, **kwargs):
-            if 'enrollment_token' in kwargs:
+            if kwargs.get('enrollment_token') is not None:
                 self.assertEqual(self.enroll(kwargs['enrollment_token']).status_code, 200)
                 clock['machine'] = AgentMachine.objects.get(machine_id='synthetic-deployment-machine')
                 kwargs['on_event']('STARTED', None); kwargs['on_event']('FINISHED', 0)
@@ -154,7 +154,7 @@ class RemoteDeploymentEnrollmentTests(TestCase):
         with mock.patch.object(runner.time, 'monotonic', side_effect=lambda: clock['seconds']), \
                 mock.patch.object(runner, 'FIRST_HEARTBEAT_TIMEOUT', 420):
             self.run_attempt(command, sleep=sleep)
-        self.assertEqual(clock['seconds'], 300)
+        self.assertEqual(clock['seconds'], 300, self.job.diagnostics)
         self.assertEqual(self.job.status, 'COMPLETED')
         self.assertEqual(self.job.endpoint.agent_lifecycle_status, 'installed')
 
@@ -218,8 +218,10 @@ class EnrollmentStdinTests(SimpleTestCase):
         protocol.open_shell.return_value = 'shell'; protocol.run_command.return_value = 'command'
         protocol.get_command_output_raw.return_value = (b'', b'', 0, True)
         script = runner._installer_script(CONTRACT)
-        with mock.patch.object(runner, '_new_winrm_protocol', return_value=protocol):
-            runner._remote_script(COMPUTER['fqdn'], 'admin', 'password', script, 30, enrollment_token=token)
+        with mock.patch.object(runner, '_new_winrm_protocol', return_value=protocol), \
+                mock.patch.object(runner, '_verify_remote_identity_session'):
+            runner._remote_script(COMPUTER['fqdn'], 'admin', 'password', script, 30,
+                endpoint_ip='192.168.104.20', expected_computer=COMPUTER, enrollment_token=token)
         args = protocol.run_command.call_args.args[2]
         launcher = base64.b64decode(args[-1]).decode('utf-16-le')
         self.assertNotIn(token, launcher)
@@ -237,8 +239,10 @@ class EnrollmentStdinTests(SimpleTestCase):
         script = "$token=[Console]::In.ReadLine(); $h=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($token))).Replace('-','').ToLowerInvariant(); if ($h -ne '" + digest + "') { exit 99 }; Write-Output 'LAUNCHER_PASS'"
         protocol = mock.Mock()
         protocol.get_command_output_raw.return_value = (b'', b'', 0, True)
-        with mock.patch.object(runner, '_new_winrm_protocol', return_value=protocol):
-            runner._remote_script(COMPUTER['fqdn'], 'admin', 'password', script, 30, enrollment_token=token)
+        with mock.patch.object(runner, '_new_winrm_protocol', return_value=protocol), \
+                mock.patch.object(runner, '_verify_remote_identity_session'):
+            runner._remote_script(COMPUTER['fqdn'], 'admin', 'password', script, 30,
+                endpoint_ip='192.168.104.20', expected_computer=COMPUTER, enrollment_token=token)
         arguments = protocol.run_command.call_args.args[2]
         payload = protocol.send_command_input.call_args.args[2]
         result = subprocess.run(['powershell', *arguments], input=payload, capture_output=True, timeout=20)

@@ -30,6 +30,7 @@ from django.urls import reverse
 
 from agents.models import AgentMachine
 from dashboard import remote_install_preflight as preflight
+from dashboard.remote_install_preflight import ProbeFailure
 from dashboard.test_ad_install_discovery import computer
 
 
@@ -39,6 +40,8 @@ REMOTE_OK = {
     'hostname': 'lab-01', 'windows_name': 'Windows 11 Pro', 'build': 22631,
     'architecture': 'x64', 'powershell_major': 5, 'admin': True,
     'nightowl_service_present': False, 'nightowl_directory_present': False,
+    'part_of_domain': True, 'domain': 'control.local',
+    'computer_sid': 'S-1-5-21-1111111111-2222222222-3333333333-4444',
 }
 DNS_OK = {'lab-01.control.local': {'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.104.20',
                                    'ipv4_addresses': ['192.168.104.20']}}
@@ -107,7 +110,12 @@ class RemoteInstallPreflightTests(TestCase):
             'service_present': False, 'directory_present': False, 'correlation': 'UNMANAGED',
         })
         self.assertNotIn(SENTINEL, json.dumps(result))
-        self.remote_mock.assert_called_once_with('lab-01.control.local', 'CONTROL\\Admin', SENTINEL)
+        args, kwargs = self.remote_mock.call_args
+        self.assertEqual(args, ('lab-01.control.local', 'CONTROL\\Admin', SENTINEL))
+        self.assertEqual(kwargs['pinned_address'], '192.168.104.20')
+        self.assertEqual(kwargs['expected_computer']['sid'], computer()['sid'])
+        self.assertIsInstance(kwargs['deadline'], float)
+        self.assertEqual(result['target']['selected_ip'], '192.168.104.20')
 
     @override_settings(WINRM_CA_TRUST_PATH='')
     def test_invalid_ca_bundle_fails_before_tcp_or_authentication(self):
@@ -165,8 +173,62 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(result['status'], 'READY')
         self.assertEqual(result['target']['winrm_transport'], 'HTTP_NTLM_ENCRYPTED')
         self.assertEqual(result['target']['winrm_port'], 5985)
-        self.tcp_mock.assert_called_once_with('192.168.102.54', port=5985)
-        self.remote_mock.assert_called_once_with('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.tcp_mock.assert_called_once_with('192.168.102.54', 5985, timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.assertEqual(self.remote_mock.call_args.kwargs['pinned_address'], '192.168.102.54')
+
+    def test_multiple_a_records_probe_all_ports_and_select_working_interface(self):
+        addresses = ['192.168.100.3', '192.168.100.221']
+        self.dns_mock.return_value = {'lab-01.control.local': {
+            'dns_status': 'RESOLVED', 'primary_ipv4': addresses[0], 'ipv4_addresses': addresses}}
+
+        def tcp(address, port, *, timeout):
+            self.assertEqual(port, 5986)
+            self.assertLessEqual(timeout, 2)
+            if address == addresses[0]:
+                raise ProbeFailure('TCP_5986_TIMEOUT', stage='TCP_5986')
+            return True
+
+        self.tcp_mock.side_effect = tcp
+        result = self.run_probe()
+        self.assertEqual(result['status'], 'READY')
+        self.assertEqual(result['target']['ipv4_addresses'], addresses)
+        self.assertEqual(result['target']['selected_ip'], addresses[1])
+        self.assertEqual([call.kwargs['pinned_address'] for call in self.remote_mock.call_args_list], [addresses[1]])
+        self.assertEqual(result['target']['endpoint_attempts'][0]['code'], 'TCP_5986_TIMEOUT')
+        self.assertEqual(result['target']['endpoint_attempts'][1]['status'], 'SELECTED')
+
+    def test_open_port_with_wrong_remote_identity_is_rejected_and_next_a_record_is_checked(self):
+        addresses = ['192.168.100.3', '192.168.100.221']
+        self.dns_mock.return_value = {'lab-01.control.local': {
+            'dns_status': 'RESOLVED', 'primary_ipv4': addresses[0], 'ipv4_addresses': addresses}}
+        wrong = {**REMOTE_OK, 'hostname': 'other-pc', 'computer_sid': 'S-1-5-21-1-2-3-999'}
+
+        def remote(_fqdn, _username, _password, *, pinned_address, **_kwargs):
+            return wrong if pinned_address == addresses[0] else REMOTE_OK
+
+        self.remote_mock.side_effect = remote
+        result = self.run_probe()
+        self.assertEqual(result['status'], 'READY')
+        self.assertEqual(result['target']['selected_ip'], addresses[1])
+        self.assertEqual(result['target']['endpoint_attempts'][0]['status'], 'IDENTITY_MISMATCH')
+        self.assertEqual(result['target']['endpoint_attempts'][0]['code'], 'REMOTE_IDENTITY_MISMATCH')
+
+    def test_identity_unverifiable_fails_closed_when_no_candidate_matches_ad(self):
+        self.remote_mock.return_value = {**REMOTE_OK, 'computer_sid': ''}
+        result = self.run_probe()
+        self.assertEqual(result['status'], 'NOT_READY')
+        self.assertEqual(result['checks']['TARGET_IDENTITY']['code'], 'REMOTE_IDENTITY_UNVERIFIABLE')
+        self.assertIsNone(result['target'].get('selected_ip'))
+
+    def test_all_valid_interfaces_of_same_identity_are_safe_and_deterministic(self):
+        addresses = ['192.168.100.221', '192.168.100.3']
+        self.dns_mock.return_value = {'lab-01.control.local': {
+            'dns_status': 'RESOLVED', 'primary_ipv4': addresses[0], 'ipv4_addresses': addresses}}
+        result = self.run_probe()
+        self.assertEqual(result['status'], 'READY')
+        self.assertEqual(result['target']['selected_ip'], '192.168.100.3')
+        self.assertEqual(self.tcp_mock.call_count, 2)
+        self.assertEqual(self.remote_mock.call_count, 1)
 
     @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
@@ -198,7 +260,8 @@ class RemoteInstallPreflightTests(TestCase):
         self.tcp_mock.side_effect = preflight.ProbeFailure('TCP_5985_REFUSED', stage='TCP_5985')
         result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
         self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'TCP_5985_REFUSED')
-        self.tcp_mock.assert_called_once_with('192.168.102.54', port=5985)
+        self.tcp_mock.assert_called_once_with(
+            '192.168.102.54', 5985, timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
         self.remote_mock.assert_not_called()
 
     def test_auth_negotiation_failure_is_reported_in_authentication_check(self):
@@ -207,6 +270,7 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(result['checks']['REMOTE_TRANSPORT']['status'], 'PASS')
         self.assertEqual(result['checks']['AUTHENTICATION'], {
             'status': 'FAIL', 'code': 'AUTH_NEGOTIATION_FAILED'})
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['status'], 'PASS')
         self.assertEqual(result['status'], 'NOT_READY')
 
     def test_unsafe_dns_addresses_never_connect(self):
@@ -230,7 +294,8 @@ class RemoteInstallPreflightTests(TestCase):
                     'dns_status': 'RESOLVED', 'primary_ipv4': address, 'ipv4_addresses': [address],
                 }}
                 self.assertEqual(self.run_probe()['status'], 'READY')
-                self.tcp_mock.assert_called_with(address, port=5986)
+                self.tcp_mock.assert_called_with(
+                    address, 5986, timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
                 self.tcp_mock.reset_mock()
                 self.remote_mock.reset_mock()
 
@@ -267,7 +332,7 @@ class RemoteInstallPreflightTests(TestCase):
     def test_admin_windows_and_installation_detection(self):
         for changes, check in [({'admin': False}, 'ADMIN_PRIVILEGE'),
                                ({'architecture': 'x86'}, 'WINDOWS_COMPATIBILITY'),
-                               ({'hostname': 'other'}, 'WINDOWS_COMPATIBILITY'),
+                               ({'hostname': 'other'}, 'TARGET_IDENTITY'),
                                ({'nightowl_service_present': True}, 'NIGHTOWL_ABSENCE'),
                                ({'nightowl_directory_present': True}, 'NIGHTOWL_ABSENCE'),
                                ({'nightowl_directory_present': 'false'}, 'NIGHTOWL_ABSENCE')]:
@@ -611,6 +676,21 @@ class WinRMTrustTests(TestCase):
         self.assertEqual(session.verify, os.path.realpath(requests.certs.where()))
         self.assertEqual(protocol.transport.server_cert_validation, 'validate')
         self.assertTrue(protocol.transport.endpoint.startswith('https://'))
+        session.close()
+
+    def test_pinned_real_pywinrm_session_keeps_fqdn_and_routes_pool_to_selected_ip(self):
+        protocol = preflight._new_winrm_protocol('lab-01.control.local', 'SyntheticAdmin', SENTINEL,
+                                                  pinned_address='192.168.100.3')
+        session = protocol.transport.session
+        self.assertFalse(session.trust_env)
+        self.assertIn('https://lab-01.control.local:5986/wsman', protocol.transport.endpoint)
+        adapter = session.get_adapter(protocol.transport.endpoint)
+        pool = adapter.poolmanager.connection_from_url(protocol.transport.endpoint)
+        connection = pool._new_conn()
+        self.assertEqual(pool.host, 'lab-01.control.local')
+        self.assertEqual(connection._pinned_address, '192.168.100.3')
+        self.assertEqual(protocol.transport.server_cert_validation, 'validate')
+        self.assertEqual(session.verify, os.path.realpath(requests.certs.where()))
         session.close()
 
     def test_missing_unreadable_empty_and_invalid_bundle_fail_closed(self):

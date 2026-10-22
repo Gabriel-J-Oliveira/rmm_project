@@ -1,6 +1,7 @@
 """Ephemeral, read-only preflight for one AD computer."""
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 import json
 import os
@@ -13,6 +14,11 @@ from pathlib import Path
 import requests
 from cryptography import x509
 from django.conf import settings
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3 import poolmanager as urllib3_poolmanager
+from urllib3.poolmanager import PoolManager
+from urllib3.util.connection import create_connection
 
 from access_inventory.services.ad_computer_discovery import discover_ad_computers, normalize_fqdn
 from config import ad_ldap
@@ -20,13 +26,17 @@ from dashboard.ad_install_discovery import _machine_maps, _match_machine, resolv
 from dashboard.remote_install_audit import exception_type
 
 
-CHECKS = ('TARGET', 'DNS', 'REMOTE_TRANSPORT', 'AUTHENTICATION', 'ADMIN_PRIVILEGE',
+CHECKS = ('TARGET', 'DNS', 'REMOTE_TRANSPORT', 'AUTHENTICATION', 'TARGET_IDENTITY', 'ADMIN_PRIVILEGE',
           'WINDOWS_COMPATIBILITY', 'NIGHTOWL_ABSENCE')
 WINRM_HTTPS_PORT = 5986
 WINRM_HTTP_PORT = 5985
 WINRM_PORT = WINRM_HTTPS_PORT
 SOCKET_TIMEOUT_SECONDS = 3
+ENDPOINT_TCP_TIMEOUT_SECONDS = 1.5
+ENDPOINT_TCP_WORKERS = 4
+MAX_DNS_IPV4_CANDIDATES = 16
 WINRM_DEADLINE_SECONDS = 25
+IDENTITY_VALIDATION_TIMEOUT_SECONDS = 10
 MAX_OUTPUT_BYTES = 8192
 _DNS_LABEL = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
 _CORPORATE_NETWORKS = tuple(ipaddress.IPv4Network(network) for network in (
@@ -41,6 +51,14 @@ $principal = [Security.Principal.WindowsPrincipal]([Security.Principal.WindowsId
 $root = Join-Path $env:ProgramData 'NightOwl'
 $agentInstall = Join-Path $root 'AgentDotNet'
 $agentExe = Join-Path $agentInstall 'NightOwl.Agent.Windows.exe'
+$cs = Get-CimInstance -ClassName Win32_ComputerSystem
+$dnsDomain = [string](Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters').Domain
+$computerSid = $null
+try {
+    $account = [Security.Principal.NTAccount]::new([string]$cs.Domain, ([string]$env:COMPUTERNAME + '$'))
+    $computerSid = $account.Translate([Security.Principal.SecurityIdentifier]).Value
+} catch { }
+$identityDomain = if ($dnsDomain) { $dnsDomain } else { [string]$cs.Domain }
 [pscustomobject]@{
     hostname = [string]$env:COMPUTERNAME
     windows_name = [string]$os.ProductName
@@ -49,8 +67,11 @@ $agentExe = Join-Path $agentInstall 'NightOwl.Agent.Windows.exe'
     powershell_major = [int]$PSVersionTable.PSVersion.Major
     admin = [bool]$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     nightowl_service_present = [bool](Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue)
-    # Legacy JSON field now represents installed executable evidence, not a partial directory.
+    # This field represents installed executable evidence, not a partial directory.
     nightowl_directory_present = [bool](Test-Path -LiteralPath $agentExe -PathType Leaf)
+    part_of_domain = [bool]$cs.PartOfDomain
+    domain = [string]$identityDomain
+    computer_sid = [string]$computerSid
 } | ConvertTo-Json -Compress
 '''
 
@@ -61,6 +82,73 @@ class ProbeFailure(Exception):
         self.stage = stage
         self.exception_type = exception
         super().__init__(code)
+
+
+class _PinnedAddressMixin:
+    """Connect to a selected address while retaining the URL host for Host/SNI/verification."""
+
+    def _new_conn(self):
+        address = getattr(self, '_pinned_address', None)
+        if not address:
+            return super()._new_conn()
+        return create_connection((address, self.port), self.timeout,
+                                 source_address=self.source_address, socket_options=self.socket_options)
+
+
+class _PinnedHTTPConnection(_PinnedAddressMixin, HTTPConnection):
+    pass
+
+
+class _PinnedHTTPSConnection(_PinnedAddressMixin, HTTPSConnection):
+    pass
+
+
+class _PinnedHTTPConnectionPool(HTTPConnectionPool):
+    ConnectionCls = _PinnedHTTPConnection
+
+    def _new_conn(self):
+        connection = super()._new_conn()
+        connection._pinned_address = self._pinned_address
+        return connection
+
+
+class _PinnedHTTPSConnectionPool(HTTPSConnectionPool):
+    ConnectionCls = _PinnedHTTPSConnection
+
+    def _new_conn(self):
+        connection = super()._new_conn()
+        connection._pinned_address = self._pinned_address
+        return connection
+
+
+class _PinnedPoolManager(PoolManager):
+    def __init__(self, *args, pinned_address, **kwargs):
+        self.pinned_address = pinned_address
+        super().__init__(*args, **kwargs)
+        # urllib3 initializes this instance attribute from its global mapping,
+        # overriding any class-level mapping supplied by a subclass.
+        self.pool_classes_by_scheme = dict(urllib3_poolmanager.pool_classes_by_scheme)
+        self.pool_classes_by_scheme.update(http=_PinnedHTTPConnectionPool, https=_PinnedHTTPSConnectionPool)
+
+    def _new_pool(self, scheme, host, port, request_context=None):
+        pool = super()._new_pool(scheme, host, port, request_context)
+        pool._pinned_address = self.pinned_address
+        return pool
+
+
+class _PinnedAddressAdapter(requests.adapters.HTTPAdapter):
+    def __init__(self, address):
+        self.address = address
+        super().__init__()
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        self._pool_connections = connections
+        self._pool_maxsize = maxsize
+        self._pool_block = block
+        self.poolmanager = _PinnedPoolManager(
+            num_pools=connections, maxsize=maxsize, block=block,
+            pinned_address=self.address, **pool_kwargs,
+        )
 
 
 def _result(checks, target=None, windows=None):
@@ -146,11 +234,11 @@ def _winrm_transport_for(fqdn):
             'label': 'HTTPS_TLS_VALIDATED'}
 
 
-def _tcp_available(address, port=WINRM_HTTPS_PORT):
+def _tcp_available(address, port=WINRM_HTTPS_PORT, *, timeout=SOCKET_TIMEOUT_SECONDS):
     if port not in (WINRM_HTTP_PORT, WINRM_HTTPS_PORT):
         raise ProbeFailure('WINRM_PORT_NOT_ALLOWED', stage='REMOTE_TRANSPORT')
     try:
-        with socket.create_connection((address, port), timeout=SOCKET_TIMEOUT_SECONDS):
+        with socket.create_connection((address, port), timeout=timeout):
             return True
     except OSError as exc:
         prefix = f'TCP_{port}'
@@ -172,6 +260,51 @@ def _safe_ipv4(value):
     return address.is_global or any(address in network for network in _CORPORATE_NETWORKS)
 
 
+def _tcp_candidate_results(addresses, port):
+    """Probe every bounded A-record candidate concurrently and return deterministic results."""
+    results = {}
+    if not addresses:
+        return results
+
+    def probe(address):
+        try:
+            available = _tcp_available(address, port, timeout=ENDPOINT_TCP_TIMEOUT_SECONDS)
+            if available:
+                return address, {'tcp_status': 'OPEN', 'code': None}
+            return address, {'tcp_status': 'FAIL', 'code': f'TCP_{port}_UNAVAILABLE'}
+        except ProbeFailure as exc:
+            return address, {'tcp_status': 'FAIL', 'code': exc.code,
+                             'exception_type': exc.exception_type}
+        except Exception as exc:
+            return address, {'tcp_status': 'FAIL', 'code': f'TCP_{port}_UNAVAILABLE',
+                             'exception_type': exception_type(exc)}
+
+    with ThreadPoolExecutor(max_workers=min(ENDPOINT_TCP_WORKERS, len(addresses))) as executor:
+        futures = [executor.submit(probe, address) for address in addresses]
+        for future in as_completed(futures):
+            address, result = future.result()
+            results[address] = result
+    return {address: results[address] for address in addresses}
+
+
+def _remote_identity_failure(remote, computer):
+    expected_fqdn = normalize_fqdn(computer.get('fqdn'))
+    expected_hostname = str(computer.get('hostname') or expected_fqdn.split('.', 1)[0]).strip().casefold()
+    expected_domain = expected_fqdn.partition('.')[2]
+    expected_sid = _valid_sid(computer.get('sid'))
+    if not expected_fqdn or not expected_sid:
+        return 'TARGET_IDENTITY_UNVERIFIABLE'
+    hostname = str(remote.get('hostname') or '').strip().casefold()
+    domain = normalize_fqdn(remote.get('domain'))
+    remote_sid = _valid_sid(remote.get('computer_sid'))
+    if (remote.get('part_of_domain') is not True or hostname != expected_hostname or
+            domain != expected_domain):
+        return 'REMOTE_IDENTITY_MISMATCH'
+    if not remote_sid:
+        return 'REMOTE_IDENTITY_UNVERIFIABLE'
+    return '' if remote_sid == expected_sid else 'REMOTE_IDENTITY_MISMATCH'
+
+
 def _block_redirects(session):
     send = session.send
 
@@ -186,9 +319,21 @@ def _block_redirects(session):
     session.send = send_without_redirects
 
 
-def _build_guarded_winrm_session(protocol):
+def _build_guarded_winrm_session(protocol, pinned_address=None):
     transport = protocol.transport
     setup_encryption = transport.setup_encryption
+    build_session = transport.build_session
+
+    def build_session_with_pin():
+        session = build_session()
+        if pinned_address:
+            # Keep the FQDN in the request URL for Host, TLS SNI and certificate
+            # hostname validation; only the socket destination is pinned.
+            session.trust_env = False
+            adapter = _PinnedAddressAdapter(pinned_address)
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+        return session
 
     def setup_encryption_without_redirects(session):
         _block_redirects(session)
@@ -197,10 +342,12 @@ def _build_guarded_winrm_session(protocol):
     # pywinrm may perform an NTLM exchange inside build_session() when HTTP
     # message encryption is forced. Install the redirect guard before that call.
     transport.setup_encryption = setup_encryption_without_redirects
+    transport.build_session = build_session_with_pin
     try:
         session = transport.build_session()
     finally:
         del transport.setup_encryption
+        del transport.build_session
     _block_redirects(session)
     return session
 
@@ -236,10 +383,12 @@ def _winrm_ca_trust_path():
     return os.path.realpath(path)
 
 
-def _new_winrm_protocol(fqdn, username, password):
+def _new_winrm_protocol(fqdn, username, password, *, pinned_address=None):
     normalized_fqdn = _valid_fqdn(fqdn)
     if not normalized_fqdn:
         raise ProbeFailure('INVALID_TARGET')
+    if pinned_address is not None and not _safe_ipv4(pinned_address):
+        raise ProbeFailure('UNSAFE_TARGET_ADDRESS', stage='DNS')
     transport = _winrm_transport_for(normalized_fqdn)
     ca_trust_path = _winrm_ca_trust_path() if transport['scheme'] == 'https' else None
     from winrm.protocol import Protocol
@@ -252,7 +401,7 @@ def _new_winrm_protocol(fqdn, username, password):
         ca_trust_path=ca_trust_path,
         proxy=None, operation_timeout_sec=3, read_timeout_sec=5,
     )
-    _build_guarded_winrm_session(protocol)
+    _build_guarded_winrm_session(protocol, pinned_address)
     return protocol
 
 
@@ -282,7 +431,8 @@ def _winrm_failure(exc, stage):
     return ProbeFailure(code, stage=stage, exception=exception_type(exc))
 
 
-def _winrm_probe(fqdn, username, password):
+def _winrm_probe(fqdn, username, password, *, pinned_address=None, expected_computer=None,
+                 deadline=None):
     try:
         from winrm.exceptions import WinRMOperationTimeoutError
     except ImportError:
@@ -293,8 +443,8 @@ def _winrm_probe(fqdn, username, password):
     command_id = None
     stage = 'WINRM_SESSION'
     try:
-        protocol = _new_winrm_protocol(fqdn, username, password)
-        deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
+        protocol = _new_winrm_protocol(fqdn, username, password, pinned_address=pinned_address)
+        deadline = min(deadline, time.monotonic() + WINRM_DEADLINE_SECONDS) if deadline else time.monotonic() + WINRM_DEADLINE_SECONDS
         stage = 'WINRM_SESSION'
         shell_id = protocol.open_shell()
         encoded = base64.b64encode(_READ_ONLY_PROBE.encode('utf-16-le')).decode('ascii')
@@ -320,6 +470,11 @@ def _winrm_probe(fqdn, username, password):
                     raise ProbeFailure('REMOTE_OUTPUT_INVALID') from None
                 if not isinstance(data, dict):
                     raise ProbeFailure('REMOTE_OUTPUT_INVALID')
+                if expected_computer is not None:
+                    stage = 'IDENTITY_VALIDATION'
+                    identity_failure = _remote_identity_failure(data, expected_computer)
+                    if identity_failure:
+                        raise ProbeFailure(identity_failure, stage=stage)
                 return data
         raise ProbeFailure('REMOTE_TIMEOUT')
     except Exception as exc:
@@ -333,6 +488,55 @@ def _winrm_probe(fqdn, username, password):
                     pass
             try:
                 protocol.close_shell(shell_id)
+            except Exception:
+                pass
+
+
+def _verify_remote_identity_session(protocol, shell_id, computer):
+    """Reconfirm AD identity on the exact pinned WinRM session before dispatch."""
+    try:
+        from winrm.exceptions import WinRMOperationTimeoutError
+    except ImportError:
+        raise ProbeFailure('WINRM_CLIENT_UNAVAILABLE', stage='IDENTITY_VALIDATION') from None
+    command_id = None
+    try:
+        encoded = base64.b64encode(_READ_ONLY_PROBE.encode('utf-16-le')).decode('ascii')
+        command_id = protocol.run_command(shell_id, 'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded])
+        if not command_id:
+            raise ProbeFailure('REMOTE_PROBE_FAILED', stage='IDENTITY_VALIDATION')
+        deadline = time.monotonic() + IDENTITY_VALIDATION_TIMEOUT_SECONDS
+        output = bytearray()
+        while time.monotonic() < deadline:
+            try:
+                chunk, _stderr, exit_code, done = protocol.get_command_output_raw(shell_id, command_id)
+            except WinRMOperationTimeoutError:
+                continue
+            if len(output) + len(chunk) > MAX_OUTPUT_BYTES:
+                raise ProbeFailure('REMOTE_OUTPUT_INVALID', stage='IDENTITY_VALIDATION')
+            output.extend(chunk)
+            if done:
+                if exit_code != 0:
+                    raise ProbeFailure('REMOTE_PROBE_FAILED', stage='IDENTITY_VALIDATION')
+                try:
+                    remote = json.loads(output.decode('utf-8-sig'))
+                except (UnicodeError, ValueError):
+                    raise ProbeFailure('REMOTE_OUTPUT_INVALID', stage='IDENTITY_VALIDATION') from None
+                if not isinstance(remote, dict):
+                    raise ProbeFailure('REMOTE_OUTPUT_INVALID', stage='IDENTITY_VALIDATION')
+                code = _remote_identity_failure(remote, computer)
+                if code:
+                    raise ProbeFailure(code, stage='IDENTITY_VALIDATION')
+                return remote
+        raise ProbeFailure('REMOTE_TIMEOUT', stage='IDENTITY_VALIDATION')
+    except ProbeFailure:
+        raise
+    except Exception as exc:
+        raise _winrm_failure(exc, 'IDENTITY_VALIDATION') from None
+    finally:
+        if command_id:
+            try:
+                protocol.cleanup_command(shell_id, command_id)
             except Exception:
                 pass
 
@@ -353,46 +557,100 @@ def run_remote_install_preflight(fqdn, username, password):
         return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
     target['winrm_transport'] = transport['label']
     target['winrm_port'] = transport['port']
+    if not _valid_sid(computer.get('sid')):
+        target['endpoint_attempts'] = []
+        return _fail(checks, 'TARGET_IDENTITY', 'TARGET_IDENTITY_UNVERIFIABLE', target)
     try:
         dns = resolve_computer_dns([computer]).get(target['fqdn'], {})
     except Exception as exc:
         failure = ProbeFailure('DNS_UNRESOLVED', stage='DNS', exception=exception_type(exc))
         return _fail(checks, 'DNS', failure.code, target, failure=failure)
-    address = dns.get('primary_ipv4')
-    if dns.get('dns_status') != 'RESOLVED' or not address:
-        return _fail(checks, 'DNS', 'DNS_UNRESOLVED', target)
     addresses = dns.get('ipv4_addresses', [])
-    if not isinstance(addresses, (list, tuple)) or not all(_safe_ipv4(item) for item in [address, *addresses]):
+    if dns.get('dns_status') != 'RESOLVED' or not isinstance(addresses, (list, tuple)) or not addresses:
+        return _fail(checks, 'DNS', 'DNS_UNRESOLVED', target)
+    if len(addresses) > MAX_DNS_IPV4_CANDIDATES:
+        return _fail(checks, 'DNS', 'DNS_ANSWER_LIMIT', target)
+    if not all(_safe_ipv4(item) for item in addresses):
         return _fail(checks, 'DNS', 'UNSAFE_TARGET_ADDRESS', target)
-    target['ip'] = address
-    target['ipv4_addresses'] = sorted(set([address, *addresses]))
+    addresses = sorted(set(addresses), key=ipaddress.IPv4Address)
+    target['ipv4_addresses'] = addresses
+    target['endpoint_attempts'] = []
     checks['DNS'] = {'status': 'PASS'}
     if transport['scheme'] == 'https':
         try:
             _winrm_ca_trust_path()
         except ProbeFailure as exc:
             return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
-    try:
-        if not _tcp_available(address, port=transport['port']):
-            code = f"TCP_{transport['port']}_UNAVAILABLE"
-            return _fail(checks, 'REMOTE_TRANSPORT', code, target,
-                         failure=ProbeFailure(code, stage=f"TCP_{transport['port']}"))
-    except ProbeFailure as exc:
-        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
-    checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
+    tcp_results = _tcp_candidate_results(addresses, transport['port'])
+    target['endpoint_attempts'] = [
+        {'ip': address, **tcp_results[address],
+         'status': 'TCP_OPEN' if tcp_results[address]['tcp_status'] == 'OPEN' else 'TCP_FAILED'}
+        for address in addresses
+    ]
+    candidates = [entry['ip'] for entry in target['endpoint_attempts'] if entry['tcp_status'] == 'OPEN']
+    if not candidates:
+        codes = [entry.get('code') for entry in target['endpoint_attempts'] if entry.get('code')]
+        code = next((candidate for candidate in (
+            f'TCP_{transport["port"]}_TIMEOUT', f'TCP_{transport["port"]}_REFUSED',
+            f'TCP_{transport["port"]}_UNAVAILABLE') if candidate in codes),
+            f'TCP_{transport["port"]}_UNAVAILABLE')
+        return _fail(checks, 'REMOTE_TRANSPORT', code, target,
+                     failure=ProbeFailure(code, stage=f'TCP_{transport["port"]}'))
     if not isinstance(username, str) or not username.strip() or len(username) > 256 or not username.isprintable() or \
             not isinstance(password, str) or not password or len(password) > 512 or not password.isprintable():
         return _fail(checks, 'AUTHENTICATION', 'CREDENTIAL_REQUIRED', target)
-    try:
-        # WinRM resolves the FQDN again; TLS hostname validation remains required, but DNS is not pinned in this MVP.
-        remote = _winrm_probe(target['fqdn'], username.strip(), password)
-    except ProbeFailure as exc:
-        key = 'AUTHENTICATION' if exc.code in (
-            'AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED', 'CREDENTIAL_REQUIRED') else 'REMOTE_TRANSPORT'
-        if exc.code == 'WINRM_AUTHORIZATION_DENIED':
-            key = 'ADMIN_PRIVILEGE'
-        return _fail(checks, key, exc.code, target, failure=exc)
+    deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
+    remote = None
+    last_failure = None
+    for address in candidates:
+        try:
+            candidate_remote = _winrm_probe(target['fqdn'], username.strip(), password,
+                                            pinned_address=address, expected_computer=computer,
+                                            deadline=deadline)
+            identity_failure = _remote_identity_failure(candidate_remote, computer)
+            if identity_failure:
+                raise ProbeFailure(identity_failure, stage='IDENTITY_VALIDATION')
+            remote = candidate_remote
+            target['selected_ip'] = address
+            target['ip'] = address
+            target['endpoint_attempts'][addresses.index(address)]['status'] = 'SELECTED'
+            break
+        except ProbeFailure as exc:
+            last_failure = exc
+            entry = target['endpoint_attempts'][addresses.index(address)]
+            entry.update(status='IDENTITY_MISMATCH' if exc.code == 'REMOTE_IDENTITY_MISMATCH' else
+                         'IDENTITY_UNVERIFIABLE' if exc.code in ('REMOTE_IDENTITY_UNVERIFIABLE',
+                                                                 'TARGET_IDENTITY_UNVERIFIABLE') else 'WINRM_FAILED',
+                         code=exc.code, stage=exc.stage, exception_type=exc.exception_type)
+            if exc.code in ('AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED',
+                             'WINRM_AUTHORIZATION_DENIED', 'CREDENTIAL_REQUIRED'):
+                break
+            if time.monotonic() >= deadline:
+                break
+    if remote is None:
+        observed_identity_mismatch = any(entry.get('status') == 'IDENTITY_MISMATCH'
+                                         for entry in target['endpoint_attempts'])
+        observed_identity_failure = observed_identity_mismatch or any(
+            entry.get('status') == 'IDENTITY_UNVERIFIABLE' for entry in target['endpoint_attempts'])
+        if observed_identity_failure:
+            checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
+            checks['AUTHENTICATION'] = {'status': 'PASS'}
+            identity_code = ('REMOTE_IDENTITY_MISMATCH' if observed_identity_mismatch
+                             else 'REMOTE_IDENTITY_UNVERIFIABLE')
+            return _fail(checks, 'TARGET_IDENTITY', identity_code, target, failure=last_failure)
+        if last_failure:
+            if last_failure.code in ('AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED',
+                                     'WINRM_AUTHORIZATION_DENIED'):
+                checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
+            key = 'AUTHENTICATION' if last_failure.code in (
+                'AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED', 'CREDENTIAL_REQUIRED') else 'REMOTE_TRANSPORT'
+            if last_failure.code == 'WINRM_AUTHORIZATION_DENIED':
+                key = 'ADMIN_PRIVILEGE'
+            return _fail(checks, key, last_failure.code, target, failure=last_failure)
+        return _fail(checks, 'REMOTE_TRANSPORT', 'WINRM_UNAVAILABLE', target)
+    checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
     checks['AUTHENTICATION'] = {'status': 'PASS'}
+    checks['TARGET_IDENTITY'] = {'status': 'PASS'}
     if type(remote.get('admin')) is not bool or not remote['admin']:
         checks['ADMIN_PRIVILEGE'] = {'status': 'FAIL', 'code': 'ADMIN_REQUIRED'}
     else:

@@ -25,10 +25,14 @@ MESSAGES = {
     'WINRM_AUTHORIZATION_DENIED': 'O WinRM recusou a autorizacao para a operacao solicitada.',
     'WINRM_HTTP_ERROR': 'O endpoint WinRM retornou uma falha HTTP.',
     'WINRM_PROTOCOL_ERROR': 'O protocolo WinRM falhou; consulte a etapa e o tipo da excecao.',
+    'REMOTE_IDENTITY_MISMATCH': 'O equipamento que respondeu nao corresponde a identidade validada no AD.',
+    'REMOTE_IDENTITY_UNVERIFIABLE': 'Nao foi possivel confirmar a identidade do equipamento remoto.',
+    'TARGET_IDENTITY_UNVERIFIABLE': 'O AD nao forneceu SID valido para confirmar a identidade do computador.',
+    'DNS_ANSWER_LIMIT': 'O DNS retornou enderecos demais para validar com seguranca.',
     'PREFLIGHT_INTERNAL_ERROR': 'O preflight nao pode ser concluido; consulte o diagnostico sanitizado.',
 }
 STAGES = {'ADMISSION', 'TARGET', 'DNS', 'CA_TRUST', 'TCP_5985', 'TCP_5986', 'WINRM_SESSION',
-          'REMOTE_EXECUTION', 'REMOTE_INPUT', 'REMOTE_OUTPUT', 'AUTHENTICATION', 'ADMIN_PRIVILEGE',
+          'REMOTE_EXECUTION', 'REMOTE_INPUT', 'REMOTE_OUTPUT', 'AUTHENTICATION', 'IDENTITY_VALIDATION', 'ADMIN_PRIVILEGE',
           'WINDOWS_COMPATIBILITY', 'NIGHTOWL_ABSENCE', 'PREFLIGHT', 'REMOTE_TRANSPORT'}
 STAGES |= {'VALIDATING_TARGET', 'VALIDATING_INSTALLER', 'CONNECTING', 'AUTHENTICATED',
            'PREFLIGHT_OK', 'PREPARING_ENROLLMENT', 'INSTALLING', 'INSTALLER_STARTED',
@@ -51,7 +55,7 @@ def safe_code(value):
 
 def sanitize_report(data):
     """Never project arbitrary JSON, exception text, credentials or remote output."""
-    from dashboard.remote_install_preflight import CHECKS, _valid_fqdn
+    from dashboard.remote_install_preflight import CHECKS, _safe_ipv4, _valid_fqdn
     data = data if isinstance(data, dict) else {}
     report = {}
     for key in ('correlation_id', 'batch_id', 'job_id'):
@@ -63,12 +67,50 @@ def sanitize_report(data):
     requested = _valid_fqdn(data.get('requested_fqdn'))
     report.update(fqdn=fqdn, requested_fqdn=requested, hostname=(requested or fqdn).split('.')[0])
     try:
-        report['resolved_ip'] = str(ipaddress.ip_address(data.get('resolved_ip')))
+        report['resolved_ip'] = str(ipaddress.IPv4Address(data.get('resolved_ip')))
     except (ValueError, TypeError):
+        report['resolved_ip'] = None
+    if report['resolved_ip'] and not _safe_ipv4(report['resolved_ip']):
         report['resolved_ip'] = None
     report['winrm_transport'] = (data.get('winrm_transport') if data.get('winrm_transport') in
                                  ('HTTPS_TLS_VALIDATED', 'HTTP_NTLM_ENCRYPTED') else '')
     report['winrm_port'] = data.get('winrm_port') if data.get('winrm_port') in (5985, 5986) else None
+    report['selected_ip'] = report['resolved_ip']
+    raw_ips = data.get('discovered_ipv4_addresses', [])
+    report['discovered_ipv4_addresses'] = []
+    if isinstance(raw_ips, (list, tuple)):
+        for value in raw_ips[:16]:
+            try:
+                address = str(ipaddress.IPv4Address(value))
+                if _safe_ipv4(address) and address not in report['discovered_ipv4_addresses']:
+                    report['discovered_ipv4_addresses'].append(address)
+            except (ValueError, TypeError):
+                continue
+    report['endpoint_attempts'] = []
+    attempts = data.get('endpoint_attempts', [])
+    if isinstance(attempts, (list, tuple)):
+        for attempt in attempts[:16]:
+            if not isinstance(attempt, dict):
+                continue
+            try:
+                address = str(ipaddress.IPv4Address(attempt.get('ip')))
+            except (ValueError, TypeError):
+                continue
+            if not _safe_ipv4(address):
+                continue
+            status = attempt.get('status')
+            if status not in ('TCP_FAILED', 'TCP_OPEN', 'WINRM_FAILED', 'IDENTITY_MISMATCH',
+                              'IDENTITY_UNVERIFIABLE', 'SELECTED', 'FAILED', 'COMPLETED'):
+                status = 'WINRM_FAILED'
+            item = {'ip': address, 'tcp_status': attempt.get('tcp_status')
+                    if attempt.get('tcp_status') in ('OPEN', 'FAIL') else 'FAIL', 'status': status}
+            if attempt.get('code'):
+                item['code'] = safe_code(attempt['code'])
+            if attempt.get('stage') in STAGES:
+                item['stage'] = attempt['stage']
+            if attempt.get('exception_type') in EXCEPTION_TYPES:
+                item['exception_type'] = attempt['exception_type']
+            report['endpoint_attempts'].append(item)
     for key in ('started_at', 'finished_at'):
         try:
             from datetime import datetime
@@ -104,9 +146,10 @@ class InstallAttempt:
 
     def record(self, ending):
         report = sanitize_report(self.data)
-        logger.info('remote_install.attempt correlation_id=%s fqdn=%s stage=%s result=%s code=%s exception_type=%s',
+        logger.info('remote_install.attempt correlation_id=%s fqdn=%s stage=%s result=%s code=%s exception_type=%s selected_ip=%s candidates=%s',
                     report['correlation_id'], report['fqdn'], report['stage'], report['result'],
-                    report['code'], report['exception_type'])
+                    report['code'], report['exception_type'], report['selected_ip'],
+                    ','.join(report['discovered_ipv4_addresses']))
         try:
             AuditEvent.objects.create(event_type='remote_install.' + self.phase + ('.finished' if ending else '.started'),
                 title='Instalacao remota: ' + (report['hostname'] or 'alvo invalido'),
@@ -129,7 +172,9 @@ class InstallAttempt:
                        if isinstance(check, dict) and check.get('status') == 'FAIL'), ('PREFLIGHT', {}))
         target = result.get('target') or {}
         self.data.update(result=result.get('status'), checks=checks, fqdn=target.get('fqdn', self.data['fqdn']),
-                         resolved_ip=target.get('ip'), code=failed[1].get('code', ''),
+                         resolved_ip=target.get('selected_ip') or target.get('ip'),
+                         discovered_ipv4_addresses=target.get('ipv4_addresses', []),
+                         endpoint_attempts=target.get('endpoint_attempts', []), code=failed[1].get('code', ''),
                          stage=failed[1].get('stage', failed[0]),
                          exception_type=failed[1].get('exception_type', ''),
                          winrm_transport=target.get('winrm_transport', ''),
@@ -189,6 +234,11 @@ def record_execution_failure(job, exc):
         previous = None
     if previous:
         report = sanitize_report(previous.metadata)
-        attempt.data.update(resolved_ip=report['resolved_ip'], checks=report['checks'])
+        diagnostics = job.diagnostics if isinstance(job.diagnostics, dict) else {}
+        attempt.data.update(resolved_ip=diagnostics.get('selected_endpoint_ip') or report['resolved_ip'],
+            discovered_ipv4_addresses=report['discovered_ipv4_addresses'],
+            endpoint_attempts=(diagnostics.get('endpoint_attempts') or report['endpoint_attempts']),
+            checks=report['checks'],
+            winrm_transport=report['winrm_transport'], winrm_port=report['winrm_port'])
     attempt.data['started_at'] = (job.started_at or job.created_at).isoformat()
     attempt.__exit__(type(exc), exc, None)

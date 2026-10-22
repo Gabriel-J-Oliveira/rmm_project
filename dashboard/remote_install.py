@@ -23,7 +23,8 @@ from dashboard.remote_install_admission import install_admission
 from dashboard.installer_contract import InstallerContractFailure
 from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
-    CHECKS, ProbeFailure, _ad_target, _ad_identity_matches, _new_winrm_protocol, _winrm_failure, run_remote_install_preflight,
+    CHECKS, ProbeFailure, _ad_target, _ad_identity_matches, _new_winrm_protocol,
+    _verify_remote_identity_session, _winrm_failure, _safe_ipv4, run_remote_install_preflight,
 )
 from dashboard.remote_install_audit import audit_admission, audited_preflight, exception_type, record_execution_failure
 
@@ -281,7 +282,8 @@ def _trusted_urls():
     return base, installer
 
 
-def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, before_send=None, lease_job_id=None, enrollment_token=None):
+def _remote_script(fqdn, username, password, script, timeout, *, endpoint_ip, expected_computer,
+                   on_event=None, before_send=None, lease_job_id=None, enrollment_token=None):
     from winrm.exceptions import WinRMOperationTimeoutError
 
     try:
@@ -302,8 +304,10 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
             payload = base64.b64encode(script.encode('ascii')) + b'\n' + enrollment_token.encode('ascii') + b'\n'
     except (AttributeError, UnicodeError, ValueError):
         raise InstallFailure('REMOTE_SCRIPT_INVALID', command_attempted=False) from None
+    if not _safe_ipv4(endpoint_ip) or not isinstance(expected_computer, dict) or not expected_computer.get('sid'):
+        raise InstallFailure('TARGET_IDENTITY_UNVERIFIABLE', command_attempted=False, stage='IDENTITY_VALIDATION')
     try:
-        protocol = _new_winrm_protocol(fqdn, username, password)
+        protocol = _new_winrm_protocol(fqdn, username, password, pinned_address=endpoint_ip)
     except Exception as exc:
         failure = _winrm_failure(exc, 'CA_TRUST')
         raise InstallFailure(failure.code, command_attempted=False,
@@ -313,6 +317,8 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
     diagnostic_stage = 'WINRM_SESSION'
     try:
         shell_id = protocol.open_shell()
+        diagnostic_stage = 'IDENTITY_VALIDATION'
+        _verify_remote_identity_session(protocol, shell_id, expected_computer)
         diagnostic_stage = 'REMOTE_EXECUTION'
         command_id = protocol.run_command(shell_id, 'powershell.exe', arguments)
         if not command_id:
@@ -373,6 +379,57 @@ def _remote_script(fqdn, username, password, script, timeout, *, on_event=None, 
                 protocol.close_shell(shell_id)
             except Exception:
                 pass
+
+
+_PRE_DISPATCH_RETRY_CODES = {
+    'WINRM_CONNECTION_FAILED', 'WINRM_REQUEST_TIMEOUT', 'TLS_HANDSHAKE_FAILED',
+    'TLS_VALIDATION_FAILED', 'WINRM_HTTP_ERROR', 'REMOTE_TIMEOUT', 'REMOTE_PROBE_FAILED',
+    'REMOTE_IDENTITY_MISMATCH', 'REMOTE_IDENTITY_UNVERIFIABLE',
+}
+
+
+def _remote_script_candidates(fqdn, username, password, script, timeout, *, endpoint_candidates,
+                              selected_ip, expected_computer, on_endpoint_attempt=None,
+                              on_selected_endpoint=None, on_event=None, lease_job_id=None,
+                              enrollment_token=None):
+    open_ips = [entry.get('ip') for entry in endpoint_candidates
+                if isinstance(entry, dict) and entry.get('tcp_status') == 'OPEN'
+                and _safe_ipv4(entry.get('ip'))]
+    if not _safe_ipv4(selected_ip) or selected_ip not in open_ips:
+        raise InstallFailure('TARGET_IDENTITY_UNVERIFIABLE', command_attempted=False,
+                             stage='IDENTITY_VALIDATION')
+    ordered = [selected_ip, *[address for address in open_ips if address != selected_ip]]
+    seen = set()
+    ordered = [address for address in ordered if address and not (address in seen or seen.add(address))]
+    attempts = []
+    last_failure = None
+    for index, address in enumerate(ordered):
+        try:
+            def before_send():
+                if on_selected_endpoint:
+                    on_selected_endpoint(address, list(attempts))
+
+            code = _remote_script(fqdn, username, password, script, timeout,
+                endpoint_ip=address, expected_computer=expected_computer, on_event=on_event,
+                before_send=before_send, lease_job_id=lease_job_id, enrollment_token=enrollment_token)
+            attempts.append({'ip': address, 'tcp_status': 'OPEN', 'status': 'COMPLETED', 'code': None})
+            if on_endpoint_attempt:
+                on_endpoint_attempt(list(attempts))
+            return code, address, attempts
+        except InstallFailure as exc:
+            last_failure = exc
+            attempts.append({'ip': address, 'tcp_status': 'OPEN', 'status': 'FAILED', 'code': exc.code,
+                             'stage': exc.stage, 'exception_type': exc.exception_type})
+            if on_endpoint_attempt:
+                on_endpoint_attempt(list(attempts))
+            if (exc.command_attempted is not False or exc.code not in _PRE_DISPATCH_RETRY_CODES
+                    or index == len(ordered) - 1):
+                exc.endpoint_attempts = attempts
+                raise
+    if last_failure:
+        last_failure.endpoint_attempts = attempts
+        raise last_failure
+    raise InstallFailure('WINRM_UNAVAILABLE', command_attempted=False, stage='REMOTE_TRANSPORT')
 
 
 def _installer_script(contract):
@@ -568,6 +625,8 @@ def run_remote_install(job_id, username, password):
     deployment = None
     job = None
     preflight = None
+    selected_endpoint_ip = None
+    endpoint_candidates = []
     def installer_event(event, code):
         nonlocal stage, install_started, installer_finished, installer_exit_code, not_started_code
         if event == 'NOT_STARTED' and not install_started and code in (25, 26, 27, 28, 29):
@@ -615,6 +674,18 @@ def run_remote_install(job_id, username, password):
         if preflight['status'] != 'READY':
             failed = next((item for item in preflight['checks'].values() if item['status'] == 'FAIL'), {})
             raise InstallFailure(failed.get('code', 'PREFLIGHT_FAILED'))
+        endpoint = preflight.get('target') or {}
+        selected_endpoint_ip = endpoint.get('selected_ip')
+        endpoint_candidates = endpoint.get('endpoint_attempts') or []
+        if not _safe_ipv4(selected_endpoint_ip):
+            raise InstallFailure('TARGET_IDENTITY_UNVERIFIABLE', stage='IDENTITY_VALIDATION')
+        _update(job_id, 'PREFLIGHT_OK', diagnostic={
+            'discovered_ipv4_addresses': endpoint.get('ipv4_addresses', [])[:16],
+            'preflight_selected_ip': selected_endpoint_ip,
+            'endpoint_attempts': endpoint_candidates[:16],
+            'winrm_transport': endpoint.get('winrm_transport'),
+            'winrm_port': endpoint.get('winrm_port'),
+        })
         try:
             computer = _ad_target(job.target_fqdn)
         except ProbeFailure as exc:
@@ -637,9 +708,22 @@ def run_remote_install(job_id, username, password):
         stage = 'INSTALLING'
         invocation_attempted = True
         _update(job_id, stage, diagnostic={'safe_to_retry': 'NO', 'invocation_attempted': True})
-        code = _remote_script(job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT,
-                              on_event=installer_event,
-                              lease_job_id=job_id, enrollment_token=enrollment_token)
+
+        def record_endpoint_attempts(attempts):
+            _update(job_id, 'INSTALLING', diagnostic={'endpoint_attempts': attempts[:16]})
+
+        def record_selected_endpoint(address, attempts):
+            nonlocal selected_endpoint_ip
+            selected_endpoint_ip = address
+            _update(job_id, 'INSTALLING', diagnostic={'selected_endpoint_ip': address,
+                'endpoint_attempts': attempts[:16]})
+
+        code, selected_endpoint_ip, _attempts = _remote_script_candidates(
+            job.target_fqdn, username, password, installer_script, INSTALL_TIMEOUT,
+            endpoint_candidates=endpoint_candidates, selected_ip=selected_endpoint_ip,
+            expected_computer=computer, on_endpoint_attempt=record_endpoint_attempts,
+            on_selected_endpoint=record_selected_endpoint, on_event=installer_event,
+            lease_job_id=job_id, enrollment_token=enrollment_token)
         enrollment_token = None
         if not install_started:
             # Reserved wrapper codes prove failure before Process.Start. An absent frame
@@ -661,7 +745,14 @@ def run_remote_install(job_id, username, password):
         stage = 'VALIDATING_SERVICE'
         _update(job_id, 'VALIDATING_SERVICE')
         service_check = "$s = Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue; if (-not $s) { exit 2 }; if ($s.Status -eq 'Running') { exit 0 }; if ($s.Status -eq 'Stopped') { exit 3 }; exit 4"
-        service_code = _remote_script(job.target_fqdn, username, password, service_check, 30)
+        service_code, selected_endpoint_ip, _service_attempts = _remote_script_candidates(
+            job.target_fqdn, username, password, service_check, 30,
+            endpoint_candidates=endpoint_candidates, selected_ip=selected_endpoint_ip,
+            expected_computer=computer,
+            on_endpoint_attempt=lambda attempts: _update(job_id, 'VALIDATING_SERVICE',
+                diagnostic={'service_endpoint_attempts': attempts[:16]}),
+            on_selected_endpoint=lambda address, attempts: _update(job_id, 'VALIDATING_SERVICE',
+                diagnostic={'selected_endpoint_ip': address, 'service_endpoint_attempts': attempts[:16]}))
         _update(job_id, stage, diagnostic={'service_present': 'NO' if service_code == 2 else
             'YES' if service_code in (0, 3, 4) else 'UNKNOWN',
             'service_state': {0: 'RUNNING', 3: 'STOPPED'}.get(service_code, 'UNKNOWN'),

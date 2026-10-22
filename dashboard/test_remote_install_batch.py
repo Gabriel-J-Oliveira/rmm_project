@@ -505,12 +505,16 @@ class BatchTests(TestCase):
         with self.assertRaises(install.InstallLeaseLost):
             install._update(job.pk, 'INSTALLER_STARTED')
         protocol = mock.Mock()
-        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), self.assertRaises(install.InstallLeaseLost):
+        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), \
+                mock.patch.object(install, '_verify_remote_identity_session'), self.assertRaises(install.InstallLeaseLost):
             install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5,
-                                   before_send=lambda: install._assert_install_lease(job.pk))
+                endpoint_ip='192.168.104.20', expected_computer=COMPUTER,
+                before_send=lambda: install._assert_install_lease(job.pk))
         protocol.send_command_input.assert_not_called()
-        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), self.assertRaises(install.InstallLeaseLost):
-            install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5, lease_job_id=job.pk)
+        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), \
+                mock.patch.object(install, '_verify_remote_identity_session'), self.assertRaises(install.InstallLeaseLost):
+            install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5,
+                endpoint_ip='192.168.104.20', expected_computer=COMPUTER, lease_job_id=job.pk)
         protocol.send_command_input.assert_not_called()
 
     def test_real_stdin_send_holds_job_transaction_lock(self):
@@ -523,8 +527,10 @@ class BatchTests(TestCase):
             seen.append(connection.in_atomic_block)
             self.assertEqual(RemoteInstallJob.objects.get(pk=job.pk).active_slot, 'global')
         protocol.send_command_input.side_effect = send
-        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol):
-            install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5, lease_job_id=job.pk)
+        with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), \
+                mock.patch.object(install, '_verify_remote_identity_session'):
+            install._remote_script(job.target_fqdn, 'admin', SENTINEL, 'exit 0', 5,
+                endpoint_ip='192.168.104.20', expected_computer=COMPUTER, lease_job_id=job.pk)
         self.assertEqual(seen, [True])
 
     def test_retry_new_parent_and_new_credentials(self):

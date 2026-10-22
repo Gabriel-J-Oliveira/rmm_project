@@ -28,7 +28,12 @@ COMPUTER = {
     'sid': 'S-1-5-21-1-2-3-1001',
     'distinguished_name': 'CN=lab-01,OU=Lab,DC=control,DC=local',
 }
-READY = {'status': 'READY', 'checks': {}}
+ENDPOINT_IP = '192.168.104.20'
+READY = {'status': 'READY', 'checks': {}, 'target': {
+    'selected_ip': ENDPOINT_IP, 'ipv4_addresses': [ENDPOINT_IP],
+    'endpoint_attempts': [{'ip': ENDPOINT_IP, 'tcp_status': 'OPEN', 'status': 'SELECTED'}],
+    'winrm_transport': 'HTTPS_TLS_VALIDATED', 'winrm_port': 5986,
+}}
 CONTRACT = {
     'release_id': '49deaa29-b916-4691-99db-732e477e80f7',
     'version': '0.1.1.0-rc44', 'channel': 'development', 'package_sha256': 'c' * 64,
@@ -158,8 +163,10 @@ class RemoteInstallJobTests(TestCase):
         protocol.open_shell.return_value = 'synthetic-shell'
         protocol.run_command.return_value = 'synthetic-command'
         protocol.get_command_output_raw.return_value = (b'synthetic-output', b'synthetic-error', 0, True)
-        with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol):
-            code = remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+        with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol), \
+                mock.patch.object(remote_install, '_verify_remote_identity_session'):
+            code = remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3,
+                endpoint_ip=ENDPOINT_IP, expected_computer=COMPUTER)
         self.assertEqual(code, 0)
         self.assertNotIn(SENTINEL, repr(protocol.run_command.call_args))
         protocol.cleanup_command.assert_called_once()
@@ -168,7 +175,22 @@ class RemoteInstallJobTests(TestCase):
             with self.subTest(code=code), mock.patch.object(
                     remote_install, '_new_winrm_protocol', side_effect=ProbeFailure(code)):
                 with self.assertRaisesMessage(remote_install.InstallFailure, code):
-                    remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+                    remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3,
+                        endpoint_ip=ENDPOINT_IP, expected_computer=COMPUTER)
+
+    def test_remote_identity_is_verified_on_pinned_session_before_installer_command(self):
+        protocol = mock.Mock()
+        protocol.open_shell.return_value = 'synthetic-shell'
+        with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol) as create, \
+                mock.patch.object(remote_install, '_verify_remote_identity_session',
+                                  side_effect=ProbeFailure('REMOTE_IDENTITY_MISMATCH')):
+            with self.assertRaisesMessage(remote_install.InstallFailure, 'REMOTE_IDENTITY_MISMATCH'):
+                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3,
+                    endpoint_ip=ENDPOINT_IP, expected_computer=COMPUTER)
+        self.assertEqual(create.call_args.kwargs['pinned_address'], ENDPOINT_IP)
+        protocol.run_command.assert_not_called()
+        protocol.send_command_input.assert_not_called()
+        protocol.close_shell.assert_called_once_with('synthetic-shell')
 
     def test_ntlm_challenge_failure_is_not_reported_as_transport_or_dispatched(self):
         protocol = mock.Mock()
@@ -176,7 +198,8 @@ class RemoteInstallJobTests(TestCase):
             'Access denied: Server did not respond with NTLM challenge token ' + SENTINEL)
         with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol):
             with self.assertRaisesMessage(remote_install.InstallFailure, 'AUTH_NEGOTIATION_FAILED') as raised:
-                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3,
+                    endpoint_ip=ENDPOINT_IP, expected_computer=COMPUTER)
         self.assertFalse(raised.exception.command_attempted)
         self.assertNotIn(SENTINEL, str(raised.exception))
         protocol.run_command.assert_not_called()
@@ -187,7 +210,8 @@ class RemoteInstallJobTests(TestCase):
         protocol.open_shell.side_effect = PermissionError('local access denied ' + SENTINEL)
         with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol):
             with self.assertRaisesMessage(remote_install.InstallFailure, 'WINRM_PROTOCOL_ERROR') as raised:
-                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3)
+                remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3,
+                    endpoint_ip=ENDPOINT_IP, expected_computer=COMPUTER)
         self.assertFalse(raised.exception.command_attempted)
         self.assertNotIn(SENTINEL, str(raised.exception))
 

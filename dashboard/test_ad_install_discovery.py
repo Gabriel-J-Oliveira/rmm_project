@@ -47,7 +47,8 @@ def computer(hostname='lab-01', fqdn='lab-01.control.local', **changes):
         'hostname': hostname, 'fqdn': fqdn, 'distinguished_name': f'CN={hostname},OU=Computers,DC=control,DC=local',
         'ou_name': 'Computers', 'ou_dn': 'OU=Computers,DC=control,DC=local',
         'operating_system': 'Windows 11 Pro', 'operating_system_version': '10.0',
-        'enabled': True, 'last_logon_at': '2020-01-01T00:00:00+00:00', 'sid': 'SYNTHETIC-SID',
+        'enabled': True, 'last_logon_at': '2020-01-01T00:00:00+00:00',
+        'sid': 'S-1-5-21-1111111111-2222222222-3333333333-4444',
     }
     item.update(changes)
     return item

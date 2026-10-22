@@ -152,6 +152,23 @@ class DiagnosticClassificationTests(SimpleTestCase):
         self.assertEqual(report['winrm_transport'], '')
         self.assertEqual(report['winrm_port'], 5985)
 
+    def test_sanitizer_keeps_bounded_endpoint_evidence_without_secrets(self):
+        report = sanitize_report({
+            'fqdn': COMPUTER['fqdn'], 'resolved_ip': '192.168.100.3',
+            'discovered_ipv4_addresses': ['192.168.100.3', '192.168.100.221', '127.0.0.1'],
+            'endpoint_attempts': [
+                {'ip': '192.168.100.3', 'tcp_status': 'OPEN', 'status': 'IDENTITY_MISMATCH',
+                 'code': 'REMOTE_IDENTITY_MISMATCH'},
+                {'ip': '192.168.100.221', 'tcp_status': 'OPEN', 'status': 'SELECTED'},
+                {'ip': '127.0.0.1', 'status': 'SELECTED', 'password': SENTINEL},
+            ],
+        })
+        self.assertEqual(report['selected_ip'], '192.168.100.3')
+        self.assertEqual(report['discovered_ipv4_addresses'], ['192.168.100.3', '192.168.100.221'])
+        self.assertEqual([item['status'] for item in report['endpoint_attempts']], ['IDENTITY_MISMATCH', 'SELECTED'])
+        self.assertNotIn(SENTINEL, json.dumps(report))
+        self.assertIsNone(sanitize_report({'fqdn': COMPUTER['fqdn'], 'resolved_ip': '127.0.0.1'})['resolved_ip'])
+
     def test_tcp_failure_categories(self):
         for error, code in ((TimeoutError(SENTINEL), 'TCP_5986_TIMEOUT'),
                             (ConnectionRefusedError(SENTINEL), 'TCP_5986_REFUSED'),
@@ -203,9 +220,11 @@ class DiagnosticClassificationTests(SimpleTestCase):
             with self.subTest(method=method):
                 protocol = mock.Mock()
                 getattr(protocol, method).side_effect = requests.exceptions.ReadTimeout(SENTINEL)
-                with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol):
+                with mock.patch.object(install, '_new_winrm_protocol', return_value=protocol), \
+                        mock.patch.object(install, '_verify_remote_identity_session'):
                     with self.assertRaises(install.InstallFailure) as raised:
-                        install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'static-probe', 3)
+                        install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'static-probe', 3,
+                            endpoint_ip='192.168.104.20', expected_computer=COMPUTER)
                 self.assertEqual(raised.exception.code, 'WINRM_REQUEST_TIMEOUT')
                 self.assertEqual(raised.exception.stage, stage)
                 self.assertEqual(raised.exception.command_attempted, attempted)
