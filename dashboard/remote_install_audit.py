@@ -12,19 +12,22 @@ from agents.models import AuditEvent
 
 logger = logging.getLogger(__name__)
 MESSAGES = {
+    'TCP_5985_UNAVAILABLE': 'Nao foi possivel conectar a porta TCP 5985 do computador.',
+    'TCP_5985_TIMEOUT': 'A conexao TCP 5985 excedeu o tempo limite.',
+    'TCP_5985_REFUSED': 'O computador recusou a conexao TCP 5985.',
     'TCP_5986_UNAVAILABLE': 'Nao foi possivel conectar a porta TCP 5986 do computador.',
     'TCP_5986_TIMEOUT': 'A conexao TCP 5986 excedeu o tempo limite.',
     'TCP_5986_REFUSED': 'O computador recusou a conexao TCP 5986.',
     'TLS_VALIDATION_FAILED': 'O certificado TLS nao passou na validacao de confianca, nome ou validade.',
     'TLS_HANDSHAKE_FAILED': 'Nao foi possivel concluir a negociacao TLS segura.',
     'WINRM_REQUEST_TIMEOUT': 'A requisicao WinRM excedeu o tempo limite.',
-    'WINRM_CONNECTION_FAILED': 'A conexao HTTPS com o WinRM foi interrompida.',
+    'WINRM_CONNECTION_FAILED': 'A conexao WinRM foi interrompida.',
     'WINRM_AUTHORIZATION_DENIED': 'O WinRM recusou a autorizacao para a operacao solicitada.',
     'WINRM_HTTP_ERROR': 'O endpoint WinRM retornou uma falha HTTP.',
     'WINRM_PROTOCOL_ERROR': 'O protocolo WinRM falhou; consulte a etapa e o tipo da excecao.',
     'PREFLIGHT_INTERNAL_ERROR': 'O preflight nao pode ser concluido; consulte o diagnostico sanitizado.',
 }
-STAGES = {'ADMISSION', 'TARGET', 'DNS', 'CA_TRUST', 'TCP_5986', 'WINRM_SESSION',
+STAGES = {'ADMISSION', 'TARGET', 'DNS', 'CA_TRUST', 'TCP_5985', 'TCP_5986', 'WINRM_SESSION',
           'REMOTE_EXECUTION', 'REMOTE_INPUT', 'REMOTE_OUTPUT', 'AUTHENTICATION', 'ADMIN_PRIVILEGE',
           'WINDOWS_COMPATIBILITY', 'NIGHTOWL_ABSENCE', 'PREFLIGHT', 'REMOTE_TRANSPORT'}
 STAGES |= {'VALIDATING_TARGET', 'VALIDATING_INSTALLER', 'CONNECTING', 'AUTHENTICATED',
@@ -63,6 +66,9 @@ def sanitize_report(data):
         report['resolved_ip'] = str(ipaddress.ip_address(data.get('resolved_ip')))
     except (ValueError, TypeError):
         report['resolved_ip'] = None
+    report['winrm_transport'] = (data.get('winrm_transport') if data.get('winrm_transport') in
+                                 ('HTTPS_TLS_VALIDATED', 'HTTP_NTLM_ENCRYPTED') else '')
+    report['winrm_port'] = data.get('winrm_port') if data.get('winrm_port') in (5985, 5986) else None
     for key in ('started_at', 'finished_at'):
         try:
             from datetime import datetime
@@ -125,7 +131,9 @@ class InstallAttempt:
         self.data.update(result=result.get('status'), checks=checks, fqdn=target.get('fqdn', self.data['fqdn']),
                          resolved_ip=target.get('ip'), code=failed[1].get('code', ''),
                          stage=failed[1].get('stage', failed[0]),
-                         exception_type=failed[1].get('exception_type', ''))
+                         exception_type=failed[1].get('exception_type', ''),
+                         winrm_transport=target.get('winrm_transport', ''),
+                         winrm_port=target.get('winrm_port'))
 
     def __exit__(self, kind, exc, tb):
         if exc is not None:

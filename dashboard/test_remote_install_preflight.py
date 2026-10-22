@@ -21,6 +21,7 @@ from requests_ntlm import HttpNtlmAuth
 from winrm.exceptions import WinRMOperationTimeoutError
 
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
 from django.test import Client, TestCase, override_settings
@@ -149,6 +150,57 @@ class RemoteInstallPreflightTests(TestCase):
         self.assertEqual(self.run_probe()['checks']['REMOTE_TRANSPORT']['code'], 'TCP_5986_UNAVAILABLE')
         self.remote_mock.assert_not_called()
 
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=[
+                           'cs-cvel-0289.control.local', 'cs-cvel-0290.control.local'])
+    def test_authorized_pilot_uses_http_5985_only_when_explicitly_enabled(self):
+        fqdn = 'CS-CVEL-0289.CONTROL.LOCAL'
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        dns = {'cs-cvel-0289.control.local': {'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.102.54',
+                                               'ipv4_addresses': ['192.168.102.54']}}
+        self.dns_mock.return_value = dns
+        remote = {**REMOTE_OK, 'hostname': 'cs-cvel-0289'}
+        self.remote_mock.return_value = remote
+        result = preflight.run_remote_install_preflight(fqdn, 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['status'], 'READY')
+        self.assertEqual(result['target']['winrm_transport'], 'HTTP_NTLM_ENCRYPTED')
+        self.assertEqual(result['target']['winrm_port'], 5985)
+        self.tcp_mock.assert_called_once_with('192.168.102.54', port=5985)
+        self.remote_mock.assert_called_once_with('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_http_allowlist_is_exact_and_other_computers_remain_https(self):
+        self.assertEqual(preflight._winrm_transport_for('CS-CVEL-0289.CONTROL.LOCAL.'), {
+            'scheme': 'http', 'port': 5985, 'message_encryption': 'always', 'label': 'HTTP_NTLM_ENCRYPTED'})
+        self.assertEqual(preflight._winrm_transport_for('cs-cvel-02890.control.local')['port'], 5986)
+        self.assertEqual(preflight._winrm_transport_for('lab-01.control.local')['scheme'], 'https')
+
+    def test_http_stays_disabled_by_default_even_for_a_pilot_name(self):
+        self.assertFalse(settings.REMOTE_INSTALL_WINRM_HTTP_ENABLED)
+        self.assertEqual(preflight._winrm_transport_for('cs-cvel-0289.control.local')['port'], 5986)
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['not-a-host'])
+    def test_invalid_enabled_http_allowlist_fails_closed_before_dns(self):
+        result = self.run_probe()
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'WINRM_HTTP_CONFIG_INVALID')
+        self.dns_mock.assert_not_called()
+        self.tcp_mock.assert_not_called()
+        self.remote_mock.assert_not_called()
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_authorized_http_tcp_failure_never_falls_back_to_https(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.102.54', 'ipv4_addresses': ['192.168.102.54']}}
+        self.tcp_mock.side_effect = preflight.ProbeFailure('TCP_5985_REFUSED', stage='TCP_5985')
+        result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'TCP_5985_REFUSED')
+        self.tcp_mock.assert_called_once_with('192.168.102.54', port=5985)
+        self.remote_mock.assert_not_called()
+
     def test_auth_negotiation_failure_is_reported_in_authentication_check(self):
         self.remote_mock.side_effect = preflight.ProbeFailure('AUTH_NEGOTIATION_FAILED')
         result = self.run_probe()
@@ -178,7 +230,7 @@ class RemoteInstallPreflightTests(TestCase):
                     'dns_status': 'RESOLVED', 'primary_ipv4': address, 'ipv4_addresses': [address],
                 }}
                 self.assertEqual(self.run_probe()['status'], 'READY')
-                self.tcp_mock.assert_called_with(address)
+                self.tcp_mock.assert_called_with(address, port=5986)
                 self.tcp_mock.reset_mock()
                 self.remote_mock.reset_mock()
 
@@ -312,6 +364,7 @@ class WinRMProbeTests(TestCase):
         self.assertEqual(kwargs['ca_trust_path'], os.path.realpath(requests.certs.where()))
         self.assertEqual(kwargs['proxy'], None)
         self.assertEqual(kwargs['password'], SENTINEL)
+        self.assertEqual(kwargs['message_encryption'], 'auto')
         self.assertGreater(kwargs['read_timeout_sec'], kwargs['operation_timeout_sec'])
         command = protocol.run_command.call_args
         self.assertEqual(command.args[1], 'powershell.exe')
@@ -319,6 +372,39 @@ class WinRMProbeTests(TestCase):
         self.assertNotIn(SENTINEL, str(command))
         protocol.cleanup_command.assert_called_once()
         protocol.close_shell.assert_called_once()
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    @mock.patch('winrm.protocol.Protocol')
+    def test_http_pilot_protocol_requires_ntlm_message_encryption(self, protocol_class):
+        preflight._new_winrm_protocol('CS-CVEL-0289.CONTROL.LOCAL.', 'CONTROL\\Admin', SENTINEL)
+        kwargs = protocol_class.call_args.kwargs
+        self.assertEqual(kwargs['endpoint'], 'http://cs-cvel-0289.control.local:5985/wsman')
+        self.assertEqual(kwargs['transport'], 'ntlm')
+        self.assertEqual(kwargs['message_encryption'], 'always')
+        self.assertIsNone(kwargs['ca_trust_path'])
+        self.assertEqual(kwargs['server_cert_validation'], 'validate')
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_http_auth_crypto_negotiation_and_timeout_fail_closed_without_https_retry(self):
+        from winrm.exceptions import AuthenticationError
+
+        failures = (
+            (AuthenticationError(SENTINEL), 'AUTHENTICATION_FAILED'),
+            (RuntimeError('NTLM message encryption negotiation failed ' + SENTINEL), 'WINRM_PROTOCOL_ERROR'),
+            (requests.exceptions.ReadTimeout(SENTINEL), 'WINRM_REQUEST_TIMEOUT'),
+        )
+        for error, code in failures:
+            with self.subTest(code=code), mock.patch('winrm.protocol.Protocol') as protocol_class:
+                protocol_class.return_value.open_shell.side_effect = error
+                with self.assertRaises(preflight.ProbeFailure) as raised:
+                    preflight._winrm_probe('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+                self.assertEqual(raised.exception.code, code)
+                self.assertNotIn(SENTINEL, str(raised.exception))
+                protocol_class.assert_called_once()
+                self.assertEqual(protocol_class.call_args.kwargs['endpoint'],
+                                 'http://cs-cvel-0289.control.local:5985/wsman')
 
     def test_untrusted_certificate_and_hostname_mismatch_fail_closed(self):
         for reason in ('untrusted certificate', 'hostname mismatch'):
@@ -593,6 +679,27 @@ class RedirectProtectionTests(TestCase):
         self.assertNotIn(SENTINEL, str(raised.exception))
         self.assertEqual(len(adapter.requests), 1)
         self.assertTrue(adapter.requests[0].url.startswith('https://lab-01.control.local:5986/'))
+
+    def test_redirect_is_blocked_before_http_encryption_handshake(self):
+        adapter = SyntheticWinRMAdapter(302, 'https://attacker.invalid/wsman')
+
+        class EncryptionTransport:
+            def build_session(self):
+                session = requests.Session()
+                session.mount('http://', adapter)
+                self.setup_encryption(session)
+                return session
+
+            def setup_encryption(self, session):
+                session.post('http://cs-cvel-0289.control.local:5985/wsman', data=b'synthetic-negotiate')
+
+        protocol = type('FakeProtocol', (), {'transport': EncryptionTransport()})()
+        with self.assertRaises(preflight.ProbeFailure) as raised:
+            preflight._build_guarded_winrm_session(protocol)
+        self.assertEqual(raised.exception.code, 'WINRM_REDIRECT_BLOCKED')
+        self.assertEqual(raised.exception.stage, 'WINRM_SESSION')
+        self.assertEqual(len(adapter.requests), 1)
+        self.assertEqual(adapter.requests[0].url, 'http://cs-cvel-0289.control.local:5985/wsman')
 
     @mock.patch('requests_ntlm.requests_ntlm.spnego.client')
     @mock.patch.object(HttpNtlmAuth, '_get_server_cert', return_value=None)

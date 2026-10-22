@@ -77,6 +77,18 @@ class AttemptAuditTests(TestCase):
         self.assertEqual(AuditEvent.objects.filter(metadata__fqdn=COMPUTER['fqdn'],
             event_type='remote_install.preflight.finished').count(), 1)
 
+    def test_preflight_audit_records_only_allowlisted_winrm_transport_metadata(self):
+        with InstallAttempt(COMPUTER['fqdn'], self.actor) as attempt:
+            attempt.complete({'status': 'NOT_READY', 'target': {
+                'fqdn': COMPUTER['fqdn'], 'ip': '192.168.104.15',
+                'winrm_transport': 'HTTP_NTLM_ENCRYPTED', 'winrm_port': 5985,
+                'unexpected': 'never-persist'}, 'checks': {
+                    'REMOTE_TRANSPORT': {'status': 'FAIL', 'code': 'TCP_5985_REFUSED'}}})
+        event = AuditEvent.objects.get(event_type='remote_install.preflight.finished')
+        self.assertEqual(event.metadata['winrm_transport'], 'HTTP_NTLM_ENCRYPTED')
+        self.assertEqual(event.metadata['winrm_port'], 5985)
+        self.assertNotIn('unexpected', event.metadata)
+
     def test_failure_in_target_revalidation_is_audited(self):
         with mock.patch.object(batch, '_ad_target', return_value=COMPUTER):
             operation = batch.create_batch([COMPUTER['fqdn']], self.actor, username='admin', password=SENTINEL)
@@ -131,11 +143,14 @@ class DiagnosticClassificationTests(SimpleTestCase):
         report = sanitize_report({'fqdn': COMPUTER['fqdn'], 'requested_fqdn': COMPUTER['fqdn'],
             'password': SENTINEL, 'exception_type': SENTINEL, 'stage': [], 'code': SENTINEL,
             'resolved_ip': SENTINEL, 'correlation_id': str(uuid.uuid4()),
+            'winrm_transport': 'untrusted-value', 'winrm_port': 5985,
             'started_at': timezone.now().isoformat(),
             'checks': {'DNS': {'status': 'FAIL', 'code': SENTINEL, 'raw': SENTINEL}}})
         self.assertNotIn(SENTINEL, json.dumps(report))
         self.assertEqual(report['code'], 'PREFLIGHT_FAILED')
         self.assertEqual(report['stage'], 'PREFLIGHT')
+        self.assertEqual(report['winrm_transport'], '')
+        self.assertEqual(report['winrm_port'], 5985)
 
     def test_tcp_failure_categories(self):
         for error, code in ((TimeoutError(SENTINEL), 'TCP_5986_TIMEOUT'),
@@ -146,6 +161,17 @@ class DiagnosticClassificationTests(SimpleTestCase):
                     preflight._tcp_available('192.168.104.15')
                 self.assertEqual(raised.exception.code, code)
                 self.assertEqual(raised.exception.stage, 'TCP_5986')
+
+    def test_http_tcp_failure_categories_use_only_authorized_port_number(self):
+        for error, code in ((TimeoutError(SENTINEL), 'TCP_5985_TIMEOUT'),
+                            (ConnectionRefusedError(SENTINEL), 'TCP_5985_REFUSED'),
+                            (OSError(SENTINEL), 'TCP_5985_UNAVAILABLE')):
+            with self.subTest(code=code), mock.patch.object(preflight.socket, 'create_connection', side_effect=error) as connect:
+                with self.assertRaises(preflight.ProbeFailure) as raised:
+                    preflight._tcp_available('192.168.104.15', port=5985)
+                self.assertEqual(raised.exception.code, code)
+                self.assertEqual(raised.exception.stage, 'TCP_5985')
+                self.assertEqual(connect.call_args.args[0], ('192.168.104.15', 5985))
                 self.assertNotIn(SENTINEL, str(raised.exception))
 
     def test_winrm_categories_and_actual_failure_stage(self):

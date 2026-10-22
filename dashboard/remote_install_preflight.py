@@ -22,7 +22,9 @@ from dashboard.remote_install_audit import exception_type
 
 CHECKS = ('TARGET', 'DNS', 'REMOTE_TRANSPORT', 'AUTHENTICATION', 'ADMIN_PRIVILEGE',
           'WINDOWS_COMPATIBILITY', 'NIGHTOWL_ABSENCE')
-WINRM_PORT = 5986
+WINRM_HTTPS_PORT = 5986
+WINRM_HTTP_PORT = 5985
+WINRM_PORT = WINRM_HTTPS_PORT
 SOCKET_TIMEOUT_SECONDS = 3
 WINRM_DEADLINE_SECONDS = 25
 MAX_OUTPUT_BYTES = 8192
@@ -117,14 +119,44 @@ def _ad_target(value):
     return computer
 
 
-def _tcp_available(address):
+def _winrm_transport_for(fqdn):
+    """Select the transport from server-side opt-in and exact FQDN authorization only."""
+    if getattr(settings, 'REMOTE_INSTALL_WINRM_HTTP_ENABLED', False) is not True:
+        return {'scheme': 'https', 'port': WINRM_HTTPS_PORT, 'message_encryption': 'auto',
+                'label': 'HTTPS_TLS_VALIDATED'}
+
+    configured = getattr(settings, 'REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST', [])
+    if isinstance(configured, str):
+        configured = configured.split(',')
+    if not isinstance(configured, (list, tuple, set, frozenset)):
+        raise ProbeFailure('WINRM_HTTP_CONFIG_INVALID', stage='REMOTE_TRANSPORT')
+    allowed = set()
+    for candidate in configured:
+        if not isinstance(candidate, str) or not candidate.strip():
+            raise ProbeFailure('WINRM_HTTP_CONFIG_INVALID', stage='REMOTE_TRANSPORT')
+        normalized = _valid_fqdn(candidate)
+        if not normalized:
+            raise ProbeFailure('WINRM_HTTP_CONFIG_INVALID', stage='REMOTE_TRANSPORT')
+        allowed.add(normalized)
+
+    if normalize_fqdn(fqdn) in allowed:
+        return {'scheme': 'http', 'port': WINRM_HTTP_PORT, 'message_encryption': 'always',
+                'label': 'HTTP_NTLM_ENCRYPTED'}
+    return {'scheme': 'https', 'port': WINRM_HTTPS_PORT, 'message_encryption': 'auto',
+            'label': 'HTTPS_TLS_VALIDATED'}
+
+
+def _tcp_available(address, port=WINRM_HTTPS_PORT):
+    if port not in (WINRM_HTTP_PORT, WINRM_HTTPS_PORT):
+        raise ProbeFailure('WINRM_PORT_NOT_ALLOWED', stage='REMOTE_TRANSPORT')
     try:
-        with socket.create_connection((address, WINRM_PORT), timeout=SOCKET_TIMEOUT_SECONDS):
+        with socket.create_connection((address, port), timeout=SOCKET_TIMEOUT_SECONDS):
             return True
     except OSError as exc:
-        code = ('TCP_5986_TIMEOUT' if isinstance(exc, TimeoutError) else
-                'TCP_5986_REFUSED' if isinstance(exc, ConnectionRefusedError) else 'TCP_5986_UNAVAILABLE')
-        raise ProbeFailure(code, stage='TCP_5986', exception=exception_type(exc)) from None
+        prefix = f'TCP_{port}'
+        code = (f'{prefix}_TIMEOUT' if isinstance(exc, TimeoutError) else
+                f'{prefix}_REFUSED' if isinstance(exc, ConnectionRefusedError) else f'{prefix}_UNAVAILABLE')
+        raise ProbeFailure(code, stage=prefix, exception=exception_type(exc)) from None
 
 
 def _safe_ipv4(value):
@@ -148,10 +180,29 @@ def _block_redirects(session):
         response = send(request, **kwargs)
         if 300 <= response.status_code < 400:
             response.close()
-            raise ProbeFailure('WINRM_REDIRECT_BLOCKED')
+            raise ProbeFailure('WINRM_REDIRECT_BLOCKED', stage='WINRM_SESSION')
         return response
 
     session.send = send_without_redirects
+
+
+def _build_guarded_winrm_session(protocol):
+    transport = protocol.transport
+    setup_encryption = transport.setup_encryption
+
+    def setup_encryption_without_redirects(session):
+        _block_redirects(session)
+        return setup_encryption(session)
+
+    # pywinrm may perform an NTLM exchange inside build_session() when HTTP
+    # message encryption is forced. Install the redirect guard before that call.
+    transport.setup_encryption = setup_encryption_without_redirects
+    try:
+        session = transport.build_session()
+    finally:
+        del transport.setup_encryption
+    _block_redirects(session)
+    return session
 
 
 def _winrm_ca_trust_path():
@@ -186,16 +237,22 @@ def _winrm_ca_trust_path():
 
 
 def _new_winrm_protocol(fqdn, username, password):
-    ca_trust_path = _winrm_ca_trust_path()
+    normalized_fqdn = _valid_fqdn(fqdn)
+    if not normalized_fqdn:
+        raise ProbeFailure('INVALID_TARGET')
+    transport = _winrm_transport_for(normalized_fqdn)
+    ca_trust_path = _winrm_ca_trust_path() if transport['scheme'] == 'https' else None
     from winrm.protocol import Protocol
 
     protocol = Protocol(
-        endpoint=f'https://{fqdn}:{WINRM_PORT}/wsman', transport='ntlm',
-        username=username, password=password, server_cert_validation='validate',
+        endpoint=f"{transport['scheme']}://{normalized_fqdn}:{transport['port']}/wsman", transport='ntlm',
+        username=username, password=password,
+        message_encryption=transport['message_encryption'],
+        server_cert_validation='validate',
         ca_trust_path=ca_trust_path,
         proxy=None, operation_timeout_sec=3, read_timeout_sec=5,
     )
-    _block_redirects(protocol.transport.build_session())
+    _build_guarded_winrm_session(protocol)
     return protocol
 
 
@@ -234,7 +291,7 @@ def _winrm_probe(fqdn, username, password):
     protocol = None
     shell_id = None
     command_id = None
-    stage = 'CA_TRUST'
+    stage = 'WINRM_SESSION'
     try:
         protocol = _new_winrm_protocol(fqdn, username, password)
         deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
@@ -291,6 +348,12 @@ def run_remote_install_preflight(fqdn, username, password):
               'fqdn': normalize_fqdn(computer['fqdn']),
               'operating_system': str(computer.get('operating_system') or '')[:120]}
     try:
+        transport = _winrm_transport_for(target['fqdn'])
+    except ProbeFailure as exc:
+        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
+    target['winrm_transport'] = transport['label']
+    target['winrm_port'] = transport['port']
+    try:
         dns = resolve_computer_dns([computer]).get(target['fqdn'], {})
     except Exception as exc:
         failure = ProbeFailure('DNS_UNRESOLVED', stage='DNS', exception=exception_type(exc))
@@ -304,14 +367,16 @@ def run_remote_install_preflight(fqdn, username, password):
     target['ip'] = address
     target['ipv4_addresses'] = sorted(set([address, *addresses]))
     checks['DNS'] = {'status': 'PASS'}
+    if transport['scheme'] == 'https':
+        try:
+            _winrm_ca_trust_path()
+        except ProbeFailure as exc:
+            return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
     try:
-        _winrm_ca_trust_path()
-    except ProbeFailure as exc:
-        return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
-    try:
-        if not _tcp_available(address):
-            return _fail(checks, 'REMOTE_TRANSPORT', 'TCP_5986_UNAVAILABLE', target,
-                         failure=ProbeFailure('TCP_5986_UNAVAILABLE', stage='TCP_5986'))
+        if not _tcp_available(address, port=transport['port']):
+            code = f"TCP_{transport['port']}_UNAVAILABLE"
+            return _fail(checks, 'REMOTE_TRANSPORT', code, target,
+                         failure=ProbeFailure(code, stage=f"TCP_{transport['port']}"))
     except ProbeFailure as exc:
         return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
     checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
