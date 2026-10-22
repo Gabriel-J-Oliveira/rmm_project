@@ -24,7 +24,8 @@ from dashboard.installer_contract import InstallerContractFailure
 from dashboard.remote_install_release import validate_install_release
 from dashboard.remote_install_preflight import (
     CHECKS, ProbeFailure, _ad_target, _ad_identity_matches, _new_winrm_protocol,
-    _verify_remote_identity_session, _winrm_failure, _safe_ipv4, run_remote_install_preflight,
+    _transport_selection, _verify_remote_identity_session, _winrm_failure, _safe_ipv4,
+    run_remote_install_preflight,
 )
 from dashboard.remote_install_audit import audit_admission, audited_preflight, exception_type, record_execution_failure
 
@@ -283,7 +284,8 @@ def _trusted_urls():
 
 
 def _remote_script(fqdn, username, password, script, timeout, *, endpoint_ip, expected_computer,
-                   on_event=None, before_send=None, lease_job_id=None, enrollment_token=None):
+                   on_event=None, before_send=None, lease_job_id=None, enrollment_token=None,
+                   winrm_transport=None):
     from winrm.exceptions import WinRMOperationTimeoutError
 
     try:
@@ -307,7 +309,8 @@ def _remote_script(fqdn, username, password, script, timeout, *, endpoint_ip, ex
     if not _safe_ipv4(endpoint_ip) or not isinstance(expected_computer, dict) or not expected_computer.get('sid'):
         raise InstallFailure('TARGET_IDENTITY_UNVERIFIABLE', command_attempted=False, stage='IDENTITY_VALIDATION')
     try:
-        protocol = _new_winrm_protocol(fqdn, username, password, pinned_address=endpoint_ip)
+        protocol = _new_winrm_protocol(fqdn, username, password, pinned_address=endpoint_ip,
+                                       transport=winrm_transport)
     except Exception as exc:
         failure = _winrm_failure(exc, 'CA_TRUST')
         raise InstallFailure(failure.code, command_attempted=False,
@@ -391,7 +394,7 @@ _PRE_DISPATCH_RETRY_CODES = {
 def _remote_script_candidates(fqdn, username, password, script, timeout, *, endpoint_candidates,
                               selected_ip, expected_computer, on_endpoint_attempt=None,
                               on_selected_endpoint=None, on_event=None, lease_job_id=None,
-                              enrollment_token=None):
+                              enrollment_token=None, winrm_transport=None):
     open_ips = [entry.get('ip') for entry in endpoint_candidates
                 if isinstance(entry, dict) and entry.get('tcp_status') == 'OPEN'
                 and _safe_ipv4(entry.get('ip'))]
@@ -411,7 +414,8 @@ def _remote_script_candidates(fqdn, username, password, script, timeout, *, endp
 
             code = _remote_script(fqdn, username, password, script, timeout,
                 endpoint_ip=address, expected_computer=expected_computer, on_event=on_event,
-                before_send=before_send, lease_job_id=lease_job_id, enrollment_token=enrollment_token)
+                before_send=before_send, lease_job_id=lease_job_id, enrollment_token=enrollment_token,
+                winrm_transport=winrm_transport)
             attempts.append({'ip': address, 'tcp_status': 'OPEN', 'status': 'COMPLETED', 'code': None})
             if on_endpoint_attempt:
                 on_endpoint_attempt(list(attempts))
@@ -677,6 +681,11 @@ def run_remote_install(job_id, username, password):
         endpoint = preflight.get('target') or {}
         selected_endpoint_ip = endpoint.get('selected_ip')
         endpoint_candidates = endpoint.get('endpoint_attempts') or []
+        try:
+            winrm_transport = _transport_selection(job.target_fqdn,
+                endpoint.get('winrm_transport'), endpoint.get('winrm_port'))
+        except ProbeFailure as exc:
+            raise InstallFailure(exc.code, stage=exc.stage) from None
         if not _safe_ipv4(selected_endpoint_ip):
             raise InstallFailure('TARGET_IDENTITY_UNVERIFIABLE', stage='IDENTITY_VALIDATION')
         _update(job_id, 'PREFLIGHT_OK', diagnostic={
@@ -685,6 +694,7 @@ def run_remote_install(job_id, username, password):
             'endpoint_attempts': endpoint_candidates[:16],
             'winrm_transport': endpoint.get('winrm_transport'),
             'winrm_port': endpoint.get('winrm_port'),
+            'transport_attempts': endpoint.get('transport_attempts', [])[:2],
         })
         try:
             computer = _ad_target(job.target_fqdn)
@@ -723,7 +733,8 @@ def run_remote_install(job_id, username, password):
             endpoint_candidates=endpoint_candidates, selected_ip=selected_endpoint_ip,
             expected_computer=computer, on_endpoint_attempt=record_endpoint_attempts,
             on_selected_endpoint=record_selected_endpoint, on_event=installer_event,
-            lease_job_id=job_id, enrollment_token=enrollment_token)
+            lease_job_id=job_id, enrollment_token=enrollment_token,
+            winrm_transport=winrm_transport)
         enrollment_token = None
         if not install_started:
             # Reserved wrapper codes prove failure before Process.Start. An absent frame
@@ -752,7 +763,8 @@ def run_remote_install(job_id, username, password):
             on_endpoint_attempt=lambda attempts: _update(job_id, 'VALIDATING_SERVICE',
                 diagnostic={'service_endpoint_attempts': attempts[:16]}),
             on_selected_endpoint=lambda address, attempts: _update(job_id, 'VALIDATING_SERVICE',
-                diagnostic={'selected_endpoint_ip': address, 'service_endpoint_attempts': attempts[:16]}))
+                diagnostic={'selected_endpoint_ip': address, 'service_endpoint_attempts': attempts[:16]}),
+            winrm_transport=winrm_transport)
         _update(job_id, stage, diagnostic={'service_present': 'NO' if service_code == 2 else
             'YES' if service_code in (0, 3, 4) else 'UNKNOWN',
             'service_state': {0: 'RUNNING', 3: 'STOPPED'}.get(service_code, 'UNKNOWN'),

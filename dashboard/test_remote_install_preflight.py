@@ -161,7 +161,7 @@ class RemoteInstallPreflightTests(TestCase):
     @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=[
                            'cs-cvel-0289.control.local', 'cs-cvel-0290.control.local'])
-    def test_authorized_pilot_uses_http_5985_only_when_explicitly_enabled(self):
+    def test_authorized_pilot_tries_https_then_falls_back_to_encrypted_http_on_tcp_failure(self):
         fqdn = 'CS-CVEL-0289.CONTROL.LOCAL'
         self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
         dns = {'cs-cvel-0289.control.local': {'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.102.54',
@@ -169,12 +169,31 @@ class RemoteInstallPreflightTests(TestCase):
         self.dns_mock.return_value = dns
         remote = {**REMOTE_OK, 'hostname': 'cs-cvel-0289'}
         self.remote_mock.return_value = remote
+        self.tcp_mock.side_effect = [ProbeFailure('TCP_5986_TIMEOUT', stage='TCP_5986'), True]
         result = preflight.run_remote_install_preflight(fqdn, 'CONTROL\\Admin', SENTINEL)
         self.assertEqual(result['status'], 'READY')
         self.assertEqual(result['target']['winrm_transport'], 'HTTP_NTLM_ENCRYPTED')
         self.assertEqual(result['target']['winrm_port'], 5985)
-        self.tcp_mock.assert_called_once_with('192.168.102.54', 5985, timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.assertEqual([call.args[1] for call in self.tcp_mock.call_args_list], [5986, 5985])
+        self.assertEqual([call.kwargs['transport']['label'] for call in self.remote_mock.call_args_list],
+                         ['HTTP_NTLM_ENCRYPTED'])
         self.assertEqual(self.remote_mock.call_args.kwargs['pinned_address'], '192.168.102.54')
+        self.assertEqual([item['transport'] for item in result['target']['transport_attempts']],
+                         ['HTTPS_TLS_VALIDATED', 'HTTP_NTLM_ENCRYPTED'])
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_https_success_does_not_probe_or_use_http(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'ipv4_addresses': ['192.168.102.54']}}
+        self.remote_mock.return_value = {**REMOTE_OK, 'hostname': 'cs-cvel-0289'}
+        result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['status'], 'READY')
+        self.assertEqual(result['target']['winrm_transport'], 'HTTPS_TLS_VALIDATED')
+        self.tcp_mock.assert_called_once_with('192.168.102.54', 5986,
+            timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.assertEqual(self.remote_mock.call_args.kwargs['transport']['scheme'], 'https')
 
     def test_multiple_a_records_probe_all_ports_and_select_working_interface(self):
         addresses = ['192.168.100.3', '192.168.100.221']
@@ -234,13 +253,27 @@ class RemoteInstallPreflightTests(TestCase):
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
     def test_http_allowlist_is_exact_and_other_computers_remain_https(self):
         self.assertEqual(preflight._winrm_transport_for('CS-CVEL-0289.CONTROL.LOCAL.'), {
-            'scheme': 'http', 'port': 5985, 'message_encryption': 'always', 'label': 'HTTP_NTLM_ENCRYPTED'})
+            'scheme': 'https', 'port': 5986, 'message_encryption': 'auto', 'label': 'HTTPS_TLS_VALIDATED'})
+        self.assertEqual([item['port'] for item in preflight._winrm_transport_candidates(
+            'CS-CVEL-0289.CONTROL.LOCAL.')], [5986, 5985])
+        self.assertEqual([item['port'] for item in preflight._winrm_transport_candidates(
+            'cs-cvel-02890.control.local')], [5986])
         self.assertEqual(preflight._winrm_transport_for('cs-cvel-02890.control.local')['port'], 5986)
         self.assertEqual(preflight._winrm_transport_for('lab-01.control.local')['scheme'], 'https')
 
     def test_http_stays_disabled_by_default_even_for_a_pilot_name(self):
         self.assertFalse(settings.REMOTE_INSTALL_WINRM_HTTP_ENABLED)
         self.assertEqual(preflight._winrm_transport_for('cs-cvel-0289.control.local')['port'], 5986)
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_non_allowlisted_target_never_probes_http_even_when_https_is_unreachable(self):
+        self.tcp_mock.side_effect = ProbeFailure('TCP_5986_TIMEOUT', stage='TCP_5986')
+        result = self.run_probe()
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'TCP_5986_TIMEOUT')
+        self.tcp_mock.assert_called_once_with('192.168.104.20', 5986,
+            timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.remote_mock.assert_not_called()
 
     @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['not-a-host'])
@@ -253,16 +286,86 @@ class RemoteInstallPreflightTests(TestCase):
 
     @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
-    def test_authorized_http_tcp_failure_never_falls_back_to_https(self):
+    def test_http_tcp_failure_is_reported_after_https_connectivity_failure(self):
         self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
         self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
             'dns_status': 'RESOLVED', 'primary_ipv4': '192.168.102.54', 'ipv4_addresses': ['192.168.102.54']}}
-        self.tcp_mock.side_effect = preflight.ProbeFailure('TCP_5985_REFUSED', stage='TCP_5985')
+        self.tcp_mock.side_effect = [
+            preflight.ProbeFailure('TCP_5986_TIMEOUT', stage='TCP_5986'),
+            preflight.ProbeFailure('TCP_5985_REFUSED', stage='TCP_5985')]
         result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
         self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'TCP_5985_REFUSED')
-        self.tcp_mock.assert_called_once_with(
-            '192.168.102.54', 5985, timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.assertEqual(result['target']['winrm_transport'], 'HTTP_NTLM_ENCRYPTED')
+        self.assertEqual(result['target']['winrm_port'], 5985)
+        self.assertEqual([call.args[1] for call in self.tcp_mock.call_args_list], [5986, 5985])
         self.remote_mock.assert_not_called()
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_authentication_failure_on_https_never_falls_back_to_http(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'ipv4_addresses': ['192.168.102.54']}}
+        self.remote_mock.side_effect = preflight.ProbeFailure('AUTHENTICATION_FAILED', stage='WINRM_SESSION')
+        result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['checks']['AUTHENTICATION']['code'], 'AUTHENTICATION_FAILED')
+        self.tcp_mock.assert_called_once_with('192.168.102.54', 5986,
+            timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.remote_mock.assert_called_once()
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_tls_validation_failure_never_falls_back_to_http(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'ipv4_addresses': ['192.168.102.54']}}
+        self.remote_mock.side_effect = preflight.ProbeFailure('TLS_VALIDATION_FAILED', stage='WINRM_SESSION')
+        result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'TLS_VALIDATION_FAILED')
+        self.tcp_mock.assert_called_once_with('192.168.102.54', 5986,
+            timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.remote_mock.assert_called_once()
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_tls_handshake_connectivity_failure_may_use_authorized_http(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'ipv4_addresses': ['192.168.102.54']}}
+        self.remote_mock.side_effect = [
+            ProbeFailure('TLS_HANDSHAKE_FAILED', stage='WINRM_SESSION'), {**REMOTE_OK, 'hostname': 'cs-cvel-0289'}]
+        result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['status'], 'READY')
+        self.assertEqual(result['target']['winrm_transport'], 'HTTP_NTLM_ENCRYPTED')
+        self.assertEqual([call.kwargs['transport']['label'] for call in self.remote_mock.call_args_list],
+                         ['HTTPS_TLS_VALIDATED', 'HTTP_NTLM_ENCRYPTED'])
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_invalid_server_ca_configuration_is_not_hidden_by_http_fallback(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'ipv4_addresses': ['192.168.102.54']}}
+        with mock.patch.object(preflight, '_winrm_ca_trust_path',
+                side_effect=ProbeFailure('WINRM_CA_TRUST_INVALID', stage='CA_TRUST')):
+            result = preflight.run_remote_install_preflight(
+                'cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['checks']['REMOTE_TRANSPORT']['code'], 'WINRM_CA_TRUST_INVALID')
+        self.tcp_mock.assert_not_called()
+        self.remote_mock.assert_not_called()
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
+    def test_identity_mismatch_on_https_never_falls_back_to_http(self):
+        self.ad_mock.return_value = [computer(hostname='CS-CVEL-0289', fqdn='cs-cvel-0289.control.local')]
+        self.dns_mock.return_value = {'cs-cvel-0289.control.local': {
+            'dns_status': 'RESOLVED', 'ipv4_addresses': ['192.168.102.54']}}
+        self.remote_mock.return_value = {**REMOTE_OK, 'hostname': 'other-pc'}
+        result = preflight.run_remote_install_preflight('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+        self.assertEqual(result['checks']['TARGET_IDENTITY']['code'], 'REMOTE_IDENTITY_MISMATCH')
+        self.tcp_mock.assert_called_once_with('192.168.102.54', 5986,
+            timeout=preflight.ENDPOINT_TCP_TIMEOUT_SECONDS)
+        self.remote_mock.assert_called_once()
 
     def test_auth_negotiation_failure_is_reported_in_authentication_check(self):
         self.remote_mock.side_effect = preflight.ProbeFailure('AUTH_NEGOTIATION_FAILED')
@@ -442,13 +545,23 @@ class WinRMProbeTests(TestCase):
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
     @mock.patch('winrm.protocol.Protocol')
     def test_http_pilot_protocol_requires_ntlm_message_encryption(self, protocol_class):
-        preflight._new_winrm_protocol('CS-CVEL-0289.CONTROL.LOCAL.', 'CONTROL\\Admin', SENTINEL)
+        preflight._new_winrm_protocol('CS-CVEL-0289.CONTROL.LOCAL.', 'CONTROL\\Admin', SENTINEL,
+                                      transport=preflight._HTTP_TRANSPORT)
         kwargs = protocol_class.call_args.kwargs
         self.assertEqual(kwargs['endpoint'], 'http://cs-cvel-0289.control.local:5985/wsman')
         self.assertEqual(kwargs['transport'], 'ntlm')
         self.assertEqual(kwargs['message_encryption'], 'always')
         self.assertIsNone(kwargs['ca_trust_path'])
         self.assertEqual(kwargs['server_cert_validation'], 'validate')
+
+    @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
+                       REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['some-other-host.control.local'])
+    @mock.patch('winrm.protocol.Protocol')
+    def test_http_protocol_cannot_be_constructed_for_non_allowlisted_fqdn(self, protocol_class):
+        with self.assertRaisesMessage(preflight.ProbeFailure, 'WINRM_PORT_NOT_ALLOWED'):
+            preflight._new_winrm_protocol('CS-CVEL-0289.CONTROL.LOCAL.', 'CONTROL\\Admin', SENTINEL,
+                                          transport=preflight._HTTP_TRANSPORT)
+        protocol_class.assert_not_called()
 
     @override_settings(REMOTE_INSTALL_WINRM_HTTP_ENABLED=True,
                        REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST=['cs-cvel-0289.control.local'])
@@ -464,7 +577,8 @@ class WinRMProbeTests(TestCase):
             with self.subTest(code=code), mock.patch('winrm.protocol.Protocol') as protocol_class:
                 protocol_class.return_value.open_shell.side_effect = error
                 with self.assertRaises(preflight.ProbeFailure) as raised:
-                    preflight._winrm_probe('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL)
+                    preflight._winrm_probe('cs-cvel-0289.control.local', 'CONTROL\\Admin', SENTINEL,
+                                           transport=preflight._HTTP_TRANSPORT)
                 self.assertEqual(raised.exception.code, code)
                 self.assertNotIn(SENTINEL, str(raised.exception))
                 protocol_class.assert_called_once()

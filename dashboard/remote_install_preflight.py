@@ -207,12 +207,17 @@ def _ad_target(value):
     return computer
 
 
-def _winrm_transport_for(fqdn):
-    """Select the transport from server-side opt-in and exact FQDN authorization only."""
-    if getattr(settings, 'REMOTE_INSTALL_WINRM_HTTP_ENABLED', False) is not True:
-        return {'scheme': 'https', 'port': WINRM_HTTPS_PORT, 'message_encryption': 'auto',
-                'label': 'HTTPS_TLS_VALIDATED'}
+_HTTPS_TRANSPORT = {'scheme': 'https', 'port': WINRM_HTTPS_PORT,
+                    'message_encryption': 'auto', 'label': 'HTTPS_TLS_VALIDATED'}
+_HTTP_TRANSPORT = {'scheme': 'http', 'port': WINRM_HTTP_PORT,
+                   'message_encryption': 'always', 'label': 'HTTP_NTLM_ENCRYPTED'}
+_CONNECTIVITY_FAILURES = {'WINRM_CONNECTION_FAILED', 'WINRM_REQUEST_TIMEOUT', 'TLS_HANDSHAKE_FAILED'}
 
+
+def _winrm_http_authorized(fqdn):
+    """Return exact FQDN authorization; malformed enabled policy fails closed."""
+    if getattr(settings, 'REMOTE_INSTALL_WINRM_HTTP_ENABLED', False) is not True:
+        return False
     configured = getattr(settings, 'REMOTE_INSTALL_WINRM_HTTP_ALLOWLIST', [])
     if isinstance(configured, str):
         configured = configured.split(',')
@@ -226,12 +231,28 @@ def _winrm_transport_for(fqdn):
         if not normalized:
             raise ProbeFailure('WINRM_HTTP_CONFIG_INVALID', stage='REMOTE_TRANSPORT')
         allowed.add(normalized)
+    return normalize_fqdn(fqdn) in allowed
 
-    if normalize_fqdn(fqdn) in allowed:
-        return {'scheme': 'http', 'port': WINRM_HTTP_PORT, 'message_encryption': 'always',
-                'label': 'HTTP_NTLM_ENCRYPTED'}
-    return {'scheme': 'https', 'port': WINRM_HTTPS_PORT, 'message_encryption': 'auto',
-            'label': 'HTTPS_TLS_VALIDATED'}
+
+def _winrm_transport_for(fqdn):
+    """Return the secure default; HTTP can only be selected after an explicit fallback decision."""
+    _winrm_http_authorized(fqdn)  # Validate enabled policy even when HTTPS is expected to work.
+    return dict(_HTTPS_TRANSPORT)
+
+
+def _winrm_transport_candidates(fqdn):
+    candidates = [dict(_HTTPS_TRANSPORT)]
+    if _winrm_http_authorized(fqdn):
+        candidates.append(dict(_HTTP_TRANSPORT))
+    return candidates
+
+
+def _transport_selection(fqdn, label, port):
+    """Revalidate the preflight's server-side selection before reusing it for installation."""
+    for transport in _winrm_transport_candidates(fqdn):
+        if transport['label'] == label and transport['port'] == port:
+            return transport
+    raise ProbeFailure('WINRM_PORT_NOT_ALLOWED', stage='REMOTE_TRANSPORT')
 
 
 def _tcp_available(address, port=WINRM_HTTPS_PORT, *, timeout=SOCKET_TIMEOUT_SECONDS):
@@ -383,13 +404,16 @@ def _winrm_ca_trust_path():
     return os.path.realpath(path)
 
 
-def _new_winrm_protocol(fqdn, username, password, *, pinned_address=None):
+def _new_winrm_protocol(fqdn, username, password, *, pinned_address=None, transport=None):
     normalized_fqdn = _valid_fqdn(fqdn)
     if not normalized_fqdn:
         raise ProbeFailure('INVALID_TARGET')
     if pinned_address is not None and not _safe_ipv4(pinned_address):
         raise ProbeFailure('UNSAFE_TARGET_ADDRESS', stage='DNS')
-    transport = _winrm_transport_for(normalized_fqdn)
+    if transport is None:
+        transport = _winrm_transport_for(normalized_fqdn)
+    if transport not in _winrm_transport_candidates(normalized_fqdn):
+        raise ProbeFailure('WINRM_PORT_NOT_ALLOWED', stage='REMOTE_TRANSPORT')
     ca_trust_path = _winrm_ca_trust_path() if transport['scheme'] == 'https' else None
     from winrm.protocol import Protocol
 
@@ -432,7 +456,7 @@ def _winrm_failure(exc, stage):
 
 
 def _winrm_probe(fqdn, username, password, *, pinned_address=None, expected_computer=None,
-                 deadline=None):
+                 deadline=None, transport=None):
     try:
         from winrm.exceptions import WinRMOperationTimeoutError
     except ImportError:
@@ -443,7 +467,8 @@ def _winrm_probe(fqdn, username, password, *, pinned_address=None, expected_comp
     command_id = None
     stage = 'WINRM_SESSION'
     try:
-        protocol = _new_winrm_protocol(fqdn, username, password, pinned_address=pinned_address)
+        protocol = _new_winrm_protocol(fqdn, username, password, pinned_address=pinned_address,
+                                       transport=transport)
         deadline = min(deadline, time.monotonic() + WINRM_DEADLINE_SECONDS) if deadline else time.monotonic() + WINRM_DEADLINE_SECONDS
         stage = 'WINRM_SESSION'
         shell_id = protocol.open_shell()
@@ -552,11 +577,11 @@ def run_remote_install_preflight(fqdn, username, password):
               'fqdn': normalize_fqdn(computer['fqdn']),
               'operating_system': str(computer.get('operating_system') or '')[:120]}
     try:
-        transport = _winrm_transport_for(target['fqdn'])
+        transports = _winrm_transport_candidates(target['fqdn'])
     except ProbeFailure as exc:
         return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
-    target['winrm_transport'] = transport['label']
-    target['winrm_port'] = transport['port']
+    target['winrm_transport'] = transports[0]['label']
+    target['winrm_port'] = transports[0]['port']
     if not _valid_sid(computer.get('sid')):
         target['endpoint_attempts'] = []
         return _fail(checks, 'TARGET_IDENTITY', 'TARGET_IDENTITY_UNVERIFIABLE', target)
@@ -575,58 +600,92 @@ def run_remote_install_preflight(fqdn, username, password):
     addresses = sorted(set(addresses), key=ipaddress.IPv4Address)
     target['ipv4_addresses'] = addresses
     target['endpoint_attempts'] = []
+    target['transport_attempts'] = []
     checks['DNS'] = {'status': 'PASS'}
-    if transport['scheme'] == 'https':
+    if transports[0]['scheme'] == 'https':
         try:
             _winrm_ca_trust_path()
         except ProbeFailure as exc:
             return _fail(checks, 'REMOTE_TRANSPORT', exc.code, target, failure=exc)
-    tcp_results = _tcp_candidate_results(addresses, transport['port'])
-    target['endpoint_attempts'] = [
-        {'ip': address, **tcp_results[address],
-         'status': 'TCP_OPEN' if tcp_results[address]['tcp_status'] == 'OPEN' else 'TCP_FAILED'}
-        for address in addresses
-    ]
-    candidates = [entry['ip'] for entry in target['endpoint_attempts'] if entry['tcp_status'] == 'OPEN']
-    if not candidates:
-        codes = [entry.get('code') for entry in target['endpoint_attempts'] if entry.get('code')]
-        code = next((candidate for candidate in (
-            f'TCP_{transport["port"]}_TIMEOUT', f'TCP_{transport["port"]}_REFUSED',
-            f'TCP_{transport["port"]}_UNAVAILABLE') if candidate in codes),
-            f'TCP_{transport["port"]}_UNAVAILABLE')
-        return _fail(checks, 'REMOTE_TRANSPORT', code, target,
-                     failure=ProbeFailure(code, stage=f'TCP_{transport["port"]}'))
     if not isinstance(username, str) or not username.strip() or len(username) > 256 or not username.isprintable() or \
             not isinstance(password, str) or not password or len(password) > 512 or not password.isprintable():
         return _fail(checks, 'AUTHENTICATION', 'CREDENTIAL_REQUIRED', target)
     deadline = time.monotonic() + WINRM_DEADLINE_SECONDS
     remote = None
     last_failure = None
-    for address in candidates:
-        try:
-            candidate_remote = _winrm_probe(target['fqdn'], username.strip(), password,
-                                            pinned_address=address, expected_computer=computer,
-                                            deadline=deadline)
-            identity_failure = _remote_identity_failure(candidate_remote, computer)
-            if identity_failure:
-                raise ProbeFailure(identity_failure, stage='IDENTITY_VALIDATION')
-            remote = candidate_remote
-            target['selected_ip'] = address
-            target['ip'] = address
-            target['endpoint_attempts'][addresses.index(address)]['status'] = 'SELECTED'
+    selected_transport = None
+    for transport_index, transport in enumerate(transports):
+        if time.monotonic() >= deadline:
             break
-        except ProbeFailure as exc:
-            last_failure = exc
-            entry = target['endpoint_attempts'][addresses.index(address)]
-            entry.update(status='IDENTITY_MISMATCH' if exc.code == 'REMOTE_IDENTITY_MISMATCH' else
-                         'IDENTITY_UNVERIFIABLE' if exc.code in ('REMOTE_IDENTITY_UNVERIFIABLE',
-                                                                 'TARGET_IDENTITY_UNVERIFIABLE') else 'WINRM_FAILED',
-                         code=exc.code, stage=exc.stage, exception_type=exc.exception_type)
-            if exc.code in ('AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED',
-                             'WINRM_AUTHORIZATION_DENIED', 'CREDENTIAL_REQUIRED'):
+        target['winrm_transport'] = transport['label']
+        target['winrm_port'] = transport['port']
+        tcp_results = _tcp_candidate_results(addresses, transport['port'])
+        transport_endpoints = [
+            {'ip': address, **tcp_results[address], 'transport': transport['label'],
+             'port': transport['port'],
+             'status': 'TCP_OPEN' if tcp_results[address]['tcp_status'] == 'OPEN' else 'TCP_FAILED'}
+            for address in addresses
+        ]
+        target['transport_attempts'].append({'transport': transport['label'], 'port': transport['port'],
+                                             'endpoint_attempts': transport_endpoints})
+        candidates = [entry['ip'] for entry in transport_endpoints if entry['tcp_status'] == 'OPEN']
+        if not candidates:
+            target['endpoint_attempts'] = transport_endpoints
+            codes = [entry.get('code') for entry in transport_endpoints if entry.get('code')]
+            last_code = next((candidate for candidate in (
+                f'TCP_{transport["port"]}_TIMEOUT', f'TCP_{transport["port"]}_REFUSED',
+                f'TCP_{transport["port"]}_UNAVAILABLE') if candidate in codes),
+                f'TCP_{transport["port"]}_UNAVAILABLE')
+            last_failure = ProbeFailure(last_code, stage=f'TCP_{transport["port"]}')
+            # HTTP is considered only after every HTTPS address failed at TCP.
+            continue
+
+        target['endpoint_attempts'] = transport_endpoints
+        failures = []
+        for address in candidates:
+            try:
+                candidate_remote = _winrm_probe(target['fqdn'], username.strip(), password,
+                    pinned_address=address, expected_computer=computer, deadline=deadline,
+                    transport=transport)
+                identity_failure = _remote_identity_failure(candidate_remote, computer)
+                if identity_failure:
+                    raise ProbeFailure(identity_failure, stage='IDENTITY_VALIDATION')
+                remote = candidate_remote
+                selected_transport = transport
+                target['selected_ip'] = address
+                target['ip'] = address
+                target['endpoint_attempts'][addresses.index(address)]['status'] = 'SELECTED'
                 break
-            if time.monotonic() >= deadline:
+            except ProbeFailure as exc:
+                last_failure = exc
+                failures.append(exc)
+                entry = target['endpoint_attempts'][addresses.index(address)]
+                entry.update(status='IDENTITY_MISMATCH' if exc.code == 'REMOTE_IDENTITY_MISMATCH' else
+                             'IDENTITY_UNVERIFIABLE' if exc.code in ('REMOTE_IDENTITY_UNVERIFIABLE',
+                                                                     'TARGET_IDENTITY_UNVERIFIABLE') else 'WINRM_FAILED',
+                             code=exc.code, stage=exc.stage, exception_type=exc.exception_type)
+                if exc.code in ('AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED',
+                                 'WINRM_AUTHORIZATION_DENIED', 'CREDENTIAL_REQUIRED'):
+                    break
+                if time.monotonic() >= deadline:
+                    break
+            if remote is not None:
                 break
+        if remote is not None:
+            break
+
+        identity_or_auth_failure = any(failure.code in (
+            'REMOTE_IDENTITY_MISMATCH', 'REMOTE_IDENTITY_UNVERIFIABLE', 'TARGET_IDENTITY_UNVERIFIABLE',
+            'AUTHENTICATION_FAILED', 'AUTH_NEGOTIATION_FAILED', 'WINRM_AUTHORIZATION_DENIED',
+            'CREDENTIAL_REQUIRED', 'TLS_VALIDATION_FAILED') for failure in failures)
+        connectivity_only = bool(failures) and all(
+            failure.code in _CONNECTIVITY_FAILURES for failure in failures)
+        if transport_index + 1 >= len(transports) or identity_or_auth_failure or not connectivity_only:
+            break
+
+    if selected_transport:
+        target['winrm_transport'] = selected_transport['label']
+        target['winrm_port'] = selected_transport['port']
     if remote is None:
         observed_identity_mismatch = any(entry.get('status') == 'IDENTITY_MISMATCH'
                                          for entry in target['endpoint_attempts'])
@@ -647,7 +706,9 @@ def run_remote_install_preflight(fqdn, username, password):
             if last_failure.code == 'WINRM_AUTHORIZATION_DENIED':
                 key = 'ADMIN_PRIVILEGE'
             return _fail(checks, key, last_failure.code, target, failure=last_failure)
-        return _fail(checks, 'REMOTE_TRANSPORT', 'WINRM_UNAVAILABLE', target)
+        return _fail(checks, 'REMOTE_TRANSPORT',
+                     last_failure.code if last_failure else 'WINRM_UNAVAILABLE', target,
+                     failure=last_failure)
     checks['REMOTE_TRANSPORT'] = {'status': 'PASS'}
     checks['AUTHENTICATION'] = {'status': 'PASS'}
     checks['TARGET_IDENTITY'] = {'status': 'PASS'}

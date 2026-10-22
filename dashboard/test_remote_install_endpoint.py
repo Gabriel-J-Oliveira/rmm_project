@@ -138,6 +138,17 @@ class EndpointFailoverTests(TestCase):
         self.assertEqual(result[2][0]['code'], 'REMOTE_IDENTITY_MISMATCH')
         self.assertEqual(remote.call_count, 2)
 
+    def test_executor_reuses_preflight_transport_for_every_pinned_address_attempt(self):
+        selected_transport = {'scheme': 'http', 'port': 5985,
+                              'message_encryption': 'always', 'label': 'HTTP_NTLM_ENCRYPTED'}
+        with mock.patch('dashboard.remote_install._remote_script', side_effect=[
+                InstallFailure('WINRM_CONNECTION_FAILED', command_attempted=False), 0]) as remote:
+            _remote_script_candidates(FQDN, 'admin', 'secret', 'script', 5,
+                endpoint_candidates=self.candidates, selected_ip='192.168.100.3',
+                expected_computer=self.target, winrm_transport=selected_transport)
+        self.assertEqual([call.kwargs['winrm_transport'] for call in remote.call_args_list],
+                         [selected_transport, selected_transport])
+
     def test_tcp_candidates_use_short_timeout_and_bounded_concurrency(self):
         lock = threading.Lock()
         active = peak = 0

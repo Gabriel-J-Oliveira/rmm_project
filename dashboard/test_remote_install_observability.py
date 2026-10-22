@@ -156,6 +156,14 @@ class DiagnosticClassificationTests(SimpleTestCase):
         report = sanitize_report({
             'fqdn': COMPUTER['fqdn'], 'resolved_ip': '192.168.100.3',
             'discovered_ipv4_addresses': ['192.168.100.3', '192.168.100.221', '127.0.0.1'],
+            'transport_attempts': [
+                {'transport': 'HTTPS_TLS_VALIDATED', 'port': 5986, 'endpoint_attempts': [
+                    {'ip': '192.168.100.3', 'status': 'TCP_FAILED', 'tcp_status': 'FAIL',
+                     'code': 'TCP_5986_TIMEOUT'},
+                    {'ip': '127.0.0.1', 'status': 'SELECTED', 'password': SENTINEL},
+                ]},
+                {'transport': SENTINEL, 'port': 5985, 'endpoint_attempts': []},
+            ],
             'endpoint_attempts': [
                 {'ip': '192.168.100.3', 'tcp_status': 'OPEN', 'status': 'IDENTITY_MISMATCH',
                  'code': 'REMOTE_IDENTITY_MISMATCH'},
@@ -166,6 +174,8 @@ class DiagnosticClassificationTests(SimpleTestCase):
         self.assertEqual(report['selected_ip'], '192.168.100.3')
         self.assertEqual(report['discovered_ipv4_addresses'], ['192.168.100.3', '192.168.100.221'])
         self.assertEqual([item['status'] for item in report['endpoint_attempts']], ['IDENTITY_MISMATCH', 'SELECTED'])
+        self.assertEqual(report['transport_attempts'][0]['endpoint_attempts'][0]['code'], 'TCP_5986_TIMEOUT')
+        self.assertEqual(len(report['transport_attempts']), 1)
         self.assertNotIn(SENTINEL, json.dumps(report))
         self.assertIsNone(sanitize_report({'fqdn': COMPUTER['fqdn'], 'resolved_ip': '127.0.0.1'})['resolved_ip'])
 

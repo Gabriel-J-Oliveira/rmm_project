@@ -171,6 +171,19 @@ class RemoteInstallJobTests(TestCase):
         self.assertNotIn(SENTINEL, repr(protocol.run_command.call_args))
         protocol.cleanup_command.assert_called_once()
         protocol.close_shell.assert_called_once()
+
+    def test_remote_command_uses_transport_selected_by_preflight(self):
+        protocol = mock.Mock()
+        protocol.open_shell.return_value = 'synthetic-shell'
+        protocol.run_command.return_value = 'synthetic-command'
+        protocol.get_command_output_raw.return_value = (b'', b'', 0, True)
+        selected = {'scheme': 'http', 'port': 5985,
+                    'message_encryption': 'always', 'label': 'HTTP_NTLM_ENCRYPTED'}
+        with mock.patch.object(remote_install, '_new_winrm_protocol', return_value=protocol) as create, \
+                mock.patch.object(remote_install, '_verify_remote_identity_session'):
+            remote_install._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, 'exit 0', 3,
+                endpoint_ip=ENDPOINT_IP, expected_computer=COMPUTER, winrm_transport=selected)
+        self.assertEqual(create.call_args.kwargs['transport'], selected)
         for code in ('WINRM_REDIRECT_BLOCKED', 'WINRM_CA_TRUST_INVALID'):
             with self.subTest(code=code), mock.patch.object(
                     remote_install, '_new_winrm_protocol', side_effect=ProbeFailure(code)):

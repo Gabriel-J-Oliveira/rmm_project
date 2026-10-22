@@ -110,7 +110,48 @@ def sanitize_report(data):
                 item['stage'] = attempt['stage']
             if attempt.get('exception_type') in EXCEPTION_TYPES:
                 item['exception_type'] = attempt['exception_type']
+            if attempt.get('transport') in ('HTTPS_TLS_VALIDATED', 'HTTP_NTLM_ENCRYPTED'):
+                item['transport'] = attempt['transport']
+            if attempt.get('port') in (5985, 5986):
+                item['port'] = attempt['port']
             report['endpoint_attempts'].append(item)
+    report['transport_attempts'] = []
+    transport_attempts = data.get('transport_attempts', [])
+    if isinstance(transport_attempts, (list, tuple)):
+        for transport_attempt in transport_attempts[:2]:
+            if not isinstance(transport_attempt, dict):
+                continue
+            label = transport_attempt.get('transport')
+            port = transport_attempt.get('port')
+            if (label, port) not in (('HTTPS_TLS_VALIDATED', 5986), ('HTTP_NTLM_ENCRYPTED', 5985)):
+                continue
+            item = {'transport': label, 'port': port, 'endpoint_attempts': []}
+            endpoints = transport_attempt.get('endpoint_attempts', [])
+            if isinstance(endpoints, (list, tuple)):
+                for endpoint in endpoints[:16]:
+                    if not isinstance(endpoint, dict):
+                        continue
+                    try:
+                        address = str(ipaddress.IPv4Address(endpoint.get('ip')))
+                    except (ValueError, TypeError):
+                        continue
+                    if not _safe_ipv4(address):
+                        continue
+                    status = endpoint.get('status')
+                    if status not in ('TCP_FAILED', 'TCP_OPEN', 'WINRM_FAILED', 'IDENTITY_MISMATCH',
+                                      'IDENTITY_UNVERIFIABLE', 'SELECTED'):
+                        status = 'WINRM_FAILED'
+                    safe_endpoint = {'ip': address, 'status': status,
+                        'tcp_status': endpoint.get('tcp_status') if endpoint.get('tcp_status') in
+                        ('OPEN', 'FAIL') else 'FAIL'}
+                    if endpoint.get('code'):
+                        safe_endpoint['code'] = safe_code(endpoint['code'])
+                    if endpoint.get('stage') in STAGES:
+                        safe_endpoint['stage'] = endpoint['stage']
+                    if endpoint.get('exception_type') in EXCEPTION_TYPES:
+                        safe_endpoint['exception_type'] = endpoint['exception_type']
+                    item['endpoint_attempts'].append(safe_endpoint)
+            report['transport_attempts'].append(item)
     for key in ('started_at', 'finished_at'):
         try:
             from datetime import datetime
@@ -174,7 +215,8 @@ class InstallAttempt:
         self.data.update(result=result.get('status'), checks=checks, fqdn=target.get('fqdn', self.data['fqdn']),
                          resolved_ip=target.get('selected_ip') or target.get('ip'),
                          discovered_ipv4_addresses=target.get('ipv4_addresses', []),
-                         endpoint_attempts=target.get('endpoint_attempts', []), code=failed[1].get('code', ''),
+                         endpoint_attempts=target.get('endpoint_attempts', []),
+                         transport_attempts=target.get('transport_attempts', []), code=failed[1].get('code', ''),
                          stage=failed[1].get('stage', failed[0]),
                          exception_type=failed[1].get('exception_type', ''),
                          winrm_transport=target.get('winrm_transport', ''),
@@ -238,6 +280,7 @@ def record_execution_failure(job, exc):
         attempt.data.update(resolved_ip=diagnostics.get('selected_endpoint_ip') or report['resolved_ip'],
             discovered_ipv4_addresses=report['discovered_ipv4_addresses'],
             endpoint_attempts=(diagnostics.get('endpoint_attempts') or report['endpoint_attempts']),
+            transport_attempts=report['transport_attempts'],
             checks=report['checks'],
             winrm_transport=report['winrm_transport'], winrm_port=report['winrm_port'])
     attempt.data['started_at'] = (job.started_at or job.created_at).isoformat()
