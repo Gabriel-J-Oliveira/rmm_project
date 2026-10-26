@@ -73,6 +73,11 @@
         const selected = currentRelease();
         version.textContent = selected ? selected.version : "Sem release utiliz\u00e1vel";
         submit.disabled = !selected || Boolean(currentId) || form.dataset.trustReady !== "true";
+        if (!currentId && form.dataset.trustReady === "true") {
+            showError(!selected ? (development
+                ? "N\u00e3o h\u00e1 release Development assinada compat\u00edvel com o trust bundle publicado."
+                : "N\u00e3o h\u00e1 release Stable dispon\u00edvel. Selecione Development e confirme a vers\u00e3o aprovada para instalar.") : "");
+        }
     }
 
     function setOpen(open) {
@@ -80,7 +85,7 @@
         if (backdrop) backdrop.hidden = !open;
         if (open) {
             if (form.dataset.trustReady !== "true") showError("O trust bundle publicado est\u00e1 ausente, expirado ou incompleto. A gera\u00e7\u00e3o fica bloqueada at\u00e9 corrigir a publica\u00e7\u00e3o.");
-            else showError("");
+            else if (!currentId) updateReleaseOptions();
             loadHistory();
         }
     }
@@ -212,13 +217,6 @@
             if (!response.ok) throw new Error("Hist\u00f3rico indispon\u00edvel.");
             const items = (await response.json()).deployments || [];
             renderHistory(items);
-            if (!currentId) {
-                const active = items.find((item) => ["waiting", "installing", "confirmation_pending"].includes(item.ui_status));
-                if (active) {
-                    showDeployment(active, false);
-                    startPolling(active.id);
-                }
-            }
         } catch (fetchError) {
             history.replaceChildren();
             const message = document.createElement("p");
@@ -280,6 +278,9 @@
                 method: "POST", headers: { "X-CSRFToken": csrfToken(), Accept: "application/json" },
                 body: payload, credentials: "same-origin", cache: "no-store"
             });
+            if (response.redirected || !(response.headers.get("content-type") || "").includes("application/json")) {
+                throw new Error("A sess\u00e3o expirou ou o acesso foi negado. Entre novamente no NightOwl e gere a instala\u00e7\u00e3o manual.");
+            }
             const data = await response.json();
             if (!response.ok || data.status !== "ok") {
                 const messages = {

@@ -232,6 +232,16 @@ body.page-agent-install .deployment-error {
     background: rgba(220, 38, 38, 0.08);
 }
 
+body.page-agent-install .agent-install-legacy {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color, #303044);
+}
+body.page-agent-install .agent-install-legacy > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 12px 0;
+}
 body.page-endpoints .manual-deployment-entry,
 body.page-agent-install .manual-deployment-entry {
     display: flex;

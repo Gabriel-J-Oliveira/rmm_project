@@ -14,13 +14,24 @@
 <section class="hero agent-install-hero page-header">
     <div>
         <h1 class="page-title"><span class="page-header-icon"><i data-lucide="hard-drive-download"></i></span>Instala&ccedil;&atilde;o do Agente</h1>
-        <p class="page-subtitle">Instale automaticamente em maquinas do dominio ou valide manualmente endpoints externos com um token visual.</p>
+        <p class="page-subtitle">Prepare uma instala&ccedil;&atilde;o individual por token ou instale remotamente nos computadores do dom&iacute;nio.</p>
     </div>
     <div class="agent-hero-badges">
         <span class="badge badge-security module-badge">Servi&ccedil;o Windows</span>
         <span class="badge badge-muted module-badge">v{{ recommended_agent_version }}</span>
     </div>
 </section>
+
+{% if can_deploy_agents %}<section class="panel manual-deployment-entry" id="manual-deployment">
+    <div>
+        <span class="section-kicker">INSTALA&Ccedil;&Atilde;O MANUAL &mdash; WINDOWS</span>
+        <h2>Instalar neste computador</h2>
+        <p>Gere o comando individual, execute no PowerShell como administrador e acompanhe a confirma&ccedil;&atilde;o do agente.</p>
+    </div>
+    <button type="button" data-deployment-open><i data-lucide="download"></i>Gerar instala&ccedil;&atilde;o manual</button>
+</section>
+{% include 'dashboard/manual_deployment_modal.html' %}
+{% endif %}
 
 <section class="metric-grid agent-install-metrics" aria-label="Resumo da instalação">
     <article class="metric-card command-metric">
@@ -112,23 +123,15 @@
     </div>
 </section>
 
-{% if can_deploy_agents %}<section class="panel manual-deployment-entry" id="manual-deployment">
-    <div>
-        <span class="section-kicker">Instala&ccedil;&atilde;o individual assistida</span>
-        <h2>Instala&ccedil;&atilde;o manual &mdash; Windows</h2>
-        <p>Gere um comando individual, execute-o no computador de destino como administrador e acompanhe enrollment e heartbeat aqui.</p>
-    </div>
-    <button type="button" data-deployment-open><i data-lucide="download"></i>Preparar instala&ccedil;&atilde;o</button>
-</section>
-{% include 'dashboard/manual_deployment_modal.html' %}
-{% endif %}
-
 <div id="ad-detail-backdrop" class="ad-detail-backdrop" hidden></div>
 <aside id="ad-detail-drawer" class="ad-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="ad-detail-title" hidden>
     <div class="ad-detail-header"><h2 id="ad-detail-title"></h2><button type="button" id="ad-detail-close" aria-label="Fechar detalhes" title="Fechar detalhes"><i data-lucide="x"></i></button></div>
     <div id="ad-detail-content" class="ad-detail-content"></div>
 </aside>
 
+<details class="agent-install-legacy" id="agent-install-legacy" {% if created_token or created_manual_token %}open{% endif %}>
+<summary>Compatibilidade: tokens e comandos legados</summary>
+<p>Para novas instala&ccedil;&otilde;es, use <a href="#manual-deployment">Gerar instala&ccedil;&atilde;o manual</a> no in&iacute;cio da p&aacute;gina.</p>
 <div class="agent-install-section-heading">
     <div><span class="section-kicker">Tokens e comandos</span><h2>Instalação manual</h2></div>
     <span class="agent-install-manual-meta">{{ expired_count }} tokens expirados · {{ uses_24h_count }} usos nas últimas 24h</span>
@@ -458,6 +461,7 @@
     </nav>
 </section>
 
+</details>
 <div id="copy-feedback" class="copy-feedback" hidden>Copiado</div>
 {% include 'dashboard/_install_batches.html' %}
 {% endblock %}
@@ -637,5 +641,5 @@
         updateCommand();
     });
 </script>
-{% if can_deploy_agents %}<script src="/static/js/manual_deployment.js"></script>{% endif %}
+{% if can_deploy_agents %}<script src="{% static 'js/manual_deployment.js' %}"></script>{% endif %}
 {% endblock %}

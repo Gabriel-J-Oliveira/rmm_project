@@ -2612,6 +2612,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertIn('data-deployment-form', content)
         self.assertIn('data-deployment-open', content)
         self.assertIn('manual_deployment.js', content)
+        self.assertLess(content.index('id="manual-deployment"'), content.index('id="ad-discovery"'))
+        self.assertIn('<details class="agent-install-legacy" id="agent-install-legacy" >', content)
 
     def test_bootstrap_logs_only_sanitized_failure_diagnostics(self):
         script = (settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1').read_text(encoding='utf-8')
