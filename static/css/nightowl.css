@@ -132,14 +132,16 @@
     .install-credential-modal footer { flex-wrap: wrap; }
 }
 
-body.page-endpoints .deployment-modal-backdrop {
+body.page-endpoints .deployment-modal-backdrop,
+body.page-agent-install .deployment-modal-backdrop {
     position: fixed;
     inset: 0;
     z-index: 80;
     background: rgba(15, 23, 42, 0.45);
 }
 
-body.page-endpoints .deployment-modal {
+body.page-endpoints .deployment-modal,
+body.page-agent-install .deployment-modal {
     position: fixed;
     top: 6vh;
     left: 50%;
@@ -155,12 +157,16 @@ body.page-endpoints .deployment-modal {
 }
 
 body.page-endpoints .deployment-modal[hidden],
-body.page-endpoints .deployment-modal-backdrop[hidden] {
+body.page-agent-install .deployment-modal[hidden],
+body.page-endpoints .deployment-modal-backdrop[hidden],
+body.page-agent-install .deployment-modal-backdrop[hidden] {
     display: none;
 }
 
 body.page-endpoints .deployment-modal > header,
-body.page-endpoints .deployment-modal > footer {
+body.page-agent-install .deployment-modal > header,
+body.page-endpoints .deployment-modal > footer,
+body.page-agent-install .deployment-modal > footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -169,53 +175,215 @@ body.page-endpoints .deployment-modal > footer {
     border-bottom: 1px solid var(--border);
 }
 
-body.page-endpoints .deployment-modal > footer {
+body.page-endpoints .deployment-modal > footer,
+body.page-agent-install .deployment-modal > footer {
     border-top: 1px solid var(--border);
     border-bottom: 0;
 }
 
-body.page-endpoints .deployment-modal__close {
+body.page-endpoints .deployment-modal__close,
+body.page-agent-install .deployment-modal__close {
     width: 36px;
     height: 36px;
     padding: 0;
 }
 
-body.page-endpoints .deployment-modal__body {
+body.page-endpoints .deployment-modal__body,
+body.page-agent-install .deployment-modal__body {
     display: grid;
     gap: 16px;
     padding: 20px;
 }
 
-body.page-endpoints .deployment-summary {
+body.page-endpoints .deployment-summary,
+body.page-agent-install .deployment-summary {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     margin: 0;
 }
 
-body.page-endpoints .deployment-summary div {
+body.page-endpoints .deployment-summary div,
+body.page-agent-install .deployment-summary div {
     padding: 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--card-hover);
 }
 
-body.page-endpoints .deployment-summary dt {
+body.page-endpoints .deployment-summary dt,
+body.page-agent-install .deployment-summary dt {
     color: var(--text-muted);
     font-size: 0.78rem;
 }
 
-body.page-endpoints .deployment-summary dd {
+body.page-endpoints .deployment-summary dd,
+body.page-agent-install .deployment-summary dd {
     margin: 4px 0 0;
     font-weight: 700;
 }
 
-body.page-endpoints .deployment-error {
+body.page-endpoints .deployment-error,
+body.page-agent-install .deployment-error {
     padding: 10px 12px;
     border: 1px solid rgba(220, 38, 38, 0.35);
     border-radius: 8px;
     color: var(--critical);
     background: rgba(220, 38, 38, 0.08);
+}
+
+body.page-endpoints .manual-deployment-entry,
+body.page-agent-install .manual-deployment-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin: 24px 0;
+    padding: 20px;
+}
+
+body.page-endpoints .manual-deployment-entry h2,
+body.page-agent-install .manual-deployment-entry h2 {
+    margin: 4px 0 6px;
+    font-size: 1.15rem;
+}
+
+body.page-endpoints .manual-deployment-entry p,
+body.page-agent-install .manual-deployment-entry p {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+body.page-endpoints .deployment-step-heading,
+body.page-agent-install .deployment-step-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+body.page-endpoints .deployment-step-heading > span,
+body.page-agent-install .deployment-step-heading > span {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    border-radius: 50%;
+    color: var(--text);
+    background: var(--card-hover);
+    font-weight: 700;
+}
+
+body.page-endpoints .deployment-step-heading strong,
+body.page-agent-install .deployment-step-heading strong,
+body.page-endpoints .deployment-step-heading small,
+body.page-agent-install .deployment-step-heading small {
+    display: block;
+}
+
+body.page-endpoints .deployment-step-heading small,
+body.page-agent-install .deployment-step-heading small {
+    margin-top: 2px;
+    color: var(--text-muted);
+}
+
+body.page-endpoints .deployment-guidance,
+body.page-agent-install .deployment-guidance {
+    margin: 0;
+    padding: 12px 14px;
+    border-left: 3px solid var(--accent, #38bdf8);
+    background: var(--card-hover);
+}
+
+body.page-endpoints .deployment-command-block,
+body.page-agent-install .deployment-command-block {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+body.page-endpoints .deployment-command-block code,
+body.page-agent-install .deployment-command-block code {
+    display: block;
+    max-height: 150px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    user-select: text;
+}
+
+body.page-endpoints .deployment-progress,
+body.page-agent-install .deployment-progress {
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-hover);
+}
+
+body.page-endpoints .deployment-progress__heading,
+body.page-agent-install .deployment-progress__heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+body.page-endpoints .deployment-progress__heading strong,
+body.page-agent-install .deployment-progress__heading strong {
+    display: block;
+    margin-top: 4px;
+}
+
+body.page-endpoints .deployment-progress > p,
+body.page-agent-install .deployment-progress > p {
+    margin: 10px 0 0;
+}
+
+body.page-endpoints .deployment-history,
+body.page-agent-install .deployment-history {
+    display: grid;
+    gap: 10px;
+}
+
+body.page-endpoints .deployment-history [data-deployment-history],
+body.page-agent-install .deployment-history [data-deployment-history] {
+    display: grid;
+    gap: 6px;
+    max-height: 180px;
+    overflow: auto;
+}
+
+body.page-endpoints .deployment-history-item,
+body.page-agent-install .deployment-history-item {
+    width: 100%;
+    padding: 9px 11px;
+    overflow-wrap: anywhere;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    background: transparent;
+}
+
+body.page-endpoints .deployment-history-empty,
+body.page-agent-install .deployment-history-empty {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+    body.page-endpoints .manual-deployment-entry,
+    body.page-agent-install .manual-deployment-entry,
+    body.page-endpoints .deployment-command-block,
+    body.page-agent-install .deployment-command-block {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    body.page-endpoints .deployment-summary,
+    body.page-agent-install .deployment-summary {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* Night Owl Desk */

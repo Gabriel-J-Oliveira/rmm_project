@@ -31,7 +31,7 @@ function Write-NightOwlBootstrapLog([string]$Status, [hashtable]$Fields) {
         $record | ConvertTo-Json -Depth 5 -Compress | Add-Content -Path $BootstrapLogPath -Encoding UTF8
     }
     catch {
-        Write-Warning ("NightOwl bootstrap log unavailable: {0}" -f $_.Exception.Message)
+        Write-Warning "NightOwl bootstrap log unavailable."
     }
 }
 
@@ -93,10 +93,10 @@ function Get-OptionalJsonProperty($Object, [string]$Name) {
 
 function Read-AgentConfig {
     $configPath = "C:\ProgramData\NightOwl\Config\agent.config.json"
-    if (-not (Test-Path $configPath)) {
-        return $null
-    }
     try {
+        if (-not (Test-Path -LiteralPath $configPath -ErrorAction Stop)) {
+            return $null
+        }
         return Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     }
     catch {
@@ -144,7 +144,7 @@ function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCod
         return [pscustomobject]@{ ok = $true; error = "" }
     }
     catch {
-        return [pscustomobject]@{ ok = $false; error = $_.Exception.Message }
+        return [pscustomobject]@{ ok = $false; error = "completion_callback_failed" }
     }
 }
 
@@ -262,8 +262,30 @@ try {
     }
     $global:NightOwlDeploymentBootstrapExitCode = 0
 } catch {
-    $message = [string]$_.Exception.Message
-    $errorCode = ($message.Split(":")[0])
+    $rawMessage = [string]$_.Exception.Message
+    $candidateCode = ($rawMessage.Split(":")[0]).Trim().ToUpperInvariant()
+    $errorCode = if ($candidateCode -match "^[A-Z0-9_]{1,80}$") { $candidateCode } else {
+        switch ($Stage) {
+            "metadata" { "BOOTSTRAP_METADATA_REQUEST_FAILED"; break }
+            "download" { "BOOTSTRAP_DOWNLOAD_FAILED"; break }
+            "install" { "BOOTSTRAP_INSTALL_METADATA_INCOMPLETE"; break }
+            "completed" { "BOOTSTRAP_CONFIRMATION_REPORT_FAILED"; break }
+            default { "BOOTSTRAP_FAILED" }
+        }
+    }
+    $errorType = $_.Exception.GetType().Name
+    $safeMessages = @{
+        "BOOTSTRAP_WINDOWS_REQUIRED" = "Este comando deve ser executado no Windows."
+        "BOOTSTRAP_ADMIN_REQUIRED" = "Abra o PowerShell como administrador e execute novamente."
+        "BOOTSTRAP_HTTPS_REQUIRED" = "O bootstrap exige URLs HTTPS validas."
+        "BOOTSTRAP_TOKEN_REQUIRED" = "O token de deployment nao foi fornecido. Gere um novo deployment."
+        "BOOTSTRAP_TRUST_SHA_MISMATCH" = "O trust bundle baixado nao corresponde ao hash publicado."
+        "BOOTSTRAP_INSTALLER_FAILED" = "O instalador terminou com falha. Consulte o log local do instalador."
+        "BOOTSTRAP_INSTALL_METADATA_INCOMPLETE" = "Os metadados obrigatorios da release estao incompletos. Revise a publicacao antes de tentar novamente."
+        "BOOTSTRAP_CONFIRMATION_REPORT_FAILED" = "A instalacao terminou, mas o resultado nao pode ser confirmado. Nao repita sem revisar o endpoint."
+        "BOOTSTRAP_FAILED" = "Falha no bootstrap. Consulte o codigo e os logs locais do instalador."
+    }
+    $message = if ($safeMessages.ContainsKey($errorCode)) { $safeMessages[$errorCode] } else { "Falha durante a etapa $Stage. Consulte o codigo e os logs locais do instalador." }
     $metadataVar = Get-Variable -Name metadata -Scope Local -ErrorAction SilentlyContinue
     if ($null -ne $metadataVar -and $null -ne $metadataVar.Value) {
         try {
@@ -279,10 +301,12 @@ try {
     Write-NightOwlResult "failed" @{
         stage = $Stage
         error_code = $errorCode
+        error_type = $errorType
         error_message = $message
     }
     Write-NightOwlBootstrapLog "failed" @{
         error_code = $errorCode
+        error_type = $errorType
         error_message = $message
     }
     Write-Error ("NightOwl installation failed: {0}" -f $message) -ErrorAction Continue

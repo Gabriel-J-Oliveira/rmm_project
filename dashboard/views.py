@@ -3,6 +3,7 @@ from datetime import datetime, time, timedelta
 import csv
 import json
 import logging
+import re
 import uuid
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -27,6 +28,7 @@ from agents.models import (
     AgentEnrollmentToken,
     AgentJob,
     AgentMachine,
+    InventorySnapshot,
     AgentUninstallRequest,
     AgentManualValidationToken,
     AgentOperationalStatus,
@@ -38,6 +40,7 @@ from agents.models import (
     AuditEvent,
     EndpointAlert,
     MaintenanceRun,
+    SAFE_DEPLOYMENT_FAILURE_CODES,
     SoftwarePolicy,
     SoftwarePolicyException,
     SoftwarePolicyTargetEndpoint,
@@ -2320,6 +2323,9 @@ def endpoint_list(request):
             'filters': filters,
             'deployment_release_options': deployment_release_options(),
             'deployment_create_url': reverse('api-deployment-create'),
+            'deployment_history_url': reverse('api-deployment-history'),
+            'can_deploy_agents': is_nightowl_technical_user(request.user),
+            'deployment_trust_ready': bool(_usable_deployment_trust_bundle()),
             **endpoint_summary_counts(filtered_rows),
             **endpoint_filter_options(rows),
             'using_mock_rmm_data': True,
@@ -2337,6 +2343,9 @@ def endpoint_list(request):
         'filters': filters,
         'deployment_release_options': deployment_release_options(),
         'deployment_create_url': reverse('api-deployment-create'),
+        'deployment_history_url': reverse('api-deployment-history'),
+        'can_deploy_agents': is_nightowl_technical_user(request.user),
+        'deployment_trust_ready': bool(_usable_deployment_trust_bundle()),
         **endpoint_summary_counts(filtered_rows),
         **endpoint_filter_options(rows),
     }
@@ -2787,6 +2796,22 @@ def _latest_published_trust_bundle():
     ).order_by('-bundle_version', '-published_at', '-created_at').first()
 
 
+def _usable_deployment_trust_bundle():
+    bundle = _latest_published_trust_bundle()
+    now = timezone.now()
+    if not bundle:
+        return None
+    if ((bundle.valid_from and bundle.valid_from > now) or
+            (bundle.valid_until and bundle.valid_until <= now) or
+            not bundle.bundle_url or not bundle.bundle_sha256 or
+            not bundle.signature_url or not bundle.signature_sha256 or
+            not bundle.root_key_id):
+        return None
+    if not bundle.bundle_url.lower().startswith('https://') or not bundle.signature_url.lower().startswith('https://'):
+        return None
+    return bundle
+
+
 def _trust_bundle_payload(trust_bundle):
     if not trust_bundle:
         return None
@@ -2806,6 +2831,9 @@ def _trust_bundle_payload(trust_bundle):
 
 
 def deployment_release_options():
+    trust_bundle = _usable_deployment_trust_bundle()
+    if not trust_bundle:
+        return []
     releases = list(AgentRelease.objects.filter(
         status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED},
         revoked=False,
@@ -2823,7 +2851,23 @@ def deployment_release_options():
             'paused': release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED,
         }
         for release in releases
+        if _deployment_release_is_usable(release, trust_bundle)
     ]
+
+
+def _deployment_release_is_usable(release, trust_bundle):
+    if (not release.signature_valid or release.legacy_unsigned or release.revoked or
+            not re.fullmatch(r'[0-9a-fA-F]{64}', release.sha256 or '') or
+            not re.fullmatch(r'[0-9a-fA-F]{64}', release.manifest_sha256 or '') or
+            not re.fullmatch(r'[0-9a-fA-F]{64}', release.signature_sha256 or '') or
+            not release.signature_key_id):
+        return False
+    artifact_urls = (release.package_url, release.manifest_url, release.signature_url)
+    if any(not str(url or '').lower().startswith('https://') for url in artifact_urls):
+        return False
+    active_keys = set(trust_bundle.active_key_ids or [])
+    revoked_keys = set(trust_bundle.revoked_key_ids or [])
+    return release.signature_key_id in active_keys and release.signature_key_id not in revoked_keys
 
 
 def select_deployment_release(channel, release_id=''):
@@ -2835,6 +2879,11 @@ def select_deployment_release(channel, release_id=''):
             raise ValidationError('Release development nao encontrada.')
         if release.status not in set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED}:
             raise ValidationError('Release development nao esta disponivel para deployment manual.')
+        if not release.signature_valid or release.legacy_unsigned:
+            raise ValidationError('Release development nao possui assinatura valida para instalacao.')
+        trust_bundle = _usable_deployment_trust_bundle()
+        if not trust_bundle or not _deployment_release_is_usable(release, trust_bundle):
+            raise ValidationError('Release development ou chave de assinatura nao e compativel com o trust bundle publicado.')
         return release
     if channel == AgentRelease.CHANNEL_STABLE:
         releases = list(AgentRelease.objects.filter(
@@ -2842,10 +2891,16 @@ def select_deployment_release(channel, release_id=''):
             status__in=AGENT_RELEASE_AVAILABLE_STATUSES,
             revoked=False,
             rollout_paused=False,
+            signature_valid=True,
+            legacy_unsigned=False,
         ))
         ordered = sort_releases_by_version(releases, reverse=True)
         if not ordered:
             raise ValidationError('Nao ha release stable elegivel para deployment.')
+        trust_bundle = _usable_deployment_trust_bundle()
+        ordered = [item for item in ordered if _deployment_release_is_usable(item, trust_bundle)] if trust_bundle else []
+        if not ordered:
+            raise ValidationError('Nao ha release stable compativel com o trust bundle publicado.')
         return ordered[0]
     raise ValidationError('Canal invalido para deployment.')
 
@@ -2869,6 +2924,91 @@ def serialize_deployment(deployment, *, command=''):
     }
 
 
+def _deployment_heartbeat(deployment):
+    endpoint = deployment.endpoint
+    if (not endpoint or not endpoint.machine_id or
+            AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
+        return None
+    enrolled_at = deployment.used_at or deployment.created_at
+    return InventorySnapshot.objects.filter(
+        machine=endpoint,
+        received_at__gte=enrolled_at,
+        raw_payload__snapshot_source='heartbeat',
+        raw_payload__machine_id=endpoint.machine_id,
+        raw_payload__agent_version=deployment.release.version,
+    ).order_by('received_at', 'pk').first()
+
+
+def serialize_deployment_status(deployment):
+    heartbeat = _deployment_heartbeat(deployment)
+    expired = deployment.status not in {
+        AgentDeploymentToken.STATUS_COMPLETED,
+        AgentDeploymentToken.STATUS_FAILED,
+        AgentDeploymentToken.STATUS_EXPIRED,
+    } and deployment.expires_at <= timezone.now()
+    if deployment.status == AgentDeploymentToken.STATUS_FAILED:
+        ui_status = 'failed'
+    elif deployment.status == AgentDeploymentToken.STATUS_EXPIRED or expired:
+        ui_status = 'expired'
+    elif deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
+        ui_status = 'confirmed' if heartbeat else 'confirmation_pending'
+    elif deployment.status == AgentDeploymentToken.STATUS_INSTALLING:
+        ui_status = 'installing'
+    else:
+        ui_status = 'waiting'
+
+    endpoint = deployment.endpoint
+    raw = heartbeat.raw_payload if heartbeat and isinstance(heartbeat.raw_payload, dict) else {}
+    reported_agent = raw.get('agent') if isinstance(raw.get('agent'), dict) else {}
+    service_status = deployment.metadata.get('reported_service_status') or reported_agent.get('service_status') or ''
+    allowed_service_states = {'running', 'stopped', 'startpending', 'stoppending', 'paused', 'unknown'}
+    service_status = str(service_status).strip()
+    if service_status.casefold() not in allowed_service_states:
+        service_status = 'Desconhecido' if service_status else ''
+
+    failure_messages = {
+        'BOOTSTRAP_ADMIN_REQUIRED': 'Execute o comando em um PowerShell elevado como administrador.',
+        'BOOTSTRAP_HTTPS_REQUIRED': 'A URL do NightOwl nao e HTTPS valida; revise a configuracao publica do servidor.',
+        'BOOTSTRAP_TRUST_SHA_MISMATCH': 'O trust bundle baixado divergiu do hash publicado. Nao continue; acione a equipe NightOwl.',
+        'BOOTSTRAP_INSTALLER_FAILED': 'O instalador falhou. Consulte o log local e confirme o codigo antes de repetir.',
+        'BOOTSTRAP_TOKEN_REQUIRED': 'O token nao foi aceito ou foi removido. Gere um novo deployment apos revisar o anterior.',
+    }
+    return {
+        'id': str(deployment.pk),
+        'status': deployment.status,
+        'ui_status': ui_status,
+        'failure_code': (deployment.failure_code if deployment.failure_code in SAFE_DEPLOYMENT_FAILURE_CODES else 'BOOTSTRAP_FAILED') if ui_status == 'failed' else '',
+        'failure_message': failure_messages.get(deployment.failure_code, 'A instalacao falhou. Revise o codigo e os logs locais antes de tentar novamente.') if ui_status == 'failed' else '',
+        'created_at': _iso_or_none(deployment.created_at),
+        'expires_at': _iso_or_none(deployment.expires_at),
+        'completed_at': _iso_or_none(deployment.completed_at),
+        'release_version': deployment.release.version,
+        'channel': deployment.channel,
+        'enrollment_confirmed': bool(endpoint and deployment.used_at),
+        'heartbeat_confirmed': bool(heartbeat),
+        'heartbeat_at': _iso_or_none(heartbeat.received_at) if heartbeat else None,
+        'endpoint': ({
+            'id': str(endpoint.pk),
+            'hostname': endpoint.hostname,
+            'domain': endpoint.domain,
+            'fqdn': endpoint.fqdn,
+            'machine_id': endpoint.machine_id,
+            'agent_version': endpoint.agent_version,
+            'service_status': service_status,
+            'last_heartbeat_at': _iso_or_none(endpoint.last_seen_at),
+            'url': reverse('endpoint-detail', args=[endpoint.pk]),
+        } if endpoint else None),
+    }
+
+
+def _deployment_json_response(payload, status=200):
+    response = JsonResponse(payload, status=status)
+    response['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response['Pragma'] = 'no-cache'
+    response['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
 @require_POST
 def deployment_create(request):
     if not is_nightowl_technical_user(request.user):
@@ -2876,26 +3016,33 @@ def deployment_create(request):
     platform = (request.POST.get('platform') or AgentDeploymentToken.PLATFORM_WINDOWS).strip().lower()
     channel = (request.POST.get('channel') or '').strip().lower()
     release_id = (request.POST.get('release_id') or '').strip()
-    try:
-        ttl_minutes = int(request.POST.get('ttl_minutes') or 30)
-    except ValueError:
-        ttl_minutes = 30
-    ttl_minutes = min(240, max(5, ttl_minutes))
     if platform != AgentDeploymentToken.PLATFORM_WINDOWS:
         return JsonResponse({'error': 'unsupported_platform', 'detail': 'Nesta etapa somente Windows e suportado.'}, status=400)
+    trust_bundle = _usable_deployment_trust_bundle()
+    if trust_bundle is None:
+        if _latest_published_trust_bundle() is None:
+            return JsonResponse({'error': 'trust_bundle_missing', 'detail': 'Nenhum trust bundle publicado para bootstrap inicial.'}, status=409)
+        return JsonResponse({'error': 'trust_bundle_unavailable', 'detail': 'O trust bundle publicado esta fora da validade ou incompleto.'}, status=409)
     try:
         release = select_deployment_release(channel, release_id)
     except ValidationError as exc:
         return JsonResponse({'error': 'invalid_release', 'detail': str(exc)}, status=400)
-    trust_bundle = _latest_published_trust_bundle()
-    if trust_bundle is None:
-        return JsonResponse({'error': 'trust_bundle_missing', 'detail': 'Nenhum trust bundle publicado para bootstrap inicial.'}, status=409)
+    now = timezone.now()
+    bootstrap_path = reverse('agent-deployment-bootstrap')
+    public_base = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/')
+    bootstrap_url = f'{public_base}{bootstrap_path}' if public_base else request.build_absolute_uri(bootstrap_path)
+    if not bootstrap_url.lower().startswith('https://'):
+        return JsonResponse({'error': 'https_required', 'detail': 'Configure a URL HTTPS publica do NightOwl antes de gerar instalacoes.'}, status=409)
+    if ((trust_bundle.valid_from and trust_bundle.valid_from > now) or
+            (trust_bundle.valid_until and trust_bundle.valid_until <= now) or
+            not trust_bundle.bundle_url or not trust_bundle.bundle_sha256):
+        return JsonResponse({'error': 'trust_bundle_unavailable', 'detail': 'O trust bundle publicado esta fora da validade ou incompleto.'}, status=409)
     deployment, token = AgentDeploymentToken.create_with_token(
         platform=platform,
         channel=channel,
         release=release,
         created_by=request.user,
-        expires_at=timezone.now() + timedelta(minutes=ttl_minutes),
+        expires_at=now + timedelta(minutes=30),
         metadata={
             'trust_bundle_id': str(trust_bundle.id),
             'trust_bundle_version': trust_bundle.bundle_version,
@@ -2921,7 +3068,21 @@ def deployment_create(request):
         },
         request=request,
     )
-    return JsonResponse({'status': 'ok', 'deployment': serialize_deployment(deployment, command=command)}, status=201)
+    return _deployment_json_response({'status': 'ok', 'deployment': serialize_deployment(deployment, command=command)}, status=201)
+
+
+def deployment_history(request):
+    if not is_nightowl_technical_user(getattr(request, 'user', None)):
+        return _deployment_json_response({'error': 'forbidden'}, status=403)
+    deployments = AgentDeploymentToken.objects.select_related('release', 'endpoint').order_by('-created_at')[:20]
+    return _deployment_json_response({'deployments': [serialize_deployment_status(item) for item in deployments]})
+
+
+def deployment_status(request, pk):
+    if not is_nightowl_technical_user(getattr(request, 'user', None)):
+        return _deployment_json_response({'error': 'forbidden'}, status=403)
+    deployment = get_object_or_404(AgentDeploymentToken.objects.select_related('release', 'endpoint'), pk=pk)
+    return _deployment_json_response({'deployment': serialize_deployment_status(deployment)})
 
 
 def _update_policy_message(reason_code):
@@ -4612,6 +4773,11 @@ def agent_install(request):
             status__in=failure_statuses,
         ).count(),
         'default_allowed_domain': 'control.local',
+        'deployment_release_options': deployment_release_options(),
+        'deployment_create_url': reverse('api-deployment-create'),
+        'deployment_history_url': reverse('api-deployment-history'),
+        'can_deploy_agents': is_nightowl_technical_user(request.user),
+        'deployment_trust_ready': bool(_usable_deployment_trust_bundle()),
     }
     from dashboard.remote_install_release import installation_release_display
     context['remote_install_release'] = installation_release_display()

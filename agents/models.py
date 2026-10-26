@@ -9,6 +9,22 @@ from django.db import models
 from django.utils import timezone
 
 
+SAFE_DEPLOYMENT_FAILURE_CODES = frozenset({
+    'BOOTSTRAP_WINDOWS_REQUIRED',
+    'BOOTSTRAP_ADMIN_REQUIRED',
+    'BOOTSTRAP_HTTPS_REQUIRED',
+    'BOOTSTRAP_TOKEN_REQUIRED',
+    'BOOTSTRAP_TRUST_SHA_MISMATCH',
+    'BOOTSTRAP_INSTALLER_FAILED',
+    'BOOTSTRAP_METADATA_REQUEST_FAILED',
+    'BOOTSTRAP_DOWNLOAD_FAILED',
+    'BOOTSTRAP_INSTALL_METADATA_INCOMPLETE',
+    'BOOTSTRAP_CONFIRMATION_REPORT_FAILED',
+    'BOOTSTRAP_STATUS_REPORT_FAILED',
+    'BOOTSTRAP_FAILED',
+})
+
+
 def hash_agent_token(token: str) -> str:
     return hmac.new(
         settings.SECRET_KEY.encode('utf-8'),
@@ -829,7 +845,7 @@ class AgentDeploymentToken(models.Model):
         now = timezone.now()
         self.status = self.STATUS_COMPLETED
         self.endpoint = endpoint
-        self.used_at = now
+        self.used_at = self.used_at or now
         self.completed_at = now
         self.save(update_fields=['status', 'endpoint', 'used_at', 'completed_at'])
 

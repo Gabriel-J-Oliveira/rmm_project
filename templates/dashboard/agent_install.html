@@ -112,6 +112,17 @@
     </div>
 </section>
 
+{% if can_deploy_agents %}<section class="panel manual-deployment-entry" id="manual-deployment">
+    <div>
+        <span class="section-kicker">Instala&ccedil;&atilde;o individual assistida</span>
+        <h2>Instala&ccedil;&atilde;o manual &mdash; Windows</h2>
+        <p>Gere um comando individual, execute-o no computador de destino como administrador e acompanhe enrollment e heartbeat aqui.</p>
+    </div>
+    <button type="button" data-deployment-open><i data-lucide="download"></i>Preparar instala&ccedil;&atilde;o</button>
+</section>
+{% include 'dashboard/manual_deployment_modal.html' %}
+{% endif %}
+
 <div id="ad-detail-backdrop" class="ad-detail-backdrop" hidden></div>
 <aside id="ad-detail-drawer" class="ad-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="ad-detail-title" hidden>
     <div class="ad-detail-header"><h2 id="ad-detail-title"></h2><button type="button" id="ad-detail-close" aria-label="Fechar detalhes" title="Fechar detalhes"><i data-lucide="x"></i></button></div>
@@ -626,4 +637,5 @@
         updateCommand();
     });
 </script>
+{% if can_deploy_agents %}<script src="/static/js/manual_deployment.js"></script>{% endif %}
 {% endblock %}

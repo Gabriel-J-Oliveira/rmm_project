@@ -1,0 +1,56 @@
+{{ deployment_release_options|json_script:"deployment-release-options" }}
+<div class="deployment-modal-backdrop" data-deployment-backdrop hidden></div>
+<section class="deployment-modal" data-deployment-modal hidden role="dialog" aria-modal="true" aria-labelledby="deployment-modal-title">
+    <header>
+        <div>
+            <span class="section-kicker">INSTALA&Ccedil;&Atilde;O MANUAL &mdash; WINDOWS</span>
+            <h2 id="deployment-modal-title">Preparar instala&ccedil;&atilde;o</h2>
+        </div>
+        <button type="button" class="deployment-modal__close" data-deployment-close aria-label="Fechar"><i data-lucide="x"></i></button>
+    </header>
+    <form data-deployment-form data-create-url="{{ deployment_create_url }}" data-history-url="{{ deployment_history_url }}" data-trust-ready="{{ deployment_trust_ready|yesno:'true,false' }}">
+        {% csrf_token %}
+        <div class="deployment-modal__body">
+            <div class="deployment-step-heading"><span>1</span><div><strong>Escolha a release</strong><small>O canal stable eleg&iacute;vel &eacute; selecionado por padr&atilde;o.</small></div></div>
+            <div class="agent-form-row">
+                <label class="filter-field">
+                    <span>Canal</span>
+                    <select name="channel" data-deployment-channel>
+                        <option value="stable" selected>Stable (recomendado)</option>
+                        <option value="development">Development (sele&ccedil;&atilde;o expl&iacute;cita)</option>
+                    </select>
+                </label>
+                <label class="filter-field" data-deployment-release-field hidden>
+                    <span>Release development</span>
+                    <select name="release_id" data-deployment-release></select>
+                </label>
+            </div>
+            <dl class="deployment-summary">
+                <div><dt>Plataforma</dt><dd>Windows</dd></div>
+                <div><dt>Vers&atilde;o</dt><dd data-deployment-version>-</dd></div>
+                <div><dt>Validade</dt><dd>30 minutos</dd></div>
+                <div><dt>Uso</dt><dd>Individual e &uacute;nico</dd></div>
+            </dl>
+            <p class="deployment-guidance">Depois de gerar, copie o comando e execute no PowerShell como administrador <strong>no computador de destino</strong>. A instala&ccedil;&atilde;o usa HTTPS e valida o trust bundle, a integridade e a assinatura da release; n&atilde;o depende de WinRM.</p>
+            <div class="deployment-error" data-deployment-error role="alert" hidden></div>
+            <div class="terminal-block deployment-command-block" data-deployment-command-box hidden>
+                <div class="copy-value-content"><span>2. Comando PowerShell</span><code data-deployment-command></code></div>
+                <button class="copy-button" type="button" data-deployment-copy><i data-lucide="copy"></i>Copiar comando</button>
+            </div>
+            <section class="deployment-progress" data-deployment-progress hidden aria-live="polite">
+                <div class="deployment-progress__heading"><div><span class="section-kicker">3. ACOMPANHAMENTO</span><strong data-deployment-status>Aguardando execu&ccedil;&atilde;o</strong></div><span data-deployment-expires></span></div>
+                <p data-deployment-message></p>
+                <dl class="deployment-summary" data-deployment-endpoint hidden></dl>
+            </section>
+            <section class="deployment-history" aria-labelledby="deployment-history-title">
+                <div class="deployment-step-heading"><span>4</span><div><strong id="deployment-history-title">Instala&ccedil;&otilde;es recentes</strong><small>Hist&oacute;rico sem comandos ou tokens.</small></div></div>
+                <div data-deployment-history role="list"><p class="deployment-history-empty">Carregando hist&oacute;rico...</p></div>
+            </section>
+        </div>
+        <footer>
+            <button type="button" class="ghost-button compact" data-deployment-close>Fechar</button>
+            <button type="button" class="ghost-button compact" data-deployment-new hidden><i data-lucide="plus"></i>Nova instala&ccedil;&atilde;o</button>
+            <button type="submit" data-deployment-submit><i data-lucide="terminal"></i>Gerar instala&ccedil;&atilde;o</button>
+        </footer>
+    </form>
+</section>

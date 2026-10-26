@@ -34,6 +34,8 @@ from .models import (
     AgentManualValidationToken,
     AgentUninstallRequest,
     AuditEvent,
+    InventorySnapshot,
+    SAFE_DEPLOYMENT_FAILURE_CODES,
     hash_enrollment_token,
     hash_agent_token,
     hash_manual_validation_token,
@@ -69,7 +71,6 @@ RESULT_FINAL_STATUSES = {
     AgentJob.STATUS_ROLLED_BACK,
     AgentJob.STATUS_ROLLBACK_FAILED,
 }
-
 
 def _sanitize_agent_payload(payload):
     sanitized = sanitize_job_value(payload)
@@ -523,7 +524,9 @@ class AgentDeploymentCompleteView(APIView):
 
         if status_value == 'failed':
             deployment.endpoint = machine
-            deployment.mark_failed(str(payload.get('error_code') or 'bootstrap_failed'), str(payload.get('error_message') or 'Bootstrap falhou.'))
+            reported_code = str(payload.get('error_code') or '').strip().upper()
+            error_code = reported_code if reported_code in SAFE_DEPLOYMENT_FAILURE_CODES else 'BOOTSTRAP_FAILED'
+            deployment.mark_failed(error_code, 'Bootstrap reportou falha; consulte o codigo e os logs locais do instalador.')
             create_audit_event(
                 event_type='agent.deployment.failed',
                 title='Deployment de agente falhou',
@@ -556,6 +559,11 @@ class AgentDeploymentCompleteView(APIView):
             return Response({'error': 'deployment_machine_mismatch', 'detail': 'Deployment concluido para outro endpoint.'}, status=status.HTTP_409_CONFLICT)
 
         deployment.mark_completed(machine)
+        deployment.metadata = {
+            **(deployment.metadata or {}),
+            'reported_service_status': 'Running',
+        }
+        deployment.save(update_fields=['metadata'])
         mark_machine_installed_from_deployment(machine, deployment)
         create_audit_event(
             event_type='agent.deployment.completed',
@@ -580,7 +588,18 @@ class AgentDeploymentCompleteView(APIView):
 def mark_machine_installed_from_deployment(machine, deployment):
     if not machine or not deployment or not deployment.release:
         return
-    machine.status = AgentMachine.STATUS_ONLINE
+    has_confirming_heartbeat = bool(
+        machine.machine_id
+        and AgentMachine.objects.filter(machine_id__iexact=machine.machine_id).count() == 1
+        and InventorySnapshot.objects.filter(
+            machine=machine,
+            received_at__gte=deployment.used_at or deployment.created_at,
+            raw_payload__snapshot_source='heartbeat',
+            raw_payload__machine_id=machine.machine_id,
+            raw_payload__agent_version=deployment.release.version,
+        ).exists()
+    )
+    machine.status = AgentMachine.STATUS_ONLINE if has_confirming_heartbeat else AgentMachine.STATUS_UNKNOWN
     machine.agent_version = deployment.release.version
     machine.last_installed_agent_version = deployment.release.version
     machine.agent_lifecycle_status = 'installed'

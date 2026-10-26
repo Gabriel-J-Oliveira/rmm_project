@@ -22,7 +22,7 @@ from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import AuditEvent, AgentDeploymentToken, AgentEnrollmentLog, AgentJob, AgentJobResultReceipt, AgentJobResultReceiptProgression, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, hash_enrollment_token
+from .models import AuditEvent, AgentDeploymentToken, AgentEnrollmentLog, AgentJob, AgentJobResultReceipt, AgentJobResultReceiptProgression, AgentLocalUninstallAuthorization, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseRootKey, AgentReleaseSigningKey, AgentReleaseTrustBundle, AgentUninstallRequest, InventorySnapshot, hash_enrollment_token
 from .job_progress import job_progress_message, job_progress_percentage, job_stage, job_stale_info, sanitize_job_value
 from .lifecycle_jobs import agent_job_parameters
 from .services import agent_release_artifact_channel, build_repair_agent_job_payload, build_update_agent_job_payload, deterministic_rollout_bucket, evaluate_agent_update_policy, find_repair_agent_release, update_agent_requires_bootstrap
@@ -2189,6 +2189,113 @@ class AgentDeploymentTokenTests(TestCase):
         audit = AuditEvent.objects.get(event_type='agent.deployment.created')
         self.assertNotIn(token, json.dumps(audit.metadata))
 
+    def test_manual_deployment_has_fixed_thirty_minute_lifetime(self):
+        deployment, _, _ = self.create_deployment(ttl_minutes='240')
+        self.assertLessEqual(deployment.expires_at - deployment.created_at, timedelta(minutes=30, seconds=2))
+        self.assertGreaterEqual(deployment.expires_at - deployment.created_at, timedelta(minutes=29, seconds=58))
+
+    def test_deployment_history_is_authorized_and_never_returns_command_or_token(self):
+        deployment, token, _ = self.create_deployment()
+        response = self.client.get(reverse('api-deployment-history'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Cache-Control'], 'no-store, no-cache, must-revalidate, max-age=0')
+        serialized = json.dumps(response.json())
+        self.assertNotIn(token, serialized)
+        self.assertNotIn('command', response.json()['deployments'][0])
+        self.assertNotIn(deployment.prefix, serialized)
+
+        user_model = get_user_model()
+        ordinary_user = user_model.objects.create_user(username='viewer', password='pass')
+        self.client.force_login(ordinary_user)
+        self.assertIn(self.client.get(reverse('api-deployment-history')).status_code, {302, 403})
+        self.assertIn(self.client.get(reverse('api-deployment-status', kwargs={'pk': deployment.pk})).status_code, {302, 403})
+
+    def test_deployment_status_requires_matching_heartbeat_after_enrollment(self):
+        deployment, endpoint, _ = self.create_enrolled_deployment()
+        deployment.refresh_from_db()
+        enrollment_at = deployment.used_at
+        deployment.mark_completed(endpoint)
+        self.assertEqual(deployment.used_at, enrollment_at)
+
+        status_url = reverse('api-deployment-status', kwargs={'pk': deployment.pk})
+        pending = self.client.get(status_url)
+        self.assertEqual(pending.status_code, 200)
+        self.assertEqual(pending.json()['deployment']['ui_status'], 'confirmation_pending')
+        self.assertFalse(pending.json()['deployment']['heartbeat_confirmed'])
+
+        received = timezone.now()
+        InventorySnapshot.objects.create(
+            machine=endpoint,
+            collected_at=received,
+            received_at=received,
+            hostname=endpoint.hostname,
+            domain=endpoint.domain,
+            raw_payload={
+                'snapshot_source': 'heartbeat',
+                'machine_id': endpoint.machine_id,
+                'agent_version': deployment.release.version,
+                'agent': {'service_status': 'Running'},
+            },
+        )
+        endpoint.last_seen_at = received
+        endpoint.save(update_fields=['last_seen_at'])
+        confirmed = self.client.get(status_url).json()['deployment']
+        self.assertEqual(confirmed['ui_status'], 'confirmed')
+        self.assertTrue(confirmed['heartbeat_confirmed'])
+        self.assertEqual(confirmed['endpoint']['machine_id'], endpoint.machine_id)
+        self.assertEqual(confirmed['endpoint']['service_status'], 'Running')
+        self.assertEqual(confirmed['endpoint']['agent_version'], deployment.release.version)
+        self.assertNotIn('command', confirmed)
+
+    def test_deployment_status_rejects_mismatched_heartbeat_and_sanitizes_failure(self):
+        deployment, endpoint, _ = self.create_enrolled_deployment('machine-status-safe', 'CS-STATUS-SAFE')
+        deployment.mark_completed(endpoint)
+        now = timezone.now()
+        InventorySnapshot.objects.create(
+            machine=endpoint, collected_at=now, received_at=now, hostname=endpoint.hostname,
+            domain=endpoint.domain, raw_payload={
+                'snapshot_source': 'heartbeat', 'machine_id': 'different-machine',
+                'agent_version': deployment.release.version,
+            },
+        )
+        status_url = reverse('api-deployment-status', kwargs={'pk': deployment.pk})
+        self.assertEqual(self.client.get(status_url).json()['deployment']['ui_status'], 'confirmation_pending')
+
+        failed_deployment, failed_endpoint, agent_token = self.create_enrolled_deployment('machine-failure-safe', 'CS-FAILURE-SAFE')
+        failure_response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(failed_deployment.pk), 'status': 'failed',
+                'machine_id': failed_endpoint.machine_id, 'error_code': 'DEPLOY_SECRET_91827',
+                'error_message': 'deploy_SECRET_SHOULD_NOT_PERSIST',
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(failure_response.status_code, 200)
+        failed_deployment.refresh_from_db()
+        self.assertEqual(failed_deployment.failure_code, 'BOOTSTRAP_FAILED')
+        self.assertNotIn('deploy_SECRET_SHOULD_NOT_PERSIST', failed_deployment.failure_message)
+        history_payload = self.client.get(reverse('api-deployment-history')).content.decode()
+        self.assertNotIn('deploy_SECRET_SHOULD_NOT_PERSIST', history_payload)
+        self.assertNotIn('DEPLOY_SECRET_91827', history_payload)
+
+    def test_invalid_or_revoked_release_and_expired_trust_bundle_block_token_creation(self):
+        AgentRelease.objects.filter(pk=self.release.pk).update(signature_valid=False)
+        invalid = self.client.post(reverse('api-deployment-create'), {
+            'platform': 'windows', 'channel': 'development', 'release_id': str(self.release.pk),
+        })
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(AgentDeploymentToken.objects.count(), 0)
+
+        AgentRelease.objects.filter(pk=self.release.pk).update(signature_valid=True)
+        AgentReleaseTrustBundle.objects.filter(pk=self.trust_bundle.pk).update(valid_until=timezone.now() - timedelta(seconds=1))
+        unavailable = self.client.post(reverse('api-deployment-create'), {
+            'platform': 'windows', 'channel': 'development', 'release_id': str(self.release.pk),
+        })
+        self.assertEqual(unavailable.status_code, 409)
+        self.assertEqual(unavailable.json()['error'], 'trust_bundle_unavailable')
+        self.assertEqual(AgentDeploymentToken.objects.count(), 0)
+
     @override_settings(NIGHTOWL_PUBLIC_URL='https://nightowl.test')
     def test_generated_deployment_command_runs_without_parent_shell_expansion(self):
         _, token, payload = self.create_deployment()
@@ -2472,7 +2579,7 @@ if ($global:NightOwlDeploymentBootstrapExitCode -ne 1) {{ throw 'bootstrap dever
 $log = Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log'
 if (-not (Test-Path $log)) {{ throw 'bootstrap.log ausente' }}
 $logText = Get-Content -Raw -Path $log
-if ($logText -notmatch 'sha256') {{ throw 'falha esperada de metadata obrigatoria ausente' }}
+        if ($logText -notmatch 'BOOTSTRAP_INSTALL_METADATA_INCOMPLETE') {{ throw 'codigo seguro de metadata incompleta ausente' }}
 Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
 """
             completed = subprocess.run(
@@ -2492,7 +2599,26 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         content = response.content.decode('utf-8')
         self.assertIn('Adicionar dispositivo', content)
         self.assertIn('data-deployment-release', content)
-        self.assertIn('Copiar', content)
+        self.assertIn('Copiar comando', content)
+        self.assertIn('INSTALA&Ccedil;&Atilde;O MANUAL', content)
+        self.assertIn('data-history-url', content)
+        self.assertIn('Stable (recomendado)', content)
+
+    def test_agent_install_page_has_manual_deployment_flow_for_authorized_operator(self):
+        response = self.client.get(reverse('agent-install'))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('INSTALA&Ccedil;&Atilde;O MANUAL', content)
+        self.assertIn('data-deployment-form', content)
+        self.assertIn('data-deployment-open', content)
+        self.assertIn('manual_deployment.js', content)
+
+    def test_bootstrap_logs_only_sanitized_failure_diagnostics(self):
+        script = (settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1').read_text(encoding='utf-8')
+        self.assertIn('$rawMessage = [string]$_.Exception.Message', script)
+        self.assertIn('$safeMessages = @{', script)
+        self.assertIn('$message = if ($safeMessages.ContainsKey($errorCode))', script)
+        self.assertNotIn('Write-NightOwlBootstrapLog "failed" @{ error_message = $rawMessage', script)
 
     def test_development_requires_explicit_release(self):
         response = self.client.post(reverse('api-deployment-create'), {'platform': 'windows', 'channel': 'development'})
@@ -2783,13 +2909,50 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
 
         self.assertEqual(response.status_code, 200, response.content)
         endpoint.refresh_from_db()
-        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_UNKNOWN)
         self.assertEqual(endpoint.agent_version, self.release.version)
         self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
         self.assertIsNone(endpoint.agent_uninstalled_at)
         self.assertEqual(endpoint.agent_uninstalled_by, '')
         self.assertEqual(endpoint.agent_uninstall_source, '')
+
+    def test_deployment_completion_marks_online_only_with_matching_post_enrollment_heartbeat(self):
+        deployment, endpoint, agent_token = self.create_enrolled_deployment(
+            'machine-heartbeat-confirmed-001', 'CS-HEARTBEAT-CONFIRMED-001'
+        )
+        deployment.refresh_from_db()
+        received = timezone.now()
+        InventorySnapshot.objects.create(
+            machine=endpoint,
+            collected_at=received,
+            received_at=received,
+            hostname=endpoint.hostname,
+            domain=endpoint.domain,
+            raw_payload={
+                'snapshot_source': 'heartbeat',
+                'machine_id': endpoint.machine_id,
+                'agent_version': deployment.release.version,
+            },
+        )
+
+        response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
+            reverse('agent-deployment-complete'),
+            data=json.dumps({
+                'deployment_id': str(deployment.id),
+                'status': 'completed',
+                'machine_id': endpoint.machine_id,
+                'version': self.release.version,
+                'service_status': 'Running',
+                'health_check_confirmed': True,
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        endpoint.refresh_from_db()
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
 
     def test_deployment_completion_resets_purged_lifecycle_after_health(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-repurge-001', 'CS-REPURGE-001')
@@ -2815,7 +2978,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
 
         self.assertEqual(response.status_code, 200, response.content)
         endpoint.refresh_from_db()
-        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_UNKNOWN)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
         self.assertEqual(endpoint.agent_version, self.release.version)
         self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
@@ -2911,7 +3074,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(response.json()['idempotent'])
         endpoint.refresh_from_db()
-        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_UNKNOWN)
         self.assertEqual(endpoint.agent_version, self.release.version)
         self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
