@@ -7,7 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from unittest import mock
+from unittest import mock, skipUnless
 from pathlib import Path
 from io import StringIO
 from datetime import timedelta
@@ -2403,6 +2403,7 @@ Write-Output 'DEPLOYMENT_COMMAND_FAILURE_OK'
         self.assertIn('HOST_STILL_ALIVE', completed.stdout)
         self.assertIn('DEPLOYMENT_COMMAND_FAILURE_OK', completed.stdout)
 
+    @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_failure_does_not_exit_host_and_writes_log(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
         if powershell is None:
@@ -2443,6 +2444,7 @@ Write-Output 'BOOTSTRAP_FAILURE_OK'
         self.assertIn('HOST_STILL_ALIVE', completed.stdout)
         self.assertIn('BOOTSTRAP_FAILURE_OK', completed.stdout)
 
+    @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_accepts_metadata_without_optional_git_commit(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
         if powershell is None:
@@ -2525,6 +2527,7 @@ Write-Output 'OPTIONAL_GIT_COMMIT_OK'
         self.assertIn('NightOwl installation completed', completed.stdout)
         self.assertIn('deployment_confirmation_status=failed', completed.stdout)
 
+    @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_still_fails_when_required_metadata_is_missing(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
         if powershell is None:

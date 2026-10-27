@@ -1377,10 +1377,11 @@ class AgentJobsResultView(APIView):
         payload_hash = _payload_sha256(payload)
         job_status = _normalize_job_status(payload.get('status'))
         lock_identity_registry()
-        machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
         job = None
         if job_id:
             job = AgentJob.objects.select_for_update().filter(pk=job_id, endpoint=machine).first()
+        # Timeout reconciliation locks job before endpoint; preserve that order.
+        machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
         try:
             validate_runtime_identity(machine, payload)
             if job is not None and job_status == AgentJob.STATUS_COMPLETED:

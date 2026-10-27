@@ -66,3 +66,22 @@ jobs:
           python manage.py test
           agents.test_enrollment_identity.PostgreSQLEnrollmentIdentityTests
           agents.test_enrollment_identity.IdentityAuditTests --noinput --verbosity 2
+
+  windows-bootstrap:
+    name: Windows deployment contract
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings
+      DJANGO_DEBUG: 'True'
+      DJANGO_SECRET_KEY: synthetic-enrollment-ci-key-not-production
+      DATABASE_URL: 'sqlite:///:memory:'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Execute Windows-only bootstrap contracts on Windows
+        run: python manage.py test agents.tests.AgentDeploymentTokenTests --noinput --verbosity 2

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock, skipUnless
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, SimpleTestCase, Client
+from django.test import TransactionTestCase, SimpleTestCase, Client
 from django.utils import timezone
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -19,7 +19,7 @@ from dashboard import remote_install as runner
 from dashboard.test_remote_install import COMPUTER, READY, CONTRACT
 
 
-class RemoteDeploymentEnrollmentTests(TestCase):
+class RemoteDeploymentEnrollmentTests(TransactionTestCase):
     def setUp(self):
         self.actor = get_user_model().objects.create_user('deployment-admin', is_staff=True)
         self.release = AgentRelease.objects.create(id=CONTRACT['release_id'], version=CONTRACT['version'],
