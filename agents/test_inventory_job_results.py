@@ -180,12 +180,17 @@ class InventoryJobResultTests(TestCase):
 
     def test_conflicting_envelope_identity_is_not_silently_overwritten(self):
         inventory = self.full_inventory()
-        with self.assertLogs('agents.views', level='WARNING') as captured:
-            self.post_result(AgentJob.TYPE_FORCE_INVENTORY, {
-                'machine_id': str(uuid.uuid4()), 'output': inventory, 'output_truncated': False,
-            })
+        job = AgentJob.objects.create(endpoint=self.machine, job_type=AgentJob.TYPE_FORCE_INVENTORY)
+        response = self.client.post('/api/agent/jobs/result/', data={
+            'job_id': str(job.pk), 'status': 'completed', 'result': {
+                'machine_id': str(uuid.uuid4()), 'output': inventory, 'output_truncated': False}},
+            content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['error'], 'machine_id_mismatch')
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_QUEUED)
+        self.assertFalse(AgentJobResultReceipt.objects.filter(job=job).exists())
         self.assertFalse(InventorySnapshot.objects.filter(machine=self.machine).exists())
-        self.assertIn('reason=machine_id_conflict', '\n'.join(captured.output))
 
     def test_envelope_metadata_fills_missing_inner_fields(self):
         inventory = self.full_inventory()

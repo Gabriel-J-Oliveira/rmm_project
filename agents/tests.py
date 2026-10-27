@@ -2790,7 +2790,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         enrollment = AgentEnrollmentLog.objects.latest('created_at')
         self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_preserved')
 
-    def test_existing_invalid_bearer_can_recover_credential_with_deployment_token(self):
+    def test_existing_invalid_bearer_cannot_recover_credential_with_deployment_token(self):
         machine = AgentMachine.objects.create(
             machine_id='machine-broken-token',
             hostname='CS-BROKEN',
@@ -2820,19 +2820,16 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
             content_type='application/json',
         )
 
-        self.assertEqual(response.status_code, 200, response.content)
-        recovered_token = response.json()['agent_token']
-        self.assertTrue(recovered_token.startswith('rmm_live_'))
-        self.assertNotEqual(recovered_token, old_valid_token)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()['error'], 'existing_identity_proof_required')
         machine.refresh_from_db()
         deployment.refresh_from_db()
-        self.assertNotEqual(machine.agent_token_hash, original_hash)
-        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
-        self.assertEqual(deployment.endpoint_id, machine.id)
+        self.assertEqual(machine.agent_token_hash, original_hash)
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_WAITING)
+        self.assertIsNone(deployment.endpoint_id)
         self.assertEqual(AgentMachine.objects.filter(machine_id=machine.machine_id).count(), 1)
-        self.assertNotIn(recovered_token, json.dumps(list(AuditEvent.objects.values_list('metadata', flat=True))))
         enrollment = AgentEnrollmentLog.objects.latest('created_at')
-        self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_recovered')
+        self.assertEqual(enrollment.status, AgentEnrollmentLog.STATUS_DENIED)
 
     def test_deployment_completion_requires_target_release_health_and_bearer(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment()

@@ -20,6 +20,9 @@ from rest_framework.views import APIView
 from .audit import create_audit_event, get_client_ip
 from .authentication import authenticate_agent_token
 from .job_progress import SENSITIVE_KEYS, sanitize_job_value
+from .identity import (IdentityConflict, find_enrollment_machine, lock_identity_registry,
+                       normalized_domain, normalized_hostname, normalized_machine_id,
+                       preserve_serial_evidence, validate_runtime_identity)
 from .lifecycle_jobs import agent_job_parameters
 from .models import (
     AgentDeploymentToken,
@@ -106,6 +109,16 @@ def _authenticated_bearer_machine(request):
     if machine is None:
         return None, ''
     return machine, token
+
+
+def _identity_conflict_response(machine, error, source, request, http_status=status.HTTP_409_CONFLICT):
+    create_audit_event(
+        event_type='endpoint.identity_conflict', title='Identidade contraditoria rejeitada',
+        severity=AuditEvent.SEVERITY_WARNING, actor_type=AuditEvent.ACTOR_AGENT,
+        actor_name='NightOwlAgent', endpoint=machine,
+        metadata={'source': source, 'code': error.code}, request=request,
+    )
+    return Response({'error': error.code, 'detail': 'Identidade nao comprovada; nenhuma alteracao de identidade foi aplicada.'}, status=http_status)
 
 
 def _public_base_url(request):
@@ -981,12 +994,15 @@ class AgentHeartbeatView(APIView):
                 payload=serializer.validated_data,
                 raw_payload=request.data,
             )
+            machine.refresh_from_db(fields=['machine_id'])
             diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
             if isinstance(diagnostic_payload, dict):
                 diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))
                 diagnostic_payload.setdefault('agent_version', request.data.get('agent_version') or serializer.validated_data.get('agent_version'))
                 diagnostic_payload.setdefault('last_heartbeat_at', request.data.get('heartbeat_at') or request.data.get('timestamp'))
                 record_agent_operational_status(machine, diagnostic_payload)
+        except IdentityConflict as exc:
+            return _identity_conflict_response(machine, exc, 'heartbeat', request)
         except Exception as exc:
             logger.exception('Failed to record heartbeat for machine_id=%s', machine.id)
             return Response(
@@ -1021,6 +1037,8 @@ class AgentStatusView(APIView):
             )
         try:
             status_record = record_agent_operational_status(machine, payload)
+        except IdentityConflict as exc:
+            return _identity_conflict_response(machine, exc, 'status', request, status.HTTP_403_FORBIDDEN)
         except ValueError as exc:
             return Response(
                 {'error': 'machine_id_mismatch', 'detail': str(exc)},
@@ -1155,6 +1173,9 @@ class AgentInventoryCollectionView(APIView):
                 collection_type=self.collection_type,
                 payload=payload,
             )
+            machine.refresh_from_db(fields=['machine_id'])
+        except IdentityConflict as exc:
+            return _identity_conflict_response(machine, exc, 'collection', request)
         except Exception as exc:
             logger.exception('Failed to record %s collection for machine_id=%s', self.collection_type, machine.id)
             return Response(
@@ -1354,9 +1375,29 @@ class AgentJobsResultView(APIView):
         result_id = _result_id_from_request(request, payload)
         payload_hash = _payload_sha256(payload)
         job_status = _normalize_job_status(payload.get('status'))
+        lock_identity_registry()
+        machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
         job = None
         if job_id:
             job = AgentJob.objects.select_for_update().filter(pk=job_id, endpoint=machine).first()
+        try:
+            validate_runtime_identity(machine, payload)
+            if job is not None and job_status == AgentJob.STATUS_COMPLETED:
+                if job.job_type in {AgentJob.TYPE_FORCE_INVENTORY, AgentJob.TYPE_COLLECT_DISKS,
+                                    AgentJob.TYPE_COLLECT_SOFTWARE, AgentJob.TYPE_COLLECT_SECURITY,
+                                    AgentJob.TYPE_WINDOWS_UPDATE_SCAN}:
+                    result = _payload_result(payload)
+                    validate_runtime_identity(machine, result)
+                    if isinstance(result.get('output'), dict):
+                        validate_runtime_identity(machine, result['output'])
+                try:
+                    collection = _collection_payload_from_job_result(job, _payload_result(payload))
+                except ValueError:
+                    collection = None  # Preserve existing handling of malformed/non-collection results.
+                if collection is not None:
+                    validate_runtime_identity(machine, collection)
+        except IdentityConflict as exc:
+            return _identity_conflict_response(machine, exc, 'job_result', request)
         if (
             job is not None
             and job.job_type == AgentJob.TYPE_UPDATE_AGENT
@@ -1944,21 +1985,20 @@ class AgentEnrollView(APIView):
         return Response(body, status=http_status)
 
     def _find_machine(self, machine_id, hostname, domain, serial_number):
-        if machine_id:
-            machine = AgentMachine.objects.filter(machine_id__iexact=machine_id).first()
-            if machine:
-                return machine, False, 'machine_id'
+        return find_enrollment_machine(machine_id, hostname, domain)
 
-        machine = AgentMachine.objects.filter(hostname__iexact=hostname, domain__iexact=domain).first()
-        if machine:
-            return machine, False, 'hostname_domain'
-
-        if serial_number:
-            serial_matches = AgentMachine.objects.filter(serial_number__iexact=serial_number)
-            if serial_matches.count() == 1:
-                return serial_matches.first(), False, 'serial_number'
-
-        return None, True, 'new'
+    def _identity_error(self, request, payload, error, enrollment_token=None, endpoint=None):
+        create_audit_event(
+            event_type='endpoint.identity_conflict', title='Enrollment de identidade rejeitado',
+            description='Identidade nao comprovada; credenciais e endpoint preservados.',
+            severity=AuditEvent.SEVERITY_WARNING, actor_type=AuditEvent.ACTOR_AGENT,
+            actor_name='NightOwlAgent installer', endpoint=endpoint,
+            metadata={'code': error.code, 'source': 'enrollment'}, request=request,
+        )
+        return self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                           error.code, 'Identidade nao comprovada; revisao necessaria.',
+                           status.HTTP_409_CONFLICT, enrollment_token=enrollment_token,
+                           endpoint=endpoint, metadata={'code': error.code})
 
     def _active_enrollment_tokens(self):
         now = timezone.now()
@@ -1972,7 +2012,8 @@ class AgentEnrollView(APIView):
         normalized_domain = (domain or '').strip().lower()
         if not normalized_domain:
             return None
-        return self._active_enrollment_tokens().filter(allowed_domain__iexact=normalized_domain).order_by('-created_at').first()
+        return self._active_enrollment_tokens().filter(allowed_domain__iexact=normalized_domain).exclude(
+            name__istartswith='NightOwlGpo-').order_by('-created_at').first()
 
     def _validate_enrollment_token(self, request, payload, token_value):
         if not token_value.startswith('enroll_'):
@@ -2216,10 +2257,14 @@ class AgentEnrollView(APIView):
             )
 
         payload = serializer.validated_data
-        hostname = payload['hostname'].strip().upper()
-        domain = payload.get('domain', '').strip().lower()
+        domain = normalized_domain(payload.get('domain'))
+        hostname = normalized_hostname(payload['hostname'], domain).upper()
         serial_number = payload.get('serial_number', '').strip()
-        machine_id = payload.get('machine_id', '').strip()
+        try:
+            machine_id = normalized_machine_id(payload.get('machine_id'))
+        except IdentityConflict as exc:
+            return self._identity_error(request, payload, exc)
+        lock_identity_registry()
         token_value = payload.get('enrollment_token', '').strip()
         manual_token_value = payload.get('manual_validation_token', '').strip()
         manual_validation_token = None
@@ -2264,6 +2309,11 @@ class AgentEnrollView(APIView):
                 )
             domain_validation = 'domain'
 
+        if enrollment_token and enrollment_token.name.casefold().startswith('nightowlgpo-'):
+            expected_hostname = enrollment_token.name[len('NightOwlGpo-'):].strip().casefold()
+            if not expected_hostname or expected_hostname != hostname.casefold():
+                return self._identity_error(request, payload, IdentityConflict('enrollment_target_mismatch'), enrollment_token=enrollment_token)
+
         if enrollment_token and enrollment_token.allowed_domain:
             allowed_domain = enrollment_token.allowed_domain.lower()
             domain_reason = 'domain_allowed'
@@ -2300,172 +2350,158 @@ class AgentEnrollView(APIView):
 
                 domain_validation = 'manual'
 
+        machine = None
         try:
-            machine, should_create, identity_source = self._find_machine(machine_id, hostname, domain, serial_number)
-            bearer_machine, bearer_token = _authenticated_bearer_machine(request)
-            agent_token = ''
-            now = timezone.now()
-            if deployment_token is not None and deployment_token.endpoint_id and machine is not None and deployment_token.endpoint_id != machine.id:
-                return self._error(
-                    request,
-                    payload,
-                    AgentEnrollmentLog.STATUS_DENIED,
-                    'deployment_machine_mismatch',
-                    'Deployment token ja esta vinculado a outro endpoint.',
-                    status.HTTP_409_CONFLICT,
-                    endpoint=machine,
-                    metadata={'deployment_id': str(deployment_token.id)},
-                )
-            if deployment_token is not None and bearer_machine is not None and machine is not None and bearer_machine.id != machine.id:
-                return self._error(
-                    request,
-                    payload,
-                    AgentEnrollmentLog.STATUS_DENIED,
-                    'deployment_bearer_mismatch',
-                    'Bearer token pertence a outro endpoint.',
-                    status.HTTP_409_CONFLICT,
-                    endpoint=machine,
-                    metadata={'deployment_id': str(deployment_token.id)},
-                )
-            if should_create:
-                agent_token = AgentMachine.generate_token()
-                machine = AgentMachine(
-                    machine_id=machine_id,
-                    hostname=hostname,
-                    domain=domain,
-                    fqdn=build_fqdn(hostname, domain),
-                    serial_number=serial_number,
-                    first_seen_at=now,
-                    is_active=True,
-                )
-                machine.set_agent_token(agent_token)
-                created_or_existing = 'created'
-            else:
-                if machine_id and not machine.machine_id:
-                    machine.machine_id = machine_id
-                if deployment_token is not None and bearer_machine is not None and bearer_machine.id == machine.id:
+            with transaction.atomic():
+                machine, should_create, identity_source = self._find_machine(machine_id, hostname, domain, serial_number)
+                bearer_machine, bearer_token = _authenticated_bearer_machine(request)
+                agent_token = ''
+                now = timezone.now()
+                if deployment_token is not None and deployment_token.endpoint_id and (machine is None or deployment_token.endpoint_id != machine.id):
+                    return self._error(
+                        request,
+                        payload,
+                        AgentEnrollmentLog.STATUS_DENIED,
+                        'deployment_machine_mismatch',
+                        'Deployment token ja esta vinculado a outro endpoint.',
+                        status.HTTP_409_CONFLICT,
+                        endpoint=machine,
+                        metadata={'deployment_id': str(deployment_token.id)},
+                    )
+                if bearer_machine is not None and (machine is None or bearer_machine.id != machine.id):
+                    raise IdentityConflict('deployment_bearer_mismatch' if deployment_token else 'bearer_identity_mismatch')
+                if should_create:
+                    if not machine_id:
+                        raise IdentityConflict('machine_id_required')
+                    agent_token = AgentMachine.generate_token()
+                    machine = AgentMachine(
+                        machine_id=machine_id,
+                        hostname=hostname,
+                        domain=domain,
+                        fqdn=build_fqdn(hostname, domain),
+                        serial_number=serial_number,
+                        first_seen_at=now,
+                        is_active=True,
+                    )
+                    identity = validate_runtime_identity(machine, payload)
+                    machine.set_agent_token(agent_token)
+                    created_or_existing = 'created'
+                else:
+                    if bearer_machine is None or bearer_machine.id != machine.id:
+                        raise IdentityConflict('existing_identity_proof_required')
+                    identity = validate_runtime_identity(machine, payload)
+                    if machine_id and not machine.machine_id:
+                        machine.machine_id = machine_id
                     agent_token = bearer_token
                     created_or_existing = 'existing_preserved'
-                elif deployment_token is not None:
-                    agent_token = AgentMachine.generate_token()
-                    machine.set_agent_token(agent_token)
-                    created_or_existing = 'existing_recovered'
-                else:
-                    agent_token = AgentMachine.generate_token()
-                    machine.set_agent_token(agent_token)
-                    created_or_existing = 'existing_rotated'
-                if machine_id and machine.machine_id and machine.machine_id != machine_id:
+
+                previous_hostname = machine.hostname
+                hostname, domain = identity['hostname'], identity['domain']
+                machine.hostname = hostname
+                machine.domain = domain
+                machine.fqdn = build_fqdn(hostname, domain)
+                if serial_number:
+                    machine.serial_number = preserve_serial_evidence(machine.serial_number, serial_number)
+                if payload.get('os_name'):
+                    machine.os_name = payload.get('os_name', '')
+                machine.agent_version = payload.get('agent_version', '')
+                machine.agent_mode = payload.get('agent_mode', '')
+                machine.agent_install_path = payload.get('install_path', '')
+                machine.agent_task_name = payload.get('task_name', '')
+                machine.agent_reported_at = now
+                if machine.first_seen_at is None:
+                    machine.first_seen_at = now
+                machine.save()
+
+                if identity['renamed']:
+                    create_audit_event(event_type='endpoint.identity_renamed',
+                        title='Hostname atualizado com identidade autenticada', endpoint=machine,
+                        actor_type=AuditEvent.ACTOR_AGENT, actor_name='NightOwlAgent installer',
+                        metadata={'source': 'enrollment', 'previous_hostname': previous_hostname,
+                                  'hostname': hostname, 'machine_id': machine.machine_id}, request=request)
+
+                if enrollment_token is not None:
+                    enrollment_token.mark_used()
+                if deployment_token is not None:
+                    deployment_token.mark_enrolled(machine)
+                if manual_validation_token is not None:
+                    manual_validation_token.mark_used(hostname, domain)
+                self._log_enrollment(
+                    request=request,
+                    payload=payload,
+                    enrollment_token=enrollment_token,
+                    endpoint=machine,
+                    status_value=AgentEnrollmentLog.STATUS_SUCCESS,
+                    message='Enrollment realizado com sucesso.',
+                    metadata={
+                        'created_or_existing': created_or_existing,
+                        'identity_source': identity_source,
+                        'machine_id': machine.machine_id,
+                        'domain_validation': domain_validation,
+                        'manual_validation_used': manual_validation_token is not None,
+                        'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                        'domain_reason': 'domain_not_allowed' if manual_validation_token else 'domain_allowed',
+                        'deployment_id': str(deployment_token.id) if deployment_token else '',
+                        'deployment_release_id': str(deployment_token.release_id) if deployment_token else '',
+                        'deployment_release_version': deployment_token.release.version if deployment_token else '',
+                    },
+                )
+                if deployment_token is not None:
                     create_audit_event(
-                        event_type='endpoint.identity_conflict',
-                        title='Conflito de identidade no enrollment',
-                        description=f'{hostname} tentou enrollment com machine_id diferente do endpoint encontrado.',
-                        severity=AuditEvent.SEVERITY_WARNING,
+                        event_type='agent.deployment.enrolled',
+                        title='Deployment de agente vinculado',
+                        description=f'Deployment Windows iniciou enrollment em {hostname}.',
+                        severity=AuditEvent.SEVERITY_INFO,
                         actor_type=AuditEvent.ACTOR_AGENT,
                         actor_name='NightOwlAgent installer',
                         endpoint=machine,
                         metadata={
-                            'stored_machine_id': machine.machine_id,
-                            'reported_machine_id': machine_id,
-                            'identity_source': identity_source,
+                            'deployment_id': str(deployment_token.id),
+                            'release_id': str(deployment_token.release_id),
+                            'release_version': deployment_token.release.version,
+                            'platform': deployment_token.platform,
+                            'channel': deployment_token.channel,
+                            'token_prefix': deployment_token.prefix,
+                            'credential_handoff': created_or_existing,
                         },
                         request=request,
                     )
-
-            machine.hostname = hostname
-            machine.domain = domain
-            machine.fqdn = payload.get('fqdn', '').strip() or build_fqdn(hostname, domain)
-            if serial_number:
-                machine.serial_number = serial_number
-            if payload.get('os_name'):
-                machine.os_name = payload.get('os_name', '')
-            machine.agent_version = payload.get('agent_version', '')
-            machine.agent_mode = payload.get('agent_mode', '')
-            machine.agent_install_path = payload.get('install_path', '')
-            machine.agent_task_name = payload.get('task_name', '')
-            machine.agent_reported_at = now
-            if machine.first_seen_at is None:
-                machine.first_seen_at = now
-            machine.save()
-
-            if enrollment_token is not None:
-                enrollment_token.mark_used()
-            if deployment_token is not None:
-                deployment_token.mark_enrolled(machine)
-            if manual_validation_token is not None:
-                manual_validation_token.mark_used(hostname, domain)
-            self._log_enrollment(
-                request=request,
-                payload=payload,
-                enrollment_token=enrollment_token,
-                endpoint=machine,
-                status_value=AgentEnrollmentLog.STATUS_SUCCESS,
-                message='Enrollment realizado com sucesso.',
-                metadata={
-                    'created_or_existing': created_or_existing,
-                    'identity_source': identity_source,
-                    'machine_id': machine.machine_id,
-                    'domain_validation': domain_validation,
-                    'manual_validation_used': manual_validation_token is not None,
-                    'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
-                    'domain_reason': 'domain_not_allowed' if manual_validation_token else 'domain_allowed',
-                    'deployment_id': str(deployment_token.id) if deployment_token else '',
-                    'deployment_release_id': str(deployment_token.release_id) if deployment_token else '',
-                    'deployment_release_version': deployment_token.release.version if deployment_token else '',
-                },
-            )
-            if deployment_token is not None:
-                create_audit_event(
-                    event_type='agent.deployment.enrolled',
-                    title='Deployment de agente vinculado',
-                    description=f'Deployment Windows iniciou enrollment em {hostname}.',
+                enrolled_event = create_audit_event(
+                    event_type='agent.enrolled',
+                    title='Agente cadastrado via enrollment',
+                    description=f'{hostname} foi cadastrado pelo fluxo de enrollment.',
                     severity=AuditEvent.SEVERITY_INFO,
                     actor_type=AuditEvent.ACTOR_AGENT,
-                    actor_name='NightOwlAgent installer',
+                    actor_name='RmmAgent installer',
                     endpoint=machine,
                     metadata={
-                        'deployment_id': str(deployment_token.id),
-                        'release_id': str(deployment_token.release_id),
-                        'release_version': deployment_token.release.version,
-                        'platform': deployment_token.platform,
-                        'channel': deployment_token.channel,
-                        'token_prefix': deployment_token.prefix,
-                        'credential_handoff': created_or_existing,
+                        'hostname': hostname,
+                        'domain': domain,
+                        'created_or_existing': created_or_existing,
+                        'identity_source': identity_source,
+                        'machine_id': machine.machine_id,
+                        'enrollment_token_prefix': enrollment_token.prefix if enrollment_token else '',
+                        'domain_validation': domain_validation,
+                        'manual_validation_used': manual_validation_token is not None,
+                        'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                        'deployment_id': str(deployment_token.id) if deployment_token else '',
+                        'deployment_release_version': deployment_token.release.version if deployment_token else '',
                     },
                     request=request,
                 )
-            create_audit_event(
-                event_type='agent.enrolled',
-                title='Agente cadastrado via enrollment',
-                description=f'{hostname} foi cadastrado pelo fluxo de enrollment.',
-                severity=AuditEvent.SEVERITY_INFO,
-                actor_type=AuditEvent.ACTOR_AGENT,
-                actor_name='RmmAgent installer',
-                endpoint=machine,
-                metadata={
-                    'hostname': hostname,
-                    'domain': domain,
-                    'created_or_existing': created_or_existing,
-                    'identity_source': identity_source,
-                    'machine_id': machine.machine_id,
-                    'enrollment_token_prefix': enrollment_token.prefix if enrollment_token else '',
-                    'domain_validation': domain_validation,
-                    'manual_validation_used': manual_validation_token is not None,
-                    'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
-                    'deployment_id': str(deployment_token.id) if deployment_token else '',
-                    'deployment_release_version': deployment_token.release.version if deployment_token else '',
-                },
-                request=request,
-            )
-        except Exception as exc:
-            logger.exception('Failed to enroll agent hostname=%s domain=%s', hostname, domain)
-            if deployment_token is not None:
-                deployment_token.mark_failed('enrollment_failed', str(exc))
+                if enrolled_event is None or transaction.get_rollback():
+                    raise RuntimeError('enrollment_audit_failed')
+        except IdentityConflict as exc:
+            return self._identity_error(request, payload, exc, enrollment_token=enrollment_token,
+                                        endpoint=machine if machine and machine.pk and not should_create else None)
+        except Exception:
+            logger.error('Enrollment failed; changes rolled back')
             return self._error(
                 request,
                 payload,
                 AgentEnrollmentLog.STATUS_ERROR,
                 'enrollment_failed',
-                str(exc),
+                'Enrollment nao concluido; nenhuma alteracao aplicada.',
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
                 enrollment_token=enrollment_token,
             )

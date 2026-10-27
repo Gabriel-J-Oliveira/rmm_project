@@ -14,6 +14,7 @@ from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from .audit import create_audit_event
+from .identity import IdentityConflict, lock_identity_registry, normalized_machine_id, preserve_serial_evidence, validate_runtime_identity
 from .models import AuditEvent
 from .models import AgentMachine
 from .models import AgentJob
@@ -1237,29 +1238,27 @@ def _normalize_machine_id(value):
 
 
 def _sync_machine_identity(machine, payload_machine_id, source):
-    machine_id = _normalize_machine_id(payload_machine_id)
+    machine_id = normalized_machine_id(payload_machine_id)
     if not machine_id:
         return []
-    if machine.machine_id and machine.machine_id != machine_id:
-        create_audit_event(
-            event_type='endpoint.identity_conflict',
-            title='Conflito de identidade do endpoint',
-            description=f'{machine.hostname} reportou machine_id diferente do cadastrado.',
-            severity=AuditEvent.SEVERITY_WARNING,
-            actor_type=AuditEvent.ACTOR_AGENT,
-            actor_name='NightOwlAgent',
-            endpoint=machine,
-            metadata={
-                'source': source,
-                'stored_machine_id': machine.machine_id,
-                'reported_machine_id': machine_id,
-            },
-        )
-        return []
+    if machine.machine_id and machine.machine_id.strip().casefold() != machine_id.casefold():
+        raise IdentityConflict('machine_id_mismatch')
     if not machine.machine_id:
         machine.machine_id = machine_id
         return ['machine_id']
     return []
+
+
+def _record_identity_rename(machine, previous_hostname, source):
+    create_audit_event(
+        event_type='endpoint.identity_renamed',
+        title='Hostname atualizado com identidade autenticada',
+        endpoint=machine,
+        actor_type=AuditEvent.ACTOR_AGENT,
+        actor_name='NightOwlAgent',
+        metadata={'source': source, 'previous_hostname': previous_hostname,
+                  'hostname': machine.hostname, 'machine_id': machine.machine_id},
+    )
 
 
 def _section(payload, collection_type, section_name, aliases=()):
@@ -1351,21 +1350,29 @@ def _raw_payload_with_previous_collections(machine, raw_payload):
 
 @transaction.atomic
 def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnapshot:
+    lock_identity_registry()
+    machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+    identity = validate_runtime_identity(machine, payload)
+    validate_runtime_identity(machine, raw_payload)
+    for key in ('diagnostics', 'operational_status', 'status'):
+        if isinstance(raw_payload.get(key), dict):
+            validate_runtime_identity(machine, raw_payload[key])
+    previous_hostname = machine.hostname
     received_at = timezone.now()
     os_data = _heartbeat_os(payload)
     hardware = payload.get('hardware') or {}
-    hostname = payload['hostname']
-    domain = payload.get('domain', '')
+    hostname = identity['hostname']
+    domain = identity['domain']
     ips = _heartbeat_ips(payload)
     logged_user = payload.get('logged_user') or payload.get('username') or ''
     agent_data = _heartbeat_agent(payload)
     heartbeat_at = payload.get('heartbeat_at') or payload.get('timestamp') or received_at
     old_agent_version = machine.agent_version
-    identity_update_fields = _sync_machine_identity(machine, payload.get('machine_id') or payload.get('agent_id'), 'heartbeat')
+    identity_update_fields = _sync_machine_identity(machine, identity['machine_id'], 'heartbeat')
 
     machine.hostname = hostname
     machine.domain = domain
-    machine.fqdn = payload.get('fqdn') or build_fqdn(hostname, domain)
+    machine.fqdn = build_fqdn(hostname, domain)
     machine.last_ip = first_ip(ips)
     machine.last_logged_user = logged_user
     machine.os_name = os_data.get('name', '')
@@ -1373,7 +1380,7 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
     machine.windows_build = os_data.get('build', '')
     machine.manufacturer = hardware.get('manufacturer', '')
     machine.model = hardware.get('model', '')
-    machine.serial_number = hardware.get('serial_number', '')
+    machine.serial_number = preserve_serial_evidence(machine.serial_number, hardware.get('serial_number'))
     agent_update_fields = []
     if agent_data:
         machine.agent_version = _safe_version(agent_data.get('version'))
@@ -1432,6 +1439,9 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
             },
         )
 
+    if identity['renamed']:
+        _record_identity_rename(machine, previous_hostname, 'heartbeat')
+
     snapshot_raw_payload = _raw_payload_with_previous_collections(machine, raw_payload)
     snapshot_raw_payload['snapshot_source'] = 'heartbeat'
 
@@ -1462,9 +1472,16 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
 @transaction.atomic
 def record_collection(machine, collection_type: str, payload: dict) -> InventorySnapshot:
     payload = _as_dict(payload)
+    lock_identity_registry()
+    machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+    identity_payload = payload
+    if collection_type in {'system', 'hardware'}:
+        identity_payload = {**payload, collection_type: payload}
+    identity = validate_runtime_identity(machine, identity_payload)
+    previous_hostname = machine.hostname
     latest = machine.inventory_snapshots.order_by('-received_at').first()
     data = _snapshot_defaults(machine, latest)
-    identity_update_fields = _sync_machine_identity(machine, payload.get('machine_id') or payload.get('agent_id'), 'collection')
+    identity_update_fields = _sync_machine_identity(machine, identity['machine_id'], 'collection')
 
     system = _as_dict(_section(payload, collection_type, 'system'))
     network = _as_dict(_section(payload, collection_type, 'network'))
@@ -1479,8 +1496,8 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
     bios_data = _as_dict(hardware.get('bios'))
     cpu_name = cpu_data.get('name') if isinstance(cpu_data, dict) else str(cpu_data or '')
 
-    data['hostname'] = payload.get('hostname') or data['hostname']
-    data['domain'] = system.get('domain') or data['domain']
+    data['hostname'] = identity['hostname']
+    data['domain'] = identity['domain']
     data['logged_user'] = system.get('logged_user') or data['logged_user']
     data['ips'] = _network_ips(network) or data['ips']
     data['os_name'] = os_data.get('name') or data['os_name']
@@ -1488,7 +1505,7 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
     data['windows_build'] = os_data.get('build') or system.get('os_build') or data['windows_build']
     data['manufacturer'] = hardware.get('manufacturer') or system.get('manufacturer') or data['manufacturer']
     data['model'] = hardware.get('model') or system.get('model') or data['model']
-    data['serial_number'] = hardware.get('serial_number') or system.get('serial_number') or bios_data.get('serial_number') or data['serial_number']
+    data['serial_number'] = hardware.get('serial_number') or system.get('serial_number') or bios_data.get('serial_number') or machine.serial_number
     data['uptime_seconds'] = system.get('uptime_seconds') or data['uptime_seconds']
     data['cpu'] = cpu_name or data['cpu']
     data['memory_total_bytes'] = hardware.get('memory_total_bytes') or data['memory_total_bytes']
@@ -1543,7 +1560,8 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
     machine.windows_build = data['windows_build']
     machine.manufacturer = data['manufacturer']
     machine.model = data['model']
-    machine.serial_number = data['serial_number']
+    machine.serial_number = preserve_serial_evidence(machine.serial_number, data['serial_number'])
+    data['serial_number'] = machine.serial_number
     if payload.get('agent_version'):
         machine.agent_version = payload.get('agent_version') or machine.agent_version
     if payload.get('agent_mode'):
@@ -1594,6 +1612,8 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
         defender_status=data['defender_status'],
         raw_payload=data['raw_payload'],
     )
+    if identity['renamed']:
+        _record_identity_rename(machine, previous_hostname, 'collection')
 
     event_type = {
         'full_inventory': 'agent.inventory_received',
@@ -1658,9 +1678,9 @@ def record_agent_operational_status(machine, payload: dict):
     if not payload:
         return None
 
-    machine_id = _normalize_machine_id(payload.get('machine_id') or payload.get('agent_id'))
-    if machine_id and machine.machine_id and machine_id != machine.machine_id:
-        raise ValueError('machine_id does not match authenticated endpoint.')
+    lock_identity_registry()
+    machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+    validate_runtime_identity(machine, payload)
 
     component_fields = _record_component_versions(machine, payload)
     if component_fields:
