@@ -2422,6 +2422,7 @@ $ErrorActionPreference = 'Stop'
 $env:TEMP = '{safe_temp}'
 Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
 $script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
+$script = $script.Replace("    Assert-Administrator", "    throw 'BOOTSTRAP_ADMIN_REQUIRED'")
 Invoke-Expression $script
 Write-Output 'HOST_STILL_ALIVE'
 if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
@@ -2429,7 +2430,7 @@ if ($global:NightOwlDeploymentBootstrapExitCode -ne 1) {{ throw 'bootstrap exit 
 $log = Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log'
 if (-not (Test-Path $log)) {{ throw 'bootstrap.log ausente' }}
 $logText = Get-Content -Raw -Path $log
-if ($logText -notmatch 'BOOTSTRAP_(TOKEN|ADMIN)_REQUIRED') {{ throw 'erro esperado ausente do log' }}
+if ($logText -notmatch 'BOOTSTRAP_ADMIN_REQUIRED') {{ throw 'erro esperado ausente do log' }}
 if ($logText -match 'deploy_') {{ throw 'deployment token vazou no log' }}
 Write-Output 'BOOTSTRAP_FAILURE_OK'
 """

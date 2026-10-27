@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock, skipUnless
 
 from django.contrib.auth import get_user_model
-from django.test import TransactionTestCase, SimpleTestCase, Client
+from django.test import TestCase, SimpleTestCase, Client
 from django.utils import timezone
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -19,8 +19,12 @@ from dashboard import remote_install as runner
 from dashboard.test_remote_install import COMPUTER, READY, CONTRACT
 
 
-class RemoteDeploymentEnrollmentTests(TransactionTestCase):
+class RemoteDeploymentEnrollmentTests(TestCase):
     def setUp(self):
+        # The worker runs inline in this harness; it must not close TestCase's transaction.
+        connections_patch = mock.patch.object(runner, 'close_old_connections')
+        connections_patch.start()
+        self.addCleanup(connections_patch.stop)
         self.actor = get_user_model().objects.create_user('deployment-admin', is_staff=True)
         self.release = AgentRelease.objects.create(id=CONTRACT['release_id'], version=CONTRACT['version'],
             channel=CONTRACT['channel'], package_url=CONTRACT['package_url'], sha256=CONTRACT['package_sha256'])
