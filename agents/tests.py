@@ -125,6 +125,7 @@ with mock.patch.object(environ.Env, "read_env", return_value=None):
 
     def test_settings_test_disables_ssl_redirect_from_runtime_environment(self):
         env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'config.settings_test'
         env['DJANGO_SECURE_SSL_REDIRECT'] = 'True'
         completed = subprocess.run(
             [

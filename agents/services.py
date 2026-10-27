@@ -1354,9 +1354,15 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
     machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
     identity = validate_runtime_identity(machine, payload)
     validate_runtime_identity(machine, raw_payload)
+    diagnostic_machine = AgentMachine(
+        pk=machine.pk, machine_id=identity['machine_id'] or machine.machine_id,
+        hostname=identity['hostname'], domain=identity['domain'], serial_number=machine.serial_number,
+    )
     for key in ('diagnostics', 'operational_status', 'status'):
         if isinstance(raw_payload.get(key), dict):
-            validate_runtime_identity(machine, raw_payload[key])
+            diagnostic_identity = validate_runtime_identity(diagnostic_machine, raw_payload[key])
+            if (diagnostic_identity['hostname'], diagnostic_identity['domain']) != (identity['hostname'], identity['domain']):
+                raise IdentityConflict('heartbeat_diagnostics_identity_conflict')
     previous_hostname = machine.hostname
     received_at = timezone.now()
     os_data = _heartbeat_os(payload)

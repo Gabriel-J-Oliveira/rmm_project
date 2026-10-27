@@ -279,6 +279,26 @@ class RuntimeIdentityTests(IdentityTestSupport, TestCase):
                 record_heartbeat(instance, {'hostname': instance.hostname}, raw)
         self.assertFalse(InventorySnapshot.objects.exists())
 
+    def test_first_binding_with_conflicting_embedded_status_changes_nothing(self):
+        instance = self.machine(machine_id='')
+        before = AgentMachine.objects.filter(pk=instance.pk).values().get()
+        response = Client(HTTP_AUTHORIZATION='Bearer rmm_live_test_' + instance.hostname).post(
+            '/api/agent/heartbeat/', data={'hostname': instance.hostname, 'machine_id': 'first-id',
+                'diagnostics': {'machine_id': 'other-id'}}, content_type='application/json')
+        self.assertEqual(response.status_code, 409)
+        self.unchanged(instance, before)
+
+    def test_operational_status_failure_rolls_back_whole_heartbeat(self):
+        instance = self.machine()
+        before = AgentMachine.objects.filter(pk=instance.pk).values().get()
+        with mock.patch('agents.views.record_agent_operational_status', side_effect=IdentityConflict('synthetic_conflict')):
+            response = Client(HTTP_AUTHORIZATION='Bearer rmm_live_test_' + instance.hostname).post(
+                '/api/agent/heartbeat/', data={'hostname': instance.hostname,
+                    'machine_id': instance.machine_id, 'diagnostics': {'service_status': 'running'}},
+                content_type='application/json')
+        self.assertEqual(response.status_code, 409)
+        self.unchanged(instance, before)
+
     def test_rename_cannot_collide_with_another_hostname(self):
         first = self.machine()
         second = self.machine('CS-OTHER')

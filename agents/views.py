@@ -989,18 +989,19 @@ class AgentHeartbeatView(APIView):
             )
 
         try:
-            snapshot = record_heartbeat(
-                machine=machine,
-                payload=serializer.validated_data,
-                raw_payload=request.data,
-            )
-            machine.refresh_from_db(fields=['machine_id'])
-            diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
-            if isinstance(diagnostic_payload, dict):
-                diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))
-                diagnostic_payload.setdefault('agent_version', request.data.get('agent_version') or serializer.validated_data.get('agent_version'))
-                diagnostic_payload.setdefault('last_heartbeat_at', request.data.get('heartbeat_at') or request.data.get('timestamp'))
-                record_agent_operational_status(machine, diagnostic_payload)
+            with transaction.atomic():
+                snapshot = record_heartbeat(
+                    machine=machine,
+                    payload=serializer.validated_data,
+                    raw_payload=request.data,
+                )
+                machine.refresh_from_db(fields=['machine_id'])
+                diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
+                if isinstance(diagnostic_payload, dict):
+                    diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))
+                    diagnostic_payload.setdefault('agent_version', request.data.get('agent_version') or serializer.validated_data.get('agent_version'))
+                    diagnostic_payload.setdefault('last_heartbeat_at', request.data.get('heartbeat_at') or request.data.get('timestamp'))
+                    record_agent_operational_status(machine, diagnostic_payload)
         except IdentityConflict as exc:
             return _identity_conflict_response(machine, exc, 'heartbeat', request)
         except Exception as exc:

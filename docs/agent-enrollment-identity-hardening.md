@@ -229,3 +229,25 @@ before merge/deploy approval. The mocked advisory SQL test is not a substitute.
 No production smoke enrollment, endpoint recovery, remote command or deploy was
 performed. The original dirty telemetry worktree was preserved; only this isolated
 feature worktree is included in the PR.
+
+## PR review follow-up (2026-10-27)
+
+The follow-up review found that embedded operational status could fail after the
+heartbeat transaction had committed. Heartbeat and status now share one atomic
+boundary; embedded diagnostics are checked against the projected/bound identity,
+including the first binding of an empty legacy machine_id. Two regression tests
+verify rejection without endpoint/snapshot mutation and rollback on status failure.
+
+The previously failing settings_test test inherited DJANGO_SETTINGS_MODULE from
+the parent test process, making setdefault select the wrong module. The subprocess
+environment now explicitly selects the module the test actually intends to test;
+the assertion and production settings are unchanged. Local focused verification:
+134 tests, 133 PASS, 1 PostgreSQL-only SKIP, no failures.
+
+New GitHub Actions checks execute the agents and remote enrollment/workflow suites
+on both SQLite and isolated PostgreSQL 17, matching the production major version.
+The PostgreSQL job explicitly reruns concurrency and read-only audit tests, with
+no SQLite substitution. Both checks must pass before the authorized merge/deploy.
+
+The separate station-service diagnostic plan is in
+`docs/incident-0262-service-recovery-review.md`. It does not authorize recovery.
