@@ -7,7 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from unittest import mock
+from unittest import mock, skipUnless
 from pathlib import Path
 from io import StringIO
 from datetime import timedelta
@@ -125,6 +125,7 @@ with mock.patch.object(environ.Env, "read_env", return_value=None):
 
     def test_settings_test_disables_ssl_redirect_from_runtime_environment(self):
         env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'config.settings_test'
         env['DJANGO_SECURE_SSL_REDIRECT'] = 'True'
         completed = subprocess.run(
             [
@@ -2402,6 +2403,7 @@ Write-Output 'DEPLOYMENT_COMMAND_FAILURE_OK'
         self.assertIn('HOST_STILL_ALIVE', completed.stdout)
         self.assertIn('DEPLOYMENT_COMMAND_FAILURE_OK', completed.stdout)
 
+    @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_failure_does_not_exit_host_and_writes_log(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
         if powershell is None:
@@ -2420,6 +2422,7 @@ $ErrorActionPreference = 'Stop'
 $env:TEMP = '{safe_temp}'
 Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
 $script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
+$script = $script.Replace("    Assert-Administrator", "    throw 'BOOTSTRAP_ADMIN_REQUIRED'")
 Invoke-Expression $script
 Write-Output 'HOST_STILL_ALIVE'
 if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
@@ -2427,7 +2430,7 @@ if ($global:NightOwlDeploymentBootstrapExitCode -ne 1) {{ throw 'bootstrap exit 
 $log = Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log'
 if (-not (Test-Path $log)) {{ throw 'bootstrap.log ausente' }}
 $logText = Get-Content -Raw -Path $log
-if ($logText -notmatch 'BOOTSTRAP_(TOKEN|ADMIN)_REQUIRED') {{ throw 'erro esperado ausente do log' }}
+if ($logText -notmatch 'BOOTSTRAP_ADMIN_REQUIRED') {{ throw 'erro esperado ausente do log' }}
 if ($logText -match 'deploy_') {{ throw 'deployment token vazou no log' }}
 Write-Output 'BOOTSTRAP_FAILURE_OK'
 """
@@ -2442,6 +2445,7 @@ Write-Output 'BOOTSTRAP_FAILURE_OK'
         self.assertIn('HOST_STILL_ALIVE', completed.stdout)
         self.assertIn('BOOTSTRAP_FAILURE_OK', completed.stdout)
 
+    @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_accepts_metadata_without_optional_git_commit(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
         if powershell is None:
@@ -2524,6 +2528,7 @@ Write-Output 'OPTIONAL_GIT_COMMIT_OK'
         self.assertIn('NightOwl installation completed', completed.stdout)
         self.assertIn('deployment_confirmation_status=failed', completed.stdout)
 
+    @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_still_fails_when_required_metadata_is_missing(self):
         powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
         if powershell is None:
@@ -2790,7 +2795,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         enrollment = AgentEnrollmentLog.objects.latest('created_at')
         self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_preserved')
 
-    def test_existing_invalid_bearer_can_recover_credential_with_deployment_token(self):
+    def test_existing_invalid_bearer_cannot_recover_credential_with_deployment_token(self):
         machine = AgentMachine.objects.create(
             machine_id='machine-broken-token',
             hostname='CS-BROKEN',
@@ -2820,19 +2825,16 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
             content_type='application/json',
         )
 
-        self.assertEqual(response.status_code, 200, response.content)
-        recovered_token = response.json()['agent_token']
-        self.assertTrue(recovered_token.startswith('rmm_live_'))
-        self.assertNotEqual(recovered_token, old_valid_token)
+        self.assertEqual(response.status_code, 409, response.content)
+        self.assertEqual(response.json()['error'], 'existing_identity_proof_required')
         machine.refresh_from_db()
         deployment.refresh_from_db()
-        self.assertNotEqual(machine.agent_token_hash, original_hash)
-        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
-        self.assertEqual(deployment.endpoint_id, machine.id)
+        self.assertEqual(machine.agent_token_hash, original_hash)
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_WAITING)
+        self.assertIsNone(deployment.endpoint_id)
         self.assertEqual(AgentMachine.objects.filter(machine_id=machine.machine_id).count(), 1)
-        self.assertNotIn(recovered_token, json.dumps(list(AuditEvent.objects.values_list('metadata', flat=True))))
         enrollment = AgentEnrollmentLog.objects.latest('created_at')
-        self.assertEqual(enrollment.metadata['created_or_existing'], 'existing_recovered')
+        self.assertEqual(enrollment.status, AgentEnrollmentLog.STATUS_DENIED)
 
     def test_deployment_completion_requires_target_release_health_and_bearer(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment()
