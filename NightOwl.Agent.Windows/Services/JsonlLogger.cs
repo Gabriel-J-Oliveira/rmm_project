@@ -1,4 +1,5 @@
 using System.Text.Json;
+using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Models;
 
 namespace NightOwl.Agent.Windows.Services;
@@ -45,7 +46,8 @@ public sealed class JsonlLogger
         await _lock.WaitAsync(ct);
         try
         {
-            await File.AppendAllTextAsync(logPath, line + Environment.NewLine, ct);
+            ct.ThrowIfCancellationRequested();
+            RotatingJsonlLog.Append(logPath, line);
         }
         finally
         {

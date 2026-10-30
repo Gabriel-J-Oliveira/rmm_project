@@ -4,12 +4,19 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using NightOwl.Agent.Shared;
 
+if (args.Length == 3 && args[0] == "--log-writer")
+{
+    RetentionClosureTests.WriteChild(args[1], args[2]);
+    return;
+}
+
 string root = Path.Combine(Path.GetTempPath(), "NightOwlPathsTests", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 Environment.SetEnvironmentVariable("NIGHTOWL_HOME", root);
 
 try
 {
+    RetentionClosureTests.Run(root);
     LocalFootprintTests.Run(root);
     NightOwlPaths paths = NightOwlPaths.FromEnvironment();
     Require(NightOwlPaths.SystemSid == "S-1-5-18", "SYSTEM SID constant mismatch.");
@@ -571,7 +578,7 @@ try
     Require(resultQueue.DrainQuarantineEvents().Count == 1, "Quarantine reason should be available for logging.");
 
     bool queueFull = false;
-    PendingResultQueue tinyQueue = new(Path.Combine(paths.StateDir, "pending-results-full"), maxRecords: 1, maxTotalBytes: 512, maxPayloadBytes: 64 * 1024);
+    PendingResultQueue tinyQueue = new(Path.Combine(paths.StateDir, "pending-results-full"), maxRecords: 1, maxTotalBytes: 16 * 1024, maxPayloadBytes: 64 * 1024);
     tinyQueue.Enqueue("update_agent", resultPayload, critical: true);
     try
     {

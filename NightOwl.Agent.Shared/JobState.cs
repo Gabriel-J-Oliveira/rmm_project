@@ -493,7 +493,7 @@ public sealed class PendingResultQueue
             PayloadSha256 = Sha256Hex(payloadBytes),
             Critical = critical
         };
-        EnforceLimits(record.Critical);
+        EnforceLimits(record);
         Save(record);
         return record;
     }
@@ -582,6 +582,8 @@ public sealed class PendingResultQueue
         }
         string destination = Path.Combine(SentDirectory, $"{record.ResultId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
         File.Move(source, destination, overwrite: true);
+        // Archive retention starts at ACK, not at the original offline result date.
+        File.SetLastWriteTimeUtc(destination, DateTime.UtcNow);
         FileInfo[] archive = new DirectoryInfo(SentDirectory).GetFiles("*.json").OrderByDescending(file=>file.LastWriteTimeUtc).ToArray();
         foreach (FileInfo file in archive.Skip(1000).Concat(archive.Take(1000).Where(file=>file.LastWriteTimeUtc<DateTime.UtcNow-_retention)))
             file.Delete();
@@ -589,59 +591,26 @@ public sealed class PendingResultQueue
 
     public void Prune()
     {
-        lock (_gate) EnforceLimits(false);
+        lock (_gate) EnforceLimits();
     }
 
-    private void EnforceLimits(bool incomingCritical)
+    private void EnforceLimits(PendingResultRecord? incoming = null)
     {
         Directory.CreateDirectory(_directory);
-        FileInfo[] files = new DirectoryInfo(_directory)
-            .GetFiles("*.json", SearchOption.TopDirectoryOnly)
-            .OrderBy(file => file.CreationTimeUtc)
-            .ToArray();
-
+        FileInfo[] files = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly);
         long totalBytes = files.Sum(file => file.Length);
-        DateTimeOffset cutoff = DateTimeOffset.UtcNow.Subtract(_retention);
-        foreach (FileInfo file in files)
+        int count = files.Length;
+        if (incoming is not null)
         {
-            if (files.Length <= _maxRecords && totalBytes <= _maxTotalBytes && file.LastWriteTimeUtc >= cutoff.UtcDateTime)
-            {
-                continue;
-            }
-
-            PendingResultRecord? record = TryLoad(file.FullName);
-            if (record?.Critical == true)
-            {
-                continue;
-            }
-
-            try
-            {
-                totalBytes -= file.Length;
-                file.Delete();
-            }
-            catch { }
-            files = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly).OrderBy(f => f.CreationTimeUtc).ToArray();
+            string path = PathFor(incoming.ResultId);
+            FileInfo? previous = files.FirstOrDefault(file => file.FullName.Equals(path, StringComparison.OrdinalIgnoreCase));
+            count += previous is null ? 1 : 0;
+            totalBytes += JsonSerializer.SerializeToUtf8Bytes(incoming, JsonOptions).LongLength - (previous?.Length ?? 0);
         }
-
-        int currentCount = Directory.GetFiles(_directory, "*.json", SearchOption.TopDirectoryOnly).Length;
-        long currentBytes = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly).Sum(file => file.Length);
-        if (currentCount >= _maxRecords || currentBytes >= _maxTotalBytes)
-        {
+        // Age and Critical never authorize deleting unacknowledged evidence.
+        // Corruption is handled by LoadAll quarantine; capacity applies to new admission.
+        if (count > _maxRecords || totalBytes > _maxTotalBytes)
             throw new InvalidOperationException(JobErrorCodes.ResultQueueFull);
-        }
-    }
-
-    private PendingResultRecord? TryLoad(string path)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<PendingResultRecord>(File.ReadAllText(path), JsonOptions);
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private void Save(PendingResultRecord record)

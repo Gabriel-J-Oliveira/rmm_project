@@ -3326,7 +3326,7 @@ $shortcut.Save()
                 message,
                 metadata = metadata ?? new { }
             };
-            File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            RotatingJsonlLog.Append(LogPath, JsonSerializer.Serialize(entry));
         }
         catch
         {

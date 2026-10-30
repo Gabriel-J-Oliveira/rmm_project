@@ -199,7 +199,7 @@ public sealed class NightOwlPaths
                 message,
                 data = data ?? new { }
             };
-            File.AppendAllText(logPath, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
+            RotatingJsonlLog.Append(logPath, JsonSerializer.Serialize(record, JsonOptions));
         }
         catch
         {

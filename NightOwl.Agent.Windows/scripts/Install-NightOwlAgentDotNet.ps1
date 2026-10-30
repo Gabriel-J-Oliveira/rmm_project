@@ -212,6 +212,60 @@ function Write-Step($Status, $Message) {
     Write-Host ("[{0}] {1}" -f $Status, $Message)
 }
 
+# Kept in both standalone lifecycle scripts: bootstrap/uninstall cannot depend on installed DLLs.
+function Write-NightOwlBoundedLog([string]$Path, [string]$Json, [long]$MaxBytes = 10485760,
+    [int]$Archives = 5, [int]$MaxRecordBytes = 65536) {
+    if ($MaxBytes -lt 256 -or $Archives -lt 1 -or $Archives -gt 20 -or
+        $MaxRecordBytes -lt 128 -or $MaxRecordBytes -gt $MaxBytes) { throw 'Invalid log limits' }
+    $Path = [IO.Path]::GetFullPath($Path)
+    $directory = [IO.Path]::GetDirectoryName($Path)
+    $current = New-Object IO.DirectoryInfo($directory)
+    while ($null -ne $current) {
+        if ($current.Exists -and ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Log reparse path rejected' }
+        $current = $current.Parent
+    }
+    [IO.Directory]::CreateDirectory($directory) | Out-Null
+    $owned = @($Path, ($Path + '.lock')) + @(1..$Archives | ForEach-Object { $Path + '.' + $_ })
+    foreach ($file in $owned) {
+        if ([IO.File]::Exists($file) -and ([IO.File]::GetAttributes($file) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Log reparse file rejected' }
+    }
+    # Existing lifecycle callers supply structured records. Redact known credential fields
+    # and bearer values before writing or calculating the record size.
+    $Json = [regex]::Replace($Json, '(?i)("[^"\\]*(?:token|password|secret|authorization|cookie|api_key)[^"\\]*"\s*:\s*)"(?:\\.|[^"\\])*"', '$1"[REDACTED]"')
+    $Json = [regex]::Replace($Json, '(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}', '$1[REDACTED]')
+    $Json = [regex]::Replace($Json, '(https?://[^\s?"\\]+)\?[^\s"\\]*', '$1')
+    $Json = ($Json | ConvertFrom-Json | ConvertTo-Json -Depth 8 -Compress)
+    $encoding = New-Object Text.UTF8Encoding($false)
+    if ($encoding.GetByteCount($Json) + 1 -gt $MaxRecordBytes) { $Json = '{"event_type":"log.record_omitted","reason":"record_limit"}' }
+    $bytes = $encoding.GetBytes($Json + "`n")
+    $lease = $null
+    $output = $null
+    try {
+        for ($attempt = 0; $null -eq $lease; $attempt++) {
+            try { $lease = [IO.File]::Open(($Path + '.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+            catch [IO.IOException] { if ($attempt -ge 40) { throw }; Start-Sleep -Milliseconds 10 }
+        }
+        foreach ($i in 1..$Archives) {
+            $archive = $Path + '.' + $i
+            if ([IO.File]::Exists($archive) -and [IO.File]::GetLastWriteTimeUtc($archive) -lt [datetime]::UtcNow.AddDays(-30)) { [IO.File]::Delete($archive) }
+        }
+        if ([IO.File]::Exists($Path) -and (Get-Item -LiteralPath $Path).Length -gt ($MaxBytes - $bytes.Length)) {
+            [IO.File]::Delete(($Path + '.' + $Archives))
+            for ($i = $Archives - 1; $i -ge 1; $i--) {
+                if ([IO.File]::Exists(($Path + '.' + $i))) { [IO.File]::Move(($Path + '.' + $i), ($Path + '.' + ($i + 1))) }
+            }
+            [IO.File]::Move($Path, ($Path + '.1'))
+        }
+        $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $output = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, $share)
+        $output.Write($bytes, 0, $bytes.Length)
+    }
+    finally {
+        if ($null -ne $output) { $output.Dispose() }
+        if ($null -ne $lease) { $lease.Dispose() }
+    }
+}
+
 function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
     try {
         $logDir = [string]$script:NightOwlPaths.Logs
@@ -222,7 +276,7 @@ function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
             message = $Message
             metadata = $Metadata
         }
-        $entry | ConvertTo-Json -Depth 6 -Compress | Add-Content -Path ([string]$script:NightOwlPaths.InstallLog) -Encoding UTF8
+        Write-NightOwlBoundedLog -Path ([string]$script:NightOwlPaths.InstallLog) -Json ($entry | ConvertTo-Json -Depth 6 -Compress)
     }
     catch {}
 }

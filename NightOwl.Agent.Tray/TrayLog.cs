@@ -23,7 +23,7 @@ internal static class TrayLog
                 message,
                 metadata = metadata ?? new { }
             };
-            File.AppendAllText(logPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            RotatingJsonlLog.Append(logPath, JsonSerializer.Serialize(entry));
         }
         catch
         {

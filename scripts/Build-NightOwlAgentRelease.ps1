@@ -46,6 +46,7 @@ $installScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Install-Nig
 $uninstallScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Uninstall-NightOwlAgentDotNet.ps1"
 $lifecycleScriptTest = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Test-NightOwlAgentLifecycleScripts.ps1"
 $installerTrustTest = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Test-NightOwlInstallerTrustBootstrap.ps1"
+$lifecycleLogTest = Join-Path $repoRoot "tests\Test-NightOwlLifecycleLogRetention.ps1"
 $iconPath = Join-Path $repoRoot "assets\icons\NightOwl.ico"
 if ([string]::IsNullOrWhiteSpace($TrustRootsPath)) {
     $TrustRootsPath = $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH
@@ -848,6 +849,7 @@ try {
         Invoke-Checked "dotnet" @("run", "--project", $uninstallerTestProject, "-c", "Release", "--no-restore")
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleScriptTest)
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installerTrustTest)
+        Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleLogTest)
     }
 
     foreach ($project in @($agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject)) {

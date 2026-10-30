@@ -243,7 +243,7 @@ public sealed class ConfigService
         {
             NightOwlPaths paths = NightOwlPaths.Current;
             Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
-            File.AppendAllText(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.applied") + Environment.NewLine);
+            RotatingJsonlLog.Append(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.applied"));
         }
         catch
         {
@@ -257,7 +257,7 @@ public sealed class ConfigService
         {
             NightOwlPaths paths = NightOwlPaths.Current;
             Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
-            File.AppendAllText(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.persist_failed", SanitizeLogMessage(errorMessage)) + Environment.NewLine);
+            RotatingJsonlLog.Append(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.persist_failed", SanitizeLogMessage(errorMessage)));
         }
         catch
         {
