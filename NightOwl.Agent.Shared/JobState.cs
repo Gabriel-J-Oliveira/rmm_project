@@ -598,8 +598,11 @@ public sealed class PendingResultQueue
     {
         Directory.CreateDirectory(_directory);
         FileInfo[] files = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly);
-        long totalBytes = files.Sum(file => file.Length);
-        int count = files.Length;
+        FileInfo[] quarantined = Directory.Exists(QuarantineDirectory)
+            ? new DirectoryInfo(QuarantineDirectory).GetFiles("*.json", SearchOption.TopDirectoryOnly) : Array.Empty<FileInfo>();
+        // Corrupt unacknowledged evidence still occupies the queue's budget.
+        long totalBytes = files.Sum(file => file.Length) + quarantined.Sum(file => file.Length);
+        int count = files.Length + quarantined.Length;
         if (incoming is not null)
         {
             string path = PathFor(incoming.ResultId);
@@ -626,8 +629,8 @@ public sealed class PendingResultQueue
         try
         {
             Directory.CreateDirectory(QuarantineDirectory);
-            string destination = Path.Combine(QuarantineDirectory, $"{Path.GetFileNameWithoutExtension(path)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-            File.Move(path, destination, overwrite: true);
+            string destination = Path.Combine(QuarantineDirectory, $"{Path.GetFileNameWithoutExtension(path)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}.json");
+            File.Move(path, destination);
             _quarantineEvents.Add(new PendingResultQuarantineEvent(path, destination, reason));
         }
         catch { }

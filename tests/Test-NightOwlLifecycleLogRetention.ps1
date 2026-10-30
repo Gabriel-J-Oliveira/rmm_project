@@ -35,6 +35,11 @@ try {
         if (-not $failed -or (Get-Item -LiteralPath $locked).Length -ne 1020) { throw 'Denied rotation must preserve active evidence and bound growth' }
         Write-NightOwlBoundedLog -Path $locked -Json '{"event_type":"recovered"}' -MaxBytes 1024 -MaxRecordBytes 512
         if (-not [IO.File]::ReadAllText($locked).Contains('recovered')) { throw 'Rotation did not recover' }
+        $partial = $path + '.partial'
+        [IO.File]::WriteAllText($partial, '{"unfinished":')
+        Write-NightOwlBoundedLog -Path $partial -Json '{"event_type":"after_partial","message":"token=fixture-secret-never-print"}'
+        $lines = [IO.File]::ReadAllLines($partial)
+        if ($lines.Count -ne 2 -or ($lines[1] | ConvertFrom-Json).event_type -ne 'after_partial' -or $lines[1].Contains('fixture-secret-never-print')) { throw 'Partial record recovery/redaction failed' }
     }
     Write-Output 'PASS lifecycle log retention: standalone helpers, quotas/age, redaction, blocked reader and recovery; no installation.'
 }

@@ -65,6 +65,13 @@ internal static class RetentionClosureTests
         Require(File.ReadAllBytes(fullDisk).SequenceEqual(prior), "Disk-full write discarded existing evidence.");
         RotatingJsonlLog.Append(fullDisk, "{\"event_type\":\"recovered\"}", small);
         Require(File.ReadAllLines(fullDisk).Length == 2, "Disk-full write failed to release the process lock.");
+        ExpectIoFailure(() => RotatingJsonlLog.AppendWithWriterForTest(fullDisk, "{}", small,
+            (stream, _) => { stream.Write(new byte[] { (byte)'{', (byte)'"' }); throw new IOException("Synthetic partial write"); }));
+        RotatingJsonlLog.Append(fullDisk, "{\"event_type\":\"after_partial\"}", small);
+        string[] recovered = File.ReadAllLines(fullDisk);
+        using (JsonDocument last = JsonDocument.Parse(recovered[^1]))
+            Require(last.RootElement.GetProperty("event_type").GetString() == "after_partial", "Partial write swallowed the next event.");
+        Require(recovered[^2] == "{\"", "Partial evidence must be preserved rather than truncated.");
 
         string rotating = Path.Combine(dir, "concurrent-rotation.jsonl");
         using (CancellationTokenSource stop = new())
@@ -140,6 +147,14 @@ internal static class RetentionClosureTests
         PendingResultQueue bytesQueue = new(Path.Combine(dir, "byte-quota"), maxTotalBytes: 512);
         ExpectFull(() => bytesQueue.Enqueue("ping", new { job_id = Guid.NewGuid().ToString(), status = "completed", text = new string('x', 500) }));
         Require(bytesQueue.LoadAll().Count == 0, "New record exceeded byte quota.");
+        string corruptQueueDir = Path.Combine(dir, "corrupt-quota");
+        PendingResultQueue corruptQueue = new(corruptQueueDir, maxRecords: 1);
+        corruptQueue.Enqueue("ping", new { job_id = Guid.NewGuid().ToString(), status = "completed" });
+        File.WriteAllText(Directory.GetFiles(corruptQueueDir, "*.json").Single(), "{corrupt-evidence");
+        Require(corruptQueue.LoadAll().Count == 0, "Corrupt result should leave active delivery.");
+        ExpectFull(() => corruptQueue.Enqueue("ping", new { job_id = Guid.NewGuid().ToString(), status = "completed" }));
+        Require(File.ReadAllText(Directory.GetFiles(corruptQueue.QuarantineDirectory, "*.json").Single()) == "{corrupt-evidence",
+            "Corrupt evidence must retain capacity and survive backpressure rather than grow without quota.");
         Console.WriteLine("PASS retention: size/count/age, JSONL/redaction, concurrent rotation/readers, permission/simulated disk-full failures, threads/processes, pending ACK/backpressure.");
     }
 

@@ -95,6 +95,7 @@ function Write-NightOwlBoundedLog([string]$Path, [string]$Json, [long]$MaxBytes 
     # and bearer values before writing or calculating the record size.
     $Json = [regex]::Replace($Json, '(?i)("[^"\\]*(?:token|password|secret|authorization|cookie|api_key)[^"\\]*"\s*:\s*)"(?:\\.|[^"\\])*"', '$1"[REDACTED]"')
     $Json = [regex]::Replace($Json, '(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}', '$1[REDACTED]')
+    $Json = [regex]::Replace($Json, '(?i)((?:agentToken|agent_token|token|password|secret|api_key|apikey|cookie)=)[^&\s"\\]+', '$1[REDACTED]')
     $Json = [regex]::Replace($Json, '(https?://[^\s?"\\]+)\?[^\s"\\]*', '$1')
     $Json = ($Json | ConvertFrom-Json | ConvertTo-Json -Depth 8 -Compress)
     $encoding = New-Object Text.UTF8Encoding($false)
@@ -111,15 +112,27 @@ function Write-NightOwlBoundedLog([string]$Path, [string]$Json, [long]$MaxBytes 
             $archive = $Path + '.' + $i
             if ([IO.File]::Exists($archive) -and [IO.File]::GetLastWriteTimeUtc($archive) -lt [datetime]::UtcNow.AddDays(-30)) { [IO.File]::Delete($archive) }
         }
-        if ([IO.File]::Exists($Path) -and (Get-Item -LiteralPath $Path).Length -gt ($MaxBytes - $bytes.Length)) {
+        $length = 0
+        $separatePartial = $false
+        if ([IO.File]::Exists($Path)) {
+            $reader = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try {
+                $length = $reader.Length
+                if ($length -gt 0) { $reader.Position = $length - 1; $separatePartial = $reader.ReadByte() -ne 10 }
+            }
+            finally { $reader.Dispose() }
+        }
+        if ($length -gt ($MaxBytes - $bytes.Length - [int]$separatePartial)) {
             [IO.File]::Delete(($Path + '.' + $Archives))
             for ($i = $Archives - 1; $i -ge 1; $i--) {
                 if ([IO.File]::Exists(($Path + '.' + $i))) { [IO.File]::Move(($Path + '.' + $i), ($Path + '.' + ($i + 1))) }
             }
             [IO.File]::Move($Path, ($Path + '.1'))
+            $separatePartial = $false
         }
         $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
         $output = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, $share)
+        if ($separatePartial) { $output.WriteByte(10) }
         $output.Write($bytes, 0, $bytes.Length)
     }
     finally {

@@ -59,16 +59,25 @@ public static class RotatingJsonlLog
                 File.Delete(archive);
         }
 
-        long length = File.Exists(path) ? new FileInfo(path).Length : 0;
-        if (length > 0 && length > policy.MaxFileBytes - bytes.Length)
+        long length = 0;
+        bool separatePartialRecord = false;
+        if (File.Exists(path))
+        {
+            using FileStream tail = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            length = tail.Length;
+            if (length > 0) { tail.Position = length - 1; separatePartialRecord = tail.ReadByte() != '\n'; }
+        }
+        if (length > 0 && length > policy.MaxFileBytes - bytes.Length - (separatePartialRecord ? 1 : 0))
         {
             // No truncate-on-error fallback. A denied rename stops this write.
             File.Delete(path + "." + policy.ArchiveCount);
             for (int i = policy.ArchiveCount - 1; i >= 1; i--)
                 if (File.Exists(path + "." + i)) File.Move(path + "." + i, path + "." + (i + 1), true);
             File.Move(path, path + ".1");
+            separatePartialRecord = false;
         }
         using FileStream output = new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+        if (separatePartialRecord) output.WriteByte((byte)'\n');
         if (writer is null) output.Write(bytes);
         else writer(output, bytes);
     }
