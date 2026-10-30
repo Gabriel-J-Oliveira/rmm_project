@@ -1,5 +1,9 @@
 # RC46 — Validação na nova máquina
 
+Nota histórica: este documento registra a primeira entrega local. A revisão
+seguinte, com commits locais autorizados, está no fechamento final, no relatório
+de footprint e no roteiro Pilot; seu estado prevalece sobre o snapshot abaixo.
+
 Data local: 2026-10-30, America/Sao_Paulo. Entrega para revisão; sem commit/push.
 
 ## Checkout, localização e preservação
