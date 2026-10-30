@@ -27,10 +27,22 @@ public sealed class OperationalActions
         {
             ["flush_dns"] = new("flush_dns", 1, true, Array.Empty<string>()),
             ["query_service"] = new("query_service", 1, false, Array.AsReadOnly(new[] { "service_name" })),
-            ["run_approved_script"] = new("run_approved_script", 1, false, Array.AsReadOnly(new[] { "script_id", "script_version", "sha256", "parameters" }))
+            ["run_approved_script"] = new("run_approved_script", 1, false, Array.AsReadOnly(new[] { "script_id", "script_version", "sha256", "parameters" })),
+            ["start_service"] = new("start_service", 1, true, Array.AsReadOnly(new[] { "service_name" })),
+            ["stop_service"] = new("stop_service", 1, true, Array.AsReadOnly(new[] { "service_name" })),
+            ["restart_service"] = new("restart_service", 1, true, Array.AsReadOnly(new[] { "service_name" })),
+            ["gpupdate"] = new("gpupdate", 1, true, Array.Empty<string>()),
+            ["create_local_user"] = new("create_local_user", 1, true, Array.AsReadOnly(new[] { "user_name", "secret_reference" })),
+            ["set_local_user_enabled"] = new("set_local_user_enabled", 1, true, Array.AsReadOnly(new[] { "user_name", "account_sid", "enabled" })),
+            ["reset_local_password"] = new("reset_local_password", 1, true, Array.AsReadOnly(new[] { "user_name", "account_sid", "secret_reference" }))
         });
     private readonly IOperationalActionNative _native;
-    public OperationalActions(IOperationalActionNative? native = null) => _native = native ?? new WindowsOperationalActionNative();
+    private readonly AdministrativeActions _administrative;
+    public OperationalActions(IOperationalActionNative? native = null, AdministrativeActions? administrative = null)
+    {
+        _native = native ?? new WindowsOperationalActionNative();
+        _administrative = administrative ?? new AdministrativeActions();
+    }
 
     public static OperationalActionRequest Validate(AgentConfig config, AgentJobRequest job)
     {
@@ -56,6 +68,7 @@ public sealed class OperationalActions
             name = field.GetString();
         }
         if (action == "run_approved_script") ApprovedScripts.Validate(config, parameters);
+        if (AdministrativeActions.Contains(action)) AdministrativeActions.Validate(config, action, parameters);
         return new(action, v, name);
     }
 
@@ -63,6 +76,7 @@ public sealed class OperationalActions
         config.OperationalActionsEnabled && config.AllowedJobTypes.Contains("operational_action", StringComparer.Ordinal)
             ? Catalog.Values.Where(x => config.AllowedOperationalActions.Contains(x.Id, StringComparer.Ordinal) &&
                     (x.Id != "run_approved_script" || ApprovedScripts.Enabled(config)))
+                .Where(x => !AdministrativeActions.Contains(x.Id) || AdministrativeActions.CanAdvertise(config, x.Id))
                 .Select(x => $"operational_action:{x.Id}:{x.Version}")
                 .Concat(config.AllowedOperationalActions.Contains("run_approved_script", StringComparer.Ordinal) && ApprovedScripts.Enabled(config)
                     ? new[] { ApprovedScripts.Capability } : Array.Empty<string>()) : Array.Empty<string>();
@@ -70,6 +84,7 @@ public sealed class OperationalActions
     public object Execute(AgentConfig config, AgentJobRequest job, CancellationToken ct)
     {
         var request = Validate(config, job);
+        if (AdministrativeActions.Contains(request.Id)) return _administrative.Execute(config, job, ct);
         if (request.Id == "run_approved_script") throw new InvalidOperationException("script_requires_async_executor");
         ct.ThrowIfCancellationRequested();
         try

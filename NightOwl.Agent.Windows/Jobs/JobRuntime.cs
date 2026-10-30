@@ -61,7 +61,21 @@ internal sealed class JobRuntime
                         DateTimeOffset signaled=DateTimeOffset.UtcNow;
                         AgentJobsPullResponse batch=await _api.PullJobsAsync(config,budget.Token,protocolV2:true);
                         foreach(AgentJobRequest job in batch.Jobs.Take(5))
-                        { journal.Accept(job); DeliveryCount++; Observe?.Invoke("signal",job.Id,signaled); Observe?.Invoke("received",job.Id,DateTimeOffset.UtcNow); }
+                        {
+                            if (job.Type == "operational_action")
+                            {
+                                try { OperationalActions.Validate(config, job); }
+                                catch (InvalidOperationException)
+                                {
+                                    // Reject credentials/invalid contracts before a payload can enter the durable inbox.
+                                    JobExecutionResult rejected = _coordinator.Validate(config, job).FinalResult
+                                        ?? throw new InvalidOperationException("action_admission_inconsistent");
+                                    journal.Result(rejected); Queue(job.Type, rejected); DeliveryCount++;
+                                    continue;
+                                }
+                            }
+                            journal.Accept(job); DeliveryCount++; Observe?.Invoke("signal",job.Id,signaled); Observe?.Invoke("received",job.Id,DateTimeOffset.UtcNow);
+                        }
                     }
                 }
                 failures=0;

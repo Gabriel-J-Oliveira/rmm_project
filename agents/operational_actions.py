@@ -16,11 +16,13 @@ from config.authz import is_nightowl_technical_user
 from .internal_jobs import internal_capability
 from .models import AgentJob, AgentMachine, AuditEvent
 from .services import create_audit_event
+from . import administrative_actions as admin
 
 CATALOG = MappingProxyType({
     'flush_dns': (1, 'agents.change_agentmachine', {}),
     'query_service': (1, 'agents.view_agentmachine', {'service_name': r'[A-Za-z0-9_.-]{1,256}'}),
     'run_approved_script': (1, 'agents.view_agentmachine', None),
+    **{action: (1, 'agents.' + permission, None) for action, permission in admin.PERMISSIONS.items()},
 })
 TIMEOUT_SECONDS = 15
 
@@ -35,6 +37,8 @@ def validate_payload(payload):
     if type(payload['action_version']) is not int or payload['action_version'] != version:
         raise ValueError('unsupported_action_version')
     params = payload['parameters']
+    if action in admin.PERMISSIONS:
+        return {'action_id': action, 'action_version': version, 'parameters': admin.validate_parameters(action, params)}
     if action == 'run_approved_script':
         from .script_library import validate_reference
         return {'action_id': action, 'action_version': version, 'parameters': validate_reference(params)}
@@ -52,12 +56,14 @@ def authorize(operator, action):
         raise PermissionError('action_forbidden')
 
 
-def validate_dispatch(job):
+def validate_dispatch(job, *, creating=False):
     payload = validate_payload(job.payload)
     operator = get_user_model().objects.filter(username=job.created_by).first()
     authorize(operator, payload['action_id'])
     if not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False):
         raise ValueError('operational_actions_disabled')
+    if payload['action_id'] in admin.PERMISSIONS:
+        admin.validate_dispatch(job, operator, creating)
     endpoint = job.endpoint
     capability = f"operational_action:{payload['action_id']}:{payload['action_version']}"
     if (not endpoint.machine_id or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1
@@ -78,13 +84,14 @@ def create_action_job(operator, endpoint_id, payload):
     job = AgentJob(endpoint=endpoint, job_type='operational_action', payload=payload,
         created_by=operator.get_username(), timeout_seconds=TIMEOUT_SECONDS,
         expires_at=timezone.now() + timedelta(minutes=15))
-    validate_dispatch(job)
+    validate_dispatch(job, creating=True)
     if endpoint.jobs.filter(status__in=('queued', 'sent', 'running')).exists():
         raise ValueError('job_conflict')
     job.save()
     create_audit_event(event_type='job.created', title='Acao operacional autorizada',
         description=payload['action_id'], endpoint=endpoint, actor_type=AuditEvent.ACTOR_USER,
-        actor_name=operator.get_username(), metadata={'job_id': str(job.pk), **payload})
+        actor_name=operator.get_username(), metadata={'job_id': str(job.pk), **payload,
+            **({'authorization': admin.binding(job, operator)} if payload['action_id'] in admin.PERMISSIONS else {})})
     return job
 
 
@@ -105,6 +112,9 @@ def validate_completion(job, result):
     if not isinstance(result, dict) or result.get('machine_id') != job.endpoint.machine_id or result.get('output_truncated'):
         raise ValueError('invalid_action_confirmation')
     output = result.get('output')
+    if payload['action_id'] in admin.PERMISSIONS:
+        admin.validate_completion(payload['action_id'], payload['parameters'], output)
+        return
     common = {'schema_version', 'action_id', 'action_version', 'success'}
     fields = {'service_name', 'state'} if payload['action_id'] == 'query_service' else set()
     if (not isinstance(output, dict) or set(output) != common | fields

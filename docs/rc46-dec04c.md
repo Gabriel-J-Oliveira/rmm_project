@@ -153,3 +153,74 @@ Arquivos DEC-04C.2: agente (`ApprovedScripts.cs`, `OwnedProcess.cs`,
 (`agents/script_library.py`, `agents/approved_scripts/environment_diagnostic_v1.ps1`,
 `agents/operational_actions.py`, `agents/urls.py`, `config/settings.py`);
 `agents/test_script_library.py`, `.env.example`, `.gitattributes` e este documento.
+
+## DEC-04C.3 — ações administrativas tipadas
+
+Continuação local sobre `31452e21`, sem sincronização automática. Usa o mesmo
+`operational_action` v1, endpoint POST, dispatcher/journal/resultados críticos e
+ACK; não cria shell, serviço, canal, tela ou agenda administrativa.
+
+| Ação | Parâmetros exatos | Execução nesta etapa |
+|---|---|---|
+| start_service / stop_service / restart_service | service_name | SCM local via ServiceController; implementação nativa, testes simulados |
+| gpupdate | {} | RefreshPolicyEx(machine=true, RP_FORCE); apenas solicitação, nunca prova de processamento |
+| create_local_user | user_name, secret_reference (UUID) | Bloqueada: entrega protegida de segredo indisponível |
+| reset_local_password | user_name, account_sid, secret_reference | Bloqueada pelo mesmo motivo |
+| set_local_user_enabled | user_name, account_sid, enabled (bool) | Bloqueada: falta isolamento/validação nativa de identidade e privilégios da conta |
+
+Senhas nunca são parâmetros aceitos. Referências não são emitidas/resolvidas nem
+garantem por si uso único/TTL: esse mecanismo ainda não existe. O backend não cria
+jobs de contas e nenhuma API de conta Windows é chamada, mesmo com flags/permissões
+habilitadas. No agente só pode persistir o resultado sanitizado de uma rejeição,
+nunca o payload de conta rejeitado ou senha recebida em campo extra.
+Nomes de domínio, contas conhecidas protegidas e SIDs de sistema/RID<=1000 são
+rejeitados; isso não substitui prova nativa de SAM/grupos, ainda pendente.
+
+Defaults: `NIGHTOWL_ADMIN_ACTIONS_ENABLED=false`, `NIGHTOWL_ADMIN_ACTION_SCOPES={}`;
+agente `administrativeActionsEnabled=false`, `allowedServiceOperations={}`,
+`allowComputerPolicyRefresh=false`, além dos gates anteriores. Escopo backend:
+UUID do endpoint → ação → lista positiva de serviços (ou true para gpupdate).
+Exemplo apenas estrutural: `{ "<endpoint-uuid>": {"start_service":["AcmePilotService"],"gpupdate":true} }`.
+No agente: `allowedServiceOperations: {"AcmePilotService":["start_service"]}`.
+Não habilitar esses exemplos sem homologação e aprovação por alvo.
+
+Migração aditiva `0041_administrative_action_permissions`: sete permissões em
+AgentJob, uma por operação; nenhuma é concedida automaticamente. Exige add_agentjob
+mais a permissão específica, usuário técnico ativo, identidade sem conflito/quarentena,
+capacidade recente e recurso autorizado. A criação audita vínculo congelado do ID
+do operador/endpoint/identidade/ação/parâmetros/timeout/expiração. Entrega e início
+revalidam esse vínculo e a autorização atual; mudança de parâmetros, alvo, usuário
+ou escopo bloqueia a execução. O agente valida novamente sua própria allowlist.
+
+Serviços: bloqueia alvos críticos conhecidos e NightOwl, drivers/shared-process,
+launch protegido, binário sob Windows, imagem com argumentos/expansões e reparse
+points. Somente serviços own-process de terceiros revisados, na allowlist. Stop
+não para dependentes; start exige dependências já running. Restart exige running
+inicial e pode deixar estado parcial se falhar: não há rollback fictício. Revisar
+ACLs/configuração/binário dos serviços piloto antes de habilitar. Não há sandbox
+ou redução de privilégios SYSTEM; autorização é por operação/recurso fechado.
+
+Orçamento existente de 5..15 s, exclusão mútua e idempotência preservados. Esperas
+cooperam com cancelamento, mas uma chamada nativa já iniciada ou atualização de GPO
+aceita não pode ser desfeita por cancelamento. Posse fica retida até retorno nativo;
+15 s não é SLA de retorno de API bloqueada. Falha/timeout exige reconciliação,
+nunca replay automático da mutação. Saída fechada e curta, sem erros nativos brutos.
+Admissão de operational_action valida antes de persistir payload no journal; teste
+sentinela confirma que pedido contendo senha rejeitada não chega a arquivos/resultados.
+
+Validação: build Release afetado (zero avisos/erros); modo
+`--administrative-actions-only` com mocks, guards de recurso, rejeição de contas,
+privilégio, timeout/cancelamento, recuperação e rejeição antes do journal/ACK;
+modos de ações/scripts/jobs anteriores aprovados. 77 testes Django selecionados
+aprovados, incluindo permissões/vínculo/revogação, resultados e integrações reais
+locais de leitura (query_service e script diagnóstico) até persistência/ACK. Check,
+makemigrations dry-run e git diff --check aprovados. Sem suíte completa/dependências
+novas. Mutações administrativas não foram executadas no Windows de desenvolvimento.
+SCM/GPUpdate reais sob SYSTEM, serviços piloto e PostgreSQL exigem homologação
+descartável posterior; credenciais TTL/uso único e contas locais continuam bloqueadas.
+
+Arquivos: AdministrativeActions.cs, OperationalActions.cs, JobRuntime.cs,
+AgentConfig.cs, AdministrativeActionTests.cs e Program.cs; backend
+agents/administrative_actions.py, operational_actions.py, models.py, teste
+test_administrative_actions.py e migração0041; settings/.env.example e este documento.
+Sem push, merge, deploy, publicação, instalação ou avanço para DEC-04D.

@@ -123,6 +123,13 @@ public sealed class AgentConfig
     [JsonPropertyName("allowedScriptVersions")]
     public List<string> AllowedScriptVersions { get; set; } = new();
 
+    [JsonPropertyName("administrativeActionsEnabled")]
+    public bool AdministrativeActionsEnabled { get; set; } = false;
+    [JsonPropertyName("allowedServiceOperations")]
+    public Dictionary<string, List<string>> AllowedServiceOperations { get; set; } = new();
+    [JsonPropertyName("allowComputerPolicyRefresh")]
+    public bool AllowComputerPolicyRefresh { get; set; } = false;
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
 

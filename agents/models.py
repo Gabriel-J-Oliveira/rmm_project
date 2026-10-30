@@ -1623,6 +1623,15 @@ class AgentJob(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        permissions = [
+            ('start_windows_service', 'Start an explicitly authorized Windows service'),
+            ('stop_windows_service', 'Stop an explicitly authorized Windows service'),
+            ('restart_windows_service', 'Restart an explicitly authorized Windows service'),
+            ('refresh_computer_policy', 'Request local computer policy refresh'),
+            ('create_local_account', 'Create an authorized local account'),
+            ('set_local_account_enabled', 'Enable or disable an authorized local account'),
+            ('reset_local_account_password', 'Reset an authorized local account password'),
+        ]
         indexes = [
             models.Index(fields=['endpoint', 'status', '-created_at']),
             models.Index(fields=['status', '-created_at']),

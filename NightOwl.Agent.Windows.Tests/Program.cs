@@ -11,6 +11,7 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--administrative-actions-only", StringComparer.Ordinal)) { await AdministrativeActionTests.RunAsync(); return; }
     if (args.Contains("--approved-scripts-only", StringComparer.Ordinal)) { await ApprovedScriptTests.RunAsync(); return; }
     if (args.Contains("--approved-scripts-e2e", StringComparer.Ordinal)) { await JobRuntimeTests.ProtocolE2E(approvedScripts: true); return; }
     if (args.Contains("--operational-actions-only", StringComparer.Ordinal)) { await OperationalActionTests.RunAsync(); return; }
