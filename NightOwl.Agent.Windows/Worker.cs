@@ -582,6 +582,7 @@ public sealed class Worker : BackgroundService
         // Keep the historical spelling for mixed-version capability consumers.
         payload.Agent["capabilities"] = config.AllowedJobTypes
             .Where(type => type is "configure_telemetry" or "collect_services" || type == "install_software" && config.SoftwareInstallEnabled)
+            .Concat(OperationalActions.Capabilities(config))
             .Append("jobs_protocol_v2").Append("job_protocol_v2").ToArray();
         TelemetrySettings? effectiveTelemetry = _telemetryRuntime.Effective;
         payload.Agent["telemetry_mode"] = config.TelemetryMode;

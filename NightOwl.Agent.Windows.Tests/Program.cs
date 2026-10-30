@@ -11,6 +11,8 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--operational-actions-only", StringComparer.Ordinal)) { await OperationalActionTests.RunAsync(); return; }
+    if (args.Contains("--operational-actions-e2e", StringComparer.Ordinal)) { await JobRuntimeTests.ProtocolE2E(operationalActions: true); return; }
     if (args.Contains("--installer-config-contract", StringComparer.Ordinal))
     {
         AgentConfig config = ConfigService.DeserializeExistingConfig(Console.In.ReadToEnd());

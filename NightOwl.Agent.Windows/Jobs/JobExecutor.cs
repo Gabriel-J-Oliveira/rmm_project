@@ -15,14 +15,16 @@ public sealed class JobExecutor
     private readonly JsonlLogger _logger;
     private readonly JobExecutionPolicy _policy;
     private readonly TelemetryConfigurationService? _telemetryConfiguration;
+    private readonly OperationalActions _operationalActions;
 
     public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger, JobExecutionPolicy policy,
-        TelemetryConfigurationService? telemetryConfiguration = null)
+        TelemetryConfigurationService? telemetryConfiguration = null, OperationalActions? operationalActions = null)
     {
         _collector = collector;
         _logger = logger;
         _policy = policy;
         _telemetryConfiguration = telemetryConfiguration;
+        _operationalActions = operationalActions ?? new OperationalActions();
     }
 
     public async Task<JobExecutionResult> ExecuteAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
@@ -107,6 +109,7 @@ public sealed class JobExecutor
 
             object result = job.Type switch
             {
+                "operational_action" => await RunCollectionAsync("operational_action", () => _operationalActions.Execute(config, job, jobToken), jobToken),
                 "force_inventory" => await RunCollectionAsync("inventory", () => _collector.BuildCollectPayload(config), jobToken),
                 "collect_disks" => new { disks = await RunCollectionAsync("disks", _collector.GetDisks, jobToken), collected_at = DateTimeOffset.UtcNow },
                 "collect_software" => new { installed_software = await RunCollectionAsync("software", _collector.GetSoftware, jobToken), collected_at = DateTimeOffset.UtcNow },
@@ -154,7 +157,7 @@ public sealed class JobExecutor
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
             stopwatch.Stop();
-            JobExecutionResult timedOut = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.TimedOut, JobErrorCodes.JobTimeout, "Job timed out.", ex.ToString());
+            JobExecutionResult timedOut = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.TimedOut, JobErrorCodes.JobTimeout, "Job timed out.", job.Type == "operational_action" ? "action_timeout" : ex.ToString());
             _policy.MarkFinal(config, job, timedOut, JobErrorCodes.JobTimeout);
             await _logger.LogAsync("job.timed_out", "Job timed out.", BuildJobLog(job, timedOut.Status, JobErrorCodes.JobTimeout, timedOut.DurationSeconds, decision.TimeoutSeconds), CancellationToken.None, "error");
             return timedOut;
@@ -162,7 +165,7 @@ public sealed class JobExecutor
         catch (Exception ex)
         {
             stopwatch.Stop();
-            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobExecutionFailed, ex.Message, ex.ToString());
+            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobExecutionFailed, ex.Message, job.Type == "operational_action" ? ex.Message : ex.ToString());
             _policy.MarkFinal(config, job, failed, JobErrorCodes.JobExecutionFailed);
             await _logger.LogAsync("job.failed", ex.Message, BuildJobLog(job, failed.Status, JobErrorCodes.JobExecutionFailed, failed.DurationSeconds, decision.TimeoutSeconds), ct, "error");
             return failed;

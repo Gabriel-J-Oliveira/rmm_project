@@ -1262,6 +1262,21 @@ class AgentJobsPullView(APIView):
         jobs = list(candidates.select_for_update().order_by('queued_at')[:5])
         response_jobs = []
         for job in jobs:
+            if job.job_type == 'operational_action':
+                from .operational_actions import validate_dispatch
+                try:
+                    if not protocol_v2:
+                        raise ValueError('action_requires_jobs_v2')
+                    validate_dispatch(job)
+                except (PermissionError, ValueError):
+                    job.status = AgentJob.STATUS_CANCELLED
+                    job.error_code = 'ACTION_AUTHORIZATION_REVOKED'
+                    job.finished_at = now
+                    job.save(update_fields=['status', 'error_code', 'finished_at', 'updated_at'])
+                    create_audit_event(event_type='job.cancelled', title='Acao operacional bloqueada',
+                        description='Autorizacao, capacidade ou contrato invalido.', endpoint=machine,
+                        actor_type=AuditEvent.ACTOR_SYSTEM, actor_name='Sistema', metadata={'job_id': str(job.pk)})
+                    continue
             if not protocol_v2 and hasattr(job,'automation_occurrence'):
                 continue
             from .automation import validate_scheduled_dispatch
@@ -1561,6 +1576,12 @@ class AgentJobsResultView(APIView):
                     )
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
+            if job.job_type == 'operational_action' and incoming_status == AgentJob.STATUS_COMPLETED:
+                from .operational_actions import validate_completion
+                try:
+                    validate_completion(job, _payload_result(payload))
+                except ValueError:
+                    return Response({'error': 'action_confirmation_invalid'}, status=400)
             if job.job_type in ('collect_services','install_software') and incoming_status==AgentJob.STATUS_COMPLETED:
                 from .internal_jobs import validate_internal_completion
                 try:

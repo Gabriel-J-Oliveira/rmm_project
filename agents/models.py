@@ -1532,6 +1532,7 @@ class AgentJob(models.Model):
     TYPE_CONFIGURE_TELEMETRY = 'configure_telemetry'
     TYPE_COLLECT_SERVICES = 'collect_services'
     TYPE_INSTALL_SOFTWARE = 'install_software'
+    TYPE_OPERATIONAL_ACTION = 'operational_action'
     TYPE_CHOICES = [
         (TYPE_FORCE_INVENTORY, 'Force inventory'),
         (TYPE_COLLECT_DISKS, 'Collect disks'),
@@ -1548,6 +1549,7 @@ class AgentJob(models.Model):
         (TYPE_CONFIGURE_TELEMETRY, 'Configure telemetry'),
         (TYPE_COLLECT_SERVICES, 'Collect services (internal)'),
         (TYPE_INSTALL_SOFTWARE, 'Install approved software (internal)'),
+        (TYPE_OPERATIONAL_ACTION, 'Approved operational action'),
     ]
 
     STATUS_QUEUED = 'queued'

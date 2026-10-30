@@ -17,8 +17,10 @@ from .views import (
 from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, EndpointTelemetryView
 from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
 from .job_control import AgentJobSignalView, AgentJobStartedView
+from .operational_actions import OperationalActionView
 
 urlpatterns = [
+    path('operational-actions/<uuid:endpoint_id>/', OperationalActionView.as_view(), name='operational-action-create'),
     path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),
     path('jobs/<uuid:job_id>/started/', AgentJobStartedView.as_view(), name='agent-jobs-started'),
     path('telemetry/control/', LiveAgentControlView.as_view(), name='agent-telemetry-control'),

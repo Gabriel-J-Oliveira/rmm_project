@@ -16,6 +16,7 @@ public sealed class JobExecutionPolicy
         "ping",
         "collect_services",
         "install_software",
+        "operational_action",
         "force_inventory",
         "collect_disks",
         "collect_software",
@@ -93,6 +94,7 @@ public sealed class JobExecutionPolicy
 
         try
         {
+            if (job.Type == "operational_action") OperationalActions.Validate(config, job);
             ValidateParameters(job);
         }
         catch (Exception ex)
@@ -132,7 +134,8 @@ public sealed class JobExecutionPolicy
         TimeSpan fallback = GetDefaultTimeout(job.Type);
         int requested = job.TimeoutSeconds <= 0 ? (int)fallback.TotalSeconds : job.TimeoutSeconds;
         int min = 5;
-        int max = job.Type.Equals("windows_update_scan", StringComparison.OrdinalIgnoreCase) ? 900 :
+        int max = job.Type.Equals("operational_action", StringComparison.OrdinalIgnoreCase) ? OperationalActions.MaxTimeoutSeconds :
+            job.Type.Equals("windows_update_scan", StringComparison.OrdinalIgnoreCase) ? 900 :
             job.Type.Equals("force_inventory", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("collect_software", StringComparison.OrdinalIgnoreCase) ? 300 :
             job.Type.Equals("collect_logs", StringComparison.OrdinalIgnoreCase) ? 180 :
             job.Type.Equals("restart_agent", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("update_agent", StringComparison.OrdinalIgnoreCase) ? 60 :
@@ -144,6 +147,7 @@ public sealed class JobExecutionPolicy
 
     public static TimeSpan GetDefaultTimeout(string jobType) => jobType switch
     {
+        "operational_action" => TimeSpan.FromSeconds(OperationalActions.MaxTimeoutSeconds),
         "ping" => TimeSpan.FromSeconds(30),
         "force_inventory" => TimeSpan.FromSeconds(300),
         "collect_software" => TimeSpan.FromSeconds(300),
@@ -161,6 +165,9 @@ public sealed class JobExecutionPolicy
         Dictionary<string, object?> p = job.Payload;
         switch (job.Type)
         {
+            case "operational_action":
+                // Full envelope and local permissions were checked by OperationalActions.Validate.
+                break;
             case "collect_services":
                 EnsureAllowedFields(p, "names", "limit", "include_details");
                 if (StrictInt(p,"limit",50) is < 1 or > 100) throw new InvalidOperationException("Invalid service limit.");

@@ -59,6 +59,12 @@ class AgentJobStartedView(APIView):
         if job.status not in (AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING):
             return Response({'error': 'job_not_startable'}, status=409)
         now = timezone.now()
+        if job.job_type == 'operational_action':
+            from .operational_actions import validate_dispatch
+            try:
+                validate_dispatch(job)
+            except (PermissionError, ValueError):
+                return Response({'error': 'action_authorization_revoked'}, status=409)
         from .automation import validate_scheduled_dispatch
         try:
             validate_scheduled_dispatch(job)

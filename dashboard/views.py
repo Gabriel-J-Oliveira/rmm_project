@@ -3926,7 +3926,7 @@ def endpoint_job_create(request, pk):
         'configure_telemetry': AgentJob.TYPE_CONFIGURE_TELEMETRY,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
-    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES} - {'collect_services', 'install_software'}
+    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES} - {'collect_services', 'install_software', 'operational_action'}
     if selected_type not in allowed_types:
         return JsonResponse(
             {

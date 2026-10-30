@@ -432,6 +432,7 @@ public sealed class JobExecutionCoordinator
             return JobCategories.Light;
         }
         if (jobType.Equals("configure_telemetry", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("operational_action", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("install_software", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
@@ -447,6 +448,7 @@ public sealed class JobExecutionCoordinator
     public static bool IsCritical(string jobType)
     {
         return jobType.Equals("configure_telemetry", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("operational_action", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("install_software", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)

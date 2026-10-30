@@ -380,3 +380,6 @@ NIGHTOWL_TELEMETRY_RETENTION_DAYS = {
     300: env.int('NIGHTOWL_TELEMETRY_RETENTION_5M_DAYS', default=30),
     3600: env.int('NIGHTOWL_TELEMETRY_RETENTION_1H_DAYS', default=90),
 }
+
+# Closed operational catalog, explicitly opt-in on both backend and agent.
+NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED = env.bool('NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', default=False)

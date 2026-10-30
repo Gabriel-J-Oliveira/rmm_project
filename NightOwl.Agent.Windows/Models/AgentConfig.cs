@@ -112,6 +112,12 @@ public sealed class AgentConfig
     [JsonIgnore]
     public string MachineIdSource { get; set; } = "";
 
+    // Both the job type and individual action must be explicitly enabled locally.
+    [JsonPropertyName("operationalActionsEnabled")]
+    public bool OperationalActionsEnabled { get; set; } = false;
+    [JsonPropertyName("allowedOperationalActions")]
+    public List<string> AllowedOperationalActions { get; set; } = new();
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
 
