@@ -26,7 +26,8 @@ public sealed class OperationalActions
         new ReadOnlyDictionary<string, OperationalActionDefinition>(new Dictionary<string, OperationalActionDefinition>(StringComparer.Ordinal)
         {
             ["flush_dns"] = new("flush_dns", 1, true, Array.Empty<string>()),
-            ["query_service"] = new("query_service", 1, false, Array.AsReadOnly(new[] { "service_name" }))
+            ["query_service"] = new("query_service", 1, false, Array.AsReadOnly(new[] { "service_name" })),
+            ["run_approved_script"] = new("run_approved_script", 1, false, Array.AsReadOnly(new[] { "script_id", "script_version", "sha256", "parameters" }))
         });
     private readonly IOperationalActionNative _native;
     public OperationalActions(IOperationalActionNative? native = null) => _native = native ?? new WindowsOperationalActionNative();
@@ -54,17 +55,22 @@ public sealed class OperationalActions
                 throw new InvalidOperationException("invalid_service_name");
             name = field.GetString();
         }
+        if (action == "run_approved_script") ApprovedScripts.Validate(config, parameters);
         return new(action, v, name);
     }
 
     public static IEnumerable<string> Capabilities(AgentConfig config) =>
         config.OperationalActionsEnabled && config.AllowedJobTypes.Contains("operational_action", StringComparer.Ordinal)
-            ? Catalog.Values.Where(x => config.AllowedOperationalActions.Contains(x.Id, StringComparer.Ordinal))
-                .Select(x => $"operational_action:{x.Id}:{x.Version}") : Array.Empty<string>();
+            ? Catalog.Values.Where(x => config.AllowedOperationalActions.Contains(x.Id, StringComparer.Ordinal) &&
+                    (x.Id != "run_approved_script" || ApprovedScripts.Enabled(config)))
+                .Select(x => $"operational_action:{x.Id}:{x.Version}")
+                .Concat(config.AllowedOperationalActions.Contains("run_approved_script", StringComparer.Ordinal) && ApprovedScripts.Enabled(config)
+                    ? new[] { ApprovedScripts.Capability } : Array.Empty<string>()) : Array.Empty<string>();
 
     public object Execute(AgentConfig config, AgentJobRequest job, CancellationToken ct)
     {
         var request = Validate(config, job);
+        if (request.Id == "run_approved_script") throw new InvalidOperationException("script_requires_async_executor");
         ct.ThrowIfCancellationRequested();
         try
         {

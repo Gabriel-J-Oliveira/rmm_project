@@ -178,7 +178,7 @@ internal static class JobRuntimeTests
     }
     private static async Task Until(Func<bool> predicate,int seconds)
     {using CancellationTokenSource timeout=new(TimeSpan.FromSeconds(seconds));while(!predicate())await Task.Delay(50,timeout.Token);}
-    internal static async Task ProtocolE2E(bool operationalActions = false)
+    internal static async Task ProtocolE2E(bool operationalActions = false, bool approvedScripts = false)
     {
         string root=Path.Combine(Path.GetTempPath(),"nightowl-jobs-e2e-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -187,11 +187,17 @@ internal static class JobRuntimeTests
         try
         {
             AgentConfig config=Config(root);
-            if (operationalActions)
+            if (operationalActions || approvedScripts)
             {
                 config.OperationalActionsEnabled = true;
                 config.AllowedJobTypes.Add("operational_action");
                 config.AllowedOperationalActions.Add("query_service");
+            }
+            if (approvedScripts)
+            {
+                config.AllowedOperationalActions.Add("run_approved_script");
+                config.ApprovedScriptsEnabled = true;
+                config.AllowedScriptVersions.Add("environment_diagnostic:1");
             }
             config.AgentToken=Environment.GetEnvironmentVariable("NIGHTOWL_TEST_TOKEN")!;
             config.MachineId=Environment.GetEnvironmentVariable("NIGHTOWL_TEST_MACHINE")!;

@@ -20,6 +20,7 @@ from .services import create_audit_event
 CATALOG = MappingProxyType({
     'flush_dns': (1, 'agents.change_agentmachine', {}),
     'query_service': (1, 'agents.view_agentmachine', {'service_name': r'[A-Za-z0-9_.-]{1,256}'}),
+    'run_approved_script': (1, 'agents.view_agentmachine', None),
 })
 TIMEOUT_SECONDS = 15
 
@@ -34,6 +35,9 @@ def validate_payload(payload):
     if type(payload['action_version']) is not int or payload['action_version'] != version:
         raise ValueError('unsupported_action_version')
     params = payload['parameters']
+    if action == 'run_approved_script':
+        from .script_library import validate_reference
+        return {'action_id': action, 'action_version': version, 'parameters': validate_reference(params)}
     if not isinstance(params, dict) or set(params) != set(schema):
         raise ValueError('invalid_action_parameters')
     for name, pattern in schema.items():
@@ -61,6 +65,9 @@ def validate_dispatch(job):
         raise ValueError('action_capability_unconfirmed')
     if job.timeout_seconds is None or not 5 <= job.timeout_seconds <= TIMEOUT_SECONDS:
         raise ValueError('invalid_action_timeout')
+    if payload['action_id'] == 'run_approved_script':
+        from .script_library import validate_dispatch as validate_script_dispatch
+        validate_script_dispatch(job, payload['parameters'])
 
 
 @transaction.atomic
@@ -82,6 +89,18 @@ def create_action_job(operator, endpoint_id, payload):
 
 
 def validate_completion(job, result):
+    if not isinstance(job.payload, dict):
+        raise ValueError('invalid_action_envelope')
+    # A revoked script cannot start again, but its final evidence must still ACK.
+    if job.payload.get('action_id') == 'run_approved_script':
+        from .script_library import validate_completion as validate_script_completion
+        if (set(job.payload) != {'action_id', 'action_version', 'parameters'}
+                or type(job.payload['action_version']) is not int or job.payload['action_version'] != 1):
+            raise ValueError('invalid_action_envelope')
+        if not isinstance(result, dict) or result.get('machine_id') != job.endpoint.machine_id or result.get('output_truncated'):
+            raise ValueError('invalid_action_confirmation')
+        validate_script_completion(job.payload['parameters'], result.get('output'))
+        return
     payload = validate_payload(job.payload)
     if not isinstance(result, dict) or result.get('machine_id') != job.endpoint.machine_id or result.get('output_truncated'):
         raise ValueError('invalid_action_confirmation')

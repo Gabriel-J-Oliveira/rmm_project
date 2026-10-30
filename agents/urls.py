@@ -18,8 +18,10 @@ from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, E
 from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
 from .job_control import AgentJobSignalView, AgentJobStartedView
 from .operational_actions import OperationalActionView
+from .script_library import ApprovedScriptCatalogView
 
 urlpatterns = [
+    path('approved-scripts/', ApprovedScriptCatalogView.as_view(), name='approved-script-catalog'),
     path('operational-actions/<uuid:endpoint_id>/', OperationalActionView.as_view(), name='operational-action-create'),
     path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),
     path('jobs/<uuid:job_id>/started/', AgentJobStartedView.as_view(), name='agent-jobs-started'),

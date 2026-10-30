@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj" />
+    <EmbeddedResource Include="..\agents\approved_scripts\environment_diagnostic_v1.ps1" LogicalName="NightOwl.ApprovedScripts.environment_diagnostic_v1.ps1" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,11 +1,101 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Diagnostics;
 
 namespace NightOwl.Agent.Windows.Jobs;
 
 internal static class OwnedProcess
 {
+    internal sealed record Capture(int ExitCode, string Stdout, string Stderr, bool OutputLimitReached);
+
+    // No script input is sent until the process belongs to a kill-on-close, single-process job.
+    internal static async Task<Capture> CaptureAsync(string executable, IReadOnlyList<string> arguments,
+        string input, int maxOutputBytes, CancellationToken ct)
+    {
+        if (maxOutputBytes is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(maxOutputBytes));
+        ct.ThrowIfCancellationRequested();
+        nint job = CreateJobObject(0, null);
+        if (job == 0) throw new Win32Exception();
+        using Process process = new();
+        bool started = false;
+        try
+        {
+            ExtendedLimits limits = new() { Basic = new BasicLimits { LimitFlags = 0x2008, ActiveLimit = 1 } };
+            if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>())) throw new Win32Exception();
+            process.StartInfo = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            };
+            foreach (string arg in arguments) process.StartInfo.ArgumentList.Add(arg);
+            process.StartInfo.Environment.Clear();
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            process.StartInfo.Environment["SystemRoot"] = windows;
+            process.StartInfo.Environment["WINDIR"] = windows;
+            process.StartInfo.Environment["SystemDrive"] = Path.GetPathRoot(windows)!.TrimEnd('\\');
+            process.StartInfo.Environment["ProgramData"] = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            foreach (string name in new[] { "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP" })
+                if (Environment.GetEnvironmentVariable(name) is { Length: > 0 } value)
+                    process.StartInfo.Environment[name] = value;
+            process.StartInfo.Environment["PSModulePath"] = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "Modules");
+            if (!process.Start()) throw new InvalidOperationException();
+            started = true;
+            if (!AssignProcessToJobObject(job, process.Handle)) throw new Win32Exception();
+            using var cancelled = ct.Register(() => TerminateJobObject(job, 1));
+            int totalBytes = 0;
+            int overflow = 0;
+            async Task<string> Drain(StreamReader reader)
+            {
+                StringBuilder text = new();
+                char[] buffer = new char[256];
+                int count;
+                while ((count = await reader.ReadAsync(buffer.AsMemory())) > 0)
+                {
+                    if (Interlocked.Add(ref totalBytes, Encoding.UTF8.GetByteCount(buffer.AsSpan(0, count))) > maxOutputBytes)
+                    {
+                        Interlocked.Exchange(ref overflow, 1);
+                        TerminateJobObject(job, 1);
+                    }
+                    else text.Append(buffer, 0, count);
+                }
+                return text.ToString();
+            }
+            Task<string> stdout = Drain(process.StandardOutput), stderr = Drain(process.StandardError);
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                await process.StandardInput.WriteAsync(input.AsMemory(), ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (IOException) when (process.HasExited || ct.IsCancellationRequested) { }
+            finally
+            {
+                try { process.StandardInput.Close(); }
+                catch (IOException) when (process.HasExited || ct.IsCancellationRequested) { }
+            }
+            await process.WaitForExitAsync(CancellationToken.None);
+            string output = await stdout, error = await stderr;
+            ct.ThrowIfCancellationRequested();
+            return new(process.ExitCode, output, error, overflow != 0);
+        }
+        finally
+        {
+            try
+            {
+                TerminateJobObject(job, 1);
+                if (started && !process.HasExited)
+                {
+                    // Also cover failure to assign the job; never leave an unowned PowerShell alive.
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync(CancellationToken.None);
+                }
+            }
+            finally { CloseHandle(job); }
+        }
+    }
+
     // Suspended creation closes the race between child creation and job assignment.
     internal static async Task<int> RunAsync(string executable, string arguments, CancellationToken ct)
     {

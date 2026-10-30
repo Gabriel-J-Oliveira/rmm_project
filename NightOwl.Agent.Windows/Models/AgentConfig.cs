@@ -118,6 +118,11 @@ public sealed class AgentConfig
     [JsonPropertyName("allowedOperationalActions")]
     public List<string> AllowedOperationalActions { get; set; } = new();
 
+    [JsonPropertyName("approvedScriptsEnabled")]
+    public bool ApprovedScriptsEnabled { get; set; } = false;
+    [JsonPropertyName("allowedScriptVersions")]
+    public List<string> AllowedScriptVersions { get; set; } = new();
+
     [JsonExtensionData]
     public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
 

@@ -31,6 +31,8 @@ if env_file.exists():
 PUBLIC_NIGHTOWL_URL = 'https://nightowl.controlsul.com.br'
 PUBLIC_NIGHTOWL_HOST = 'nightowl.controlsul.com.br'
 NIGHTOWL_JOB_AUTOMATIONS_ENABLED = env.bool('NIGHTOWL_JOB_AUTOMATIONS_ENABLED', default=False)
+NIGHTOWL_APPROVED_SCRIPTS_ENABLED = env.bool('NIGHTOWL_APPROVED_SCRIPTS_ENABLED', default=False)
+NIGHTOWL_REVOKED_SCRIPT_VERSIONS = env.list('NIGHTOWL_REVOKED_SCRIPT_VERSIONS', default=[])
 
 
 def clean_env_list(name, default=None):

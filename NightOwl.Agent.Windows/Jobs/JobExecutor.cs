@@ -107,7 +107,10 @@ public sealed class JobExecutor
                 return uninstallResult;
             }
 
-            object result = job.Type switch
+            ApprovedScriptExecution? script = null;
+            if (job.Type == "operational_action" && OperationalActions.Validate(config, job).Id == "run_approved_script")
+                script = await ApprovedScripts.ExecuteAsync(config, job, jobToken);
+            object result = script?.Output ?? (job.Type switch
             {
                 "operational_action" => await RunCollectionAsync("operational_action", () => _operationalActions.Execute(config, job, jobToken), jobToken),
                 "force_inventory" => await RunCollectionAsync("inventory", () => _collector.BuildCollectPayload(config), jobToken),
@@ -122,7 +125,7 @@ public sealed class JobExecutor
                     GetPayloadInt(job,"limit",50),GetPayloadBool(job,"include_details",false)), jobToken),
                 "install_software" => await new SoftwareInstallation().InstallAsync(config,GetPayloadString(job,"package_id",""),jobToken),
                 _ => throw new NotSupportedException("unsupported_job_type")
-            };
+            });
 
             stopwatch.Stop();
             JobExecutionResult completed = new()
@@ -133,7 +136,8 @@ public sealed class JobExecutor
                 FinishedAt = DateTimeOffset.UtcNow,
                 DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
                 ExitCode = 0,
-                Stdout = "ok",
+                Stdout = script?.Stdout ?? "ok",
+                Stderr = script?.Stderr ?? "",
                 Result = result
             };
             completed = LimitResult(config, job, completed);
@@ -161,6 +165,17 @@ public sealed class JobExecutor
             _policy.MarkFinal(config, job, timedOut, JobErrorCodes.JobTimeout);
             await _logger.LogAsync("job.timed_out", "Job timed out.", BuildJobLog(job, timedOut.Status, JobErrorCodes.JobTimeout, timedOut.DurationSeconds, decision.TimeoutSeconds), CancellationToken.None, "error");
             return timedOut;
+        }
+        catch (ScriptExecutionFailure ex)
+        {
+            stopwatch.Stop();
+            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed,
+                ex.Message, "Approved script failed.", ex.Message);
+            failed.ExitCode = ex.ExitCode;
+            _policy.MarkFinal(config, job, failed, ex.Message);
+            await _logger.LogAsync("job.failed", "Approved script failed.",
+                BuildJobLog(job, failed.Status, ex.Message, failed.DurationSeconds, decision.TimeoutSeconds), CancellationToken.None, "error");
+            return failed;
         }
         catch (Exception ex)
         {
