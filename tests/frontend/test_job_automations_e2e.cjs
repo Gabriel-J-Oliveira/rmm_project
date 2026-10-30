@@ -44,7 +44,13 @@ let phase='initialization';
         await row.getByRole('button',{name:'Reativar',exact:true}).click();
         await page.waitForFunction(()=>!document.querySelector('[data-automation-definitions]').textContent.includes('Pausada'));
         phase='edit';
+        const previousRow=await row.elementHandle();
         await row.getByRole('button',{name:'Editar',exact:true}).click();
+        // Editing triggers a definitions refresh. Wait for that operation to finish
+        // replacing the row before submitting, rather than racing the UI's busy guard.
+        await previousRow.waitForElementState('hidden');
+        assert(await form.locator('[name="id"]').inputValue(),'Edit must select a persisted definition');
+        assert.equal(await form.locator('[name="revision"]').inputValue(),'1');
         await form.locator('[name="name"]').fill('Reviewed synthetic automation');
         await form.locator('button[type="submit"]').click();
         await panel.locator('[data-automation-definitions]').getByText('Reviewed synthetic automation / r2',{exact:true}).waitFor();

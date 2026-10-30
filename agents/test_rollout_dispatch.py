@@ -337,6 +337,11 @@ class PostgreSQLDispatchTests(TransactionTestCase):
             self.assertEqual(AgentJob.objects.count(), 0 if manual_first else 1)
 
     def test_migration_reverse_before_and_after_dispatch(self):
+        latest_targets = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        def restore_schema():
+            MigrationExecutor(connection).migrate(latest_targets)
+            self.assertIn('agents_telemetrylivesession', connection.introspection.table_names())
+        self.addCleanup(restore_schema)
         c = self.create()
         before = list(AgentMachine.objects.values())
         MigrationExecutor(connection).migrate([('agents', '0031_agentrolloutcampaign_agentrolloutwave_and_more')])

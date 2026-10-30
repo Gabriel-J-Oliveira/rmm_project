@@ -767,6 +767,11 @@ class PostgreSQLRolloutGovernanceTests(TransactionTestCase):
         self.assertEqual(AuditEvent.objects.filter(event_type='rollout.campaign_completed').count(), 1)
 
     def test_migration_0033_backfill_guards_reverse_and_reapply(self):
+        latest_targets = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        def restore_schema():
+            MigrationExecutor(connection).migrate(latest_targets)
+            self.assertIn('agents_telemetrylivesession', connection.introspection.table_names())
+        self.addCleanup(restore_schema)
         campaign = self.create(ready=False)
         campaign_id = campaign.pk
 
