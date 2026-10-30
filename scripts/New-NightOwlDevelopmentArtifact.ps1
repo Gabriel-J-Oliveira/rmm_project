@@ -1,8 +1,10 @@
 # Local inspection artifact only. This is NOT the release builder and cannot publish/sign/install.
+param([string]$SourceRoot = '')
 $ErrorActionPreference = 'Stop'
-$repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$toolRepo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$repo = if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $toolRepo } else { (Resolve-Path -LiteralPath $SourceRoot).Path }
 $id = [datetime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + [guid]::NewGuid().ToString('N')
-$output = Join-Path $repo ('artifacts/rc46-development/' + $id)
+$output = Join-Path $toolRepo ('artifacts/rc46-development/' + $id)
 $publish = Join-Path $output 'build-output'
 $payload = Join-Path $output 'payload'
 [IO.Directory]::CreateDirectory($payload) | Out-Null
