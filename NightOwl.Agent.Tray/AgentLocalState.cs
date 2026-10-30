@@ -19,6 +19,22 @@ internal sealed class AgentLocalState
     public static AgentLocalState Load()
     {
         NightOwlPaths paths = NightOwlPaths.Current;
+        using (JsonDocument? snapshot = ReadJson(TrayRuntimeStatus.PathFor(paths)))
+        {
+            if (snapshot?.RootElement is JsonElement projected && projected.ValueKind == JsonValueKind.Object
+                && projected.TryGetProperty("schemaVersion", out JsonElement schema) && schema.ValueKind == JsonValueKind.Number
+                && schema.TryGetInt32(out int versionNumber) && versionNumber == 1)
+            {
+                return new AgentLocalState
+                {
+                    MachineId = GetString(projected, "machineId", ""), EndpointId = GetString(projected, "endpointId", ""), AgentVersion = GetString(projected, "agentVersion", ""),
+                    ServerBaseUrl = GetString(projected, "serverBaseUrl", NightOwlPaths.DefaultServerUrl),
+                    InstallPath = GetString(projected, "installPath", paths.InstallDir),
+                    LogPath = GetString(projected, "logPath", paths.AgentLogPath),
+                    LastHeartbeatAt = GetDate(projected, "lastHeartbeatAt")
+                };
+            }
+        }
         string installPath = paths.InstallDir;
         string configPath = paths.ResolveConfigPath();
         string statePath = paths.StatePath;
@@ -95,7 +111,11 @@ internal sealed class AgentLocalState
             }
 
             using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            return JsonDocument.Parse(stream);
+            long length = stream.Length;
+            if (length > 1024 * 1024) return null;
+            byte[] snapshot = new byte[(int)length];
+            int read = stream.ReadAtLeast(snapshot, snapshot.Length, throwOnEndOfStream: false);
+            return JsonDocument.Parse(snapshot.AsMemory(0, read));
         }
         catch
         {

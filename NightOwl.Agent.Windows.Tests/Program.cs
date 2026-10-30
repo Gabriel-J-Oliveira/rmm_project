@@ -39,8 +39,9 @@ try
         Console.WriteLine("Repair runner functional tests passed.");
         return;
     }
-    if (args.Contains("--configuration-consolidation-only", StringComparer.Ordinal)) { ConfigurationConsolidationTests.Run(); return; }
+    if (args.Contains("--configuration-consolidation-only", StringComparer.Ordinal)) { ConfigurationConsolidationTests.Run(); await TrayProjectionTests.RunAsync(); return; }
     if (args.Contains("--heartbeat-contract", StringComparer.Ordinal)) { await LightweightHeartbeatTests.EmitHeartbeatContractAsync(); return; }
+    if (args.Contains("--footprint-observation", StringComparer.Ordinal)) { await LightweightHeartbeatTests.EmitHeartbeatContractAsync(observeFootprint: true); return; }
     if (args.Contains("--cleanup-baseline", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: true); return; }
     if (args.Contains("--cleanup-only", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: false); return; }
     if (args.Contains("--jobs-only", StringComparer.Ordinal)) { await JobRuntimeTests.RunAsync(); return; }
@@ -51,6 +52,7 @@ try
     if (args.Contains("--continuous-only", StringComparer.Ordinal)) { await ContinuousTelemetryTests.RunAsync(); return; }
     if (args.Length == 0)
     {
+        await TrayProjectionTests.RunAsync();
         await JobRuntimeTests.RunAsync();
         await ContinuousTelemetryTests.RunAsync();
     }

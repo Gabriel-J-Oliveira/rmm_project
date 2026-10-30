@@ -64,6 +64,24 @@ internal static class LocalFootprintTests
         File.WriteAllText(NightOwlPaths.Current.AgentLogPath,"{\"event_type\":\"heartbeat.sent\",\"timestamp\":\"2026-10-30T12:00:00Z\"}\n"+new string('x',2*1024*1024));
         Check(AgentLocalState.Load().LastHeartbeatAt==DateTimeOffset.Parse("2026-10-30T12:03:00Z"),
             "Truncated log must preserve authoritative heartbeat from state, never invent a newer value.");
+        string publicPath = TrayRuntimeStatus.PathFor(NightOwlPaths.Current);
+        File.WriteAllText(publicPath, System.Text.Json.JsonSerializer.Serialize(new TrayRuntimeStatus
+        {
+            MachineId="public-fixture", AgentVersion="public-version", ServerBaseUrl="https://isolated.invalid/prefix",
+            LastHeartbeatAt=DateTimeOffset.Parse("2026-10-30T12:04:00Z")
+        }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        using (FileStream blockedConfig = new(legacy,FileMode.Open,FileAccess.Read,FileShare.None))
+        {
+            AgentLocalState projected = AgentLocalState.Load();
+            Check(projected.MachineId=="public-fixture"&&projected.ServerBaseUrl=="https://isolated.invalid/prefix"
+                &&projected.LastHeartbeatAt==DateTimeOffset.Parse("2026-10-30T12:04:00Z"),
+                "Tray must use sanitized status without access to protected config/state.");
+        }
+        File.WriteAllText(publicPath,"{\"schemaVersion\":\"invalid\"}");
+        Check(AgentLocalState.Load().MachineId=="synthetic-local","Malformed projection must fall back safely.");
+        File.WriteAllText(publicPath,new string('x',2*1024*1024));
+        Check(AgentLocalState.Load().MachineId=="synthetic-local","Oversized projection must not consume unbounded memory or break fallback.");
+        File.Delete(publicPath);
         Console.WriteLine("PASS Shared/Tray footprint: bounded tail, actual reader, malformed/UTF8/rotation, pending/restart/reconnection, bounded grace, transition-only logging.");
     }
 }

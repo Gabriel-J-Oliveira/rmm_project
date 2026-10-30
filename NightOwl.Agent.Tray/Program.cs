@@ -7,7 +7,8 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        NightOwl.Agent.Shared.NightOwlPaths.Current.Bootstrap("tray", applyAcl: false);
+        // The SYSTEM service/installer owns migrations and protected directories.
+        // Interactive logon must not create identity or require administrative writes.
         using Mutex mutex = new(false, MutexName, out bool createdNew);
         if (!createdNew)
         {
