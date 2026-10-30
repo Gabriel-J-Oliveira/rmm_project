@@ -1,0 +1,10 @@
+<article class="endpoint-terminal" data-terminal-panel data-request-url="{% url 'terminal-session-request' endpoint.pk %}">
+    <header class="terminal-header">
+        <div><h2>Terminal remoto</h2><p>PowerShell com autorização e consentimento local. A sessão não usa privilégios administrativos.</p></div>
+        <div class="terminal-actions"><button type="button" data-terminal-start disabled>Solicitar sessão</button><button type="button" data-terminal-stop disabled>Encerrar</button></div>
+    </header>
+    <form hidden>{% csrf_token %}</form>
+    <div class="terminal-status" role="status" aria-live="polite"><strong data-terminal-state>Aguardando autorização</strong><span data-terminal-identity>Identidade ainda não confirmada</span></div>
+    <div class="terminal-screen" data-terminal-screen aria-label="Terminal PowerShell" hidden></div>
+    <p class="terminal-notice" data-terminal-notice>A abertura depende da aprovação do usuário local. O conteúdo fica apenas nesta sessão e é descartado ao encerrar.</p>
+</article>

@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import secrets
+import re
 from datetime import timedelta
 from ipaddress import ip_address
 
@@ -22,6 +23,7 @@ from .services import create_audit_event
 
 MAX_SESSIONS = 4
 LIFETIME_SECONDS = 300
+CONSENT_SECONDS = 120
 TICKET_SECONDS = 30
 
 
@@ -47,11 +49,15 @@ def require_control(request):
 def audit(session, event, reason=''):
     actor = (AuditEvent.ACTOR_USER if event in ('requested', 'operator_connected', 'cancelled') else
              AuditEvent.ACTOR_AGENT if event == 'agent_connected' else AuditEvent.ACTOR_SYSTEM)
+    metadata = {'session_id': str(session.pk), 'operator_id': session.operator_id, 'mode': session.mode}
+    if event == 'ready' and session.consent_at:
+        metadata.update(consent_to_ready_ms=round((timezone.now()-session.consent_at).total_seconds()*1000, 3),
+            identity_sid=session.identity_sid, integrity=session.identity_integrity, elevated=False)
     create_audit_event(event_type='terminal.' + event, title='Terminal transport ' + event,
         description=reason, endpoint=session.endpoint, actor_type=actor,
         actor_name=session.operator.get_username() if actor == AuditEvent.ACTOR_USER else
             'NightOwlAgent' if actor == AuditEvent.ACTOR_AGENT else 'Sistema',
-        metadata={'session_id': str(session.pk), 'operator_id': session.operator_id, 'mode': session.mode})
+        metadata=metadata)
 
 
 def record_rejection(session_id):
@@ -76,6 +82,8 @@ def validate_session(session):
         raise PermissionError('session_closed')
     if session.expires_at <= timezone.now():
         raise PermissionError('session_expired')
+    if session.status == 'awaiting_consent' and session.consent_deadline <= timezone.now():
+        raise PermissionError('consent_expired')
     authorize(session.operator, session.endpoint)
     validate_mode(session.operator, session.endpoint, session.mode)
     if (session.machine_id != session.endpoint.machine_id or
@@ -118,7 +126,7 @@ def close_session(session_id, reason, status='closed'):
 
 
 @transaction.atomic
-def create_session(operator, endpoint_id, mode='synthetic'):
+def create_session(operator, endpoint_id, mode='synthetic', *, consent_required=False):
     if not enabled():
         raise ValueError('terminal_disabled')
     # Serialize global admission on PostgreSQL; conditional unique constraints also
@@ -137,17 +145,65 @@ def create_session(operator, endpoint_id, mode='synthetic'):
         raise ValueError('session_limit')
     session = TerminalSession(operator=operator, endpoint=endpoint, machine_id=endpoint.machine_id, mode=mode,
         agent_identity=endpoint.agent_token_hash, expires_at=timezone.now() + timedelta(seconds=LIFETIME_SECONDS))
-    ticket = issue_ticket(session, 'operator')
+    if consent_required:
+        session.status = 'awaiting_consent'
+        session.consent_deadline = timezone.now() + timedelta(seconds=CONSENT_SECONDS)
+    ticket = None if consent_required else issue_ticket(session, 'operator')
     session.save()
     audit(session, 'requested')
     audit(session, 'authorized')
-    return connection_info(session, 'operator', ticket)
+    return operator_state(session) if consent_required else connection_info(session, 'operator', ticket)
+
+
+def operator_state(session):
+    return {'session_id': str(session.pk), 'status': session.status, 'mode': session.mode,
+        'execution': session.mode == 'conpty', 'machine_id': session.machine_id, 'operator_id': str(session.operator_id),
+        'expires_at': session.expires_at.isoformat(), 'consent_deadline': session.consent_deadline.isoformat() if session.consent_deadline else None,
+        'identity': {'sid': session.identity_sid, 'windows_session_id': session.windows_session_id,
+            'integrity': session.identity_integrity, 'elevated': False} if session.identity_sid else None}
+
+
+def consent_request(session):
+    return {'session_id': str(session.pk), 'machine_id': session.machine_id, 'operator_id': str(session.operator_id),
+        'operator_name': session.operator.get_username(), 'endpoint_name': session.endpoint.hostname,
+        'expires_at': session.expires_at.isoformat(), 'consent_deadline': session.consent_deadline.isoformat()}
+
+
+def validate_identity(value):
+    if (not isinstance(value, dict) or set(value) != {'sid', 'windows_session_id', 'integrity', 'elevated'} or
+            not isinstance(value.get('sid'), str) or len(value['sid']) > 184 or not re.fullmatch(r'S-1-(?:\d+-){1,14}\d+', value['sid']) or
+            value['sid'] in ('S-1-5-18', 'S-1-5-19', 'S-1-5-20') or value['elevated'] is not False or
+            type(value['windows_session_id']) is not int or not 1 <= value['windows_session_id'] < 2**31 or
+            type(value['integrity']) is not int or not 0 < value['integrity'] <= 8192):
+        raise ValueError('terminal_identity_invalid')
+    return value
+
+
+@transaction.atomic
+def accept_consent(endpoint, session_id, decision, identity=None):
+    session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id, endpoint=endpoint)
+    if session.status == 'awaiting_consent' and (session.expires_at <= timezone.now() or session.consent_deadline <= timezone.now()):
+        return close_session(session.pk, 'consent_expired', 'expired')
+    validate_session(session)
+    if session.status != 'awaiting_consent' or decision not in ('approved', 'denied', 'expired'):
+        raise ValueError('consent_not_pending')
+    if decision != 'approved':
+        return close_session(session.pk, 'consent_' + decision, 'expired' if decision == 'expired' else 'cancelled')
+    identity = validate_identity(identity)
+    session.status, session.consent_at = 'authorized', timezone.now()
+    session.identity_sid = identity['sid']
+    session.windows_session_id, session.identity_integrity = identity['windows_session_id'], identity['integrity']
+    session.save(update_fields=['status', 'consent_at', 'identity_sid', 'windows_session_id', 'identity_integrity'])
+    audit(session, 'consent_approved')
+    return session
 
 
 @transaction.atomic
 def consume_ticket(session_id, role, ticket, owner):
     session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id)
     validate_session(session)
+    if session.status == 'awaiting_consent':
+        raise PermissionError('consent_required')
     if session.transport_owner and session.transport_owner != owner:
         raise PermissionError('wrong_transport_worker')
     digest = hashlib.sha256(ticket.encode()).hexdigest()
@@ -170,13 +226,18 @@ def check_live(session_id):
 
 
 @transaction.atomic
-def mark_ready(session_id):
+def mark_ready(session_id, identity=None):
     session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id)
     validate_session(session)
+    if session.consent_at:
+        validate_identity(identity)
+        if identity != operator_state(session)['identity']:
+            raise PermissionError('consent_identity_changed')
     if session.status != 'ready':
         session.status = 'ready'
         session.save(update_fields=['status'])
         audit(session, 'ready')
+    return operator_state(session)['identity']
 
 
 class PrivateTerminalView(APIView):
@@ -196,7 +257,8 @@ class TerminalOperatorView(PrivateTerminalView):
             if (not isinstance(request.data, dict) or set(request.data) - {'type', 'protocol', 'mode'} or
                     request.data.get('type') != 'request' or type(request.data.get('protocol')) is not int or request.data['protocol'] != 1):
                 raise ValueError('invalid_request')
-            return Response(create_session(request.user, endpoint_id, request.data.get('mode', 'synthetic')), status=201)
+            mode = request.data.get('mode', 'synthetic')
+            return Response(create_session(request.user, endpoint_id, mode, consent_required=mode == 'conpty'), status=201)
         except PermissionError:
             # Record rejection metadata only; never tickets, payloads, or headers.
             create_audit_event(event_type='terminal.rejected', title='Terminal request rejected', description='authorization_denied',
@@ -212,7 +274,7 @@ class TerminalCancelView(TerminalOperatorView):
     def post(self, request, session_id):
         try:
             require_control(request)
-            if request.data != {'type': 'cancel'}:
+            if set(request.data) - {'type', 'csrfmiddlewaretoken'} or request.data.get('type') != 'cancel':
                 raise ValueError('invalid_request')
             session = TerminalSession.objects.get(pk=session_id, operator=request.user)
             close_session(session.pk, 'operator_cancelled', 'cancelled')
@@ -242,6 +304,8 @@ class TerminalAgentPollView(PrivateTerminalView):
             if not session:
                 return Response({'session': None})
             validate_session(session)
+            if session.status == 'awaiting_consent':
+                return Response({'session': None, 'consent_request': consent_request(session)})
             ticket = issue_ticket(session, 'agent')
             session.save(update_fields=['agent_ticket_hash', 'agent_ticket_expires'])
             return Response({'session': connection_info(session, 'agent', ticket)})
@@ -249,3 +313,64 @@ class TerminalAgentPollView(PrivateTerminalView):
             return Response({'error': 'terminal_forbidden'}, status=403)
         except ValueError:
             return Response({'error': 'terminal_disabled_or_invalid'}, status=409)
+
+
+class TerminalOperatorStatusView(TerminalOperatorView):
+    @transaction.atomic
+    def get(self, request, session_id):
+        try:
+            require_control(request)
+            session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id, operator=request.user)
+            if session.status in TerminalSession.ACTIVE:
+                try:
+                    validate_session(session)
+                except PermissionError:
+                    session = close_session(session.pk, 'authorization_or_consent_expired', 'expired')
+            return Response(operator_state(session))
+        except TerminalSession.DoesNotExist:
+            return Response({'error': 'session_not_found'}, status=404)
+        except (ValueError, PermissionError):
+            return Response({'error': 'terminal_unavailable'}, status=403)
+
+
+class TerminalOperatorConnectView(TerminalOperatorView):
+    @transaction.atomic
+    def post(self, request, session_id):
+        try:
+            require_control(request)
+            if request.data != {'type': 'connect', 'protocol': 1} or type(request.data.get('protocol')) is not int:
+                raise ValueError('invalid_connect')
+            session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator','endpoint').get(pk=session_id,operator=request.user)
+            validate_session(session)
+            if session.status not in ('authorized','connecting') or session.operator_ticket_hash:
+                raise ValueError('ticket_already_issued_or_not_authorized')
+            ticket=issue_ticket(session,'operator')
+            session.save(update_fields=['operator_ticket_hash','operator_ticket_expires'])
+            audit(session,'operator_ticket_issued')
+            result=operator_state(session)
+            result.update(connection_info(session,'operator',ticket))
+            return Response(result)
+        except TerminalSession.DoesNotExist:
+            return Response({'error':'session_not_found'},status=404)
+        except (ValueError,PermissionError):
+            return Response({'error':'terminal_connect_rejected'},status=409)
+
+
+class TerminalAgentConsentView(PrivateTerminalView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, session_id):
+        endpoint = authenticate_agent_token(request)
+        try:
+            require_control(request)
+            if (not isinstance(request.data, dict) or set(request.data) - {'machine_id', 'decision', 'identity'} or
+                    request.data.get('machine_id') != endpoint.machine_id):
+                raise ValueError('invalid_consent')
+            validate_runtime_identity(endpoint, request.data)
+            session = accept_consent(endpoint, session_id, request.data.get('decision'), request.data.get('identity'))
+            return Response({'session_id': str(session.pk), 'status': session.status})
+        except TerminalSession.DoesNotExist:
+            return Response({'error': 'session_not_found'}, status=404)
+        except (ValueError, PermissionError):
+            return Response({'error': 'consent_rejected'}, status=409)

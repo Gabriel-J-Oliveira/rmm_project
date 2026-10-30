@@ -1,3 +1,4 @@
+using NightOwl.Agent.Shared;
 using System.Buffers.Binary;
 using System.Net.WebSockets;
 using System.Text;
@@ -9,6 +10,8 @@ namespace NightOwl.Agent.Windows.Services;
 /// <summary>Outbound session transport; real execution requires separate local identity/consent policy.</summary>
 public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logger)
 {
+    public Action<ConPtyObservation>? ObserveSession { get; set; }
+    public Action<string>? ObserveFailure { get; set; }
     public const int MaxDataBytes = 16 * 1024;
     public const int MaxFrameBytes = MaxDataBytes + 9;
 
@@ -16,6 +19,7 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
     {
         if (!config.RemoteTerminalTransportEnabled || !config.HasValidToken) return;
         int failures = 0;
+        Guid? consentSession = null;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -23,13 +27,32 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 budget.CancelAfter(TimeSpan.FromSeconds(5));
                 JsonElement response = await api.TerminalPollAsync(config, budget.Token);
+                if (response.TryGetProperty("consent_request", out var proposal))
+                {
+                    consentSession = Guid.Parse(proposal.GetProperty("session_id").GetString()!);
+                    if (!await new TerminalConsentCoordinator(api).RequestAsync(config, proposal, ct)) consentSession = null;
+                    else
+                    {
+                        using var opening = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        opening.CancelAfter(TimeSpan.FromSeconds(5));
+                        response = await api.TerminalPollAsync(config, opening.Token);
+                    }
+                }
                 if (response.GetProperty("session").ValueKind != JsonValueKind.Null)
-                    await ConnectAsync(config, response.GetProperty("session"), ct);
+                {
+                    try { await ConnectAsync(config, response.GetProperty("session"), ct); }
+                    finally { TerminalConsentCoordinator.Clear(consentSession); consentSession = null; }
+                }
                 failures = 0;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-            catch (Exception)
+            catch (Exception failure)
             {
+                string category = failure is AgentApiException apiError ? "http_" + apiError.StatusCodeValue :
+                    failure is InvalidOperationException or InvalidDataException && System.Text.RegularExpressions.Regex.IsMatch(failure.Message, "^terminal_[a-z_]{1,80}$") ?
+                    failure.Message : failure.GetType().Name;
+                try { ObserveFailure?.Invoke(category); } catch (Exception) { }
+                TerminalConsentCoordinator.Clear(consentSession); consentSession = null;
                 failures = Math.Min(4, failures + 1);
                 // Never log URLs, credentials, native output, or exception bodies.
                 try { await logger.LogAsync("terminal.transport.unavailable", "Synthetic transport unavailable.",
@@ -40,6 +63,7 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                 TimeSpan.FromMilliseconds(Random.Shared.Next(250)), ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
         }
+        TerminalConsentCoordinator.Clear(consentSession);
     }
 
     public static Uri ValidateConnection(AgentConfig config, JsonElement session)
@@ -156,7 +180,9 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                         await SendControl(socket, new { type = "error", code = identityFailure ? "identity_or_consent_required" : "conpty_start_failed" }, lifetime.Token, sendGate);
                         return;
                     }
-                    await SendControl(socket, new { type = "process_ready", mode = "conpty", execution = true, non_system = true }, lifetime.Token, sendGate);
+                    await SendControl(socket, new { type = "process_ready", mode = "conpty", execution = true, non_system = true,
+                        identity = new { sid = terminal.Identity.Sid, windows_session_id = terminal.Identity.SessionId,
+                            integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated } }, lifetime.Token, sendGate);
                     break;
                 case "ready":
                     if (ready || message.GetProperty("mode").GetString() != (real ? "conpty" : "synthetic") ||
@@ -211,7 +237,11 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
         finally
         {
             lifetime.Cancel();
-            if (terminal is not null) await terminal.DisposeAsync();
+            if (terminal is not null)
+            {
+                await terminal.DisposeAsync();
+                try { ObserveSession?.Invoke(terminal.Observe()); } catch (Exception) { }
+            }
             try { await output; } catch (Exception) { }
         }
     }

@@ -1,7 +1,7 @@
 # DEC-04D — terminal remoto
 
-O registro de D.1 abaixo é histórico. D.2, ao final, acrescenta execução real
-opt-in; os modos e controles de D.1 continuam compatíveis.
+Os registros de D.1/D.2 abaixo são históricos. D.3 acrescenta interface VT e
+consentimento no Tray; o gate operacional continua fechado conforme sua seção.
 
 ## DEC-04D.1 — sessões e transporte (registro histórico)
 
@@ -264,3 +264,102 @@ Arquivos D.2: `ConPtyTerminal.cs`, `TerminalIdentity.cs`,
 `settings.py`, `.env.example` e este documento. Sem push/merge/deploy ou novas
 dependências. Referências técnicas: [ConPTY](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session),
 [CreateProcessAsUser](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessasusera).
+
+## DEC-04D.3 — navegador e consentimento local
+
+Base preservada: `5467d8b` e `7b53075`. A página existente do endpoint ganhou
+painel VT, estados de autorização/consentimento/conexão/erro/encerramento,
+identidade Windows confirmada e botão Encerrar. xterm.js 5.5.0 + addon-fit
+0.10.0 são servidos localmente, com licenças MIT e integridade npm/arquivos
+em `static/vendor/xterm/manifest.json`; não havia biblioteca VT reutilizável.
+Nenhum código executável de CDN é carregado na página com terminal habilitado.
+Sem novas ferramentas, SDKs ou infraestrutura instalados.
+
+Fluxo: POST autorizado cria `awaiting_consent` (até 120 s), sem tickets.
+O agente usa o controle D.1 já existente e projeta somente metadados locais,
+sem bearer/ticket/conteúdo. Tray mostra operador, endpoint, origem, identidade,
+sessão Windows e validade; Negar é o padrão, inclusive Enter/fechar diálogo.
+Permitir emite recibo DPAPI CurrentUser; código de identidade/consentimento
+foi compartilhado com o Tray, mantendo fachada/API do motor D.2.
+
+A projeção exige ACL sem escrita de terceiros e sem reparse points. Serviço
+usa origem SYSTEM/Administradores protegida; host do próprio usuário usa prova
+DPAPI vinculada ao conteúdo e ao SID/sessão configurados. Não se enumera nem
+seleciona usuário conectado. Recibo continua vinculado a operador, endpoint,
+ID remoto, logon LUID e expiração. Remoção/alteração revoga; Tray revoga ao
+sair/logoff e o serviço revalida o mesmo logon Windows durante a execução.
+Os testes de ACL usam apenas DACL de fixture privada, sem SeSecurityPrivilege.
+
+Após aprovação autenticada do agente, o operador obtém seu ticket por **POST
+com CSRF** (`terminal/connect/<id>/`); GET de status nunca emite credencial.
+São aceitas as duas ordens de conexão. `process_ready` deve comprovar a mesma
+identidade aprovada antes de `ready`; entrada anterior continua rejeitada.
+Negação, expiração e revogação não abrem processo. Migração `0044` inclui
+consentimento/identidade e mantém unicidade também enquanto aguarda aprovação.
+APIs internas D.2/sintéticas continuam exigindo seu controle local de identidade.
+
+Bytes interativos usam exclusivamente WS. Consulta HTTP de estado só existe
+durante a autorização/consentimento, não para transportar entrada/saída.
+Fechar página usa cancelamento CSRF via beacon + fechamento WS. Reconexão exige
+novo ID, tickets e consentimento; não há retomada/replay de entrada. Buffers
+JS até 256 KiB, frames até 16 KiB, scrollback zero, geometria até 240×80;
+OSC52/ativação de links não acionam clipboard/navegação. Tela/credenciais são
+descartadas ao encerrar; nada é salvo em storage/transcrição/log. Limites de
+D.1/D.2, tarefas independentes e cadências anteriores foram preservados.
+
+### Validação e medições D.3
+
+Builds Release de Shared/agente/testes/Tray: zero avisos/erros. Modos focados
+`--terminal-consent-only`, `--terminal-transport-only`, `--conpty-only` passaram.
+39 testes Django focados passaram, incluindo consentimento aprovado/negado/
+expirado, isolamento, CSRF, ticket único, ordem agente-primeiro e D.1/D.2.
+Smoke com Chrome já instalado e Node/CDP nativo: **browser, VT, backend e
+ConPTY reais; clique de consentimento simulado pelo teste**, com recibo DPAPI
+real e fixture privada. Validou Unicode/ANSI, resize, saída incremental,
+encerramento manual, segunda sessão com novo consentimento e pagehide com
+limpeza de processos. Não executou sessão corporativa nem clicou no Tray real.
+
+| Rodada final isolada, sem TLS/proxy/internet | Medição |
+|---|---|
+| Digitação→eco visível, 100 amostras | p50 49,70 ms; p95 64,60 ms |
+| Enter→marcador executado/renderizado, 100 amostras | p50 56,55 ms; p95 71,90 ms |
+| Recepção→render aproximado, 771 blocos | p50 13,10 ms; p95 16,50 ms |
+| Comando→marcador no WS sem navegador, 100 amostras | p50 15,595 ms; p95 19,154 ms |
+| Solicitação→autorização | 55 ms, uma amostra; sem percentis |
+| Consentimento→processo confirmado, segunda sessão | 874,504 ms, uma amostra; sem percentis |
+| Descarte da tela / limpeza nativa de 2 sessões | 9,8 ms / 25,089 e 40,250 ms; sem percentis |
+| Sessão principal: CPU acumulada do job / working set PS / pico commit job | 2.812,5 ms / 83,13 MiB / 66,79 MiB |
+
+Instrumentação usa apenas IDs, durações e contagens. Eventos JS distinguem
+recepção/render e entrada→próximo render (este último não prova causalidade de
+um comando); o teste usa marcadores montados por expressão para excluir eco da
+linha. Render usa callbacks VT + RAF; números visuais incluem automação/CDP e
+poll de observação. Não são latência pura da rede nem SLA de pixels/hardware.
+CPU/RAM não incluem todo Chrome/conhost/backend. Rodadas sob carga concorrente
+apresentaram caudas maiores, inclusive sem navegador; a tabela registra rodada
+sem testes paralelos. D.2 registrou ~15,8/21,1 ms no WS: a rodada sem browser
+permaneceu próxima, enquanto a UI acrescenta renderização/automação. Não se
+subtraem percentis nem se extrapola para TLS/internet/produção.
+
+### Gate e encerramento do incremento
+
+`NIGHTOWL_TERMINAL_BROWSER_ENABLED=false` por padrão. Além das flags D.1/D.2,
+`terminalServiceConsentHomologated=false` bloqueia **antes de WTS** o caminho
+SYSTEM→usuário; também impede anunciar a capacidade correspondente. Não foi
+comprovado o fluxo com serviço SYSTEM + Tray real neste ambiente e ele não foi
+habilitado. O fluxo isolado usou o próprio usuário médio, sem elevação.
+
+ASGI de produção continua indisponível; o adaptador stdlib é só de teste. O
+relay requer um único processo/event loop WS. HTTP sticky-cookie sozinho não
+garante que operador e agente cheguem ao mesmo worker. Para múltiplos workers
+seria necessário relay compartilhado com filas/buffers/limites/encerramento
+globais e roteamento por sessão, mantendo consumo atômico de tickets e
+revalidação; não foi instalado Redis/Channels ou criado outro serviço.
+TLS/proxy requer upgrade sem buffering, limites WS, idle timeout compatível,
+certificado confiável e forwarded headers apenas de proxy confiável.
+
+RC46 Pilot ainda exige aprovação manual real no Tray, serviço com token
+restrito/WTS, logoff real, ACLs de instalação, testes TLS/proxy/topologia e
+medidas em condições representativas. **Implementação D.3 encerrada; DEC-04D
+permanece bloqueada para habilitação operacional por esses gates.** Sem push,
+merge, deploy, publicação, Fast Install ou novas ações administrativas.

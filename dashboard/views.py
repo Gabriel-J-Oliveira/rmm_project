@@ -3535,6 +3535,15 @@ def endpoint_detail(request, pk):
         'patch_rows': build_endpoint_patch_rows(endpoint),
         'task_rows': build_endpoint_task_rows(endpoint),
     }
+    from agents.terminal_sessions import authorize as authorize_terminal, validate_mode as validate_terminal_mode, enabled as terminal_enabled
+    context['terminal_available'] = False
+    if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
+        try:
+            authorize_terminal(request.user, endpoint)
+            validate_terminal_mode(request.user, endpoint, 'conpty')
+            context['terminal_available'] = True
+        except (ValueError, PermissionError):
+            pass
     context['endpoint_detail_payload'] = build_endpoint_detail_payload(
         endpoint,
         snapshot,

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using NightOwl.Agent.Windows.Models;
+using NightOwl.Agent.Shared;
 
 namespace NightOwl.Agent.Windows.Services;
 
@@ -96,6 +97,10 @@ public sealed class AgentApiClient
     internal Task<JsonElement> TerminalPollAsync(AgentConfig config, CancellationToken ct) =>
         JobExchange(config, config.ServerBaseUrl.TrimEnd('/') + "/api/agent/terminal/poll/",
             new { machine_id = config.MachineId }, null, ct);
+    internal Task<JsonElement> TerminalConsentAsync(AgentConfig config, Guid id, string decision, TerminalTokenFacts? facts, CancellationToken ct) =>
+        JobExchange(config, config.ServerBaseUrl.TrimEnd('/') + "/api/agent/terminal/consent/" + id.ToString("D") + "/",
+            new { machine_id = config.MachineId, decision, identity = facts is null ? null : new { sid = facts.Sid,
+                windows_session_id = facts.SessionId, integrity = facts.Integrity, elevated = facts.Elevated } }, null, ct);
     internal async Task JobStartedAsync(AgentConfig config,AgentJobRequest job,CancellationToken ct)
     {
         JsonElement ack=await JobExchange(config,config.ServerBaseUrl.TrimEnd('/')+"/api/agent/jobs/"+Guid.Parse(job.Id)+"/started/",

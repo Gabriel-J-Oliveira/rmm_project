@@ -11,6 +11,8 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--terminal-consent-only", StringComparer.Ordinal)) { TerminalConsentTests.Run(); return; }
+    if (args.Contains("--terminal-browser-agent", StringComparer.Ordinal)) { await ConPtyTests.BrowserAgentAsync(); return; }
     if (args.Contains("--conpty-only", StringComparer.Ordinal)) { await ConPtyTests.RunAsync(); return; }
     if (args.Contains("--conpty-e2e", StringComparer.Ordinal)) { await ConPtyTests.E2EAsync(); return; }
     if (args.Contains("--terminal-transport-only", StringComparer.Ordinal)) { await TerminalTransportTests.RunAsync(); return; }

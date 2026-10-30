@@ -1,3 +1,4 @@
+using NightOwl.Agent.Shared;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
@@ -203,6 +204,65 @@ internal static class ConPtyTests
             Console.WriteLine("PASS real ConPTY WebSocket cleanup");
         }
         finally { foreach (string file in new[] { receipt, receipt + ".used" }) if (File.Exists(file)) File.Delete(file); }
+    }
+
+    internal static async Task BrowserAgentAsync()
+    {
+        TerminalConsentTests.SecureFixture(NightOwlPaths.Current.Root);
+        // Isolated smoke: real runtime/PTY, local user's click explicitly simulated by THIS TEST ONLY.
+        AgentConfig config = Config();
+        config.ServerBaseUrl = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_SERVER")!;
+        if (!new Uri(config.ServerBaseUrl).IsLoopback) throw new Exception("Loopback only");
+        config.MachineId = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_MACHINE")!;
+        config.AgentToken = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_TOKEN")!;
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        List<TerminalConsentRequest> approved = new();
+        var approval = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    var request = TerminalConsentRequest.ReadTrusted(NightOwl.Agent.Shared.NightOwlPaths.Current);
+                    if (request.IsPending)
+                    {
+                        lock (approved)
+                        {
+                            if (!approved.Any(value => value.Authorization.SessionId == request.Authorization.SessionId))
+                            {
+                                TerminalUserIdentity.ApproveCurrentUser(request.Policy, request.Authorization, true);
+                                approved.Add(request);
+                                Console.WriteLine("CONSENT_TEST_MODE=simulated-local-click-with-real-dpapi");
+                            }
+                        }
+                    }
+                }
+                catch (IOException) { }
+                await Task.Delay(100, stop.Token);
+            }
+        });
+        try
+        {
+            var transport = new RemoteTerminalTransport(new AgentApiClient(new RealHttp()),
+                new JsonlLogger(Path.Combine(NightOwl.Agent.Shared.NightOwlPaths.Current.LogsDir, "terminal-test-metadata.jsonl")));
+            int sessions = 0;
+            transport.ObserveSession = value => { Console.WriteLine("BROWSER_AGENT_RESOURCE=" + JsonSerializer.Serialize(value)); if (++sessions == 2) stop.Cancel(); };
+            transport.ObserveFailure = code => Console.WriteLine("BROWSER_AGENT_FAILURE_CODE=" + code);
+            await transport.RunAsync(config, stop.Token);
+            Check(approved.Count == 2, "Fresh consent was not simulated for each session");
+        }
+        finally
+        {
+            stop.Cancel();
+            try { await approval; } catch (OperationCanceledException) { }
+            foreach (var request in approved) TerminalUserIdentity.RevokeCurrentUser(request.Policy, request.Authorization.SessionId);
+        }
+    }
+
+    private sealed class RealHttp : IHttpClientFactory
+    {
+        private static readonly HttpClientHandler Handler = new() { AllowAutoRedirect = false, UseProxy = false };
+        public HttpClient CreateClient(string name) => new(Handler, false);
     }
 
     private static string Expression(string marker) => $"[Console]::WriteLine('{marker[..8]}'+'{marker[8..]}')";

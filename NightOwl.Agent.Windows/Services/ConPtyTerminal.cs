@@ -1,3 +1,4 @@
+using NightOwl.Agent.Shared;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;

@@ -69,6 +69,9 @@ class LoopbackASGI:
             headers = [tuple(part.strip() for part in line.split(b':', 1)) for line in lines[1:] if b':' in line]
             headers = [(key.lower(), value) for key, value in headers]
             header_dict = dict(headers)
+            if header_dict.get(b'upgrade', b'').lower() != b'websocket':
+                await self.http(lines[0], path, headers, header_dict, reader, writer)
+                return
             scope = {'type': 'websocket', 'asgi': {'version': '3.0'}, 'path': path.split('?', 1)[0],
                 'query_string': path.split('?', 1)[1].encode() if '?' in path else b'', 'scheme': 'ws',
                 'headers': headers, 'client': ('127.0.0.1', 1), 'server': ('127.0.0.1', self.port),
@@ -117,6 +120,38 @@ class LoopbackASGI:
             except ConnectionError:
                 pass
             self.tasks.discard(task)
+
+    async def http(self, request_line, path, headers, header_dict, reader, writer):
+        # Isolated browser smoke only. Production must use a real ASGI WS server.
+        from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
+        length = int(header_dict.get(b'content-length', b'0'))
+        if length > 65536: raise ValueError('test_http_limit')
+        body = await reader.readexactly(length) if length else b''
+        scope = {'type':'http','asgi':{'version':'3.0'},'http_version':'1.1','method':request_line.split()[0].decode(),
+            'path':path.split('?',1)[0], 'raw_path':path.split('?',1)[0].encode(), 'root_path':'',
+            'query_string':path.split('?',1)[1].encode() if '?' in path else b'', 'scheme':'http','headers':headers,
+            'client':('127.0.0.1',1),'server':('127.0.0.1',self.port)}
+        first = True
+        result = {}
+        chunks = []
+        async def receive():
+            nonlocal first
+            if first:
+                first=False
+                return {'type':'http.request','body':body,'more_body':False}
+            await asyncio.Event().wait()
+        async def send(message):
+            if message['type']=='http.response.start': result.update(message)
+            elif message['type']=='http.response.body':
+                chunks.append(message.get('body',b''))
+                if sum(map(len,chunks)) > 2*1024*1024: raise ValueError('test_http_output_limit')
+        await ASGIStaticFilesHandler(application)(scope,receive,send)
+        data=b''.join(chunks)
+        status=result.get('status',500)
+        response=f'HTTP/1.1 {status} Response\r\nConnection: close\r\nContent-Length: {len(data)}\r\n'.encode()
+        response+=b''.join(key+b': '+value+b'\r\n' for key,value in result.get('headers',[]) if key.lower() not in (b'content-length',b'connection'))
+        writer.write(response+b'\r\n'+data)
+        await writer.drain()
 
 
 class WSClient:

@@ -18,6 +18,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private string _serviceStatus = "Unknown";
     private readonly ServiceObservation _serviceObservation = new();
     private readonly long _observationStarted = Stopwatch.GetTimestamp();
+    private readonly TerminalConsentPresenter _terminalConsent;
 
     public TrayApplicationContext()
     {
@@ -30,6 +31,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => ShowStatusWindow();
+        _terminalConsent = new TerminalConsentPresenter();
 
         _timer = new System.Windows.Forms.Timer
         {
@@ -59,6 +61,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             _timer.Stop();
+            _terminalConsent.Dispose();
             _timer.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
@@ -73,6 +76,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ContextMenuStrip menu = new();
         menu.Items.Add("Abrir NightOwl", null, (_, _) => OpenNightOwl());
         menu.Items.Add("Status do agente", null, (_, _) => ShowStatusWindow());
+        menu.Items.Add("Encerrar terminal remoto", null, (_, _) => _terminalConsent.Revoke());
         menu.Items.Add("Atualizar agente", null, (_, _) => UpdateAgent());
         menu.Items.Add("Reiniciar agente", null, (_, _) => RestartAgentService());
         menu.Items.Add("Desinstalar NightOwl", null, (_, _) => UninstallAgent());

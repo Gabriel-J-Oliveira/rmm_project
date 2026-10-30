@@ -119,6 +119,8 @@ public sealed class AgentConfig
     public bool RemoteTerminalTransportEnabled { get; set; } = false;
     [JsonPropertyName("terminalConPtyEnabled")]
     public bool TerminalConPtyEnabled { get; set; } = false;
+    [JsonPropertyName("terminalServiceConsentHomologated")]
+    public bool TerminalServiceConsentHomologated { get; set; } = false;
     [JsonPropertyName("terminalAuthorizedUserSid")]
     public string TerminalAuthorizedUserSid { get; set; } = "";
     [JsonPropertyName("terminalWindowsSessionId")]

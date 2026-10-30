@@ -179,13 +179,14 @@ async def reader(peer, link, receive, session_id=None):
         elif kind == 'close' and set(event) == {'type'}:
             raise ProtocolError('peer_closed')
         elif kind == 'process_ready' and peer.role == 'agent' and link.mode == 'conpty' and link.transport_ready.is_set() and not link.ready.is_set():
-            if (event != {'type': 'process_ready', 'mode': 'conpty', 'execution': True, 'non_system': True} or
+            legacy = {key: value for key, value in event.items() if key != 'identity'}
+            if (legacy != {'type': 'process_ready', 'mode': 'conpty', 'execution': True, 'non_system': True} or
                     event.get('execution') is not True or event.get('non_system') is not True):
                 raise ProtocolError('invalid_process_confirmation')
-            await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id), CONTROL_SECONDS)
+            identity = await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id, event.get('identity')), CONTROL_SECONDS)
             link.ready.set()
             for member in link.peers.values():
-                member.enqueue(event={'type': 'ready', 'mode': 'conpty', 'execution': True})
+                member.enqueue(event={'type': 'ready', 'mode': 'conpty', 'execution': True, 'identity': identity})
         elif kind == 'error' and peer.role == 'agent' and set(event) == {'type', 'code'} and event['code'] in (
                 'identity_or_consent_required', 'conpty_start_failed', 'terminal_output_limit', 'terminal_process_exited'):
             raise ProtocolError(event['code'])

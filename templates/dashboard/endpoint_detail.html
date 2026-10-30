@@ -3,6 +3,13 @@
 
 {% block title %}Night Owl | {{ endpoint.hostname }}{% endblock %}
 {% block body_class %}page-endpoint-detail{% endblock %}
+{% block icon_script %}{% if not terminal_available %}{{ block.super }}{% endif %}{% endblock %}
+{% block styles %}
+{% if terminal_available %}
+<link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
+<link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
+{% endif %}
+{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -44,6 +51,7 @@
             <div><dt>Agente</dt><dd><span class="agent-version-pill agent-{{ agent_version_state }}">{{ endpoint.agent_version|default:"sem versao" }}</span></dd></div>
         </dl>
     </header>
+    {% if terminal_available %}{% include 'dashboard/endpoint_terminal.html' %}{% endif %}
 
     <nav class="endpoint-tabs" aria-label="Se&ccedil;&otilde;es do endpoint">
         <button class="is-active" type="button" data-endpoint-tab="overview"><i data-lucide="layout-dashboard"></i>Vis&atilde;o geral</button>
@@ -357,6 +365,11 @@
 {% endblock %}
 
 {% block scripts %}
+{% if terminal_available %}
+<script src="{% static 'vendor/xterm/xterm.js' %}"></script>
+<script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
+<script src="{% static 'js/endpoint_terminal.js' %}"></script>
+{% endif %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-1"></script>
 <script src="{% static 'js/endpoint_detail.js' %}?v=telemetry-management-1"></script>

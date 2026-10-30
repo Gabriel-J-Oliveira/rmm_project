@@ -22,7 +22,7 @@ class TerminalAccessGrant(models.Model):
 
 
 class TerminalSession(models.Model):
-    ACTIVE = ('authorized', 'connecting', 'ready')
+    ACTIVE = ('awaiting_consent', 'authorized', 'connecting', 'ready')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
@@ -34,6 +34,11 @@ class TerminalSession(models.Model):
     expires_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True)
     reason = models.CharField(max_length=40, blank=True)
+    consent_deadline = models.DateTimeField(null=True)
+    consent_at = models.DateTimeField(null=True)
+    identity_sid = models.CharField(max_length=184, blank=True)
+    windows_session_id = models.PositiveIntegerField(null=True)
+    identity_integrity = models.PositiveIntegerField(null=True)
     transport_owner = models.CharField(max_length=36, blank=True)
     operator_ticket_hash = models.CharField(max_length=64, blank=True)
     agent_ticket_hash = models.CharField(max_length=64, blank=True)
@@ -45,8 +50,8 @@ class TerminalSession(models.Model):
     class Meta:
         permissions = [('open_terminalsession', 'Open synthetic remote terminal transport')]
         constraints = [
-            models.UniqueConstraint(fields=['endpoint'], condition=models.Q(status__in=('authorized', 'connecting', 'ready')), name='terminal_active_endpoint'),
-            models.UniqueConstraint(fields=['operator'], condition=models.Q(status__in=('authorized', 'connecting', 'ready')), name='terminal_active_operator'),
+            models.UniqueConstraint(fields=['endpoint'], condition=models.Q(status__in=('awaiting_consent', 'authorized', 'connecting', 'ready')), name='terminal_active_endpoint'),
+            models.UniqueConstraint(fields=['operator'], condition=models.Q(status__in=('awaiting_consent', 'authorized', 'connecting', 'ready')), name='terminal_active_operator'),
         ]
 
 
