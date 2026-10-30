@@ -9,6 +9,45 @@ from django.db import models
 from django.utils import timezone
 
 
+class TerminalAccessGrant(models.Model):
+    """Explicit, expiring operator-to-endpoint authorization, separate from staff."""
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
+    enabled = models.BooleanField(default=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['operator', 'endpoint'], name='terminal_grant_operator_endpoint')]
+
+
+class TerminalSession(models.Model):
+    ACTIVE = ('authorized', 'connecting', 'ready')
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
+    machine_id = models.CharField(max_length=255)
+    agent_identity = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, default='authorized')
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True)
+    reason = models.CharField(max_length=40, blank=True)
+    transport_owner = models.CharField(max_length=36, blank=True)
+    operator_ticket_hash = models.CharField(max_length=64, blank=True)
+    agent_ticket_hash = models.CharField(max_length=64, blank=True)
+    operator_ticket_expires = models.DateTimeField(null=True)
+    agent_ticket_expires = models.DateTimeField(null=True)
+    operator_ticket_used = models.BooleanField(default=False)
+    agent_ticket_used = models.BooleanField(default=False)
+
+    class Meta:
+        permissions = [('open_terminalsession', 'Open synthetic remote terminal transport')]
+        constraints = [
+            models.UniqueConstraint(fields=['endpoint'], condition=models.Q(status__in=('authorized', 'connecting', 'ready')), name='terminal_active_endpoint'),
+            models.UniqueConstraint(fields=['operator'], condition=models.Q(status__in=('authorized', 'connecting', 'ready')), name='terminal_active_operator'),
+        ]
+
+
 SAFE_DEPLOYMENT_FAILURE_CODES = frozenset({
     'BOOTSTRAP_WINDOWS_REQUIRED',
     'BOOTSTRAP_ADMIN_REQUIRED',

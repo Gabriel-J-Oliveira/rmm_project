@@ -93,6 +93,9 @@ public sealed class AgentApiClient
         JsonElement signal=await JobExchange(config,config.ServerBaseUrl.TrimEnd('/')+"/api/agent/jobs/signal/",null,null,ct);
         return signal.GetProperty("protocol").GetInt32()==2 && signal.GetProperty("available").GetBoolean();
     }
+    internal Task<JsonElement> TerminalPollAsync(AgentConfig config, CancellationToken ct) =>
+        JobExchange(config, config.ServerBaseUrl.TrimEnd('/') + "/api/agent/terminal/poll/",
+            new { machine_id = config.MachineId }, null, ct);
     internal async Task JobStartedAsync(AgentConfig config,AgentJobRequest job,CancellationToken ct)
     {
         JsonElement ack=await JobExchange(config,config.ServerBaseUrl.TrimEnd('/')+"/api/agent/jobs/"+Guid.Parse(job.Id)+"/started/",

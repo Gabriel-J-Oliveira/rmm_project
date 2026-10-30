@@ -17,10 +17,14 @@ from .views import (
 from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, EndpointTelemetryView
 from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
 from .job_control import AgentJobSignalView, AgentJobStartedView
+from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView
 from .operational_actions import OperationalActionView
 from .script_library import ApprovedScriptCatalogView
 
 urlpatterns = [
+    path('terminal/sessions/<uuid:endpoint_id>/', TerminalOperatorView.as_view(), name='terminal-session-request'),
+    path('terminal/cancel/<uuid:session_id>/', TerminalCancelView.as_view(), name='terminal-session-cancel'),
+    path('terminal/poll/', TerminalAgentPollView.as_view(), name='terminal-agent-poll'),
     path('approved-scripts/', ApprovedScriptCatalogView.as_view(), name='approved-script-catalog'),
     path('operational-actions/<uuid:endpoint_id>/', OperationalActionView.as_view(), name='operational-action-create'),
     path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),

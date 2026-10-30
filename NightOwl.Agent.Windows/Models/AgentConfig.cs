@@ -115,6 +115,8 @@ public sealed class AgentConfig
     // Both the job type and individual action must be explicitly enabled locally.
     [JsonPropertyName("operationalActionsEnabled")]
     public bool OperationalActionsEnabled { get; set; } = false;
+    [JsonPropertyName("remoteTerminalTransportEnabled")]
+    public bool RemoteTerminalTransportEnabled { get; set; } = false;
     [JsonPropertyName("allowedOperationalActions")]
     public List<string> AllowedOperationalActions { get; set; } = new();
 

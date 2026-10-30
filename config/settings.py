@@ -385,5 +385,10 @@ NIGHTOWL_TELEMETRY_RETENTION_DAYS = {
 
 # Closed operational catalog, explicitly opt-in on both backend and agent.
 NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED = env.bool('NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', default=False)
+
+# D.1 relay is process-local; deployment must explicitly assert one ASGI process.
+NIGHTOWL_TERMINAL_ENABLED = env.bool('NIGHTOWL_TERMINAL_ENABLED', default=False)
+NIGHTOWL_TERMINAL_SINGLE_PROCESS = env.bool('NIGHTOWL_TERMINAL_SINGLE_PROCESS', default=False)
+NIGHTOWL_TERMINAL_TEST_LOOPBACK = False
 NIGHTOWL_ADMIN_ACTIONS_ENABLED = env.bool('NIGHTOWL_ADMIN_ACTIONS_ENABLED', default=False)
 NIGHTOWL_ADMIN_ACTION_SCOPES = env.json('NIGHTOWL_ADMIN_ACTION_SCOPES', default={})

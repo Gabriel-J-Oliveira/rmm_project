@@ -93,6 +93,9 @@ public sealed class Worker : BackgroundService
         Task heartbeatTask = Task.Run(() => RunHeartbeatLoopAsync(config, initialHeartbeat,
             handshakeCancellation.Token), CancellationToken.None);
         Task jobsTask = Task.CompletedTask;
+        Task terminalTask = config.RemoteTerminalTransportEnabled
+            ? Task.Run(() => new RemoteTerminalTransport(_api, _logger).RunAsync(config, handshakeCancellation.Token), CancellationToken.None)
+            : Task.CompletedTask;
         try
         {
             try
@@ -175,6 +178,7 @@ public sealed class Worker : BackgroundService
             handshakeCancellation.Cancel();
             await heartbeatTask;
             try { await jobsTask; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+            try { await terminalTask; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
             CopyHeartbeatCheckpoint(state);
             await updateHandshakeTask;
             try { await _telemetryRuntime.StopAsync(); }
@@ -583,6 +587,7 @@ public sealed class Worker : BackgroundService
         payload.Agent["capabilities"] = config.AllowedJobTypes
             .Where(type => type is "configure_telemetry" or "collect_services" || type == "install_software" && config.SoftwareInstallEnabled)
             .Concat(OperationalActions.Capabilities(config))
+            .Concat(config.RemoteTerminalTransportEnabled ? new[] { "remote_terminal_transport:1" } : Array.Empty<string>())
             .Append("jobs_protocol_v2").Append("job_protocol_v2").ToArray();
         TelemetrySettings? effectiveTelemetry = _telemetryRuntime.Effective;
         payload.Agent["telemetry_mode"] = config.TelemetryMode;
