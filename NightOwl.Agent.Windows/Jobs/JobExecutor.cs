@@ -919,11 +919,13 @@ public sealed class JobExecutor
         script.AppendLine("}");
         script.AppendLine("try {");
         script.AppendLine("    $installArgs = @(");
-        script.AppendLine("        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', " + QuotePsSingle(installerPath) + ",");
-        script.AppendLine("        '-Repair', '-InstallAsService', '-ServerUrl', " + QuotePsSingle(config.ServerBaseUrl) + ",");
-        script.AppendLine("        '-PackageUrl', " + QuotePsSingle(packageUrl) + ", '-TrustedPublicKeysPath', " + QuotePsSingle(trustBundlePath) + ",");
-        script.AppendLine("        '-ExpectedVersion', " + QuotePsSingle(targetVersion) + ", '-ExpectedChannel', " + QuotePsSingle(channel) + ",");
-        script.AppendLine("        '-ExpectedPackageSha256', " + QuotePsSingle(sha256) + ", '-ExpectedReleaseId', " + QuotePsSingle(releaseId) + ",");
+        // Start-Process joins ArgumentList with spaces; PowerShell string quoting alone
+        // does not preserve a native argument containing spaces.
+        script.AppendLine("        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', " + QuotePsSingle(QuoteArg(installerPath)) + ",");
+        script.AppendLine("        '-Repair', '-InstallAsService', '-ServerUrl', " + QuotePsSingle(QuoteArg(config.ServerBaseUrl)) + ",");
+        script.AppendLine("        '-PackageUrl', " + QuotePsSingle(QuoteArg(packageUrl)) + ", '-TrustedPublicKeysPath', " + QuotePsSingle(QuoteArg(trustBundlePath)) + ",");
+        script.AppendLine("        '-ExpectedVersion', " + QuotePsSingle(QuoteArg(targetVersion)) + ", '-ExpectedChannel', " + QuotePsSingle(QuoteArg(channel)) + ",");
+        script.AppendLine("        '-ExpectedPackageSha256', " + QuotePsSingle(QuoteArg(sha256)) + ", '-ExpectedReleaseId', " + QuotePsSingle(QuoteArg(releaseId)) + ",");
         script.AppendLine("        '-RunCheck', '-NonInteractive'");
         script.AppendLine("    )");
         script.AppendLine("    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath");
@@ -1000,7 +1002,7 @@ public sealed class JobExecutor
         return bool.TryParse(value.ToString(), out bool parsed) ? parsed : fallback;
     }
 
-    private static string QuoteArg(string arg)
+    internal static string QuoteArg(string arg)
     {
         if (string.IsNullOrEmpty(arg))
         {
@@ -1010,7 +1012,18 @@ public sealed class JobExecutor
         {
             return arg;
         }
-        return "\"" + arg.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        StringBuilder quoted = new("\"");
+        int slashes = 0;
+        foreach (char character in arg)
+        {
+            if (character == '\\') { slashes++; continue; }
+            quoted.Append('\\', character == '"' ? slashes * 2 + 1 : slashes);
+            quoted.Append(character);
+            slashes = 0;
+        }
+        quoted.Append('\\', slashes * 2);
+        quoted.Append('"');
+        return quoted.ToString();
     }
 
     private static string QuotePsSingle(string value)

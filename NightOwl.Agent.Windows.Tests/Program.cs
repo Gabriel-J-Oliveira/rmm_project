@@ -11,6 +11,21 @@ using System.Text.Json;
 
 try
 {
+    if (args.FirstOrDefault() == "--echo-arguments")
+    {
+        Console.WriteLine(JsonSerializer.Serialize(args.Skip(1).ToArray()));
+        return;
+    }
+    if (args.Contains("--repair-only", StringComparer.Ordinal))
+    {
+        TestNativeArgumentQuoting();
+        TestRepairRunnerScriptPersistsCompletedResult();
+        TestRepairRunnerScriptPersistsFailedResult();
+        TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
+        TestRepairRunnerScriptSupportsSpacedPaths();
+        Console.WriteLine("Repair runner functional tests passed.");
+        return;
+    }
     if (args.Contains("--configuration-consolidation-only", StringComparer.Ordinal)) { ConfigurationConsolidationTests.Run(); return; }
     if (args.Contains("--heartbeat-contract", StringComparer.Ordinal)) { await LightweightHeartbeatTests.EmitHeartbeatContractAsync(); return; }
     if (args.Contains("--cleanup-baseline", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: true); return; }
@@ -101,9 +116,11 @@ try
     TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
     TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
     TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
+    TestNativeArgumentQuoting();
     TestRepairRunnerScriptPersistsCompletedResult();
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
+    TestRepairRunnerScriptSupportsSpacedPaths();
     TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
     TestRunningUpdateWaitsForActiveHandshakeBeforeRecovery();
     TestCompletedUpdateJobIsIgnoredOnLaterRestart();
@@ -1215,14 +1232,37 @@ static void TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery()
         "Expired repair external runner marker should allow JOB_INTERRUPTED recovery.");
 }
 
+static void TestNativeArgumentQuoting()
+{
+    string[] arguments = { "", @"C:\Program Files\NightOwl\file.ps1", @"path with trailing slash\", "embedded\"quote", "apostrophe's file", @"no-spaces\path" };
+    using Process child = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        Arguments = "--echo-arguments " + string.Join(" ", arguments.Select(JobExecutor.QuoteArg)),
+        UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+    }) ?? throw new InvalidOperationException("Could not start argument quoting fixture.");
+    string output = child.StandardOutput.ReadToEnd();
+    Require(child.WaitForExit(15000) && child.ExitCode == 0, "Argument quoting fixture did not complete.");
+    string[] actual = JsonSerializer.Deserialize<string[]>(output)!;
+    Require(actual.SequenceEqual(arguments), "Native argument quoting changed spaces, slashes, quotes or empty arguments.");
+}
+
 static void TestRepairRunnerScriptPersistsCompletedResult()
 {
-    RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Completed);
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Completed);
+    DeleteTempDir(result.RootDir);
 }
 
 static void TestRepairRunnerScriptPersistsFailedResult()
 {
-    RunRepairRunnerScriptFunctionalTest(installerExitCode: 7, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Failed);
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 7, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Failed);
+    DeleteTempDir(result.RootDir);
+}
+
+static void TestRepairRunnerScriptSupportsSpacedPaths()
+{
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(0, false, JobFinalStatuses.Completed, spacedPaths: true);
+    DeleteTempDir(result.RootDir);
 }
 
 static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
@@ -1233,6 +1273,9 @@ static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
     string log = File.ReadAllText(runnerLog);
     Require(log.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) || log.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include a failure stage.");
     Require(log.Contains(result.JobId, StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include job_id.");
+    Require(new JobStore(Path.Combine(result.RootDir, "jobs")).Load(result.JobId)!.ExternalRunnerActive,
+        "Unavailable result queue must retain uncertain external ownership.");
+    DeleteTempDir(result.RootDir);
 }
 
 static void TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart()
@@ -1698,7 +1741,7 @@ static RemoteJobResult NewCompletedRemoteUpdateResult(string jobId)
     };
 }
 
-static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus)
+static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus, bool spacedPaths = false)
 {
     string powershell = GetWindowsPowerShellPath();
     Require(File.Exists(powershell), "Windows PowerShell 5.1 is required for repair runner functional tests.");
@@ -1710,7 +1753,7 @@ static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerE
         string pendingDir = Path.Combine(root, "pending-results");
         string jobsDir = Path.Combine(root, "jobs");
         string runnerDir = Path.Combine(root, "runner");
-        string trustPath = Path.Combine(root, "Trust", "release-public-keys.json");
+        string trustPath = Path.Combine(root, spacedPaths ? "Trust Bundle" : "Trust", "release-public-keys.json");
         Directory.CreateDirectory(installPath);
         Directory.CreateDirectory(pendingDir);
         Directory.CreateDirectory(jobsDir);
@@ -1719,7 +1762,7 @@ static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerE
         File.WriteAllText(trustPath, "{}");
         File.WriteAllText(Path.Combine(installPath, "agent.config.json"), "{}");
 
-        string installerPath = Path.Combine(root, "FakeInstall-NightOwlAgentDotNet.ps1");
+        string installerPath = Path.Combine(root, spacedPaths ? "Fake Install NightOwl's Agent.ps1" : "FakeInstall-NightOwlAgentDotNet.ps1");
         File.WriteAllText(installerPath, @"
 param(
     [switch]$Repair,
@@ -1734,6 +1777,8 @@ param(
     [switch]$RunCheck,
     [switch]$NonInteractive
 )
+if (-not (Test-Path -LiteralPath $TrustedPublicKeysPath)) { exit 98 }
+if ($ExpectedVersion -ne '0.1.1.0-rc23' -or $ExpectedReleaseId -ne 'release-id-123') { exit 99 }
 Set-Content -Path '" + Path.Combine(installPath, "agent.version.json").Replace("'", "''") + @"' -Value ('{""version"":""' + $ExpectedVersion + '""}') -Encoding UTF8
 Write-Output 'status=completed'
 Write-Output 'operation=repair'
@@ -1796,10 +1841,16 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             RedirectStandardOutput = true,
             RedirectStandardError = true
         }) ?? throw new InvalidOperationException("Failed to start repair runner functional test.");
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(15000);
-        Require(process.HasExited, "Repair runner script did not exit.");
+        Task<string> stdoutRead = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrRead = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(15000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            throw new InvalidOperationException("Repair runner script did not exit.");
+        }
+        string stdout = stdoutRead.GetAwaiter().GetResult();
+        string stderr = stderrRead.GetAwaiter().GetResult();
 
         if (!breakPendingDirectory)
         {
