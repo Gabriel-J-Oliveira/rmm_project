@@ -62,9 +62,11 @@ class Peer:
 
 
 class Link:
-    def __init__(self):
+    def __init__(self, mode='synthetic'):
+        self.mode = mode
         self.peers = {}
         self.ready = asyncio.Event()
+        self.transport_ready = asyncio.Event()
         self.ended = asyncio.Event()
         self.reason = 'disconnected'
         self.created = time.monotonic()
@@ -97,11 +99,11 @@ class TerminalHub:
         self.loop = loop
         self.connections += 1
 
-    def attach(self, session_id, peer):
+    def attach(self, session_id, peer, mode='synthetic'):
         if session_id not in self.links:
             if len(self.links) >= control.MAX_SESSIONS:
                 raise ProtocolError('session_limit')
-            self.links[session_id] = Link()
+            self.links[session_id] = Link(mode)
         link = self.links[session_id]
         if peer.role in link.peers or link.ended.is_set():
             raise ProtocolError('peer_already_connected')
@@ -143,7 +145,7 @@ async def writer(peer, send):
             raise ProtocolError('send_timeout') from None
 
 
-async def reader(peer, link, receive):
+async def reader(peer, link, receive, session_id=None):
     while True:
         message = await receive()
         if message['type'] == 'websocket.disconnect':
@@ -176,6 +178,17 @@ async def reader(peer, link, receive):
             peer.ping = None
         elif kind == 'close' and set(event) == {'type'}:
             raise ProtocolError('peer_closed')
+        elif kind == 'process_ready' and peer.role == 'agent' and link.mode == 'conpty' and link.transport_ready.is_set() and not link.ready.is_set():
+            if (event != {'type': 'process_ready', 'mode': 'conpty', 'execution': True, 'non_system': True} or
+                    event.get('execution') is not True or event.get('non_system') is not True):
+                raise ProtocolError('invalid_process_confirmation')
+            await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id), CONTROL_SECONDS)
+            link.ready.set()
+            for member in link.peers.values():
+                member.enqueue(event={'type': 'ready', 'mode': 'conpty', 'execution': True})
+        elif kind == 'error' and peer.role == 'agent' and set(event) == {'type', 'code'} and event['code'] in (
+                'identity_or_consent_required', 'conpty_start_failed', 'terminal_output_limit', 'terminal_process_exited'):
+            raise ProtocolError(event['code'])
         elif (kind, peer.role) in (('resize', 'operator'), ('resized', 'agent')) and link.ready.is_set():
             if (set(event) != {'type', 'cols', 'rows'} or
                     any(type(event[k]) is not int or not 1 <= event[k] <= 500 for k in ('cols', 'rows'))):
@@ -230,17 +243,19 @@ async def terminal_application(scope, receive, send):
         if (not isinstance(auth, dict) or set(auth) != {'type', 'credential'} or auth['type'] != 'authenticate' or
                 not isinstance(auth['credential'], str) or not 32 <= len(auth['credential']) <= 128):
             raise ProtocolError('invalid_authentication')
-        await asyncio.wait_for(sync_to_async(control.consume_ticket)(session_id, role, auth['credential'], OWNER), CONTROL_SECONDS)
+        mode = await asyncio.wait_for(sync_to_async(control.consume_ticket)(session_id, role, auth['credential'], OWNER), CONTROL_SECONDS)
         authenticated = True
         peer = Peer(role)
-        link = HUB.attach(session_id, peer)
+        link = HUB.attach(session_id, peer, mode)
         peer.enqueue(event={'type': 'connected', 'session_id': session_id, 'role': role, 'protocol': 1})
         if len(link.peers) == 2:
-            await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id), CONTROL_SECONDS)
-            link.ready.set()
+            link.transport_ready.set()
+            if mode == 'synthetic':
+                await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id), CONTROL_SECONDS)
+                link.ready.set()
             for member in link.peers.values():
-                member.enqueue(event={'type': 'ready', 'mode': 'synthetic', 'execution': False})
-        tasks = [asyncio.create_task(writer(peer, send)), asyncio.create_task(reader(peer, link, receive)),
+                member.enqueue(event={'type': 'ready' if mode == 'synthetic' else 'transport_ready', 'mode': mode, 'execution': mode == 'conpty'})
+        tasks = [asyncio.create_task(writer(peer, send)), asyncio.create_task(reader(peer, link, receive, session_id)),
                  asyncio.create_task(monitor(session_id, peer, link)), asyncio.create_task(link.ended.wait())]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:

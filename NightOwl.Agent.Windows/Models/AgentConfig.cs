@@ -117,6 +117,14 @@ public sealed class AgentConfig
     public bool OperationalActionsEnabled { get; set; } = false;
     [JsonPropertyName("remoteTerminalTransportEnabled")]
     public bool RemoteTerminalTransportEnabled { get; set; } = false;
+    [JsonPropertyName("terminalConPtyEnabled")]
+    public bool TerminalConPtyEnabled { get; set; } = false;
+    [JsonPropertyName("terminalAuthorizedUserSid")]
+    public string TerminalAuthorizedUserSid { get; set; } = "";
+    [JsonPropertyName("terminalWindowsSessionId")]
+    public int? TerminalWindowsSessionId { get; set; }
+    [JsonPropertyName("terminalShell")]
+    public string TerminalShell { get; set; } = "powershell51";
     [JsonPropertyName("allowedOperationalActions")]
     public List<string> AllowedOperationalActions { get; set; } = new();
 

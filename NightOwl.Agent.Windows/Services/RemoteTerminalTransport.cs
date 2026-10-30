@@ -6,7 +6,7 @@ using NightOwl.Agent.Windows.Models;
 
 namespace NightOwl.Agent.Windows.Services;
 
-/// <summary>D.1 outbound synthetic relay only. Contains no process or shell interface.</summary>
+/// <summary>Outbound session transport; real execution requires separate local identity/consent policy.</summary>
 public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logger)
 {
     public const int MaxDataBytes = 16 * 1024;
@@ -24,7 +24,7 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                 budget.CancelAfter(TimeSpan.FromSeconds(5));
                 JsonElement response = await api.TerminalPollAsync(config, budget.Token);
                 if (response.GetProperty("session").ValueKind != JsonValueKind.Null)
-                    await ConnectSyntheticAsync(config, response.GetProperty("session"), ct);
+                    await ConnectAsync(config, response.GetProperty("session"), ct);
                 failures = 0;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -45,8 +45,12 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
     public static Uri ValidateConnection(AgentConfig config, JsonElement session)
     {
         if (!config.RemoteTerminalTransportEnabled) throw new InvalidOperationException("terminal_disabled");
-        if (session.GetProperty("mode").GetString() != "synthetic" || session.GetProperty("execution").GetBoolean() ||
-            session.GetProperty("protocol").GetInt32() != 1) throw new InvalidDataException("terminal_mode_invalid");
+        string? mode = session.GetProperty("mode").GetString();
+        bool real = mode == "conpty";
+        if (mode is not ("synthetic" or "conpty") || session.GetProperty("execution").GetBoolean() != real ||
+            session.GetProperty("protocol").GetInt32() != 1 || real && (!config.TerminalConPtyEnabled ||
+            session.GetProperty("machine_id").GetString() != config.MachineId || string.IsNullOrEmpty(session.GetProperty("operator_id").GetString())))
+            throw new InvalidDataException("terminal_mode_invalid");
         Guid id = Guid.Parse(session.GetProperty("session_id").GetString()!);
         string expected = $"/ws/terminal/{id:D}/agent/";
         if (session.GetProperty("websocket_path").GetString() != expected ||
@@ -62,6 +66,12 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
 
     public async Task ConnectSyntheticAsync(AgentConfig config, JsonElement session, CancellationToken ct)
     {
+        if (session.GetProperty("mode").GetString() != "synthetic") throw new InvalidDataException("terminal_mode_invalid");
+        await ConnectAsync(config, session, ct);
+    }
+
+    public async Task ConnectAsync(AgentConfig config, JsonElement session, CancellationToken ct)
+    {
         Uri uri = ValidateConnection(config, session);
         DateTimeOffset expires = session.GetProperty("expires_at").GetDateTimeOffset();
         TimeSpan remaining = expires - DateTimeOffset.UtcNow;
@@ -69,6 +79,10 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
         lifetime.CancelAfter(remaining);
         using ClientWebSocket socket = new();
+        using SemaphoreSlim sendGate = new(1, 1);
+        ConPtyTerminal? terminal = null;
+        Task output = Task.CompletedTask;
+        bool real = session.GetProperty("mode").GetString() == "conpty";
         socket.Options.AddSubProtocol("nightowl-terminal.v1");
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
         socket.Options.SetBuffer(MaxFrameBytes, MaxFrameBytes);
@@ -77,10 +91,12 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
             opening.CancelAfter(TimeSpan.FromSeconds(5));
             await socket.ConnectAsync(uri, opening.Token);
         }
-        await SendControl(socket, new { type = "authenticate", credential = session.GetProperty("credential").GetString() }, lifetime.Token);
+        await SendControl(socket, new { type = "authenticate", credential = session.GetProperty("credential").GetString() }, lifetime.Token, sendGate);
         byte[] buffer = new byte[MaxFrameBytes];
         ulong receivedSequence = 0, sentSequence = 0;
         bool ready = false;
+        try
+        {
         while (socket.State == WebSocketState.Open && !lifetime.IsCancellationRequested)
         {
             int size = 0;
@@ -106,10 +122,15 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                 if (!ready || !ValidInputFrame(buffer.AsSpan(0, size), receivedSequence + 1))
                     throw new InvalidDataException("terminal_binary_invalid");
                 receivedSequence++;
-                // Synthetic echo proves byte transport; it never interprets or executes input.
+                if (real)
+                {
+                    await terminal!.WriteAsync(buffer.AsMemory(9, size - 9), lifetime.Token);
+                    continue;
+                }
+                // D.1 compatibility: echo never interprets input.
                 buffer[0] = 1;
                 BinaryPrimitives.WriteUInt64BigEndian(buffer.AsSpan(1, 8), ++sentSequence);
-                await Send(socket, buffer.AsMemory(0, size), WebSocketMessageType.Binary, lifetime.Token);
+                await Send(socket, buffer.AsMemory(0, size), WebSocketMessageType.Binary, lifetime.Token, sendGate);
                 continue;
             }
             if (size > 1024) throw new InvalidDataException("terminal_control_limit");
@@ -118,37 +139,95 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
             switch (message.GetProperty("type").GetString())
             {
                 case "connected": break;
+                case "transport_ready":
+                    if (!real || terminal is not null || message.GetProperty("mode").GetString() != "conpty" || !message.GetProperty("execution").GetBoolean())
+                        throw new InvalidDataException("terminal_mode_invalid");
+                    try
+                    {
+                        var authorization = new TerminalAuthorization(Guid.Parse(session.GetProperty("session_id").GetString()!), config.MachineId,
+                            session.GetProperty("operator_id").GetString()!, expires);
+                        terminal = await ConPtyTerminal.StartAsync(config, authorization, 80, 24, lifetime.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        bool identityFailure = ex is InvalidOperationException &&
+                            (ex.Message.Contains("identity", StringComparison.Ordinal) || ex.Message.Contains("consent", StringComparison.Ordinal) ||
+                             ex.Message.Contains("profile", StringComparison.Ordinal) || ex.Message == "terminal_session_not_authorized");
+                        await SendControl(socket, new { type = "error", code = identityFailure ? "identity_or_consent_required" : "conpty_start_failed" }, lifetime.Token, sendGate);
+                        return;
+                    }
+                    await SendControl(socket, new { type = "process_ready", mode = "conpty", execution = true, non_system = true }, lifetime.Token, sendGate);
+                    break;
                 case "ready":
-                    if (message.GetProperty("mode").GetString() != "synthetic" || message.GetProperty("execution").GetBoolean())
+                    if (ready || message.GetProperty("mode").GetString() != (real ? "conpty" : "synthetic") ||
+                        message.GetProperty("execution").GetBoolean() != real || real && terminal is null)
                         throw new InvalidDataException("terminal_mode_invalid");
                     ready = true;
+                    if (real)
+                    {
+                        output = Task.Run(async () =>
+                        {
+                            byte[] frame = new byte[MaxFrameBytes];
+                            try
+                            {
+                                await foreach (byte[] bytes in terminal!.Output.ReadAllAsync(lifetime.Token))
+                                {
+                                    frame[0] = 1;
+                                    BinaryPrimitives.WriteUInt64BigEndian(frame.AsSpan(1, 8), ++sentSequence);
+                                    bytes.CopyTo(frame, 9);
+                                    int size = bytes.Length;
+                                    // Coalesce already available VT fragments, preserving order and
+                                    // fixed memory/latency. Never wait for command completion.
+                                    while (terminal.Output.TryPeek(out var next) && next.Length <= MaxDataBytes - size && terminal.Output.TryRead(out next))
+                                    { next.CopyTo(frame, size + 9); size += next.Length; }
+                                    await Send(socket, frame.AsMemory(0, size + 9), WebSocketMessageType.Binary, lifetime.Token, sendGate);
+                                    await Task.Delay(12, lifetime.Token); // <100 frames/s; fixed bounded queues preserve pressure.
+                                }
+                                await SendControl(socket, new { type = "error", code = terminal.Observe().OutputBytes > ConPtyTerminal.MaxOutputBytes ?
+                                    "terminal_output_limit" : "terminal_process_exited" }, lifetime.Token, sendGate);
+                            }
+                            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+                            finally { lifetime.Cancel(); }
+                        });
+                    }
                     break;
                 case "ping":
                     string nonce = message.GetProperty("nonce").GetString()!;
                     if (nonce.Length != 16 || nonce.Any(c => !Uri.IsHexDigit(c))) throw new InvalidDataException("terminal_ping_invalid");
-                    await SendControl(socket, new { type = "pong", nonce }, lifetime.Token);
+                    await SendControl(socket, new { type = "pong", nonce }, lifetime.Token, sendGate);
                     break;
                 case "resize":
                     int cols = message.GetProperty("cols").GetInt32(), rows = message.GetProperty("rows").GetInt32();
                     if (!ready || cols is < 1 or > 500 || rows is < 1 or > 500) throw new InvalidDataException("terminal_resize_invalid");
-                    await SendControl(socket, new { type = "resized", cols, rows }, lifetime.Token);
+                    if (real) terminal!.Resize(cols, rows);
+                    await SendControl(socket, new { type = "resized", cols, rows }, lifetime.Token, sendGate);
                     break;
                 case "closed": case "error": return;
                 default: throw new InvalidDataException("terminal_control_invalid");
             }
+        }
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        finally
+        {
+            lifetime.Cancel();
+            if (terminal is not null) await terminal.DisposeAsync();
+            try { await output; } catch (Exception) { }
         }
     }
 
     public static bool ValidInputFrame(ReadOnlySpan<byte> frame, ulong expectedSequence) =>
         frame.Length is > 9 and <= MaxFrameBytes && frame[0] == 0 && BinaryPrimitives.ReadUInt64BigEndian(frame.Slice(1, 8)) == expectedSequence;
 
-    private static Task SendControl(ClientWebSocket socket, object value, CancellationToken ct) =>
-        Send(socket, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)), WebSocketMessageType.Text, ct);
+    private static Task SendControl(ClientWebSocket socket, object value, CancellationToken ct, SemaphoreSlim gate) =>
+        Send(socket, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)), WebSocketMessageType.Text, ct, gate);
 
-    private static async Task Send(ClientWebSocket socket, ReadOnlyMemory<byte> data, WebSocketMessageType type, CancellationToken ct)
+    private static async Task Send(ClientWebSocket socket, ReadOnlyMemory<byte> data, WebSocketMessageType type, CancellationToken ct, SemaphoreSlim gate)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(TimeSpan.FromSeconds(2));
-        await socket.SendAsync(data, type, true, budget.Token);
+        await gate.WaitAsync(budget.Token);
+        try { await socket.SendAsync(data, type, true, budget.Token); }
+        finally { gate.Release(); }
     }
 }

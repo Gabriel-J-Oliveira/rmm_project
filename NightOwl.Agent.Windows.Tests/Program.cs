@@ -11,6 +11,8 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--conpty-only", StringComparer.Ordinal)) { await ConPtyTests.RunAsync(); return; }
+    if (args.Contains("--conpty-e2e", StringComparer.Ordinal)) { await ConPtyTests.E2EAsync(); return; }
     if (args.Contains("--terminal-transport-only", StringComparer.Ordinal)) { await TerminalTransportTests.RunAsync(); return; }
     if (args.Contains("--terminal-transport-e2e", StringComparer.Ordinal)) { await TerminalTransportTests.E2EAsync(); return; }
     if (args.Contains("--administrative-actions-only", StringComparer.Ordinal)) { await AdministrativeActionTests.RunAsync(); return; }

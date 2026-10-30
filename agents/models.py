@@ -14,6 +14,7 @@ class TerminalAccessGrant(models.Model):
     operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
     enabled = models.BooleanField(default=True)
+    allow_conpty = models.BooleanField(default=False)
     expires_at = models.DateTimeField()
 
     class Meta:
@@ -28,6 +29,7 @@ class TerminalSession(models.Model):
     machine_id = models.CharField(max_length=255)
     agent_identity = models.CharField(max_length=64)
     status = models.CharField(max_length=16, default='authorized')
+    mode = models.CharField(max_length=16, default='synthetic', choices=[('synthetic', 'Synthetic'), ('conpty', 'ConPTY')])
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True)

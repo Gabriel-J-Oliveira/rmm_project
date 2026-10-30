@@ -51,7 +51,7 @@ def audit(session, event, reason=''):
         description=reason, endpoint=session.endpoint, actor_type=actor,
         actor_name=session.operator.get_username() if actor == AuditEvent.ACTOR_USER else
             'NightOwlAgent' if actor == AuditEvent.ACTOR_AGENT else 'Sistema',
-        metadata={'session_id': str(session.pk), 'operator_id': session.operator_id, 'mode': 'synthetic'})
+        metadata={'session_id': str(session.pk), 'operator_id': session.operator_id, 'mode': session.mode})
 
 
 def record_rejection(session_id):
@@ -77,6 +77,7 @@ def validate_session(session):
     if session.expires_at <= timezone.now():
         raise PermissionError('session_expired')
     authorize(session.operator, session.endpoint)
+    validate_mode(session.operator, session.endpoint, session.mode)
     if (session.machine_id != session.endpoint.machine_id or
             not hmac.compare_digest(session.agent_identity, session.endpoint.agent_token_hash)):
         raise PermissionError('identity_changed')
@@ -92,7 +93,18 @@ def issue_ticket(session, role):
 def connection_info(session, role, ticket):
     return {'session_id': str(session.pk), 'credential': ticket, 'expires_at': session.expires_at.isoformat(),
         'ticket_seconds': TICKET_SECONDS, 'websocket_path': f'/ws/terminal/{session.pk}/{role}/',
-        'mode': 'synthetic', 'execution': False, 'protocol': 1}
+        'mode': session.mode, 'execution': session.mode == 'conpty', 'protocol': 1,
+        'machine_id': session.machine_id, 'operator_id': str(session.operator_id)}
+
+
+def validate_mode(operator, endpoint, mode):
+    if mode not in ('synthetic', 'conpty'):
+        raise ValueError('terminal_mode_invalid')
+    if mode == 'conpty' and (not getattr(settings, 'NIGHTOWL_TERMINAL_CONPTY_ENABLED', False) or
+            not TerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
+                allow_conpty=True, expires_at__gt=timezone.now()).exists() or
+            not internal_capability(endpoint, 'remote_terminal_conpty:1')):
+        raise PermissionError('terminal_execution_not_authorized')
 
 
 @transaction.atomic
@@ -106,7 +118,7 @@ def close_session(session_id, reason, status='closed'):
 
 
 @transaction.atomic
-def create_session(operator, endpoint_id):
+def create_session(operator, endpoint_id, mode='synthetic'):
     if not enabled():
         raise ValueError('terminal_disabled')
     # Serialize global admission on PostgreSQL; conditional unique constraints also
@@ -116,13 +128,14 @@ def create_session(operator, endpoint_id):
             cursor.execute('SELECT pg_advisory_xact_lock(%s)', [734625190284])
     endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint_id)
     authorize(operator, endpoint)
+    validate_mode(operator, endpoint, mode)
     if not internal_capability(endpoint, 'remote_terminal_transport:1'):
         raise ValueError('transport_capability_unconfirmed')
     for stale in TerminalSession.objects.filter(status__in=TerminalSession.ACTIVE, expires_at__lte=timezone.now()):
         close_session(stale.pk, 'session_expired', 'expired')
     if TerminalSession.objects.filter(status__in=TerminalSession.ACTIVE).count() >= MAX_SESSIONS:
         raise ValueError('session_limit')
-    session = TerminalSession(operator=operator, endpoint=endpoint, machine_id=endpoint.machine_id,
+    session = TerminalSession(operator=operator, endpoint=endpoint, machine_id=endpoint.machine_id, mode=mode,
         agent_identity=endpoint.agent_token_hash, expires_at=timezone.now() + timedelta(seconds=LIFETIME_SECONDS))
     ticket = issue_ticket(session, 'operator')
     session.save()
@@ -148,7 +161,7 @@ def consume_ticket(session_id, role, ticket, owner):
     if updated != 1:
         raise PermissionError('credential_replayed')
     audit(session, role + '_connected')
-    return session.expires_at
+    return session.mode
 
 
 def check_live(session_id):
@@ -180,9 +193,10 @@ class TerminalOperatorView(PrivateTerminalView):
     def post(self, request, endpoint_id):
         try:
             require_control(request)
-            if request.data != {'type': 'request', 'protocol': 1} or type(request.data.get('protocol')) is not int:
+            if (not isinstance(request.data, dict) or set(request.data) - {'type', 'protocol', 'mode'} or
+                    request.data.get('type') != 'request' or type(request.data.get('protocol')) is not int or request.data['protocol'] != 1):
                 raise ValueError('invalid_request')
-            return Response(create_session(request.user, endpoint_id), status=201)
+            return Response(create_session(request.user, endpoint_id, request.data.get('mode', 'synthetic')), status=201)
         except PermissionError:
             # Record rejection metadata only; never tickets, payloads, or headers.
             create_audit_event(event_type='terminal.rejected', title='Terminal request rejected', description='authorization_denied',

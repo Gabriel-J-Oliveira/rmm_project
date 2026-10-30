@@ -588,6 +588,8 @@ public sealed class Worker : BackgroundService
             .Where(type => type is "configure_telemetry" or "collect_services" || type == "install_software" && config.SoftwareInstallEnabled)
             .Concat(OperationalActions.Capabilities(config))
             .Concat(config.RemoteTerminalTransportEnabled ? new[] { "remote_terminal_transport:1" } : Array.Empty<string>())
+            .Concat(config.RemoteTerminalTransportEnabled && config.TerminalConPtyEnabled && !string.IsNullOrEmpty(config.TerminalAuthorizedUserSid) &&
+                config.TerminalWindowsSessionId > 0 ? new[] { "remote_terminal_conpty:1" } : Array.Empty<string>())
             .Append("jobs_protocol_v2").Append("job_protocol_v2").ToArray();
         TelemetrySettings? effectiveTelemetry = _telemetryRuntime.Effective;
         payload.Agent["telemetry_mode"] = config.TelemetryMode;
