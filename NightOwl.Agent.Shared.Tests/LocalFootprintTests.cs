@@ -9,6 +9,15 @@ internal static class LocalFootprintTests
     internal static void Run(string root)
     {
         void Check(bool ok,string message){if(!ok)throw new InvalidOperationException(message);}
+        Check(NightOwlPaths.InteractiveTrayLogPath==NightOwlPaths.Current.TrayLogPath,"Fixture log must remain inside NIGHTOWL_HOME.");
+        string? priorHome=Environment.GetEnvironmentVariable("NIGHTOWL_HOME");
+        try
+        {
+            Environment.SetEnvironmentVariable("NIGHTOWL_HOME",null);
+            Check(NightOwlPaths.InteractiveTrayLogPath==Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"NightOwl","Logs","agent-tray-user.jsonl"),
+                "Normal interactive logging must use a user-owned directory, without widening ProgramData ACLs.");
+        }
+        finally { Environment.SetEnvironmentVariable("NIGHTOWL_HOME",priorHome); }
         string path=Path.Combine(root,"tail-fixture.jsonl");
         string[] fixture=Enumerable.Range(0,100000).Select(i=>$"line-{i:D6}-"+new string('x',90)).ToArray();
         File.WriteAllLines(path,fixture,new UTF8Encoding(false));

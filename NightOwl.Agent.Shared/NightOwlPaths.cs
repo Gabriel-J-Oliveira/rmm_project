@@ -16,6 +16,12 @@ public sealed class NightOwlPaths
     public const string EveryoneSid = "S-1-1-0";
     public const string AuthenticatedUsersSid = "S-1-5-11";
 
+    // Interactive users have RX, not write access, to ProgramData logs.
+    // Explicit NIGHTOWL_HOME keeps development fixtures entirely inside their root.
+    public static string InteractiveTrayLogPath => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("NIGHTOWL_HOME"))
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NightOwl", "Logs", "agent-tray-user.jsonl")
+        : Current.TrayLogPath;
+
     public string Root { get; }
     public string InstallDir { get; }
     public string ConfigDir { get; }

@@ -678,7 +678,7 @@ internal static class Program
             string logsOut = Path.Combine(_staging, "logs");
             Directory.CreateDirectory(logsOut);
             long total = 0;
-            foreach (string path in new[] { _paths.AgentLogPath, _paths.UpdaterLogPath, _paths.TrayLogPath })
+            foreach (string path in new[] { _paths.AgentLogPath, _paths.UpdaterLogPath, _paths.TrayLogPath, NightOwlPaths.InteractiveTrayLogPath }.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 CopyLogTail(path, Path.Combine("logs", Path.GetFileName(path)), ref total);
             }

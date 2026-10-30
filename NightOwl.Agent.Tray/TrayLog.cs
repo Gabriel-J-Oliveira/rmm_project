@@ -9,7 +9,7 @@ internal static class TrayLog
     {
         try
         {
-            string logPath = NightOwlPaths.Current.TrayLogPath;
+            string logPath = NightOwlPaths.InteractiveTrayLogPath;
             string? dir = Path.GetDirectoryName(logPath);
             if (!string.IsNullOrWhiteSpace(dir))
             {
