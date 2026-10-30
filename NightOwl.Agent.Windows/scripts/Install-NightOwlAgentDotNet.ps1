@@ -1066,14 +1066,42 @@ function Get-TelemetryConfig($ExistingConfig) {
     if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetryEnabled') {
         $enabled = $ExistingConfig.telemetryEnabled -is [bool] -and $ExistingConfig.telemetryEnabled
     }
-    return [ordered]@{
+    # Missing mode has always loaded as legacy in installer-generated configs.
+    $result = [ordered]@{
         telemetryEnabled = [bool]$enabled
-        telemetrySampleSeconds = if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetrySampleSeconds') { $ExistingConfig.telemetrySampleSeconds } else { 300 }
-        telemetryFlushSeconds = if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetryFlushSeconds') { $ExistingConfig.telemetryFlushSeconds } elseif ($null -ne $ExistingConfig) { 3600 } else { 900 }
+        telemetryMode = 'legacy'
+        telemetrySampleSeconds = 300
+        telemetryFlushSeconds = $(if ($null -ne $ExistingConfig) { 3600 } else { 900 })
+        telemetryBufferMaxSamples = 2304
+        telemetryBufferMaxAgeHours = 192
+        telemetryWindowMaxBytes = 134217728
+        telemetryWindowMaxAgeHours = 192
     }
+    foreach ($key in @($result.Keys)) {
+        if ($key -ne 'telemetryEnabled' -and $null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains $key) {
+            $result[$key] = $ExistingConfig.$key
+        }
+    }
+    return $result
 }
 
-function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTokenValue, [string]$MachineIdValue, [string]$ServerBaseValue, [string]$VersionValue) {
+function Merge-AgentRuntimeConfig($GeneratedConfig, $ExistingConfig, [bool]$ServerChanged = $false) {
+    # Identity/credentials/version/installPath belong to the lifecycle entrypoint.
+    # Keep explicit configuration, including removals from allowedJobTypes.
+    $authoritative = @('agentToken', 'machineId', 'agentVersion', 'installPath')
+    $routes = @('serverBaseUrl', 'heartbeatUrl', 'collectUrl', 'jobsPullUrl', 'jobsResultUrl', 'telemetryUrl')
+    if ($null -ne $ExistingConfig) {
+        foreach ($property in $ExistingConfig.PSObject.Properties) {
+            if ($property.Name -in $authoritative -or ($ServerChanged -and $property.Name -in $routes)) { continue }
+            $GeneratedConfig[$property.Name] = $property.Value
+        }
+    }
+    $telemetry = Get-TelemetryConfig $ExistingConfig
+    foreach ($key in $telemetry.Keys) { $GeneratedConfig[$key] = $telemetry[$key] }
+    return $GeneratedConfig
+}
+
+function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTokenValue, [string]$MachineIdValue, [string]$ServerBaseValue, [string]$VersionValue, [bool]$ServerChanged = $false) {
     $checkpoint = [ordered]@{
         agentToken = $AgentTokenValue
         machineId = $MachineIdValue
@@ -1098,8 +1126,7 @@ function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTo
             $checkpoint.agentVersion = $existingVersion
         }
     }
-    $telemetry = Get-TelemetryConfig $ExistingConfig
-    foreach ($key in $telemetry.Keys) { $checkpoint[$key] = $telemetry[$key] }
+    $checkpoint = Merge-AgentRuntimeConfig $checkpoint $ExistingConfig $ServerChanged
     Save-AgentConfig -Path $Path -Config $checkpoint
     $reloaded = Read-JsonFile $Path
     $reloadedToken = Get-ConfigAgentToken $reloaded
@@ -1801,6 +1828,26 @@ $identityInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_IDENTITY_IN
 Repair-JsonFileIfInvalid -Path $configPath -ErrorCode $configInvalidCode
 Repair-JsonFileIfInvalid -Path ([string]$script:NightOwlPaths.IdentityPath) -ErrorCode $identityInvalidCode
 
+$preservedConfig = Read-JsonFile $configPath
+if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
+    Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
+    Write-InstallLog "path.file.migrated" "Config legado copiado para Config." @{ source = $legacyConfigPath; destination = $configPath }
+    $preservedConfig = Read-JsonFile $configPath
+}
+elseif (Test-Path $legacyConfigPath) {
+    Write-InstallLog "path.legacy.preserved" "Config legado preservado; Config ja existe." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
+}
+
+$serverChangedExplicitly = $PSBoundParameters.ContainsKey('ServerUrl') -and
+    -not [string]::IsNullOrWhiteSpace((Get-ConfigServerUrl $preservedConfig)) -and
+    (Normalize-ServerUrl (Get-ConfigServerUrl $preservedConfig)) -ne $serverBase
+$existingToken = Get-ConfigAgentToken $preservedConfig
+$existingServer = Get-ConfigServerUrl $preservedConfig
+if (-not [string]::IsNullOrWhiteSpace($existingServer) -and (-not $PSBoundParameters.ContainsKey('ServerUrl'))) {
+    $serverBase = Normalize-ServerUrl $existingServer
+}
+
+
 $localExe = Join-Path $sourcePath "NightOwl.Agent.Windows.exe"
 $tempPackageDir = $null
 if (-not (Test-Path $localExe) -or -not [string]::IsNullOrWhiteSpace($PackageUrl)) {
@@ -1819,22 +1866,6 @@ Write-InstallLog "release.metadata.resolved" "Metadata da release resolvida para
     channel = [string]$releaseMetadata.channel
     package_sha256 = [string]$releaseMetadata.packageSha256
     source = [string]$releaseMetadata.source
-}
-
-$preservedConfig = Read-JsonFile $configPath
-if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
-    Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
-    Write-InstallLog "path.file.migrated" "Config legado copiado para Config." @{ source = $legacyConfigPath; destination = $configPath }
-    $preservedConfig = Read-JsonFile $configPath
-}
-elseif (Test-Path $legacyConfigPath) {
-    Write-InstallLog "path.legacy.preserved" "Config legado preservado; Config ja existe." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
-}
-
-$existingToken = Get-ConfigAgentToken $preservedConfig
-$existingServer = Get-ConfigServerUrl $preservedConfig
-if (-not [string]::IsNullOrWhiteSpace($existingServer) -and [string]::IsNullOrWhiteSpace($ServerUrl)) {
-    $serverBase = Normalize-ServerUrl $existingServer
 }
 
 if ((-not (Test-Path $statePath)) -and (Test-Path $legacyStatePath)) {
@@ -1888,7 +1919,7 @@ elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
         Write-Step "OK" "Config de intervalos recebida do servidor"
     }
     if ($isDeploymentEnrollment) {
-        Save-AgentCredentialCheckpoint -Path $configPath -ExistingConfig $preservedConfig -AgentTokenValue $AgentToken -MachineIdValue $machineId -ServerBaseValue $serverBase -VersionValue (Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig)
+        Save-AgentCredentialCheckpoint -Path $configPath -ExistingConfig $preservedConfig -AgentTokenValue $AgentToken -MachineIdValue $machineId -ServerBaseValue $serverBase -VersionValue (Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig) -ServerChanged $serverChangedExplicitly
         Write-InstallLog "credential.persisted" "Credencial de deployment persistida antes da instalacao." @{
             machine_id = (Protect-SecretValue $machineId)
             credential_source = if ($existingToken -eq $AgentToken) { "preserved" } else { "recovered" }
@@ -1958,8 +1989,7 @@ $config = [ordered]@{
     jobsPath = [string]$script:NightOwlPaths.StateDir
     allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent")
 }
-$telemetry = Get-TelemetryConfig $preservedConfig
-foreach ($key in $telemetry.Keys) { $config[$key] = $telemetry[$key] }
+$config = Merge-AgentRuntimeConfig $config $preservedConfig $serverChangedExplicitly
 Save-AgentConfig -Path $configPath -Config $config
 if (-not $existingInstallation -and (Test-Path $legacyConfigPath)) {
     Remove-Item -Path $legacyConfigPath -Force
@@ -2088,10 +2118,6 @@ else {
 }
 
 Write-InstalledState -Path $statePath -MachineId $machineId
-
-if ($tempPackageDir -and (Test-Path $tempPackageDir)) {
-    Remove-Item -Path $tempPackageDir -Recurse -Force -ErrorAction SilentlyContinue
-}
 
 Write-OperationReport -Status "completed"
 Write-InstallLog ("operation.{0}.completed" -f $script:Operation) "Operacao do agente concluida." @{ operation = $script:Operation; version = $packageVersion; machine_id = (Protect-SecretValue $machineId) }

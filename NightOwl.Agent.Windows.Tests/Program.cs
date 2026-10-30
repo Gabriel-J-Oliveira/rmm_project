@@ -11,6 +11,19 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--installer-config-contract", StringComparer.Ordinal))
+    {
+        AgentConfig config = ConfigService.DeserializeExistingConfig(Console.In.ReadToEnd());
+        typeof(ConfigService).GetMethod("Normalize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, new object[] { config });
+        ConfigService.ApplyConfigMigrations(config);
+        Console.WriteLine(JsonSerializer.Serialize(new { config.MachineId, config.TelemetryEnabled, config.TelemetryMode,
+            config.TelemetryWindowMaxBytes, config.TelemetryWindowMaxAgeHours, config.TelemetryBufferMaxSamples,
+            config.JobSignalSeconds, config.AllowedJobTypes, config.SoftwareInstallEnabled, config.SoftwareCatalogSha256,
+            config.ServerBaseUrl, config.HeartbeatUrl, config.Intervals, config.ConfigMigrationVersion,
+            futureSettingPreserved = config.ExtensionData.TryGetValue("futureSetting", out JsonElement future) && future.GetString() == "preserve-me"
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        return;
+    }
     if (args.FirstOrDefault() == "--echo-arguments")
     {
         Console.WriteLine(JsonSerializer.Serialize(args.Skip(1).ToArray()));

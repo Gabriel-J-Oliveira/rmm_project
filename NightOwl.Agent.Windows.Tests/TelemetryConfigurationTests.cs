@@ -12,6 +12,12 @@ internal static class TelemetryConfigurationTests
     private static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     internal static async Task RunAsync()
     {
+        using (NativeDiskCounters counters = new())
+        {
+            Check(!counters.InitializationAttempted, "Constructing disabled/legacy telemetry must not open PDH queries.");
+            _ = counters.Read(new Dictionary<string, object?>());
+            Check(counters.InitializationAttempted, "First requested native read must initialize counters.");
+        }
         var requested = new TelemetrySettings(true, 300, 900);
         Check(TelemetrySettings.Parse(Payload(requested)) == requested, "Strict payload round trip.");
         foreach (var invalid in new[] {
@@ -28,6 +34,13 @@ internal static class TelemetryConfigurationTests
         Directory.CreateDirectory(root);
         try
         {
+            FakeTelemetryHttpClientFactory transport = new();
+            TelemetryPipeline unsupported = new(new TelemetryCollector(), new AgentApiClient(transport), new JsonlLogger(Path.Combine(root, "unsupported.jsonl")));
+            bool modeRejected = false;
+            try { await unsupported.RunAsync(new AgentConfig { TelemetryMode = "unrecognized-profile" }, CancellationToken.None); }
+            catch (InvalidOperationException) { modeRejected = true; }
+            Check(modeRejected && transport.Calls == 0, "Unsupported mode must not silently collect/upload legacy telemetry.");
+            await unsupported.RunAsync(new AgentConfig { TelemetryEnabled = false, TelemetryMode = "unrecognized-profile" }, CancellationToken.None);
             string path = Path.Combine(root, "config.json");
             string journalPath = Path.Combine(root, "journal.json");
             var config = new AgentConfig { AgentToken = "identity-secret-sentinel", MachineId = Guid.NewGuid().ToString(),

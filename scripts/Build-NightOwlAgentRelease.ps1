@@ -850,6 +850,7 @@ try {
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleScriptTest)
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installerTrustTest)
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleLogTest)
+        Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repoRoot 'tests\Test-NightOwlInstallerConfiguration.ps1'))
     }
 
     foreach ($project in @($agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject)) {

@@ -57,7 +57,8 @@ Invoke-NightOwlEnrollment -BaseUrl 'https://example.test' -MachineId 'synthetic'
 "@
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childTest))
 $childInfo = New-Object System.Diagnostics.ProcessStartInfo
-$childInfo.FileName = (Join-Path $PSHOME 'powershell.exe')
+$childInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $childInfo.FileName)) { throw 'Windows PowerShell 5.1 is required for the remote installer child contract.' }
 $childInfo.Arguments = '-NoProfile -NonInteractive -EncodedCommand ' + $encoded
 $childInfo.UseShellExecute = $false
 $childInfo.RedirectStandardOutput = $true

@@ -8,9 +8,14 @@ internal sealed class NativeDiskCounters : IDisposable
 {
     private nint _query;
     private bool _primed;
+    private bool _disposed;
+    internal bool InitializationAttempted { get; private set; }
     private readonly Dictionary<string, nint> _handles = new();
-    internal NativeDiskCounters()
+    private void Initialize()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (InitializationAttempted) return;
+        InitializationAttempted = true;
         if (!OperatingSystem.IsWindows() || PdhOpenQuery(null, 0, out _query) != 0) return;
         foreach ((string name, string path) in new Dictionary<string, string>
         {
@@ -25,6 +30,7 @@ internal sealed class NativeDiskCounters : IDisposable
 
     internal Dictionary<string, double> Read(Dictionary<string, object?> quality)
     {
+        Initialize();
         Dictionary<string, double> values = new();
         if (_query == 0 || PdhCollectQueryData(_query) != 0)
         {
@@ -73,7 +79,7 @@ internal sealed class NativeDiskCounters : IDisposable
         return values;
     }
 
-    public void Dispose() { if (_query != 0) { PdhCloseQuery(_query); _query = 0; } }
+    public void Dispose() { _disposed = true; if (_query != 0) { PdhCloseQuery(_query); _query = 0; } }
     [StructLayout(LayoutKind.Sequential)] private struct Formatted { public uint Status; public double Value; }
     [StructLayout(LayoutKind.Sequential)] private struct Item { public nint Name; public Formatted Value; }
     [DllImport("pdh.dll", CharSet = CharSet.Unicode, EntryPoint = "PdhOpenQueryW")] private static extern uint PdhOpenQuery(string? source, nint data, out nint query);

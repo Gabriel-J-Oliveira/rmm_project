@@ -112,6 +112,9 @@ public sealed class AgentConfig
     [JsonIgnore]
     public string MachineIdSource { get; set; } = "";
 
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
+
     [JsonIgnore]
     public bool HasValidToken => !IsPlaceholderToken(AgentToken);
 

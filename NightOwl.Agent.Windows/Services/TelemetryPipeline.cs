@@ -49,6 +49,12 @@ public sealed class TelemetryPipeline
     public async Task RunAsync(AgentConfig config, CancellationToken ct, Action? ready = null)
     {
         if (!config.TelemetryEnabled) return;
+        if (config.TelemetryMode is not ("legacy" or "continuous"))
+        {
+            await LogBestEffortAsync("telemetry.mode.unsupported", "Unsupported telemetry mode; sampling not started.",
+                new { reason = "unsupported_mode" }, ct);
+            throw new InvalidOperationException("Unsupported telemetry mode.");
+        }
         if (_continuous is not null && config.TelemetryMode == "continuous")
         {
             await _continuous.RunAsync(config, ct, ready);
