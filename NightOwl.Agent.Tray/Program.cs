@@ -15,9 +15,9 @@ internal static class Program
             return;
         }
 
-        if (!TrayApplicationContext.IsServiceRunning())
+        if (!TrayApplicationContext.IsServicePresent())
         {
-            TrayLog.Write("tray.exit.service_not_running", "Servico NightOwlAgentDotNet ausente ou parado.");
+            TrayLog.Write("tray.exit.service_not_running", "Servico NightOwlAgentDotNet ausente ou inacessivel.");
             return;
         }
 

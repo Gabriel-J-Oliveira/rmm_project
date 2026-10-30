@@ -1,4 +1,5 @@
 from datetime import timedelta
+from django.db import IntegrityError
 
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -30,6 +31,15 @@ class AgentTelemetryView(APIView):
         if declared_size > MAX_TELEMETRY_BODY_BYTES or len(request._request.body) > MAX_TELEMETRY_BODY_BYTES:
             return Response({'error': 'payload_too_large'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
         machine = authenticate_agent_token(request)
+        if isinstance(request.data, dict) and request.data.get('schema_version') == 2:
+            from .telemetry_continuous import validate_windows, persist_windows
+            try:
+                if str(request.data.get('machine_id')).lower() != str(machine.machine_id).lower():
+                    return Response({'error': 'machine_id_mismatch'}, status=403)
+                accepted = persist_windows(machine, validate_windows(request.data))
+            except (ValueError, TypeError, KeyError, OverflowError, IntegrityError):
+                return Response({'error': 'invalid_telemetry_window'}, status=400)
+            return Response({'status': 'ok', 'accepted_window_ids': accepted})
         serializer = BatchSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({'error': 'invalid_telemetry', 'detail': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -66,6 +76,11 @@ class EndpointTelemetryView(APIView):
         return Response({
             'endpoint_id': str(endpoint_id),
             'samples': [{
+                'schema_version': row.schema_version,
+                'kind': 'window' if row.schema_version == 2 else 'legacy_raw',
+                'resolution_seconds': row.resolution_seconds,
+                'window_end_at': row.window_end_at.isoformat() if row.window_end_at else None,
+                'metric_summaries': row.metric_summaries if row.schema_version == 2 else None,
                 'sample_id': str(row.sample_id),
                 'collected_at': row.collected_at.isoformat(),
                 'cpu_percent': row.cpu_percent,

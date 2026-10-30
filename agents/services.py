@@ -1348,6 +1348,77 @@ def _raw_payload_with_previous_collections(machine, raw_payload):
     return payload
 
 
+def _heartbeat_inventory_projection(machine, payload, latest):
+    """Keep cached inventory separate from evidence observed by this heartbeat."""
+    data = _snapshot_defaults(machine, latest)
+    hardware = payload.get('hardware') or {}
+    os_data = _heartbeat_os(payload)
+    reported = {
+        'os_name': os_data.get('name'), 'os_version': os_data.get('version'),
+        'windows_build': os_data.get('build'), 'cpu': hardware.get('cpu'),
+        'memory_total_bytes': hardware.get('memory_total_bytes'),
+        'manufacturer': hardware.get('manufacturer'), 'model': hardware.get('model'),
+        'serial_number': hardware.get('serial_number'),
+        'logged_user': payload.get('logged_user') or payload.get('username'),
+        'ips': _heartbeat_ips(payload), 'uptime_seconds': payload.get('uptime_seconds'),
+        'disks': payload.get('disks'), 'installed_software': payload.get('installed_software'),
+        'defender_status': payload.get('defender_status'),
+    }
+    observed, unknown = [], []
+    for field, value in reported.items():
+        if value is None or value == '' or value == [] or value == {}:
+            continue
+        if field == 'memory_total_bytes' and value <= 0:
+            continue
+        if field == 'serial_number':
+            value = preserve_serial_evidence(machine.serial_number, value)
+            if value != reported[field]:
+                continue
+        data[field] = value
+        observed.append(field)
+    for field in ('os', 'hardware', 'os_name', 'os_version', 'windows_build', 'logged_user', 'username',
+                  'ip_address', 'ips', 'uptime_seconds', 'disks', 'installed_software', 'defender_status'):
+        if field in payload and payload[field] in (None, '', [], {}):
+            unknown.append(field)
+    unknown.extend('hardware.' + field for field, value in hardware.items()
+                   if value in (None, '', [], {}) or field == 'memory_total_bytes' and value == 0)
+    unknown.extend('os.' + field for field, value in (payload.get('os') or {}).items()
+                   if value in (None, '', [], {}))
+    previous_raw = (latest.raw_payload or {}) if latest else {}
+    inherited = {}
+    previous_heartbeat = _as_dict(previous_raw.get('heartbeat_inventory'))
+    previous = _as_dict(previous_heartbeat.get('inherited'))
+    sections = {'cpu': 'hardware', 'memory_total_bytes': 'hardware', 'manufacturer': 'hardware',
+                'model': 'hardware', 'serial_number': 'hardware', 'os_name': 'system',
+                'os_version': 'system', 'windows_build': 'system', 'logged_user': 'system',
+                'ips': 'network', 'disks': 'disk', 'installed_software': 'software',
+                'defender_status': 'security', 'uptime_seconds': 'system'}
+    for field in reported:
+        if field in observed or data[field] in (None, '', [], {}):
+            continue
+        collection_type = previous_raw.get('latest_collection_type')
+        refreshed = previous_raw.get('snapshot_source') == 'collection' and (
+            collection_type in ('full_inventory', sections[field]) or
+            collection_type == 'system' and field in ('manufacturer', 'model', 'serial_number', 'uptime_seconds'))
+        if not refreshed and field in previous:
+            inherited[field] = previous[field]
+            continue
+        if not refreshed and field in previous_heartbeat.get('observed_fields', []):
+            inherited[field] = {'source': 'heartbeat', 'collected_at': previous_heartbeat.get('observed_at'),
+                                'projection_snapshot_id': str(latest.pk)}
+            continue
+        section_name = 'system' if refreshed and collection_type == 'system' else sections[field]
+        section = (previous_raw.get('collections') or {}).get(section_name) or {}
+        inherited[field] = {
+            'source': 'inventory:' + section_name if section else 'previous_snapshot' if latest else 'agent_machine',
+            'collected_at': section.get('collected_at') if isinstance(section, dict) else None,
+            'projection_snapshot_id': str(latest.pk) if latest else None,
+        }
+        if latest and not previous_raw.get('collections'):
+            inherited[field]['collected_at'] = latest.collected_at.isoformat()
+    return data, {'observed_fields': observed, 'unknown_fields': unknown, 'inherited': inherited}
+
+
 @transaction.atomic
 def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnapshot:
     lock_identity_registry()
@@ -1365,14 +1436,15 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
                 raise IdentityConflict('heartbeat_diagnostics_identity_conflict')
     previous_hostname = machine.hostname
     received_at = timezone.now()
-    os_data = _heartbeat_os(payload)
-    hardware = payload.get('hardware') or {}
+    latest = machine.inventory_snapshots.order_by('-received_at').first()
+    projection, provenance = _heartbeat_inventory_projection(machine, payload, latest)
     hostname = identity['hostname']
     domain = identity['domain']
-    ips = _heartbeat_ips(payload)
-    logged_user = payload.get('logged_user') or payload.get('username') or ''
+    ips = projection['ips']
+    logged_user = projection['logged_user']
     agent_data = _heartbeat_agent(payload)
     heartbeat_at = payload.get('heartbeat_at') or payload.get('timestamp') or received_at
+    provenance['observed_at'] = _parse_agent_datetime(heartbeat_at).isoformat()
     old_agent_version = machine.agent_version
     identity_update_fields = _sync_machine_identity(machine, identity['machine_id'], 'heartbeat')
 
@@ -1381,21 +1453,18 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
     machine.fqdn = build_fqdn(hostname, domain)
     machine.last_ip = first_ip(ips)
     machine.last_logged_user = logged_user
-    machine.os_name = os_data.get('name', '')
-    machine.os_version = os_data.get('version', '')
-    machine.windows_build = os_data.get('build', '')
-    machine.manufacturer = hardware.get('manufacturer', '')
-    machine.model = hardware.get('model', '')
-    machine.serial_number = preserve_serial_evidence(machine.serial_number, hardware.get('serial_number'))
+    for field in ('os_name', 'os_version', 'windows_build', 'manufacturer', 'model', 'serial_number'):
+        if field in provenance['observed_fields']:
+            setattr(machine, field, projection[field])
     agent_update_fields = []
     if agent_data:
-        machine.agent_version = _safe_version(agent_data.get('version'))
-        machine.agent_mode = agent_data.get('mode', '')
-        machine.agent_install_path = agent_data.get('install_path', '')
-        machine.agent_task_name = agent_data.get('task_name', '')
-        machine.agent_runtime = agent_data.get('runtime', '')
-        machine.agent_runtime_version = agent_data.get('runtime_version', '')
-        machine.agent_update_source = agent_data.get('update_source', '')
+        for field, key in (('agent_version', 'version'), ('agent_mode', 'mode'),
+                           ('agent_install_path', 'install_path'), ('agent_task_name', 'task_name'),
+                           ('agent_runtime', 'runtime'), ('agent_runtime_version', 'runtime_version'),
+                           ('agent_update_source', 'update_source')):
+            value = _safe_version(agent_data.get(key)) if key == 'version' else agent_data.get(key)
+            if value:
+                setattr(machine, field, value)
         machine.agent_reported_at = received_at
         agent_update_fields = [
             'agent_version',
@@ -1450,6 +1519,7 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
 
     snapshot_raw_payload = _raw_payload_with_previous_collections(machine, raw_payload)
     snapshot_raw_payload['snapshot_source'] = 'heartbeat'
+    snapshot_raw_payload['heartbeat_inventory'] = provenance
 
     return InventorySnapshot.objects.create(
         machine=machine,
@@ -1459,20 +1529,44 @@ def record_heartbeat(machine, payload: dict, raw_payload: dict) -> InventorySnap
         domain=domain,
         logged_user=logged_user,
         ips=ips,
-        os_name=os_data.get('name', ''),
-        os_version=os_data.get('version', ''),
-        windows_build=os_data.get('build', ''),
-        cpu=hardware.get('cpu', ''),
-        memory_total_bytes=hardware.get('memory_total_bytes'),
-        disks=payload.get('disks', []),
-        manufacturer=hardware.get('manufacturer', ''),
-        model=hardware.get('model', ''),
-        serial_number=hardware.get('serial_number', ''),
-        uptime_seconds=payload.get('uptime_seconds'),
-        installed_software=payload.get('installed_software', []),
-        defender_status=payload.get('defender_status', {}),
+        **{field: projection[field] for field in (
+            'os_name', 'os_version', 'windows_build', 'cpu', 'memory_total_bytes', 'disks',
+            'manufacturer', 'model', 'serial_number', 'uptime_seconds', 'installed_software', 'defender_status')},
         raw_payload=snapshot_raw_payload,
     )
+
+
+def _merge_inventory_evidence(previous, incoming):
+    """Unknown readings never replace evidence; affirmative absence is distinct."""
+    previous = _as_dict(previous)
+    incoming = _as_dict(incoming)
+    state = incoming.get('collection_status') or incoming.get('status')
+    if state in ('failed', 'unknown'):
+        return dict(previous)
+    if state == 'not_present':
+        return dict(incoming)
+    merged = dict(previous)
+    for key, value in incoming.items():
+        if value is None or value == '' or value == 'unknown' or value == [] or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, dict):
+            merged[key] = _merge_inventory_evidence(previous.get(key), value)
+        elif key == 'modules' and isinstance(value, list):
+            old_rows = previous.get(key) if isinstance(previous.get(key), list) else []
+            rows = []
+            for row in value:
+                if not isinstance(row, dict):
+                    continue
+                locator = row.get('device_locator')
+                matches = [old for old in old_rows if isinstance(old, dict) and locator and old.get('device_locator') == locator]
+                unique = sum(isinstance(item, dict) and item.get('device_locator') == locator for item in value) == 1
+                # Never carry evidence across a confirmed replacement module.
+                same_serial = len(matches) == 1 and matches[0].get('serial_number') == row.get('serial_number') and bool(row.get('serial_number'))
+                rows.append(_merge_inventory_evidence(matches[0], row) if unique and same_serial else row)
+            merged[key] = rows
+        else:
+            merged[key] = value
+    return merged
 
 
 @transaction.atomic
@@ -1513,7 +1607,7 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
     data['model'] = hardware.get('model') or system.get('model') or data['model']
     data['serial_number'] = hardware.get('serial_number') or system.get('serial_number') or bios_data.get('serial_number') or machine.serial_number
     data['uptime_seconds'] = system.get('uptime_seconds') or data['uptime_seconds']
-    data['cpu'] = cpu_name or data['cpu']
+    data['cpu'] = cpu_name if cpu_name and cpu_name != 'unknown' else data['cpu']
     data['memory_total_bytes'] = hardware.get('memory_total_bytes') or data['memory_total_bytes']
 
     disk_items = _disk_rows(disk)
@@ -1527,15 +1621,44 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
 
     raw_payload = dict(data['raw_payload'] or {})
     collections = dict(raw_payload.get('collections') or {})
-    collections[collection_type] = payload
+    previous_collections = dict(collections)
+    scheduled = payload.get('collection_scope') == 'scheduled'
+    collections['scheduled_inventory' if scheduled else collection_type] = payload
     collected_at = payload.get('collected_at')
+    observations = dict(raw_payload.get('inventory_observations') or {})
+    states = _as_dict(payload.get('section_states'))
+    for name, incoming in (('system', system), ('hardware', hardware), ('network', network)):
+        if not incoming and name not in states:
+            continue
+        previous = _as_dict(previous_collections.get(name))
+        section_state = incoming.get('collection_status') or incoming.get('status')
+        state = states.get(name) or (section_state if section_state in ('available', 'unknown', 'not_present', 'failed') else
+                                     'available' if incoming else 'unknown')
+        observation = {**_as_dict(observations.get(name)), 'status': state,
+                       'last_attempt_at': collected_at, 'source': f'agent:{name}'}
+        if state == 'available' and incoming:
+            merged = _merge_inventory_evidence(previous, incoming)
+            # Each nested hardware section keeps its own original evidence date.
+            for child in ('cpu', 'baseboard', 'bios', 'memory', 'battery'):
+                value = incoming.get(child)
+                if states and isinstance(value, dict) and (value.get('collection_status') or value.get('status')) not in {'failed', 'unknown'}:
+                    merged[child] = {**_as_dict(merged.get(child)), 'collected_at': value.get('collected_at') or collected_at}
+            merged['collected_at'] = incoming.get('collected_at') or collected_at
+            collections[name] = merged
+            observation['last_success_at'] = merged['collected_at']
+        elif previous:
+            collections[name] = previous
+        else:
+            collections.pop(name, None)
+        observations[name] = observation
+    for name in ('hardware_details', 'cpu', 'baseboard', 'memory', 'battery', 'physical_disks', 'disk'):
+        if name in states:
+            observations[name] = {**_as_dict(observations.get(name)), 'status': states[name],
+                                  'last_attempt_at': collected_at, 'source': f'agent:{name}'}
+            if states[name] in {'available', 'not_present'}:
+                observations[name]['last_success_at'] = collected_at
+    raw_payload['inventory_observations'] = observations
     if collection_type == 'full_inventory':
-        if system:
-            collections['system'] = {**system, 'collected_at': system.get('collected_at') or collected_at}
-        if hardware:
-            collections['hardware'] = {**hardware, 'collected_at': hardware.get('collected_at') or collected_at}
-        if network:
-            collections['network'] = {**network, 'collected_at': network.get('collected_at') or collected_at}
         if disk_items:
             collections['disk'] = {
                 'disks': disk_items,
@@ -1551,7 +1674,7 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
     if patches:
         collections['patches'] = patches
     raw_payload['collections'] = collections
-    raw_payload['latest_collection_type'] = collection_type
+    raw_payload['latest_collection_type'] = 'scheduled_inventory' if scheduled else collection_type
     raw_payload['snapshot_source'] = 'collection'
     raw_payload['latest_collection_received_at'] = timezone.now().isoformat()
     data['raw_payload'] = raw_payload

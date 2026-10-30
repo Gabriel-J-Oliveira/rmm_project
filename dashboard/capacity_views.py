@@ -1,13 +1,14 @@
 """Read-only presentation data for the OBZ capacity dashboard."""
 
 from collections import defaultdict
+from itertools import groupby
 from datetime import timedelta
 import math
 from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import connection
-from django.db.models import Count, Min, OuterRef, Q, Subquery
+from django.db.models import Count, Min, OuterRef, Q, Subquery, Exists
 from django.http import Http404, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -51,6 +52,12 @@ def _inventory_map(endpoint_ids):
     references = {}
     for snapshot in InventorySnapshot.objects.filter(pk__in=Subquery(latest_ids)):
         raw = snapshot.raw_payload or {}
+        collections = raw.get('collections') or {}
+        hardware = collections.get('hardware') or {}
+        if collections.get('scheduled_inventory') and isinstance(hardware, dict) and hardware.get('collected_at'):
+            # Scheduled groups carry independently dated, merged evidence, including across heartbeats.
+            result[snapshot.machine_id] = snapshot
+            continue
         full = (raw.get('collections') or {}).get('full_inventory') or {}
         if full:
             try:
@@ -81,8 +88,12 @@ def _inventory_provenance(snapshot):
     if snapshot is None:
         return {'collected_at': None, 'received_at': None, 'sections': {}}
     collections = (snapshot.raw_payload or {}).get('collections') or {}
+    hardware = collections.get('hardware') or {}
+    collected_at = snapshot.collected_at.isoformat()
+    if collections.get('scheduled_inventory') and isinstance(hardware, dict):
+        collected_at = hardware.get('detailed_collected_at') or hardware.get('collected_at')
     return {
-        'snapshot_id': str(snapshot.pk), 'collected_at': snapshot.collected_at.isoformat(),
+        'snapshot_id': str(snapshot.pk), 'collected_at': collected_at,
         'received_at': snapshot.received_at.isoformat(),
         'sections': {name: value.get('collected_at') for name, value in collections.items()
                      if name in ('hardware', 'system', 'disk', 'software') and isinstance(value, dict)},
@@ -348,12 +359,14 @@ def _compact_summary(endpoint, start, end, aggregate):
 def _overview(now, hours):
     latest_processes_query = (EndpointPerformanceSample.objects
                               .filter(endpoint_id=OuterRef('pk'), collected_at__gte=now - timedelta(days=7), collected_at__lt=now)
+                              .exclude(process_consumers={})
                               .order_by('-collected_at', '-id').values('process_consumers')[:1])
     endpoints = list(AgentMachine.objects.only(
         'id', 'hostname', 'status', 'last_seen_at', 'agent_version',
         'os_name', 'os_version', 'windows_build', 'first_seen_at', 'fqdn',
         'last_ip', 'last_logged_user', 'manufacturer', 'model',
-    ).annotate(obz_last_processes=Subquery(latest_processes_query),
+    ).annotate(obz_has_v2=Exists(EndpointPerformanceSample.objects.filter(endpoint_id=OuterRef('pk'), schema_version=2)),
+               obz_last_processes=Subquery(latest_processes_query),
                obz_last_telemetry=Subquery(EndpointPerformanceSample.objects.filter(
                    endpoint_id=OuterRef('pk'), collected_at__lt=now).order_by('-collected_at', '-id')
                    .values('collected_at')[:1])).order_by('hostname', 'pk'))
@@ -376,6 +389,17 @@ def _overview(now, hours):
         })
     primary_start = now - timedelta(hours=hours)
     context_start = now - timedelta(days=7)
+    continuous = defaultdict(list)
+    if any(endpoint.obz_has_v2 for endpoint in endpoints):
+        from agents.telemetry_continuous import continuous_summary
+        by_id = {e.pk: e for e in endpoints}
+        stream = EndpointPerformanceSample.objects.filter(endpoint_id__in=[e.pk for e in endpoints if e.obz_has_v2],
+                schema_version=2, collected_at__gte=context_start, window_end_at__lte=now).only(
+                    'endpoint_id', 'collected_at', 'created_at', 'window_end_at', 'resolution_seconds', 'metric_summaries').order_by('endpoint_id', 'collected_at').iterator(chunk_size=200)
+        for endpoint_id, group in groupby(stream, key=lambda sample: sample.endpoint_id):
+            samples = list(group)
+            continuous[endpoint_id] = (continuous_summary(by_id[endpoint_id], primary_start, now, samples),
+                                       continuous_summary(by_id[endpoint_id], context_start, now, samples))
     if connection.vendor == 'postgresql':
         primary_aggregates = _aggregate_window(primary_start, now)
         context_aggregates = _aggregate_window(context_start, now)
@@ -390,7 +414,9 @@ def _overview(now, hours):
             grouped[endpoint_id].append(tuple(sample))
     result = []
     for endpoint in endpoints:
-        if connection.vendor == 'postgresql':
+        if continuous.get(endpoint.pk):
+            primary, context = continuous[endpoint.pk]
+        elif connection.vendor == 'postgresql':
             primary = _compact_summary(endpoint, primary_start, now, primary_aggregates.get(endpoint.pk))
             context = _compact_summary(endpoint, context_start, now, context_aggregates.get(endpoint.pk))
         else:
@@ -465,15 +491,19 @@ def capacity_detail(request, pk):
     last_sample = (EndpointPerformanceSample.objects.filter(
         endpoint=endpoint, collected_at__gte=now - timedelta(days=7), collected_at__lt=now,
     )
-                   .order_by('-collected_at', '-pk').values('process_consumers', 'uptime_seconds').first())
-    processes = _latest_processes(last_sample['process_consumers']) if last_sample else []
-    sample_ranges = EndpointPerformanceSample.objects.filter(
+                   .order_by('-collected_at', '-pk').values('uptime_seconds').first())
+    process_sample = (EndpointPerformanceSample.objects.filter(
         endpoint=endpoint, collected_at__gte=now - timedelta(days=7), collected_at__lt=now,
+    ).exclude(process_consumers={}).order_by('-collected_at', '-pk')
+        .values('process_consumers', 'collected_at').first())
+    processes = _latest_processes(process_sample['process_consumers']) if process_sample else []
+    sample_ranges = EndpointPerformanceSample.objects.filter(
+        endpoint=endpoint, collected_at__gte=now - timedelta(days=90), collected_at__lt=now,
     ).aggregate(**{
         f'{field}_{key}': aggregate('collected_at' if field == 'first' else 'pk', filter=Q(
             collected_at__gte=now - timedelta(hours=duration),
         ))
-        for key, duration in (('6h', 6), ('24h', 24), ('3d', 72), ('7d', 168))
+        for key, duration in (('6h', 6), ('24h', 24), ('3d', 72), ('7d', 168), ('30d', 720), ('90d', 2160))
         for field, aggregate in (('first', Min), ('count', Count))
     })
     series_ranges = {
@@ -482,6 +512,8 @@ def capacity_detail(request, pk):
             and sample_ranges[f'count_{key}'] >= duration * 12 * 0.5)))
         for key, duration in (('6h', 6), ('24h', 24), ('3d', 72), ('7d', 168))
     }
+    series_ranges.update({key: sample_ranges[f'count_{key}'] >= 2 and sample_ranges[f'first_{key}'] <= now-timedelta(hours=duration*.75)
+                          for key, duration in (('30d',720),('90d',2160))})
     raw = snapshot.raw_payload if snapshot and isinstance(snapshot.raw_payload, dict) else {}
     collections = raw.get('collections') if isinstance(raw.get('collections'), dict) else {}
     apps = snapshot.installed_software if snapshot and isinstance(snapshot.installed_software, list) else []
@@ -518,13 +550,15 @@ def capacity_detail(request, pk):
             'endpoint_url': reverse('endpoint-detail', args=[endpoint.pk]),
             'alerts_url': reverse('alerts-list') + '?' + urlencode({'q': endpoint.hostname}),
         },
-        'primary': {'quality': primary['quality'], 'stats': _stats(primary), 'diagnostics': primary_diagnostics},
+        'primary': {'quality': primary['quality'], 'stats': _stats(primary), 'diagnostics': primary_diagnostics,
+                    'workload': primary.get('workload'), 'data_kind': primary.get('data_kind', 'legacy_raw')},
         'context': {'quality': context['quality'], 'stats': _stats(context), 'diagnostics': context_diagnostics},
         'capacity': capacity, 'hardware': capacity['hardware_context'],
         'inventory_warnings': (hardware or {}).get('inventory_warnings', []),
         'inventory_provenance': _inventory_provenance(snapshot),
         'alerts': alerts, 'alert_counts': alert_counts,
         'applications': applications, 'processes': processes,
+        'processes_observed_at': process_sample['collected_at'].isoformat() if process_sample else None,
         'disks': disk_rows, 'disk_count': len(disk_rows) if disk_rows else None, 'series_ranges': series_ranges,
     })
 
@@ -534,16 +568,23 @@ def capacity_detail(request, pk):
 @require_GET
 def capacity_series(request, pk):
     period = request.GET.get('period', '24h')
-    hours = {'6h': 6, '24h': 24, '3d': 72, '7d': 168}.get(period)
+    hours = {'6h': 6, '24h': 24, '3d': 72, '7d': 168, '30d':720, '90d':2160}.get(period)
     if hours is None:
         return JsonResponse({'error': 'invalid_period'}, status=400)
     if not AgentMachine.objects.filter(pk=pk).exists():
         raise Http404
+    if hours > 168:
+        from agents.telemetry_history import historical_series
+        return JsonResponse({'demo':False, 'series':historical_series(pk,hours)})
     end = timezone.now()
     samples = (EndpointPerformanceSample.objects.filter(
         endpoint_id=pk, collected_at__gte=end - timedelta(hours=hours), collected_at__lt=end,
-    ).order_by('-collected_at').values('collected_at', 'cpu_percent', 'memory_used_percent')[:2100])
+    ).order_by('-collected_at').values('collected_at', 'cpu_percent', 'memory_used_percent', 'schema_version', 'resolution_seconds', 'metric_summaries')[:11000])
     return JsonResponse({'demo': False, 'series': [
-        {'at': item['collected_at'].isoformat(), 'cpu': item['cpu_percent'], 'memory': item['memory_used_percent']}
+        {'at': item['collected_at'].isoformat(), 'cpu': item['cpu_percent'], 'memory': item['memory_used_percent'],
+         'kind': 'window' if item['schema_version'] == 2 else 'legacy_raw', 'resolution_seconds': item['resolution_seconds'],
+         'cpu_max': item['metric_summaries'].get('metrics', {}).get('cpu.usage_percent', {}).get('max'),
+         'cpu_distribution': item['metric_summaries'].get('metrics', {}).get('cpu.usage_percent', {}).get('distribution'),
+         'memory_distribution': item['metric_summaries'].get('metrics', {}).get('memory.used_percent', {}).get('distribution')}
         for item in reversed(list(samples))
     ]})

@@ -1,0 +1,78 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {chromium} = require('playwright');
+let phase='initialization';
+(async()=>{
+    const server=process.env.NIGHTOWL_E2E_SERVER;
+    assert(/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(server));
+    const browser=await chromium.launch({headless:true,channel:'chrome'});
+    try {
+        const context=await browser.newContext({viewport:{width:1920,height:1080}});
+        await context.addCookies([{name:'sessionid',value:process.env.NIGHTOWL_E2E_SESSION,url:server}]);
+        const page=await context.newPage();
+        page.on('dialog',dialog=>dialog.accept());
+        const root=path.resolve(__dirname,'../..');
+        await page.route('**/*',async route=>{
+            const url=new URL(route.request().url());
+            if(url.origin!==server)return route.abort();
+            if(!url.pathname.startsWith('/static/'))return route.continue();
+            const file=path.resolve(root,'static',decodeURIComponent(url.pathname.slice(8)));
+            assert(file.startsWith(path.join(root,'static')+path.sep));
+            if(!fs.existsSync(file))return route.fulfill({status:404,body:''});
+            return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'application/octet-stream'});
+        });
+        await page.goto(server+'/jobs/?tab=automations');
+        const panel=page.locator('[data-automations-root]'),form=panel.locator('form');
+        phase='targets';
+        await page.waitForFunction(()=>document.querySelectorAll('[name="targets"] option').length>=2);
+        const ids=await form.locator('[name="targets"] option').evaluateAll(nodes=>nodes.slice(0,2).map(n=>n.value));
+        const name='<img src=x onerror=alert(1)> Automation';
+        await form.locator('[name="name"]').fill(name);
+        await form.locator('[name="job_type"]').selectOption('collect_logs');
+        await form.locator('[name="kind"]').selectOption('once');
+        await form.locator('[name="timezone"]').fill('UTC');
+        await form.locator('[name="starts_at"]').fill(new Date(Date.now()+600000).toISOString().slice(0,16));
+        await form.locator('[name="targets"]').selectOption(ids);
+        phase='create_future';
+        await form.locator('button[type="submit"]').click();
+        const row=panel.locator('[data-automation-definitions] tr').filter({hasText:name});
+        await row.waitFor();
+        assert.equal(await panel.locator('img').count(),0,'Untrusted names must remain text');
+        await row.getByRole('button',{name:'Pausar',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('[data-automation-definitions]').textContent.includes('Pausada'));
+        await row.getByRole('button',{name:'Reativar',exact:true}).click();
+        await page.waitForFunction(()=>!document.querySelector('[data-automation-definitions]').textContent.includes('Pausada'));
+        phase='edit';
+        await row.getByRole('button',{name:'Editar',exact:true}).click();
+        await form.locator('[name="name"]').fill('Reviewed synthetic automation');
+        await form.locator('button[type="submit"]').click();
+        await panel.locator('[data-automation-definitions]').getByText('Reviewed synthetic automation / r2',{exact:true}).waitFor();
+        phase='cancel_next';
+        await panel.getByRole('button',{name:'Cancelar proxima ocorrencia',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelectorAll('[data-automation-occurrences] tr').length===2);
+        assert((await panel.locator('[data-automation-occurrences]').innerText()).includes('Cancelada'));
+        phase='recurrence_controls';
+        for(const kind of ['weekly','monthly','interval']) {
+            await form.locator('[name="kind"]').selectOption(kind);
+            assert(await panel.locator('[data-recurrence="'+kind+'"]').isVisible());
+        }
+        await form.locator('[name="kind"]').selectOption('immediate');
+        await form.locator('[name="name"]').fill('Immediate synthetic automation');
+        await form.locator('[name="targets"]').selectOption(ids);
+        phase='create_immediate';
+        await form.locator('button[type="submit"]').click();
+        await panel.locator('[data-automation-definitions]').getByText('Immediate synthetic automation / r1',{exact:true}).waitFor();
+        assert.equal(await panel.getByRole('link',{name:'Abrir job'}).count(),2);
+        await page.screenshot({path:path.join(process.env.TEMP,'nightowl-automations-1920.png'),fullPage:true});
+        await page.setViewportSize({width:390,height:844});
+        await page.waitForTimeout(250);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile page overflow');
+        await page.screenshot({path:path.join(process.env.TEMP,'nightowl-automations-390.png'),fullPage:true});
+        phase='job_link';
+        await panel.getByRole('link',{name:'Abrir job'}).first().click();
+        await page.locator('[data-job-drawer].is-open').waitFor();
+        assert((await page.locator('[data-job-field="status"]').textContent()).includes('fila'));
+        console.log('PASS actual Django API and Chrome: schedule, pause/resume, edit, future cancellation, immediate jobs, recurrence fields, XSS, desktop/mobile and job deep link.');
+    }finally{await browser.close();}
+})().catch(error=>{console.log('AUTOMATION_BROWSER_FAILURE='+JSON.stringify({phase,error_type:error.name,message:error.message.slice(0,220)}));process.exitCode=1;});

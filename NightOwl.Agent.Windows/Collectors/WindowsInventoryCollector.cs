@@ -4,7 +4,6 @@ using System.Globalization;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -15,22 +14,45 @@ namespace NightOwl.Agent.Windows.Collectors;
 
 public sealed class WindowsInventoryCollector
 {
+    private static long _powerShellStarted;
+    internal static long PowerShellStarted => Interlocked.Read(ref _powerShellStarted);
     private readonly JsonlLogger _logger;
+    private readonly object _collectionGate = new();
+    private readonly Func<AgentConfig, AgentCollectPayload>? _collect;
 
     public WindowsInventoryCollector(JsonlLogger logger)
     {
         _logger = logger;
     }
 
+    internal WindowsInventoryCollector(JsonlLogger logger, Func<AgentConfig, AgentCollectPayload> collect)
+        : this(logger) => _collect = collect;
+
+    internal T RunExclusiveCollection<T>(Func<T> collect)
+    {
+        // A timed-out caller does not release ownership of a still-running collection.
+        if (!Monitor.TryEnter(_collectionGate))
+            throw new InvalidOperationException(JobErrorCodes.JobConcurrencyLimit);
+        try { return collect(); }
+        finally { Monitor.Exit(_collectionGate); }
+    }
+
     public AgentHeartbeatPayload BuildHeartbeat(AgentConfig config)
     {
-        Dictionary<string, object?> system = GetSystem();
-        Dictionary<string, object?> hardware = GetHardware();
-        Dictionary<string, object?> network = GetNetwork();
-        List<string> ips = AsStringList(network.GetValueOrDefault("ips"));
+        string? domain = null;
+        List<string> ips = new();
+        try { domain = IPGlobalProperties.GetIPGlobalProperties().DomainName.Trim().TrimEnd('.'); }
+        catch (NetworkInformationException) { }
+        try
+        {
+            ips = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                .SelectMany(n => n.GetIPProperties().UnicastAddresses)
+                .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork && !System.Net.IPAddress.IsLoopback(a.Address))
+                .Select(a => a.Address.ToString()).Distinct().ToList();
+        }
+        catch (NetworkInformationException) { }
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        Dictionary<string, object?> cpu = AsDict(hardware.GetValueOrDefault("cpu"));
-        Dictionary<string, object?> os = AsDict(system.GetValueOrDefault("os"));
         FileVersionDetails trayVersion = GetFileVersionDetails(Path.Combine(config.InstallPath, "NightOwl.Agent.Tray.exe"));
         FileVersionDetails updaterVersion = GetFileVersionDetails(Path.Combine(config.InstallPath, "NightOwl.Agent.Updater.exe"));
 
@@ -39,30 +61,16 @@ public sealed class WindowsInventoryCollector
             AgentId = config.MachineId,
             MachineId = config.MachineId,
             Hostname = Environment.MachineName,
-            Fqdn = system.GetValueOrDefault("fqdn")?.ToString() ?? Environment.MachineName,
-            Domain = system.GetValueOrDefault("domain")?.ToString() ?? Environment.UserDomainName,
-            LoggedUser = system.GetValueOrDefault("logged_user")?.ToString() ?? Environment.UserName,
-            Username = system.GetValueOrDefault("logged_user")?.ToString() ?? Environment.UserName,
-            IpAddress = network.GetValueOrDefault("primary_ip")?.ToString() ?? ips.FirstOrDefault() ?? "",
-            OsName = os.GetValueOrDefault("name")?.ToString() ?? RuntimeInformation.OSDescription,
-            OsVersion = os.GetValueOrDefault("version")?.ToString() ?? Environment.OSVersion.VersionString,
-            WindowsBuild = os.GetValueOrDefault("build")?.ToString() ?? Environment.OSVersion.Version.Build.ToString(CultureInfo.InvariantCulture),
+            Fqdn = string.IsNullOrWhiteSpace(domain) ? null : Environment.MachineName + "." + domain,
+            Domain = string.IsNullOrWhiteSpace(domain) ? null : domain,
+            IpAddress = ips.FirstOrDefault(),
             AgentVersion = NormalizeFunctionalVersion(config.AgentVersion),
             TrayVersion = trayVersion.FunctionalVersion,
             UpdaterVersion = updaterVersion.FunctionalVersion,
             AgentMode = "dotnet-service",
             InstallMode = "dotnet-service",
-            Ips = ips,
-            Os = os,
-            Hardware = new Dictionary<string, object?>
-            {
-                ["cpu"] = cpu.GetValueOrDefault("name")?.ToString() ?? "",
-                ["memory_total_bytes"] = hardware.GetValueOrDefault("total_memory_bytes") ?? hardware.GetValueOrDefault("memory_total_bytes"),
-                ["manufacturer"] = hardware.GetValueOrDefault("manufacturer")?.ToString() ?? system.GetValueOrDefault("manufacturer")?.ToString() ?? "",
-                ["model"] = hardware.GetValueOrDefault("model")?.ToString() ?? system.GetValueOrDefault("model")?.ToString() ?? "",
-                ["serial_number"] = hardware.GetValueOrDefault("serial_number")?.ToString() ?? system.GetValueOrDefault("serial_number")?.ToString() ?? ""
-            },
-            UptimeSeconds = ToLong(system.GetValueOrDefault("uptime_seconds")) ?? Environment.TickCount64 / 1000,
+            Ips = ips.Count == 0 ? null : ips,
+            UptimeSeconds = Math.Max(0, Environment.TickCount64 / 1000),
             Agent = BuildAgentMetadata(config, trayVersion, updaterVersion),
             HeartbeatAt = now,
             Timestamp = now
@@ -71,24 +79,73 @@ public sealed class WindowsInventoryCollector
 
     public AgentCollectPayload BuildCollectPayload(AgentConfig config)
     {
-        DateTimeOffset collectedAt = DateTimeOffset.UtcNow;
-        Dictionary<string, object?> system = CollectSection("system", GetSystem, new Dictionary<string, object?>());
-        Dictionary<string, object?> hardwareCore = CollectSection("hardware", GetHardware, new Dictionary<string, object?>());
-        Dictionary<string, object?> hardwareDetails = CollectSection("asset_hardware", GetAssetHardwareDetails, new Dictionary<string, object?>());
-        Dictionary<string, object?> physicalDisks = CollectSection("physical_disks", GetPhysicalDisksRaw, new Dictionary<string, object?>());
-        Dictionary<string, object?> hardware = HardwareInventoryNormalizer.MergeHardware(
-            hardwareCore, hardwareDetails, physicalDisks, Environment.GetEnvironmentVariable("SystemDrive") ?? "");
-        Dictionary<string, object?> network = CollectSection("network", GetNetwork, new Dictionary<string, object?> { ["interfaces"] = new List<object>() });
-        List<Dictionary<string, object?>> disks = CollectSection("disks", GetDisks, new List<Dictionary<string, object?>>());
-        List<Dictionary<string, object?>> software = CollectSection("software", GetSoftware, new List<Dictionary<string, object?>>());
-        Dictionary<string, object?> security = CollectSection("security", GetSecurity, new Dictionary<string, object?>());
-        Dictionary<string, object?> patches = CollectSection("patches", GetPatchStatus, new Dictionary<string, object?>());
+        AgentCollectPayload payload = BuildScheduledPayload(config, new(true, true, true, true, true));
+        payload.CollectionScope = "full";
+        return payload;
+    }
 
-        system["collected_at"] = collectedAt;
-        hardware["collected_at"] = collectedAt;
-        network["collected_at"] = collectedAt;
-        security["collected_at"] = collectedAt;
-        patches["collected_at"] = collectedAt;
+    internal AgentCollectPayload BuildScheduledPayload(AgentConfig config, InventoryPlan plan)
+        => RunExclusiveCollection(() => _collect is null ? BuildCollectPayloadCore(config, plan) : _collect(config));
+
+    private AgentCollectPayload BuildCollectPayloadCore(AgentConfig config, InventoryPlan plan)
+    {
+        DateTimeOffset collectedAt = DateTimeOffset.UtcNow;
+        Dictionary<string, object?> states = new();
+        Dictionary<string, object?> platform = plan.Basic || plan.Detailed
+            ? CollectSection("platform", () => ReadPlatform(plan.Detailed), new Dictionary<string, object?>()) : new();
+        Dictionary<string, object?> system = plan.Basic && platform.Count > 0 ? MapSystem(platform) : new();
+        Dictionary<string, object?> hardware = platform.Count > 0
+            ? plan.Detailed ? GetHardware(platform) : GetBasicHardware(platform) : new();
+        if (plan.Detailed)
+        {
+            Dictionary<string, object?> details = CollectSection("asset_hardware", GetAssetHardwareDetails, new Dictionary<string, object?>());
+            Dictionary<string, object?> storage = CollectSection("physical_disks", GetPhysicalDisksRaw, new Dictionary<string, object?>());
+            states["cpu"] = hardware.GetValueOrDefault("cpu") is Dictionary<string, object?> processor
+                ? processor.GetValueOrDefault("status") : "failed";
+            states["baseboard"] = hardware.GetValueOrDefault("baseboard") is Dictionary<string, object?> board
+                ? board.GetValueOrDefault("status") : "failed";
+            hardware = MergeHardwareSections(hardware, details, storage, Environment.GetEnvironmentVariable("SystemDrive") ?? "");
+            // Empty/failed enrichment is omitted; the backend retains the previous valid section.
+            if (details.Count > 0)
+            {
+                if (details.GetValueOrDefault("modules_query_succeeded") is true &&
+                    details.GetValueOrDefault("arrays_query_succeeded") is true &&
+                    details.GetValueOrDefault("battery") is Dictionary<string, object?> batteryResult &&
+                    batteryResult.GetValueOrDefault("query_succeeded") is true && storage.GetValueOrDefault("query_succeeded") is true &&
+                    Equals(states["cpu"], "available"))
+                    hardware["detailed_collected_at"] = collectedAt;
+                states["hardware_details"] = hardware.ContainsKey("detailed_collected_at") ? "available" : "failed";
+                states["memory"] = ((Dictionary<string, object?>)hardware["memory"]!).GetValueOrDefault("status");
+                states["battery"] = details.GetValueOrDefault("battery") is Dictionary<string, object?> battery &&
+                    battery.GetValueOrDefault("query_succeeded") is true
+                    ? battery.GetValueOrDefault("present") is true ? "available" : "not_present" : "failed";
+            }
+            else states["hardware_details"] = "failed";
+            states["physical_disks"] = storage.GetValueOrDefault("query_succeeded") is true ? "available" : "failed";
+        }
+        Dictionary<string, object?> network = plan.Network ? CollectSection("network", GetNetwork, new Dictionary<string, object?>()) : new();
+        Dictionary<string, object?> bitlocker = plan.Volumes || plan.Ancillary
+            ? CollectSection("bitlocker", GetBitLockerSummary, new Dictionary<string, object?>()) : new();
+        bool diskSucceeded = false;
+        List<Dictionary<string, object?>> disks = plan.Volumes ? CollectSection("disks", () =>
+        {
+            List<Dictionary<string, object?>> result = GetDisksCore(bitlocker);
+            diskSucceeded = true;
+            return result;
+        }, new List<Dictionary<string, object?>>()) : new();
+        List<Dictionary<string, object?>> software = plan.Ancillary ? CollectSection("software", GetSoftware, new List<Dictionary<string, object?>>()) : new();
+        Dictionary<string, object?> security = plan.Ancillary ? CollectSection("security", () => GetSecurityCore(software, bitlocker), new Dictionary<string, object?>()) : new();
+        Dictionary<string, object?> patches = plan.Ancillary ? CollectSection("patches", GetPatchStatus, new Dictionary<string, object?>()) : new();
+
+        foreach ((string name, Dictionary<string, object?> section, bool requested) in new[] {
+            ("system", system, plan.Basic), ("hardware", hardware, plan.Basic || plan.Detailed),
+            ("network", network, plan.Network), ("security", security, plan.Ancillary), ("patches", patches, plan.Ancillary) })
+        {
+            if (!requested) continue;
+            states[name] = section.Count > 0 ? "available" : "failed";
+            if (section.Count > 0) section["collected_at"] = collectedAt;
+        }
+        if (plan.Volumes) states["disk"] = diskSucceeded ? "available" : "failed";
 
         return new AgentCollectPayload
         {
@@ -96,6 +153,8 @@ public sealed class WindowsInventoryCollector
             AgentVersion = config.AgentVersion,
             AgentMode = "dotnet-service",
             CollectedAt = collectedAt,
+            SectionStates = states,
+            CollectionScope = "scheduled",
             System = system,
             Hardware = hardware,
             Network = network,
@@ -107,8 +166,31 @@ public sealed class WindowsInventoryCollector
     }
 
     public List<Dictionary<string, object?>> GetDisks()
+        => RunExclusiveCollection(() => GetDisksCore());
+
+    internal static Dictionary<string, object?> GetBasicHardware(Dictionary<string, object?> platform) => new()
     {
-        Dictionary<string, string> bitlocker = GetBitLockerMap();
+        ["manufacturer"] = platform.GetValueOrDefault("manufacturer")?.ToString() ?? "",
+        ["model"] = platform.GetValueOrDefault("model")?.ToString() ?? "",
+        ["serial_number"] = platform.GetValueOrDefault("serial_number")?.ToString() ?? "",
+        ["memory_total_bytes"] = platform.GetValueOrDefault("total_memory_bytes"),
+        ["total_memory_bytes"] = platform.GetValueOrDefault("total_memory_bytes"),
+        ["collected_at"] = DateTimeOffset.UtcNow
+    };
+
+    internal static Dictionary<string, object?> MergeHardwareSections(Dictionary<string, object?> core,
+        Dictionary<string, object?> details, Dictionary<string, object?> storage, string systemDrive)
+    {
+        // MergeHardware already normalizes physical disks when enrichment is available.
+        if (details.Count > 0) return HardwareInventoryNormalizer.MergeHardware(core, details, storage, systemDrive);
+        if (storage.GetValueOrDefault("query_succeeded") is true)
+            core["physical_disks"] = HardwareInventoryNormalizer.PhysicalDisks(storage, systemDrive);
+        return core;
+    }
+
+    private List<Dictionary<string, object?>> GetDisksCore(Dictionary<string, object?>? collectedBitlocker = null)
+    {
+        Dictionary<string, string> bitlocker = GetBitLockerMap(collectedBitlocker);
         Dictionary<string, string> volumeHealth = GetVolumeHealthMap();
         string systemDrive = (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:").TrimEnd('\\');
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -146,6 +228,9 @@ public sealed class WindowsInventoryCollector
     }
 
     public List<Dictionary<string, object?>> GetSoftware()
+        => RunExclusiveCollection(GetSoftwareCore);
+
+    private List<Dictionary<string, object?>> GetSoftwareCore()
     {
         List<Dictionary<string, object?>> rows = new();
         ReadUninstallKey(rows, RegistryView.Registry64, "x64", "HKLM64");
@@ -159,13 +244,17 @@ public sealed class WindowsInventoryCollector
     }
 
     public Dictionary<string, object?> GetSecurity()
+        => RunExclusiveCollection(() => GetSecurityCore());
+
+    private Dictionary<string, object?> GetSecurityCore(List<Dictionary<string, object?>>? collectedSoftware = null,
+        Dictionary<string, object?>? collectedBitlocker = null)
     {
         Dictionary<string, object?> defender = GetDefenderStatus();
         Dictionary<string, object?> firewall = GetFirewallStatus();
         List<Dictionary<string, object?>> antivirusProducts = GetAntivirusProducts();
-        Dictionary<string, object?> bitlocker = GetBitLockerSummary();
+        Dictionary<string, object?> bitlocker = collectedBitlocker ?? GetBitLockerSummary();
         List<string> localAdmins = GetLocalAdmins();
-        List<Dictionary<string, object?>> software = GetSoftware();
+        List<Dictionary<string, object?>> software = collectedSoftware ?? GetSoftware();
         string[] remoteTools = { "AnyDesk", "TeamViewer", "UltraVNC", "TightVNC", "RealVNC", "RustDesk", "Chrome Remote Desktop" };
         List<string> detectedRemoteTools = software
             .Where(s => remoteTools.Any(tool => (s.GetValueOrDefault("display_name")?.ToString() ?? "").Contains(tool, StringComparison.OrdinalIgnoreCase)))
@@ -236,6 +325,9 @@ public sealed class WindowsInventoryCollector
     }
 
     public Dictionary<string, object?> GetPatchStatus()
+        => RunExclusiveCollection(GetPatchStatusCore);
+
+    private Dictionary<string, object?> GetPatchStatusCore()
     {
         List<string> rebootReasons = GetRebootPendingReasons();
         Dictionary<string, object?> updateInfo = GetWindowsUpdateInfo();
@@ -259,36 +351,10 @@ public sealed class WindowsInventoryCollector
     }
 
     public Dictionary<string, object?> GetSystem()
-    {
-        Dictionary<string, object?> ps = RunPowerShellObject("""
-            $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-            $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-            $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
-            $boot = if ($os.LastBootUpTime) { ([DateTime]$os.LastBootUpTime).ToUniversalTime().ToString("o") } else { $null }
-            $install = if ($os.InstallDate) { ([DateTime]$os.InstallDate).ToUniversalTime().ToString("o") } else { $null }
-            $machineType = if ($os.ProductType -and $os.ProductType -ne 1) { "server" } elseif ($cs.PCSystemTypeEx -eq 2) { "notebook" } else { "workstation" }
-            [pscustomobject]@{
-              hostname = $env:COMPUTERNAME
-              fqdn = ([System.Net.Dns]::GetHostEntry($env:COMPUTERNAME).HostName)
-              domain = if ($cs.PartOfDomain) { $cs.Domain } else { "" }
-              workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { "" }
-              logged_user = $cs.UserName
-              os_name = $os.Caption
-              os_version = $os.Version
-              os_build = $os.BuildNumber
-              os_architecture = $os.OSArchitecture
-              install_date = $install
-              last_boot_time = $boot
-              uptime_seconds = if ($os.LastBootUpTime) { [int64]((Get-Date) - ([DateTime]$os.LastBootUpTime)).TotalSeconds } else { $null }
-              timezone = [TimeZoneInfo]::Local.Id
-              locale = [System.Globalization.CultureInfo]::CurrentCulture.Name
-              machine_type = $machineType
-              manufacturer = $cs.Manufacturer
-              model = $cs.Model
-              serial_number = $bios.SerialNumber
-            }
-        """, timeoutSeconds: 12);
+        => MapSystem(ReadPlatform());
 
+    private static Dictionary<string, object?> MapSystem(Dictionary<string, object?> ps)
+    {
         Dictionary<string, object?> os = new()
         {
             ["name"] = ps.GetValueOrDefault("os_name")?.ToString() ?? RuntimeInformation.OSDescription,
@@ -303,7 +369,7 @@ public sealed class WindowsInventoryCollector
             ["fqdn"] = ps.GetValueOrDefault("fqdn")?.ToString() ?? TryGetFqdn(),
             ["domain"] = ps.GetValueOrDefault("domain")?.ToString() ?? Environment.UserDomainName,
             ["workgroup"] = ps.GetValueOrDefault("workgroup")?.ToString() ?? "",
-            ["logged_user"] = ps.GetValueOrDefault("logged_user")?.ToString() ?? WindowsIdentity.GetCurrent().Name,
+            ["logged_user"] = ps.GetValueOrDefault("logged_user")?.ToString(),
             ["os_name"] = os["name"],
             ["os_version"] = os["version"],
             ["os_build"] = os["build"],
@@ -324,49 +390,82 @@ public sealed class WindowsInventoryCollector
     }
 
     public Dictionary<string, object?> GetHardware()
-    {
-        Dictionary<string, object?> ps = RunPowerShellObject("""
-            $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
-            $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
-            $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-            $bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
-            $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
-            $battery = $null
-            try {
-              $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
-            } catch {}
+        => GetHardware(ReadPlatform());
+
+    private static Dictionary<string, object?> ReadPlatform(bool detailed = true) => RunPowerShellObject(
+        "$includeDetails=" + (detailed ? "$true;" : "$false;") + """
+            $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+            $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+            $bios = Get-CimInstance Win32_BIOS -ErrorAction Stop
+            $cpu = $null; $board = $null; $product = $null; $processors = @()
+            if ($includeDetails) {
+              $processors = @(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue)
+              $cpu = $processors | Select-Object -First 1
+              $board = Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
+              $product = Get-CimInstance Win32_ComputerSystemProduct -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
             $tpm = $null
-            try { $tpm = Get-CimInstance -Namespace "root\cimv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1 } catch {}
+            if ($includeDetails) { try { $tpm = Get-CimInstance -Namespace "root\cimv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction Stop | Select-Object -First 1 } catch {} }
             [pscustomobject]@{
+              hostname = $env:COMPUTERNAME
+              fqdn = if ($cs.PartOfDomain) { "$($env:COMPUTERNAME).$($cs.Domain)" } else { $env:COMPUTERNAME }
+              domain = if ($cs.PartOfDomain) { $cs.Domain } else { "" }
+              workgroup = if (-not $cs.PartOfDomain) { $cs.Workgroup } else { "" }
+              logged_user = $cs.UserName
+              os_name = $os.Caption; os_version = $os.Version; os_build = $os.BuildNumber
+              os_architecture = $os.OSArchitecture
+              install_date = if ($os.InstallDate) { ([DateTime]$os.InstallDate).ToUniversalTime().ToString("o") } else { $null }
+              last_boot_time = if ($os.LastBootUpTime) { ([DateTime]$os.LastBootUpTime).ToUniversalTime().ToString("o") } else { $null }
+              uptime_seconds = if ($os.LastBootUpTime) { [int64]((Get-Date) - ([DateTime]$os.LastBootUpTime)).TotalSeconds } else { $null }
+              timezone = [TimeZoneInfo]::Local.Id; locale = [System.Globalization.CultureInfo]::CurrentCulture.Name
+              machine_type = if ($os.ProductType -ne 1) { "server" } elseif ($cs.PCSystemTypeEx -eq 2) { "notebook" } else { "workstation" }
               manufacturer = $cs.Manufacturer
               model = $cs.Model
+              system_sku = $cs.SystemSKUNumber; system_family = $cs.SystemFamily
+              oem_product = if ($product) { [pscustomobject]@{
+                name=$product.Name; version=$product.Version; vendor=$product.Vendor
+                sku=$product.SKUNumber; identifying_number=$product.IdentifyingNumber
+              } } else { $null }
+              board_manufacturer = $board.Manufacturer; board_product = $board.Product
+              board_version = $board.Version; board_serial_number = $board.SerialNumber
               serial_number = $bios.SerialNumber
               bios_version = (($bios.SMBIOSBIOSVersion, $bios.Version) | Where-Object { $_ } | Select-Object -First 1)
               bios_release_date = if ($bios.ReleaseDate) { ([DateTime]$bios.ReleaseDate).ToUniversalTime().ToString("o") } else { $null }
               motherboard = if ($board) { "$($board.Manufacturer) $($board.Product)" } else { $null }
               cpu_name = $cpu.Name
               cpu_manufacturer = $cpu.Manufacturer
-              physical_cores = $cpu.NumberOfCores
-              logical_processors = $cpu.NumberOfLogicalProcessors
+              physical_cores = if ($processors.Count -gt 0 -and @($processors | Where-Object { -not $_.NumberOfCores }).Count -eq 0) { ($processors | Measure-Object NumberOfCores -Sum).Sum } else { $null }
+              logical_processors = if ($processors.Count -gt 0 -and @($processors | Where-Object { -not $_.NumberOfLogicalProcessors }).Count -eq 0) { ($processors | Measure-Object NumberOfLogicalProcessors -Sum).Sum } else { $null }
+              processors = @($processors | ForEach-Object { [pscustomobject]@{
+                name=$_.Name; manufacturer=$_.Manufacturer; socket=$_.SocketDesignation
+                processor_id=$_.ProcessorId; max_clock_mhz=$_.MaxClockSpeed
+                physical_cores=$_.NumberOfCores; logical_processors=$_.NumberOfLogicalProcessors
+              } })
               cpu_max_clock_mhz = $cpu.MaxClockSpeed
               cpu_socket = $cpu.SocketDesignation
               cpu_processor_id = $cpu.ProcessorId
               total_memory_bytes = if ($cs.TotalPhysicalMemory) { [int64]$cs.TotalPhysicalMemory } else { $null }
               available_memory_bytes = if ($os.FreePhysicalMemory) { [int64]$os.FreePhysicalMemory * 1024 } else { $null }
-              tpm_present = [bool]$tpm
+              tpm_present = if ($tpm) { $true } else { $null }
               tpm_enabled = if ($tpm) { [bool]$tpm.IsEnabled_InitialValue } else { $null }
-              battery_present = [bool]$battery
-              battery_status = if ($battery) { $battery.BatteryStatus } else { $null }
             }
         """, timeoutSeconds: 12);
 
+    internal static Dictionary<string, object?> GetHardware(Dictionary<string, object?> ps)
+    {
         Dictionary<string, object?> cpu = new()
         {
-            ["name"] = ps.GetValueOrDefault("cpu_name")?.ToString() ?? RuntimeInformation.ProcessArchitecture.ToString(),
+            ["status"] = string.IsNullOrWhiteSpace(ps.GetValueOrDefault("cpu_name")?.ToString()) ? "unknown" : "available",
+            ["source"] = "Win32_Processor",
+            ["name"] = ps.GetValueOrDefault("cpu_name")?.ToString(),
             ["manufacturer"] = ps.GetValueOrDefault("cpu_manufacturer")?.ToString() ?? "",
             ["physical_cores"] = ToLong(ps.GetValueOrDefault("physical_cores")),
-            ["logical_processors"] = ToLong(ps.GetValueOrDefault("logical_processors")) ?? Environment.ProcessorCount,
+            ["logical_processors"] = ToLong(ps.GetValueOrDefault("logical_processors")),
             ["max_clock_mhz"] = ToLong(ps.GetValueOrDefault("cpu_max_clock_mhz")),
+            ["max_clock_ghz"] = ToLong(ps.GetValueOrDefault("cpu_max_clock_mhz")) is > 0 and var mhz ? mhz / 1000d : null,
+            ["clock_source"] = "Win32_Processor.MaxClockSpeed",
+            ["clock_kind"] = "reported_maximum_not_instantaneous",
+            ["processors"] = ps.GetValueOrDefault("processors"),
             ["socket"] = ps.GetValueOrDefault("cpu_socket")?.ToString()?.Trim(),
             ["processor_id"] = ps.GetValueOrDefault("cpu_processor_id")?.ToString()?.Trim()
         };
@@ -375,6 +474,18 @@ public sealed class WindowsInventoryCollector
         {
             ["manufacturer"] = ps.GetValueOrDefault("manufacturer")?.ToString() ?? "",
             ["model"] = ps.GetValueOrDefault("model")?.ToString() ?? "",
+            ["system_sku"] = ps.GetValueOrDefault("system_sku"),
+            ["system_family"] = ps.GetValueOrDefault("system_family"),
+            ["oem_product"] = ps.GetValueOrDefault("oem_product"),
+            ["baseboard"] = new Dictionary<string, object?>
+            {
+                ["status"] = string.IsNullOrWhiteSpace(ps.GetValueOrDefault("board_product")?.ToString()) ? "unknown" : "available",
+                ["source"] = "Win32_BaseBoard",
+                ["manufacturer"] = ps.GetValueOrDefault("board_manufacturer"),
+                ["product"] = ps.GetValueOrDefault("board_product"),
+                ["version"] = ps.GetValueOrDefault("board_version"),
+                ["serial_number"] = ps.GetValueOrDefault("board_serial_number")
+            },
             ["serial_number"] = ps.GetValueOrDefault("serial_number")?.ToString() ?? "",
             ["bios_version"] = ps.GetValueOrDefault("bios_version")?.ToString() ?? "",
             ["bios_release_date"] = ps.GetValueOrDefault("bios_release_date"),
@@ -400,8 +511,6 @@ public sealed class WindowsInventoryCollector
                 ["present"] = ToBool(ps.GetValueOrDefault("tpm_present")),
                 ["enabled"] = ToBool(ps.GetValueOrDefault("tpm_enabled"))
             },
-            ["battery_present"] = ToBool(ps.GetValueOrDefault("battery_present")),
-            ["battery_status"] = ps.GetValueOrDefault("battery_status"),
             ["collected_at"] = DateTimeOffset.UtcNow
         };
     }
@@ -409,22 +518,23 @@ public sealed class WindowsInventoryCollector
     private Dictionary<string, object?> GetAssetHardwareDetails()
     {
         return RunPowerShellObject("""
-            $modules = @(); $arrays = @(); $modulesQuerySucceeded = $false
-            $battery = $null; $batteryQuerySucceeded = $false
+            $modules = @(); $arrays = @(); $modulesQuerySucceeded = $false; $arraysQuerySucceeded = $false
+            $battery = $null; $batteries = @(); $batteryQuerySucceeded = $false
             try {
               $modules = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop)
               $modulesQuerySucceeded = $true
             } catch {}
-            try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop) } catch {}
+            try { $arrays = @(Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop | Where-Object { $_.Use -eq 3 }); $arraysQuerySucceeded = $true } catch {}
             try {
-              $battery = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1
+              $batteries = @(Get-CimInstance Win32_Battery -ErrorAction Stop)
+              $battery = $batteries | Select-Object -First 1
               $batteryQuerySucceeded = $true
             } catch {}
-            $design = $null; $full = $null; $cycles = $null
-            if ($battery) {
+            $design = $null; $full = $null; $cycles = $null; $static = $null
+            if ($battery -and $batteries.Count -eq 1) {
               try {
                 $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)
-                if ($rows.Count -eq 1) { $design = $rows[0].DesignedCapacity }
+                if ($rows.Count -eq 1) { $static = $rows[0]; $design = $static.DesignedCapacity }
               } catch {}
               try {
                 $rows = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)
@@ -447,6 +557,14 @@ public sealed class WindowsInventoryCollector
                 }
               })
               memory_slots = @($arrays | ForEach-Object { $_.MemoryDevices })
+              maximum_capacity_bytes = @($arrays | ForEach-Object {
+                if ($_.MaxCapacityEx -gt 0) { [int64]$_.MaxCapacityEx * 1024 }
+                else { $null }
+              })
+              memory_arrays = @($arrays | ForEach-Object { [pscustomobject]@{
+                memory_devices=$_.MemoryDevices; max_capacity_raw=$_.MaxCapacity; max_capacity_ex_kib=$_.MaxCapacityEx
+              } })
+              arrays_query_succeeded = $arraysQuerySucceeded
               modules_query_succeeded = $modulesQuerySucceeded
               battery = [pscustomobject]@{
                 query_succeeded = $batteryQuerySucceeded
@@ -456,6 +574,11 @@ public sealed class WindowsInventoryCollector
                 design_capacity_mwh = $design
                 full_charge_capacity_mwh = $full
                 cycle_count = $cycles
+                manufacturer = if ($static) { $static.ManufactureName } else { $null }
+                model = if ($static) { $static.DeviceName } elseif ($battery) { $battery.Name } else { $null }
+                serial_number = if ($static) { $static.SerialNumber } else { $null }
+                device_id = if ($battery) { $battery.DeviceID } else { $null }
+                part_number = $null
               }
             }
         """, timeoutSeconds: 15);
@@ -464,9 +587,9 @@ public sealed class WindowsInventoryCollector
     private Dictionary<string, object?> GetPhysicalDisksRaw()
     {
         return RunPowerShellObject("""
-            $modern = @(); $physical = @(); $wmi = @(); $osRows = @()
-            try { $physical = @(Get-PhysicalDisk -ErrorAction Stop) } catch {}
-            try { $wmi = @(Get-CimInstance Win32_DiskDrive -ErrorAction Stop) } catch {}
+            $modern = @(); $physical = @(); $wmi = @(); $osRows = @(); $querySucceeded = $false
+            try { $physical = @(Get-PhysicalDisk -ErrorAction Stop); $querySucceeded = $true } catch {}
+            try { $wmi = @(Get-CimInstance Win32_DiskDrive -ErrorAction Stop); $querySucceeded = $true } catch {}
             try { $modern = @(Get-Disk -ErrorAction Stop) } catch {}
             foreach ($disk in $modern) {
               $letters = @()
@@ -485,6 +608,7 @@ public sealed class WindowsInventoryCollector
               }
             }
             [pscustomobject]@{
+              query_succeeded = $querySucceeded
               physical_disks = @($physical | ForEach-Object {
                 [pscustomobject]@{
                   device_id = $_.DeviceId; friendly_name = $_.FriendlyName
@@ -515,7 +639,7 @@ public sealed class WindowsInventoryCollector
     private Dictionary<string, object?> GetNetwork()
     {
         var adapters = NetworkInterface.GetAllNetworkInterfaces()
-            .Where(n => n.OperationalStatus == OperationalStatus.Up)
+            .Where(n => n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
             .Select(n =>
             {
                 IPInterfaceProperties props = n.GetIPProperties();
@@ -547,11 +671,11 @@ public sealed class WindowsInventoryCollector
                     ["type"] = n.NetworkInterfaceType.ToString()
                 };
             })
-            .Where(a => AsStringList(a.GetValueOrDefault("ipv4_addresses")).Count > 0)
             .ToList();
 
-        List<string> ips = adapters.SelectMany(a => AsStringList(a.GetValueOrDefault("ipv4_addresses"))).Distinct().ToList();
-        Dictionary<string, object?>? primaryAdapter = adapters.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.GetValueOrDefault("gateway")?.ToString())) ?? adapters.FirstOrDefault();
+        List<Dictionary<string, object?>> activeAdapters = adapters.Where(a => Equals(a.GetValueOrDefault("status"), "Up")).ToList();
+        List<string> ips = activeAdapters.SelectMany(a => AsStringList(a.GetValueOrDefault("ipv4_addresses"))).Distinct().ToList();
+        Dictionary<string, object?>? primaryAdapter = activeAdapters.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.GetValueOrDefault("gateway")?.ToString())) ?? activeAdapters.FirstOrDefault();
 
         return new Dictionary<string, object?>
         {
@@ -569,11 +693,12 @@ public sealed class WindowsInventoryCollector
 
     private T CollectSection<T>(string section, Func<T> collect, T fallback)
     {
+        Stopwatch duration = Stopwatch.StartNew();
         LogSection($"collection.{section}.started", $"{section} collection started.", null);
         try
         {
             T result = collect();
-            LogSection($"collection.{section}.completed", $"{section} collection completed.", DescribeSectionResult(result));
+            LogSection($"collection.{section}.completed", $"{section} collection completed.", new { duration_ms = duration.ElapsedMilliseconds, result = DescribeSectionResult(result) });
             return result;
         }
         catch (Exception ex)
@@ -820,10 +945,10 @@ public sealed class WindowsInventoryCollector
         };
     }
 
-    private static Dictionary<string, string> GetBitLockerMap()
+    private static Dictionary<string, string> GetBitLockerMap(Dictionary<string, object?>? summary = null)
     {
         Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
-        foreach (Dictionary<string, object?> row in AsDictList(GetBitLockerSummary().GetValueOrDefault("volumes")))
+        foreach (Dictionary<string, object?> row in AsDictList((summary ?? GetBitLockerSummary()).GetValueOrDefault("volumes")))
         {
             string mount = row.GetValueOrDefault("mount_point")?.ToString() ?? "";
             string key = mount.TrimEnd('\\', ':').ToUpperInvariant();
@@ -996,6 +1121,15 @@ public sealed class WindowsInventoryCollector
         return AsDictList(value);
     }
 
+    private static readonly AsyncLocal<CancellationToken> JobCancellation = new();
+    internal static IDisposable WithJobCancellation(CancellationToken token) => new CollectionCancellation(token);
+    private sealed class CollectionCancellation : IDisposable
+    {
+        private readonly CancellationToken _previous = JobCancellation.Value;
+        internal CollectionCancellation(CancellationToken token) { JobCancellation.Value=token; }
+        public void Dispose() { JobCancellation.Value=_previous; }
+    }
+
     private static object? RunPowerShellJson(string script, int timeoutSeconds)
     {
         string command = "$ErrorActionPreference='SilentlyContinue'; " + script + " | ConvertTo-Json -Depth 8 -Compress";
@@ -1013,8 +1147,15 @@ public sealed class WindowsInventoryCollector
             }
         };
 
+        JobCancellation.Value.ThrowIfCancellationRequested();
         process.Start();
-        if (!process.WaitForExit(timeoutSeconds * 1000))
+        Interlocked.Increment(ref _powerShellStarted);
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        using CancellationTokenSource budget = CancellationTokenSource.CreateLinkedTokenSource(JobCancellation.Value);
+        budget.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        try { process.WaitForExitAsync(budget.Token).GetAwaiter().GetResult(); }
+        catch (OperationCanceledException)
         {
             try
             {
@@ -1022,12 +1163,17 @@ public sealed class WindowsInventoryCollector
             }
             catch
             {
-                // Best effort.
+                // Do not release collector ownership while a child may still be running.
             }
+            process.WaitForExit();
+            // Caller cancellation aborts the job; an enrichment budget remains missing evidence.
+            JobCancellation.Value.ThrowIfCancellationRequested();
             return null;
         }
 
-        string output = process.StandardOutput.ReadToEnd();
+        string output = stdout.GetAwaiter().GetResult();
+        _ = stderr.GetAwaiter().GetResult();
+        if (process.ExitCode != 0) return null;
         if (string.IsNullOrWhiteSpace(output))
         {
             return null;

@@ -11,6 +11,19 @@ public sealed class JobExecutionCoordinator
     private readonly JsonlLogger _logger;
     private readonly object _sync = new();
     private readonly Dictionary<string, ActiveJob> _active = new(StringComparer.OrdinalIgnoreCase);
+    internal JobStore Store => _policy.Store;
+    internal JobDecision Validate(AgentConfig config, AgentJobRequest job) => _policy.Prepare(config, job);
+    internal void PersistOutcome(AgentConfig config, AgentJobRequest job, JobExecutionResult result) => _policy.MarkFinal(config,job,result);
+    internal bool HasActiveUpdate => _policy.Store.LoadAll().Any(record => !record.IsFinal && record.JobType == "update_agent" && record.Status == "running");
+    internal void RecoverFinalResult(AgentConfig config, PendingResultRecord pending)
+    {
+        if (!TryBuildFinalResult(config, pending, out RemoteJobResult? result)) return;
+        JobStateRecord? record = Store.Load(result!.JobId);
+        if (record is not null && !record.IsFinal && record.JobType == pending.JobType)
+            Store.MarkFinal(result, record.CorrelationId);
+    }
+    internal bool HasExternalOwner => _policy.Store.LoadAll().Any(record => !record.IsFinal &&
+        (record.ExternalRunnerActive || record.Status == "running" && GetCategory(record.JobType) == JobCategories.Exclusive));
 
     public JobExecutionCoordinator(JobExecutionPolicy policy, JsonlLogger logger)
     {
@@ -49,6 +62,17 @@ public sealed class JobExecutionCoordinator
 
         foreach (JobStateRecord record in _policy.Store.LoadAll().Where(record => record.Status.Equals("running", StringComparison.OrdinalIgnoreCase)))
         {
+            if (record.JobType == "restart_agent")
+            {
+                if (!RestartConfirmed(record, new DateTimeOffset(System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime()))) continue;
+                DateTimeOffset confirmedAt = DateTimeOffset.UtcNow;
+                JobExecutionResult restarted = new() { JobId=record.JobId, Status="completed", StartedAt=record.UpdatedAt,
+                    FinishedAt=confirmedAt, DurationSeconds=Math.Max(0,(confirmedAt-record.UpdatedAt).TotalSeconds),
+                    Result=new {type="restart_agent",confirmed=true,restart_status="new_process_ready",machine_id=config.MachineId} };
+                _policy.MarkFinal(config,new AgentJobRequest {Id=record.JobId,Type=record.JobType},restarted);
+                resultQueue.Enqueue(record.JobType,restarted,true);
+                continue;
+            }
             if (record.JobType == "configure_telemetry"
                 && File.Exists(Path.Combine(NightOwlPaths.Current.StateDir, "telemetry-configuration.json")))
                 continue;
@@ -71,9 +95,11 @@ public sealed class JobExecutionCoordinator
             }
 
             DateTimeOffset now = DateTimeOffset.UtcNow;
-            if (ShouldSkipInterruptedRecoveryForExternalRunner(record, now))
+            if (record.ExternalRunnerActive)
             {
-                await _logger.LogAsync("job.interrupted.recovery_skipped_external_runner", "Running lifecycle job is owned by an external runner; interrupted recovery skipped.", new
+                await _logger.LogAsync(ShouldSkipInterruptedRecoveryForExternalRunner(record, now)
+                    ? "job.interrupted.recovery_skipped_external_runner" : "job.external_runner.review_required",
+                    "External runner completion is unconfirmed; no terminal result fabricated.", new
                 {
                     record.JobId,
                     record.JobType,
@@ -105,6 +131,7 @@ public sealed class JobExecutionCoordinator
                 }
             };
 
+            new JobJournal(config,_policy.Store).Result(result);
             _policy.Store.MarkFinal(new RemoteJobResult
             {
                 JobId = record.JobId,
@@ -256,6 +283,9 @@ public sealed class JobExecutionCoordinator
         return now <= expiresAt;
     }
 
+    internal static bool RestartConfirmed(JobStateRecord record, DateTimeOffset processStartedAt)
+        => record.JobType == "restart_agent" && record.Status == "running" && processStartedAt > record.UpdatedAt;
+
     public static bool ShouldSkipInterruptedRecoveryForPendingUpdate(JobStateRecord record, string updateStatePath)
     {
         if (!record.JobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
@@ -402,6 +432,7 @@ public sealed class JobExecutionCoordinator
             return JobCategories.Light;
         }
         if (jobType.Equals("configure_telemetry", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("install_software", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)
@@ -416,6 +447,7 @@ public sealed class JobExecutionCoordinator
     public static bool IsCritical(string jobType)
     {
         return jobType.Equals("configure_telemetry", StringComparison.OrdinalIgnoreCase)
+            || jobType.Equals("install_software", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("restart_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("update_agent", StringComparison.OrdinalIgnoreCase)
             || jobType.Equals("repair_agent", StringComparison.OrdinalIgnoreCase)

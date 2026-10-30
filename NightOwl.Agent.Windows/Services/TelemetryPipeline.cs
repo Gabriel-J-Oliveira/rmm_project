@@ -19,6 +19,7 @@ public sealed class TelemetryPipeline
     private readonly TimeSpan _shutdownGrace;
     private readonly object _collectionGate = new();
     private Task<TelemetrySample>? _collectionTask;
+    private readonly ContinuousTelemetryPipeline? _continuous;
     internal bool CollectionActive { get { lock (_collectionGate) return _collectionTask is { IsCompleted: false }; } }
 
     public TelemetryPipeline(TelemetryCollector collector, AgentApiClient api, JsonlLogger logger)
@@ -26,6 +27,8 @@ public sealed class TelemetryPipeline
             Path.Combine(NightOwlPaths.Current.StateDir, "telemetry-buffer.json"),
             TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(2))
     {
+        ContinuousNativeReader reader = new(collector);
+        _continuous = new ContinuousTelemetryPipeline(api, logger, (config, token) => reader.Read(config.MachineId, token));
     }
 
     internal TelemetryPipeline(TelemetryCollector collector, AgentApiClient api, JsonlLogger logger,
@@ -46,6 +49,11 @@ public sealed class TelemetryPipeline
     public async Task RunAsync(AgentConfig config, CancellationToken ct, Action? ready = null)
     {
         if (!config.TelemetryEnabled) return;
+        if (_continuous is not null && config.TelemetryMode == "continuous")
+        {
+            await _continuous.RunAsync(config, ct, ready);
+            return;
+        }
         try
         {
             TelemetryBuffer buffer = await LoadBufferWithRetryAsync(config, ct);

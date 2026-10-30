@@ -11,7 +11,7 @@
 {% endblock %}
 
 {% block content %}
-<section class="endpoint-detail-shell" data-endpoint-detail data-endpoint-id="{{ endpoint.id }}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}" data-ip="{{ primary_ip|default:''|escape }}">
+<section class="endpoint-detail-shell" data-endpoint-detail data-live-allowed="{{ endpoint_detail_payload.live_monitoring_allowed|yesno:'yes,no' }}" data-endpoint-id="{{ endpoint.id }}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}" data-ip="{{ primary_ip|default:''|escape }}">
     <header class="endpoint-ops-header">
         <div class="endpoint-ops-title">
             <a class="back-link" href="{% url 'endpoint-list' %}">&larr; Voltar para endpoints</a>
@@ -360,4 +360,5 @@
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-1"></script>
 <script src="{% static 'js/endpoint_detail.js' %}?v=telemetry-management-1"></script>
+<script src="{% static 'js/endpoint_live.js' %}?v=continuous-2"></script>
 {% endblock %}

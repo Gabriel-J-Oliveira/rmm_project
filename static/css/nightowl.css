@@ -11458,13 +11458,49 @@ body.page-noc .noc-card-actionable.has-mock-status::before {
 }
 
 /* Jobs / remote task queue */
+.automation-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 16px 0; border-block: 1px solid var(--border); }
+.automation-form label { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 13px; }
+.automation-form input, .automation-form select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, #10121d); color: var(--text-primary); font: inherit; }
+.automation-form input[type="checkbox"] { width: auto; }
+.automation-form [hidden] { display: none; }
+.automation-weekdays { display: flex; flex-wrap: wrap; gap: 10px; }
+.automation-weekdays label { flex-direction: row; align-items: center; }
+.automation-targets, .automation-actions { grid-column: 1 / -1; }
+.automation-row-actions { white-space: nowrap; }
+.automation-row-actions button { margin: 3px; }
+.automation-icon-button { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, #10121d); color: var(--text-primary); cursor: pointer; }
+.automation-icon-button:hover { border-color: var(--soft-purple); }
+.automation-row-actions svg { width: 16px; height: 16px; }
+@media (max-width: 700px) { .automation-form { grid-template-columns: minmax(0, 1fr); } }
 body.page-jobs .content {
     max-width: none;
 }
 
 .jobs-page {
     display: grid;
+    min-width: 0;
     gap: 16px;
+}
+
+body.page-jobs .main-area,
+body.page-jobs .jobs-tab-panel {
+    min-width: 0;
+}
+
+body.page-jobs .jobs-drawer[aria-hidden="true"] {
+    visibility: hidden;
+    pointer-events: none;
+}
+
+body.page-jobs .jobs-drawer .event-drawer-body dd {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+    body.page-jobs .app-shell.has-sidebar {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .jobs-module-tabs {
@@ -34038,3 +34074,27 @@ body.page-jobs .install-batch-table td small {
 }
 body.page-jobs .install-batch-item-table td small { line-height: 1.5; }
 body.page-jobs .install-batch-item-table .install-batch-status { white-space: nowrap; }
+
+.endpoint-live { margin-top: 24px; padding: 16px; }
+.endpoint-live > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.endpoint-live label { display: inline-flex; flex-direction: column; gap: 6px; margin: 8px 16px 12px 0; max-width: 100%; }
+.endpoint-live select { max-width: 100%; }
+.endpoint-live-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.endpoint-live-grid > div { min-width: 0; }
+.endpoint-live-grid svg { display: block; width: 100%; aspect-ratio: 600 / 130; }
+.endpoint-live h3 { font-size: 16px; }
+@media (max-width: 700px) { .endpoint-live-grid { grid-template-columns: minmax(0, 1fr); } }
+
+body.page-endpoint-detail .endpoint-hardware-evidence .endpoint-fact-list dd {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
+}
+
+@media (max-width: 520px) {
+    body.page-endpoint-detail .endpoint-hardware-evidence .rmm-info-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+}

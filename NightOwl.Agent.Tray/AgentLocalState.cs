@@ -19,7 +19,6 @@ internal sealed class AgentLocalState
     public static AgentLocalState Load()
     {
         NightOwlPaths paths = NightOwlPaths.Current;
-        paths.Bootstrap("tray", applyAcl: false);
         string installPath = paths.InstallDir;
         string configPath = paths.ResolveConfigPath();
         string statePath = paths.StatePath;
@@ -113,17 +112,7 @@ internal sealed class AgentLocalState
                 return null;
             }
 
-            List<string> lines = new(capacity: 400);
-            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using StreamReader reader = new(stream);
-            while (reader.ReadLine() is { } line)
-            {
-                lines.Add(line);
-                if (lines.Count > 400)
-                {
-                    lines.RemoveAt(0);
-                }
-            }
+            IReadOnlyList<string> lines = LogTailReader.Read(path).Lines;
 
             for (int i = lines.Count - 1; i >= 0; i--)
             {

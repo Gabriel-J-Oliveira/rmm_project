@@ -11,7 +11,7 @@
 {% endblock %}
 
 {% block content %}
-<section class="jobs-page" data-jobs-root>
+    <section class="jobs-page" data-jobs-root data-jobs-url="{% url 'jobs-data' %}">
     <section class="alerts-command-header page-header">
         <div class="alerts-command-title">
             <span class="command-icon page-header-icon"><i data-lucide="list-checks"></i></span>
@@ -21,7 +21,7 @@
             </div>
         </div>
         <div class="alerts-header-actions page-actions">
-            <span class="auto-refresh-chip module-badge"><i data-lucide="plug-zap"></i>Preview agente</span>
+            <span class="auto-refresh-chip module-badge"><i data-lucide="plug-zap"></i>Jobs persistidos</span>
             <span class="ops-chip"><i data-lucide="satellite"></i>&Uacute;ltima leitura <strong data-operational-opened-at>--</strong></span>
             <span class="ops-chip"><i data-lucide="clock-3"></i>Idade <strong data-operational-age>agora</strong></span>
             <span class="ops-chip"><i data-lucide="sparkles"></i>Novo desde abertura <strong data-operational-new-count>0</strong></span>
@@ -31,12 +31,14 @@
     </section>
 
     <nav class="jobs-module-tabs" aria-label="Modos de tarefas">
-        <button class="is-active" type="button" data-task-tab="agenda"><i data-lucide="calendar-days"></i>Agenda</button>
-        <button type="button" data-task-tab="list"><i data-lucide="list-checks"></i>Lista</button>
+        <button type="button" data-task-tab="automations"><i data-lucide="calendar-days"></i>Agendamentos</button>
+        <button disabled title="Preview nao operacional nesta entrega" type="button" data-task-tab="list"><i data-lucide="list-checks"></i>Lista (preview)</button>
         <button type="button" data-task-tab="jobs"><i data-lucide="terminal-square"></i>Jobs t&eacute;cnicos</button>
         <button type="button" data-task-tab="installations"><i data-lucide="hard-drive-download"></i>Instalações <span id="install-active-count" hidden></span></button>
-        <button type="button" data-task-tab="templates"><i data-lucide="clipboard-list"></i>Modelos</button>
+        <button disabled title="Preview nao operacional nesta entrega" type="button" data-task-tab="templates"><i data-lucide="clipboard-list"></i>Modelos (preview)</button>
     </nav>
+
+    {% include 'dashboard/job_automations.html' %}
 
     <section class="jobs-tab-panel is-active" data-task-tab-panel="agenda">
         <section class="panel operational-calendar-panel">
@@ -126,11 +128,11 @@
                 <select name="status" data-job-filter="status">
                     <option value="">Todos</option>
                     <option value="queued">Em fila</option>
-                    <option value="sent">Enviada</option>
+                    <option value="dispatched">Entregue</option>
                     <option value="running">Em execu&ccedil;&atilde;o</option>
                     <option value="completed">Conclu&iacute;da</option>
                     <option value="failed">Falha</option>
-                    <option value="expired">Expirada</option>
+                    <option value="timed_out">Tempo esgotado</option>
                     <option value="cancelled">Cancelada</option>
                 </select>
             </label>
@@ -139,13 +141,11 @@
                 <select name="type" data-job-filter="type">
                     <option value="">Todos</option>
                     <option value="force_inventory">force_inventory</option>
-                    <option value="defender_check">defender_check</option>
-                    <option value="disk_check">disk_check</option>
+                    <option value="collect_security">collect_security</option>
+                    <option value="collect_disks">collect_disks</option>
                     <option value="collect_logs">collect_logs</option>
                     <option value="ping">ping</option>
-                    <option value="cleanup_temp">cleanup_temp</option>
-                    <option value="run_script">run_script</option>
-                    <option value="install_software">install_software</option>
+                    <option value="collect_software">collect_software</option>
                     <option value="windows_update_scan">windows_update_scan</option>
                 </select>
             </label>
@@ -170,7 +170,7 @@
         </form>
         <div class="ops-filter-summary">
             <span><i data-lucide="funnel"></i><strong data-filtered-count>0</strong> tarefas exibidas</span>
-            <span>Futura API: <code>/api/jobs/</code></span>
+            <span>Fonte: <code>/jobs/data/</code></span>
         </div>
     </section>
 
@@ -178,7 +178,7 @@
         <div class="section-heading">
             <div>
                 <h2>Execu&ccedil;&otilde;es remotas / Jobs do agente</h2>
-                <p>Status local mockado: queued, sent, running, completed, failed, expired e cancelled.</p>
+                <p>Ultimos 200 jobs persistidos. Entrega, inicio confirmado e resultado sao etapas distintas.</p>
             </div>
             <div class="alert-view-toggle">
                 <button type="button" class="is-active" data-jobs-density="comfortable"><i data-lucide="rows-3"></i>Confort&aacute;vel</button>
@@ -205,7 +205,7 @@
                     </tr>
                 </thead>
                 <tbody data-jobs-table-body>
-                    <tr><td colspan="10" class="empty-state endpoint-empty">Carregando tarefas mockadas...</td></tr>
+                    <tr><td colspan="10" class="empty-state endpoint-empty">Consultando jobs persistidos...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -326,6 +326,10 @@
                     <div><dt>Finalizado</dt><dd data-job-field="finishedAt">--</dd></div>
                     <div><dt>Dura&ccedil;&atilde;o</dt><dd data-job-field="duration">--</dd></div>
                     <div><dt>Exit code</dt><dd data-job-field="exitCode">--</dd></div>
+                    <div><dt>Entregue</dt><dd data-job-field="dispatchedAt">--</dd></div>
+                    <div><dt>Tentativa</dt><dd data-job-field="attempt">--</dd></div>
+                    <div><dt>Comunicacao / heartbeat</dt><dd data-job-field="communication">--</dd></div>
+                    <div><dt>Erro</dt><dd data-job-field="errorCode">--</dd></div>
                 </dl>
             </section>
             <section>
@@ -350,7 +354,6 @@
             </section>
             <div class="event-drawer-actions">
                 <button type="button" data-job-copy-output><i data-lucide="copy"></i>Copiar sa&iacute;da</button>
-                <button type="button" data-job-rerun><i data-lucide="rotate-cw"></i>Reexecutar</button>
                 <button type="button" data-job-cancel><i data-lucide="ban"></i>Cancelar</button>
             </div>
         </div>
@@ -362,6 +365,7 @@
 {% block scripts %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/jobs.js' %}"></script>
+<script src="{% static 'js/job_automations.js' %}"></script>
 <script src="{% static 'js/install_batch_client.js' %}"></script>
 <script src="{% static 'js/install_batches.js' %}"></script>
 {% endblock %}

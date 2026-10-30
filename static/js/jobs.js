@@ -27,9 +27,11 @@
     var taskTimeline = root.querySelector("[data-task-timeline]");
 
     var currentJob = null;
+    var reloadActive = false;
     var currentTask = null;
     var requestedTab = new URLSearchParams(window.location.search).get('tab');
-    var activeTab = ['agenda', 'list', 'jobs', 'installations', 'templates'].includes(requestedTab) ? requestedTab : 'agenda';
+    var requestedJob = new URLSearchParams(window.location.search).get('job');
+    var activeTab = ['jobs', 'installations', 'automations'].includes(requestedTab) ? requestedTab : 'jobs';
     var calendarDate = new Date();
 
     var allJobs = [];
@@ -42,6 +44,8 @@
     var statusLabels = {
         queued: "Em fila",
         sent: "Enviada",
+        dispatched: "Entregue",
+        timed_out: "Tempo esgotado",
         running: "Em execucao",
         completed: "Concluida",
         failed: "Falha",
@@ -316,7 +320,8 @@
     function updateJobMetrics() {
         var counts = { queued: 0, running: 0, completed: 0, failed: 0, expired: 0 };
         allJobs.forEach(function (job) {
-            if (job.status === "sent") counts.queued += 1;
+            if (job.status === "sent" || job.status === "dispatched") counts.queued += 1;
+            else if (job.status === "timed_out") counts.expired += 1;
             else if (counts[job.status] != null) counts[job.status] += 1;
         });
         Object.keys(counts).forEach(function (key) {
@@ -360,7 +365,7 @@
     function renderJobsTable() {
         if (!jobTbody) return;
         if (!filteredJobs.length) {
-            jobTbody.innerHTML = '<tr><td colspan="10" class="empty-state endpoint-empty">' + icon("list-x") + '<strong>Nenhuma tarefa encontrada</strong><span>Ajuste os filtros ou dispare uma acao mockada em endpoints/alertas.</span></td></tr>';
+            jobTbody.innerHTML = '<tr><td colspan="10" class="empty-state endpoint-empty">' + icon("list-x") + '<strong>Nenhuma tarefa encontrada</strong><span>Nenhum job persistido corresponde aos filtros.</span></td></tr>';
             return;
         }
         jobTbody.innerHTML = filteredJobs.map(function (job) {
@@ -377,8 +382,6 @@
                 '<td><div class="endpoint-row-actions jobs-row-actions">' +
                 '<button type="button" data-job-action="details" title="Ver detalhes">' + icon("panel-right-open") + '</button>' +
                 '<button type="button" data-job-action="copy" title="Copiar saida">' + icon("copy") + '</button>' +
-                '<button type="button" data-job-action="rerun" title="Reexecutar">' + icon("rotate-cw") + '</button>' +
-                (canCancel(job) ? '<button type="button" data-job-action="cancel" title="Cancelar">' + icon("ban") + '</button>' : '') +
                 '<a href="' + escapeHtml(endpointUrl(job)) + '" title="Abrir endpoint">' + icon("monitor") + '</a>' +
                 '<a href="' + escapeHtml(eventsUrl(job)) + '" title="Ver eventos relacionados">' + icon("history") + '</a>' +
                 '</div></td>' +
@@ -516,18 +519,23 @@
         setJobDrawerField("finishedAt", formatDate(job.finishedAt));
         setJobDrawerField("duration", formatDuration(job.durationMs));
         setJobDrawerField("exitCode", job.exitCode == null ? "--" : String(job.exitCode));
+        setJobDrawerField("dispatchedAt", formatDate(job.dispatchedAt));
+        setJobDrawerField("attempt", String(job.attempt || 1));
+        setJobDrawerField("communication", (job.communication || 'unknown') + ' / ' + formatDate(job.lastHeartbeatAt));
+        setJobDrawerField("errorCode", [job.errorCode, job.errorMessage].filter(Boolean).join(' / '));
         root.querySelector('[data-job-field="payload"]').textContent = JSON.stringify({
             id: job.id,
             command: job.command,
             payload: job.payload || {},
-            future_api: { create: "/api/jobs/", agent_pull: "/api/agent/jobs/pull/", agent_result: "/api/agent/jobs/result/" }
+            correlation_id: job.correlationId,
+            result_id: job.resultId
         }, null, 2);
         root.querySelector('[data-job-field="stdout"]').textContent = job.stdout || "stdout indisponivel.";
         root.querySelector('[data-job-field="stderr"]').textContent = job.stderr || "stderr vazio.";
         var timeline = root.querySelector("[data-job-timeline]");
         if (timeline) {
-            timeline.innerHTML = (job.timeline || [job.status]).map(function (status) {
-                return '<li><span class="job-status-badge job-status-' + escapeHtml(status) + '">' + escapeHtml(statusLabels[status] || status) + '</span></li>';
+            timeline.innerHTML = (job.history || []).map(function (event) {
+                return '<li>' + escapeHtml(formatDate(event.at)) + ' · ' + escapeHtml(event.event) + ' · ' + escapeHtml(event.actor) + '</li>';
             }).join("");
         }
         var endpointLink = root.querySelector("[data-job-link-endpoint]");
@@ -535,7 +543,7 @@
         if (endpointLink) endpointLink.href = endpointUrl(job);
         if (eventsLink) eventsLink.href = eventsUrl(job);
         var cancelButton = root.querySelector("[data-job-cancel]");
-        if (cancelButton) cancelButton.hidden = !canCancel(job);
+        if (cancelButton) cancelButton.hidden = true;
         jobDrawer.classList.add("is-open");
         jobDrawer.setAttribute("aria-hidden", "false");
         if (jobBackdrop) jobBackdrop.hidden = false;
@@ -752,17 +760,16 @@
     }
 
     function reloadAll(message) {
-        if (!api) {
-            showToast("MockNightowlApi indisponivel.");
-            return Promise.resolve();
-        }
+        if (reloadActive) return Promise.resolve();
+        reloadActive = true;
         if (jobLoading) jobLoading.hidden = false;
-        return Promise.all([
-            api.getJobs({}),
-            api.getEndpoints({}),
-            api.getOperationalTasks ? api.getOperationalTasks({}) : Promise.resolve([]),
-            api.getTaskTemplates ? api.getTaskTemplates() : Promise.resolve([])
-        ]).then(function (results) {
+        return fetch(root.dataset.jobsUrl + (requestedJob ? '?job=' + encodeURIComponent(requestedJob) : ''), {credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(10000)}).then(function(response) {
+            if(!response.ok) throw new Error('jobs_unavailable');
+            return response.json();
+        }).then(function(data) {
+            if(data.source !== 'persisted') throw new Error('invalid_jobs_source');
+            return [data.jobs,data.endpoints,[],[]];
+        }).then(function (results) {
             allJobs = results[0] || [];
             endpoints = results[1] || [];
             allTasks = results[2] || [];
@@ -770,6 +777,14 @@
             renderEndpointOptions();
             applyJobFilters();
             renderAllTaskViews();
+            if (requestedJob && !currentJob) {
+                var linkedJob = jobById(requestedJob);
+                if (linkedJob) openJobDrawer(linkedJob);
+            }
+            if (currentJob && jobDrawer.classList.contains('is-open')) {
+                var freshJob = jobById(currentJob.id);
+                if (freshJob) openJobDrawer(freshJob);
+            }
             if (currentTask && currentTask.id) {
                 var freshTask = taskById(currentTask.id);
                 if (freshTask) {
@@ -780,7 +795,10 @@
                 }
             }
             if (message) showToast(message);
+        }).catch(function() {
+            showToast('Nao foi possivel consultar os jobs persistidos.');
         }).finally(function () {
+            reloadActive = false;
             if (jobLoading) jobLoading.hidden = true;
         });
     }
@@ -800,17 +818,11 @@
     }
 
     function rerun(job) {
-        if (!api || typeof api.rerunJob !== "function") return;
-        api.rerunJob(job.id).then(function () {
-            return reloadAll("Tarefa reexecutada no mock.");
-        });
+        showToast('Reexecucao indisponivel; use a acao autorizada no endpoint.');
     }
 
     function cancelJob(job) {
-        if (!api || typeof api.cancelJob !== "function") return;
-        api.cancelJob(job.id).then(function (updated) {
-            return reloadAll(updated ? "Tarefa cancelada." : "Tarefa nao encontrada.");
-        });
+        showToast('Cancelamento indisponivel nesta tela; nenhum job foi alterado.');
     }
 
     function saveTask() {
@@ -1203,4 +1215,6 @@
     }
     activateTab(activeTab);
     reloadAll();
+    var liveRefresh = setInterval(function () { if (!document.hidden && activeTab === 'jobs') reloadAll(); }, 5000);
+    window.addEventListener('pagehide', function () { clearInterval(liveRefresh); });
 }());

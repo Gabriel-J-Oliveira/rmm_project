@@ -30,6 +30,7 @@ if env_file.exists():
 
 PUBLIC_NIGHTOWL_URL = 'https://nightowl.controlsul.com.br'
 PUBLIC_NIGHTOWL_HOST = 'nightowl.controlsul.com.br'
+NIGHTOWL_JOB_AUTOMATIONS_ENABLED = env.bool('NIGHTOWL_JOB_AUTOMATIONS_ENABLED', default=False)
 
 
 def clean_env_list(name, default=None):
@@ -362,4 +363,20 @@ AD_AUTH_CONFIG = {
     'ADMIN_GROUP': env('AD_ADMIN_GROUP', default=''),
     'TECH_GROUP': env('AD_TECH_GROUP', default=''),
     'TIMEOUT': env.int('AD_TIMEOUT', default=8),
+}
+
+# Dedicated single-host, cross-worker cache. Never put this private pickle cache in a web root.
+CACHES = {
+    'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'},
+    'telemetry_live': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': env('NIGHTOWL_TELEMETRY_LIVE_CACHE', default=str(BASE_DIR.parent / '.nightowl-telemetry-live')),
+        'TIMEOUT': 120,
+        'OPTIONS': {'MAX_ENTRIES': 500},
+    },
+}
+NIGHTOWL_TELEMETRY_RETENTION_DAYS = {
+    60: env.int('NIGHTOWL_TELEMETRY_RETENTION_1M_DAYS', default=7),
+    300: env.int('NIGHTOWL_TELEMETRY_RETENTION_5M_DAYS', default=30),
+    3600: env.int('NIGHTOWL_TELEMETRY_RETENTION_1H_DAYS', default=90),
 }

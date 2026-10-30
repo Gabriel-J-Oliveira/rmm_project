@@ -11,6 +11,46 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--configuration-consolidation-only", StringComparer.Ordinal)) { ConfigurationConsolidationTests.Run(); return; }
+    if (args.Contains("--heartbeat-contract", StringComparer.Ordinal)) { await LightweightHeartbeatTests.EmitHeartbeatContractAsync(); return; }
+    if (args.Contains("--cleanup-baseline", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: true); return; }
+    if (args.Contains("--cleanup-only", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: false); return; }
+    if (args.Contains("--jobs-only", StringComparer.Ordinal)) { await JobRuntimeTests.RunAsync(); return; }
+    if (args.Contains("--jobs-e2e", StringComparer.Ordinal)) { await JobRuntimeTests.ProtocolE2E(); return; }
+    if (args.Contains("--continuous-e2e", StringComparer.Ordinal)) { await ContinuousTelemetryTests.ProtocolE2E(); return; }
+    if (args.Contains("--continuous-native", StringComparer.Ordinal)) { await ContinuousTelemetryTests.NativeCost(); return; }
+    if (args.Contains("--continuous-native-minute", StringComparer.Ordinal)) { await ContinuousTelemetryTests.NativeCost(minute:true); return; }
+    if (args.Contains("--continuous-only", StringComparer.Ordinal)) { await ContinuousTelemetryTests.RunAsync(); return; }
+    if (args.Length == 0)
+    {
+        await JobRuntimeTests.RunAsync();
+        await ContinuousTelemetryTests.RunAsync();
+    }
+    HardwareCadenceTests.Run();
+    if (args.Contains("--hardware-only", StringComparer.Ordinal))
+    {
+        TestHardwareInventoryV2();
+        TestHardwareEnrichmentIsolation();
+        await LightweightHeartbeatTests.RunAsync();
+        return;
+    }
+    if (args.Contains("--lightweight-heartbeat-only", StringComparer.Ordinal))
+    {
+        await LightweightHeartbeatTests.RunAsync();
+        TestPreservesIdentityAndEndpoints();
+        TestPreservesIntervals();
+        TestAgentStateHeartbeatPreservesInstalledLifecycle();
+        TestAgentStateJobPullAndCollectionPreserveLifecycle();
+        TestAgentStateRuntimeDoesNotRewriteUninstalledLifecycle();
+        TestAgentStateRuntimePreservesUnknownPropertiesAndRecentJobs();
+        TestStateSaveFailureDoesNotEscapeWorkerBoundary();
+        TestStateSaveFailureBackoffPreventsAcceleratedLoop();
+        TestHardwareInventoryV2();
+        TestHardwareEnrichmentIsolation();
+        Console.WriteLine("Heartbeat regression tests passed (10 existing identity/state/hardware groups).");
+        return;
+    }
+    await LightweightHeartbeatTests.RunAsync();
     if (args.Contains("--telemetry-configuration-only", StringComparer.Ordinal))
     {
         await TelemetryConfigurationTests.RunAsync();
@@ -419,6 +459,16 @@ static void TestHardwareEnrichmentIsolation()
         new object[] { "Write-Host 'not-json'; [pscustomobject]@{ value = 1 }", 5 })!;
     Require(timedOut.Count == 0 && invalidJson.Count == 0,
         "Controlled timeout and malformed PowerShell JSON must produce empty enrichment results.");
+
+    using (CancellationTokenSource externalStop = new(TimeSpan.FromMilliseconds(250)))
+    using (WindowsInventoryCollector.WithJobCancellation(externalStop.Token))
+    {
+        bool cancelled = false;
+        try { powerShellObject.Invoke(null, new object[] { "Start-Sleep -Seconds 3; [pscustomobject]@{ value = 1 }", 10 }); }
+        catch (System.Reflection.TargetInvocationException error) when (error.InnerException is OperationCanceledException)
+        { cancelled = true; }
+        Require(cancelled, "External job cancellation must propagate after the PowerShell process is stopped.");
+    }
 
     foreach (Dictionary<string, object?> failedDetails in new[] { timedOut, invalidJson, new Dictionary<string, object?>() })
     {

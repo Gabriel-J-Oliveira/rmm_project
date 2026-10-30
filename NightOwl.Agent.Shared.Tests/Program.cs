@@ -10,6 +10,7 @@ Environment.SetEnvironmentVariable("NIGHTOWL_HOME", root);
 
 try
 {
+    LocalFootprintTests.Run(root);
     NightOwlPaths paths = NightOwlPaths.FromEnvironment();
     Require(NightOwlPaths.SystemSid == "S-1-5-18", "SYSTEM SID constant mismatch.");
     Require(NightOwlPaths.AdministratorsSid == "S-1-5-32-544", "Builtin Administrators SID constant mismatch.");
@@ -521,8 +522,12 @@ try
     jobStore.Mark(Guid.NewGuid().ToString(), "ping", JobFinalStatuses.Completed, 1);
     jobStore.Mark(Guid.NewGuid().ToString(), "ping", JobFinalStatuses.Completed, 1);
     jobStore.Mark(Guid.NewGuid().ToString(), "ping", JobFinalStatuses.Completed, 1);
+    string retainedActiveId = Guid.NewGuid().ToString();
+    jobStore.Mark(retainedActiveId, "repair_agent", "running", 1);
+    jobStore.MarkExternalRunnerStarted(retainedActiveId, "repair_agent", repairRunnerPath, 900);
     jobStore.Prune();
-    Require(Directory.GetFiles(jobsDir, "*.json").Length <= 2, "Job retention did not prune old records.");
+    Require(jobStore.LoadAll().Count(record => record.IsFinal) <= 2, "Job retention did not prune terminal records.");
+    Require(jobStore.Load(retainedActiveId)?.ExternalRunnerActive == true, "Retention removed an externally owned operation.");
 
     string resultQueueDir = Path.Combine(paths.StateDir, "pending-results-test");
     PendingResultQueue resultQueue = new(resultQueueDir, maxRecords: 5, maxTotalBytes: 512 * 1024, maxPayloadBytes: 64 * 1024);

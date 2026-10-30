@@ -27,6 +27,7 @@ builder.Services.AddSingleton<JobExecutionCoordinator>();
 builder.Services.AddSingleton<JobExecutor>();
 builder.Services.AddHostedService<Worker>();
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("jobs-v2").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 IHost host = builder.Build();
 host.Run();

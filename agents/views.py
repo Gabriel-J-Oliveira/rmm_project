@@ -1202,9 +1202,11 @@ class AgentJobsPullView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @transaction.atomic
     def get(self, request):
         machine = authenticate_agent_token(request)
         now = timezone.now()
+        protocol_v2 = request.headers.get('X-NightOwl-Job-Protocol') == '2'
         expired = machine.jobs.filter(
             status=AgentJob.STATUS_QUEUED,
             expires_at__isnull=False,
@@ -1252,9 +1254,46 @@ class AgentJobsPullView(APIView):
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
 
-        jobs = list(machine.jobs.filter(status=AgentJob.STATUS_QUEUED).order_by('queued_at')[:5])
+        if protocol_v2:
+            from .job_control import delivery_candidates
+            candidates = delivery_candidates(machine, now)
+        else:
+            candidates = machine.jobs.filter(status=AgentJob.STATUS_QUEUED)
+        jobs = list(candidates.select_for_update().order_by('queued_at')[:5])
         response_jobs = []
         for job in jobs:
+            if not protocol_v2 and hasattr(job,'automation_occurrence'):
+                continue
+            from .automation import validate_scheduled_dispatch
+            try:
+                validate_scheduled_dispatch(job)
+            except (PermissionError, ValueError):
+                job.status=AgentJob.STATUS_CANCELLED
+                job.error_code='AUTOMATION_AUTHORIZATION_REVOKED'
+                job.finished_at=now
+                job.save(update_fields=['status','error_code','finished_at','updated_at'])
+                create_audit_event(event_type='job.cancelled',title='Autorizacao de automacao revogada',
+                    description='Identidade, permissao ou capacidade deixou de ser valida.',endpoint=machine,
+                    actor_type=AuditEvent.ACTOR_SYSTEM,actor_name='Sistema',metadata={'job_id':str(job.pk)})
+                continue
+            if job.job_type in ('collect_services','install_software'):
+                from django.conf import settings
+                from .internal_jobs import validate_internal_payload, internal_capability
+                flag = 'NIGHTOWL_SERVICE_COLLECTION_ENABLED' if job.job_type=='collect_services' else 'NIGHTOWL_SOFTWARE_INSTALL_ENABLED'
+                try:
+                    if not getattr(settings,flag,False) or not internal_capability(machine,job.job_type):
+                        raise ValueError('internal_job_disabled')
+                    validate_internal_payload(job.job_type,job.payload)
+                except ValueError:
+                    job.status=AgentJob.STATUS_UNSUPPORTED
+                    job.error_code='INTERNAL_CAPABILITY_DISABLED'
+                    job.finished_at=now
+                    job.save(update_fields=['status','error_code','finished_at','updated_at'])
+                    create_audit_event(event_type='job.unsupported',title='Capacidade interna bloqueada',
+                        description='Flag, capacidade ou contrato invalido.',endpoint=machine,
+                        severity=AuditEvent.SEVERITY_WARNING,actor_type=AuditEvent.ACTOR_AGENT,actor_name='NightOwlAgent',
+                        metadata={'job_id':str(job.pk),'job_type':job.job_type})
+                    continue
             if job.job_type == AgentJob.TYPE_CONFIGURE_TELEMETRY:
                 from .telemetry_configuration import telemetry_capability, validate_configuration
                 try:
@@ -1277,7 +1316,7 @@ class AgentJobsPullView(APIView):
                     continue
             job.status = AgentJob.STATUS_SENT
             job.dispatched_at = now
-            job.started_at = now
+            job.started_at = None if protocol_v2 else now
             job.save(update_fields=['status', 'dispatched_at', 'started_at', 'updated_at'])
             if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT:
                 uninstall_request = getattr(job, 'uninstall_request', None)
@@ -1334,9 +1373,9 @@ class AgentJobsPullView(APIView):
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
             create_audit_event(
-                event_type='job.started',
-                title='Job iniciado pelo agente',
-                description=f'Job {job.job_type} iniciou execucao em {machine.hostname}.',
+                event_type='job.delivered',
+                title='Job entregue; inicio ainda nao confirmado',
+                description=f'Job {job.job_type} entregue a {machine.hostname}.',
                 severity=AuditEvent.SEVERITY_INFO,
                 actor_type=AuditEvent.ACTOR_AGENT,
                 actor_name='NightOwlAgent',
@@ -1522,6 +1561,12 @@ class AgentJobsResultView(APIView):
                     )
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
+            if job.job_type in ('collect_services','install_software') and incoming_status==AgentJob.STATUS_COMPLETED:
+                from .internal_jobs import validate_internal_completion
+                try:
+                    validate_internal_completion(job,_payload_result(payload))
+                except ValueError:
+                    return Response({'error':'internal_confirmation_invalid'},status=400)
             if job.job_type == AgentJob.TYPE_CONFIGURE_TELEMETRY and incoming_status == AgentJob.STATUS_COMPLETED:
                 from .telemetry_configuration import validate_completion
                 try:
@@ -1551,6 +1596,7 @@ class AgentJobsResultView(APIView):
                         'status': 'ok',
                         'ignored': True,
                         'reason': 'job_already_final',
+                        'result_id': result_id,
                         'machine_id': machine.machine_id or str(machine.id),
                         'job_id': str(job.id),
                         'job_status': job.status,

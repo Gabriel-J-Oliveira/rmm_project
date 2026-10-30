@@ -8,5 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NightOwl.Agent.Shared\NightOwl.Agent.Shared.csproj" />
+    <Compile Include="..\NightOwl.Agent.Tray\AgentLocalState.cs" Link="Tray\AgentLocalState.cs" />
+    <Compile Include="..\NightOwl.Agent.Tray\ServiceObservation.cs" Link="Tray\ServiceObservation.cs" />
   </ItemGroup>
 </Project>

@@ -12,6 +12,12 @@ internal static class HardwareInventoryNormalizer
         hardware["battery"] = Battery(
             enrichment.GetValueOrDefault("battery") as Dictionary<string, object?> ?? new(),
             core.GetValueOrDefault("battery_present") as bool?, core.GetValueOrDefault("battery_status"));
+        Dictionary<string, object?> battery = (Dictionary<string, object?>)hardware["battery"]!;
+        if (battery.GetValueOrDefault("collection_status") as string != "failed")
+        {
+            hardware["battery_present"] = battery["present"];
+            hardware["battery_status"] = battery["status"];
+        }
         hardware["physical_disks"] = PhysicalDisks(storage, systemDrive);
         return hardware;
     }
@@ -29,6 +35,10 @@ internal static class HardwareInventoryNormalizer
                 ["capacity_bytes"] = capacity,
                 ["speed_mhz"] = PositiveLong(raw.GetValueOrDefault("speed_mhz")),
                 ["configured_speed_mhz"] = PositiveLong(raw.GetValueOrDefault("configured_speed_mhz")),
+                ["speed_reported_value"] = PositiveLong(raw.GetValueOrDefault("speed_mhz")),
+                ["speed_reported_unit"] = "provider_raw_unverified",
+                ["configured_clock_mhz"] = PositiveLong(raw.GetValueOrDefault("configured_speed_mhz")),
+                ["speed_source"] = "Win32_PhysicalMemory.Speed/ConfiguredClockSpeed (SMBIOS-reported; not measured)",
                 ["manufacturer"] = Text(raw.GetValueOrDefault("manufacturer")),
                 ["part_number"] = Text(raw.GetValueOrDefault("part_number")),
                 ["serial_number"] = Text(raw.GetValueOrDefault("serial_number")),
@@ -47,10 +57,20 @@ internal static class HardwareInventoryNormalizer
             ? modules.Sum(module => (long)module["capacity_bytes"]!)
             : null;
         int? slotsUsed = source.GetValueOrDefault("modules_query_succeeded") is false ||
-                         modules.Count == 0 && reportedTotalBytes is > 0 ? null : modules.Count;
+                         modules.Count == 0 ? null : modules.Count;
+        if (slotsTotal < slotsUsed) slotsTotal = null;
+        List<long?> maxima = Values(source.GetValueOrDefault("maximum_capacity_bytes")).Select(PositiveLong).ToList();
+        long? maximum = maxima.Count > 0 && maxima.All(value => value is > 0) ? maxima.Sum(value => value!.Value) : null;
+        if (maximum < (PositiveLong(reportedTotalBytes) ?? moduleTotal)) maximum = null;
         return new Dictionary<string, object?>
         {
-            ["total_bytes"] = PositiveLong(reportedTotalBytes) ?? moduleTotal,
+            ["status"] = source.GetValueOrDefault("modules_query_succeeded") is false ? "failed" : modules.Count > 0 ? "available" : "unknown",
+            ["source"] = "Win32_PhysicalMemory/Win32_PhysicalMemoryArray",
+            ["arrays"] = Rows(source.GetValueOrDefault("memory_arrays")).ToList(),
+            ["maximum_supported_bytes"] = maximum,
+            ["maximum_source"] = maximum is null ? null : "SMBIOS/Win32_PhysicalMemoryArray (firmware-reported, not OEM compatibility approval)",
+            ["total_bytes"] = moduleTotal ?? PositiveLong(reportedTotalBytes),
+            ["reported_system_total_bytes"] = PositiveLong(reportedTotalBytes),
             ["slots_total"] = slotsTotal,
             ["slots_used"] = slotsUsed,
             ["slots_free"] = slotsTotal is null || slotsUsed is null ? null : Math.Max(slotsTotal.Value - slotsUsed.Value, 0),
@@ -67,6 +87,13 @@ internal static class HardwareInventoryNormalizer
         long? full = present is true ? BatteryCapacity(source.GetValueOrDefault("full_charge_capacity_mwh")) : null;
         return new Dictionary<string, object?>
         {
+            ["collection_status"] = querySucceeded ? present is true ? "available" : "not_present" : "failed",
+            ["source"] = "Win32_Battery/root.wmi",
+            ["manufacturer"] = present is true ? Text(source.GetValueOrDefault("manufacturer")) : null,
+            ["model"] = present is true ? Text(source.GetValueOrDefault("model")) : null,
+            ["serial_number"] = present is true ? Text(source.GetValueOrDefault("serial_number")) : null,
+            ["part_number"] = present is true ? Text(source.GetValueOrDefault("part_number")) : null,
+            ["device_id"] = present is true ? Text(source.GetValueOrDefault("device_id")) : null,
             ["present"] = present,
             ["status"] = present is true ? BatteryStatus(source.GetValueOrDefault("status_code") ?? legacyStatus)
                 : present is false ? "not_present" : "unknown",

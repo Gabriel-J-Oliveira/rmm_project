@@ -25,6 +25,9 @@ public sealed class Worker : BackgroundService
     private readonly TelemetryConfigurationService? _telemetryConfiguration;
     private readonly Func<AgentConfig> _loadConfig;
     private readonly string _updateStatePath;
+    private long _latestHeartbeatTicks;
+    private long _latestJobPullTicks;
+    private readonly SemaphoreSlim _heavyWork = new(1, 1);
 
     public Worker(
         ConfigService configService,
@@ -65,6 +68,7 @@ public sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await Task.Yield();
         AgentConfig config = _loadConfig();
         AgentState state = _stateService.Load(config);
         await _logger.LogAsync("config.loaded", "Agent config loaded.", new { config.AgentVersion, config.ServerBaseUrl }, stoppingToken);
@@ -85,21 +89,29 @@ public sealed class Worker : BackgroundService
         await MigrateLegacyPendingResultsAsync(config, stoppingToken);
         using CancellationTokenSource handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         Task updateHandshakeTask = RunPendingUpdateHandshakeAsync(config, handshakeCancellation.Token);
+        DateTimeOffset? initialHeartbeat = state.LastHeartbeatAt;
+        Task heartbeatTask = Task.Run(() => RunHeartbeatLoopAsync(config, initialHeartbeat,
+            handshakeCancellation.Token), CancellationToken.None);
+        Task jobsTask = Task.CompletedTask;
         try
         {
-            await _telemetryRuntime.StartAsync(config, stoppingToken);
-            if (_telemetryConfiguration is not null)
-                await _telemetryConfiguration.RecoverAsync(config, stoppingToken);
-        }
-        catch (Exception) when (!stoppingToken.IsCancellationRequested)
-        {
-            await _logger.LogAsync("telemetry.startup.not_ready", "Telemetry initialization/recovery pending.", null, stoppingToken, "warning");
-        }
-        await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken, _updateStatePath);
-        TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
+            try
+            {
+                await _telemetryRuntime.StartAsync(config, stoppingToken);
+                if (_telemetryConfiguration is not null)
+                    await _telemetryConfiguration.RecoverAsync(config, stoppingToken);
+            }
+            catch (Exception) when (!stoppingToken.IsCancellationRequested)
+            {
+                await _logger.LogAsync("telemetry.startup.not_ready", "Telemetry initialization/recovery pending.", null, stoppingToken, "warning");
+            }
+            await _jobCoordinator.RecoverInterruptedJobsAsync(config, _resultQueue, stoppingToken, _updateStatePath);
+            JobRuntime jobs = new(_api, _jobCoordinator, _jobExecutor.ExecuteAsync, _resultQueue, _logger, _heavyWork,
+                token => MigrateLegacyPendingResultsAsync(config, token));
+            jobs.PollConfirmed = at => Interlocked.Exchange(ref _latestJobPullTicks,at.UtcTicks);
+            jobsTask = Task.Run(() => jobs.RunAsync(config, handshakeCancellation.Token), CancellationToken.None);
+            TimeSpan stateSaveBackoff = InitialStateSaveBackoff;
 
-        try
-        {
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -131,21 +143,14 @@ public sealed class Worker : BackgroundService
                         }
                     }
 
-                    await FlushPendingResultsAsync(config, stoppingToken);
-
-                    if (IsDue(state.LastHeartbeatAt, config.Intervals.HeartbeatSeconds, now))
+                    if (InventoryPlan.Due(state, now, config.Intervals.CollectSeconds).Any &&
+                        IsDue(state.LastCollectionAt, Math.Min(300, Math.Max(5, config.Intervals.CollectSeconds)), now) &&
+                        !_jobCoordinator.HasExternalOwner && await _heavyWork.WaitAsync(0, stoppingToken))
                     {
-                        await SendHeartbeatAsync(config, state, now, stoppingToken);
-                    }
-
-                    if (IsDue(state.LastCollectionAt, config.Intervals.CollectSeconds, now))
-                    {
-                        await SendCollectionAsync(config, state, now, stoppingToken);
-                    }
-
-                    if (IsDue(state.LastJobPullAt, config.Intervals.JobsSeconds, now))
-                    {
-                        await PullAndRunJobsAsync(config, state, now, stoppingToken);
+                        bool ownsCollection = true;
+                        try { await SendCollectionAsync(config, state, now, stoppingToken,
+                            () => { _heavyWork.Release(); ownsCollection = false; }); }
+                        finally { if (ownsCollection) _heavyWork.Release(); }
                     }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
@@ -154,6 +159,7 @@ public sealed class Worker : BackgroundService
                     await _logger.LogAsync("service.loop.failed", ex.Message, BuildErrorData(ex), stoppingToken, "error");
                 }
 
+                CopyHeartbeatCheckpoint(state);
                 StateSaveOutcome saveOutcome = await SaveStateWithBoundaryAsync(
                     token => _stateService.SaveAsync(config, state, token),
                     _logger,
@@ -167,6 +173,9 @@ public sealed class Worker : BackgroundService
         finally
         {
             handshakeCancellation.Cancel();
+            await heartbeatTask;
+            try { await jobsTask; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+            CopyHeartbeatCheckpoint(state);
             await updateHandshakeTask;
             try { await _telemetryRuntime.StopAsync(); }
             catch (TimeoutException)
@@ -182,6 +191,44 @@ public sealed class Worker : BackgroundService
             try { await _logger.LogAsync("service.stopping", "NightOwl .NET agent stopping.", null, CancellationToken.None); }
             catch (Exception) { /* Shutdown must not be blocked by diagnostics. */ }
         }
+    }
+
+    private void CopyHeartbeatCheckpoint(AgentState state)
+    {
+        long ticks = Interlocked.Read(ref _latestHeartbeatTicks);
+        if (ticks > 0) state.LastHeartbeatAt = new DateTimeOffset(ticks, TimeSpan.Zero);
+        long jobTicks = Interlocked.Read(ref _latestJobPullTicks);
+        if (jobTicks > 0) state.LastJobPullAt = new DateTimeOffset(jobTicks,TimeSpan.Zero);
+    }
+
+    internal async Task RunHeartbeatLoopAsync(AgentConfig config, DateTimeOffset? lastHeartbeat, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+                if (config.HasValidToken && IsDue(lastHeartbeat, config.Intervals.HeartbeatSeconds, now))
+                {
+                    using CancellationTokenSource request = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    request.CancelAfter(TimeSpan.FromSeconds(30));
+                    try
+                    {
+                        if (await SendHeartbeatAsync(config, request.Token))
+                        {
+                            lastHeartbeat = now;
+                            Interlocked.Exchange(ref _latestHeartbeatTicks, now.UtcTicks);
+                        }
+                    }
+                    catch (Exception) when (!ct.IsCancellationRequested)
+                    {
+                        // Collection/logging failures cannot terminate the heartbeat scheduler.
+                    }
+                }
+                await Task.Delay(DefaultLoopDelay, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
     }
 
     private async Task RunPendingUpdateHandshakeAsync(AgentConfig config, CancellationToken ct)
@@ -518,51 +565,6 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    private async Task FlushPendingResultsAsync(AgentConfig config, CancellationToken ct)
-    {
-        foreach (PendingResultRecord pending in _resultQueue.ListDue(DateTimeOffset.UtcNow))
-        {
-            try
-            {
-                JobExecutionResult result = pending.Payload.Deserialize<JobExecutionResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web))
-                    ?? throw new InvalidOperationException(JobErrorCodes.ResultPayloadInvalid);
-                await _api.SendJobResultAsync(config, result, ct, pending.ResultId);
-                _resultQueue.MarkSent(pending);
-                await _logger.LogAsync("job.result.sent", "Queued job result sent.", new
-                {
-                    pending.JobId,
-                    pending.JobType,
-                    result_id = pending.ResultId,
-                    pending.Status,
-                    attempt_count = pending.AttemptCount,
-                    idempotency_key = pending.ResultId
-                }, ct);
-            }
-            catch (Exception ex)
-            {
-                _resultQueue.MarkAttemptFailed(pending, JobErrorCodes.ResultSendFailed, ex.Message);
-                await _logger.LogAsync("job.result.send_failed", ex.Message, BuildErrorData(ex, new
-                {
-                    pending.JobId,
-                    pending.JobType,
-                    result_id = pending.ResultId,
-                    attempt_count = pending.AttemptCount + 1,
-                    next_attempt_at = pending.NextAttemptAt
-                }), ct, "error");
-            }
-        }
-
-        foreach (PendingResultQuarantineEvent quarantined in _resultQueue.DrainQuarantineEvents())
-        {
-            await _logger.LogAsync("pending_result.quarantined", "Pending result moved to quarantine.", new
-            {
-                source_path = quarantined.SourcePath,
-                destination_path = quarantined.DestinationPath,
-                reason = quarantined.Reason
-            }, ct, "warning");
-        }
-    }
-
     private static bool IsDue(DateTimeOffset? previous, int intervalSeconds, DateTimeOffset now)
     {
         if (previous is null)
@@ -574,33 +576,45 @@ public sealed class Worker : BackgroundService
         return now - previous.Value >= TimeSpan.FromSeconds(interval);
     }
 
-    private async Task SendHeartbeatAsync(AgentConfig config, AgentState state, DateTimeOffset now, CancellationToken ct)
+    private async Task<bool> SendHeartbeatAsync(AgentConfig config, CancellationToken ct)
     {
         AgentHeartbeatPayload payload = _collector.BuildHeartbeat(config);
-        payload.Agent["capabilities"] = config.AllowedJobTypes.Contains("configure_telemetry", StringComparer.OrdinalIgnoreCase)
-            ? new[] { "configure_telemetry" } : Array.Empty<string>();
-        if (_telemetryRuntime.Effective is not null)
-            payload.Agent["telemetry_configuration"] = _telemetryRuntime.Effective.Report();
+        // Keep the historical spelling for mixed-version capability consumers.
+        payload.Agent["capabilities"] = config.AllowedJobTypes
+            .Where(type => type is "configure_telemetry" or "collect_services" || type == "install_software" && config.SoftwareInstallEnabled)
+            .Append("jobs_protocol_v2").Append("job_protocol_v2").ToArray();
+        TelemetrySettings? effectiveTelemetry = _telemetryRuntime.Effective;
+        payload.Agent["telemetry_mode"] = config.TelemetryMode;
+        if (config.TelemetryMode == "continuous")
+            payload.Agent["continuous_telemetry"] = new { schema_version = 2, sample_seconds = 10, summary_seconds = 60, upload_seconds = 60, raw_retention_minutes = 30 };
+        if (effectiveTelemetry is not null)
+            payload.Agent["telemetry_configuration"] = effectiveTelemetry.Report();
         try
         {
             await _api.PostHeartbeatAsync(config, payload, ct);
-            state.LastHeartbeatAt = now;
-            await _logger.LogAsync("heartbeat.sent", "Heartbeat sent.", new { payload.Hostname, payload.MachineId }, ct);
+            try { await _logger.LogAsync("heartbeat.sent", "Heartbeat sent.", new { payload.Hostname, payload.MachineId }, ct); }
+            catch (Exception) { /* The server already acknowledged this heartbeat. */ }
+            return true;
         }
         catch (Exception ex)
         {
-            await _logger.LogAsync("heartbeat.failed", ex.Message, BuildErrorData(ex), ct, "error");
+            try { await _logger.LogAsync("heartbeat.failed", ex.Message, BuildErrorData(ex), ct, "error"); }
+            catch (Exception) { /* Logging must not stop the scheduler. */ }
+            return false;
         }
     }
 
-    private async Task SendCollectionAsync(AgentConfig config, AgentState state, DateTimeOffset now, CancellationToken ct)
+    private async Task SendCollectionAsync(AgentConfig config, AgentState state, DateTimeOffset now, CancellationToken ct, Action? collected = null)
     {
         await _logger.LogAsync("collection.started", "Aggregated collection started.", null, ct);
         try
         {
-            AgentCollectPayload payload = _collector.BuildCollectPayload(config);
+            InventoryPlan plan = InventoryPlan.Due(state, now, config.Intervals.CollectSeconds);
+            using var scope = WindowsInventoryCollector.WithJobCancellation(ct);
+            AgentCollectPayload payload = _collector.BuildScheduledPayload(config, plan);
+            collected?.Invoke();
             await _api.PostCollectionAsync(config, payload, ct);
-            state.LastCollectionAt = now;
+            RecordInventoryCheckpoint(state, plan, payload, now);
             await _logger.LogAsync("collection.sent", "Aggregated collection sent.", new
             {
                 disks = payload.Disks.Count,
@@ -613,75 +627,17 @@ public sealed class Worker : BackgroundService
         }
     }
 
-    private async Task PullAndRunJobsAsync(AgentConfig config, AgentState state, DateTimeOffset now, CancellationToken ct)
+    internal static void RecordInventoryCheckpoint(AgentState state, InventoryPlan plan, AgentCollectPayload payload, DateTimeOffset now)
     {
-        state.LastJobPullAt = now;
-        await _logger.LogAsync("job.pull.started", "Pulling jobs.", null, ct);
-
-        AgentJobsPullResponse response;
-        try
-        {
-            response = await _api.PullJobsAsync(config, ct);
-            await _logger.LogAsync("job.pull.response", "Job pull completed.", new { count = response.Jobs.Count }, ct);
-        }
-        catch (Exception ex)
-        {
-            await _logger.LogAsync("job.pull.failed", ex.Message, BuildErrorData(ex), ct, "error");
-            return;
-        }
-
-        IEnumerable<AgentJobRequest> orderedJobs = response.Jobs
-            .OrderBy(job => JobExecutionCoordinator.GetCategory(job.Type).Equals(JobCategories.Exclusive, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenByDescending(job => job.Priority)
-            .ThenBy(job => job.CreatedAt ?? DateTimeOffset.UtcNow);
-
-        foreach (AgentJobRequest job in orderedJobs)
-        {
-            await _logger.LogAsync("job.received", "Job received.", new { job.Id, job.Type }, ct);
-            JobExecutionResult result;
-            bool started = false;
-            JobStartDecision startDecision = await _jobCoordinator.TryStartAsync(config, job, ct);
-            if (!startDecision.CanStart)
-            {
-                result = startDecision.Result!;
-            }
-            else
-            {
-                started = true;
-                try
-                {
-                    result = await _jobExecutor.ExecuteAsync(config, job, ct);
-                }
-                finally
-                {
-                    _jobCoordinator.Release(job);
-                }
-            }
-
-            try
-            {
-                string jobType = InferJobType(result, job.Type);
-                PendingResultRecord queued = jobType == "configure_telemetry"
-                    ? _resultQueue.LoadAll().FirstOrDefault(item => item.JobId == result.JobId)
-                        ?? _resultQueue.Enqueue(jobType, result, true)
-                    : _resultQueue.Enqueue(jobType, result, JobExecutionCoordinator.IsCritical(jobType));
-                await _logger.LogAsync("job.result.queued", "Job result persisted before send.", new
-                {
-                    job.Id,
-                    job.Type,
-                    result.Status,
-                    result_id = queued.ResultId,
-                    category = JobExecutionCoordinator.GetCategory(jobType),
-                    critical = queued.Critical
-                }, ct);
-                await FlushPendingResultsAsync(config, ct);
-                state.RememberJob(job.Id);
-            }
-            catch (Exception ex)
-            {
-                await _logger.LogAsync("job.result.queue_failed", ex.Message, BuildErrorData(ex, new { job.Id, job.Type, started }), ct, "error");
-            }
-        }
+        state.LastCollectionAt = now;
+        if (plan.Basic && payload.System.Count > 0) state.LastBasicInventoryAt = now;
+        if (plan.Detailed && payload.Hardware.GetValueOrDefault("detailed_collected_at") is not null)
+            state.LastDetailedHardwareAt = now;
+        if (plan.Volumes && payload.SectionStates.GetValueOrDefault("disk") as string == "available")
+            state.LastVolumesAt = now;
+        if (plan.Network && payload.Network.Count > 0) state.LastNetworkInventoryAt = now;
+        if (plan.Ancillary && payload.Security.Count > 0 && payload.Patches.Count > 0)
+            state.LastAncillaryInventoryAt = now;
     }
 
     private static string InferJobType(JobExecutionResult result, string fallback = "")

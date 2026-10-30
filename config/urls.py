@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
+from dashboard import automation_views
 
 from dashboard import views as dashboard_views
 from dashboard import ad_install_views
@@ -72,6 +73,11 @@ urlpatterns = [
     path('api/capacity/<uuid:pk>/series/', capacity_views.capacity_series, name='api-capacity-series'),
     path('events/', dashboard_views.events_list, name='events-list'),
     path('jobs/', dashboard_views.jobs_list, name='jobs-list'),
+    path('jobs/data/', dashboard_views.jobs_data, name='jobs-data'),
+    path('jobs/automations/', automation_views.automations, name='job-automations'),
+    path('jobs/automations/targets/', automation_views.targets, name='job-automation-targets'),
+    path('jobs/automations/<uuid:definition_id>/', automation_views.automations, name='job-automation-detail'),
+    path('jobs/occurrences/<uuid:occurrence_id>/cancel/', automation_views.occurrence_cancel, name='job-occurrence-cancel'),
     path('maintenance/', dashboard_views.maintenance_list, name='maintenance-list'),
     path('maintenance/email-outbox/', dashboard_views.email_outbox_list, name='email-outbox-list'),
     path('maintenance/email-outbox/process/', dashboard_views.email_outbox_process, name='email-outbox-process'),

@@ -15,8 +15,15 @@ from .views import (
     AgentUpdatePolicyView,
 )
 from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, EndpointTelemetryView
+from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
+from .job_control import AgentJobSignalView, AgentJobStartedView
 
 urlpatterns = [
+    path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),
+    path('jobs/<uuid:job_id>/started/', AgentJobStartedView.as_view(), name='agent-jobs-started'),
+    path('telemetry/control/', LiveAgentControlView.as_view(), name='agent-telemetry-control'),
+    path('telemetry/live/', LiveAgentPointsView.as_view(), name='agent-telemetry-live'),
+    path('telemetry/live/<uuid:endpoint_id>/', LiveOperatorView.as_view(), name='endpoint-telemetry-live'),
     path('telemetry/', AgentTelemetryView.as_view(), name='agent-telemetry'),
     path('telemetry/<uuid:endpoint_id>/', EndpointTelemetryView.as_view(), name='endpoint-telemetry'),
     path('telemetry/<uuid:endpoint_id>/summary/', EndpointTelemetrySummaryView.as_view(), name='endpoint-telemetry-summary'),

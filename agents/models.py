@@ -1035,6 +1035,10 @@ class EndpointPerformanceSample(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE, related_name='performance_samples')
     sample_id = models.UUIDField()
+    schema_version = models.PositiveSmallIntegerField(default=1, db_default=1)
+    resolution_seconds = models.PositiveIntegerField(default=300, db_default=300)
+    window_end_at = models.DateTimeField(null=True)
+    metric_summaries = models.JSONField(default=dict, db_default={})
     collected_at = models.DateTimeField()
     cpu_percent = models.FloatField(null=True)
     memory_total_bytes = models.BigIntegerField(null=True)
@@ -1051,7 +1055,7 @@ class EndpointPerformanceSample(models.Model):
     disk_write_latency_ms = models.FloatField(null=True)
     network_received_bytes = models.BigIntegerField(null=True)
     network_sent_bytes = models.BigIntegerField(null=True)
-    uptime_seconds = models.BigIntegerField()
+    uptime_seconds = models.BigIntegerField(null=True)
     process_consumers = models.JSONField(default=dict)
     collection_duration_ms = models.BigIntegerField()
     agent_working_set_bytes = models.BigIntegerField(null=True)
@@ -1059,8 +1063,18 @@ class EndpointPerformanceSample(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=['endpoint', 'sample_id'], name='uniq_endpoint_telemetry_sample')]
+        constraints = [models.UniqueConstraint(fields=['endpoint', 'sample_id'], name='uniq_endpoint_telemetry_sample'),
+                       models.UniqueConstraint(fields=['endpoint', 'collected_at', 'resolution_seconds'], condition=models.Q(schema_version=2), name='unique_endpoint_window_resolution')]
         indexes = [models.Index(fields=['endpoint', '-collected_at'], name='endpoint_perf_time_idx')]
+
+
+class TelemetryLiveSession(models.Model):
+    endpoint = models.OneToOneField(AgentMachine, on_delete=models.CASCADE, related_name='live_telemetry_session')
+    session_id = models.UUIDField(default=uuid.uuid4)
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    hard_expires_at = models.DateTimeField()
 
 
 class SoftwarePolicy(models.Model):
@@ -1516,6 +1530,8 @@ class AgentJob(models.Model):
     TYPE_UNINSTALL_AGENT = 'uninstall_agent'
     TYPE_RESTART_AGENT = 'restart_agent'
     TYPE_CONFIGURE_TELEMETRY = 'configure_telemetry'
+    TYPE_COLLECT_SERVICES = 'collect_services'
+    TYPE_INSTALL_SOFTWARE = 'install_software'
     TYPE_CHOICES = [
         (TYPE_FORCE_INVENTORY, 'Force inventory'),
         (TYPE_COLLECT_DISKS, 'Collect disks'),
@@ -1530,6 +1546,8 @@ class AgentJob(models.Model):
         (TYPE_UNINSTALL_AGENT, 'Uninstall agent'),
         (TYPE_RESTART_AGENT, 'Restart agent'),
         (TYPE_CONFIGURE_TELEMETRY, 'Configure telemetry'),
+        (TYPE_COLLECT_SERVICES, 'Collect services (internal)'),
+        (TYPE_INSTALL_SOFTWARE, 'Install approved software (internal)'),
     ]
 
     STATUS_QUEUED = 'queued'
@@ -1617,6 +1635,61 @@ class AgentJob(models.Model):
         if self.status != self.STATUS_QUEUED:
             return False
         return not self.expires_at or self.expires_at > timezone.now()
+
+
+class AutomationDefinition(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=120)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    state = models.CharField(max_length=16, default='active', choices=[('active', 'Active'), ('paused', 'Paused'), ('cancelled', 'Cancelled'), ('finished', 'Finished')])
+    revision = models.PositiveIntegerField(default=1)
+    job_type = models.CharField(max_length=80)
+    payload = models.JSONField(default=dict)
+    targets = models.JSONField(default=list)
+    schedule = models.JSONField(default=dict)
+    timezone_name = models.CharField(max_length=80)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    validity_seconds = models.PositiveIntegerField(default=900)
+    offline_policy = models.CharField(max_length=16, default='expire', choices=[('wait', 'Wait within window'), ('skip', 'Skip if offline'), ('expire', 'Expire if offline')])
+    next_due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=80, blank=True)
+    last_processed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        permissions = [('control_automation', 'Pause, resume and cancel automations'), ('execute_automation', 'Run an automation immediately')]
+        indexes = [models.Index(fields=['state', 'next_due_at'])]
+
+
+class AutomationOccurrence(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    definition = models.ForeignKey(AutomationDefinition, on_delete=models.PROTECT, related_name='occurrences')
+    endpoint = models.ForeignKey(AgentMachine, on_delete=models.PROTECT)
+    revision = models.PositiveIntegerField()
+    scheduled_for = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    job = models.OneToOneField(AgentJob, null=True, blank=True, on_delete=models.PROTECT, related_name='automation_occurrence')
+    status = models.CharField(max_length=20)
+    reason = models.CharField(max_length=80, blank=True)
+    snapshot = models.JSONField(default=dict)
+    invocation_key = models.CharField(max_length=40, default='scheduled')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['definition', 'revision', 'scheduled_for', 'endpoint', 'invocation_key'], name='automation_occurrence_unique')]
+        indexes = [models.Index(fields=['definition', '-scheduled_for'])]
+
+
+class AutomationSchedulerHealth(models.Model):
+    key = models.CharField(max_length=32, primary_key=True, default='jobs')
+    last_started_at = models.DateTimeField(null=True)
+    last_success_at = models.DateTimeField(null=True)
+    processed = models.PositiveIntegerField(default=0)
+    failed = models.PositiveIntegerField(default=0)
 
 
 class AgentUninstallRequest(models.Model):

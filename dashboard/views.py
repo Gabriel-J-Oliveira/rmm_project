@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib import messages
 from django.contrib.auth import authenticate
+from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -20,7 +21,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 
 from agents.models import (
     AgentDeploymentToken,
@@ -2030,12 +2031,44 @@ def events_list(request):
     return render(request, 'dashboard/events.html', context)
 
 
+@login_required
 def jobs_list(request):
     context = {
         'active_nav': 'jobs',
-        'using_mock_rmm_data': True,
+        'using_mock_rmm_data': False,
     }
     return render(request, 'dashboard/jobs.html', context)
+
+
+@login_required
+@require_GET
+def jobs_data(request):
+    if not is_nightowl_technical_user(request.user) or not request.user.has_perm('agents.view_agentjob'):
+        return JsonResponse({'error':'forbidden'},status=403)
+    query=AgentJob.objects.select_related('endpoint','agent_release').order_by('-created_at')
+    if request.GET.get('job'):
+        try:
+            query=query.filter(pk=uuid.UUID(request.GET['job']))
+        except ValueError:
+            return JsonResponse({'error':'invalid_job_id'},status=400)
+    jobs=list(query[:200])
+    histories={str(job.pk):[] for job in jobs}
+    events=AuditEvent.objects.filter(metadata__job_id__in=list(histories),event_type__startswith='job.').order_by('-created_at')[:1000]
+    for event in events:
+        history=histories.get(str(event.metadata.get('job_id')))
+        if history is not None and len(history)<20:
+            history.append({'event':event.event_type,'at':event.created_at.isoformat(),'actor':event.actor_name})
+    rows=[]
+    endpoints={}
+    for job in jobs:
+        row=serialize_agent_job(job)
+        row.update(endpointId=str(job.endpoint_id),history=list(reversed(histories[str(job.pk)])),
+                   communication=job.endpoint.status,lastHeartbeatAt=_iso_or_none(job.endpoint.last_seen_at))
+        rows.append(row)
+        endpoints[str(job.endpoint_id)]={'id':str(job.endpoint_id),'hostname':job.endpoint.hostname}
+    response=JsonResponse({'jobs':rows,'endpoints':list(endpoints.values()),'source':'persisted','limit':200})
+    response['Cache-Control']='no-store'
+    return response
 
 
 def maintenance_list(request):
@@ -3199,6 +3232,15 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'biosReleaseDate': bios.get('release_date') or hardware.get('bios_release_date') or '',
             'motherboard': hardware.get('motherboard') or '',
             'cpuManufacturer': hardware.get('cpu_manufacturer') or '',
+            'cpuDetails': ensure_dict(hardware.get('cpu')),
+            'memoryDetails': ensure_dict(hardware.get('memory')),
+            'baseboardDetails': ensure_dict(hardware.get('baseboard')),
+            'batteryDetails': ensure_dict(hardware.get('battery')),
+            'systemSku': hardware.get('system_sku') or '',
+            'systemFamily': hardware.get('system_family') or '',
+            'oemProduct': ensure_dict(hardware.get('oem_product')),
+            'hardwareCollectedAt': hardware.get('detailed_collected_at') or hardware.get('collected_at'),
+            'sectionStates': ensure_dict(raw_payload.get('inventory_observations')),
             'physicalCores': hardware.get('physical_cores') or '',
             'logicalProcessors': hardware.get('logical_processors') or '',
             'tpmPresent': hardware.get('tpm_present'),
@@ -3392,6 +3434,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
         'trusted_release_keys_bundle': _trust_bundle_payload(latest_trust_bundle),
         'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
+        'live_monitoring_allowed': bool(can_view_technical and user and user.has_perm('agents.view_agentmachine') and user.has_perm('agents.view_endpointperformancesample')),
         'uninstall_request': serialize_uninstall_request(uninstall_request),
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
@@ -3883,7 +3926,7 @@ def endpoint_job_create(request, pk):
         'configure_telemetry': AgentJob.TYPE_CONFIGURE_TELEMETRY,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
-    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES}
+    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES} - {'collect_services', 'install_software'}
     if selected_type not in allowed_types:
         return JsonResponse(
             {
@@ -3892,6 +3935,10 @@ def endpoint_job_create(request, pk):
             },
             status=400,
         )
+
+    endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint.pk)
+    if endpoint.jobs.filter(status__in=('queued','sent','running')).count() >= 50:
+        return JsonResponse({'error':'endpoint_job_queue_full','detail':'Limite de 50 jobs pendentes neste endpoint.'},status=409)
 
     lifecycle_types = {
         AgentJob.TYPE_UPDATE_AGENT,
@@ -3931,7 +3978,7 @@ def endpoint_job_create(request, pk):
         payload['target'] = request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname)
         payload['count'] = 2
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
-        payload['lines'] = 120
+        payload['max_lines'] = 120
     elif selected_type == AgentJob.TYPE_UPDATE_AGENT:
         selected_release_id = (request.POST.get('release_id') or request.POST.get('agent_release_id') or '').strip()
         force_update = (request.POST.get('force') or '').strip().lower() in {'1', 'true', 'on', 'yes'}

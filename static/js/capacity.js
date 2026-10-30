@@ -283,13 +283,21 @@
       let drawing = false;
       return series.map((item, index) => {
         if (!Number.isFinite(item[key])) { drawing = false; return ''; }
+        if (index > 0 && Date.parse(item.at) - Date.parse(series[index - 1].at) > 1.5 * (item.resolution_seconds || 300) * 1000) drawing = false;
         const command = drawing ? 'L' : 'M'; drawing = true;
         return `${command}${(index / (series.length - 1) * 100).toFixed(2)},${(100 - item[key]).toFixed(2)}`;
       }).join(' ');
     };
-    const bins = key => [0, 0, 0, 0].map((_, index) => series.filter(item => Number.isFinite(item[key]) && Math.min(3, Math.floor(item[key] / 25)) === index).length);
-    const distribution = (title, key) => `<div class="capacity-mini-hist"><strong>${title}</strong>${bins(key).map((count, index) => `<div><small>${index * 25}–${(index + 1) * 25}%</small><span class="capacity-dist-track"><span class="capacity-dist-fill" style="width:${series.length ? count / series.length * 100 : 0}%"></span></span><b>${count}</b></div>`).join('')}</div>`;
-    return `<div class="capacity-series-wrap"><span>100%</span><svg class="capacity-series" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" tabindex="0" aria-label="Série de CPU e memória no período; use as setas para explorar amostras"><path d="${path('cpu')}" fill="none" stroke="#22E6A7" stroke-width="1.6" vector-effect="non-scaling-stroke"/><path d="${path('memory')}" fill="none" stroke="#FFC857" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg><span>0%</span></div><div class="capacity-series-legend"><span>● CPU</span><span>● RAM</span><small>${stamp(series[0].at)} – ${stamp(series[series.length - 1].at)}</small></div><div class="capacity-series-hover" data-series-hover aria-live="polite">Toque ou mova o cursor no gráfico para ver uma amostra.</div><div class="capacity-histograms">${distribution('CPU', 'cpu')}${distribution('Memória', 'memory')}</div>`;
+    const consolidated = series.every(item => item.kind === 'window');
+    const legacy = series.every(item => item.kind !== 'window');
+    const bins = key => [0, 0, 0, 0].map((_, index) => consolidated
+      ? series.reduce((total, item) => total + Object.entries(item[key + '_distribution'] || {}).reduce((sum, [bucket, weight]) => sum + (Math.min(3, Math.floor(Number(bucket) / 25)) === index ? weight : 0), 0), 0)
+      : series.filter(item => Number.isFinite(item[key]) && Math.min(3, Math.floor(item[key] / 25)) === index).length);
+    const distribution = (title, key) => {
+      const values = bins(key), total = values.reduce((sum, value) => sum + value, 0);
+      return `<div class="capacity-mini-hist"><strong>${title} · ${consolidated ? 'segundos observados' : 'pontos legados'}</strong>${values.map((count, index) => `<div><small>${index * 25}–${(index + 1) * 25}%</small><span class="capacity-dist-track"><span class="capacity-dist-fill" style="width:${total ? count / total * 100 : 0}%"></span></span><b>${number(count)}</b></div>`).join('')}</div>`;
+    };
+    return `<div class="capacity-series-wrap"><span>100%</span><svg class="capacity-series" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" tabindex="0" aria-label="Série de CPU e memória no período; use as setas para explorar amostras"><path d="${path('cpu')}" fill="none" stroke="#22E6A7" stroke-width="1.6" vector-effect="non-scaling-stroke"/><path d="${path('memory')}" fill="none" stroke="#FFC857" stroke-width="1.6" vector-effect="non-scaling-stroke"/><path d="${path('cpu_max')}" fill="none" stroke="#F48787" stroke-dasharray="3 2" stroke-width="1.3" vector-effect="non-scaling-stroke"/></svg><span>0%</span></div><div class="capacity-series-legend"><span>● CPU media</span><span>● RAM</span><span>CPU maxima observada (tracejado)</span><small>${stamp(series[0].at)} – ${stamp(series[series.length - 1].at)}</small></div><div class="capacity-series-hover" data-series-hover aria-live="polite">Toque ou mova o cursor no gráfico para ver uma amostra.</div><div class="capacity-histograms">${consolidated || legacy ? distribution('CPU', 'cpu') + distribution('Memoria', 'memory') : 'Contratos mistos: distribuicoes nao combinadas.'}</div>`;
   }
   function assessmentStatus(cap) {
     const statuses = [cap.capacity.cpu.status, cap.capacity.memory.status];
@@ -355,7 +363,7 @@ box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><di
       const c = primary.stats.cpu, m = primary.stats.memory_used, mc = primary.stats.memory_committed;
       box.innerHTML = `<h3>Período principal</h3><div class="capacity-detail-grid">${fact('CPU · média / p95 / p99', `${percent(c.avg)} / ${percent(c.p95)} / ${percent(c.p99)}`)}${fact('RAM · média / p95 / p99', `${percent(m.avg)} / ${percent(m.p95)} / ${percent(m.p99)}`)}${fact('Memória comprometida p95', percent(mc.p95))}${fact('Cobertura', `${primary.quality.received_samples} / ${primary.quality.expected_samples}`)}</div><div class="capacity-section-heading"><h3>Série temporal</h3><div class="capacity-range" role="group" aria-label="Período da série">${['6h', '24h', '3d', '7d'].map(range => `<button type="button" data-range="${range}" aria-pressed="${state.range === range}" ${data.series_ranges[range] ? '' : 'disabled title="Sem dados suficientes"'}>${range}</button>`).join('')}</div></div><div data-series-body>${!data.series_ranges[state.range] ? empty('Sem dados suficientes neste período.') : state.series ? seriesChart(state.series) : empty('Carregando série temporal…')}</div><h3>Contexto 7d</h3><div class="capacity-detail-grid">${fact('CPU', statusText(context.diagnostics.diagnostics.cpu.status))}${fact('Memória', statusText(context.diagnostics.diagnostics.memory.status))}${fact('Cobertura', percent(context.quality.coverage_percent))}${fact('Amostras', `${context.quality.received_samples} / ${context.quality.expected_samples}`)}</div>`;
     } else if (state.tab === 'impact') {
-      box.innerHTML = `<h3>Consumo observado recentemente</h3><p class="capacity-chart-note">Observação recente; não implica relação causal com problemas de desempenho.</p><h3>Maiores consumidores de CPU</h3>${renderProcessRanking(data.processes, 'cpu')}<h3>Maiores consumidores de memória</h3>${renderProcessRanking(data.processes, 'memory')}`;
+      box.innerHTML = `<h3>Consumo observado recentemente</h3><p class="capacity-chart-note">Última coleta de processos: ${esc(stamp(data.processes_observed_at))}. Não implica relação causal com problemas de desempenho.</p><h3>Maiores consumidores de CPU</h3>${renderProcessRanking(data.processes, 'cpu')}<h3>Maiores consumidores de memória</h3>${renderProcessRanking(data.processes, 'memory')}`;
     } else if (state.tab === 'hardware') {
       const slots = hardware.memory.slots_total, used = hardware.memory.slots_used;
       const slotView = Number.isInteger(slots) && Number.isInteger(used) && slots <= 32 && used <= slots ? `<div class="capacity-slots" aria-label="${used} slots usados de ${slots}">${Array.from({ length: slots }, (_, index) => `<span class="${index < used ? 'used' : ''}" title="${index < used ? 'Ocupado' : 'Livre'}"></span>`).join('')}</div>` : '';
@@ -378,6 +386,28 @@ box.innerHTML = `<section class="capacity-summary-group"><h3>Avaliação</h3><di
       warning.setAttribute('role', 'status');
       warning.textContent = 'O inventário reportou contagens de slots de memória inconsistentes. Os slots estão indisponíveis; os demais dados válidos foram preservados.';
       box.prepend(warning);
+    }
+    if (state.tab === 'performance') {
+      const ranges = box.querySelector('.capacity-range');
+      if (ranges) for (const period of ['30d','90d']) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.dataset.range = period; button.textContent = period;
+        button.disabled = !data.series_ranges[period];
+        button.setAttribute('aria-pressed', String(state.range === period));
+        ranges.appendChild(button);
+      }
+      if (primary.workload) {
+        const block = document.createElement('section');
+        block.className = 'capacity-summary-group';
+        const title = document.createElement('h3'); title.textContent = 'Workload por janelas completas'; block.appendChild(title);
+        for (const [resource, result] of Object.entries(primary.workload)) {
+          const row = document.createElement('p');
+          row.textContent = resource.toUpperCase() + ': ' + result.status + ' · Maior sequencia: ' + result.longest_confirmed_minutes + ' min · Ocorrencias: ' + result.episodes;
+          block.appendChild(row);
+        }
+        const note = document.createElement('small'); note.textContent = 'Sinais para investigacao, nao recomendacao automatica de upgrade. Percentis continuos aproximados por histograma de 1 ponto percentual.';
+        block.appendChild(note); box.prepend(block);
+      }
     }
     icons();
   }

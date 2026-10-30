@@ -83,6 +83,8 @@ def monitoring_summary(endpoint):
     ).first()
     return {
         'compatible': compatible, 'minimum_version': MINIMUM_VERSION,
+        'continuous': ((heartbeat.raw_payload.get('agent') or {}).get('continuous_telemetry')
+                       if heartbeat and isinstance(heartbeat.raw_payload.get('agent'), dict) else None),
         'effective': effective, 'reported_at': reported_at, 'applied_at': confirmed_at,
         'requested': job.payload if job else None,
         'job_id': str(job.id) if job else None, 'job_status': job.status if job else None,

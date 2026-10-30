@@ -17,28 +17,36 @@ public sealed class AgentHeartbeatPayload
     public string Hostname { get; set; } = "";
 
     [JsonPropertyName("fqdn")]
-    public string Fqdn { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Fqdn { get; set; }
 
     [JsonPropertyName("domain")]
-    public string Domain { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Domain { get; set; }
 
     [JsonPropertyName("logged_user")]
-    public string LoggedUser { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LoggedUser { get; set; }
 
     [JsonPropertyName("username")]
-    public string Username { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Username { get; set; }
 
     [JsonPropertyName("ip_address")]
-    public string IpAddress { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IpAddress { get; set; }
 
     [JsonPropertyName("os_name")]
-    public string OsName { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OsName { get; set; }
 
     [JsonPropertyName("os_version")]
-    public string OsVersion { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OsVersion { get; set; }
 
     [JsonPropertyName("windows_build")]
-    public string WindowsBuild { get; set; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WindowsBuild { get; set; }
 
     [JsonPropertyName("agent_version")]
     public string AgentVersion { get; set; } = "";
@@ -56,13 +64,16 @@ public sealed class AgentHeartbeatPayload
     public string InstallMode { get; set; } = "dotnet-service";
 
     [JsonPropertyName("ips")]
-    public List<string> Ips { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Ips { get; set; }
 
     [JsonPropertyName("os")]
-    public Dictionary<string, object?> Os { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, object?>? Os { get; set; }
 
     [JsonPropertyName("hardware")]
-    public Dictionary<string, object?> Hardware { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, object?>? Hardware { get; set; }
 
     [JsonPropertyName("uptime_seconds")]
     public long UptimeSeconds { get; set; }
@@ -79,6 +90,12 @@ public sealed class AgentHeartbeatPayload
 
 public sealed class AgentCollectPayload
 {
+    [JsonPropertyName("collection_scope")]
+    public string CollectionScope { get; set; } = "full";
+
+    [JsonPropertyName("section_states")]
+    public Dictionary<string, object?> SectionStates { get; set; } = new();
+
     [JsonPropertyName("machine_id")]
     public string MachineId { get; set; } = "";
 
