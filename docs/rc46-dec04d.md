@@ -410,3 +410,28 @@ chaves ou teste de token válido; não existe ainda canal de credenciais para
 testar. Para D.4.1B permanecem a confiança independente, identidade do agente,
 transporte autenticado e anti-replay, expiração/revogação, autenticação real
 homologada e a fronteira de execução/encerramento documentada acima.
+
+## DEC-04D.4.1B — revisão da decisão de confiança
+
+A Controlsul definiu o backend como confiável para intermediar credenciais
+temporariamente. A autenticação da chave do agente independente do backend,
+PKI adicional e criptografia ponta a ponta não são requisitos desta versão;
+as afirmações anteriores sobre esse gate ficam supersedidas por essa decisão.
+HTTPS/WSS válido, autorização por operador e endpoint, não persistência e
+descarte da credencial, tickets únicos e revogação continuam necessários.
+
+A garantia anterior de eliminar qualquer processo criado indiretamente por
+um administrador também foi revisada: o encerramento deve cobrir processos
+controlados pela sessão; alterações administrativas externas podem permanecer.
+O Job Object existente é relevante para essa fronteira, mas o caminho
+administrativo ainda precisa ser implementado e verificado.
+
+O código atual não implementa o novo fluxo: `TerminalOperatorView` solicita
+consentimento em modo ConPTY, `TerminalUserIdentity.ValidateFacts` rejeita
+tokens elevados, `ConPtyTerminal` cria token restrito e o relay aceita apenas
+eventos previstos e usa fila para envio. `TerminalAdministrativeAuthentication`
+permanece isolado, sem transporte de senha ou ligação ao ConPTY. São lacunas
+de implementação, não evidência de impossibilidade técnica no Windows.
+Nenhum modo administrativo foi habilitado. Permanecem implementação e testes
+de transporte sem persistência ou fila de senha, logout/revogação, validação
+efetiva do token e ciclo de vida; não há homologação Windows administrativa.
