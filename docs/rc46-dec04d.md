@@ -363,3 +363,20 @@ restrito/WTS, logoff real, ACLs de instalação, testes TLS/proxy/topologia e
 medidas em condições representativas. **Implementação D.3 encerrada; DEC-04D
 permanece bloqueada para habilitação operacional por esses gates.** Sem push,
 merge, deploy, publicação, Fast Install ou novas ações administrativas.
+
+## DEC-04D.4.1 — bloqueio de segurança
+
+Não há modo administrativo não assistido implementado ou habilitado. O fluxo
+existente exige consentimento e rejeita tokens administrativos e SYSTEM. Falta
+um mecanismo de confiança do navegador na chave do agente que vincule a chave
+à sessão; o relay atual não fornece essa autenticação independente. A entrega
+de senha não foi adicionada ao backend, navegador ou agente.
+
+O Job Object atual encerra os processos associados, mas um administrador pode
+solicitar a serviços ou outros intermediários Windows que criem processos fora
+do Job. Portanto, isso não comprova a garantia solicitada para todos os
+processos criados indiretamente. É necessário definir uma fronteira de execução
+que imponha essa garantia ou alterar explicitamente o requisito antes de
+habilitar o terminal administrativo. Logout, lease e identidade administrativa
+também necessitam implementação e validação em Windows real; nenhuma conta ou
+privilégio da máquina foi alterado. DEC-04D.4.2 e o piloto continuam pendentes.
