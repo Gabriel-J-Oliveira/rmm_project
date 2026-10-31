@@ -11,6 +11,7 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--terminal-admin-auth-only", StringComparer.Ordinal)) { TerminalAdministrativeAuthenticationTests.Run(); return; }
     if (args.Contains("--terminal-consent-only", StringComparer.Ordinal)) { TerminalConsentTests.Run(); return; }
     if (args.Contains("--terminal-browser-agent", StringComparer.Ordinal)) { await ConPtyTests.BrowserAgentAsync(); return; }
     if (args.Contains("--conpty-only", StringComparer.Ordinal)) { await ConPtyTests.RunAsync(); return; }

@@ -380,3 +380,33 @@ que imponha essa garantia ou alterar explicitamente o requisito antes de
 habilitar o terminal administrativo. Logout, lease e identidade administrativa
 também necessitam implementação e validação em Windows real; nenhuma conta ou
 privilégio da máquina foi alterado. DEC-04D.4.2 e o piloto continuam pendentes.
+
+## DEC-04D.4.1A — autenticação isolada e gate de confiança
+
+O enrollment existente identifica endpoints e usa credenciais do agente; as
+chaves de release autenticam artefatos, não uma chave individual do endpoint
+para o navegador. Nenhuma dessas âncoras fornece associação verificável
+independente do backend. Uma chave recebida pela mesma sessão não resolve isso;
+um backend capaz de alterar o JavaScript pode capturar a senha antes da
+criptografia. É necessária uma âncora e distribuição de cliente autenticadas
+por canal independente, com vínculo endpoint/chave, rotação e revogação.
+Não foi criada PKI, identidade persistente ou envio de credenciais; o caminho
+continua bloqueado, sem interface ou integração de autenticação administrativa.
+
+O componente isolado `TerminalAdministrativeAuthentication` prepara LogonUser
+para conta local ou domínio e exige token elevado, membro efetivo dos
+administradores, integridade alta e SID diferente das contas de serviço.
+Não eleva token nem inicia processo. A senha entra como buffer mutável, cuja
+memória gerenciada e cópia nativa são zeradas ao sair; o token é descartado
+em falha e pertence ao chamador em sucesso. Não guarda senha; isso não demonstra
+proteção do fluxo completo.
+
+Build Release de agente/Shared/testes passou sem avisos. Testes focados
+rejeitaram conta inexistente, SID SYSTEM e tokens sintéticos sem os privilégios
+exigidos, e verificaram limpeza do buffer; consentimento existente também
+passou. Seis testes Django do contrato existente passaram. Não houve login
+administrativo real, teste de domínio, replay criptográfico, associação de
+chaves ou teste de token válido; não existe ainda canal de credenciais para
+testar. Para D.4.1B permanecem a confiança independente, identidade do agente,
+transporte autenticado e anti-replay, expiração/revogação, autenticação real
+homologada e a fronteira de execução/encerramento documentada acima.
