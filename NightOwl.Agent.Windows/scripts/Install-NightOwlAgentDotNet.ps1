@@ -1227,6 +1227,44 @@ function Test-ProtectedPayloadRelativePath([string]$RelativePath) {
     return $false
 }
 
+function Test-PayloadUnchanged([string]$SourceDir, [string]$DestinationDir) {
+    try {
+        Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust
+        foreach ($item in Get-ChildItem -LiteralPath $SourceDir -File -Recurse -Force -ErrorAction Stop) {
+            $relative = $item.FullName.Substring($SourceDir.Length).TrimStart('\', '/')
+            if ((Test-ProtectedPayloadRelativePath $relative) -or $item.Name -like '*.pdb' -or $relative -eq 'agent.version.json') { continue }
+            $target = Join-Path $DestinationDir $relative
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { return $false }
+            if ((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction Stop).Hash -ne
+                (Get-FileHash -LiteralPath $target -Algorithm SHA256 -ErrorAction Stop).Hash) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Test-NoOpHeartbeat($State, [string]$ExpectedMachineId) {
+    try {
+        if ((Get-JsonProperty $State @('machine_id', 'machineId')) -ne $ExpectedMachineId) { return $false }
+        $value = Get-JsonProperty $State @('lastHeartbeatAt')
+        $when = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse($value, [ref]$when)) { return $false }
+        $age = [DateTimeOffset]::UtcNow - $when.ToUniversalTime()
+        return $age.TotalSeconds -ge 0 -and $age.TotalMinutes -le 10
+    } catch { return $false }
+}
+
+function Test-NoOpServiceBinding([string]$Name, [string]$ExePath) {
+    try {
+        $services = @(Get-CimInstance Win32_Service -ErrorAction Stop | Where-Object { $_.Name -eq $Name })
+        if ($services.Count -ne 1) { return $false }
+        $path = ([string]$services[0].PathName).Trim()
+        if ($path -match '^"([^"]+)"(?:\s.*)?$') { $path = $matches[1] }
+        elseif ($path -match '^(.*?\.exe)(?:\s.*)?$') { $path = $matches[1] }
+        else { return $false }
+        return [string]::Equals([IO.Path]::GetFullPath($path), [IO.Path]::GetFullPath($ExePath), [StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
+}
+
 function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
     Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
@@ -1906,6 +1944,44 @@ Write-InstallLog "release.metadata.resolved" "Metadata da release resolvida para
     channel = [string]$releaseMetadata.channel
     package_sha256 = [string]$releaseMetadata.packageSha256
     source = [string]$releaseMetadata.source
+}
+
+# A no-op is allowed only after signed package validation and under the existing
+# update lock. Explicit configuration/lifecycle changes still take the full path.
+$noOpAllowedParameters = @('ServerUrl','PackageUrl','TrustedPublicKeysPath','ExpectedVersion','ExpectedChannel',
+    'ExpectedPackageSha256','ExpectedReleaseId','ExpectedGitCommit','InstallPath','ServiceName','DisplayName',
+    'InstallAsService','RunCheck','NoGui','NonInteractive','Install','Repair','DebugLog')
+$noOpHasOtherParameters = @($PSBoundParameters.Keys | Where-Object { $_ -notin $noOpAllowedParameters }).Count -gt 0
+if ($existingInstallation -and $InstallAsService -and -not $noOpHasOtherParameters -and
+    $null -ne $script:ValidatedReleaseMetadata -and -not $serverChangedExplicitly -and
+    -not [string]::IsNullOrWhiteSpace($existingToken) -and -not [string]::IsNullOrWhiteSpace($existingServer) -and
+    (Normalize-ServerUrl $existingServer) -eq $serverBase -and
+    [string]::IsNullOrWhiteSpace($EnrollmentToken) -and [string]::IsNullOrWhiteSpace($AgentToken) -and
+    [string]::IsNullOrWhiteSpace($ManualValidationToken)) {
+    $noOpId = Get-JsonProperty $preservedConfig @('machineId', 'machine_id')
+    $noOpIdentity = Read-JsonFile ([string]$script:NightOwlPaths.IdentityPath)
+    $noOpState = Read-JsonFile $statePath
+    if ((Test-MachineId $noOpId) -and (Get-JsonProperty $noOpIdentity @('machine_id', 'machineId')) -eq $noOpId -and
+        (Test-NoOpHeartbeat $noOpState $noOpId) -and
+        (Test-NoOpServiceBinding $ServiceName (Join-Path $InstallPath 'NightOwl.Agent.Windows.exe')) -and
+        (Test-PayloadUnchanged $sourcePath $InstallPath)) {
+        $noOpHealth = @(Test-AgentLifecycleHealth -Name $ServiceName -ConfigPath $configPath `
+            -IdentityPath ([string]$script:NightOwlPaths.IdentityPath) -ExpectedMachineId $noOpId `
+            -ExePath (Join-Path $InstallPath 'NightOwl.Agent.Windows.exe') -VersionPath (Join-Path $InstallPath 'agent.version.json') `
+            -ExpectedReleaseMetadata $releaseMetadata -LegacyConfigPath $legacyConfigPath -RequireNoLegacyConfig:$false `
+            -RequireTrayTask:$true -TrayTaskName 'NightOwl Agent Tray' -TrayExePath (Join-Path $InstallPath 'NightOwl.Agent.Tray.exe') `
+            -StartMenuShortcutPath (Get-StartMenuShortcutPath))
+        if ($noOpHealth.Count -eq 0) {
+            $script:Report.machine_id = Protect-SecretValue $noOpId
+            $script:Report.identity_preserved = $true
+            $script:Report.previous_version = [string]$releaseMetadata.version
+            $script:Report.installed_version = [string]$releaseMetadata.version
+            Add-ReportAction 'operation.unchanged' @{ reason = 'verified_payload_and_recent_health' }
+            Write-OperationReport -Status 'completed'
+            Write-Step 'OK' 'Pacote e instalacao saudavel ja correspondem; nenhuma parada necessaria.'
+            return
+        }
+    }
 }
 
 if ((-not (Test-Path $statePath)) -and (Test-Path $legacyStatePath)) {
