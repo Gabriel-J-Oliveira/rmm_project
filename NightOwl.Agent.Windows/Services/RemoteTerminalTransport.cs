@@ -70,9 +70,9 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
     {
         if (!config.RemoteTerminalTransportEnabled) throw new InvalidOperationException("terminal_disabled");
         string? mode = session.GetProperty("mode").GetString();
-        bool real = mode == "conpty";
+        bool real = mode is "conpty" or "admin_auth";
         if (mode is not ("synthetic" or "conpty" or "admin_auth") || session.GetProperty("execution").GetBoolean() != real ||
-            session.GetProperty("protocol").GetInt32() != 1 || real && (!config.TerminalConPtyEnabled ||
+            session.GetProperty("protocol").GetInt32() != 1 || mode == "conpty" && (!config.TerminalConPtyEnabled ||
             session.GetProperty("machine_id").GetString() != config.MachineId || string.IsNullOrEmpty(session.GetProperty("operator_id").GetString())))
             throw new InvalidDataException("terminal_mode_invalid");
         if (mode == "admin_auth" && (!config.TerminalAdministrativeAuthenticationEnabled || session.GetProperty("machine_id").GetString() != config.MachineId || string.IsNullOrEmpty(session.GetProperty("operator_id").GetString())))
@@ -108,8 +108,8 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
         using SemaphoreSlim sendGate = new(1, 1);
         ConPtyTerminal? terminal = null;
         Task output = Task.CompletedTask;
-        bool real = session.GetProperty("mode").GetString() == "conpty";
         bool administrativeAuthentication = session.GetProperty("mode").GetString() == "admin_auth";
+        bool real = administrativeAuthentication || session.GetProperty("mode").GetString() == "conpty";
         bool authenticationAttempted = false;
         socket.Options.AddSubProtocol("nightowl-terminal.v1");
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
@@ -168,7 +168,7 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
             {
                 case "connected": break;
                 case "transport_ready":
-                    if (administrativeAuthentication && message.GetProperty("mode").GetString() == "admin_auth" && !message.GetProperty("execution").GetBoolean()) break;
+                    if (administrativeAuthentication && message.GetProperty("mode").GetString() == "admin_auth" && message.GetProperty("execution").GetBoolean()) break;
                     if (!real || terminal is not null || message.GetProperty("mode").GetString() != "conpty" || !message.GetProperty("execution").GetBoolean())
                         throw new InvalidDataException("terminal_mode_invalid");
                     try
@@ -195,14 +195,26 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                     string account = message.GetProperty("account").GetString() ?? "";
                     string domain = message.GetProperty("domain").GetString() ?? "";
                     char[] password = ReadPassword(buffer.AsSpan(0, size));
-                    string authResult;
-                    try { using var token = TerminalAdministrativeAuthentication.Authenticate(account, domain, password); authResult = "accepted"; }
-                    catch (Exception) { authResult = "rejected"; }
+                    Array.Clear(buffer);
+                    try
+                    {
+                        var token = TerminalAdministrativeAuthentication.Authenticate(account, domain, password);
+                        var authorization = new TerminalAuthorization(Guid.Parse(session.GetProperty("session_id").GetString()!), config.MachineId,
+                            session.GetProperty("operator_id").GetString()!, expires);
+                        terminal = await ConPtyTerminal.StartAdministrativeAsync(token, authorization, 80, 24, lifetime.Token);
+                    }
+                    catch (Exception)
+                    {
+                        await SendControl(socket, new { type = "windows_auth_result", result = "rejected" }, lifetime.Token, sendGate);
+                    }
                     finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(password.AsSpan())); Array.Clear(buffer); }
-                    await SendControl(socket, new { type = "windows_auth_result", result = authResult }, lifetime.Token, sendGate);
+                    if (terminal is not null)
+                        await SendControl(socket, new { type = "process_ready", mode = "admin_auth", execution = true, non_system = true,
+                            identity = new { sid = terminal.Identity.Sid, windows_session_id = terminal.Identity.SessionId,
+                                integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated } }, lifetime.Token, sendGate);
                     break;
                 case "ready":
-                    if (ready || message.GetProperty("mode").GetString() != (real ? "conpty" : "synthetic") ||
+                    if (ready || message.GetProperty("mode").GetString() != (administrativeAuthentication ? "admin_auth" : real ? "conpty" : "synthetic") ||
                         message.GetProperty("execution").GetBoolean() != real || real && terminal is null)
                         throw new InvalidDataException("terminal_mode_invalid");
                     ready = true;

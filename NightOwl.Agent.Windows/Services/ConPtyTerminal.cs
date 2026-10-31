@@ -24,6 +24,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private TerminalIdentity? _identity;
+    private TerminalTokenFacts? _processIdentity;
     private FileStream? _input, _read;
     private nint _console, _job, _process, _thread;
     private Task _reader = Task.CompletedTask, _exit = Task.CompletedTask, _processWait = Task.CompletedTask, _consentMonitor = Task.CompletedTask;
@@ -37,7 +38,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
     private long _workingSet, _peakCommit;
     private double _cpuMs;
     public uint ProcessId { get; private set; }
-    public TerminalTokenFacts Identity => _identity!.Facts;
+    public TerminalTokenFacts Identity => _processIdentity ?? throw new InvalidOperationException("terminal_child_identity_unconfirmed");
     public ChannelReader<byte[]> Output => _output.Reader;
     public Task Completion => _exit;
     public ConPtyObservation Observe()
@@ -59,6 +60,17 @@ public sealed class ConPtyTerminal : IAsyncDisposable
 
     public static async Task<ConPtyTerminal> StartAsync(AgentConfig config, TerminalAuthorization authorization,
         int cols, int rows, CancellationToken ct, long maxOutputBytes = MaxOutputBytes, long maxInputBytes = MaxInputBytes)
+        => await StartCoreAsync(() => TerminalIdentity.Acquire(config, authorization), authorization, cols, rows, ct, maxOutputBytes, maxInputBytes);
+
+    public static async Task<ConPtyTerminal> StartAdministrativeAsync(SafeAccessTokenHandle token, TerminalAuthorization authorization,
+        int cols, int rows, CancellationToken ct)
+    {
+        try { return await StartCoreAsync(() => TerminalIdentity.FromAdministrativeToken(token), authorization, cols, rows, ct, MaxOutputBytes, MaxInputBytes); }
+        catch { token.Dispose(); throw; }
+    }
+
+    private static async Task<ConPtyTerminal> StartCoreAsync(Func<TerminalIdentity> acquire, TerminalAuthorization authorization,
+        int cols, int rows, CancellationToken ct, long maxOutputBytes, long maxInputBytes)
     {
         if (maxOutputBytes is < 1024 or > MaxOutputBytes) throw new InvalidDataException("terminal_output_limit_invalid");
         if (maxInputBytes is < 1024 or > MaxInputBytes) throw new InvalidDataException("terminal_input_limit_invalid");
@@ -66,9 +78,10 @@ public sealed class ConPtyTerminal : IAsyncDisposable
         var terminal = new ConPtyTerminal { _admitted = true, _outputLimit = maxOutputBytes, _inputLimit = maxInputBytes };
         try
         {
-            terminal._identity = TerminalIdentity.Acquire(config, authorization);
+            terminal._identity = acquire();
             ValidateSize(cols, rows);
             terminal.StartNative(cols, rows);
+            if (terminal._identity.IsAdministrative) terminal._identity.Token.Dispose();
             terminal._external = ct.Register(() => terminal.RequestStop());
             TimeSpan remaining = authorization.ExpiresAt - DateTimeOffset.UtcNow;
             terminal._stop.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
@@ -234,7 +247,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             // Explicit null standard handles prevent inheritance of the service's
             // redirected stdio; console initialization binds them to this ConPTY.
             StartupEx startup = new() { Startup = new() { Size = Marshal.SizeOf<StartupEx>(), Flags = 0x100 }, Attributes = attributes };
-            if (!_identity!.IsCaller)
+            if (!_identity!.IsCaller && !_identity.IsAdministrative)
             {
                 // Existing user desktop ACLs only; never grant station access or
                 // substitute a SYSTEM desktop if the target cannot access it.
@@ -261,7 +274,9 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             ProcessInfo process;
             const uint flags = 0x80000 | 0x400 | 0x4 | 0x4000; // Extended startup, Unicode environment, suspended, below-normal priority.
             bool created;
-            if (_identity.IsCaller)
+            if (_identity.IsAdministrative)
+                created = CreateProcessAsUser(_identity.Token, shell, command, 0, 0, false, flags, environment, profile, ref startup, out process);
+            else if (_identity.IsCaller)
                 created = CreateProcess(shell, command, 0, 0, false, flags, environment, profile, ref startup, out process);
             else
             {
@@ -278,9 +293,8 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             using (childToken)
             {
                 var facts = TerminalIdentity.Inspect(childToken);
-                if (facts.Sid != _identity.Facts.Sid || facts.SessionId != _identity.Facts.SessionId || facts.LogonId != _identity.Facts.LogonId ||
-                    facts.Elevated || facts.Administrator || facts.Integrity > 8192 || facts.DangerousPrivileges || !facts.Interactive)
-                    throw new InvalidOperationException("terminal_child_identity_failed");
+                ValidateChildIdentity(_identity.Facts, facts, _identity.IsAdministrative);
+                _processIdentity = facts;
             }
             if (ResumeThread(_thread) == uint.MaxValue) throw new InvalidOperationException("terminal_process_start_failed");
             _startMs = watch.Elapsed.TotalMilliseconds;
@@ -294,6 +308,15 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             if (desktop != 0) Marshal.FreeHGlobal(desktop);
             foreach (nint handle in new[] { inputRead, inputWrite, outputRead, outputWrite }) if (handle != 0) CloseHandle(handle);
         }
+    }
+
+    public static void ValidateChildIdentity(TerminalTokenFacts expected, TerminalTokenFacts actual, bool administrative)
+    {
+        if (actual.Sid != expected.Sid || actual.SessionId != expected.SessionId || actual.LogonId != expected.LogonId)
+            throw new InvalidOperationException("terminal_child_identity_failed");
+        if (administrative) TerminalAdministrativeAuthentication.Validate(actual);
+        else if (actual.Elevated || actual.Administrator || actual.Integrity > 8192 || actual.DangerousPrivileges || !actual.Interactive)
+            throw new InvalidOperationException("terminal_child_identity_failed");
     }
 
     [StructLayout(LayoutKind.Sequential)] private readonly struct Coord(short x, short y) { public readonly short X = x, Y = y; }

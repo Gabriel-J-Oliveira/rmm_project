@@ -7,6 +7,12 @@ internal static class TerminalAdministrativeAuthenticationTests
     {
         var admin = new TerminalTokenFacts("S-1-5-21-1-2-3-1001", 1, 1, 12288, true, true, true);
         TerminalAdministrativeAuthentication.Validate(admin);
+        ConPtyTerminal.ValidateChildIdentity(admin, admin, true);
+        foreach (var invalid in new[] { admin with { Sid = "S-1-5-18" }, admin with { LogonId = 2 }, admin with { Elevated = false } })
+        {
+            try { ConPtyTerminal.ValidateChildIdentity(admin, invalid, true); throw new Exception("Invalid process identity accepted"); }
+            catch (InvalidOperationException) { }
+        }
         foreach (var invalid in new[] { admin with { Administrator = false }, admin with { Elevated = false },
             admin with { Integrity = 8192 }, admin with { Sid = "S-1-5-18" } })
         {

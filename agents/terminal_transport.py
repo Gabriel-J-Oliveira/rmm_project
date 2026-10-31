@@ -195,15 +195,16 @@ async def reader(peer, link, receive, session_id=None):
                 raise ProtocolError('invalid_windows_auth_result')
             link.auth_completed = True
             other.enqueue(event=event)
-        elif kind == 'process_ready' and peer.role == 'agent' and link.mode == 'conpty' and link.transport_ready.is_set() and not link.ready.is_set():
+        elif kind == 'process_ready' and peer.role == 'agent' and link.mode in ('conpty', 'admin_auth') and link.transport_ready.is_set() and not link.ready.is_set() and (link.mode != 'admin_auth' or link.auth_submitted and not link.auth_completed):
             legacy = {key: value for key, value in event.items() if key != 'identity'}
-            if (legacy != {'type': 'process_ready', 'mode': 'conpty', 'execution': True, 'non_system': True} or
+            if (legacy != {'type': 'process_ready', 'mode': link.mode, 'execution': True, 'non_system': True} or
                     event.get('execution') is not True or event.get('non_system') is not True):
                 raise ProtocolError('invalid_process_confirmation')
             identity = await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id, event.get('identity')), CONTROL_SECONDS)
+            if link.mode == 'admin_auth': link.auth_completed = True
             link.ready.set()
             for member in link.peers.values():
-                member.enqueue(event={'type': 'ready', 'mode': 'conpty', 'execution': True, 'identity': identity})
+                member.enqueue(event={'type': 'ready', 'mode': link.mode, 'execution': True, 'identity': identity})
         elif kind == 'error' and peer.role == 'agent' and set(event) == {'type', 'code'} and event['code'] in (
                 'identity_or_consent_required', 'conpty_start_failed', 'terminal_output_limit', 'terminal_process_exited'):
             raise ProtocolError(event['code'])
@@ -226,7 +227,7 @@ async def monitor(session_id, peer, link):
         except asyncio.TimeoutError:
             raise ProtocolError('control_timeout') from None
         now = time.monotonic()
-        if not link.ready.is_set() and now - link.created > JOIN_SECONDS:
+        if not link.ready.is_set() and now - link.created > (60 if link.mode == 'admin_auth' else JOIN_SECONDS):
             raise ProtocolError('join_timeout')
         if now - peer.last_received > IDLE_SECONDS or peer.ping and now - peer.last_ping > IDLE_SECONDS:
             raise ProtocolError('keepalive_timeout')
@@ -272,7 +273,7 @@ async def terminal_application(scope, receive, send):
                 await asyncio.wait_for(sync_to_async(control.mark_ready)(session_id), CONTROL_SECONDS)
                 link.ready.set()
             for member in link.peers.values():
-                member.enqueue(event={'type': 'ready' if mode == 'synthetic' else 'transport_ready', 'mode': mode, 'execution': mode == 'conpty'})
+                member.enqueue(event={'type': 'ready' if mode == 'synthetic' else 'transport_ready', 'mode': mode, 'execution': mode in ('conpty', 'admin_auth')})
         tasks = [asyncio.create_task(writer(peer, send)), asyncio.create_task(reader(peer, link, receive, session_id)),
                  asyncio.create_task(monitor(session_id, peer, link)), asyncio.create_task(link.ended.wait())]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

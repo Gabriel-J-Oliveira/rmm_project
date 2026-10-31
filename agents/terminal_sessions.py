@@ -53,6 +53,8 @@ def audit(session, event, reason=''):
     if event == 'ready' and session.consent_at:
         metadata.update(consent_to_ready_ms=round((timezone.now()-session.consent_at).total_seconds()*1000, 3),
             identity_sid=session.identity_sid, integrity=session.identity_integrity, elevated=False)
+    if event == 'ready' and session.mode == 'admin_auth':
+        metadata.update(identity_sid=session.identity_sid, integrity=session.identity_integrity, elevated=True)
     create_audit_event(event_type='terminal.' + event, title='Terminal transport ' + event,
         description=reason, endpoint=session.endpoint, actor_type=actor,
         actor_name=session.operator.get_username() if actor == AuditEvent.ACTOR_USER else
@@ -101,7 +103,7 @@ def issue_ticket(session, role):
 def connection_info(session, role, ticket):
     return {'session_id': str(session.pk), 'credential': ticket, 'expires_at': session.expires_at.isoformat(),
         'ticket_seconds': TICKET_SECONDS, 'websocket_path': f'/ws/terminal/{session.pk}/{role}/',
-        'mode': session.mode, 'execution': session.mode == 'conpty', 'protocol': 1,
+        'mode': session.mode, 'execution': session.mode in ('conpty', 'admin_auth'), 'protocol': 1,
         'machine_id': session.machine_id, 'operator_id': str(session.operator_id)}
 
 
@@ -162,10 +164,10 @@ def create_session(operator, endpoint_id, mode='synthetic', *, consent_required=
 
 def operator_state(session):
     return {'session_id': str(session.pk), 'status': session.status, 'mode': session.mode,
-        'execution': session.mode == 'conpty', 'machine_id': session.machine_id, 'operator_id': str(session.operator_id),
+        'execution': session.mode in ('conpty', 'admin_auth'), 'machine_id': session.machine_id, 'operator_id': str(session.operator_id),
         'expires_at': session.expires_at.isoformat(), 'consent_deadline': session.consent_deadline.isoformat() if session.consent_deadline else None,
         'identity': {'sid': session.identity_sid, 'windows_session_id': session.windows_session_id,
-            'integrity': session.identity_integrity, 'elevated': False} if session.identity_sid else None}
+            'integrity': session.identity_integrity, 'elevated': session.mode == 'admin_auth'} if session.identity_sid else None}
 
 
 def consent_request(session):
@@ -234,6 +236,17 @@ def check_live(session_id):
 def mark_ready(session_id, identity=None):
     session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id)
     validate_session(session)
+    if session.mode == 'admin_auth':
+        if (not isinstance(identity, dict) or set(identity) != {'sid', 'windows_session_id', 'integrity', 'elevated'} or
+            not isinstance(identity.get('sid'), str) or not re.fullmatch(r'S-1-(?:\d+-){1,14}\d+', identity['sid']) or len(identity['sid']) > 184 or
+            identity['sid'] in ('S-1-5-18', 'S-1-5-19', 'S-1-5-20') or identity.get('elevated') is not True or
+            type(identity.get('windows_session_id')) is not int or not 0 <= identity['windows_session_id'] < 2**31 or
+            type(identity.get('integrity')) is not int or not 12288 <= identity['integrity'] < 2**31):
+            raise PermissionError('terminal_identity_invalid')
+        session.identity_sid = identity['sid']
+        session.windows_session_id = identity['windows_session_id']
+        session.identity_integrity = identity['integrity']
+        session.save(update_fields=['identity_sid', 'windows_session_id', 'identity_integrity'])
     if session.consent_at:
         validate_identity(identity)
         if identity != operator_state(session)['identity']:
@@ -242,7 +255,7 @@ def mark_ready(session_id, identity=None):
         session.status = 'ready'
         session.save(update_fields=['status'])
         audit(session, 'ready')
-    return operator_state(session)['identity']
+    return identity if session.mode == 'admin_auth' else operator_state(session)['identity']
 
 
 class PrivateTerminalView(APIView):

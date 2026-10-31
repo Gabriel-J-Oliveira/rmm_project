@@ -1,6 +1,6 @@
 <section data-admin-auth data-url="{% url 'terminal-session-request' endpoint.pk %}">
   <h2>Autenticação administrativa</h2>
-  <p>Validação de acesso Windows; o terminal ainda não será iniciado.</p>
+  <p>PowerShell com a conta administrativa Windows informada.</p>
   <form autocomplete="off">{% csrf_token %}
     <label>Usuário Windows <input name="account" maxlength="256" required autocomplete="off"></label>
     <label>Domínio (vazio para conta local) <input name="domain" maxlength="256" autocomplete="off"></label>
@@ -8,4 +8,6 @@
     <button type="submit">Validar</button><button type="button" data-cancel>Cancelar</button>
   </form>
   <p role="status" data-status>Aguardando solicitação</p>
+  <p data-identity>Identidade não ativa</p>
+  <div data-screen aria-label="Terminal PowerShell" style="height: 360px; background: #0b1020" hidden></div>
 </section>

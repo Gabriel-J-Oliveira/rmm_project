@@ -25,6 +25,15 @@ def enable_admin(machine, operator):
 
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True, NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True)
 class AdminAuthControlTests(TestCase):
+    def test_ready_rejects_system_and_non_elevated_process(self):
+        machine, _, operator = fixture('admin-auth-invalid-process')
+        enable_admin(machine, operator)
+        info = sessions.create_session(operator, machine.pk, 'admin_auth')
+        identity = {'sid':'S-1-5-21-1-2-3-1001','windows_session_id':0,'integrity':12288,'elevated':True}
+        for invalid in ({**identity, 'sid':'S-1-5-18'}, {**identity, 'elevated':False}, {**identity, 'integrity':8192}):
+            with self.assertRaises(PermissionError): sessions.mark_ready(info['session_id'], invalid)
+        self.assertEqual(sessions.mark_ready(info['session_id'], identity), identity)
+
     def test_http_rejects_unauthorized_operator(self):
         machine, _, operator = fixture('admin-auth-owner')
         enable_admin(machine, operator)
@@ -42,7 +51,7 @@ class AdminAuthControlTests(TestCase):
         with override_settings(NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=False):
             with self.assertRaises(PermissionError): sessions.create_session(operator, machine.pk, 'admin_auth')
         info = sessions.create_session(operator, machine.pk, 'admin_auth')
-        self.assertFalse(info['execution'])
+        self.assertTrue(info['execution'])
         sessions.consume_ticket(info['session_id'], 'operator', info['credential'], transport.OWNER)
         with self.assertRaises(PermissionError): sessions.consume_ticket(info['session_id'], 'operator', info['credential'], transport.OWNER)
         TerminalSession.objects.filter(pk=info['session_id']).update(expires_at=timezone.now() - timedelta(seconds=1))
@@ -52,6 +61,30 @@ class AdminAuthControlTests(TestCase):
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True,
     NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True, NIGHTOWL_TERMINAL_TEST_LOOPBACK=True, ALLOWED_HOSTS=['testserver', '127.0.0.1'])
 class AdminAuthIntegrationTests(TransactionTestCase):
+    async def test_simulated_process_identity_and_io_after_authentication(self):
+        machine, token, operator = await sync_to_async(fixture)('admin-auth-ready')
+        await sync_to_async(enable_admin)(machine, operator)
+        info = await sync_to_async(sessions.create_session)(operator, machine.pk, 'admin_auth')
+        response = await sync_to_async(Client(HTTP_AUTHORIZATION='Bearer ' + token).post)(reverse('terminal-agent-poll'),
+            {'machine_id': machine.machine_id}, content_type='application/json', secure=True)
+        agent_info = response.json()['session']
+        transport.HUB = transport.TerminalHub()
+        async with LoopbackASGI() as server:
+            browser = await WSClient.connect(server, info['websocket_path'], info['credential'])
+            agent = await WSClient.connect(server, agent_info['websocket_path'], agent_info['credential'], origin=False)
+            await browser.until('transport_ready'); await agent.until('transport_ready')
+            await browser.control({'type':'windows_auth','account':'mock','domain':'.','password':'synthetic'})
+            await agent.until('windows_auth')
+            identity = {'sid':'S-1-5-21-1-2-3-1001','windows_session_id':0,'integrity':12288,'elevated':True}
+            await agent.control({'type':'process_ready','mode':'admin_auth','execution':True,'non_system':True,'identity':identity})
+            self.assertEqual((await browser.until('ready'))['identity'], identity)
+            await agent.until('ready')
+            await browser.binary(0, 1, b'synthetic-input')
+            self.assertEqual((await agent.read())[9:], b'synthetic-input')
+            await agent.binary(1, 1, b'synthetic-output')
+            self.assertEqual((await browser.read())[9:], b'synthetic-output')
+            await browser.close(); await agent.close()
+
     async def test_simulated_browser_real_backend_agent_and_windows_rejection(self):
         machine, token, operator = await sync_to_async(fixture)('admin-auth-integration')
         await sync_to_async(enable_admin)(machine, operator)

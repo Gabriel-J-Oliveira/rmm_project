@@ -466,3 +466,28 @@ anteriores foram preservados. S02 precisa integrar o token ao ConPTY, definir
 e testar cleanup de processos controlados e revogação/logout, além de validar
 conta administrativa real e TLS antes da homologação. Não há terminal
 administrativo executável nesta etapa.
+
+## RC46-S02 — ConPTY administrativo
+
+O fluxo S01 agora entrega o token de `LogonUser` ao mesmo motor ConPTY. O
+PowerShell é criado suspenso com `CreateProcessAsUser` e atribuído ao Job na
+criação. Antes de retomar, o agente inspeciona o token do processo, compara
+SID, logon e sessão com o token autenticado e exige administrador efetivo,
+integridade alta e identidade diferente das contas de serviço. Falhas fecham
+o Job; não há fallback ao token do serviço. O token de autenticação é fechado
+após a criação/verificação; o processo e filhos controlados permanecem no Job.
+O WebSocket só aceita entrada após `process_ready` e a UI usa o VT existente.
+O modo assistido e seu consentimento continuam separados. Flags permanecem
+desativadas por padrão. O texto S01 acima descreve o estado histórico.
+
+Build e testes focados cobrem política de token/processo simulada, rejeição
+de conta inexistente no Windows e protocolo administrativo com peers simulados.
+ConPTY real foi exercitado com identidade local não elevada, incluindo saída
+incremental, resize e encerramento de filhos; isso não é teste administrativo.
+Sem credenciais administrativas de teste disponíveis, o caminho positivo
+`LogonUser` → `CreateProcessAsUser` → PowerShell elevado não foi executado.
+Perfil existente e permissões do serviço exigidas pelo Windows para
+`CreateProcessAsUser` precisam de homologação no ambiente alvo; não foram
+concedidos privilégios nem alteradas contas para testar. S03 deve validar
+logout, revogação, desconexão e cleanup com processo administrativo real,
+além de TLS/proxy e piloto. Sem habilitação de produção.

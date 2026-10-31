@@ -5,7 +5,7 @@
 {% block body_class %}page-endpoint-detail{% endblock %}
 {% block icon_script %}{% if not terminal_available and not terminal_admin_auth_available %}{{ block.super }}{% endif %}{% endblock %}
 {% block styles %}
-{% if terminal_available %}
+{% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
 <link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
 {% endif %}
@@ -366,7 +366,11 @@
 {% endblock %}
 
 {% block scripts %}
-{% if terminal_admin_auth_available %}<script src="{% static 'js/terminal_admin_auth.js' %}"></script>{% endif %}
+{% if terminal_admin_auth_available %}
+<script src="{% static 'vendor/xterm/xterm.js' %}"></script>
+<script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
+<script src="{% static 'js/terminal_admin_auth.js' %}"></script>
+{% endif %}
 {% if terminal_available %}
 <script src="{% static 'vendor/xterm/xterm.js' %}"></script>
 <script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
