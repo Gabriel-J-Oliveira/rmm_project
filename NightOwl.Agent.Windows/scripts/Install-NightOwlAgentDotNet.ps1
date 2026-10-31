@@ -1232,6 +1232,8 @@ function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
     $started = Get-Date
     $deadline = $started.AddSeconds(30)
+    $copiedCount = 0
+    $unchangedCount = 0
     foreach ($item in Get-ChildItem -Path $SourceDir -Force -Recurse) {
         $relative = $item.FullName.Substring($SourceDir.Length).TrimStart("\", "/")
         if (Test-ProtectedPayloadRelativePath $relative) {
@@ -1250,7 +1252,14 @@ function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
             while ($true) {
                 $attempt++
                 try {
+                    if ((Test-Path -LiteralPath $destination -PathType Leaf) -and
+                        (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction Stop).Hash -eq
+                        (Get-FileHash -LiteralPath $destination -Algorithm SHA256 -ErrorAction Stop).Hash) {
+                        $unchangedCount++
+                        break
+                    }
                     Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
+                    $copiedCount++
                     break
                 }
                 catch [System.UnauthorizedAccessException] {
@@ -1274,7 +1283,7 @@ function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
             }
         }
     }
-    Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir }
+    Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir; copied = $copiedCount; unchanged = $unchangedCount }
 }
 
 function Get-CopyRetryDelayMilliseconds([int]$Attempt) {
