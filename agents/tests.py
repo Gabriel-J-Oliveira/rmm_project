@@ -2931,6 +2931,53 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         machine.refresh_from_db(); self.assertEqual(machine.agent_token_hash, old_hash)
         self.assertEqual(machine.status, AgentMachine.STATUS_ONLINE)
 
+    def test_late_heartbeat_reconciles_pending_deployment_after_commit(self):
+        deployment, machine, token = self.create_enrolled_deployment('fi03a-late', 'FI03A-LATE')
+        client = Client(HTTP_AUTHORIZATION=f'Bearer {token}')
+        payload = {'deployment_id':str(deployment.pk), 'status':'pending', 'machine_id':machine.machine_id,
+            'version':self.release.version, 'service_status':'Running', 'health_check_confirmed':True}
+        self.assertEqual(client.post(reverse('agent-deployment-complete'), data=json.dumps(payload), content_type='application/json').status_code, 202)
+        heartbeat = {'machine_id':machine.machine_id, 'hostname':machine.hostname, 'domain':machine.domain, 'agent_version':self.release.version}
+        with self.captureOnCommitCallbacks(execute=True):
+            response = client.post(reverse('agent-heartbeat'), data=json.dumps(heartbeat), content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+        deployment.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_COMPLETED)
+        self.assertEqual(deployment.metadata['communication_status'], 'operational')
+
+    def test_late_heartbeat_does_not_reconcile_expired_or_superseded(self):
+        from agents.views import reconcile_pending_deployment_heartbeat
+        deployment, machine, token = self.create_enrolled_deployment('fi03a-expired', 'FI03A-EXPIRED')
+        client = Client(HTTP_AUTHORIZATION=f'Bearer {token}')
+        payload = {'deployment_id':str(deployment.pk), 'status':'pending', 'machine_id':machine.machine_id,
+            'version':self.release.version, 'service_status':'Running', 'health_check_confirmed':True}
+        self.assertEqual(client.post(reverse('agent-deployment-complete'), data=json.dumps(payload), content_type='application/json').status_code, 202)
+        snapshot = InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat','machine_id':machine.machine_id,'agent_version':self.release.version})
+        AgentDeploymentToken.objects.filter(pk=deployment.pk).update(expires_at=timezone.now() - timedelta(seconds=1))
+        reconcile_pending_deployment_heartbeat(machine, snapshot)
+        deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+        AgentDeploymentToken.objects.filter(pk=deployment.pk).update(expires_at=timezone.now() + timedelta(minutes=10))
+        newer, _, _ = self.create_deployment()
+        newer.endpoint = machine; newer.save(update_fields=['endpoint'])
+        reconcile_pending_deployment_heartbeat(machine, snapshot)
+        deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+
+    def test_late_heartbeat_requires_matching_version_and_local_install_confirmation(self):
+        from agents.views import reconcile_pending_deployment_heartbeat
+        deployment, machine, token = self.create_enrolled_deployment('fi03a-gate', 'FI03A-GATE')
+        snapshot = InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat','machine_id':machine.machine_id,'agent_version':self.release.version})
+        reconcile_pending_deployment_heartbeat(machine, snapshot)
+        deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+        snapshot.raw_payload['agent_version'] = 'different'; snapshot.save(update_fields=['raw_payload'])
+        client = Client(HTTP_AUTHORIZATION=f'Bearer {token}')
+        payload = {'deployment_id':str(deployment.pk), 'status':'pending', 'machine_id':machine.machine_id,
+            'version':self.release.version, 'service_status':'Running', 'health_check_confirmed':True}
+        self.assertEqual(client.post(reverse('agent-deployment-complete'), data=json.dumps(payload), content_type='application/json').status_code, 202)
+        reconcile_pending_deployment_heartbeat(machine, snapshot)
+        deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+
     def test_deployment_completion_resets_uninstalled_lifecycle_after_health(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-reinstall-001', 'CS-REINSTALL-001')
         endpoint.status = AgentMachine.STATUS_UNINSTALLED

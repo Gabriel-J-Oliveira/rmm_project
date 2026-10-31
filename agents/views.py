@@ -649,6 +649,36 @@ def mark_machine_installed_from_deployment(machine, deployment):
     ])
 
 
+@transaction.atomic
+def reconcile_pending_deployment_heartbeat(machine, snapshot):
+    """Complete only a locally confirmed, current and unexpired deployment."""
+    raw = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    if (raw.get('snapshot_source') != 'heartbeat' or not machine.machine_id or
+            raw.get('machine_id') != machine.machine_id):
+        return
+    candidates = AgentDeploymentToken.objects.select_for_update().select_related('release').filter(
+        endpoint=machine, status=AgentDeploymentToken.STATUS_INSTALLING,
+        expires_at__gt=timezone.now(), installing_at__lt=snapshot.received_at,
+    ).order_by('-created_at', '-pk')
+    for deployment in candidates:
+        metadata = deployment.metadata or {}
+        if (metadata.get('remote_install_job_id') or metadata.get('reported_service_status') != 'Running' or
+                metadata.get('communication_status') not in ('awaiting_heartbeat', 'heartbeat_timeout') or
+                raw.get('agent_version') != deployment.release.version):
+            continue
+        if AgentDeploymentToken.objects.filter(endpoint=machine, created_at__gt=deployment.created_at).exists():
+            continue
+        deployment.mark_completed(machine)
+        deployment.metadata = {**metadata, 'communication_status': 'operational', 'heartbeat_snapshot_id': str(snapshot.pk)}
+        deployment.save(update_fields=['metadata'])
+        mark_machine_installed_from_deployment(machine, deployment)
+        create_audit_event(event_type='agent.deployment.completed', title='Deployment de agente concluido',
+            description='Heartbeat posterior confirmou o deployment.', endpoint=machine,
+            actor_type=AuditEvent.ACTOR_AGENT, actor_name='NightOwlAgent',
+            metadata={'deployment_id': str(deployment.pk), 'release_id': str(deployment.release_id)})
+        break
+
+
 def _payload_sha256(payload):
     encoded = json.dumps(payload or {}, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
     return hashlib.sha256(encoded).hexdigest()
@@ -1014,6 +1044,7 @@ class AgentHeartbeatView(APIView):
                     raw_payload=request.data,
                 )
                 machine.refresh_from_db(fields=['machine_id'])
+                transaction.on_commit(lambda: reconcile_pending_deployment_heartbeat(machine, snapshot), robust=True)
                 diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
                 if isinstance(diagnostic_payload, dict):
                     diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))

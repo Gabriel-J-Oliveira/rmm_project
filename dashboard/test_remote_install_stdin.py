@@ -9,10 +9,21 @@ from dashboard.test_remote_install import COMPUTER, CONTRACT, SENTINEL
 
 
 class RemoteWrapperStdinTests(SimpleTestCase):
+    def test_exit_code_two_is_pending_not_operational(self):
+        self.assertIsNone(runner._check_installer_exit(0))
+        with self.assertRaises(runner.InstallFailure) as raised:
+            runner._check_installer_exit(2)
+        self.assertEqual(raised.exception.code, 'INSTALL_CONFIRMATION_PENDING')
+        self.assertTrue(raised.exception.installed)
+        with self.assertRaises(runner.InstallFailure) as failed:
+            runner._check_installer_exit(1)
+        self.assertEqual(failed.exception.code, 'INSTALLER_EXIT_NONZERO')
+
     def dispatch(self, protocol, script, events=None):
-        with mock.patch.object(runner, '_new_winrm_protocol', return_value=protocol):
+        with mock.patch.object(runner, '_new_winrm_protocol', return_value=protocol), \
+             mock.patch.object(runner, '_verify_remote_identity_session'):
             return runner._remote_script(COMPUTER['fqdn'], 'synthetic-admin', SENTINEL,
-                                         script, 30, on_event=events)
+                                         script, 30, endpoint_ip='10.0.0.10', expected_computer={**COMPUTER, 'sid':'S-1-5-21-1-2-3-1001'}, on_event=events)
 
     def protocol(self):
         protocol = mock.Mock()
@@ -55,7 +66,8 @@ class RemoteWrapperStdinTests(SimpleTestCase):
         for script in ('', '\u00e9', 'x' * runner.MAX_REMOTE_SCRIPT_BYTES):
             with self.subTest(size=len(script)), mock.patch.object(runner, '_new_winrm_protocol') as connect:
                 with self.assertRaises(runner.InstallFailure) as raised:
-                    runner._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, script, 30)
+                    runner._remote_script(COMPUTER['fqdn'], 'admin', SENTINEL, script, 30,
+                                          endpoint_ip='10.0.0.10', expected_computer={**COMPUTER, 'sid':'S-1-5-21-1-2-3-1001'})
                 self.assertEqual(raised.exception.code, 'REMOTE_SCRIPT_INVALID')
                 self.assertFalse(raised.exception.command_attempted)
                 connect.assert_not_called()

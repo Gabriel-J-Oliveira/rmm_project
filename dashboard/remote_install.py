@@ -616,6 +616,15 @@ def preview_install_confirmation(job_id):
     return result
 
 
+def _check_installer_exit(code):
+    if code == 2:
+        raise InstallFailure('INSTALL_CONFIRMATION_PENDING', installed=True)
+    if code == 25:
+        raise InstallFailure('NIGHTOWL_INSTALLATION_DETECTED')
+    if code != 0:
+        raise InstallFailure('INSTALLER_EXIT_NONZERO')
+
+
 def run_remote_install(job_id, username, password):
     stop = threading.Event()
     pulse = threading.Thread(target=_heartbeat, args=(job_id, stop), daemon=True)
@@ -748,10 +757,7 @@ def run_remote_install(job_id, username, password):
             raise InstallFailure('INSTALLER_RESULT_UNKNOWN')
         if not installer_finished or code != installer_exit_code:
             raise InstallFailure('INSTALLER_RESULT_UNKNOWN')
-        if code == 25:
-            raise InstallFailure('NIGHTOWL_INSTALLATION_DETECTED')
-        if code != 0:
-            raise InstallFailure('INSTALLER_EXIT_NONZERO')
+        _check_installer_exit(code)
         installed = True
         stage = 'VALIDATING_SERVICE'
         _update(job_id, 'VALIDATING_SERVICE')
