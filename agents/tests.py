@@ -2479,7 +2479,7 @@ function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
         }}
         trusted_public_keys = [pscustomobject]@{{
             url = 'https://nightowl.test/trust/release-public-keys.json'
-            sha256 = 'trustedsha'
+            sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         }}
     }}
 }}
@@ -2493,7 +2493,7 @@ function Invoke-WebRequest {{
     }}
     return [pscustomobject]@{{ Content = 'ok' }}
 }}
-function Get-Sha256([string]$Path) {{ return 'trustedsha' }}
+function Get-Sha256([string]$Path) {{ return 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }}
 '@
 $marker = "try {{" + "`r`n    `$Stage = `"preflight`""
 $idx = $script.IndexOf($marker)
@@ -2558,7 +2558,7 @@ function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
         }}
         trusted_public_keys = [pscustomobject]@{{
             url = 'https://nightowl.test/trust/release-public-keys.json'
-            sha256 = 'trustedsha'
+            sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
         }}
     }}
 }}
@@ -2569,7 +2569,7 @@ function Invoke-WebRequest {{
     }}
     return [pscustomobject]@{{ Content = 'ok' }}
 }}
-function Get-Sha256([string]$Path) {{ return 'trustedsha' }}
+function Get-Sha256([string]$Path) {{ return 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }}
 '@
 $marker = "try {{" + "`r`n    `$Stage = `"preflight`""
 $idx = $script.IndexOf($marker)

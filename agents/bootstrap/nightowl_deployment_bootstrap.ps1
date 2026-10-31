@@ -72,6 +72,22 @@ function Get-Sha256([string]$Path) {
     return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Get-VerifiedTrustBundle([string]$Url, [string]$Path, [string]$ExpectedSha) {
+    if ($ExpectedSha -notmatch '^[a-fA-F0-9]{64}$') { throw "BOOTSTRAP_TRUST_SHA_MISMATCH" }
+    if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Get-Sha256 $Path) -eq $ExpectedSha.ToLowerInvariant()) {
+        return
+    }
+    $candidate = $Path + "." + [guid]::NewGuid().ToString("N") + ".partial"
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $candidate -UseBasicParsing -ErrorAction Stop
+        if ((Get-Sha256 $candidate) -ne $ExpectedSha.ToLowerInvariant()) { throw "BOOTSTRAP_TRUST_SHA_MISMATCH" }
+        Move-Item -LiteralPath $candidate -Destination $Path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $candidate) { Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {
     return Invoke-RestMethod -Method Get -Uri $Url -Headers @{ "X-NightOwl-Deployment-Token" = $DeploymentToken } -UseBasicParsing
 }
@@ -168,12 +184,8 @@ try {
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
     $trustPath = Join-Path $TempRoot "release-public-keys.json"
     $installerPath = Join-Path $TempRoot "Install-NightOwlAgentDotNet.ps1"
-    Invoke-WebRequest -Uri ([string]$metadata.trusted_public_keys.url) -OutFile $trustPath -UseBasicParsing
-    $actualTrustSha = Get-Sha256 $trustPath
     $expectedTrustSha = ([string]$metadata.trusted_public_keys.sha256).ToLowerInvariant()
-    if ($actualTrustSha -ne $expectedTrustSha) {
-        throw "BOOTSTRAP_TRUST_SHA_MISMATCH"
-    }
+    Get-VerifiedTrustBundle -Url ([string]$metadata.trusted_public_keys.url) -Path $trustPath -ExpectedSha $expectedTrustSha
     Invoke-WebRequest -Uri ([string]$metadata.release.installer_url) -OutFile $installerPath -UseBasicParsing
 
     $Stage = "install"
