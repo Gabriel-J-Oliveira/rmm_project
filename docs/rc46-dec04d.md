@@ -491,3 +491,13 @@ Perfil existente e permissões do serviço exigidas pelo Windows para
 concedidos privilégios nem alteradas contas para testar. S03 deve validar
 logout, revogação, desconexão e cleanup com processo administrativo real,
 além de TLS/proxy e piloto. Sem habilitação de produção.
+
+## RC46-S03 — correção de logout
+
+O logout Django não encerrava as sessões de terminal do operador. Agora as
+sessões ativas são canceladas no logout e o monitor WebSocket existente encerra
+as conexões. Tickets de sessões encerradas continuam inválidos. O cancelamento
+abrange todas as sessões ativas desse operador, inclusive em outras abas.
+Não foi executada autenticação administrativa positiva real: nenhuma conta de
+laboratório com credenciais autorizadas foi fornecida. A homologação do fluxo
+administrativo completo e encerramento de seus processos continua pendente.
