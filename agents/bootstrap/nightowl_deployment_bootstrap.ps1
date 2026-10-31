@@ -120,6 +120,32 @@ function Read-AgentConfig {
     }
 }
 
+function Get-ExistingInstallationState([string]$Root, $Metadata) {
+    $exe = Join-Path $Root 'AgentDotNet\NightOwl.Agent.Windows.exe'
+    $svc = Get-Service -Name 'NightOwlAgentDotNet' -ErrorAction SilentlyContinue
+    $hasExe = Test-Path -LiteralPath $exe -PathType Leaf
+    if (-not $svc -and -not $hasExe) { return 'absent' }
+    if (-not $svc -or -not $hasExe) { return 'incomplete' }
+    try {
+        $config = Get-Content -Raw -LiteralPath (Join-Path $Root 'Config\agent.config.json') | ConvertFrom-Json
+        $identity = Get-Content -Raw -LiteralPath (Join-Path $Root 'Identity\agent.identity.json') | ConvertFrom-Json
+        $state = Get-Content -Raw -LiteralPath (Join-Path $Root 'State\agent.state.json') | ConvertFrom-Json
+        $version = Get-Content -Raw -LiteralPath (Join-Path $Root 'AgentDotNet\agent.version.json') | ConvertFrom-Json
+        $machine = Get-OptionalJsonProperty $config 'machineId'
+        if ([string]::IsNullOrWhiteSpace($machine) -or [string]::IsNullOrWhiteSpace((Get-OptionalJsonProperty $config 'agentToken')) -or
+            $machine -ne (Get-OptionalJsonProperty $identity 'machine_id') -or $machine -ne (Get-OptionalJsonProperty $state 'machine_id')) { return 'incomplete' }
+        if ((Get-OptionalJsonProperty $version 'version') -ne [string]$Metadata.release.version -or
+            (Get-OptionalJsonProperty $version 'packageSha256') -ne [string]$Metadata.release.sha256) { return 'different_version' }
+        if ((Get-OptionalJsonProperty $config 'serverBaseUrl').TrimEnd('/') -ne ([string]$Metadata.server_url).TrimEnd('/')) { return 'unverified' }
+        $heartbeat = [DateTimeOffset]::MinValue
+        $raw = Get-OptionalJsonProperty $state 'lastHeartbeatAt'
+        if ($svc.Status.ToString() -ne 'Running' -or -not [DateTimeOffset]::TryParse($raw, [ref]$heartbeat)) { return 'unverified' }
+        $age = [DateTimeOffset]::UtcNow - $heartbeat.ToUniversalTime()
+        if ($age.TotalSeconds -lt 0 -or $age.TotalMinutes -gt 10) { return 'unverified' }
+        return 'healthy_compatible'
+    } catch { return 'incomplete' }
+}
+
 function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCode, [string]$ErrorMessage) {
     $completionUrl = Get-OptionalJsonProperty -Object $Metadata -Name "completion_url"
     if ([string]::IsNullOrWhiteSpace($completionUrl)) {
@@ -180,6 +206,9 @@ try {
     Assert-Https ([string]$metadata.release.package_url)
     Assert-Https ([string]$metadata.trusted_public_keys.url)
 
+    $existingState = Get-ExistingInstallationState -Root 'C:\ProgramData\NightOwl' -Metadata $metadata
+    Write-NightOwlBootstrapLog "existing_installation" @{ state = $existingState }
+    if ($existingState -ne 'healthy_compatible') {
     $Stage = "download"
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
     $trustPath = Join-Path $TempRoot "release-public-keys.json"
@@ -229,6 +258,7 @@ try {
     if ($installerExitCode -ne 0) {
         throw "BOOTSTRAP_INSTALLER_FAILED:$installerExitCode"
     }
+    } else { Write-Host 'NightOwl: instalacao compativel e heartbeat local recente; reinstalacao dispensada.' }
 
     $Stage = "completed"
     $machineId = ""

@@ -569,9 +569,26 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
         throw "INSTALL_PACKAGE_INSECURE_URL: download de pacote exige HTTPS."
     }
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+    $cacheMutex = $null
+    $cacheLocked = $false
+    $cacheFile = $null
+    $cacheHit = $false
+    try {
+    if ($ExpectedPackageSha256 -match '^[a-fA-F0-9]{64}$') {
+        $cacheMutex = New-Object System.Threading.Mutex($false, 'Global\NightOwlInstallerPackageCache')
+        try { $cacheLocked = $cacheMutex.WaitOne(120000) } catch [System.Threading.AbandonedMutexException] { $cacheLocked = $true }
+        if (-not $cacheLocked) { throw 'INSTALL_PACKAGE_CACHE_LOCK_TIMEOUT' }
+        $cacheFile = Join-Path ([string]$script:NightOwlPaths.Cache) ('installer-' + $ExpectedPackageSha256.ToLowerInvariant() + '.zip')
+    }
     $zipPath = Join-Path $WorkDir "NightOwl.Agent.Windows.zip"
-    Write-Step "OK" ("Baixando pacote: {0}" -f $Url)
-    Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+    if ($cacheFile -and (Test-Path -LiteralPath $cacheFile -PathType Leaf) -and (Get-FileSha256 $cacheFile) -eq $ExpectedPackageSha256.ToLowerInvariant()) {
+        Copy-Item -LiteralPath $cacheFile -Destination $zipPath
+        $cacheHit = $true
+        Write-Step "OK" "Pacote encontrado no cache; validacao completa sera executada"
+    } else {
+        Write-Step "OK" ("Baixando pacote: {0}" -f $Url)
+        Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+    }
     if (-not (Test-Path $zipPath) -or (Get-Item $zipPath).Length -le 0) {
         throw "Download do pacote falhou ou retornou arquivo vazio."
     }
@@ -606,11 +623,25 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     Assert-RequiredPackageFiles -SourceDir $extractPath -RequireTrust
     $trustedKeysPath = Resolve-TrustedPublicKeysForInstaller -ReleaseBundledTrustPath $releaseBundledTrustPath
     $script:ValidatedReleaseMetadata = Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath -TrustedKeysPath $trustedKeysPath
+    if ($cacheFile -and -not $cacheHit) {
+        $cacheCandidate = $cacheFile + '.' + [guid]::NewGuid().ToString('N') + '.partial'
+        $cacheBackup = $cacheCandidate + '.backup'
+        try {
+            Copy-Item -LiteralPath $zipPath -Destination $cacheCandidate
+            if ((Get-FileSha256 $cacheCandidate) -ne $ExpectedPackageSha256.ToLowerInvariant()) { throw 'INSTALL_PACKAGE_CACHE_INVALID' }
+            if (Test-Path -LiteralPath $cacheFile) { [IO.File]::Replace($cacheCandidate, $cacheFile, $cacheBackup) }
+            else { [IO.File]::Move($cacheCandidate, $cacheFile) }
+        } finally { foreach ($temporary in @($cacheCandidate, $cacheBackup)) { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue } } }
+    }
     $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
     if (-not $exe) {
         throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
     }
     return $exe.DirectoryName
+    } finally {
+        if ($cacheLocked) { $cacheMutex.ReleaseMutex() }
+        if ($cacheMutex) { $cacheMutex.Dispose() }
+    }
 }
 
 function Resolve-TrustedPublicKeysForInstaller([string]$ReleaseBundledTrustPath) {
