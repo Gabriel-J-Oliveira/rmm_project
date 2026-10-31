@@ -8,6 +8,7 @@ from ipaddress import ip_address
 
 from django.conf import settings
 from django.db import connection, transaction, IntegrityError, OperationalError
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
@@ -219,7 +220,8 @@ def consume_ticket(session_id, role, ticket, owner):
             not hmac.compare_digest(digest, getattr(session, role + '_ticket_hash'))):
         raise PermissionError('invalid_credential')
     # Conditional update prevents concurrent replay even where row locks are unavailable.
-    updated = TerminalSession.objects.filter(pk=session.pk, **{role + '_ticket_used': False}).update(
+    updated = TerminalSession.objects.filter(Q(transport_owner='') | Q(transport_owner=owner),
+        pk=session.pk, status__in=TerminalSession.ACTIVE, **{role + '_ticket_used': False}).update(
         **{role + '_ticket_used': True, 'transport_owner': owner, 'status': 'connecting'})
     if updated != 1:
         raise PermissionError('credential_replayed')

@@ -49,6 +49,19 @@ class TerminalControlTests(TestCase):
     def poll(self, machine_id=None, client=None):
         return (client or self.agent).post(reverse('terminal-agent-poll'), {'machine_id': machine_id or self.machine.machine_id}, content_type='application/json', secure=True)
 
+    def test_owner_change_between_read_and_ticket_update_is_rejected(self):
+        info = self.request().json()
+        digest = hashlib.sha256(info['credential'].encode()).hexdigest()
+        compare = sessions.hmac.compare_digest
+        def race(left, right):
+            result = compare(left, right)
+            if left == digest and right == digest:
+                TerminalSession.objects.filter(pk=info['session_id']).update(transport_owner='other-worker')
+            return result
+        with patch.object(sessions.hmac, 'compare_digest', side_effect=race):
+            with self.assertRaises(PermissionError):
+                sessions.consume_ticket(info['session_id'], 'operator', info['credential'], transport.OWNER)
+
     def test_feature_default_disabled_single_process_and_tls_required(self):
         for config in ({'NIGHTOWL_TERMINAL_ENABLED': False}, {'NIGHTOWL_TERMINAL_SINGLE_PROCESS': False}):
             with override_settings(**config):

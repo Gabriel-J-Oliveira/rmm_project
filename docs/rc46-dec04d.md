@@ -501,3 +501,22 @@ abrange todas as sessões ativas desse operador, inclusive em outras abas.
 Não foi executada autenticação administrativa positiva real: nenhuma conta de
 laboratório com credenciais autorizadas foi fornecida. A homologação do fluxo
 administrativo completo e encerramento de seus processos continua pendente.
+
+## RC46-S04 — relay multiprocesso pendente
+
+O relay mantém `HUB` e filas no processo ASGI e o ticket vincula a sessão a
+`transport_owner`; peers em workers distintos não conseguem formar um par.
+O cache existente em arquivo é voltado a telemetria e não oferece um canal
+adequado de mensagens interativas com backpressure e falha fechada. Redis,
+cliente Redis, Channels e servidor ASGI WebSocket não estavam disponíveis no
+ambiente de desenvolvimento. Não se instalou infraestrutura.
+
+A atualização condicional de consumo de ticket agora também exige que o dono
+continue vazio ou seja o mesmo worker, evitando substituição concorrente por
+outro worker. O gate de processo único continua obrigatório. Não há relay
+compartilhado implementado nem teste de peers em processos distintos.
+Uma opção para concluir S04 é Redis compartilhado com autenticação e transporte
+protegido, canais efêmeros por sessão, limites de fila e lease de presença;
+precisa de cliente compatível, servidor local de teste e testes de queda,
+isolamento, ordenação e backpressure antes de alterar o gate. Redis não é a
+única implementação possível; nenhuma configuração foi homologada.
