@@ -29,7 +29,7 @@ class TerminalSession(models.Model):
     machine_id = models.CharField(max_length=255)
     agent_identity = models.CharField(max_length=64)
     status = models.CharField(max_length=16, default='authorized')
-    mode = models.CharField(max_length=16, default='synthetic', choices=[('synthetic', 'Synthetic'), ('conpty', 'ConPTY')])
+    mode = models.CharField(max_length=16, default='synthetic', choices=[('synthetic', 'Synthetic'), ('conpty', 'ConPTY'), ('admin_auth', 'Administrative authentication')])
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     closed_at = models.DateTimeField(null=True)

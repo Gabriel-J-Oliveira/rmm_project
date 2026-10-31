@@ -117,6 +117,8 @@ public sealed class AgentConfig
     public bool OperationalActionsEnabled { get; set; } = false;
     [JsonPropertyName("remoteTerminalTransportEnabled")]
     public bool RemoteTerminalTransportEnabled { get; set; } = false;
+    [JsonPropertyName("terminalAdministrativeAuthenticationEnabled")]
+    public bool TerminalAdministrativeAuthenticationEnabled { get; set; } = false;
     [JsonPropertyName("terminalConPtyEnabled")]
     public bool TerminalConPtyEnabled { get; set; } = false;
     [JsonPropertyName("terminalServiceConsentHomologated")]

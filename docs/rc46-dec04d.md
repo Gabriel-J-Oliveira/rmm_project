@@ -435,3 +435,34 @@ de implementação, não evidência de impossibilidade técnica no Windows.
 Nenhum modo administrativo foi habilitado. Permanecem implementação e testes
 de transporte sem persistência ou fila de senha, logout/revogação, validação
 efetiva do token e ciclo de vida; não há homologação Windows administrativa.
+
+## RC46-S01 — autenticação administrativa sem execução
+
+Decisão vigente: backend confiável, HTTPS/WSS válido e credencial transitória;
+não se exige PKI ou chave de agente independente do backend. Sessões `admin_auth`
+usam permissão NightOwl, grant por operador/endpoint com `allow_conpty`, flags
+e capability do agente, tickets únicos, expiração, Origin, CSRF e limites do
+transporte existente. O modo não usa consentimento Tray nem inicia ConPTY.
+O modo assistido anterior é preservado enquanto houver consumidores. A flag
+do backend `NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED` e a configuração do agente
+`terminalAdministrativeAuthenticationEnabled` são desabilitadas por padrão.
+
+O formulário envia usuário, domínio e senha após ambos os peers autenticarem
+o WebSocket; a sessão aceita somente uma tentativa. O relay mantém a mensagem
+transitoriamente em sua fila limitada em memória, sem armazenamento persistente,
+e não registra conteúdo. O agente usa LogonUser e valida token administrativo
+elevado, rejeita contas de serviço e descarta o token, sem criar processo.
+Buffers mutáveis do agente e o campo do navegador são limpos; strings imutáveis
+do navegador/backend e cópias do transporte não podem ser zeradas com garantia.
+O backend confiável pode ler as credenciais durante a transmissão.
+
+Teste integrado em loopback: navegador simulado por cliente WebSocket, backend
+ASGI real, agente .NET real e LogonUser real rejeitando conta inexistente.
+Segunda tentativa na sessão foi rejeitada; senha sintética não apareceu nas
+linhas de sessão/auditoria nem na saída do agente. Validação de privilégios usa
+tokens sintéticos; sem credenciais administrativas autorizadas, não foi
+testado sucesso Windows real ou domínio, nem TLS real. Os testes de transporte
+anteriores foram preservados. S02 precisa integrar o token ao ConPTY, definir
+e testar cleanup de processos controlados e revogação/logout, além de validar
+conta administrativa real e TLS antes da homologação. Não há terminal
+administrativo executável nesta etapa.

@@ -3537,7 +3537,15 @@ def endpoint_detail(request, pk):
     }
     from agents.terminal_sessions import authorize as authorize_terminal, validate_mode as validate_terminal_mode, enabled as terminal_enabled
     context['terminal_available'] = False
-    if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
+    context['terminal_admin_auth_available'] = False
+    if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False):
+        try:
+            authorize_terminal(request.user, endpoint)
+            validate_terminal_mode(request.user, endpoint, 'admin_auth')
+            context['terminal_admin_auth_available'] = True
+        except (ValueError, PermissionError):
+            pass
+    if not context['terminal_admin_auth_available'] and terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
         try:
             authorize_terminal(request.user, endpoint)
             validate_terminal_mode(request.user, endpoint, 'conpty')

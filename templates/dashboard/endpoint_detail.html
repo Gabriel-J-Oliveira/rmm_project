@@ -3,7 +3,7 @@
 
 {% block title %}Night Owl | {{ endpoint.hostname }}{% endblock %}
 {% block body_class %}page-endpoint-detail{% endblock %}
-{% block icon_script %}{% if not terminal_available %}{{ block.super }}{% endif %}{% endblock %}
+{% block icon_script %}{% if not terminal_available and not terminal_admin_auth_available %}{{ block.super }}{% endif %}{% endblock %}
 {% block styles %}
 {% if terminal_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
@@ -52,6 +52,7 @@
         </dl>
     </header>
     {% if terminal_available %}{% include 'dashboard/endpoint_terminal.html' %}{% endif %}
+    {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}
 
     <nav class="endpoint-tabs" aria-label="Se&ccedil;&otilde;es do endpoint">
         <button class="is-active" type="button" data-endpoint-tab="overview"><i data-lucide="layout-dashboard"></i>Vis&atilde;o geral</button>
@@ -365,6 +366,7 @@
 {% endblock %}
 
 {% block scripts %}
+{% if terminal_admin_auth_available %}<script src="{% static 'js/terminal_admin_auth.js' %}"></script>{% endif %}
 {% if terminal_available %}
 <script src="{% static 'vendor/xterm/xterm.js' %}"></script>
 <script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>

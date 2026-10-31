@@ -106,8 +106,13 @@ def connection_info(session, role, ticket):
 
 
 def validate_mode(operator, endpoint, mode):
-    if mode not in ('synthetic', 'conpty'):
+    if mode not in ('synthetic', 'conpty', 'admin_auth'):
         raise ValueError('terminal_mode_invalid')
+    if mode == 'admin_auth' and (not getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False) or
+            not TerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
+                allow_conpty=True, expires_at__gt=timezone.now()).exists() or
+            not internal_capability(endpoint, 'remote_terminal_admin_auth:1')):
+        raise PermissionError('terminal_execution_not_authorized')
     if mode == 'conpty' and (not getattr(settings, 'NIGHTOWL_TERMINAL_CONPTY_ENABLED', False) or
             not TerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
                 allow_conpty=True, expires_at__gt=timezone.now()).exists() or

@@ -11,6 +11,18 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--terminal-admin-auth-agent", StringComparer.Ordinal))
+    {
+        var baseUrl = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_SERVER")!;
+        if (!new Uri(baseUrl).IsLoopback) throw new InvalidOperationException("Loopback only");
+        var config = new AgentConfig { ServerBaseUrl = baseUrl, MachineId = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_MACHINE")!,
+            RemoteTerminalTransportEnabled = true, TerminalAdministrativeAuthenticationEnabled = true };
+        using var session = JsonDocument.Parse(Console.In.ReadToEnd());
+        var runtime = new RemoteTerminalTransport(null!, null!);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await runtime.ConnectAsync(config, session.RootElement, timeout.Token);
+        return;
+    }
     if (args.Contains("--terminal-admin-auth-only", StringComparer.Ordinal)) { TerminalAdministrativeAuthenticationTests.Run(); return; }
     if (args.Contains("--terminal-consent-only", StringComparer.Ordinal)) { TerminalConsentTests.Run(); return; }
     if (args.Contains("--terminal-browser-agent", StringComparer.Ordinal)) { await ConPtyTests.BrowserAgentAsync(); return; }

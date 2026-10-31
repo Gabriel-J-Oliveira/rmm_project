@@ -70,6 +70,8 @@ class Link:
         self.ended = asyncio.Event()
         self.reason = 'disconnected'
         self.created = time.monotonic()
+        self.auth_submitted = False
+        self.auth_completed = False
 
     def end(self, reason):
         if not self.ended.is_set():
@@ -143,6 +145,8 @@ async def writer(peer, send):
             await asyncio.wait_for(send(message), SEND_SECONDS)
         except asyncio.TimeoutError:
             raise ProtocolError('send_timeout') from None
+        finally:
+            message = None  # Do not retain the previous outbound frame while idle.
 
 
 async def reader(peer, link, receive, session_id=None):
@@ -178,6 +182,19 @@ async def reader(peer, link, receive, session_id=None):
             peer.ping = None
         elif kind == 'close' and set(event) == {'type'}:
             raise ProtocolError('peer_closed')
+        elif kind == 'windows_auth' and peer.role == 'operator' and link.mode == 'admin_auth' and link.transport_ready.is_set() and not link.auth_submitted:
+            if (set(event) != {'type', 'account', 'domain', 'password'} or
+                any(not isinstance(event[k], str) or '\x00' in event[k] for k in ('account', 'domain', 'password')) or
+                not 1 <= len(event['account']) <= 256 or len(event['domain']) > 256 or not 1 <= len(event['password']) <= 512):
+                raise ProtocolError('invalid_windows_auth')
+            link.auth_submitted = True
+            other.enqueue(event=event)
+            del event, text, message
+        elif kind == 'windows_auth_result' and peer.role == 'agent' and link.mode == 'admin_auth' and link.auth_submitted and not link.auth_completed:
+            if set(event) != {'type', 'result'} or event['result'] not in ('accepted', 'rejected'):
+                raise ProtocolError('invalid_windows_auth_result')
+            link.auth_completed = True
+            other.enqueue(event=event)
         elif kind == 'process_ready' and peer.role == 'agent' and link.mode == 'conpty' and link.transport_ready.is_set() and not link.ready.is_set():
             legacy = {key: value for key, value in event.items() if key != 'identity'}
             if (legacy != {'type': 'process_ready', 'mode': 'conpty', 'execution': True, 'non_system': True} or
