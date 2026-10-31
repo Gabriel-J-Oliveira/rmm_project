@@ -94,7 +94,7 @@ function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {
 
 function Invoke-JsonPost([string]$Url, [hashtable]$Headers, [hashtable]$Body) {
     $json = $Body | ConvertTo-Json -Depth 8
-    return Invoke-RestMethod -Method Post -Uri $Url -Headers $Headers -Body $json -ContentType "application/json" -UseBasicParsing
+    return Invoke-RestMethod -Method Post -Uri $Url -Headers $Headers -Body $json -ContentType "application/json" -UseBasicParsing -TimeoutSec 5
 }
 
 function Get-OptionalJsonProperty($Object, [string]$Name) {
@@ -177,12 +177,18 @@ function Send-DeploymentCompletion($Metadata, [string]$Status, [string]$ErrorCod
         machine_id = $machineId
         version = [string]$Metadata.release.version
         service_status = $serviceStatus
-        health_check_confirmed = ($Status -eq "completed" -and $serviceStatus -eq "Running")
+        health_check_confirmed = ($Status -in @('completed', 'pending') -and $serviceStatus -eq "Running")
         error_code = $ErrorCode
         error_message = $ErrorMessage
     }
     try {
-        Invoke-JsonPost -Url $completionUrl -Headers $headers -Body $body | Out-Null
+        $response = Invoke-JsonPost -Url $completionUrl -Headers $headers -Body $body
+        $state = Get-OptionalJsonProperty -Object $response -Name 'status'
+        if ($Status -eq 'completed' -and $state -eq 'awaiting_heartbeat') {
+            return [pscustomobject]@{ ok = $false; error = 'awaiting_heartbeat' }
+        }
+        if ($Status -eq 'pending' -and $state -eq 'completed') { return [pscustomobject]@{ ok = $true; error = 'completed' } }
+        if ($state -ne $Status) { return [pscustomobject]@{ ok = $false; error = 'completion_response_invalid' } }
         return [pscustomobject]@{ ok = $true; error = "" }
     }
     catch {
@@ -276,33 +282,49 @@ try {
     } catch {
         $serviceStatus = "Unknown"
     }
-    $confirmation = Send-DeploymentCompletion -Metadata $metadata -Status "completed" -ErrorCode "" -ErrorMessage ""
-    $confirmationStatus = if ($confirmation.ok) { "completed" } else { "failed" }
+    $localInstallStatus = if ($serviceStatus -eq 'Running') { 'completed' } else { 'unverified' }
+    $timeoutSeconds = 30
+    $configuredTimeout = 0
+    if ([int]::TryParse($env:NIGHTOWL_DEPLOYMENT_CONFIRM_TIMEOUT_SECONDS, [ref]$configuredTimeout)) {
+        $timeoutSeconds = [Math]::Max(0, [Math]::Min(300, $configuredTimeout))
+    }
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $confirmation = Send-DeploymentCompletion -Metadata $metadata -Status "completed" -ErrorCode "" -ErrorMessage ""
+        if ($confirmation.ok -or $confirmation.error -ne 'awaiting_heartbeat' -or $deadline.Elapsed.TotalSeconds -ge $timeoutSeconds) { break }
+        Start-Sleep -Seconds ([Math]::Min(3, [Math]::Max(1, $timeoutSeconds - [int]$deadline.Elapsed.TotalSeconds)))
+    } while ($true)
+    if (-not $confirmation.ok -and $confirmation.error -eq 'awaiting_heartbeat') {
+        $timedOut = Send-DeploymentCompletion -Metadata $metadata -Status 'pending' -ErrorCode '' -ErrorMessage ''
+        if ($timedOut.ok -and $timedOut.error -eq 'completed') { $confirmation = $timedOut }
+    }
+    $confirmationStatus = if ($confirmation.ok) { "completed" } elseif ($confirmation.error -eq 'awaiting_heartbeat') { 'pending' } else { 'failed' }
     if (-not $confirmation.ok) {
         Write-NightOwlBootstrapLog "warning" @{
             warning_code = "BOOTSTRAP_COMPLETION_CALLBACK_FAILED"
             warning_message = $confirmation.error
-            installation_status = "completed"
+            installation_status = $localInstallStatus
             deployment_confirmation_status = "failed"
         }
     }
-    Write-NightOwlResult "completed" @{
+    $resultStatus = if ($confirmation.ok) { 'completed' } else { 'pending' }
+    Write-NightOwlResult $resultStatus @{
         hostname = $env:COMPUTERNAME
         machine_id = $machineId
         version = $version
         service_status = $serviceStatus
         enrollment_status = "completed"
-        installation_status = "completed"
+        installation_status = $localInstallStatus
         deployment_confirmation_status = $confirmationStatus
     }
-    Write-NightOwlBootstrapLog "completed" @{
+    Write-NightOwlBootstrapLog $resultStatus @{
         hostname = $env:COMPUTERNAME
         machine_id = $machineId
         version = $version
         service_status = $serviceStatus
         deployment_confirmation_status = $confirmationStatus
     }
-    $global:NightOwlDeploymentBootstrapExitCode = 0
+    $global:NightOwlDeploymentBootstrapExitCode = if ($confirmation.ok) { 0 } else { 2 }
 } catch {
     $rawMessage = [string]$_.Exception.Message
     $candidateCode = ($rawMessage.Split(":")[0]).Trim().ToUpperInvariant()

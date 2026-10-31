@@ -2511,7 +2511,7 @@ if ($global:CapturedInstallArgs -contains '-ExpectedGitCommit') {{ throw 'Expect
 foreach ($required in @('-ExpectedVersion','0.1.1.0-rc19','-ExpectedChannel','development','-ExpectedPackageSha256','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','-ExpectedReleaseId','release-test-id')) {{
     if (-not ($global:CapturedInstallArgs -contains $required)) {{ throw "argumento esperado ausente: $required" }}
 }}
-if ($global:NightOwlDeploymentBootstrapExitCode -ne 0) {{ throw 'bootstrap deveria concluir com sucesso' }}
+if ($global:NightOwlDeploymentBootstrapExitCode -ne 2) {{ throw 'bootstrap deveria sinalizar confirmacao pendente' }}
 if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'deployment token nao foi removido' }}
 if (Test-Path Env:\\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN) {{ throw 'installer enrollment token nao foi removido' }}
 Write-Output 'OPTIONAL_GIT_COMMIT_OK'
@@ -2525,7 +2525,7 @@ Write-Output 'OPTIONAL_GIT_COMMIT_OK'
             )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         self.assertIn('OPTIONAL_GIT_COMMIT_OK', completed.stdout)
-        self.assertIn('NightOwl installation completed', completed.stdout)
+        self.assertIn('NightOwl installation pending', completed.stdout)
         self.assertIn('deployment_confirmation_status=failed', completed.stdout)
 
     @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
@@ -2855,6 +2855,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         deployment.refresh_from_db()
         self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
 
+        InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat', 'machine_id':endpoint.machine_id, 'agent_version':self.release.version})
         completed = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
             reverse('agent-deployment-complete'),
             data=json.dumps({
@@ -2889,6 +2891,46 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(replay.status_code, 200, replay.content)
         self.assertTrue(replay.json()['idempotent'])
 
+    def test_deployment_requires_new_heartbeat_from_bound_endpoint(self):
+        deployment, endpoint, token = self.create_enrolled_deployment('fi01c-machine', 'FI01C')
+        deployment.refresh_from_db()
+        client = Client(HTTP_AUTHORIZATION=f'Bearer {token}')
+        payload = {'deployment_id':str(deployment.pk), 'status':'completed', 'machine_id':endpoint.machine_id,
+            'version':self.release.version, 'service_status':'Running', 'health_check_confirmed':True}
+        def send(): return client.post(reverse('agent-deployment-complete'), data=json.dumps(payload), content_type='application/json')
+        old = deployment.installing_at - timedelta(seconds=1)
+        InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname, collected_at=old, received_at=old,
+            raw_payload={'snapshot_source':'heartbeat','machine_id':endpoint.machine_id,'agent_version':self.release.version})
+        other, _ = AgentMachine.create_with_token(hostname='FI01C-OTHER', machine_id='fi01c-other')
+        InventorySnapshot.objects.create(machine=other, hostname=other.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat','machine_id':other.machine_id,'agent_version':self.release.version})
+        self.assertEqual(send().json()['status'], 'awaiting_heartbeat')
+        deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
+        payload['status'] = 'pending'
+        self.assertEqual(send().json()['status'], 'pending')
+        deployment.refresh_from_db(); self.assertEqual(deployment.metadata['communication_status'], 'heartbeat_timeout')
+        payload['status'] = 'completed'
+        InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat','machine_id':endpoint.machine_id,'agent_version':self.release.version})
+        self.assertEqual(send().json()['status'], 'completed')
+        deployment.refresh_from_db(); self.assertEqual(deployment.metadata['communication_status'], 'operational')
+
+    def test_existing_agent_waits_for_new_heartbeat_without_reenrollment(self):
+        deployment, _, _ = self.create_deployment()
+        deployment.mark_installing()
+        machine, token = AgentMachine.create_with_token(hostname='FI01C-EXISTING', machine_id='fi01c-existing')
+        old_hash = machine.agent_token_hash
+        payload = {'deployment_id':str(deployment.pk), 'status':'completed', 'machine_id':machine.machine_id,
+            'version':self.release.version, 'service_status':'Running', 'health_check_confirmed':True}
+        client = Client(HTTP_AUTHORIZATION=f'Bearer {token}')
+        def send(): return client.post(reverse('agent-deployment-complete'), data=json.dumps(payload), content_type='application/json')
+        self.assertEqual(send().json()['status'], 'awaiting_heartbeat')
+        InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat', 'machine_id':machine.machine_id, 'agent_version':self.release.version})
+        self.assertEqual(send().json()['status'], 'completed')
+        machine.refresh_from_db(); self.assertEqual(machine.agent_token_hash, old_hash)
+        self.assertEqual(machine.status, AgentMachine.STATUS_ONLINE)
+
     def test_deployment_completion_resets_uninstalled_lifecycle_after_health(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-reinstall-001', 'CS-REINSTALL-001')
         endpoint.status = AgentMachine.STATUS_UNINSTALLED
@@ -2897,6 +2939,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         endpoint.agent_uninstalled_by = 'operator'
         endpoint.agent_uninstall_source = 'panel'
         endpoint.save(update_fields=['status', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+        InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat', 'machine_id':endpoint.machine_id, 'agent_version':self.release.version})
 
         response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
             reverse('agent-deployment-complete'),
@@ -2913,7 +2957,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
 
         self.assertEqual(response.status_code, 200, response.content)
         endpoint.refresh_from_db()
-        self.assertEqual(endpoint.status, AgentMachine.STATUS_UNKNOWN)
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
         self.assertEqual(endpoint.agent_version, self.release.version)
         self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
@@ -2966,6 +3010,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         endpoint.agent_uninstalled_by = 'operator'
         endpoint.agent_uninstall_source = 'panel'
         endpoint.save(update_fields=['status', 'agent_lifecycle_status', 'agent_uninstalled_at', 'agent_uninstalled_by', 'agent_uninstall_source', 'updated_at'])
+        InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat', 'machine_id':endpoint.machine_id, 'agent_version':self.release.version})
 
         response = Client(HTTP_AUTHORIZATION=f'Bearer {agent_token}').post(
             reverse('agent-deployment-complete'),
@@ -2982,7 +3028,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
 
         self.assertEqual(response.status_code, 200, response.content)
         endpoint.refresh_from_db()
-        self.assertEqual(endpoint.status, AgentMachine.STATUS_UNKNOWN)
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')
         self.assertEqual(endpoint.agent_version, self.release.version)
         self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
@@ -3052,6 +3098,8 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
     def test_idempotent_deployment_completion_reconciles_stale_lifecycle(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-idempotent-lifecycle', 'CS-IDEMPOTENT-LIFECYCLE')
         deployment.mark_completed(endpoint)
+        InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat', 'machine_id':endpoint.machine_id, 'agent_version':self.release.version})
         endpoint.status = AgentMachine.STATUS_UNINSTALLED
         endpoint.agent_version = self.release.version
         endpoint.last_installed_agent_version = '0.1.1.0-rc36'
@@ -3078,7 +3126,7 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(response.json()['idempotent'])
         endpoint.refresh_from_db()
-        self.assertEqual(endpoint.status, AgentMachine.STATUS_UNKNOWN)
+        self.assertEqual(endpoint.status, AgentMachine.STATUS_ONLINE)
         self.assertEqual(endpoint.agent_version, self.release.version)
         self.assertEqual(endpoint.last_installed_agent_version, self.release.version)
         self.assertEqual(endpoint.agent_lifecycle_status, 'installed')

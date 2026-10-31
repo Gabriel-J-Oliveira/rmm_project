@@ -558,23 +558,41 @@ class AgentDeploymentCompleteView(APIView):
             )
             return Response({'status': 'failed', 'deployment_id': str(deployment.id)})
 
-        if status_value != 'completed':
+        if status_value not in ('completed', 'pending'):
             return Response({'error': 'invalid_status', 'detail': 'Status de deployment invalido.'}, status=status.HTTP_400_BAD_REQUEST)
         if release_version != deployment.release.version:
             return Response({'error': 'release_mismatch', 'detail': 'Release confirmada diverge do deployment.'}, status=status.HTTP_409_CONFLICT)
         if service_status.lower() != 'running' or not health_check:
             return Response({'error': 'health_not_confirmed', 'detail': 'Servico/health check nao confirmados.'}, status=status.HTTP_409_CONFLICT)
 
+        heartbeat = InventorySnapshot.objects.filter(
+            machine=machine, received_at__gt=deployment.installing_at,
+            raw_payload__snapshot_source='heartbeat', raw_payload__machine_id=machine.machine_id,
+            raw_payload__agent_version=deployment.release.version,
+        ).order_by('received_at', 'pk').first() if machine.machine_id and deployment.installing_at else None
         if deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
             if deployment.endpoint_id == machine.id:
+                if not heartbeat:
+                    return Response({'error': 'heartbeat_not_confirmed'}, status=status.HTTP_409_CONFLICT)
                 mark_machine_installed_from_deployment(machine, deployment)
                 return Response({'status': 'completed', 'deployment_id': str(deployment.id), 'idempotent': True})
             return Response({'error': 'deployment_machine_mismatch', 'detail': 'Deployment concluido para outro endpoint.'}, status=status.HTTP_409_CONFLICT)
+
+        if deployment.status != AgentDeploymentToken.STATUS_INSTALLING or deployment.is_expired or not deployment.installing_at:
+            return Response({'error': 'deployment_not_active'}, status=status.HTTP_409_CONFLICT)
+        if not heartbeat:
+            deployment.endpoint = machine
+            deployment.metadata = {**(deployment.metadata or {}), 'reported_service_status': 'Running',
+                'communication_status': 'heartbeat_timeout' if status_value == 'pending' else 'awaiting_heartbeat'}
+            deployment.save(update_fields=['endpoint', 'metadata'])
+            return Response({'status': 'pending' if status_value == 'pending' else 'awaiting_heartbeat', 'deployment_id': str(deployment.id)}, status=status.HTTP_202_ACCEPTED)
 
         deployment.mark_completed(machine)
         deployment.metadata = {
             **(deployment.metadata or {}),
             'reported_service_status': 'Running',
+            'communication_status': 'operational',
+            'heartbeat_snapshot_id': str(heartbeat.pk),
         }
         deployment.save(update_fields=['metadata'])
         mark_machine_installed_from_deployment(machine, deployment)
@@ -606,7 +624,7 @@ def mark_machine_installed_from_deployment(machine, deployment):
         and AgentMachine.objects.filter(machine_id__iexact=machine.machine_id).count() == 1
         and InventorySnapshot.objects.filter(
             machine=machine,
-            received_at__gte=deployment.used_at or deployment.created_at,
+            received_at__gte=(deployment.used_at if (deployment.metadata or {}).get('remote_install_job_id') else deployment.installing_at) or deployment.used_at or deployment.created_at,
             raw_payload__snapshot_source='heartbeat',
             raw_payload__machine_id=machine.machine_id,
             raw_payload__agent_version=deployment.release.version,
