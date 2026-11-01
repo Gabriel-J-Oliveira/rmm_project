@@ -76,3 +76,35 @@ operacional. Testes Django focados existentes: 7 aprovados para vínculo de toke
 GPO, identidade existente, token inválido/expirado/reutilizado e checkpoint,
 endpoint e expiração de deployment. São testes simulados dos contratos atuais;
 não comprovam enrollment de máquina de domínio autenticada nem execução GPO real.
+
+## ENC-BOOT — encerramento e handoff INT-01
+
+A RC46 segue para integração e laboratório com instalação manual e pelo
+frontend/WinRM implementadas e testadas por simulações; não estão homologadas
+em ambiente real. GPO/SYSTEM é **NO-GO** na RC46: falta autenticação verificável
+da conta de computador. Sua reabertura depende de decisão posterior sobre essa
+autenticação; não usar token compartilhado, credenciais no SYSVOL ou domínio
+autodeclarado como prova. Nenhum mecanismo alternativo será implementado aqui.
+
+Preservar os contratos de assinatura e trust, cache, no-op conservador,
+identidade/enrollment, staging e rollback, e confirmação por heartbeat novo do
+endpoint e da tentativa corretos. Estão implementados e sujeitos à homologação
+real. Recuperação WinRM é opcional e independente do gerenciamento normal pelo
+agente. Mantém-se o pacote self-contained convencional; PKG-01/02 foram
+experimentos documentados e suas otimizações não foram adotadas.
+
+Para homologação: validar instalação manual e WinRM em laboratório Windows com
+AD/WinRM, release assinada e trust autorizados; verificar serviço, Tray,
+preservação de identidade/configuração, cache/no-op, atualização, reparo,
+rollback e confirmação de heartbeat, incluindo falhas e timeout. Validar a
+recuperação WinRM opcional e seus pré-requisitos de transporte. Resultados de
+simulações não comprovam comportamento real nem garantem instalação em cinco
+segundos. GPO permanece fora do escopo, não como pendência de homologação.
+
+Handoff: branch `feature/rc46-agent-cleanup-closure`; HEAD de referência antes
+deste commit documental `cf1f49557e4031468e869df1d7b23147a375ea11`. A integração
+INT-01 ainda não foi iniciada. Referências: [FI-01](rc46-fi01.md),
+[FI-02](rc46-fi02.md), [FI-03](rc46-fi03.md) e as seções anteriores deste
+arquivo. Os documentos `docs/rc46-boot01.md` e
+`docs/rc46-fast-install-v2-proposal.md` já estavam não rastreados; foram
+preservados e não foram adicionados automaticamente.
