@@ -35,6 +35,10 @@ class RemoteWrapperStdinTests(SimpleTestCase):
     def test_large_real_wrapper_uses_bytes_stdin_and_short_argv(self):
         protocol = self.protocol()
         script = runner._installer_script(CONTRACT) + '\n#' + 'x' * 12000
+        self.assertIn("$env:NIGHTOWL_INSTALLER_SILENT = '1'", script)
+        self.assertIn('$info.CreateNoWindow = $true', script)
+        self.assertIn('-NonInteractive', script)
+        self.assertIn('[System.IO.Stream]::Null', script)
         self.dispatch(protocol, script)
         protocol.run_command.assert_called_once_with('shell', 'powershell.exe',
                                                     ['-NoProfile', '-NonInteractive', '-Command', '-'])

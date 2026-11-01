@@ -636,10 +636,14 @@ def build_deployment_command(request, deployment_token):
     escaped_url = bootstrap_url.replace("'", "''")
     return (
         f"$env:NIGHTOWL_DEPLOYMENT_TOKEN='{escaped_token}'; "
+        "$nightOwlPreviousProgress=$ProgressPreference; $ProgressPreference='SilentlyContinue'; "
         "try { "
-        f"$script=(Invoke-WebRequest -UseBasicParsing -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
+        f"$script=(Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
         "Invoke-Expression $script "
-        "} finally { Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }"
+        "} catch { $global:NightOwlDeploymentBootstrapExitCode=1; "
+        "Write-Host ('NightOwl: nao foi possivel iniciar o bootstrap. Verifique rede/backend. Log, se existente: {0}' -f (Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log')) -ForegroundColor Red "
+        "} finally { $ProgressPreference=$nightOwlPreviousProgress; "
+        "Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }"
     )
 
 
@@ -2962,7 +2966,9 @@ def _deployment_heartbeat(deployment):
     if (not endpoint or not endpoint.machine_id or
             AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
         return None
-    enrolled_at = deployment.used_at or deployment.created_at
+    metadata = deployment.metadata or {}
+    enrolled_at = ((deployment.used_at if metadata.get('remote_install_job_id') else deployment.installing_at)
+                   or deployment.used_at or deployment.created_at)
     return InventorySnapshot.objects.filter(
         machine=endpoint,
         received_at__gte=enrolled_at,
@@ -2986,7 +2992,10 @@ def serialize_deployment_status(deployment):
     elif deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
         ui_status = 'confirmed' if heartbeat else 'confirmation_pending'
     elif deployment.status == AgentDeploymentToken.STATUS_INSTALLING:
-        ui_status = 'installing'
+        metadata = deployment.metadata or {}
+        ui_status = ('confirmation_pending' if metadata.get('reported_service_status') == 'Running'
+                     and metadata.get('communication_status') in ('awaiting_heartbeat', 'heartbeat_timeout')
+                     else 'installing')
     else:
         ui_status = 'waiting'
 

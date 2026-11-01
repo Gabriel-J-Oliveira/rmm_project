@@ -37,6 +37,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($env:NIGHTOWL_INSTALLER_SILENT -eq '1') { $NonInteractive = $true }
 
 if ([string]::IsNullOrWhiteSpace($EnrollmentToken) -and -not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
     $EnrollmentToken = [string]$env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN
@@ -199,10 +200,15 @@ function Write-OperationReport([string]$Status, [string]$ErrorCode = "", [string
         New-Item -ItemType Directory -Force -Path $diagDir | Out-Null
         $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
         $path = Join-Path $diagDir ("{0}-report-{1}.json" -f $script:Operation, $stamp)
-        $script:Report | ConvertTo-Json -Depth 8 | Set-Content -Path $path -Encoding UTF8
+        $reportJson = $script:Report | ConvertTo-Json -Depth 8
+        foreach ($sensitive in @($EnrollmentToken, $AgentToken, $ManualValidationToken, $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
+            if (-not [string]::IsNullOrWhiteSpace($sensitive)) { $reportJson = $reportJson.Replace($sensitive, '[REDACTED]') }
+        }
+        $reportJson = $reportJson -replace '(?i)(deploy_|enroll_|rmm_live_)[A-Za-z0-9_-]+', '[REDACTED]'
+        $reportJson | Set-Content -Path $path -Encoding UTF8
         Write-InstallLog "operation.report.written" "Relatorio da operacao gravado." @{ operation = $script:Operation; path = $path; status = $Status; error_code = $ErrorCode }
-        if ($NonInteractive) {
-            $script:Report | ConvertTo-Json -Depth 8
+        if ($NonInteractive -and $env:NIGHTOWL_INSTALLER_SILENT -ne '1') {
+            $reportJson
         }
     }
     catch {
@@ -211,7 +217,11 @@ function Write-OperationReport([string]$Status, [string]$ErrorCode = "", [string
 }
 
 function Write-Step($Status, $Message) {
-    Write-Host ("[{0}] {1}" -f $Status, $Message)
+    if ($env:NIGHTOWL_INSTALLER_SILENT -eq '1') {
+        $safeMessage = if ($Message -match '(?i)https?://|token|secret|password|bearer|deploy_|enroll_|rmm_live_') { '[redacted]' } else { [string]$Message }
+        if ($safeMessage.Length -gt 256) { $safeMessage = $safeMessage.Substring(0, 256) }
+        Write-InstallLog 'operation.step' 'Etapa do instalador.' @{ status = [string]$Status; detail = $safeMessage }
+    } else { Write-Host ("[{0}] {1}" -f $Status, $Message) }
 }
 
 # Kept in both standalone lifecycle scripts: bootstrap/uninstall cannot depend on installed DLLs.
@@ -291,7 +301,12 @@ function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
             message = $Message
             metadata = $Metadata
         }
-        Write-NightOwlBoundedLog -Path ([string]$script:NightOwlPaths.InstallLog) -Json ($entry | ConvertTo-Json -Depth 6 -Compress)
+        $json = $entry | ConvertTo-Json -Depth 6 -Compress
+        foreach ($sensitive in @($EnrollmentToken, $AgentToken, $ManualValidationToken, $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
+            if (-not [string]::IsNullOrWhiteSpace($sensitive)) { $json = $json.Replace($sensitive, '[REDACTED]') }
+        }
+        $json = $json -replace '(?i)(deploy_|enroll_|rmm_live_)[A-Za-z0-9_-]+', '[REDACTED]'
+        Write-NightOwlBoundedLog -Path ([string]$script:NightOwlPaths.InstallLog) -Json $json
     }
     catch {}
 }

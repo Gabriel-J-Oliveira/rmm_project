@@ -1,5 +1,8 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+$previousProgressPreference = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
+$previousInstallerSilent = [Environment]::GetEnvironmentVariable('NIGHTOWL_INSTALLER_SILENT', 'Process')
 
 $MetadataUrl = "__NIGHTOWL_DEPLOYMENT_METADATA_URL__"
 $Stage = "start"
@@ -11,13 +14,15 @@ function Protect-NightOwlLogValue([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return ""
     }
-    if ($Value -match "(?i)deploy_|token|secret|password|private") {
+    if ($Value -match "(?i)deploy_|enroll_|rmm_live_|bearer|authorization|token|secret|password|private") {
         return "[REDACTED]"
     }
+    if ($Value.Length -gt 256) { return $Value.Substring(0, 256) }
     return $Value
 }
 
 function Write-NightOwlBootstrapLog([string]$Status, [hashtable]$Fields) {
+    $mutex = $null; $locked = $false
     try {
         New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
         $record = [ordered]@{
@@ -28,23 +33,23 @@ function Write-NightOwlBootstrapLog([string]$Status, [hashtable]$Fields) {
         foreach ($key in $Fields.Keys) {
             $record[$key] = Protect-NightOwlLogValue ([string]$Fields[$key])
         }
-        $record | ConvertTo-Json -Depth 5 -Compress | Add-Content -Path $BootstrapLogPath -Encoding UTF8
+        $mutex = New-Object System.Threading.Mutex($false, 'Local\NightOwl.DeploymentBootstrapLog')
+        try { $locked = $mutex.WaitOne(5000) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
+        if (-not $locked) { return }
+        if ((Test-Path -LiteralPath $BootstrapLogPath -PathType Leaf) -and (Get-Item -LiteralPath $BootstrapLogPath).Length -ge 1048576) {
+            Move-Item -LiteralPath $BootstrapLogPath -Destination ($BootstrapLogPath + '.1') -Force
+        }
+        $record | ConvertTo-Json -Depth 5 -Compress | Add-Content -LiteralPath $BootstrapLogPath -Encoding UTF8
     }
-    catch {
-        Write-Warning "NightOwl bootstrap log unavailable."
+    catch { }
+    finally {
+        if ($locked) { $mutex.ReleaseMutex() }
+        if ($mutex) { $mutex.Dispose() }
     }
 }
 
 function Write-NightOwlResult([string]$Status, [hashtable]$Fields) {
-    $parts = @("NightOwl installation $Status")
-    foreach ($key in $Fields.Keys) {
-        $value = [string]$Fields[$key]
-        if ($value -match "(?i)token|secret|password|private") {
-            $value = "[REDACTED]"
-        }
-        $parts += "$key=$value"
-    }
-    Write-Host ($parts -join "`n")
+    # The frontend and bounded local log carry progress; errors are reported below.
 }
 
 function Assert-Windows {
@@ -254,17 +259,24 @@ try {
         $installArgs += @("-ExpectedGitCommit", $expectedGitCommit)
     }
     $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN = $Token
+    $env:NIGHTOWL_INSTALLER_SILENT = '1'
+    $installerErrorPreference = $ErrorActionPreference
     try {
-        & powershell.exe @installArgs
+        # Windows PowerShell 5.1 can turn redirected native stderr into a
+        # terminating error under Stop before LASTEXITCODE is read.
+        $ErrorActionPreference = 'Continue'
+        & powershell.exe @installArgs *> $null
         $installerExitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $installerErrorPreference
         Remove-Item Env:\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
+        [Environment]::SetEnvironmentVariable('NIGHTOWL_INSTALLER_SILENT', $previousInstallerSilent, 'Process')
     }
     if ($installerExitCode -ne 0) {
         throw "BOOTSTRAP_INSTALLER_FAILED:$installerExitCode"
     }
-    } else { Write-Host 'NightOwl: instalacao compativel e heartbeat local recente; reinstalacao dispensada.' }
+    }
 
     $Stage = "completed"
     $machineId = ""
@@ -328,7 +340,7 @@ try {
 } catch {
     $rawMessage = [string]$_.Exception.Message
     $candidateCode = ($rawMessage.Split(":")[0]).Trim().ToUpperInvariant()
-    $errorCode = if ($candidateCode -match "^[A-Z0-9_]{1,80}$") { $candidateCode } else {
+    $errorCode = if ($candidateCode -match "^[A-Z0-9_]{1,80}$" -and $candidateCode -notmatch '(?i)DEPLOY_|ENROLL_|RMM_LIVE_|PASSWORD|SECRET') { $candidateCode } else {
         switch ($Stage) {
             "metadata" { "BOOTSTRAP_METADATA_REQUEST_FAILED"; break }
             "download" { "BOOTSTRAP_DOWNLOAD_FAILED"; break }
@@ -353,12 +365,12 @@ try {
     $metadataVar = Get-Variable -Name metadata -Scope Local -ErrorAction SilentlyContinue
     if ($null -ne $metadataVar -and $null -ne $metadataVar.Value) {
         try {
-            Send-DeploymentCompletion -Metadata $metadata -Status "failed" -ErrorCode $errorCode -ErrorMessage $message
+            Send-DeploymentCompletion -Metadata $metadata -Status "failed" -ErrorCode $errorCode -ErrorMessage $message | Out-Null
         }
         catch {
             Write-NightOwlBootstrapLog "failed" @{
                 error_code = "BOOTSTRAP_STATUS_REPORT_FAILED"
-                error_message = $_.Exception.Message
+                error_message = 'completion_callback_failed'
             }
         }
     }
@@ -373,9 +385,11 @@ try {
         error_type = $errorType
         error_message = $message
     }
-    Write-Error ("NightOwl installation failed: {0}" -f $message) -ErrorAction Continue
+    Write-Host ("NightOwl: {0} Codigo: {1}. Log: {2}" -f $message, $errorCode, $BootstrapLogPath) -ForegroundColor Red
     $global:NightOwlDeploymentBootstrapExitCode = 1
 } finally {
     Remove-Item Env:\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
+    [Environment]::SetEnvironmentVariable('NIGHTOWL_INSTALLER_SILENT', $previousInstallerSilent, 'Process')
     Remove-Item Env:\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
+    $ProgressPreference = $previousProgressPreference
 }

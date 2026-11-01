@@ -203,7 +203,8 @@
         </div>
         <p class="agent-token-result-meta">Domínio: {{ created_enrollment.allowed_domain|default:"Qualquer" }} · Expira em: {{ created_enrollment.expires_at|date:"d/m/Y H:i" }}</p>
         <div class="created-token-box"><div class="copy-value-content"><span>Enrollment token</span><code id="created-enrollment-token">{{ created_token }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-token"><i data-lucide="copy"></i>Copiar token</button></div>
-        <div class="terminal-block created-command-block"><div class="copy-value-content"><span>Comando PowerShell recomendado</span><code id="created-enrollment-command">{{ created_command }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-command"><i data-lucide="copy"></i>Copiar comando</button></div>
+        <p>Comando legado de enrollment: não oferece a confirmação de deployment por heartbeat. Para instalação acompanhada, use o comando de deployment gerado no frontend.</p>
+        <div class="terminal-block created-command-block"><div class="copy-value-content"><span>Comando PowerShell legado</span><code id="created-enrollment-command">{{ created_command }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-command"><i data-lucide="copy"></i>Copiar comando</button></div>
         {% endif %}
     </section>
     </div>

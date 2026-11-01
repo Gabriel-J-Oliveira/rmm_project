@@ -487,6 +487,7 @@ try {{
     if ($enrollmentToken -notmatch '^deploy_[A-Za-z0-9_-]{{20,200}}$') {{ Stop-BeforeInstaller 28 }}
     $childScript = @'
 $ErrorActionPreference = 'Stop'
+$env:NIGHTOWL_INSTALLER_SILENT = '1'
 $token = [Console]::In.ReadLine()
 if ($token -notmatch '^deploy_[A-Za-z0-9_-]{{20,200}}$') {{ exit 28 }}
 & '__INSTALLER_PATH__' -EnrollmentToken $token -ServerUrl '{base}' -PackageUrl '{package}' -TrustedPublicKeysPath '__TRUST_PATH__' -ExpectedVersion '{contract['version']}' -ExpectedChannel '{contract['channel']}' -ExpectedPackageSha256 '{contract['package_sha256']}' -ExpectedGitCommit '{contract['git_commit']}' -InstallAsService -RunCheck -NoGui -NonInteractive

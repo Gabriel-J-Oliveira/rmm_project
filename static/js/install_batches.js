@@ -15,6 +15,8 @@
         COMPLETED_WITH_ERRORS: 'Concluída com falhas', INTERRUPTED: 'Interrompida' };
     const itemLabels = { WAITING: 'Aguardando', PREFLIGHT: 'Verificando', INSTALLING: 'Instalando',
         COMPLETED: 'Concluído', FAILED: 'Falha', REVIEW_REQUIRED: 'Requer revisão', SKIPPED: 'Ignorado' };
+    const displayLabels = { waiting: 'Aguardando início', checking: 'Verificando', installing: 'Instalando', pending: 'Instalado localmente; aguardando comunicação', pending_unverified: 'Instalação aguardando confirmação',
+        operational: 'Confirmado e operacional', repair_required: 'Reparo necessário', failed: 'Falha', unknown: 'Resultado incerto' };
     const terminal = status => ['COMPLETED', 'COMPLETED_WITH_ERRORS', 'INTERRUPTED'].includes(status);
     const n = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
     const percent = value => Math.min(100, n(value));
@@ -190,7 +192,7 @@
     function drawItem(row, item) {
         row.replaceChildren();
         const identity = el('td'); identity.append(el('strong', '', item.hostname || item.fqdn), el('small', 'install-muted', item.fqdn));
-        const status = el('td'); status.append(badge(item.status, itemLabels));
+        const status = el('td'); status.append(badge(item.status, { ...itemLabels, [item.status]: displayLabels[item.display_status] || itemLabels[item.status] }));
         if (['FAILED', 'REVIEW_REQUIRED'].includes(item.status)) {
             const info = button('Informações sobre o resultado', 'info', () => {}); tooltip(info, item); status.append(info);
         }
