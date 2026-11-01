@@ -2978,6 +2978,38 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         reconcile_pending_deployment_heartbeat(machine, snapshot)
         deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_INSTALLING)
 
+    def test_late_heartbeat_reconciles_proven_remote_install(self):
+        from dashboard.models import RemoteInstallJob
+        from dashboard.remote_install import reconcile_remote_install_heartbeat
+        from unittest.mock import patch
+        deployment, machine, _ = self.create_enrolled_deployment('fi03a2-remote', 'FI03A2-REMOTE')
+        deployment.refresh_from_db()
+        job = RemoteInstallJob.objects.create(target_hostname=machine.hostname, target_fqdn='fixture.example.local',
+            requested_by=self.user, endpoint=machine, status='INSTALLED_UNVERIFIED', stage='WAITING_HEARTBEAT',
+            error_code='HEARTBEAT_TIMEOUT', finished_at=timezone.now(), diagnostics={
+                'installer_exit_code':0, 'installer_started_at':'fixture', 'installer_finished_at':'fixture',
+                'service_state':'RUNNING', 'service_validation_status':'PASS', 'release_id':str(deployment.release_id),
+                'version':deployment.release.version, 'deployment_id':str(deployment.pk)})
+        deployment.metadata = {'remote_install_job_id':str(job.pk), 'target_fqdn':job.target_fqdn}
+        deployment.save(update_fields=['metadata']); deployment.mark_failed('remote_install_unverified')
+        snapshot = InventorySnapshot.objects.create(machine=machine, hostname=machine.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source':'heartbeat','machine_id':machine.machine_id,'agent_version':self.release.version})
+        with patch('dashboard.remote_install._matching_endpoint', return_value=machine):
+            AgentDeploymentToken.objects.filter(pk=deployment.pk).update(expires_at=timezone.now() - timedelta(seconds=1))
+            reconcile_remote_install_heartbeat(machine, snapshot)
+            deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_FAILED)
+            AgentDeploymentToken.objects.filter(pk=deployment.pk).update(expires_at=timezone.now() + timedelta(minutes=5))
+            new_job = RemoteInstallJob.objects.create(target_hostname=machine.hostname, target_fqdn=job.target_fqdn,
+                requested_by=self.user, status='FAILED')
+            reconcile_remote_install_heartbeat(machine, snapshot)
+            deployment.refresh_from_db(); self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_FAILED)
+            RemoteInstallJob.objects.filter(pk=new_job.pk).update(created_at=job.created_at - timedelta(seconds=1))
+            reconcile_remote_install_heartbeat(machine, snapshot)
+        deployment.refresh_from_db(); job.refresh_from_db()
+        self.assertEqual(deployment.status, AgentDeploymentToken.STATUS_COMPLETED)
+        self.assertEqual(job.status, 'COMPLETED')
+        self.assertTrue(job.diagnostics['late_heartbeat_reconciled'])
+
     def test_deployment_completion_resets_uninstalled_lifecycle_after_health(self):
         deployment, endpoint, agent_token = self.create_enrolled_deployment('machine-reinstall-001', 'CS-REINSTALL-001')
         endpoint.status = AgentMachine.STATUS_UNINSTALLED

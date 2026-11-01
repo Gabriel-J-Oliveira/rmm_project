@@ -1045,6 +1045,8 @@ class AgentHeartbeatView(APIView):
                 )
                 machine.refresh_from_db(fields=['machine_id'])
                 transaction.on_commit(lambda: reconcile_pending_deployment_heartbeat(machine, snapshot), robust=True)
+                from dashboard.remote_install import reconcile_remote_install_heartbeat
+                transaction.on_commit(lambda: reconcile_remote_install_heartbeat(machine, snapshot), robust=True)
                 diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
                 if isinstance(diagnostic_payload, dict):
                     diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))
