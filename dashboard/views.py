@@ -3535,6 +3535,12 @@ def endpoint_detail(request, pk):
         'patch_rows': build_endpoint_patch_rows(endpoint),
         'task_rows': build_endpoint_task_rows(endpoint),
     }
+    context['winrm_recovery_available'] = bool(
+        request.is_secure() and request.user.is_authenticated and request.user.is_active
+        and (request.user.is_staff or request.user.is_superuser)
+        and endpoint.is_active and endpoint.machine_id
+        and endpoint.status == AgentMachine.STATUS_OFFLINE
+    )
     from agents.terminal_sessions import authorize as authorize_terminal, validate_mode as validate_terminal_mode, enabled as terminal_enabled
     context['terminal_available'] = False
     context['terminal_admin_auth_available'] = False

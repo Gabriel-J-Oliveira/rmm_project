@@ -128,3 +128,16 @@ class OfflineRecoveryTests(TestCase):
         self.assertEqual(response.json()['error_code'], 'RECOVERY_RESTART_CONFIRMATION_REQUIRED')
         self.assertNotIn('fixture-password', response.content.decode())
         self.assertNotIn('fixture-password', str(list(RemoteInstallJob.objects.values())))
+
+    def test_recovery_form_requires_staff_offline_and_https(self):
+        InventorySnapshot.objects.create(machine=self.machine, hostname=self.machine.hostname, collected_at=timezone.now())
+        client = Client(); client.force_login(self.actor)
+        url = reverse('endpoint-detail', args=[self.machine.pk])
+        self.assertContains(client.get(url, secure=True), 'data-winrm-recovery')
+        self.assertNotContains(client.get(url), 'data-winrm-recovery')
+        self.machine.status = AgentMachine.STATUS_ONLINE; self.machine.save(update_fields=['status'])
+        self.assertNotContains(client.get(url, secure=True), 'data-winrm-recovery')
+        self.machine.status = AgentMachine.STATUS_OFFLINE; self.machine.save(update_fields=['status'])
+        client.force_login(get_user_model().objects.create_user('form-nonstaff'))
+        response = client.get(url, secure=True)
+        self.assertIn(response.status_code, (302, 403))

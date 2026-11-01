@@ -31,7 +31,9 @@ param(
     [switch]$ForceRecovery,
     [switch]$TrustLocalPackage,
     [switch]$AllowReleaseBundledTrustForLab,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$PrepareWinRM,
+    [string[]]$WinRMAllowedSources = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -1265,6 +1267,74 @@ function Test-NoOpServiceBinding([string]$Name, [string]$ExePath) {
     } catch { return $false }
 }
 
+function Invoke-OptionalWinRMPreparation([string[]]$Sources) {
+    try {
+        if (-not $Sources -or $Sources.Count -gt 32) { return 'invalid_sources' }
+        $normalized = @()
+        foreach ($source in $Sources) {
+            if ($source -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})(?:/(\d{1,2}))?$') { return 'invalid_sources' }
+            $ipText = $matches[1]; $prefix = if ($matches[2]) { [int]$matches[2] } else { 32 }
+            $ip = $null
+            if (-not [Net.IPAddress]::TryParse($ipText, [ref]$ip) -or $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+                $prefix -lt 1 -or $prefix -gt 32 -or $ipText -eq '0.0.0.0' -or $ip.GetAddressBytes()[0] -ge 224) { return 'invalid_sources' }
+            $normalized += $ip.ToString() + '/' + $prefix
+        }
+        $normalized = @($normalized | Sort-Object -Unique)
+        if ((Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service') -or
+            (Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile') -or
+            (Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules')) { return 'policy_managed' }
+        $svc = Get-CimInstance Win32_Service -Filter "Name='WinRM'" -ErrorAction Stop
+        if (-not $svc -or $svc.State -ne 'Running' -or $svc.StartMode -eq 'Disabled') { return 'service_not_ready' }
+        if (-not @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $_.NetworkCategory -eq 'DomainAuthenticated' }).Count) { return 'domain_profile_required' }
+        $listener = $null
+        foreach ($item in @(Get-ChildItem 'WSMan:\localhost\Listener' -ErrorAction Stop)) {
+            $values = @{}
+            foreach ($entry in @(Get-ChildItem -LiteralPath $item.PSPath -ErrorAction Stop)) { $values[[string]$entry.Name] = [string]$entry.Value }
+            if ($values.Transport -eq 'HTTPS' -and $values.Port -eq '5986' -and $values.Enabled -eq 'true' -and $values.CertificateThumbprint -match '^[a-fA-F0-9]{40}$') { $listener = $values; break }
+        }
+        if (-not $listener) { return 'https_listener_required' }
+        $cert = Get-Item -LiteralPath ('Cert:\LocalMachine\My\' + $listener.CertificateThumbprint) -ErrorAction Stop
+        if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt (Get-Date) -or $cert.NotAfter -le (Get-Date)) { return 'certificate_invalid' }
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($normalized -join ','))
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $id = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').Substring(0,16) } finally { $sha.Dispose() }
+        $name = 'NightOwl-WinRM-HTTPS-' + $id
+        # An additional scoped allow rule cannot restrict an existing broad allow.
+        # Refuse preparation if an effective inbound rule might also permit 5986
+        # from a scope other than the explicitly approved sources.
+        foreach ($rule in @(Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -Action Allow -ErrorAction Stop)) {
+            if ([string]$rule.Profile -in @('Private','Public','Private, Public','Public, Private')) { continue }
+            $filters = @($rule | Get-NetFirewallPortFilter -ErrorAction Stop)
+            if (-not $filters.Count) { return 'firewall_scope_conflict' }
+            foreach ($filter in $filters) {
+                if ([string]$filter.Protocol -in @('UDP','17','ICMPv4','ICMPv6')) { continue }
+                $overlaps = $false
+                foreach ($port in ([string]$filter.LocalPort -split ',')) {
+                    $port = $port.Trim()
+                    if ($port -match '^\d+$') { if ([int]$port -eq 5986) { $overlaps = $true } }
+                    elseif ($port -match '^(\d+)-(\d+)$') { if ([int]$matches[1] -le 5986 -and [int]$matches[2] -ge 5986) { $overlaps = $true } }
+                    else { $overlaps = $true }
+                }
+                if ($overlaps) {
+                    $scope = @($rule | Get-NetFirewallAddressFilter -ErrorAction Stop | ForEach-Object { $_.RemoteAddress } | Sort-Object -Unique)
+                    if (-not $scope.Count -or @($scope | Where-Object { $_ -notin $normalized }).Count) { return 'firewall_scope_conflict' }
+                }
+            }
+        }
+        $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+        if ($existing) {
+            $addresses = @($existing | Get-NetFirewallAddressFilter -ErrorAction Stop | ForEach-Object { $_.RemoteAddress } | Sort-Object -Unique)
+            $ports = @($existing | Get-NetFirewallPortFilter -ErrorAction Stop)
+            if ($existing.Enabled -eq 'True' -and $existing.Direction -eq 'Inbound' -and $existing.Action -eq 'Allow' -and
+                [string]$existing.Profile -eq 'Domain' -and $ports.Count -eq 1 -and [string]$ports[0].Protocol -in @('TCP','6') -and
+                [string]$ports[0].LocalPort -eq '5986' -and (($addresses -join ',') -eq ($normalized -join ','))) { return 'already_configured' }
+            return 'firewall_rule_conflict'
+        }
+        New-NetFirewallRule -Name $name -DisplayName 'NightOwl WinRM HTTPS (restricted)' -Direction Inbound -Action Allow -Enabled True -Profile Domain -Protocol TCP -LocalPort 5986 -RemoteAddress $normalized -ErrorAction Stop | Out-Null
+        return 'firewall_prepared'
+    } catch { return 'inspection_or_preparation_failed' }
+}
+
 function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
     Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
@@ -1901,6 +1971,14 @@ Set-NightOwlSecureAcl -Paths @(
     [string]$script:NightOwlPaths.Cache
 )
 
+if ($PrepareWinRM) {
+    $winrmPreparation = Invoke-OptionalWinRMPreparation -Sources $WinRMAllowedSources
+    Add-ReportAction 'winrm.preparation' @{ result = $winrmPreparation }
+    Write-InstallLog 'winrm.preparation' 'Resultado da preparacao opcional WinRM.' @{ result = $winrmPreparation }
+    $winrmStepStatus = if ($winrmPreparation -in @('already_configured','firewall_prepared')) { 'OK' } else { 'WARN' }
+    Write-Step $winrmStepStatus ("Preparacao WinRM: {0}" -f $winrmPreparation)
+}
+
 $configInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_CONFIG_INVALID" } else { "INSTALL_CONFIG_INVALID" }
 $identityInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_IDENTITY_INVALID" } else { "INSTALL_IDENTITY_INVALID" }
 Repair-JsonFileIfInvalid -Path $configPath -ErrorCode $configInvalidCode
@@ -1950,7 +2028,7 @@ Write-InstallLog "release.metadata.resolved" "Metadata da release resolvida para
 # update lock. Explicit configuration/lifecycle changes still take the full path.
 $noOpAllowedParameters = @('ServerUrl','PackageUrl','TrustedPublicKeysPath','ExpectedVersion','ExpectedChannel',
     'ExpectedPackageSha256','ExpectedReleaseId','ExpectedGitCommit','InstallPath','ServiceName','DisplayName',
-    'InstallAsService','RunCheck','NoGui','NonInteractive','Install','Repair','DebugLog')
+    'InstallAsService','RunCheck','NoGui','NonInteractive','Install','Repair','DebugLog','PrepareWinRM','WinRMAllowedSources')
 $noOpHasOtherParameters = @($PSBoundParameters.Keys | Where-Object { $_ -notin $noOpAllowedParameters }).Count -gt 0
 if ($existingInstallation -and $InstallAsService -and -not $noOpHasOtherParameters -and
     $null -ne $script:ValidatedReleaseMetadata -and -not $serverChangedExplicitly -and

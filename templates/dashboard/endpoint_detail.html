@@ -53,6 +53,20 @@
     </header>
     {% if terminal_available %}{% include 'dashboard/endpoint_terminal.html' %}{% endif %}
     {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}
+    {% if winrm_recovery_available %}
+    <section class="panel" aria-label="Recuperação WinRM">
+        <h2>Recuperação WinRM</h2>
+        <p>Estado local WinRM e teste remoto: indisponíveis. Autenticação: não verificada.</p>
+        <form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
+            {% csrf_token %}
+            <label>Conta administrativa <input name="username" required maxlength="256" autocomplete="username"></label>
+            <label>Senha <input name="password" type="password" required maxlength="512" autocomplete="new-password"></label>
+            <label><input name="restart_running" type="checkbox"> Permitir reiniciar serviço em execução</label>
+            <button type="submit">Reconectar agente via WinRM</button>
+            <p role="status" data-winrm-recovery-status></p>
+        </form>
+    </section>
+    {% endif %}
 
     <nav class="endpoint-tabs" aria-label="Se&ccedil;&otilde;es do endpoint">
         <button class="is-active" type="button" data-endpoint-tab="overview"><i data-lucide="layout-dashboard"></i>Vis&atilde;o geral</button>
@@ -366,6 +380,7 @@
 {% endblock %}
 
 {% block scripts %}
+{% if winrm_recovery_available %}<script src="{% static 'js/endpoint_winrm_recovery.js' %}"></script>{% endif %}
 {% if terminal_admin_auth_available %}
 <script src="{% static 'vendor/xterm/xterm.js' %}"></script>
 <script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
