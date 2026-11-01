@@ -44,3 +44,35 @@ homologação dos caminhos implementados também são necessários release assin
 com o instalador atualizado, deploy autorizado do backend e laboratório Windows
 com WinRM/AD. Até lá, releases anteriores continuam usando redirecionamento no
 bootstrap e não recebem os novos eventos de silêncio no instalador.
+
+## BOOT-02G — autorização GPO
+
+A análise do contrato confirma um bloqueio de autenticação para uma instalação
+nova: `Invoke-EnrollmentRequest` envia domínio, hostname e machine_id como
+campos informados pelo cliente. Sem token, `AgentEnrollView` seleciona uma
+autorização ativa pelo domínio informado; isso não autentica a conta de computador
+no AD. O endpoint de enrollment não exige autenticação integrada de máquina ou
+certificado de cliente nesse fluxo. TLS autentica o servidor, não comprova por
+si só a identidade do computador. Execução como SYSTEM também não é prova
+transmitida ao backend. Para identidade já cadastrada o backend exige o bearer
+do agente correspondente e preserva a credencial; isso não resolve a primeira
+instalação. O token de deployment continua individual, expirável e de uso único.
+
+A decisão necessária é identificar qual autenticação verificável de conta de
+computador a infraestrutura existente oferece ao backend, por exemplo Kerberos/
+Negotiate integrado ou certificado de cliente, e como sua identidade será
+vinculada e autorizada para o endpoint. O repositório não demonstra esse contrato
+para enrollment; não se afirma que a infraestrutura corporativa o tenha ou não.
+A emissão de token individual sob demanda só seria apropriada após autenticação e
+autorização dessa identidade. Não foi criado wrapper GPO nem segredo compartilhado.
+A instalação nova, reexecução e códigos 0/1/2 por GPO permanecem bloqueados, não
+homologados. Os caminhos manual e WinRM não foram alterados.
+
+O heartbeat autenticado mostra comunicação do agente; a confirmação do deployment
+atual exige endpoint, machine_id, versão e heartbeat posterior ao checkpoint da
+tentativa. Sem deployment correlacionado, não há prova de que o heartbeat
+confirme uma tentativa GPO específica. Serviço iniciado não é confirmação
+operacional. Testes Django focados existentes: 7 aprovados para vínculo de token
+GPO, identidade existente, token inválido/expirado/reutilizado e checkpoint,
+endpoint e expiração de deployment. São testes simulados dos contratos atuais;
+não comprovam enrollment de máquina de domínio autenticada nem execução GPO real.
