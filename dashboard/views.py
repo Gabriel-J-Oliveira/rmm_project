@@ -3541,6 +3541,30 @@ def endpoint_detail(request, pk):
         and endpoint.is_active and endpoint.machine_id
         and endpoint.status == AgentMachine.STATUS_OFFLINE
     )
+    context['winrm_observability_available'] = bool(
+        request.is_secure() and request.user.is_authenticated and request.user.is_active
+        and (request.user.is_staff or request.user.is_superuser) and endpoint.is_active
+    )
+    if context['winrm_observability_available']:
+        from dashboard.models import RemoteInstallJob
+        raw = snapshot.raw_payload if snapshot and isinstance(snapshot.raw_payload, dict) else {}
+        context['winrm_local'] = (raw.get('collections') or {}).get('winrm') or {}
+        received_at = parse_datetime(context['winrm_local'].get('received_at', ''))
+        context['winrm_local_stale'] = (endpoint.status != AgentMachine.STATUS_ONLINE or not received_at
+            or received_at < timezone.now() - timedelta(hours=26))
+        local_data = context['winrm_local'].get('data')
+        local_data = local_data if isinstance(local_data, dict) else {}
+        service = local_data.get('service') if isinstance(local_data.get('service'), dict) else {}
+        listeners = local_data.get('listeners') if isinstance(local_data.get('listeners'), list) else []
+        context['winrm_local_state'] = ('não verificado' if not local_data else
+            'serviço e listener informados' if service.get('state') == 'Running'
+            and any(str(item.get('enabled')).lower() == 'true' for item in listeners if isinstance(item, dict))
+            else 'indisponível ou configuração incompleta')
+        last_check = RemoteInstallJob.objects.filter(endpoint=endpoint, diagnostics__operation='winrm_connectivity').order_by('-created_at').first()
+        context['winrm_remote'] = (last_check.diagnostics or {}).get('result', {}) if last_check else {}
+        last_recovery = RemoteInstallJob.objects.filter(endpoint=endpoint, diagnostics__operation='offline_recovery').order_by('-created_at').first()
+        context['winrm_authentication'] = 'validada na última recuperação' if last_recovery and last_recovery.status == 'COMPLETED' else 'não verificada'
+        context['winrm_authentication_at'] = last_recovery.finished_at if last_recovery else None
     from agents.terminal_sessions import authorize as authorize_terminal, validate_mode as validate_terminal_mode, enabled as terminal_enabled
     context['terminal_available'] = False
     context['terminal_admin_auth_available'] = False

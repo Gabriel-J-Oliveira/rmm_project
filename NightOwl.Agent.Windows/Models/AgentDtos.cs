@@ -128,6 +128,9 @@ public sealed class AgentCollectPayload
 
     [JsonPropertyName("patches")]
     public Dictionary<string, object?> Patches { get; set; } = new();
+
+    [JsonPropertyName("winrm")]
+    public Dictionary<string, object?> WinRm { get; set; } = new();
 }
 
 public sealed class AgentJobsPullResponse

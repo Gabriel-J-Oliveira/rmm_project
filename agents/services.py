@@ -1621,6 +1621,9 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
 
     raw_payload = dict(data['raw_payload'] or {})
     collections = dict(raw_payload.get('collections') or {})
+    winrm = payload.get('winrm')
+    if isinstance(winrm, dict) and winrm.get('version') == 1 and winrm.get('result') in {'ok', 'partial', 'failed'}:
+        collections['winrm'] = {'data': winrm, 'received_at': timezone.now().isoformat()}
     previous_collections = dict(collections)
     scheduled = payload.get('collection_scope') == 'scheduled'
     collections['scheduled_inventory' if scheduled else collection_type] = payload

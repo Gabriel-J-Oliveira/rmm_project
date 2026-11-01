@@ -91,6 +91,7 @@ urlpatterns = [
     path('agent-install/ad-computers/preflight/', ad_install_views.preflight_ad_computer, name='agent-install-ad-preflight'),
     path('agent-install/ad-computers/install/', ad_install_views.install_ad_computer, name='agent-install-ad-install'),
     path('agent-install/endpoints/<uuid:pk>/recover/', agent_recovery_views.recover, name='agent-offline-recovery'),
+    path('agent-install/endpoints/<uuid:pk>/winrm-check/', agent_recovery_views.connectivity, name='agent-winrm-check'),
     path('agent-install/endpoints/<uuid:pk>/recovery-status/', agent_recovery_views.recovery_status, name='agent-recovery-status'),
     path('agent-install/install-jobs/<uuid:pk>/', ad_install_views.remote_install_status, name='agent-install-job-status'),
     path('agent-install/install-batches/', remote_install_batch_views.batches, name='agent-install-batches'),

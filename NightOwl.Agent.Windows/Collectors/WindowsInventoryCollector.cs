@@ -136,6 +136,7 @@ public sealed class WindowsInventoryCollector
         List<Dictionary<string, object?>> software = plan.Ancillary ? CollectSection("software", GetSoftware, new List<Dictionary<string, object?>>()) : new();
         Dictionary<string, object?> security = plan.Ancillary ? CollectSection("security", () => GetSecurityCore(software, bitlocker), new Dictionary<string, object?>()) : new();
         Dictionary<string, object?> patches = plan.Ancillary ? CollectSection("patches", GetPatchStatus, new Dictionary<string, object?>()) : new();
+        Dictionary<string, object?> winrm = plan.Basic ? CollectWinRm() : new();
 
         foreach ((string name, Dictionary<string, object?> section, bool requested) in new[] {
             ("system", system, plan.Basic), ("hardware", hardware, plan.Basic || plan.Detailed),
@@ -161,8 +162,31 @@ public sealed class WindowsInventoryCollector
             Disks = disks,
             Software = software,
             Security = security,
-            Patches = patches
+            Patches = patches,
+            WinRm = winrm
         };
+    }
+
+    internal static Dictionary<string, object?> CollectWinRm()
+    {
+        Dictionary<string, object?> result;
+        try
+        {
+            result = RunPowerShellObject("""
+$errorsFound = @(); $service = $null; $listeners = @(); $profiles = @(); $firewall = @(); $policy = @()
+try { $s = Get-CimInstance Win32_Service -Filter "Name='WinRM'" -ErrorAction Stop; if ($s) { $service = @{ state=[string]$s.State; startup=[string]$s.StartMode } } else { $errorsFound += 'service_missing' } } catch { $errorsFound += 'service_unavailable' }
+try { foreach ($item in @(Get-ChildItem 'WSMan:\localhost\Listener' -ErrorAction Stop)) { $v=@{}; foreach ($entry in @(Get-ChildItem -LiteralPath $item.PSPath -ErrorAction Stop)) { $v[[string]$entry.Name]=[string]$entry.Value }; $listeners += @{ transport=$v.Transport; port=$v.Port; enabled=$v.Enabled } } } catch { $errorsFound += 'listener_unavailable' }
+try { $profiles = @(Get-NetConnectionProfile -ErrorAction Stop | Select-Object -First 16 -ExpandProperty NetworkCategory | ForEach-Object { [string]$_ }) } catch { $errorsFound += 'profile_unavailable' }
+try { foreach ($rule in @(Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -ErrorAction Stop)) { $ports=@($rule | Get-NetFirewallPortFilter -ErrorAction Stop); foreach ($p in $ports) { $relevant=$false; if ([string]$p.Protocol -in @('TCP','6','Any')) { foreach ($port in ([string]$p.LocalPort -split ',')) { $port=$port.Trim(); if ($port -in @('Any','5985','5986')) { $relevant=$true } elseif ($port -match '^(\d+)-(\d+)$') { if ([int]$matches[1] -le 5986 -and [int]$matches[2] -ge 5985) { $relevant=$true } } elseif ($port -notmatch '^\d+$') { $relevant=$true; $errorsFound += 'firewall_port_uninterpreted' } } }; if ($relevant) { $addresses=@($rule | Get-NetFirewallAddressFilter -ErrorAction Stop | ForEach-Object { $_.RemoteAddress }); $firewall += @{ action=[string]$rule.Action; profile=[string]$rule.Profile; port=[string]$p.LocalPort; remote_addresses=@($addresses | Select-Object -First 32) }; if ($addresses.Count -gt 32) { $errorsFound += 'firewall_scope_truncated' }; if ($firewall.Count -ge 32) { $errorsFound += 'firewall_rules_truncated'; break } } }; if ($firewall.Count -ge 32) { break } } } catch { $errorsFound += 'firewall_unavailable' }
+try { foreach ($path in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service','HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile','HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules')) { if (Test-Path $path) { $policy += 'policy_present'; break } } } catch { $errorsFound += 'policy_unavailable' }
+@{ version=1; service=$service; listeners=@($listeners | Select-Object -First 16); profiles=$profiles; firewall=$firewall; policy=$policy; errors=$errorsFound; result=$(if ($errorsFound.Count) {'partial'} else {'ok'}) }
+""", 12);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { result = new(); }
+        if (result.Count == 0) result = new() { ["version"] = 1, ["result"] = "failed", ["errors"] = new[] { "collection_unavailable" } };
+        result["collected_at"] = DateTimeOffset.UtcNow;
+        return result;
     }
 
     public List<Dictionary<string, object?>> GetDisks()

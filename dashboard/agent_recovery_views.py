@@ -65,3 +65,22 @@ def recovery_status(request, pk):
         'recommendation':recommendation})
     response['Cache-Control'] = 'no-store'
     return response
+
+
+@login_required
+@csrf_protect
+@require_POST
+def connectivity(request, pk):
+    from dashboard.winrm_observability import check_connectivity
+    if not request.is_secure() or not request.user.is_active or not (request.user.is_staff or request.user.is_superuser):
+        return JsonResponse({'error_code': 'ACCESS_DENIED'}, status=403)
+    machine = AgentMachine.objects.filter(pk=pk).first()
+    if not machine:
+        return JsonResponse({'error_code': 'ENDPOINT_NOT_FOUND'}, status=404)
+    try:
+        result = check_connectivity(machine, request.user)
+    except ProbeFailure as exc:
+        return JsonResponse({'error_code': exc.code}, status=429 if exc.code == 'CHECK_RATE_LIMITED' else 409)
+    response = JsonResponse(result)
+    response['Cache-Control'] = 'no-store'
+    return response

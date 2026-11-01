@@ -23,7 +23,7 @@ def recover_offline_agent(machine, actor, username, password, restart_running):
             not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}', machine.machine_id)):
         raise InstallFailure('RECOVERY_IDENTITY_CONFLICT')
     fqdn = (machine.fqdn or '').strip().rstrip('.')
-    computer = _ad_target(fqdn)
+    computer = _ad_target(fqdn, expected_machine=machine)
     if not computer.get('sid') or _matching_endpoint(computer) != machine:
         raise InstallFailure('RECOVERY_IDENTITY_CONFLICT')
     try:
@@ -38,7 +38,7 @@ def recover_offline_agent(machine, actor, username, password, restart_running):
     dispatched = False
     outcome_unknown = False
     try:
-        preflight = run_remote_install_preflight(fqdn, username, password)
+        preflight = run_remote_install_preflight(fqdn, username, password, expected_machine=machine)
         checks = preflight.get('checks') or {}
         failures = [v.get('code', 'WINRM_UNAVAILABLE') for k, v in checks.items()
                     if k != 'NIGHTOWL_ABSENCE' and v.get('status') != 'PASS']

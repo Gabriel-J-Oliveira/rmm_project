@@ -184,7 +184,7 @@ def _ad_identity_matches(computer, fqdn, dn, sid='', *, require_sid=False):
     return bool(expected) and _valid_sid(computer.get('sid')) == expected
 
 
-def _ad_target(value):
+def _ad_target(value, *, expected_machine=None):
     fqdn = _valid_fqdn(value)
     domain = normalize_fqdn(ad_ldap.ad_config().get('DOMAIN'))
     if not fqdn or not domain or not fqdn.endswith(f'.{domain}'):
@@ -199,10 +199,12 @@ def _ad_target(value):
     if computer.get('enabled') is not True:
         raise ProbeFailure('AD_COMPUTER_DISABLED')
     try:
-        _, correlation, _ = _match_machine(computer, _machine_maps())
+        machine, correlation, _ = _match_machine(computer, _machine_maps())
     except Exception as exc:
         raise ProbeFailure('CORRELATION_UNAVAILABLE', stage='TARGET', exception=exception_type(exc)) from None
-    if correlation != 'UNMANAGED':
+    if expected_machine is None and correlation != 'UNMANAGED':
+        raise ProbeFailure('TARGET_MANAGED_OR_CONFLICT')
+    if expected_machine is not None and (correlation != 'MANAGED' or machine != expected_machine):
         raise ProbeFailure('TARGET_MANAGED_OR_CONFLICT')
     return computer
 
@@ -566,10 +568,10 @@ def _verify_remote_identity_session(protocol, shell_id, computer):
                 pass
 
 
-def run_remote_install_preflight(fqdn, username, password):
+def run_remote_install_preflight(fqdn, username, password, *, expected_machine=None):
     checks = {name: {'status': 'SKIPPED'} for name in CHECKS}
     try:
-        computer = _ad_target(fqdn)
+        computer = _ad_target(fqdn, expected_machine=expected_machine) if expected_machine is not None else _ad_target(fqdn)
     except ProbeFailure as exc:
         return _fail(checks, 'TARGET', exc.code, failure=exc)
     checks['TARGET'] = {'status': 'PASS'}
