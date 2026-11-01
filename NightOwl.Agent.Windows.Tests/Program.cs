@@ -11,6 +11,20 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--winrm-contract", StringComparer.Ordinal))
+    {
+        var payload = new AgentCollectPayload { MachineId = "lab-id", CollectionScope = "scheduled",
+            WinRm = WindowsInventoryCollector.CollectWinRm() };
+        if (!payload.WinRm.ContainsKey("version") || !payload.WinRm.ContainsKey("result") || !payload.WinRm.ContainsKey("collected_at"))
+            throw new InvalidOperationException("Missing WinRM collection contract fields");
+        var capture = new WinRmContractHttpFactory();
+        var config = new AgentConfig { CollectUrl = "https://fixture.invalid/api/agent/collect/", AgentToken = "fixture-token" };
+        await new AgentApiClient(capture).PostCollectionAsync(config, payload, CancellationToken.None);
+        if (capture.Body is null || capture.Authorization != "Bearer fixture-token" || capture.Path != "/api/agent/collect/")
+            throw new InvalidOperationException("WinRM collection HTTP contract was not sent");
+        Console.WriteLine(capture.Body);
+        return;
+    }
     if (args.Contains("--terminal-admin-auth-agent", StringComparer.Ordinal))
     {
         var baseUrl = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_SERVER")!;
@@ -2008,6 +2022,24 @@ sealed class FakeTelemetryHttpClientFactory : IHttpClientFactory
             {
                 Content = new StringContent(owner.Succeed ? "{}" : "offline"),
             };
+        }
+    }
+}
+
+sealed class WinRmContractHttpFactory : IHttpClientFactory
+{
+    internal string? Body;
+    internal string? Authorization;
+    internal string? Path;
+    public HttpClient CreateClient(string name) => new(new Handler(this));
+    private sealed class Handler(WinRmContractHttpFactory owner) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            owner.Body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            owner.Authorization = request.Headers.Authorization?.ToString();
+            owner.Path = request.RequestUri?.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
         }
     }
 }

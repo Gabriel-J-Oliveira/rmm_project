@@ -1,4 +1,8 @@
 from unittest import mock
+import json
+import shutil
+import subprocess
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -16,7 +20,7 @@ from dashboard.winrm_observability import check_connectivity
 class WinRmObservabilityTests(TestCase):
     def setUp(self):
         cache.clear()
-        self.machine, _ = AgentMachine.create_with_token(hostname='LAB', machine_id='lab-id')
+        self.machine, self.agent_token = AgentMachine.create_with_token(hostname='LAB', machine_id='lab-id')
         self.machine.fqdn = 'lab.example.local'; self.machine.domain = 'example.local'
         self.machine.last_ip = '10.0.0.10'; self.machine.status = AgentMachine.STATUS_OFFLINE
         self.machine.save()
@@ -85,6 +89,20 @@ class WinRmObservabilityTests(TestCase):
         self.assertContains(response, 'informação desatualizada')
         self.assertContains(response, 'Stopped')
         self.assertContains(response, 'Verificar conectividade WinRM')
+
+    def test_dotnet_winrm_serialization_reaches_inventory_contract(self):
+        dll = Path(__file__).resolve().parent.parent / 'NightOwl.Agent.Windows.Tests' / 'bin' / 'Release' / 'net8.0-windows' / 'NightOwl.Agent.Windows.Tests.dll'
+        if not dll.is_file() or not shutil.which('dotnet'):
+            self.skipTest('Build do projeto de testes .NET necessário')
+        process = subprocess.run(['dotnet', str(dll), '--winrm-contract'], capture_output=True, text=True, timeout=30, check=True)
+        payload = json.loads(process.stdout)
+        self.assertEqual(payload['machine_id'], self.machine.machine_id)
+        self.assertIn(payload['winrm']['result'], ('ok', 'partial', 'failed'))
+        response = self.client.post(reverse('agent-collect'), data=json.dumps(payload), content_type='application/json',
+                                    HTTP_AUTHORIZATION='Bearer ' + self.agent_token, secure=True)
+        self.assertEqual(response.status_code, 200)
+        snapshot = self.machine.inventory_snapshots.order_by('-received_at').first()
+        self.assertEqual(snapshot.raw_payload['collections']['winrm']['data'], payload['winrm'])
 
     def test_view_requires_staff_and_https(self):
         url = reverse('agent-winrm-check', args=[self.machine.pk])
