@@ -120,6 +120,21 @@ class OfflineRecoveryTests(TestCase):
         self.machine.status = AgentMachine.STATUS_ONLINE; self.machine.save(update_fields=['status'])
         self.assertEqual(client.get(url, secure=True).json()['recommendation'], 'AGENT_REPAIR')
 
+    def test_status_exposes_persisted_recovery_without_sensitive_diagnostics(self):
+        job = RemoteInstallJob.objects.create(target_hostname=self.machine.hostname,
+            target_fqdn=self.machine.fqdn, requested_by=self.actor, endpoint=self.machine,
+            status='FAILED', stage='WAITING_HEARTBEAT', error_code='HEARTBEAT_TIMEOUT',
+            started_at=timezone.now(), finished_at=timezone.now(),
+            diagnostics={'operation': 'offline_recovery', 'password': 'never-return-this'})
+        client = Client(); client.force_login(self.actor)
+        response = client.get(reverse('agent-recovery-status', args=[self.machine.pk]), secure=True)
+        self.assertEqual(response.json()['latest_recovery']['id'], str(job.pk))
+        self.assertEqual(response.json()['latest_recovery']['error_code'], 'HEARTBEAT_TIMEOUT')
+        self.assertNotContains(response, 'never-return-this')
+        other = get_user_model().objects.create_user('status-nonstaff')
+        client.force_login(other)
+        self.assertIn(client.get(reverse('agent-recovery-status', args=[self.machine.pk]), secure=True).status_code, (302, 403))
+
     def test_authorized_http_recovery_does_not_persist_password(self):
         self.mocks['_remote_script_candidates'].return_value = (10, '10.0.0.10', [])
         client = Client(); client.force_login(self.actor)

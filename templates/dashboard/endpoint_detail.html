@@ -5,6 +5,7 @@
 {% block body_class %}page-endpoint-detail{% endblock %}
 {% block icon_script %}{% if not terminal_available and not terminal_admin_auth_available %}{{ block.super }}{% endif %}{% endblock %}
 {% block styles %}
+{% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
 {% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
 <link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
@@ -31,13 +32,15 @@
             <div class="endpoint-critical-strip">
                 <span class="endpoint-health-pill {{ health.class }}">{% if health.score != None %}Sa&uacute;de {{ health.score }}/100{% else %}Sa&uacute;de indispon&iacute;vel{% endif %}</span>
                 <span class="endpoint-attention-pill attention-{{ endpoint_attention.level }}">{{ endpoint_attention.label }}</span>
-                <span><i data-lucide="user"></i>{{ endpoint.last_logged_user|default:"sem usuario" }}</span>
+                <span title="Último usuário informado pelo inventário"><i data-lucide="user"></i>{{ endpoint.last_logged_user|default:"sem usuario informado" }}</span>
                 <span><i data-lucide="building-2"></i>{{ endpoint_sector|default:"sem setor" }}</span>
                 <span class="mono"><i data-lucide="network"></i>{{ primary_ip|default:"sem IP" }}</span>
             </div>
         </div>
 
         <div class="endpoint-ops-actions">
+            {% if winrm_observability_available %}<span class="winrm-indicator" data-winrm-indicator role="status">WinRM: não verificado</span>{% endif %}
+            {% if terminal_admin_auth_available %}<button class="terminal-open-button" type="button" data-terminal-open {% if endpoint.status != 'online' %}disabled title="Agente offline"{% endif %}>Abrir terminal</button>{% endif %}
             <button class="copy-btn" type="button" data-copy="{{ endpoint.hostname }}"><i data-lucide="copy"></i>Hostname</button>
             <button class="copy-btn" type="button" data-copy="{{ primary_ip|default:'' }}"><i data-lucide="clipboard"></i>IP</button>
             <a class="copy-btn link-btn" href="{% url 'tickets:create' %}?endpoint={{ endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
@@ -67,14 +70,15 @@
         <p>Autenticação administrativa: {{ winrm_authentication }}{% if winrm_authentication_at %} em {{ winrm_authentication_at|date:'d/m/Y H:i:s' }}{% endif %}.</p>
         <form data-winrm-check action="{% url 'agent-winrm-check' endpoint.id %}" method="post">{% csrf_token %}<button type="submit">Verificar conectividade WinRM</button></form>
         {% if winrm_recovery_available %}
-        <form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
+        <div class="install-credential-overlay winrm-credential-overlay" data-recovery-modal hidden><section class="install-credential-modal" role="dialog" aria-modal="true" aria-label="Recuperar agente"><h2>Recuperar agente</h2><form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
             {% csrf_token %}
+            <label>Conta conhecida <select data-recovery-known><option value="">Usar outra conta</option></select></label>
             <label>Conta administrativa <input name="username" required maxlength="256" autocomplete="username"></label>
             <label>Senha <input name="password" type="password" required maxlength="512" autocomplete="new-password"></label>
             <label><input name="restart_running" type="checkbox"> Permitir reiniciar serviço em execução</label>
-            <button type="submit">Reconectar agente via WinRM</button>
+            <footer><button type="button" data-recovery-cancel>Cancelar</button><button type="submit">Recuperar agente</button></footer>
             <p role="status" data-winrm-recovery-status></p>
-        </form>
+        </form></section></div>
         {% endif %}
     </section>
     {% endif %}
@@ -227,7 +231,7 @@
                     <div><dt>Modelo</dt><dd>{{ snapshot.model|default:"-" }}</dd></div>
                     <div><dt>Serial</dt><dd class="mono">{{ snapshot.serial_number|default:"-" }}</dd></div>
                     <div><dt>CPU</dt><dd>{{ snapshot.cpu|default:"-" }}</dd></div>
-                    <div><dt>Mem&oacute;ria</dt><dd>{% if memory_total_gb %}{{ memory_total_gb }} GB{% else %}-{% endif %}</dd></div>
+                    <div><dt>Mem&oacute;ria</dt><dd>{% if memory_total_gb %}{{ memory_total_gb }} GiB{% else %}-{% endif %}</dd></div>
                 </dl>
             </article>
         </div>
@@ -237,9 +241,9 @@
             <div class="endpoint-disk-table">
                 {% for disk in disks %}
                 <article class="disk-row">
-                    <div class="disk-row-header"><strong class="mono">{{ disk.name }}</strong><span class="disk-pill disk-pill-{{ disk.level }}">{{ disk.used_percent }}% usado</span></div>
-                    <div class="disk-meta"><span>Total: {{ disk.size_gb|default:"-" }} GB</span><span>Livre: {{ disk.free_gb|default:"-" }} GB</span></div>
-                    <div class="disk-bar"><span class="disk-fill disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></span></div>
+                    <div class="disk-row-header"><strong class="mono">{{ disk.name }}</strong><span class="disk-pill disk-pill-{{ disk.level }}">{% if disk.used_percent != None %}{{ disk.used_percent }}% usado{% else %}Uso desconhecido{% endif %}</span></div>
+                    <div class="disk-meta"><span>Total: {{ disk.size_gb|default_if_none:"-" }} GiB</span><span>Livre: {{ disk.free_gb|default_if_none:"-" }} GiB</span></div>
+                    {% if disk.used_percent != None %}<div class="disk-bar"><span class="disk-fill disk-{{ disk.level }}" style="width: {{ disk.used_percent }}%"></span></div>{% endif %}
                     <footer>
                         <button type="button" data-endpoint-action="check_disk">Ver detalhes</button>
                         <button type="button" data-endpoint-action="run_cleanup">Executar limpeza</button>
@@ -388,10 +392,12 @@
 {% if endpoint_detail_payload %}
 {{ endpoint_detail_payload|json_script:"endpoint-detail-real-payload" }}
 {% endif %}
+{{ approved_script_availability|json_script:"approved-script-availability" }}
+{% if winrm_observability_available %}{{ winrm_remote|json_script:"winrm-last-check" }}<div data-winrm-context data-endpoint="{{ endpoint.pk }}" data-user="{{ request.user.pk }}" data-agent-status="{{ endpoint.get_status_display }}" data-status-url="{% url 'agent-recovery-status' endpoint.id %}"></div>{% endif %}
 {% endblock %}
 
 {% block scripts %}
-{% if winrm_recovery_available %}<script src="{% static 'js/endpoint_winrm_recovery.js' %}"></script>{% endif %}
+{% if winrm_observability_available %}<script src="{% static 'js/endpoint_winrm_recovery.js' %}"></script>{% endif %}
 {% if winrm_observability_available %}<script src="{% static 'js/endpoint_winrm_check.js' %}"></script>{% endif %}
 {% if terminal_admin_auth_available %}
 <script src="{% static 'vendor/xterm/xterm.js' %}"></script>
@@ -405,6 +411,8 @@
 {% endif %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-1"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=telemetry-management-1"></script>
+<script src="{% static 'js/job_display.js' %}"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=job-status-1"></script>
+<script src="{% static 'js/endpoint_approved_scripts.js' %}"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=continuous-2"></script>
 {% endblock %}

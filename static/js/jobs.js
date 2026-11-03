@@ -202,7 +202,14 @@
     }
 
     function jobStatus(job) {
-        return '<span class="job-status-badge job-status-' + escapeHtml(job.status || "queued") + '">' + escapeHtml(statusLabels[job.status] || job.status || "queued") + "</span>";
+        return '<span class="job-status-badge job-status-' + escapeHtml(job.status || "queued") + '">' + escapeHtml(window.NightOwlJobDisplay.status(job)) + "</span>";
+    }
+
+    function jobResult(job) {
+        if (job.type === 'operational_action' && job.payload && job.payload.action_id === 'gpupdate' && job.status === 'completed') {
+            return 'Solicitação aceita; aplicação da política não confirmada';
+        }
+        return job.result || '--';
     }
 
     function jobType(job) {
@@ -370,7 +377,7 @@
         }
         jobTbody.innerHTML = filteredJobs.map(function (job) {
             return '<tr data-job-id="' + escapeHtml(job.id) + '">' +
-                '<td>' + jobStatus(job) + '</td>' +
+                '<td>' + jobStatus(job) + (window.NightOwlJobDisplay.unconfirmed(job) ? '<small>Resultado não confirmado</small>' : '') + '</td>' +
                 '<td>' + jobType(job) + '<small class="mono job-command">' + escapeHtml(job.command || "") + '</small></td>' +
                 '<td><a class="table-link mono" href="' + escapeHtml(endpointUrl(job)) + '">' + escapeHtml(job.endpoint || "-") + '</a></td>' +
                 '<td>' + escapeHtml(job.createdBy || "Sistema") + '</td>' +
@@ -378,7 +385,7 @@
                 '<td class="mono">' + escapeHtml(formatDate(job.startedAt)) + '</td>' +
                 '<td class="mono">' + escapeHtml(formatDate(job.finishedAt)) + '</td>' +
                 '<td class="mono">' + escapeHtml(formatDuration(job.durationMs)) + '</td>' +
-                '<td><strong class="job-result">' + escapeHtml(job.result || "--") + '</strong></td>' +
+                '<td><strong class="job-result">' + escapeHtml(jobResult(job)) + '</strong></td>' +
                 '<td><div class="endpoint-row-actions jobs-row-actions">' +
                 '<button type="button" data-job-action="details" title="Ver detalhes">' + icon("panel-right-open") + '</button>' +
                 '<button type="button" data-job-action="copy" title="Copiar saida">' + icon("copy") + '</button>' +
@@ -510,7 +517,7 @@
         currentJob = job;
         setJobDrawerField("name", job.name || typeLabels[job.type] || "Tarefa");
         setJobDrawerField("id", job.id);
-        setJobDrawerField("status", statusLabels[job.status] || job.status);
+        setJobDrawerField("status", window.NightOwlJobDisplay.status(job) + (window.NightOwlJobDisplay.unconfirmed(job) ? " · Resultado não confirmado" : ""));
         setJobDrawerField("type", job.type);
         setJobDrawerField("endpoint", job.endpoint);
         setJobDrawerField("createdBy", job.createdBy || "Sistema");

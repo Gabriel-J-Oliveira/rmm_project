@@ -1,11 +1,13 @@
 """Explicit staff-only recovery contract; no credentials are persisted."""
 import re
+from datetime import timedelta
 
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.debug import sensitive_post_parameters, sensitive_variables
 from django.views.decorators.http import require_POST, require_GET
+from django.utils import timezone
 
 from agents.models import AgentMachine, AgentJob
 from dashboard.agent_recovery import recover_offline_agent
@@ -61,8 +63,25 @@ def recovery_status(request, pk):
     details = result.get('details') if isinstance(result.get('details'), dict) else {}
     needs_repair = bool(job and (result.get('reason') == 'repair_required' or details.get('reason') == 'repair_required'))
     recommendation = ('AGENT_REPAIR' if machine.status == AgentMachine.STATUS_ONLINE else 'RECOVER_COMMUNICATION_OR_INTERVENTION') if needs_repair else 'NONE'
+    from dashboard.models import RemoteInstallJob
+    latest = RemoteInstallJob.objects.filter(endpoint=machine, diagnostics__operation='offline_recovery').order_by('-created_at').first()
+    can_recover = bool(request.is_secure() and machine.is_active and not machine.has_terminal_lifecycle and
+        machine.status == AgentMachine.STATUS_OFFLINE and machine.machine_id and machine.agent_token_hash and
+        machine.agent_version and machine.fqdn and machine.last_seen_at and
+        machine.last_seen_at < timezone.now() - timedelta(minutes=5) and
+        re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}', machine.machine_id) and
+        AgentMachine.objects.filter(machine_id__iexact=machine.machine_id).count() == 1 and
+        not RemoteInstallJob.objects.filter(active_slot='global').exists())
+    operation = None
+    if latest:
+        code = latest.error_code if re.fullmatch(r'[A-Z0-9_]{0,64}', latest.error_code or '') else 'RECOVERY_FAILED'
+        operation = {'id': str(latest.pk), 'status': latest.status, 'stage': latest.stage,
+            'error_code': code, 'started_at': latest.started_at.isoformat() if latest.started_at else None,
+            'finished_at': latest.finished_at.isoformat() if latest.finished_at else None,
+            'created_at': latest.created_at.isoformat()}
     response = JsonResponse({'status':'REPAIR_REQUIRED' if needs_repair else 'NO_REPAIR_REPORTED',
-        'recommendation':recommendation})
+        'recommendation':recommendation, 'latest_recovery': operation, 'can_recover': can_recover,
+        'agent_status': machine.status})
     response['Cache-Control'] = 'no-store'
     return response
 

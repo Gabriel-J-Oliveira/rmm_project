@@ -8,9 +8,46 @@
     let socket = null, id = null, generation = 0, terminal = null, observer = null, resizeTimer = null;
     let sent = 0n, received = 0n, pending = 0, totalInput = 0, fit = null;
     const csrf = form.elements.csrfmiddlewaretoken.value;
+    const drawer = panel.querySelector('[data-drawer]'), shade = panel.querySelector('[data-drawer-shade]');
+    const authModal = panel.querySelector('[data-auth-modal]'), terminalModal = panel.querySelector('[data-terminal-modal]');
+    const accountList = panel.querySelector('[data-accounts]');
+    const storageKey = `nightowl.terminal.accounts.${panel.dataset.user}.${panel.dataset.endpoint}`;
+    let attemptedAccount = '';
+    function accounts() {
+        try { const value = JSON.parse(localStorage.getItem(storageKey) || '[]');
+            return Array.isArray(value) ? value.filter(x => typeof x === 'string' && x.length <= 256).slice(0,10) : [];
+        } catch (_) { return []; }
+    }
+    function remember(value) {
+        if (!value) return;
+        try { localStorage.setItem(storageKey, JSON.stringify([value, ...accounts().filter(x => x.toLowerCase() !== value.toLowerCase())].slice(0,10))); } catch (_) {}
+    }
+    function renderAccounts() {
+        accountList.replaceChildren();
+        const saved = accounts();
+        if (!saved.length) { const empty = document.createElement('p'); empty.textContent = 'Nenhuma conta utilizada neste navegador.'; accountList.append(empty); }
+        for (const value of saved) {
+            const row = document.createElement('div'), label = document.createElement('span'), button = document.createElement('button');
+            row.className = 'terminal-account-row'; label.textContent = value; button.type = 'button'; button.textContent = 'Conectar';
+            button.addEventListener('click', () => openAuth(value)); row.append(label, button); accountList.append(row);
+        }
+    }
+    function toggleDrawer(open) { drawer.hidden = shade.hidden = !open; }
+    function openAuth(value = '') {
+        account.value = value; account.readOnly = Boolean(value); domain.value = ''; password.value = '';
+        status.textContent = 'Aguardando solicitação'; authModal.hidden = false; (value ? password : account).focus();
+    }
+    document.querySelector('[data-terminal-open]')?.addEventListener('click', () => { renderAccounts(); toggleDrawer(true); });
+    panel.querySelector('[data-drawer-close]').addEventListener('click', () => toggleDrawer(false));
+    shade.addEventListener('click', () => toggleDrawer(false));
+    panel.querySelector('[data-new-account]').addEventListener('click', () => openAuth());
+    panel.querySelector('[data-terminal-close]').addEventListener('click', () => finish('Encerrado'));
+    panel.querySelector('[data-maximize]').addEventListener('click', () => panel.querySelector('[data-terminal-dialog]').classList.toggle('maximized'));
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') { if (!terminalModal.hidden) finish('Encerrado'); else if (!authModal.hidden) finish('Cancelado'); else toggleDrawer(false); } });
     function finish(label) {
         generation++;
-        password.value = '';
+        password.value = ''; attemptedAccount = '';
+        terminalModal.hidden = true;
         clearTimeout(resizeTimer); observer?.disconnect(); observer = null;
         terminal?.dispose(); terminal = fit = null; screen.replaceChildren(); screen.hidden = true;
         identity.textContent = 'Identidade não ativa'; pending = totalInput = 0;
@@ -26,6 +63,7 @@
     form.addEventListener('submit', async event => {
         event.preventDefault();
         if (location.protocol !== 'https:' && location.hostname !== '127.0.0.1') { finish('Conexão segura necessária'); return; }
+        attemptedAccount = account.value.trim();
         const current = ++generation;
         form.querySelector('[type=submit]').disabled = true;
         status.textContent = 'Aguardando agente';
@@ -60,14 +98,18 @@
                     const value = JSON.parse(message.data);
                     if (value.type === 'ping') socket.send(JSON.stringify({type:'pong',nonce:value.nonce}));
                     else if (value.type === 'transport_ready' && value.mode === 'admin_auth') {
-                        socket.send(JSON.stringify({type:'windows_auth',account:account.value,domain:domain.value,password:password.value}));
+                        const parts = attemptedAccount.split('\\');
+                        const accountName = parts.length === 2 ? parts[1] : attemptedAccount;
+                        const accountDomain = parts.length === 2 ? parts[0] : '';
+                        socket.send(JSON.stringify({type:'windows_auth',account:accountName,domain:accountDomain,password:password.value}));
                         password.value = ''; status.textContent = 'Validando credenciais';
                     } else if (value.type === 'ready' && value.mode === 'admin_auth' && value.execution === true) {
                         const user = value.identity;
                         if (!user || user.elevated !== true || user.integrity < 12288 || /^(S-1-5-(18|19|20))$/.test(user.sid)) throw Error();
+                        remember(attemptedAccount); attemptedAccount = ''; authModal.hidden = true; toggleDrawer(false); terminalModal.hidden = false;
                         identity.textContent = `${user.sid} · sessão Windows ${user.windows_session_id} · administrador`;
                         terminal = new Terminal({cols:80,rows:24,scrollback:0,allowProposedApi:true,
-                            linkHandler:{activate:() => {}},theme:{background:'#0b1020',foreground:'#e2e8f0'}});
+                            linkHandler:{activate:() => {}},theme:{background:'#160d25',foreground:'#e2e8f0'}});
                         terminal.parser.registerOscHandler(52, () => true);
                         fit = new FitAddon.FitAddon(); terminal.loadAddon(fit); screen.hidden = false; terminal.open(screen);
                         terminal.onData(value => {
@@ -94,6 +136,6 @@
             socket.onclose = () => finish('Conexão encerrada');
         } catch (_) { if (current === generation) finish('Solicitação rejeitada'); }
     });
-    panel.querySelector('[data-cancel]').addEventListener('click', () => finish('Cancelado'));
+    panel.querySelector('[data-cancel]').addEventListener('click', () => { finish('Cancelado'); authModal.hidden = true; });
     window.addEventListener('pagehide', () => finish('Encerrado'));
 })();

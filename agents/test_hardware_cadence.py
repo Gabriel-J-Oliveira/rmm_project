@@ -103,11 +103,36 @@ class HardwareCadenceTests(TestCase):
         self.assertEqual(inventory['memoryDetails']['modules'][0]['part_number'], 'SYNTH-PART')
         self.assertEqual(inventory['adapters'][0]['dns_servers'], ['192.0.2.53'])
 
+    def test_heartbeat_preserves_success_failure_and_confirmed_absence(self):
+        self.collect(hardware={'battery': {'collection_status': 'not_present', 'present': False}},
+                     states={'hardware': 'available', 'battery': 'not_present'})
+        failed = self.collect(states={'network': 'failed', 'memory': 'unknown'})
+        observations = failed.raw_payload['inventory_observations']
+        result = record_heartbeat(self.machine, {'machine_id': self.machine.machine_id,
+            'hostname': self.machine.hostname, 'uptime_seconds': 123}, {})
+        self.assertEqual(result.raw_payload['inventory_observations'], observations)
+        self.assertEqual(result.raw_payload['collections']['network']['collected_at'], self.old)
+        self.assertIs(result.raw_payload['collections']['hardware']['battery']['present'], False)
+        self.assertEqual(result.raw_payload['inventory_observations']['battery']['status'], 'not_present')
+        self.assertEqual(result.raw_payload['inventory_observations']['network']['status'], 'failed')
+
+    def test_heartbeat_recovers_observations_from_older_snapshot(self):
+        observed = self.collect(states={'network': 'failed'})
+        heartbeat = record_heartbeat(self.machine, {'machine_id': self.machine.machine_id,
+            'hostname': self.machine.hostname}, {})
+        raw = dict(heartbeat.raw_payload)
+        raw.pop('inventory_observations')
+        type(heartbeat).objects.filter(pk=heartbeat.pk).update(raw_payload=raw)
+        result = record_heartbeat(self.machine, {'machine_id': self.machine.machine_id,
+            'hostname': self.machine.hostname}, {})
+        self.assertEqual(result.raw_payload['inventory_observations'], observed.raw_payload['inventory_observations'])
+
     def test_heartbeat_does_not_rejuvenate_detail(self):
         record_heartbeat(self.machine, {'machine_id': self.machine.machine_id, 'hostname': self.machine.hostname}, {})
         latest = self.machine.inventory_snapshots.order_by('-received_at').first()
         self.assertEqual(latest.raw_payload['collections']['hardware']['detailed_collected_at'], self.old)
         from dashboard.capacity_views import _inventory_map, _inventory_provenance, _hardware
+
         capacity = _inventory_map([self.machine.pk])[self.machine.pk]
         self.assertEqual(_inventory_provenance(capacity)['collected_at'], self.old)
         self.assertEqual(_hardware(capacity)['cpu']['max_clock_mhz'], 3600)

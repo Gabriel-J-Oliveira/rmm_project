@@ -81,6 +81,7 @@
         restart_agent: "Reiniciar agente",
         configure_telemetry: "Configurar telemetria"
     };
+    const operationalLabels = {flush_dns: "Limpar cache DNS", query_service: "Consultar serviço", gpupdate: "Solicitar atualização de política", start_service: "Iniciar serviço", stop_service: "Parar serviço", restart_service: "Reiniciar serviço"};
 
     if (realPayloadScript && realPayloadScript.textContent) {
         try {
@@ -243,39 +244,12 @@
         return '<span class="alert-status alert-status-' + escapeHtml(value || "open") + '">' + escapeHtml(text || labels[value] || value || "Novo") + "</span>";
     }
 
-    function jobBadge(value) {
-        return '<span class="job-status-badge job-status-' + escapeHtml(value || "queued") + '">' + escapeHtml(labels[value] || value || "Em fila") + "</span>";
+    function jobBadge(value, text) {
+        return '<span class="job-status-badge job-status-' + escapeHtml(value || "queued") + '">' + escapeHtml(text || labels[value] || value || "Em fila") + "</span>";
     }
 
     function jobProgress(job) {
-        if (job && (job.progressPercentage != null || job.progress_percentage != null)) {
-            const backendProgress = Number(job.progressPercentage != null ? job.progressPercentage : job.progress_percentage);
-            return Math.max(0, Math.min(100, Number.isNaN(backendProgress) ? 0 : Math.round(backendProgress)));
-        }
-        const statusProgress = {
-            queued: 10,
-            pending: 10,
-            sent: 25,
-            dispatched: 25,
-            waiting_agent: 25,
-            running: 60,
-            completed: 100,
-            failed: 100,
-            expired: 100,
-            timed_out: 100,
-            duplicate: 100,
-            unsupported: 100,
-            invalid_parameters: 100,
-            interrupted: 100,
-            rolled_back: 100,
-            rollback_failed: 100,
-            cancelled: 100,
-            canceled: 100
-        };
-        if (job && Object.prototype.hasOwnProperty.call(statusProgress, job.status)) {
-            return statusProgress[job.status];
-        }
-        return job && job.progress != null ? job.progress : 0;
+        return window.NightOwlJobDisplay.measuredProgress(job);
     }
 
     function jobType(value, job) {
@@ -284,6 +258,8 @@
 
     function jobTypeLabel(value, job) {
         const payload = job && job.payload && typeof job.payload === "object" ? job.payload : {};
+        if (value === "operational_action" && payload.action_id === "run_approved_script") return "Script aprovado: " + (payload.parameters && payload.parameters.script_id || "script");
+        if (value === "operational_action") return operationalLabels[payload.action_id] || "Ação operacional";
         const result = job && job.resultJson && typeof job.resultJson === "object" ? job.resultJson : {};
         const mode = String(payload.mode || result.mode || "").toLowerCase();
         if (value === "uninstall_agent" && mode === "purge") return "Purge do agente";
@@ -440,6 +416,7 @@
                 updatePaused: !!(agentUpdatePolicy.update_paused || endpoint.update_paused)
             },
             agentDiagnostic: agentDiagnostic,
+            operationalActions: asObject(payload.operational_actions),
             activeJob: activeJob,
             activeUpdateJob: activeUpdateJob,
             uninstallRequest: maybeObject(payload.uninstall_request),
@@ -486,7 +463,6 @@
                     exitCode: event.metadata && event.metadata.exit_code,
                     payload: event.metadata || {},
                     resultJson: event.metadata || {},
-                    progress: 100,
                     timeline: [event.eventType]
                 };
             }),
@@ -614,7 +590,7 @@
 
     function healthParts(detail) {
         const diskRows = diskDisplayRows(detail.disks || []);
-        const diskScore = diskRows.some(function (disk) { return diskUsedPercent(disk) >= 90; }) ? 35 : diskRows.some(function (disk) { return diskUsedPercent(disk) >= 80; }) ? 70 : 95;
+        const diskScore = !diskRows.some(function (disk) { return diskUsedPercent(disk) !== null; }) ? 40 : diskRows.some(function (disk) { return diskUsedPercent(disk) >= 90; }) ? 35 : diskRows.some(function (disk) { return diskUsedPercent(disk) >= 80; }) ? 70 : 95;
         const securityScore = detail.security && detail.security.status === "critical" ? 25 : detail.security && detail.security.status === "attention" ? 70 : detail.security && detail.security.status === "unknown" ? 55 : 95;
         const alertScore = (detail.alerts || []).some(function (alert) { return alert.severity === "critical" && alert.status !== "resolved"; }) ? 35 : (detail.alerts || []).length ? 70 : 95;
         return [
@@ -661,12 +637,15 @@
     }
 
     function diskUsedPercent(disk) {
-        const raw = Number(firstDiskValue(disk, ["usedPercent", "used_percent", "usedPercentage", "used_percentage"], 0));
-        return Math.max(0, Math.min(100, Number.isNaN(raw) ? 0 : Math.round(raw)));
+        const value = firstDiskValue(disk, ["usedPercent", "used_percent", "usedPercentage", "used_percentage"], null);
+        if (value === null) return null;
+        const raw = Number(value);
+        return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? Math.round(raw) : null;
     }
 
     function diskSeverity(disk, usedPercent) {
         const severity = firstDiskValue(disk, ["severity", "status"], "");
+        if (usedPercent === null) return "unknown";
         if (severity) return severity;
         if (usedPercent >= 90) return "critical";
         if (usedPercent >= 80) return "warning";
@@ -709,12 +688,15 @@
         const filesystem = firstDiskValue(disk, ["filesystem", "file_system"], "-");
         const bitlockerStatus = firstDiskValue(disk, ["bitlockerStatus", "bitlocker_status"], "-");
         const healthStatus = firstDiskValue(disk, ["healthStatus", "health_status"], "-");
+        if (usedPercent === null) {
+            return '<article class="disk-row"><strong>' + escapeHtml(name) + '</strong><span>Uso desconhecido</span><div class="disk-meta">Total: ' + escapeHtml(totalGb) + ' GiB · Livre: ' + escapeHtml(freeGb) + ' GiB</div></article>';
+        }
         if (compact) {
-            const diskTitle = freeGb + " GB livres de " + totalGb + " GB - " + filesystem;
-            return '<div><strong class="mono" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</strong><span>' + escapeHtml(usedPercent) + '%</span><em><i class="disk-' + escapeHtml(severity) + '" style="width:' + escapeHtml(usedPercent) + '%"></i></em><small title="' + escapeHtml(diskTitle) + '">' + escapeHtml(freeGb) + ' GB livres de ' + escapeHtml(totalGb) + ' GB - ' + escapeHtml(filesystem) + "</small></div>";
+            const diskTitle = freeGb + " GiB livres de " + totalGb + " GiB - " + filesystem;
+            return '<div><strong class="mono" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</strong><span>' + escapeHtml(usedPercent) + '%</span><em><i class="disk-' + escapeHtml(severity) + '" style="width:' + escapeHtml(usedPercent) + '%"></i></em><small title="' + escapeHtml(diskTitle) + '">' + escapeHtml(freeGb) + ' GiB livres de ' + escapeHtml(totalGb) + ' GiB - ' + escapeHtml(filesystem) + "</small></div>";
         }
         return '<article class="disk-row"><div class="disk-row-header"><strong class="mono">' + escapeHtml(name) + '</strong><span class="disk-pill disk-pill-' + escapeHtml(severity) + '">' + escapeHtml(usedPercent) + '% usado</span></div>' +
-            '<div class="disk-meta"><span>Total: ' + escapeHtml(totalGb) + ' GB</span><span>Livre: ' + escapeHtml(freeGb) + ' GB</span><span>FS: ' + escapeHtml(filesystem) + '</span><span>BitLocker: ' + escapeHtml(bitlockerStatus) + '</span><span>Saude: ' + escapeHtml(healthStatus) + '</span></div>' +
+            '<div class="disk-meta"><span>Total: ' + escapeHtml(totalGb) + ' GiB</span><span>Livre: ' + escapeHtml(freeGb) + ' GiB</span><span>FS: ' + escapeHtml(filesystem) + '</span><span>BitLocker: ' + escapeHtml(bitlockerStatus) + '</span><span>Saude: ' + escapeHtml(healthStatus) + '</span></div>' +
             '<div class="disk-bar"><span class="disk-fill disk-' + escapeHtml(severity) + '" style="width:' + escapeHtml(usedPercent) + '%"></span></div>' +
             '<footer>' + actionButton("check_disk", "Verificar disco", "hard-drive") + actionButton("run_cleanup", "Executar limpeza", "sparkles") + actionButton("create_ticket", "Criar chamado", "ticket") + "</footer></article>";
     }
@@ -785,15 +767,18 @@
             const progress = jobProgress(job);
             const result = jobResultLabel(job);
             const primaryTime = job.finishedAt || job.startedAt || job.dispatchedAt || job.createdAt;
+            const steps = window.NightOwlJobDisplay.milestones(job);
+            const evidence = steps.map(function (step) { return escapeHtml(step.label) + ': ' + escapeHtml(formatDate(step.at)); }).join(' · ');
+            const progressMarkup = progress == null ? '<div class="endpoint-job-stage">' + escapeHtml(window.NightOwlJobDisplay.status(job)) + '</div>' : '<div class="endpoint-job-progressline"><div class="endpoint-job-progress"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>';
             const stale = job.isStale || job.is_stale;
             const staleText = stale ? '<div class="endpoint-job-stale">Possivelmente travado - ' + escapeHtml(staleReasonLabel(job.staleReason || job.stale_reason)) + '</div>' : "";
             const versionLine = job.targetVersion || job.previousVersion ? '<small class="endpoint-job-version">' + escapeHtml([job.previousVersion, job.targetVersion].filter(Boolean).join(" -> ")) + '</small>' : "";
             return '<article class="endpoint-job-item ' + (isActive ? "is-active " : "") + 'endpoint-job-item-' + escapeHtml(job.status || "pending") + (stale ? " is-stale" : "") + '">' +
                 '<div class="endpoint-job-identity">' +
-                    jobBadge(job.status) + jobType(job.type, job) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' + versionLine +
+                    jobBadge(job.status, window.NightOwlJobDisplay.status(job)) + jobType(job.type, job) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' + versionLine +
                 '</div>' +
                 '<div class="endpoint-job-output">' +
-                    '<div class="endpoint-job-progressline"><div class="endpoint-job-progress endpoint-job-progress-' + escapeHtml(job.status || "pending") + '"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' +
+                    progressMarkup + (evidence ? '<small>' + evidence + '</small>' : '') + (window.NightOwlJobDisplay.unconfirmed(job) ? '<div>Resultado não confirmado</div>' : '') +
                     '<div class="endpoint-job-stage">' + escapeHtml(job.stage || "-") + '</div>' +
                     '<div class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</div>' + staleText +
                 '</div>' +
@@ -849,6 +834,7 @@
     }
 
     function jobResultLabel(job) {
+        if (job.type === "operational_action" && job.payload && job.payload.action_id === "gpupdate" && job.status === "completed") return "Solicitação aceita; aplicação da política não confirmada";
         if (job.progressMessage || job.progress_message) return job.progressMessage || job.progress_message;
         const result = job.resultJson || {};
         if (job.type === "update_agent") {
@@ -943,7 +929,7 @@
         setSlot("agent-body",
             '<div class="endpoint-agent-body"><div class="agent-version-panel">' + agentVersionDisplay(agent) + (agent.state === "outdated" ? '<small>Atualizacao disponivel</small>' : '<small>Versao atual</small>') + '</div>' +
             '<div class="endpoint-agent-facts">' + factList([
-                { label: "Servico/status", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "-") },
+                { label: "Serviço/status informado pelo agente", value: (agent.serviceName || "-") + " / " + (agent.serviceStatus || "Não informado") },
                 { label: "Modo/runtime", value: (agent.mode || "-") + " / " + (agent.runtime || "-") },
                 { label: "Ultima comunicacao", value: agent.lastRun },
                 { label: "Canal/politica", value: (agent.updateChannel || "stable") + " / " + (agent.updatePolicy || "manual") },
@@ -978,8 +964,8 @@
             { label: "Modelo", value: inv.model },
             { label: "Serial", value: inv.serial, mono: true },
             { label: "CPU", value: inv.cpu },
-            { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
-            { label: "Disponivel na coleta de hardware", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
+            { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GiB" : "-" },
+            { label: "Disponivel na coleta de hardware", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "-" },
             { label: "Ultimo inventario", value: inv.lastFullInventory, className: "endpoint-fact-wide" }
         ]) + '</div>');
 
@@ -1054,12 +1040,14 @@
                 { label: "Build", value: inv.build, mono: true },
                 { label: "Arquitetura", value: inv.architecture },
                 { label: "Dominio", value: detail.domain },
+                { label: "Último usuário informado", value: detail.user || "Não informado" },
                 { label: "Tipo", value: inv.machineType },
                 { label: "Instalacao", value: formatDate(inv.installDate) },
                 { label: "Ultimo boot", value: formatDate(inv.lastBootTime) },
                 { label: "Timezone", value: inv.timezone },
                 { label: "Locale", value: inv.locale },
-                { label: "Uptime", value: inv.uptime }
+                { label: "Uptime Windows no último heartbeat", value: inv.uptime },
+                { label: "Heartbeat do uptime", value: formatDate(inv.uptimeObservedAt) }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("cpu") + 'Hardware</h2></header>' + factList([
                 { label: "Fabricante", value: inv.manufacturer },
@@ -1069,8 +1057,8 @@
                 { label: "Fabricante CPU", value: inv.cpuManufacturer },
                 { label: "Cores fisicos", value: inv.physicalCores },
                 { label: "Processadores logicos", value: inv.logicalProcessors },
-                { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GB" : "-" },
-                { label: "Memoria disponivel na coleta de hardware", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GB" : "-" },
+                { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GiB" : "-" },
+                { label: "Memoria disponivel na coleta de hardware", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "-" },
                 { label: "BIOS/UEFI", value: inv.bios },
                 { label: "BIOS data", value: formatDate(inv.biosReleaseDate) },
                 { label: "Placa-mae", value: inv.motherboard },
@@ -1084,7 +1072,8 @@
                 { label: "Gateway", value: inv.defaultGateway, mono: true },
                 { label: "DNS", value: (inv.dnsServers || []).join(", "), mono: true },
                 { label: "MACs", value: (inv.macs || []).join(", "), mono: true },
-                { label: "Ultimo inventario completo", value: inv.lastFullInventory },
+                { label: "Último inventário completo", value: formatDate(inv.lastFullInventory) },
+                { label: "Última coleta de rede", value: formatDate(inv.networkCollectedAt) },
                 { label: "Agente", value: detail.agent && detail.agent.version, mono: true }
             ]) + ((inv.adapters || []).length ? '<div class="endpoint-task-list">' + inv.adapters.map(function (adapter) {
                 adapter = asObject(adapter);
@@ -1199,6 +1188,10 @@
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
             actionButton("collect_disks", "Coletar discos", "hard-drive") +
             actionButton("collect_software", "Coletar software", "package-search") +
+            Object.keys(operationalLabels).map(function (action) {
+                const available = asObject(asObject(detail.operationalActions)[action]);
+                return '<button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="Ação indisponível para este operador ou endpoint"') + '><span>' + escapeHtml(operationalLabels[action]) + '</span></button>';
+            }).join("") +
             agentManagementButtons.join("") +
             lifecycleButtons.join("") +
             purgeButtons.join("") +
@@ -1216,20 +1209,22 @@
         const lastError = asObject(diagnostic.last_error);
         const updater = asObject(diagnostic.updater);
         const queue = asObject(diagnostic.queue);
-        const indicator = diagnostic.indicator || "healthy";
-        const uptime = summary.agent_uptime_seconds ? formatDuration(summary.agent_uptime_seconds * 1000) : "-";
+        const indicator = diagnostic.indicator || "unknown";
+        const uptime = summary.agent_uptime_seconds == null ? "Não informado" : summary.agent_uptime_seconds === 0 ? "0s" : formatDuration(summary.agent_uptime_seconds * 1000);
         return '<div class="endpoint-compact-grid security-grid endpoint-diagnostics-grid">' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("stethoscope") + 'Resumo operacional</h2>' + severityBadge(indicator === "critical" || indicator === "offline" ? "critical" : indicator === "attention" ? "warning" : "success", indicator) + '</header>' +
+            '<article class="panel endpoint-dense-card"><header><h2>' + icon("stethoscope") + 'Resumo operacional</h2>' + severityBadge(indicator === "critical" || indicator === "offline" ? "critical" : indicator === "attention" || indicator === "unknown" ? "warning" : "success", indicator) + '</header>' +
             factList([
                 { label: "Versao instalada", value: summary.installed_version || "-" },
                 { label: "Versao disponivel", value: summary.available_version || "-" },
-                { label: "Ultimo heartbeat", value: formatDate(summary.last_heartbeat_at) },
+                { label: "Último heartbeat aceito", value: formatDate(summary.last_heartbeat_at) },
+                { label: "Última comunicação", value: formatDate(summary.last_communication_at) },
+                { label: "Último diagnóstico", value: formatDate(summary.diagnostic_reported_at) },
                 { label: "Ultimo inventario", value: formatDate(summary.last_inventory_at) },
-                { label: "Servico", value: summary.service_status || "-" },
+                { label: "Serviço reportado", value: summary.service_status || "Não informado" },
                 { label: "Uptime agente", value: uptime },
                 { label: "Jobs ativos", value: summary.running_job_count == null ? "-" : summary.running_job_count },
                 { label: "Resultados pendentes", value: summary.pending_result_count == null ? "-" : summary.pending_result_count },
-                { label: "Usuario atual", value: summary.current_user || "-" },
+                { label: "Último usuário informado", value: summary.current_user || "Não informado" },
                 { label: "IP atual", value: summary.current_ip || "-", mono: true }
             ]) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("alert-triangle") + 'Ultimo erro</h2></header>' +
@@ -1248,7 +1243,7 @@
                 { label: "Etapa", value: updater.current_stage || "-", mono: true },
                 { label: "Resultado", value: updater.status || "-" },
                 { label: "Health check", value: updater.health_check_confirmed ? "Confirmado" : "Pendente/nao informado" },
-                { label: "Rollback", value: (updater.rollback_status || "-") + " / tentativa " + (updater.rollback_attempt || 0) },
+                { label: "Rollback", value: (updater.rollback_status || "-") + " / tentativa " + (updater.rollback_attempt == null ? "não informada" : updater.rollback_attempt) },
                 { label: "Erro original", value: [updater.error_code, updater.error_message].filter(Boolean).join(" - ") || "-", className: "endpoint-fact-wide" },
                 { label: "Erro rollback", value: [updater.rollback_error_code, updater.rollback_error_message].filter(Boolean).join(" - ") || "-", className: "endpoint-fact-wide" },
                 { label: "Package URL", value: updater.package_url || "-", mono: true, className: "endpoint-fact-wide" }
@@ -1259,7 +1254,7 @@
                 { label: "Mais antigo", value: formatDate(queue.oldest_pending_at) },
                 { label: "Em retry", value: queue.retrying_count == null ? "-" : queue.retrying_count },
                 { label: "Quarentena", value: queue.quarantined_count == null ? "-" : queue.quarantined_count },
-                { label: "Fila cheia", value: queue.queue_full ? "Sim" : "Nao" },
+                { label: "Fila cheia", value: queue.queue_full == null ? "Não informado" : queue.queue_full ? "Sim" : "Não" },
                 { label: "Ultimo erro envio", value: queue.last_send_error || "-", className: "endpoint-fact-wide" }
             ]) + '</article>' +
         '</div>';
@@ -1409,6 +1404,11 @@
             });
         }, 3500);
     }
+
+    root.addEventListener('nightowl:approved-script-queued', function () {
+        schedulePolling();
+        reloadEndpoint(false);
+    });
 
     function createRealJob(action, options) {
         options = options || {};
@@ -1646,7 +1646,7 @@
     function formatPackageSize(value) {
         const size = Number(value || 0);
         if (!size || Number.isNaN(size)) return "-";
-        if (size >= 1073741824) return (size / 1073741824).toFixed(1).replace(".", ",") + " GB";
+        if (size >= 1073741824) return (size / 1073741824).toFixed(1).replace(".", ",") + " GiB";
         if (size >= 1048576) return (size / 1048576).toFixed(1).replace(".", ",") + " MB";
         if (size >= 1024) return (size / 1024).toFixed(1).replace(".", ",") + " KB";
         return size + " B";
@@ -2034,6 +2034,32 @@
 
     function runEndpointAction(action, origin) {
         if (!endpointDetail) return;
+        if (Object.prototype.hasOwnProperty.call(operationalLabels, action)) {
+            const available = asObject(asObject(endpointDetail.operationalActions)[action]);
+            if (endpointDetail.source === 'mock' || !available.enabled) { showToast('Ação indisponível.'); return; }
+            const parameters = {};
+            if (['query_service', 'start_service', 'stop_service', 'restart_service'].includes(action)) {
+                const service = window.prompt('Informe o nome do serviço Windows' + (available.services && available.services.length ? ' autorizado: ' + available.services.join(', ') : ':'));
+                if (service === null) return;
+                const name = service.trim();
+                const limit = action === 'query_service' ? 256 : 128;
+                if (!/^[A-Za-z0-9_.-]+$/.test(name) || name.length > limit || (action !== 'query_service' && !(available.services || []).some(function (item) { return item.toLowerCase() === name.toLowerCase(); }))) {
+                    showToast('Nome de serviço inválido ou não autorizado.'); return;
+                }
+                parameters.service_name = name;
+            }
+            if (!window.confirm(operationalLabels[action] + (parameters.service_name ? ': ' + parameters.service_name : '') + '?')) return;
+            fetch('/api/agent/operational-actions/' + encodeURIComponent(root.dataset.endpointId) + '/', {
+                method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken'), 'Accept': 'application/json'},
+                body: JSON.stringify({action_id: action, action_version: 1, parameters: parameters})
+            }).then(async function (response) {
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'action_failed');
+                showToast(action === 'gpupdate' ? 'Solicitação enfileirada; aplicação da política ainda não confirmada.' : 'Ação enfileirada para o agente.');
+                schedulePolling(); return reloadEndpoint(false);
+            }).catch(function (error) { showToast('Não foi possível enfileirar a ação: ' + error.message); });
+            return;
+        }
         if (action === "execute_check" || action === "run_cleanup") {
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
@@ -2198,7 +2224,7 @@
             status: job.status,
             raw_status: job.rawStatus,
             stage: job.stage,
-            progress_percentage: job.progressPercentage || job.progress_percentage || job.progress,
+            progress_percentage: jobProgress(job),
             progress_message: job.progressMessage || job.progress_message || jobResultLabel(job),
             attempt: job.attempt,
             timeout_seconds: job.timeoutSeconds,
@@ -2227,9 +2253,9 @@
             { label: "Job ID", value: job.jobId || job.id, mono: true },
             { label: "Result ID", value: job.resultId || "-", mono: true },
             { label: "Correlation ID", value: job.correlationId || "-", mono: true },
-            { label: "Status", value: labels[job.status] || job.status },
+            { label: "Status", value: window.NightOwlJobDisplay.status(job) },
             { label: "Etapa", value: job.stage || "-" },
-            { label: "Progresso", value: (job.progressPercentage || job.progress_percentage || job.progress || 0) + "%" },
+            { label: "Progresso", value: jobProgress(job) == null ? "Não informado" : jobProgress(job) + "%" },
             { label: "Tipo", value: labels[job.type] || job.type },
             { label: "Tentativa", value: job.attempt || "-" },
             { label: "Timeout", value: job.timeoutSeconds ? job.timeoutSeconds + "s" : "-" },
@@ -2282,7 +2308,7 @@
             type: job.type,
             status: job.status,
             stage: job.stage,
-            progress: job.progressPercentage || job.progress,
+            progress: jobProgress(job),
             payload: job.payload || {},
             result: job.resultJson || {},
             stdout: job.stdout || "",

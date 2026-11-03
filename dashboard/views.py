@@ -15,7 +15,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Case, Count, IntegerField, Max, Q, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -836,20 +836,19 @@ def build_disk_rows(disks):
         disk = ensure_dict(disk)
         if not disk:
             continue
-        size = disk.get('size_bytes') or disk.get('total_bytes') or 0
-        free = disk.get('free_bytes') or 0
-        try:
-            size = int(size)
-            free = int(free)
-        except (TypeError, ValueError):
-            size = 0
-            free = 0
+        def valid_bytes(value):
+            try:
+                value = int(value) if value is not None and value != '' else None
+                return value if value is not None and value >= 0 else None
+            except (TypeError, ValueError, OverflowError):
+                return None
+        size = valid_bytes(disk.get('size_bytes') if disk.get('size_bytes') is not None else disk.get('total_bytes'))
+        free = valid_bytes(disk.get('free_bytes'))
+        used_percent = round(((size - free) / size) * 100) if size and free is not None and free <= size else None
 
-        used_percent = 0
-        if size > 0:
-            used_percent = round(((size - free) / size) * 100)
-
-        if used_percent >= 90:
+        if used_percent is None:
+            level = 'unknown'
+        elif used_percent >= 90:
             level = 'critical'
         elif used_percent >= 80:
             level = 'warning'
@@ -884,11 +883,12 @@ def get_primary_disk(disks):
         }
 
     primary = next((disk for disk in rows if str(disk['name']).upper().startswith('C:')), rows[0])
-    total = f"{primary['size_gb']} GB" if primary['size_gb'] is not None else '-'
-    free = f"{primary['free_gb']} GB" if primary['free_gb'] is not None else '-'
+    total = f"{primary['size_gb']} GiB" if primary['size_gb'] is not None else '-'
+    free = f"{primary['free_gb']} GiB" if primary['free_gb'] is not None else '-'
+    used = f"{primary['used_percent']}% usado" if primary['used_percent'] is not None else 'uso desconhecido'
     return {
         **primary,
-        'summary': f"{primary['name']} · {primary['used_percent']}% usado · {free} livre de {total}",
+        'summary': f"{primary['name']} · {used} · {free} livre de {total}",
         'has_data': True,
     }
 
@@ -2064,10 +2064,13 @@ def jobs_data(request):
             history.append({'event':event.event_type,'at':event.created_at.isoformat(),'actor':event.actor_name})
     rows=[]
     endpoints={}
+    heartbeats = {row['machine_id']: row['latest'] for row in InventorySnapshot.objects.filter(
+        machine_id__in={job.endpoint_id for job in jobs}, raw_payload__snapshot_source='heartbeat'
+    ).values('machine_id').annotate(latest=Max('received_at'))}
     for job in jobs:
         row=serialize_agent_job(job)
         row.update(endpointId=str(job.endpoint_id),history=list(reversed(histories[str(job.pk)])),
-                   communication=job.endpoint.status,lastHeartbeatAt=_iso_or_none(job.endpoint.last_seen_at))
+                   communication=job.endpoint.status,lastHeartbeatAt=_iso_or_none(heartbeats.get(job.endpoint_id)))
         rows.append(row)
         endpoints[str(job.endpoint_id)]={'id':str(job.endpoint_id),'hostname':job.endpoint.hostname}
     response=JsonResponse({'jobs':rows,'endpoints':list(endpoints.values()),'source':'persisted','limit':200})
@@ -2712,17 +2715,23 @@ def _agent_indicator_from_status(endpoint, diagnostic, recommended_version):
         return diagnostic.health_indicator
     if agent_version_state(endpoint.agent_version, recommended_version) == 'outdated':
         return 'attention'
-    return 'healthy'
+    return 'unknown'
 
 
-def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version, *, can_view_technical=False, can_view_admin=False):
+def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version, *, can_view_technical=False, can_view_admin=False, last_heartbeat=None):
     installed_version = endpoint.agent_version or (diagnostic.installed_version if diagnostic else '')
     available_version = (diagnostic.available_version if diagnostic else '') or recommended_version
-    running_jobs = [job for job in jobs if job.status in {AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING}]
     last_error_message = diagnostic.last_error_message if diagnostic and can_view_admin else (diagnostic.last_error_message[:160] if diagnostic and can_view_technical else '')
     update_error_message = diagnostic.update_error_message if diagnostic and can_view_admin else (diagnostic.update_error_message[:160] if diagnostic and can_view_technical else '')
     rollback_error_message = diagnostic.rollback_error_message if diagnostic and can_view_admin else (diagnostic.rollback_error_message[:160] if diagnostic and can_view_technical else '')
     result_last_send_error = diagnostic.result_last_send_error if diagnostic and can_view_admin else (diagnostic.result_last_send_error[:160] if diagnostic and can_view_technical else '')
+    diagnostic_raw = ensure_dict(diagnostic.raw_payload if diagnostic else {})
+    raw_queue = ensure_dict(diagnostic_raw.get('result_queue') or diagnostic_raw.get('pending_results') or diagnostic_raw.get('queue'))
+    raw_agent_status = ensure_dict(diagnostic_raw.get('agent') or diagnostic_raw.get('agent_status') or diagnostic_raw)
+    raw_updater = ensure_dict(diagnostic_raw.get('updater') or diagnostic_raw.get('update_state'))
+    def reported_count(key, value):
+        raw = raw_queue.get(key)
+        return value if type(raw) is int and raw >= 0 else None
     return {
         'visible': bool(can_view_technical),
         'admin': bool(can_view_admin),
@@ -2730,15 +2739,17 @@ def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version,
         'summary': {
             'installed_version': installed_version or '',
             'available_version': available_version or '',
-            'last_heartbeat_at': _iso_or_none((diagnostic.last_heartbeat_at if diagnostic else None) or endpoint.last_seen_at),
+            'last_heartbeat_at': _iso_or_none(last_heartbeat),
+            'last_communication_at': _iso_or_none(endpoint.last_seen_at),
+            'diagnostic_reported_at': _iso_or_none(diagnostic.updated_at if diagnostic else None),
             'last_inventory_at': _iso_or_none(diagnostic.last_inventory_at if diagnostic else None),
             'last_agent_start_at': _iso_or_none(diagnostic.last_agent_start_at if diagnostic else None),
-            'agent_uptime_seconds': diagnostic.agent_uptime_seconds if diagnostic else None,
-            'service_status': (diagnostic.service_status if diagnostic else '') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE else ''),
+            'agent_uptime_seconds': diagnostic.agent_uptime_seconds if diagnostic and type(raw_agent_status.get('agent_uptime_seconds')) is int else None,
+            'service_status': (diagnostic.service_status if diagnostic else '') or '',
             'current_user': diagnostic.current_user if diagnostic else endpoint.last_logged_user,
             'current_ip': str((diagnostic.current_ip if diagnostic else None) or endpoint.last_ip or ''),
-            'pending_result_count': diagnostic.pending_result_count if diagnostic else 0,
-            'running_job_count': diagnostic.running_job_count if diagnostic else len(running_jobs),
+            'pending_result_count': reported_count('pending_count', diagnostic.pending_result_count) if diagnostic else None,
+            'running_job_count': diagnostic.running_job_count if diagnostic and type(raw_agent_status.get('running_job_count')) is int else None,
         },
         'last_error': {
             'component': diagnostic.last_error_component if diagnostic else '',
@@ -2756,8 +2767,8 @@ def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version,
             'started_at': _iso_or_none(diagnostic.update_started_at if diagnostic else None),
             'completed_at': _iso_or_none(diagnostic.update_completed_at if diagnostic else None),
             'rollback_status': diagnostic.rollback_status if diagnostic else '',
-            'rollback_attempt': diagnostic.rollback_attempt if diagnostic else 0,
-            'health_check_confirmed': diagnostic.health_check_confirmed if diagnostic else False,
+            'rollback_attempt': diagnostic.rollback_attempt if diagnostic and type(raw_updater.get('rollback_attempt')) is int else None,
+            'health_check_confirmed': diagnostic.health_check_confirmed if diagnostic and type(raw_updater.get('health_check_confirmed')) is bool else None,
             'error_code': diagnostic.update_error_code if diagnostic else '',
             'error_message': update_error_message,
             'rollback_error_code': diagnostic.rollback_error_code if diagnostic else '',
@@ -2765,11 +2776,11 @@ def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version,
             'package_url': diagnostic.package_url_sanitized if diagnostic and can_view_admin else '',
         },
         'queue': {
-            'pending_count': diagnostic.result_pending_count if diagnostic else 0,
+            'pending_count': reported_count('pending_count', diagnostic.result_pending_count) if diagnostic else None,
             'oldest_pending_at': _iso_or_none(diagnostic.result_oldest_pending_at if diagnostic else None),
-            'retrying_count': diagnostic.result_retrying_count if diagnostic else 0,
-            'quarantined_count': diagnostic.result_quarantined_count if diagnostic else 0,
-            'queue_full': diagnostic.result_queue_full if diagnostic else False,
+            'retrying_count': reported_count('retrying_count', diagnostic.result_retrying_count) if diagnostic else None,
+            'quarantined_count': reported_count('quarantined_count', diagnostic.result_quarantined_count) if diagnostic else None,
+            'queue_full': diagnostic.result_queue_full if diagnostic and type(raw_queue.get('queue_full')) is bool else None,
             'last_send_error': result_last_send_error,
         },
     }
@@ -3037,7 +3048,7 @@ def serialize_deployment_status(deployment):
             'machine_id': endpoint.machine_id,
             'agent_version': endpoint.agent_version,
             'service_status': service_status,
-            'last_heartbeat_at': _iso_or_none(endpoint.last_seen_at),
+            'last_heartbeat_at': _iso_or_none(endpoint.inventory_snapshots.filter(raw_payload__snapshot_source='heartbeat').order_by('-received_at').values_list('received_at', flat=True).first()),
             'url': reverse('endpoint-detail', args=[endpoint.pk]),
         } if endpoint else None),
     }
@@ -3155,6 +3166,48 @@ def _update_policy_message(reason_code):
     return messages_by_reason.get(reason_code or '', 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.')
 
 
+def operational_action_availability(endpoint, user):
+    from agents import administrative_actions as admin
+    from agents.internal_jobs import internal_capability
+    from agents.operational_actions import authorize
+    actions = ('flush_dns', 'query_service', 'gpupdate', 'start_service', 'stop_service', 'restart_service')
+    result = {name: {'enabled': False, 'services': []} for name in actions}
+    if (not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False) or
+            endpoint.status != AgentMachine.STATUS_ONLINE or not endpoint.machine_id or
+            AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
+        return result
+    scopes = getattr(settings, 'NIGHTOWL_ADMIN_ACTION_SCOPES', {})
+    scope = scopes.get(str(endpoint.pk), {}) if isinstance(scopes, dict) else {}
+    scope = scope if isinstance(scope, dict) else {}
+    for name in actions:
+        try:
+            authorize(user, name)
+            if not internal_capability(endpoint, f'operational_action:{name}:1'):
+                continue
+            if name in admin.PERMISSIONS:
+                if not getattr(settings, 'NIGHTOWL_ADMIN_ACTIONS_ENABLED', False):
+                    continue
+                if name == 'gpupdate':
+                    if scope.get(name) is not True:
+                        continue
+                else:
+                    allowed = scope.get(name)
+                    if not isinstance(allowed, list):
+                        continue
+                    for service in allowed:
+                        try:
+                            admin.validate_parameters(name, {'service_name': service})
+                            result[name]['services'].append(service)
+                        except ValueError:
+                            continue
+                    if not result[name]['services']:
+                        continue
+            result[name]['enabled'] = True
+        except PermissionError:
+            continue
+    return result
+
+
 def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets, *, request=None):
     update_decision = evaluate_agent_update_policy(endpoint, manual=False)
     recommended_version = update_decision.target_version or latest_agent_version()
@@ -3162,6 +3215,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     user = getattr(request, 'user', None)
     can_view_admin = bool(user and getattr(user, 'is_authenticated', False) and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
     diagnostic = _endpoint_diagnostic(endpoint)
+    latest_heartbeat = endpoint.inventory_snapshots.filter(raw_payload__snapshot_source='heartbeat').order_by('-received_at').first()
     raw_payload = ensure_dict(snapshot.raw_payload if snapshot else {})
     raw_agent = ensure_dict(raw_payload.get('agent'))
     system = _normalize_collection_dict(_raw_collection(snapshot, 'system'))
@@ -3188,7 +3242,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'updater_version': raw_agent.get('updater_version') or raw_payload.get('updater_version') or '',
         'install_mode': raw_agent.get('install_mode') or ('service' if (endpoint.agent_mode or '').lower() == 'service' else ''),
         'service_name': raw_agent.get('service_name') or endpoint.agent_task_name or 'NightOwlAgent',
-        'service_status': raw_agent.get('service_status') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE and (endpoint.agent_mode or '').lower() == 'service' else ''),
+        'service_status': raw_agent.get('service_status') or '',
         'service_start_type': raw_agent.get('service_start_type') or '',
         'service_account': raw_agent.get('service_account') or '',
         'install_path': endpoint.agent_install_path or raw_agent.get('install_path') or r'C:\ProgramData\NightOwl\Agent',
@@ -3200,7 +3254,8 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'jobs_pull_url': raw_agent.get('jobs_pull_url') or '',
         'jobs_result_url': raw_agent.get('jobs_result_url') or '',
         'collection_endpoints': raw_agent.get('collection_endpoints') or {},
-        'last_heartbeat_at': _iso_or_none(endpoint.last_seen_at),
+        'last_heartbeat_at': _iso_or_none(latest_heartbeat.received_at if latest_heartbeat else None),
+        'last_communication_at': _iso_or_none(endpoint.last_seen_at),
         'last_inventory_at': full_inventory.get('collected_at') or system.get('collected_at') or hardware.get('collected_at') or network.get('collected_at'),
         'last_software_inventory_at': software_collection.get('collected_at') or full_inventory.get('collected_at'),
         'last_security_inventory_at': security_collection.get('collected_at') or full_inventory.get('collected_at'),
@@ -3262,8 +3317,10 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'dnsServers': network.get('dns_servers') or [],
             'adapters': network_adapters,
             'macs': macs,
-            'uptime': format_uptime(system.get('uptime_seconds') or (snapshot.uptime_seconds if snapshot else None)),
-            'lastFullInventory': full_inventory.get('collected_at') or system.get('collected_at') or hardware.get('collected_at'),
+            'uptime': format_uptime(latest_heartbeat.uptime_seconds if latest_heartbeat else None),
+            'uptimeObservedAt': _iso_or_none(latest_heartbeat.received_at if latest_heartbeat else None),
+            'lastFullInventory': full_inventory.get('collected_at') if full_inventory.get('collection_scope') != 'scheduled' else None,
+            'networkCollectedAt': network.get('collected_at'),
             'raw': {
                 'system': system,
                 'hardware': hardware,
@@ -3409,6 +3466,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
 
     return {
         'data_source': 'real',
+        'operational_actions': operational_action_availability(endpoint, user),
         'endpoint': {
             'id': str(endpoint.id),
             'machine_id': endpoint.machine_id or str(endpoint.id),
@@ -3455,6 +3513,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             recommended_version,
             can_view_technical=can_view_technical,
             can_view_admin=can_view_admin,
+            last_heartbeat=latest_heartbeat.received_at if latest_heartbeat else None,
         ),
         'inventory': inventory,
         'hardware': hardware or None,
@@ -3547,7 +3606,10 @@ def endpoint_detail(request, pk):
     context['winrm_recovery_available'] = bool(
         request.is_secure() and request.user.is_authenticated and request.user.is_active
         and (request.user.is_staff or request.user.is_superuser)
-        and endpoint.is_active and endpoint.machine_id
+        and endpoint.is_active and not endpoint.has_terminal_lifecycle and endpoint.machine_id
+        and endpoint.agent_token_hash and endpoint.agent_version and endpoint.fqdn
+        and endpoint.last_seen_at and endpoint.last_seen_at < timezone.now() - timedelta(minutes=5)
+        and AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() == 1
         and endpoint.status == AgentMachine.STATUS_OFFLINE
     )
     context['winrm_observability_available'] = bool(
@@ -3575,12 +3637,15 @@ def endpoint_detail(request, pk):
         context['winrm_authentication'] = 'validada na última recuperação' if last_recovery and last_recovery.status == 'COMPLETED' else 'não verificada'
         context['winrm_authentication_at'] = last_recovery.finished_at if last_recovery else None
     from agents.terminal_sessions import authorize as authorize_terminal, validate_mode as validate_terminal_mode, enabled as terminal_enabled
+    from agents.internal_jobs import internal_capability
     context['terminal_available'] = False
     context['terminal_admin_auth_available'] = False
     if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False):
         try:
             authorize_terminal(request.user, endpoint)
             validate_terminal_mode(request.user, endpoint, 'admin_auth')
+            if not internal_capability(endpoint, 'remote_terminal_transport:1'):
+                raise ValueError('transport_capability_unconfirmed')
             context['terminal_admin_auth_available'] = True
         except (ValueError, PermissionError):
             pass
@@ -3591,6 +3656,25 @@ def endpoint_detail(request, pk):
             context['terminal_available'] = True
         except (ValueError, PermissionError):
             pass
+    # Page-only eligibility hints; dispatch repeats every authorization check.
+    from agents.script_library import CATALOG as approved_script_catalog
+    from agents.operational_actions import validate_dispatch as validate_operational_dispatch
+    script_availability = {}
+    for script in approved_script_catalog.values():
+        key = f'{script.script_id}:{script.version}:{script.sha256}'
+        script_availability[key] = False
+        if endpoint.status != AgentMachine.STATUS_ONLINE:
+            continue
+        candidate = AgentJob(endpoint=endpoint, job_type='operational_action', created_by=request.user.get_username(),
+            timeout_seconds=15, payload={'action_id': 'run_approved_script', 'action_version': 1,
+                'parameters': {'script_id': script.script_id, 'script_version': script.version,
+                    'sha256': script.sha256, 'parameters': {}}})
+        try:
+            validate_operational_dispatch(candidate, creating=True)
+            script_availability[key] = True
+        except (ValueError, PermissionError):
+            pass
+    context['approved_script_availability'] = script_availability
     context['endpoint_detail_payload'] = build_endpoint_detail_payload(
         endpoint,
         snapshot,

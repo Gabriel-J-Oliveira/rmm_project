@@ -289,7 +289,7 @@ def continuous_summary(endpoint, start, end, rows):
         'quality': {'expected_samples': expected, 'received_samples': received, 'coverage_percent': received/expected*100 if expected else None,
                     'over_expected_samples': max(0, received-expected), 'first_sample_at': rows[0].collected_at.isoformat() if rows else None,
                     'last_sample_at': rows[-1].window_end_at.isoformat() if rows else None, 'metric_validity': validity,
-                    'gap_threshold_seconds': 70, 'largest_internal_gap_seconds': max(((b.collected_at-a.window_end_at).total_seconds() for a,b in zip(rows, rows[1:])), default=None),
+                    'gap_threshold_seconds': 10, 'largest_internal_gap_seconds': max(((b.collected_at-a.window_end_at).total_seconds() for a,b in zip(rows, rows[1:])), default=None),
                     'gaps_over_threshold_count': sum((b.collected_at-a.window_end_at).total_seconds() > 10 for a,b in zip(rows, rows[1:])),
                     'ingestion_lag_seconds': {'avg': sum((row.created_at-row.window_end_at).total_seconds() for row in rows)/len(rows) if rows else None},
                     'negative_lag_samples': sum(row.created_at < row.window_end_at for row in rows),

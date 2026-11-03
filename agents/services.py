@@ -408,20 +408,20 @@ def _normalize_disk_rows(disks):
     for disk in disks or []:
         if not isinstance(disk, dict):
             continue
-        size = disk.get('size_bytes') or disk.get('total_bytes') or 0
-        free = disk.get('free_bytes') or 0
+        size = disk.get('size_bytes') if disk.get('size_bytes') is not None else disk.get('total_bytes')
+        free = disk.get('free_bytes')
         used = disk.get('used_bytes')
-        if used is None:
+        if used is None and size is not None and free is not None:
             try:
-                used = int(size or 0) - int(free or 0)
+                used = int(size) - int(free)
             except (TypeError, ValueError):
-                used = 0
+                used = None
         rows.append({
             'name': disk.get('name') or disk.get('letter') or disk.get('device_id') or '-',
             'letter': disk.get('letter') or disk.get('name') or '',
             'label': disk.get('label') or disk.get('volume_name') or '',
             'size_bytes': size,
-            'total_bytes': disk.get('total_bytes') or size,
+            'total_bytes': disk.get('total_bytes') if disk.get('total_bytes') is not None else size,
             'free_bytes': free,
             'used_bytes': used,
             'filesystem': disk.get('filesystem') or '',
@@ -1335,15 +1335,17 @@ def _snapshot_defaults(machine, latest=None):
 
 def _raw_payload_with_previous_collections(machine, raw_payload):
     payload = dict(raw_payload or {})
-    if payload.get('collections'):
-        return payload
     for latest in machine.inventory_snapshots.order_by('-received_at')[:30]:
         latest_raw = getattr(latest, 'raw_payload', None) or {}
-        latest_collections = latest_raw.get('collections') if isinstance(latest_raw, dict) else None
-        if latest_collections:
-            payload['collections'] = latest_collections
-            payload['latest_collection_type'] = latest_raw.get('latest_collection_type')
-            payload['latest_collection_received_at'] = latest_raw.get('latest_collection_received_at')
+        if not isinstance(latest_raw, dict):
+            continue
+        if 'collections' not in payload and latest_raw.get('collections'):
+            for key in ('collections', 'latest_collection_type', 'latest_collection_received_at'):
+                if key in latest_raw:
+                    payload[key] = latest_raw[key]
+        if 'inventory_observations' not in payload and latest_raw.get('inventory_observations'):
+            payload['inventory_observations'] = latest_raw['inventory_observations']
+        if 'collections' in payload and 'inventory_observations' in payload:
             break
     return payload
 

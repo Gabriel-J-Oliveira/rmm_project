@@ -14,7 +14,7 @@ assert(source.includes("function renderJobs(jobs, limit)"), "renderJobs must exi
 assert(source.includes("function renderJobItem(job, isActive)"), "renderJobItem must be explicit");
 assert(source.includes("endpoint-active-job"), "active job highlight must be rendered");
 assert(source.includes("Historico recente"), "recent history section must be rendered");
-assert(source.includes("progressPercentage") && source.includes("progress_percentage"), "backend progress fields must be consumed");
+assert(source.includes("NightOwlJobDisplay.measuredProgress"), "only measured job progress may be displayed");
 assert(source.includes("data-copy-job-details"), "technical detail copy action must exist");
 assert(source.includes("data-mark-job-failed"), "manual stale failure action must exist");
 assert(source.includes("document.hidden"), "polling must slow down in background tabs");

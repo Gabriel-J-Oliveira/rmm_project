@@ -7,15 +7,17 @@
         event.preventDefault();
         if (window.location.protocol !== 'https:') return;
         button.disabled = true;
+        document.dispatchEvent(new CustomEvent('nightowl:winrm-checking'));
         output.textContent = 'Verificação em andamento...';
         try {
             const response = await fetch(form.action, {method: 'POST', credentials: 'same-origin',
                 headers: {'X-CSRFToken': form.elements.csrfmiddlewaretoken.value}});
             const data = await response.json();
+            document.dispatchEvent(new CustomEvent('nightowl:winrm-checked', {detail: response.ok ? data : null}));
             output.textContent = response.ok
                 ? `TCP ${data.tcp}; WS-Man ${data.wsman}; autenticação ${data.authentication}; ${data.checked_at}. ${data.error || ''}`
                 : `Verificação indisponível: ${data.error_code || 'erro'}`;
-        } catch (_) { output.textContent = 'Verificação indisponível.'; }
+        } catch (_) { output.textContent = 'Verificação indisponível.'; document.dispatchEvent(new CustomEvent('nightowl:winrm-checked', {detail:null})); }
         finally { button.disabled = false; }
     });
 })();

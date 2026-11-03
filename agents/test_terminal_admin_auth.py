@@ -25,6 +25,24 @@ def enable_admin(machine, operator):
 
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True, NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True)
 class AdminAuthControlTests(TestCase):
+    def test_endpoint_button_respects_status_and_transport_capability(self):
+        machine, _, operator = fixture('admin-auth-button')
+        enable_admin(machine, operator)
+        machine.status = 'online'
+        machine.save(update_fields=['status'])
+        self.client.force_login(operator)
+        url = reverse('endpoint-detail', args=[machine.pk])
+        response = self.client.get(url)
+        self.assertContains(response, 'data-terminal-open')
+        self.assertNotContains(response, 'data-terminal-open disabled')
+        machine.status = 'offline'
+        machine.save(update_fields=['status'])
+        self.assertContains(self.client.get(url), 'data-terminal-open disabled')
+        snapshot = InventorySnapshot.objects.get(machine=machine)
+        snapshot.raw_payload['agent']['capabilities'].remove('remote_terminal_transport:1')
+        snapshot.save(update_fields=['raw_payload'])
+        self.assertNotContains(self.client.get(url), 'data-terminal-open')
+
     def test_logout_closes_session_and_prevents_ticket_reuse(self):
         machine, _, operator = fixture('admin-auth-logout')
         enable_admin(machine, operator)
