@@ -2502,7 +2502,7 @@ $env:NIGHTOWL_DEPLOYMENT_TOKEN = 'deploy_optional_metadata_test'
 $script = (Get-Content -Raw -Path '{safe_script}').Replace('__NIGHTOWL_DEPLOYMENT_METADATA_URL__', 'https://nightowl.test/deployments/metadata/')
 $script = $script.Replace("    Assert-Administrator`r`n", "    # Assert-Administrator bypassed by regression test`r`n")
 $script = $script.Replace("    Assert-Administrator`n", "    # Assert-Administrator bypassed by regression test`n")
-$script = $script.Replace('& powershell.exe @installArgs', '$global:CapturedInstallArgs = $installArgs; $global:CapturedInstallerEnrollmentToken = $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN; $global:InstallerInvoked = $true; $global:LASTEXITCODE = 0')
+$script = $script.Replace('& powershell.exe @installArgs *> $null', '$global:CapturedInstallArgs = $installArgs; $global:CapturedInstallerEnrollmentToken = $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN; $global:InstallerInvoked = $true; $global:LASTEXITCODE = 0')
 $override = @'
 function Invoke-JsonGet([string]$Url, [string]$DeploymentToken) {{
     return [pscustomobject]@{{
@@ -2565,8 +2565,7 @@ Write-Output 'OPTIONAL_GIT_COMMIT_OK'
             )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         self.assertIn('OPTIONAL_GIT_COMMIT_OK', completed.stdout)
-        self.assertIn('NightOwl installation pending', completed.stdout)
-        self.assertIn('deployment_confirmation_status=failed', completed.stdout)
+        self.assertNotIn('NightOwl installation pending', completed.stdout)
 
     @skipUnless(os.name == 'nt', 'Windows bootstrap requires Windows; covered by Windows CI')
     def test_bootstrap_still_fails_when_required_metadata_is_missing(self):
