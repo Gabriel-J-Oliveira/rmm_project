@@ -42,6 +42,10 @@ if ($env:NIGHTOWL_INSTALLER_SILENT -eq '1') { $NonInteractive = $true }
 if ([string]::IsNullOrWhiteSpace($EnrollmentToken) -and -not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
     $EnrollmentToken = [string]$env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN
 }
+if ([string]::IsNullOrWhiteSpace($ManualValidationToken) -and -not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN)) {
+    $ManualValidationToken = [string]$env:NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN
+    Remove-Item Env:\NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN -ErrorAction SilentlyContinue
+}
 
 function New-NightOwlPaths([string]$RequestedInstallPath) {
     $root = if ([string]::IsNullOrWhiteSpace($env:NIGHTOWL_HOME)) { "C:\ProgramData\NightOwl" } else { $env:NIGHTOWL_HOME }

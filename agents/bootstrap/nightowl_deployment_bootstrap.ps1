@@ -219,7 +219,14 @@ try {
 
     $existingState = Get-ExistingInstallationState -Root 'C:\ProgramData\NightOwl' -Metadata $metadata
     Write-NightOwlBootstrapLog "existing_installation" @{ state = $existingState }
-    if ($existingState -ne 'healthy_compatible') {
+    $needsManual = (Get-OptionalJsonProperty -Object $metadata -Name 'manual_validation_required') -eq 'True'
+    if ($needsManual) {
+        $manualToken = Read-Host 'Informe o token de validacao manual NightOwl'
+        if ([string]::IsNullOrWhiteSpace($manualToken)) { throw 'BOOTSTRAP_TOKEN_REQUIRED' }
+        $env:NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN = $manualToken
+        $manualToken = $null
+    }
+    if ($existingState -ne 'healthy_compatible' -or $needsManual) {
     $Stage = "download"
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
     $trustPath = Join-Path $TempRoot "release-public-keys.json"
@@ -271,6 +278,7 @@ try {
     finally {
         $ErrorActionPreference = $installerErrorPreference
         Remove-Item Env:\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
+        Remove-Item Env:\NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN -ErrorAction SilentlyContinue
         [Environment]::SetEnvironmentVariable('NIGHTOWL_INSTALLER_SILENT', $previousInstallerSilent, 'Process')
     }
     if ($installerExitCode -ne 0) {
@@ -389,6 +397,7 @@ try {
     $global:NightOwlDeploymentBootstrapExitCode = 1
 } finally {
     Remove-Item Env:\NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:\NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN -ErrorAction SilentlyContinue
     [Environment]::SetEnvironmentVariable('NIGHTOWL_INSTALLER_SILENT', $previousInstallerSilent, 'Process')
     Remove-Item Env:\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
     $ProgressPreference = $previousProgressPreference

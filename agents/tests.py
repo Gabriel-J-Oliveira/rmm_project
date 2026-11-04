@@ -2652,12 +2652,10 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         response = self.client.get(reverse('agent-install'))
         self.assertEqual(response.status_code, 200)
         content = response.content.decode('utf-8')
-        self.assertIn('INSTALA&Ccedil;&Atilde;O MANUAL', content)
-        self.assertIn('data-deployment-form', content)
-        self.assertIn('data-deployment-open', content)
-        self.assertIn('manual_deployment.js', content)
-        self.assertLess(content.index('id="manual-deployment"'), content.index('id="ad-discovery"'))
-        self.assertIn('<details class="agent-install-legacy" id="agent-install-legacy" >', content)
+        self.assertIn('data-manual-install="ad"', content)
+        self.assertIn('data-manual-install="external"', content)
+        self.assertIn('manual_install_forms.js', content)
+        self.assertNotIn('id="generated-install-command"', content)
 
     def test_bootstrap_logs_only_sanitized_failure_diagnostics(self):
         script = (settings.BASE_DIR / 'agents' / 'bootstrap' / 'nightowl_deployment_bootstrap.ps1').read_text(encoding='utf-8')
@@ -2671,6 +2669,108 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(AgentDeploymentToken.objects.count(), 0)
+
+    def test_manual_batch_issues_distinct_bounded_deployments(self):
+        from .models import AgentDeploymentBatch
+        response = self.client.post(reverse('api-deployment-create'), {'install_kind': 'ad', 'name': 'Lote',
+            'allowed_domain': 'control.local', 'expires_hours': '2', 'max_uses': '2',
+            'channel': 'development', 'release_id': str(self.release.pk)})
+        self.assertEqual(response.status_code, 201, response.content)
+        batch_data = response.json()['batch']
+        self.assertNotIn('command', batch_data)
+        self.assertNotIn('token', json.dumps(batch_data))
+        issue_url = batch_data['issue_url']
+        first_id = str(uuid.uuid4())
+        self.assertIn(Client().post(issue_url, {'request_id': first_id}).status_code, (302, 403))
+        other_user = get_user_model().objects.create_user('other-operator', password='synthetic', is_staff=True)
+        other_client = Client()
+        other_client.force_login(other_user)
+        self.assertEqual(other_client.post(issue_url, {'request_id': first_id}).status_code, 404)
+        one = self.client.post(issue_url, {'request_id': first_id})
+        self.assertEqual(one.status_code, 201, one.content)
+        self.assertEqual(self.client.post(issue_url, {'request_id': first_id}).status_code, 409)
+        two = self.client.post(issue_url, {'request_id': str(uuid.uuid4())})
+        self.assertEqual(two.status_code, 201, two.content)
+        token = one.json()['deployment']['command'].split("$env:NIGHTOWL_DEPLOYMENT_TOKEN='", 1)[1].split("'", 1)[0]
+        self.assertNotEqual(one.json()['deployment']['id'], two.json()['deployment']['id'])
+        self.assertEqual(self.client.post(issue_url, {'request_id': str(uuid.uuid4())}).status_code, 409)
+        batch = AgentDeploymentBatch.objects.get()
+        self.assertEqual(batch.used_count, 2)
+        self.assertEqual(AgentDeploymentToken.objects.filter(metadata__batch_id=str(batch.id)).count(), 2)
+        payload = {'enrollment_token': token, 'machine_id': 'batch-pc-1', 'hostname': 'PC-1',
+                   'domain': 'control.local', 'agent_version': self.release.version}
+        def enroll(data):
+            return Client().post(reverse('agent-enroll'), data=json.dumps(data), content_type='application/json')
+        self.assertEqual(enroll({**payload, 'domain': 'other.local'}).status_code, 403)
+        self.assertEqual(enroll({**payload, 'agent_version': 'wrong'}).status_code, 403)
+        self.assertEqual(enroll(payload).status_code, 200)
+        self.assertEqual(enroll(payload).status_code, 403)
+        self.assertNotIn(token, json.dumps(list(AuditEvent.objects.values_list('metadata', flat=True))))
+        batch.max_uses = 3
+        batch.expires_at = timezone.now() - timedelta(seconds=1)
+        batch.save(update_fields=['max_uses', 'expires_at'])
+        self.assertEqual(self.client.post(issue_url, {'request_id': str(uuid.uuid4())}).status_code, 409)
+        batch.expires_at = timezone.now() + timedelta(minutes=10)
+        batch.save(update_fields=['expires_at'])
+        self.assertEqual(self.client.post(batch_data['revoke_url']).status_code, 200)
+        self.assertEqual(self.client.post(issue_url, {'request_id': str(uuid.uuid4())}).status_code, 409)
+
+    def test_manual_batch_issuance_rolls_back_on_audit_failure(self):
+        from .models import AgentDeploymentBatch
+        batch = AgentDeploymentBatch.objects.create(name='Lote', release=self.release, created_by=self.user,
+            allowed_domain='control.local', expires_at=timezone.now()+timedelta(minutes=10), max_uses=1)
+        with mock.patch('dashboard.views.create_audit_event', side_effect=RuntimeError('synthetic')):
+            with self.assertRaises(RuntimeError):
+                self.client.post(reverse('api-deployment-batch-issue', kwargs={'pk': batch.pk}), {'request_id': str(uuid.uuid4())})
+        batch.refresh_from_db()
+        self.assertEqual(batch.used_count, 0)
+        self.assertFalse(AgentDeploymentToken.objects.filter(metadata__batch_id=str(batch.pk)).exists())
+
+    def test_external_deployment_requires_its_manual_token_and_release(self):
+        from .models import AgentManualValidationToken
+        response = self.client.post(reverse('api-deployment-create'), {'install_kind': 'external', 'name': 'Notebook',
+            'expires_minutes': '30', 'channel': 'development', 'release_id': str(self.release.pk)})
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        token = body['deployment']['command'].split("$env:NIGHTOWL_DEPLOYMENT_TOKEN='", 1)[1].split("'", 1)[0]
+        manual = body['manual_token']
+        _, other = AgentManualValidationToken.create_with_token(name='Other', expires_at=timezone.now()+timedelta(minutes=30))
+        payload = {'enrollment_token': token, 'machine_id': 'external-test-001', 'hostname': 'EXT001',
+                   'domain': '', 'agent_version': self.release.version}
+        client = Client()
+        def enroll(data):
+            return client.post(reverse('agent-enroll'), data=json.dumps(data), content_type='application/json')
+        self.assertEqual(enroll({k: v for k, v in {**payload, 'manual_validation_token': manual}.items() if k != 'enrollment_token'}).status_code, 403)
+        self.assertEqual(enroll(payload).status_code, 403)
+        self.assertEqual(enroll({**payload, 'manual_validation_token': other}).status_code, 403)
+        self.assertEqual(enroll({**payload, 'manual_validation_token': manual, 'agent_version': 'wrong'}).status_code, 403)
+        manual_record = AgentManualValidationToken.objects.get(pk=AgentDeploymentToken.objects.get(pk=body['deployment']['id']).metadata['manual_validation_id'])
+        manual_record.expires_at = timezone.now() - timedelta(seconds=1)
+        manual_record.save(update_fields=['expires_at'])
+        self.assertEqual(enroll({**payload, 'manual_validation_token': manual}).status_code, 403)
+        manual_record.expires_at = timezone.now() + timedelta(minutes=10)
+        manual_record.save(update_fields=['expires_at'])
+        self.assertEqual(enroll({**payload, 'manual_validation_token': manual}).status_code, 200)
+        self.assertEqual(enroll({**payload, 'manual_validation_token': manual}).status_code, 403)
+        # Migração também remove prefixos antigos que armazenavam o token inteiro.
+        import importlib
+        from types import SimpleNamespace
+        from django.apps import apps
+        manual_record.prefix = manual
+        manual_record.save(update_fields=['prefix'])
+        legacy_log = AgentEnrollmentLog.objects.create(status='error', metadata={'manual_validation_token_prefix': manual})
+        importlib.import_module('agents.migrations.0046_deployment_batch').redact_manual_prefixes(
+            apps, SimpleNamespace(connection=SimpleNamespace(alias='default')))
+        manual_record.refresh_from_db()
+        legacy_log.refresh_from_db()
+        self.assertEqual(manual_record.prefix, manual[:10])
+        self.assertEqual(legacy_log.metadata['manual_validation_token_prefix'], manual[:10])
+        stored = json.dumps(list(AgentEnrollmentLog.objects.values('message', 'metadata')),
+                            default=str) + json.dumps(list(AuditEvent.objects.values('description', 'metadata')), default=str)
+        self.assertNotIn(manual, stored)
+        self.assertNotIn(token, stored)
+        AgentDeploymentToken.objects.get(pk=body['deployment']['id']).delete()
+        self.assertFalse(AgentManualValidationToken.objects.filter(pk=manual_record.pk).exists())
 
     def test_stable_selects_current_eligible_release(self):
         stable = AgentRelease.objects.create(
@@ -2697,6 +2797,20 @@ Write-Output 'REQUIRED_METADATA_MISSING_FAILED_OK'
         self.assertEqual(response.status_code, 201, response.content)
         deployment = AgentDeploymentToken.objects.get()
         self.assertEqual(deployment.release_id, stable.id)
+
+        # Uma seleção explícita deve prevalecer sobre a versão stable mais nova.
+        stable.pk = uuid.uuid4()
+        stable.version = '0.1.1.0'
+        stable.save(force_insert=True)
+        selected = self.client.post(reverse('api-deployment-create'), {
+            'platform': 'windows', 'channel': 'stable', 'release_id': str(stable.pk),
+        })
+        self.assertEqual(selected.status_code, 201, selected.content)
+        self.assertEqual(selected.json()['deployment']['release_id'], str(stable.pk))
+        rejected = self.client.post(reverse('api-deployment-create'), {
+            'platform': 'windows', 'channel': 'stable', 'release_id': str(self.release.pk),
+        })
+        self.assertEqual(rejected.status_code, 400)
 
     def test_invalid_expired_and_reused_token_are_rejected(self):
         deployment, token, _ = self.create_deployment()

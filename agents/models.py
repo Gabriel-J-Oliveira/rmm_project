@@ -794,6 +794,20 @@ class AgentEnrollmentToken(models.Model):
         return instance, token
 
 
+class AgentDeploymentBatch(models.Model):
+    """Bounded authorization; only the authenticated operator may issue deployments."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=150)
+    release = models.ForeignKey(AgentRelease, on_delete=models.PROTECT)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    allowed_domain = models.CharField(max_length=150)
+    expires_at = models.DateTimeField(db_index=True)
+    max_uses = models.PositiveIntegerField()
+    used_count = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
 class AgentDeploymentToken(models.Model):
     PLATFORM_WINDOWS = 'windows'
     PLATFORM_CHOICES = [
@@ -995,6 +1009,8 @@ class AgentManualValidationToken(models.Model):
         blank=True,
         related_name='manual_validation_tokens',
     )
+    deployment = models.ForeignKey(AgentDeploymentToken, on_delete=models.CASCADE, null=True, blank=True,
+                                   related_name='manual_validation_tokens')
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -1031,7 +1047,7 @@ class AgentManualValidationToken(models.Model):
         token = generate_manual_validation_token()
         instance = cls(
             token_hash=hash_manual_validation_token(token),
-            prefix=token[:18],
+            prefix=token[:10],
             **kwargs,
         )
         instance.save()

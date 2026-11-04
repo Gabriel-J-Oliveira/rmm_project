@@ -418,6 +418,7 @@ class AgentDeploymentBootstrapScriptView(APIView):
         return response
 
 
+
 class AgentDeploymentMetadataView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -464,6 +465,7 @@ class AgentDeploymentMetadataView(APIView):
                 'platform': deployment.platform,
                 'channel': deployment.channel,
                 'expires_at': deployment.expires_at.isoformat(),
+                'manual_validation_required': bool(deployment.metadata.get('manual_validation_id')),
                 'server_url': base_url,
                 'completion_url': request.build_absolute_uri(reverse('agent-deployment-complete')),
                 'release': {
@@ -2228,6 +2230,20 @@ class AgentEnrollView(APIView):
                 status.HTTP_403_FORBIDDEN,
                 metadata={'deployment_id': str(deployment_token.id), 'platform': deployment_token.platform},
             )
+        metadata = deployment_token.metadata or {}
+        if metadata.get('manual_install_kind') or metadata.get('batch_id'):
+            from dashboard.views import _deployment_release_is_usable, _usable_deployment_trust_bundle
+            trust = _usable_deployment_trust_bundle()
+            if (not trust or deployment_token.release.status not in ('published', 'paused') or
+                    not _deployment_release_is_usable(deployment_token.release, trust)):
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_release_unavailable', 'Release ou trust indisponivel.', status.HTTP_403_FORBIDDEN)
+            if str(payload.get('agent_version') or '') != deployment_token.release.version:
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_release_mismatch', 'Release do deployment nao corresponde ao instalador.', status.HTTP_403_FORBIDDEN)
+            if metadata.get('allowed_domain') and normalized_domain(payload.get('domain')) != normalized_domain(metadata['allowed_domain']):
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_domain_mismatch', 'Dominio informado nao corresponde ao lote.', status.HTTP_403_FORBIDDEN)
         target = deployment_token.metadata.get('target_fqdn') if deployment_token.metadata.get('remote_install_job_id') else None
         if target:
             hostname = str(payload.get('hostname') or '').strip().rstrip('.').casefold()
@@ -2278,7 +2294,7 @@ class AgentEnrollView(APIView):
             )
         return None
 
-    def _validate_manual_token(self, request, payload, manual_token_value, enrollment_token=None, domain_reason='domain_not_allowed'):
+    def _validate_manual_token(self, request, payload, manual_token_value, enrollment_token=None, domain_reason='domain_not_allowed', deployment_token=None):
         if not manual_token_value.startswith('manual_'):
             return None, self._error(
                 request,
@@ -2306,6 +2322,12 @@ class AgentEnrollView(APIView):
                 metadata={'reason': domain_reason},
             )
 
+        bound = manual_validation_token.deployment or AgentDeploymentToken.objects.filter(
+            metadata__manual_validation_id=str(manual_validation_token.pk)).first()
+        if bound and (deployment_token is None or bound.pk != deployment_token.pk):
+            return None, self._error(request, payload, AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                'invalid_manual_validation_token', 'Token manual pertence a outro deployment.', status.HTTP_403_FORBIDDEN)
+
         if enrollment_token and manual_validation_token.enrollment_token_id and manual_validation_token.enrollment_token_id != enrollment_token.id:
             return None, self._error(
                 request,
@@ -2315,7 +2337,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual nao pertence a este enrollment token.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
 
         if not enrollment_token and manual_validation_token.enrollment_token_id:
@@ -2333,7 +2355,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual inativo.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
 
         if manual_validation_token.is_expired:
@@ -2345,7 +2367,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual expirado.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
 
         if manual_validation_token.is_used:
@@ -2357,7 +2379,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual ja utilizado.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
         return (manual_validation_token, enrollment_token), None
 
@@ -2400,6 +2422,18 @@ class AgentEnrollView(APIView):
                 enrollment_token, token_error = self._validate_enrollment_token(request, payload, token_value)
             if token_error:
                 return token_error
+            if deployment_token is not None and deployment_token.metadata.get('manual_validation_id'):
+                if not manual_token_value:
+                    return self._error(request, payload, AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
+                        'manual_validation_required', 'Informe o token manual desta instalacao.', status.HTTP_403_FORBIDDEN)
+                manual_result, manual_error = self._validate_manual_token(request, payload, manual_token_value, deployment_token=deployment_token)
+                if manual_error:
+                    return manual_error
+                manual_validation_token, linked_enrollment = manual_result
+                if linked_enrollment is not None or str(manual_validation_token.pk) != deployment_token.metadata['manual_validation_id']:
+                    return self._error(request, payload, AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                        'invalid_manual_validation_token', 'Token manual nao corresponde ao deployment.', status.HTTP_403_FORBIDDEN)
+                domain_validation = 'manual'
         elif manual_token_value:
             manual_result, manual_error = self._validate_manual_token(
                 request,
@@ -2559,7 +2593,7 @@ class AgentEnrollView(APIView):
                         'machine_id': machine.machine_id,
                         'domain_validation': domain_validation,
                         'manual_validation_used': manual_validation_token is not None,
-                        'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                        'manual_validation_token_prefix': manual_validation_token.prefix[:10] if manual_validation_token else '',
                         'domain_reason': 'domain_not_allowed' if manual_validation_token else 'domain_allowed',
                         'deployment_id': str(deployment_token.id) if deployment_token else '',
                         'deployment_release_id': str(deployment_token.release_id) if deployment_token else '',
@@ -2603,7 +2637,7 @@ class AgentEnrollView(APIView):
                         'enrollment_token_prefix': enrollment_token.prefix if enrollment_token else '',
                         'domain_validation': domain_validation,
                         'manual_validation_used': manual_validation_token is not None,
-                        'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                        'manual_validation_token_prefix': manual_validation_token.prefix[:10] if manual_validation_token else '',
                         'deployment_id': str(deployment_token.id) if deployment_token else '',
                         'deployment_release_version': deployment_token.release.version if deployment_token else '',
                     },

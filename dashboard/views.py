@@ -24,6 +24,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST, require_GET
 
 from agents.models import (
+    AgentDeploymentBatch,
     AgentDeploymentToken,
     AgentEnrollmentLog,
     AgentEnrollmentToken,
@@ -2949,6 +2950,11 @@ def select_deployment_release(channel, release_id=''):
         ordered = [item for item in ordered if _deployment_release_is_usable(item, trust_bundle)] if trust_bundle else []
         if not ordered:
             raise ValidationError('Nao ha release stable compativel com o trust bundle publicado.')
+        if release_id:
+            selected = next((item for item in ordered if str(item.pk) == release_id), None)
+            if selected is None:
+                raise ValidationError('Release stable selecionada nao esta disponivel para deployment manual.')
+            return selected
         return ordered[0]
     raise ValidationError('Canal invalido para deployment.')
 
@@ -3029,6 +3035,7 @@ def serialize_deployment_status(deployment):
     return {
         'id': str(deployment.pk),
         'status': deployment.status,
+        'batch_id': (deployment.metadata or {}).get('batch_id', ''),
         'ui_status': ui_status,
         'failure_code': (deployment.failure_code if deployment.failure_code in SAFE_DEPLOYMENT_FAILURE_CODES else 'BOOTSTRAP_FAILED') if ui_status == 'failed' else '',
         'failure_message': failure_messages.get(deployment.failure_code, 'A instalacao falhou. Revise o codigo e os logs locais antes de tentar novamente.') if ui_status == 'failed' else '',
@@ -3090,6 +3097,46 @@ def deployment_create(request):
             (trust_bundle.valid_until and trust_bundle.valid_until <= now) or
             not trust_bundle.bundle_url or not trust_bundle.bundle_sha256):
         return JsonResponse({'error': 'trust_bundle_unavailable', 'detail': 'O trust bundle publicado esta fora da validade ou incompleto.'}, status=409)
+    kind = (request.POST.get('install_kind') or '').strip()
+    if kind not in ('', 'ad', 'external'):
+        return _deployment_json_response({'error': 'invalid_kind'}, status=400)
+    if kind:
+        name = (request.POST.get('name') or '').strip()
+        notes = (request.POST.get('notes') or '').strip()
+        try:
+            duration = int(request.POST.get('expires_hours' if kind == 'ad' else 'expires_minutes') or 0)
+            limit = int(request.POST.get('max_uses') or 1) if kind == 'ad' else 1
+        except ValueError:
+            return _deployment_json_response({'error': 'invalid_limits', 'detail': 'Validade ou limite invalido.'}, status=400)
+        if not name or len(name) > 150 or not 1 <= duration <= (72 if kind == 'ad' else 1440) or not 1 <= limit <= 100:
+            return _deployment_json_response({'error': 'invalid_limits', 'detail': 'Informe nome, validade e limite validos.'}, status=400)
+        expires = now + (timedelta(hours=duration) if kind == 'ad' else timedelta(minutes=duration))
+        if kind == 'ad':
+            domain = (request.POST.get('allowed_domain') or '').strip().lower().rstrip('.')
+            if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,149}', domain):
+                return _deployment_json_response({'error': 'invalid_domain', 'detail': 'Informe um dominio valido.'}, status=400)
+            batch = AgentDeploymentBatch.objects.create(name=name, release=release, created_by=request.user,
+                allowed_domain=domain, expires_at=expires, max_uses=limit, notes=notes)
+            create_audit_event(event_type='agent.deployment.batch_created', title='Lote manual criado',
+                description='Lote manual limitado criado pelo operador.', actor_type=AuditEvent.ACTOR_USER,
+                actor_name=request.user.get_username(), metadata={'batch_id': str(batch.pk), 'release_id': str(release.pk),
+                'max_uses': limit, 'allowed_domain': domain}, request=request)
+            return _deployment_json_response({'status': 'ok', 'kind': 'ad', 'batch': {'id': str(batch.pk),
+                'expires_at': expires.isoformat(), 'release_version': release.version, 'remaining': limit,
+                'issue_url': reverse('api-deployment-batch-issue', kwargs={'pk': batch.pk}),
+                'revoke_url': reverse('api-deployment-batch-revoke', kwargs={'pk': batch.pk})}}, status=201)
+        with transaction.atomic():
+            manual, manual_token = AgentManualValidationToken.create_with_token(name=name, expires_at=expires, notes=notes)
+            deployment, token = AgentDeploymentToken.create_with_token(platform=platform, channel=channel, release=release,
+                created_by=request.user, expires_at=expires, metadata={'manual_install_kind': 'external',
+                'manual_validation_id': str(manual.pk), 'trust_bundle_id': str(trust_bundle.pk), 'name': name})
+            manual.deployment = deployment
+            manual.save(update_fields=['deployment'])
+        create_audit_event(event_type='agent.deployment.created', title='Deployment externo criado',
+            description='Deployment externo com validação manual criada.', actor_type=AuditEvent.ACTOR_USER,
+            actor_name=request.user.get_username(), metadata={'deployment_id': str(deployment.pk), 'release_id': str(release.pk)}, request=request)
+        return _deployment_json_response({'status': 'ok', 'kind': 'external', 'manual_token': manual_token,
+            'deployment': serialize_deployment(deployment, command=build_deployment_command(request, {'token': token}))}, status=201)
     deployment, token = AgentDeploymentToken.create_with_token(
         platform=platform,
         channel=channel,
@@ -3124,10 +3171,73 @@ def deployment_create(request):
     return _deployment_json_response({'status': 'ok', 'deployment': serialize_deployment(deployment, command=command)}, status=201)
 
 
+@require_POST
+@transaction.atomic
+def deployment_batch_issue(request, pk):
+    if not is_nightowl_technical_user(request.user):
+        return _deployment_json_response({'error': 'forbidden'}, status=403)
+    try:
+        request_id = str(uuid.UUID(request.POST.get('request_id', '')))
+    except (ValueError, AttributeError):
+        return _deployment_json_response({'error': 'invalid_request_id'}, status=400)
+    batch = get_object_or_404(AgentDeploymentBatch.objects.select_for_update(), pk=pk, created_by=request.user)
+    if AgentDeploymentToken.objects.filter(metadata__batch_id=str(batch.pk), metadata__issue_request_id=request_id).exists():
+        return _deployment_json_response({'error': 'duplicate_request', 'detail': 'Esta emissão já foi processada; consulte o acompanhamento.'}, status=409)
+    now = timezone.now()
+    if not batch.is_active or batch.expires_at <= now or batch.used_count >= batch.max_uses:
+        return _deployment_json_response({'error': 'batch_unavailable', 'detail': 'Lote expirado, revogado ou sem usos disponíveis.'}, status=409)
+    release = AgentRelease.objects.select_for_update().get(pk=batch.release_id)
+    trust = _usable_deployment_trust_bundle()
+    if trust:
+        trust = AgentReleaseTrustBundle.objects.select_for_update().get(pk=trust.pk)
+    if (not trust or trust.status != AgentReleaseTrustBundle.STATUS_PUBLISHED or
+            (trust.valid_from and trust.valid_from > now) or (trust.valid_until and trust.valid_until <= now) or
+            release.status not in ('published', 'paused') or not _deployment_release_is_usable(release, trust)):
+        return _deployment_json_response({'error': 'release_unavailable', 'detail': 'Release ou trust indisponível.'}, status=409)
+    base = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/') or request.build_absolute_uri('/').rstrip('/')
+    if not base.lower().startswith('https://'):
+        return _deployment_json_response({'error': 'https_required'}, status=409)
+    deployment, token = AgentDeploymentToken.create_with_token(channel=release.channel, release=release,
+        created_by=request.user, expires_at=min(batch.expires_at, now + timedelta(minutes=30)),
+        metadata={'batch_id': str(batch.pk), 'issue_request_id': request_id, 'allowed_domain': batch.allowed_domain,
+                  'release_version': release.version, 'trust_bundle_id': str(trust.pk)})
+    batch.used_count += 1
+    batch.save(update_fields=['used_count'])
+    create_audit_event(event_type='agent.deployment.batch_issued', title='Deployment individual emitido',
+        description='Comando individual emitido pelo operador.', actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(), metadata={'batch_id': str(batch.pk), 'deployment_id': str(deployment.pk)}, request=request)
+    return _deployment_json_response({'deployment': serialize_deployment(deployment, command=build_deployment_command(request, {'token': token})),
+                                      'remaining': batch.max_uses - batch.used_count}, status=201)
+
+
+@require_POST
+@transaction.atomic
+def deployment_batch_revoke(request, pk):
+    if not is_nightowl_technical_user(request.user):
+        return _deployment_json_response({'error': 'forbidden'}, status=403)
+    batch = get_object_or_404(AgentDeploymentBatch.objects.select_for_update(), pk=pk, created_by=request.user)
+    batch.is_active = False
+    batch.save(update_fields=['is_active'])
+    create_audit_event(event_type='agent.deployment.batch_revoked', title='Lote revogado',
+        description='Emissões futuras do lote foram revogadas.', actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(), metadata={'batch_id': str(batch.pk)}, request=request)
+    return _deployment_json_response({'status': 'revoked'})
+
+
 def deployment_history(request):
     if not is_nightowl_technical_user(getattr(request, 'user', None)):
         return _deployment_json_response({'error': 'forbidden'}, status=403)
-    deployments = AgentDeploymentToken.objects.select_related('release', 'endpoint').order_by('-created_at')[:20]
+    deployments = AgentDeploymentToken.objects.select_related('release', 'endpoint').order_by('-created_at')
+    batch_id = (request.GET.get('batch_id') or '').strip()
+    if batch_id:
+        try:
+            batch_id = str(uuid.UUID(batch_id))
+        except ValueError:
+            return _deployment_json_response({'error': 'invalid_batch'}, status=400)
+        batch = get_object_or_404(AgentDeploymentBatch, pk=batch_id, created_by=request.user)
+        deployments = deployments.filter(metadata__batch_id=str(batch.pk))[:100]
+    else:
+        deployments = deployments[:20]
     return _deployment_json_response({'deployments': [serialize_deployment_status(item) for item in deployments]})
 
 
@@ -4833,7 +4943,7 @@ def agent_install(request):
                     severity=AuditEvent.SEVERITY_INFO,
                     metadata={
                         'manual_validation_token_id': str(created_manual_validation.id),
-                        'prefix': created_manual_validation.prefix,
+                        'prefix': created_manual_validation.prefix[:10],
                     },
                     request=request,
                 )
