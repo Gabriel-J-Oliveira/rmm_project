@@ -198,7 +198,7 @@
             <table class="endpoint-table endpoint-list-table endpoint-ops-table">
                 <thead>
                     <tr>
-                        <th class="select-col"><input type="checkbox" data-endpoint-select-all aria-label="Selecionar todos"></th>
+                        <th class="select-col"><input type="checkbox" data-endpoint-select-all aria-label="Selecionar todos nesta página"></th>
                         <th>Status</th>
                         <th>Endpoint</th>
                         <th>Tipo</th>
@@ -287,6 +287,24 @@
                 </tbody>
             </table>
         </div>
+        <nav class="endpoint-pagination" data-endpoint-pagination aria-label="Paginação da tabela de endpoints">
+            <span data-endpoint-pagination-summary aria-live="polite"></span>
+            <div class="endpoint-page-size-control">
+                <label for="endpoint-page-size">Por página</label>
+                <select id="endpoint-page-size" data-endpoint-page-size aria-label="Endpoints por página">
+                    <option value="10" selected>10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                </select>
+            </div>
+            <div class="endpoint-page-controls">
+                <button type="button" data-endpoint-page-first aria-label="Primeira página"><i data-lucide="chevrons-left"></i></button>
+                <button type="button" data-endpoint-page-previous aria-label="Página anterior"><i data-lucide="chevron-left"></i></button>
+                <span data-endpoint-page-current>1 / 1</span>
+                <button type="button" data-endpoint-page-next aria-label="Próxima página"><i data-lucide="chevron-right"></i></button>
+                <button type="button" data-endpoint-page-last aria-label="Última página"><i data-lucide="chevrons-right"></i></button>
+            </div>
+        </nav>
     </div>
 
     <div class="endpoint-view endpoint-card-grid" data-endpoint-view-panel="cards" hidden>

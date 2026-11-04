@@ -61,8 +61,23 @@
         const bulkBar = root.querySelector("[data-endpoint-bulk-bar]");
         const selectedCount = root.querySelector("[data-endpoint-selected-count]");
         const selectAll = root.querySelector("[data-endpoint-select-all]");
+        const pagination = root.querySelector("[data-endpoint-pagination]");
+        const pageSizeControl = root.querySelector("[data-endpoint-page-size]");
+        const pageSummary = root.querySelector("[data-endpoint-pagination-summary]");
+        const pageCurrent = root.querySelector("[data-endpoint-page-current]");
         const rowChecks = Array.from(root.querySelectorAll("[data-endpoint-select]"));
         const tableRows = Array.from(root.querySelectorAll("tr[data-endpoint-row]"));
+        let pageSize = Number(pageSizeControl?.value) || 10;
+        let currentPage = 1;
+
+        function pageCount() {
+            return Math.max(1, Math.ceil(tableRows.length / pageSize));
+        }
+
+        function currentPageRows() {
+            const start = (currentPage - 1) * pageSize;
+            return tableRows.slice(start, start + pageSize);
+        }
 
         function setView(view) {
             viewButtons.forEach(function (button) {
@@ -73,6 +88,7 @@
                 panel.hidden = !active;
                 panel.classList.toggle("is-active", active);
             });
+            if (pagination) pagination.hidden = view !== "table" || tableRows.length <= 10;
             if (window.lucide && typeof window.lucide.createIcons === "function") {
                 window.lucide.createIcons();
             }
@@ -87,9 +103,39 @@
                 row.classList.toggle("is-selected", Boolean(checkbox && checkbox.checked));
             });
             if (selectAll) {
-                selectAll.checked = checked.length > 0 && checked.length === rowChecks.length;
-                selectAll.indeterminate = checked.length > 0 && checked.length < rowChecks.length;
+                const pageChecks = currentPageRows().map(function (row) {
+                    return row.querySelector("[data-endpoint-select]");
+                }).filter(Boolean);
+                const pageChecked = pageChecks.filter(function (input) { return input.checked; }).length;
+                selectAll.checked = pageChecks.length > 0 && pageChecked === pageChecks.length;
+                selectAll.indeterminate = pageChecked > 0 && pageChecked < pageChecks.length;
             }
+        }
+
+        function renderPage() {
+            const pages = pageCount();
+            currentPage = Math.min(Math.max(1, currentPage), pages);
+            const start = tableRows.length ? (currentPage - 1) * pageSize : 0;
+            const end = Math.min(start + pageSize, tableRows.length);
+            tableRows.forEach(function (row, index) {
+                row.hidden = index < start || index >= end;
+            });
+            if (pageSummary) {
+                pageSummary.textContent = tableRows.length
+                    ? `Exibindo ${start + 1}-${end} de ${tableRows.length} endpoints`
+                    : "Nenhum endpoint para exibir";
+            }
+            if (pageCurrent) pageCurrent.textContent = `${tableRows.length ? currentPage : 0} / ${tableRows.length ? pages : 0}`;
+            [
+                ["[data-endpoint-page-first]", currentPage <= 1],
+                ["[data-endpoint-page-previous]", currentPage <= 1],
+                ["[data-endpoint-page-next]", currentPage >= pages],
+                ["[data-endpoint-page-last]", currentPage >= pages]
+            ].forEach(function (entry) {
+                const button = root.querySelector(entry[0]);
+                if (button) button.disabled = entry[1] || tableRows.length === 0;
+            });
+            updateBulkBar();
         }
 
         viewButtons.forEach(function (button) {
@@ -100,7 +146,9 @@
 
         if (selectAll) {
             selectAll.addEventListener("change", function () {
-                rowChecks.forEach(function (input) {
+                currentPageRows().forEach(function (row) {
+                    const input = row.querySelector("[data-endpoint-select]");
+                    if (!input) return;
                     input.checked = selectAll.checked;
                 });
                 updateBulkBar();
@@ -109,6 +157,30 @@
 
         rowChecks.forEach(function (input) {
             input.addEventListener("change", updateBulkBar);
+        });
+
+        if (pageSizeControl) {
+            pageSizeControl.addEventListener("change", function () {
+                pageSize = Math.min(50, Math.max(1, Number(pageSizeControl.value) || 10));
+                currentPage = 1;
+                renderPage();
+            });
+        }
+        root.querySelector("[data-endpoint-page-first]")?.addEventListener("click", function () {
+            currentPage = 1;
+            renderPage();
+        });
+        root.querySelector("[data-endpoint-page-previous]")?.addEventListener("click", function () {
+            currentPage -= 1;
+            renderPage();
+        });
+        root.querySelector("[data-endpoint-page-next]")?.addEventListener("click", function () {
+            currentPage += 1;
+            renderPage();
+        });
+        root.querySelector("[data-endpoint-page-last]")?.addEventListener("click", function () {
+            currentPage = pageCount();
+            renderPage();
         });
 
         tableRows.forEach(function (row) {
@@ -194,7 +266,8 @@
             }
         });
 
-        updateBulkBar();
+        renderPage();
+        setView("table");
     }
 
     document.querySelectorAll("[data-endpoint-action]").forEach(function (button) {

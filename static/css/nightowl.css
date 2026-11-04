@@ -7841,7 +7841,7 @@ a {
 }
 
 .metric-card:hover,
-.panel:hover {
+.panel:not(.endpoint-ops-filter-panel):not(.endpoint-ops-panel):hover {
     background: var(--card-hover);
     border-color: rgba(167, 139, 250, 0.48);
     box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.06), 0 12px 36px rgba(0, 0, 0, 0.16);
@@ -9279,6 +9279,8 @@ body.page-endpoints .endpoint-quick-filters a.is-active {
 
 body.page-endpoints .endpoint-ops-panel {
     overflow: visible;
+    margin-top: 20px;
+    margin-bottom: 56px;
 }
 
 body.page-endpoints .endpoint-ops-list-header {
@@ -9290,6 +9292,7 @@ body.page-endpoints .endpoint-ops-list-header h2 {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    font-size: 24px;
 }
 
 body.page-endpoints .endpoint-ops-list-header h2 svg {
@@ -9372,8 +9375,9 @@ body.page-endpoints .endpoint-bulk-bar button:hover {
 }
 
 body.page-endpoints .endpoint-ops-table-wrap {
-    max-height: 68vh;
-    overflow: auto;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: visible;
 }
 
 body.page-endpoints .endpoint-ops-table {
@@ -9391,9 +9395,78 @@ body.page-endpoints .endpoint-ops-table tr[data-endpoint-row] {
     cursor: pointer;
 }
 
-body.page-endpoints .endpoint-ops-table tr[data-endpoint-row]:hover td,
 body.page-endpoints .endpoint-ops-table tr[data-endpoint-row].is-selected td {
     background: rgba(124, 58, 237, 0.09);
+}
+
+body.page-endpoints .endpoint-ops-table tr[data-endpoint-row]:hover:not(.is-selected) td {
+    background: transparent;
+}
+
+body.page-endpoints .endpoint-table tbody tr:hover td {
+    background: transparent;
+}
+
+body.page-endpoints .endpoint-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 16px;
+    padding: 12px 0 4px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+body.page-endpoints .endpoint-page-size-control,
+body.page-endpoints .endpoint-page-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+body.page-endpoints .endpoint-pagination[hidden] {
+    display: none;
+}
+
+body.page-endpoints .endpoint-page-size-control select,
+body.page-endpoints .endpoint-page-controls button {
+    min-width: 34px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(7, 9, 16, 0.72);
+    color: var(--text-secondary);
+    font: inherit;
+    text-decoration: none;
+}
+
+body.page-endpoints .endpoint-page-controls button:hover:not(:disabled) {
+    border-color: rgba(167, 139, 250, 0.42);
+    color: var(--text-primary);
+}
+
+body.page-endpoints .endpoint-page-controls button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+body.page-endpoints .endpoint-page-controls svg {
+    width: 15px;
+    height: 15px;
+}
+
+body.page-endpoints .endpoint-page-current {
+    min-width: 58px;
+    text-align: center;
+    color: var(--text-primary);
+    font-weight: 700;
 }
 
 body.page-endpoints .select-col {
@@ -9589,11 +9662,6 @@ body.page-endpoints .endpoint-card-item.attention-critical {
 
 body.page-endpoints .endpoint-card-item.attention-warning {
     border-color: rgba(245, 158, 11, 0.3);
-}
-
-body.page-endpoints .endpoint-card-item:hover {
-    transform: translateY(-1px);
-    border-color: rgba(167, 139, 250, 0.28);
 }
 
 body.page-endpoints .endpoint-card-item header,
