@@ -113,13 +113,55 @@ test('page size stays within 50 and selection survives page navigation', () => {
     assert.equal(page.selectedCount.textContent, '24');
 });
 
-test('pagination is hidden for other views; only endpoint cards keep row hover', () => {
+test('pagination is hidden for other views; only summary cards keep hover', () => {
     const page = makePage();
     page.views[1].fire('click');
     assert.equal(page.pagination.hidden, true);
-    assert.match(css, /\.endpoint-card-item:hover\s*\{/);
+    assert.doesNotMatch(css, /\.endpoint-card-item:hover\s*\{/);
+    assert.match(css, /\.panel:not\(\.endpoint-ops-filter-panel\):not\(\.endpoint-ops-panel\):hover/);
+    assert.match(css, /\.endpoint-metric-card:hover/);
     assert.match(css, /\.endpoint-ops-table-wrap\s*\{[^}]*overflow-y:\s*visible/s);
     assert.match(css, /\.endpoint-table tbody tr:hover td\s*\{\s*background:\s*transparent;/);
+});
+
+test('large endpoint panels remain stationary while summary cards and controls retain hover', async () => {
+    const { chromium } = require('playwright');
+    const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || 'chrome', headless: true });
+    try {
+        const page = await browser.newPage();
+        await page.setContent(`<style>${css}</style><body class="page-endpoints">
+            <a class="metric-card endpoint-metric-card" href="#" style="width:180px">Online</a>
+            <section class="panel endpoint-ops-filter-panel" style="padding:30px">Filtros
+                <div class="endpoint-quick-filters"><a href="#">Todos</a></div>
+            </section>
+            <section class="panel endpoint-ops-panel" style="padding:30px">Parque operacional
+                <div class="endpoint-row-actions"><button>Abrir</button></div>
+                <article class="endpoint-card-item attention-critical">Endpoint</article>
+            </section></body>`);
+        const appearance = selector => page.locator(selector).evaluate(element => {
+            const style = getComputedStyle(element);
+            return [style.backgroundColor, style.borderColor, style.boxShadow, style.transform];
+        });
+        for (const viewport of [{ width: 1920, height: 1080 }, { width: 390, height: 844 }]) {
+            await page.setViewportSize(viewport);
+            for (const selector of ['.endpoint-ops-filter-panel', '.endpoint-ops-panel', '.endpoint-card-item']) {
+                await page.mouse.move(0, 0);
+                await page.waitForTimeout(220);
+                const before = await appearance(selector);
+                await page.locator(selector).hover({ position: { x: 10, y: 10 } });
+                await page.waitForTimeout(220);
+                assert.deepEqual(await appearance(selector), before, selector);
+            }
+            for (const selector of ['.endpoint-metric-card', '.endpoint-quick-filters a', '.endpoint-row-actions button']) {
+                await page.mouse.move(0, 0);
+                await page.waitForTimeout(220);
+                const before = await appearance(selector);
+                await page.locator(selector).hover();
+                await page.waitForTimeout(220);
+                assert.notDeepEqual(await appearance(selector), before, selector);
+            }
+        }
+    } finally { await browser.close(); }
 });
 
 test('25 rows, navigation boundaries and page-only deselection', () => {

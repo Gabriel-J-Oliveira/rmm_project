@@ -7841,7 +7841,7 @@ a {
 }
 
 .metric-card:hover,
-.panel:hover {
+.panel:not(.endpoint-ops-filter-panel):not(.endpoint-ops-panel):hover {
     background: var(--card-hover);
     border-color: rgba(167, 139, 250, 0.48);
     box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.06), 0 12px 36px rgba(0, 0, 0, 0.16);
@@ -9662,11 +9662,6 @@ body.page-endpoints .endpoint-card-item.attention-critical {
 
 body.page-endpoints .endpoint-card-item.attention-warning {
     border-color: rgba(245, 158, 11, 0.3);
-}
-
-body.page-endpoints .endpoint-card-item:hover {
-    transform: translateY(-1px);
-    border-color: rgba(167, 139, 250, 0.28);
 }
 
 body.page-endpoints .endpoint-card-item header,
