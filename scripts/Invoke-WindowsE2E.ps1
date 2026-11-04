@@ -19,6 +19,12 @@ try {
     $env:TEMP = $work
     $env:TMP = $work
     $env:DOTNET_CLI_HOME = $work
+    # Start-Process -Credential inherits this runner's environment. Do not pass
+    # runneradmin's inaccessible profile directories to the standard user.
+    $env:USERPROFILE = $work
+    $env:APPDATA = Join-Path $work 'AppData\Roaming'
+    $env:LOCALAPPDATA = Join-Path $work 'AppData\Local'
+    New-Item -ItemType Directory -Path $env:APPDATA, $env:LOCALAPPDATA -Force | Out-Null
     $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
     $out = Join-Path $work 'stdout.txt'
     $err = Join-Path $work 'stderr.txt'

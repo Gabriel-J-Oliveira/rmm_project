@@ -140,7 +140,7 @@ class TerminalBrowserSmokeTests(TransactionTestCase):
                 try:
                     stdout,stderr=await asyncio.wait_for(browser.communicate(),110)
                     for line in stdout.decode().splitlines():
-                        if line.startswith(('BROWSER_TERMINAL_MEASURED=','TERMINAL_BROWSER_FAILURE=','TERMINAL_BROWSER_STATE=','TERMINAL_BROWSER_EVAL_ERROR=')):print(line)
+                        if line.startswith(('BROWSER_TERMINAL_MEASURED=','TERMINAL_BROWSER_FAILURE=','TERMINAL_BROWSER_STATE=','TERMINAL_BROWSER_EVAL_ERROR=','TERMINAL_BROWSER_LAUNCH=')):print(line)
                     if browser.returncode:
                         state=await sync_to_async(lambda:list(TerminalSession.objects.filter(endpoint=machine).values('status','reason','consent_at','operator_ticket_used','agent_ticket_used')))()
                         print('TERMINAL_BROWSER_DB_STATE='+json.dumps(state,default=str))

@@ -34,10 +34,16 @@ class CDP {
         '--disable-sync','--disable-background-networking','--disable-background-timer-throttling','--disable-renderer-backgrounding',
         '--disable-backgrounding-occluded-windows','--disable-features=BackForwardCache','about:blank'
     ],{windowsHide:true,stdio:'ignore'});
+    let chromeExitCode=null, chromeSignal=null, chromeSpawnError=null;
+    chrome.on('exit',(code,signal)=>{chromeExitCode=code;chromeSignal=signal;});
+    chrome.on('error',error=>{chromeSpawnError=error.code || 'spawn_failed';});
     let cdp;
     try {
         const portFile=path.join(profile,'DevToolsActivePort');
         for(let i=0;i<100 && !fs.existsSync(portFile);i++) await sleep(100);
+        if (!fs.existsSync(portFile)) console.log('TERMINAL_BROWSER_LAUNCH='+JSON.stringify({
+            stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,signal:chromeSignal,error_code:chromeSpawnError
+        }));
         assert(fs.existsSync(portFile),'Existing Chrome did not start');
         const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);
         const ws=new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
