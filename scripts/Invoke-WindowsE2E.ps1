@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 # GitHub's hosted runner is elevated. The real assisted ConPTY contract requires
 # an explicitly authenticated interactive standard user, not a reduced test token.
-$user = 'nightowl-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+$user = 'nw-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
 $password = ConvertTo-SecureString ('Nw!' + [guid]::NewGuid().ToString('N') + '9a') -AsPlainText -Force
 $credential = [pscredential]::new(".\$user", $password)
 $work = Join-Path $env:GITHUB_WORKSPACE '.windows-e2e'
