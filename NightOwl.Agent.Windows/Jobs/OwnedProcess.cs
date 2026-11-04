@@ -7,15 +7,20 @@ namespace NightOwl.Agent.Windows.Jobs;
 
 internal static class OwnedProcess
 {
+    // Optional test harness observer; never includes input, output, paths or identities.
+    internal static Action<string, long>? TestObserver;
     internal sealed record Capture(int ExitCode, string Stdout, string Stderr, bool OutputLimitReached);
 
     // No script input is sent until the process belongs to a kill-on-close, single-process job.
     internal static async Task<Capture> CaptureAsync(string executable, IReadOnlyList<string> arguments,
         string input, int maxOutputBytes, CancellationToken ct)
     {
+        var timing = Stopwatch.StartNew();
+        void Observe(string stage) => TestObserver?.Invoke(stage, timing.ElapsedMilliseconds);
         if (maxOutputBytes is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(maxOutputBytes));
         ct.ThrowIfCancellationRequested();
         nint job = CreateJobObject(0, null);
+        Observe("job_created");
         if (job == 0) throw new Win32Exception();
         using Process process = new();
         bool started = false;
@@ -23,6 +28,7 @@ internal static class OwnedProcess
         {
             ExtendedLimits limits = new() { Basic = new BasicLimits { LimitFlags = 0x2008, ActiveLimit = 1 } };
             if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>())) throw new Win32Exception();
+            Observe("limits_set");
             process.StartInfo = new ProcessStartInfo(executable)
             {
                 UseShellExecute = false, CreateNoWindow = true,
@@ -41,18 +47,22 @@ internal static class OwnedProcess
                     process.StartInfo.Environment[name] = value;
             process.StartInfo.Environment["PSModulePath"] = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "Modules");
             if (!process.Start()) throw new InvalidOperationException();
+            Observe("process_started");
             started = true;
             if (!AssignProcessToJobObject(job, process.Handle)) throw new Win32Exception();
-            using var cancelled = ct.Register(() => TerminateJobObject(job, 1));
+            Observe("job_assigned");
+            using var cancelled = ct.Register(() => { Observe("cancel_requested"); TerminateJobObject(job, 1); });
             int totalBytes = 0;
             int overflow = 0;
-            async Task<string> Drain(StreamReader reader)
+            async Task<string> Drain(StreamReader reader, string stream)
             {
                 StringBuilder text = new();
                 char[] buffer = new char[256];
                 int count;
+                bool first = true;
                 while ((count = await reader.ReadAsync(buffer.AsMemory())) > 0)
                 {
+                    if (first) { Observe(stream + "_first_data"); first = false; }
                     if (Interlocked.Add(ref totalBytes, Encoding.UTF8.GetByteCount(buffer.AsSpan(0, count))) > maxOutputBytes)
                     {
                         Interlocked.Exchange(ref overflow, 1);
@@ -60,13 +70,16 @@ internal static class OwnedProcess
                     }
                     else text.Append(buffer, 0, count);
                 }
+                Observe(stream + "_eof");
                 return text.ToString();
             }
-            Task<string> stdout = Drain(process.StandardOutput), stderr = Drain(process.StandardError);
+            Task<string> stdout = Drain(process.StandardOutput, "stdout"), stderr = Drain(process.StandardError, "stderr");
+            Observe("drains_started");
             try
             {
                 ct.ThrowIfCancellationRequested();
                 await process.StandardInput.WriteAsync(input.AsMemory(), ct);
+                Observe("stdin_written");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
             catch (IOException) when (process.HasExited || ct.IsCancellationRequested) { }
@@ -74,9 +87,12 @@ internal static class OwnedProcess
             {
                 try { process.StandardInput.Close(); }
                 catch (IOException) when (process.HasExited || ct.IsCancellationRequested) { }
+                Observe("stdin_closed");
             }
             await process.WaitForExitAsync(CancellationToken.None);
+            Observe("process_exited");
             string output = await stdout, error = await stderr;
+            Observe("streams_drained");
             ct.ThrowIfCancellationRequested();
             return new(process.ExitCode, output, error, overflow != 0);
         }

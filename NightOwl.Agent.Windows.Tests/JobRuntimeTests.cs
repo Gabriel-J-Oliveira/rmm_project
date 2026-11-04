@@ -180,6 +180,8 @@ internal static class JobRuntimeTests
     {using CancellationTokenSource timeout=new(TimeSpan.FromSeconds(seconds));while(!predicate())await Task.Delay(50,timeout.Token);}
     internal static async Task ProtocolE2E(bool operationalActions = false, bool approvedScripts = false)
     {
+        if (approvedScripts) OwnedProcess.TestObserver = (stage, elapsed) =>
+            Console.WriteLine("SCRIPT_PROCESS_STAGE=" + JsonSerializer.Serialize(new { stage, elapsed_ms = elapsed }));
         string root=Path.Combine(Path.GetTempPath(),"nightowl-jobs-e2e-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         using CancellationTokenSource stop=new(TimeSpan.FromSeconds(90));
@@ -230,7 +232,7 @@ internal static class JobRuntimeTests
             Console.WriteLine("JOB_PROTOCOL_TIMINGS="+JsonSerializer.Serialize(new {jobs=observations,signals=runtime.SignalRequests,
                 deliveries=runtime.DeliveryCount,working_set_bytes=harness.WorkingSet64,cpu_ms=harness.TotalProcessorTime.TotalMilliseconds}));
         }
-        finally{stop.Cancel();try{await run;}catch(OperationCanceledException){} Directory.Delete(root,true);}
+        finally{stop.Cancel();try{await run;}catch(OperationCanceledException){} OwnedProcess.TestObserver = null; Directory.Delete(root,true);}
     }
     private sealed class RealFactory:IHttpClientFactory
     {
