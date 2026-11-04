@@ -32,9 +32,18 @@ class CDP {
     const chrome=spawn('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',[
         '--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check',
         '--disable-sync','--disable-background-networking','--disable-background-timer-throttling','--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows','--disable-features=BackForwardCache','about:blank'
-    ],{windowsHide:true,stdio:'ignore'});
+        '--disable-backgrounding-occluded-windows','--disable-features=BackForwardCache','--enable-logging=stderr','about:blank'
+    ],{windowsHide:true,stdio:['ignore','ignore','pipe']});
     let chromeExitCode=null, chromeSignal=null, chromeSpawnError=null;
+    const chromeDiagnostics = new Set();
+    chrome.stderr.on('data',data=>{
+        const value=data.toString();
+        if (/access is denied|access_denied/i.test(value)) chromeDiagnostics.add('access_denied');
+        if (/sandbox/i.test(value)) chromeDiagnostics.add('sandbox');
+        if (/profile|user.data/i.test(value)) chromeDiagnostics.add('profile');
+        if (/devtools listening/i.test(value)) chromeDiagnostics.add('devtools_listening');
+        if (/failed|error/i.test(value)) chromeDiagnostics.add('other_error');
+    });
     chrome.on('exit',(code,signal)=>{chromeExitCode=code;chromeSignal=signal;});
     chrome.on('error',error=>{chromeSpawnError=error.code || 'spawn_failed';});
     let cdp;
@@ -42,7 +51,7 @@ class CDP {
         const portFile=path.join(profile,'DevToolsActivePort');
         for(let i=0;i<100 && !fs.existsSync(portFile);i++) await sleep(100);
         if (!fs.existsSync(portFile)) console.log('TERMINAL_BROWSER_LAUNCH='+JSON.stringify({
-            stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,signal:chromeSignal,error_code:chromeSpawnError
+            stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,signal:chromeSignal,error_code:chromeSpawnError,diagnostics:[...chromeDiagnostics]
         }));
         assert(fs.existsSync(portFile),'Existing Chrome did not start');
         const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);
