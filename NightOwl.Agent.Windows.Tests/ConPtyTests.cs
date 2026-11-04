@@ -248,7 +248,10 @@ internal static class ConPtyTests
             int sessions = 0;
             transport.ObserveSession = value => { Console.WriteLine("BROWSER_AGENT_RESOURCE=" + JsonSerializer.Serialize(value)); if (++sessions == 2) stop.Cancel(); };
             transport.ObserveFailure = code => Console.WriteLine("BROWSER_AGENT_FAILURE_CODE=" + code);
-            await transport.RunAsync(config, stop.Token);
+            var running = transport.RunAsync(config, stop.Token);
+            if (await Task.WhenAny(approval, running) == approval && approval.IsFaulted)
+                await approval; // Surface consent failures instead of leaving the browser waiting.
+            await running;
             Check(approved.Count == 2, "Fresh consent was not simulated for each session");
         }
         finally

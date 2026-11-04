@@ -11,6 +11,16 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--ci-terminal-facts", StringComparer.Ordinal))
+    {
+        var facts = TerminalUserIdentity.CurrentFacts();
+        Console.WriteLine("CI_TERMINAL_FACTS=" + JsonSerializer.Serialize(new {
+            interactive_session = facts.SessionId > 0, facts.Interactive, facts.Elevated,
+            facts.Administrator, facts.Integrity, facts.DangerousPrivileges,
+            service_identity = facts.Sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20"
+        }));
+        return;
+    }
     if (args.Contains("--winrm-contract", StringComparer.Ordinal))
     {
         var payload = new AgentCollectPayload { MachineId = "lab-id", CollectionScope = "scheduled",

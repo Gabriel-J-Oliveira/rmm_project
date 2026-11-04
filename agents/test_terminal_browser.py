@@ -146,7 +146,8 @@ class TerminalBrowserSmokeTests(TransactionTestCase):
                         print('TERMINAL_BROWSER_DB_STATE='+json.dumps(state,default=str))
                         if agent.returncode is not None:
                             output,error=await agent.communicate()
-                            print('TERMINAL_AGENT_EARLY_EXIT='+json.dumps({'code':agent.returncode,'error_type':error.decode().split(':',1)[0][:100]}))
+                            category = 'identity_rejected' if b'terminal_identity_not_authorized' in error else 'native_agent_failed'
+                            print('TERMINAL_AGENT_EARLY_EXIT='+json.dumps({'stage':'consent_or_transport','code':agent.returncode,'category':category}))
                     self.assertEqual(browser.returncode,0,'Browser smoke failed; process content withheld')
                     output,error=await asyncio.wait_for(agent.communicate(),15)
                     for line in output.decode().splitlines():

@@ -187,3 +187,7 @@ class ConPtyTransportTests(TransactionTestCase):
                 await operator.close()
                 if process.returncode is None:
                     process.kill(); await process.wait()
+                if process.returncode:
+                    _, error = await process.communicate()
+                    category = 'identity_rejected' if b'terminal_identity_not_authorized' in error else 'native_agent_failed'
+                    print('CONPTY_E2E_FAILURE=' + json.dumps({'stage': 'agent', 'category': category, 'exit_code': process.returncode}))
