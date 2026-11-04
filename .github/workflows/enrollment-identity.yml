@@ -99,7 +99,7 @@ jobs:
       - name: Verify required Windows E2E selection
         run: python manage.py test agents.test_ci_partition --noinput --verbosity 2
       - name: Run real Windows .NET, ConPTY and browser contracts
-        run: python manage.py test agents --tag windows_e2e --testrunner agents.ci_runner.WindowsE2ERunner --noinput --verbosity 2
+        run: ./scripts/Invoke-WindowsE2E.ps1
 
   windows-bootstrap:
     name: Windows deployment contract

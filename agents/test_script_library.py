@@ -164,9 +164,6 @@ class ScriptLibraryTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()['result_id'], 'synthetic-script-receipt')
         job.refresh_from_db()
-        if job.status != 'completed':
-            print('SCRIPT_E2E_FAILURE=' + json.dumps({'stage': 'result', 'status': job.status,
-                'agent_exit_code': result.returncode}))
         self.assertEqual(job.status, 'completed')
         self.assertEqual(job.result['output']['sha256'], DEMO.sha256)
         self.assertEqual(AgentJobResultReceipt.objects.filter(job=job).count(), 1)
@@ -191,6 +188,9 @@ class ScriptLibraryE2ETests(LiveServerTestCase):
         evidence = json.loads(next(line.split('=', 1)[1] for line in result.stdout.splitlines() if line.startswith('JOB_PROTOCOL_TIMINGS=')))
         self.assertIn('result_ack', evidence['jobs'][str(job.pk)])
         job.refresh_from_db()
+        if job.status != 'completed':
+            print('SCRIPT_E2E_FAILURE=' + json.dumps({'stage': 'result', 'status': job.status,
+                'agent_exit_code': result.returncode}))
         self.assertEqual(job.status, 'completed')
         self.assertEqual(job.result['output']['sha256'], DEMO.sha256)
         self.assertTrue(job.result['output']['diagnostic']['powershell_version'].startswith('5.1'))
