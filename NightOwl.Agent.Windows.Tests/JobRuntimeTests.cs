@@ -189,6 +189,9 @@ internal static class JobRuntimeTests
             foreach (var probe in new[] {
                 (Name: "ps_stdin", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine('probe')\n"),
                 (Name: "ps_argument", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::WriteLine('probe')" }, Input: ""),
+                (Name: "ps_utc", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine([DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture))\n"),
+                (Name: "ps_version", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine($PSVersionTable.PSVersion.ToString())\n"),
+                (Name: "ps_json", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "@{v=1} | ConvertTo-Json -Compress\n"),
                 (Name: "cmd_argument", Exe: Path.Combine(system, "cmd.exe"), Args: new[] { "/c", "exit", "0" }, Input: "") })
             {
                 using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
