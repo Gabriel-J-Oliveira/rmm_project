@@ -133,7 +133,7 @@ class CDP {
             commands.push((await evaluate('performance.now()'))-at);
         }
         phase='incremental_output';
-        await call('Input.insertText',{text:`[Console]::WriteLine('EARLY_'+'BROWSER');Start-Sleep -Milliseconds 500;[Console]::WriteLine('LATE_'+'BROWSER')`});
+        await call('Input.insertText',{text:`[Console]::WriteLine('EARLY_'+'BROWSER');Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop;Start-Sleep -Milliseconds 500;[Console]::WriteLine('LATE_'+'BROWSER')`});
         await enter();
         await until(`(${text}).includes('EARLY_BROWSER')`);
         assert(!(await evaluate(`(${text}).includes('LATE_BROWSER')`)));

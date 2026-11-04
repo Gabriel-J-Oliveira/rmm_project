@@ -180,33 +180,6 @@ internal static class JobRuntimeTests
     {using CancellationTokenSource timeout=new(TimeSpan.FromSeconds(seconds));while(!predicate())await Task.Delay(50,timeout.Token);}
     internal static async Task ProtocolE2E(bool operationalActions = false, bool approvedScripts = false)
     {
-        if (approvedScripts) OwnedProcess.TestObserver = (stage, elapsed) =>
-            Console.WriteLine("SCRIPT_PROCESS_STAGE=" + JsonSerializer.Serialize(new { stage, elapsed_ms = elapsed }));
-        if (approvedScripts)
-        {
-            string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
-            string ps = Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe");
-            foreach (var probe in new[] {
-                (Name: "ps_stdin", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine('probe')\n"),
-                (Name: "ps_argument", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::WriteLine('probe')" }, Input: ""),
-                (Name: "ps_utc", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine([DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture))\n"),
-                (Name: "ps_version", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine($PSVersionTable.PSVersion.ToString())\n"),
-                (Name: "ps_json", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "@{v=1} | ConvertTo-Json -Compress\n"),
-                (Name: "ps_import_utility", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "Import-Module Microsoft.PowerShell.Utility; [Console]::WriteLine('probe')\n"),
-                (Name: "ps_preimport_json", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop\n@{v=1} | ConvertTo-Json -Compress\n"),
-                (Name: "ps_command_discovery", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "Get-Command ConvertTo-Json | Out-Null; [Console]::WriteLine('probe')\n"),
-                (Name: "cmd_argument", Exe: Path.Combine(system, "cmd.exe"), Args: new[] { "/c", "exit", "0" }, Input: "") })
-            {
-                using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var timer = Stopwatch.StartNew();
-                try {
-                    var result = await OwnedProcess.CaptureAsync(probe.Exe, probe.Args, probe.Input, 4096, limit.Token);
-                    Console.WriteLine("SCRIPT_PROCESS_PROBE=" + JsonSerializer.Serialize(new { probe.Name, status = "exited", result.ExitCode, elapsed_ms = timer.ElapsedMilliseconds }));
-                } catch (OperationCanceledException) {
-                    Console.WriteLine("SCRIPT_PROCESS_PROBE=" + JsonSerializer.Serialize(new { probe.Name, status = "timed_out", elapsed_ms = timer.ElapsedMilliseconds }));
-                }
-            }
-        }
         string root=Path.Combine(Path.GetTempPath(),"nightowl-jobs-e2e-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         using CancellationTokenSource stop=new(TimeSpan.FromSeconds(90));
@@ -257,7 +230,7 @@ internal static class JobRuntimeTests
             Console.WriteLine("JOB_PROTOCOL_TIMINGS="+JsonSerializer.Serialize(new {jobs=observations,signals=runtime.SignalRequests,
                 deliveries=runtime.DeliveryCount,working_set_bytes=harness.WorkingSet64,cpu_ms=harness.TotalProcessorTime.TotalMilliseconds}));
         }
-        finally{stop.Cancel();try{await run;}catch(OperationCanceledException){} OwnedProcess.TestObserver = null; Directory.Delete(root,true);}
+        finally{stop.Cancel();try{await run;}catch(OperationCanceledException){} Directory.Delete(root,true);}
     }
     private sealed class RealFactory:IHttpClientFactory
     {

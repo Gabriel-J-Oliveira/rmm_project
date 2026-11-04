@@ -184,9 +184,6 @@ class ScriptLibraryE2ETests(LiveServerTestCase):
         result = subprocess.run(['dotnet', str(dll), '--approved-scripts-e2e'], capture_output=True, text=True, timeout=100,
             env={**os.environ, 'NIGHTOWL_TEST_SERVER': self.live_server_url, 'NIGHTOWL_TEST_TOKEN': token,
                 'NIGHTOWL_TEST_MACHINE': machine.machine_id, 'NIGHTOWL_TEST_JOB_COUNT': '1'})
-        for line in result.stdout.splitlines():
-            if line.startswith(('SCRIPT_PROCESS_STAGE=', 'SCRIPT_PROCESS_PROBE=')):
-                print(line)
         self.assertEqual(result.returncode, 0, 'Local script E2E failed; raw output withheld.')
         evidence = json.loads(next(line.split('=', 1)[1] for line in result.stdout.splitlines() if line.startswith('JOB_PROTOCOL_TIMINGS=')))
         self.assertIn('result_ack', evidence['jobs'][str(job.pk)])
