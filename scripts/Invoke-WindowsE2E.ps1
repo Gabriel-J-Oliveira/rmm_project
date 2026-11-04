@@ -5,10 +5,12 @@ $ErrorActionPreference = 'Stop'
 $user = 'nw-e2e-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
 $password = ConvertTo-SecureString ('Nw!' + [guid]::NewGuid().ToString('N') + '9a') -AsPlainText -Force
 $credential = [pscredential]::new(".\$user", $password)
-$work = Join-Path $env:GITHUB_WORKSPACE '.windows-e2e'
+$workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\')
+$work = [IO.Path]::GetFullPath((Join-Path $workspace '.windows-e2e'))
+if ([IO.Path]::GetDirectoryName($work) -ine $workspace) { throw 'Invalid test workspace path' }
 $created = $false
 try {
-    New-LocalUser -Name $user -Password $password -AccountNeverExpires | Out-Null
+    $account = New-LocalUser -Name $user -Password $password -AccountNeverExpires
     $created = $true
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     $acl = Get-Acl $env:GITHUB_WORKSPACE
@@ -42,6 +44,26 @@ try {
     if ($process.ExitCode -ne 0) { throw "Windows E2E failed with exit code $($process.ExitCode)" }
 }
 finally {
+    if ($created) {
+        # Only processes owned by the uniquely created test identity are eligible.
+        $testSid = $account.SID.Value
+        $stopped = 0
+        foreach ($candidate in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+            try {
+                $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
+                if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $testSid) {
+                    Stop-Process -Id $candidate.ProcessId -Force -ErrorAction Stop
+                    Wait-Process -Id $candidate.ProcessId -Timeout 5 -ErrorAction SilentlyContinue
+                    $stopped++
+                }
+            } catch { }
+        }
+        Write-Output ("CI_TEST_IDENTITY_CLEANUP=" + (@{ stopped = $stopped } | ConvertTo-Json -Compress))
+    }
     if ($created) { Remove-LocalUser -Name $user -ErrorAction Continue }
-    if (Test-Path $work) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Continue }
+    if (Test-Path -LiteralPath $work) {
+        $workItem = Get-Item -LiteralPath $work -Force
+        if (($workItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Test workspace is a reparse point' }
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Continue
+    }
 }

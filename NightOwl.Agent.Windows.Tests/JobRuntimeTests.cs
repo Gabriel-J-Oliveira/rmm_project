@@ -193,6 +193,7 @@ internal static class JobRuntimeTests
                 (Name: "ps_version", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "[Console]::WriteLine($PSVersionTable.PSVersion.ToString())\n"),
                 (Name: "ps_json", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "@{v=1} | ConvertTo-Json -Compress\n"),
                 (Name: "ps_import_utility", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "Import-Module Microsoft.PowerShell.Utility; [Console]::WriteLine('probe')\n"),
+                (Name: "ps_preimport_json", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop\n@{v=1} | ConvertTo-Json -Compress\n"),
                 (Name: "ps_command_discovery", Exe: ps, Args: new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Input: "Get-Command ConvertTo-Json | Out-Null; [Console]::WriteLine('probe')\n"),
                 (Name: "cmd_argument", Exe: Path.Combine(system, "cmd.exe"), Args: new[] { "/c", "exit", "0" }, Input: "") })
             {

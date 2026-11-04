@@ -57,7 +57,8 @@ public static class ApprovedScripts
                 "WindowsPowerShell", "v1.0", "powershell.exe");
             // Only the OS runtime and this embedded content can reach the process helper.
             var capture = await OwnedProcess.CaptureAsync(runtime,
-                new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" }, Content() + "\n", MaxOutputBytes, ct);
+                new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-" },
+                "Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop\n" + Content() + "\n", MaxOutputBytes, ct);
             return Confirm(capture);
         }
         catch (OperationCanceledException) { throw; }
