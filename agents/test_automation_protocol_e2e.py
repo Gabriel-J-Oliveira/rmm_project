@@ -1,4 +1,5 @@
 """One real local Windows read-only job, released only after its calendar slot."""
+from django.test import tag
 import os
 import json
 import subprocess
@@ -52,6 +53,7 @@ class AutomationProtocolE2ETests(AutomationFixture,LiveServerTestCase):
         self.assertEqual(job.status,'completed')
         self.assertTrue(AgentJobResultReceipt.objects.filter(job=job).exists())
 
+    @tag('windows_e2e')
     def test_calendar_occurrence_uses_existing_dotnet_execution_and_exact_receipt(self):
         self.prepare()
         dll=self.ingest_actual_worker_heartbeat()
@@ -72,6 +74,7 @@ class AutomationProtocolE2ETests(AutomationFixture,LiveServerTestCase):
         self.assertEqual(definition.occurrences.get().job_id,job.pk)
         print('PASS_REAL_CALENDAR_DJANGO_DOTNET_EXACT_ACK=YES (isolated loopback, local read-only collect_logs)')
 
+    @tag('windows_e2e')
     def test_actual_worker_capability_allows_immediate_and_recurring_first_occurrence(self):
         self.prepare()
         dll=self.ingest_actual_worker_heartbeat()

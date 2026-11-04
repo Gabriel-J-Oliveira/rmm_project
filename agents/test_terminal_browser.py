@@ -1,4 +1,5 @@
 import asyncio
+from django.test import tag
 import json
 import os
 import tempfile
@@ -114,6 +115,7 @@ class BrowserConsentControlTests(TestCase):
     NIGHTOWL_TERMINAL_BROWSER_ENABLED=True,NIGHTOWL_TERMINAL_TEST_LOOPBACK=True,ALLOWED_HOSTS=['127.0.0.1','testserver'],
     SESSION_COOKIE_SECURE=False,CSRF_COOKIE_SECURE=False)
 class TerminalBrowserSmokeTests(TransactionTestCase):
+    @tag('windows_e2e')
     async def test_real_browser_real_pty_simulated_local_consent_click(self):
         # Fixtures/identity deliberately isolated, never a corporate endpoint.
         from asgiref.sync import sync_to_async

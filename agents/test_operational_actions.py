@@ -1,4 +1,5 @@
 import copy
+from django.test import tag
 import json
 import os
 import subprocess
@@ -193,6 +194,7 @@ class OperationalActionTests(TestCase):
 
 @override_settings(NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True)
 class OperationalActionE2ETests(LiveServerTestCase):
+    @tag('windows_e2e')
     def test_native_query_through_dotnet_runtime_result_and_ack(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         self.assertTrue(dll.exists(), 'Build affected .NET projects in Release first.')

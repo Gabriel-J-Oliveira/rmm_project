@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Path $root | Out-Null
 $previousTemp = $env:TEMP; $env:TEMP = $root
 $env:NIGHTOWL_DEPLOYMENT_CONFIRM_TIMEOUT_SECONDS = '0'
 $env:NIGHTOWL_INSTALLER_SILENT = 'prior'
+$syntheticToken = 'deploy_' + 'synthetic_credential_123456789'
 $mock = @'
 function Assert-Windows {}
 function Assert-Administrator {}
@@ -33,7 +34,7 @@ try {
         @{existing='healthy_compatible';pending=$false;exit=0;result=0;calls=1;manual=$true}
     )) {
         $script:fixtureExisting=$case.existing; $script:fixturePending=$case.pending; $script:childExit=$case.exit; $script:childCalls=0; $script:fixtureManual=($case.manual -eq $true)
-        $env:NIGHTOWL_DEPLOYMENT_TOKEN='deploy_synthetic_credential_123456789'
+        $env:NIGHTOWL_DEPLOYMENT_TOKEN=$syntheticToken
         $global:NightOwlDeploymentBootstrapExitCode=-1
         $captured = @(& $block *>&1)
         if ($global:NightOwlDeploymentBootstrapExitCode -ne $case.result -or $script:childCalls -ne $case.calls) { throw "Incorrect result $($case.existing)/$($case.pending): code=$global:NightOwlDeploymentBootstrapExitCode calls=$script:childCalls output=$captured" }
@@ -44,7 +45,7 @@ try {
         if (Test-Path Env:\NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN) { throw 'Manual token not removed' }
     }
     $log = Get-Content -Raw -LiteralPath (Join-Path $root 'NightOwlDeployment\bootstrap.log')
-    if ($log -match 'deploy_synthetic_credential_123456789|manual_SYNTHETIC|noisy installer') { throw 'Sensitive or raw child output leaked to log' }
+    if ($log.Contains($syntheticToken) -or $log -match 'manual_SYNTHETIC|noisy installer') { throw 'Sensitive or raw child output leaked to log' }
     $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $sourcePath).Path, [ref]$null, [ref]$null)
     foreach ($name in @('Protect-NightOwlLogValue','Write-NightOwlBootstrapLog')) {
         $definition = $ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}, $true)
@@ -52,10 +53,10 @@ try {
     }
     $TempRoot=Join-Path $root 'NightOwlDeployment'; $BootstrapLogPath=Join-Path $TempRoot 'bootstrap.log'; $Stage='fixture'
     [IO.File]::WriteAllText($BootstrapLogPath, ('x' * 1048576))
-    Write-NightOwlBootstrapLog 'failed' @{ detail='deploy_synthetic_credential_123456789'; code='TEST_FAILURE' }
+    Write-NightOwlBootstrapLog 'failed' @{ detail=$syntheticToken; code='TEST_FAILURE' }
     if (-not (Test-Path -LiteralPath ($BootstrapLogPath + '.1'))) { throw 'Log rotation missing' }
     $rotatedLog=Get-Content -Raw -LiteralPath $BootstrapLogPath
-    if ($rotatedLog -match 'deploy_synthetic_credential_123456789' -or $rotatedLog -notmatch 'TEST_FAILURE') { throw 'Log redaction or useful failure code missing' }
+    if ($rotatedLog.Contains($syntheticToken) -or $rotatedLog -notmatch 'TEST_FAILURE') { throw 'Log redaction or useful failure code missing' }
     $beforePreference=$ErrorActionPreference
     try {
         $ErrorActionPreference='Continue'

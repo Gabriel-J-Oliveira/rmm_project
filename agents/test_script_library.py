@@ -1,4 +1,5 @@
 import copy
+from django.test import tag
 import json
 import os
 import subprocess
@@ -172,6 +173,7 @@ class ScriptLibraryTests(TestCase):
 
 @override_settings(NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True, NIGHTOWL_APPROVED_SCRIPTS_ENABLED=True)
 class ScriptLibraryE2ETests(LiveServerTestCase):
+    @tag('windows_e2e')
     def test_actual_powershell_diagnostic_v2_persisted_with_exact_ack(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         self.assertTrue(dll.exists(), 'Build affected .NET projects first.')

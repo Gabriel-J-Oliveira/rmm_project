@@ -642,7 +642,7 @@ def build_deployment_command(request, deployment_token):
         f"$script=(Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
         "Invoke-Expression $script "
         "} catch { $global:NightOwlDeploymentBootstrapExitCode=1; "
-        "Write-Host ('NightOwl: nao foi possivel iniciar o bootstrap. Verifique rede/backend. Log, se existente: {0}' -f (Join-Path $env:TEMP 'NightOwlDeployment\\bootstrap.log')) -ForegroundColor Red "
+        "Write-Host ('NightOwl: nao foi possivel iniciar o bootstrap. Verifique rede/backend. Log, se existente: {0}' -f (Join-Path ([IO.Path]::GetTempPath()) 'NightOwlDeployment\\bootstrap.log')) -ForegroundColor Red "
         "} finally { $ProgressPreference=$nightOwlPreviousProgress; "
         "Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }"
     )

@@ -2,6 +2,7 @@
 
 The database here is isolated SQLite; it does not prove PostgreSQL concurrency.
 """
+from django.test import tag
 import json
 import math
 import statistics
@@ -18,6 +19,7 @@ from .models import AgentMachine,AgentJob,AgentJobResultReceipt
 
 
 class JobsProtocolE2ETests(LiveServerTestCase):
+    @tag('windows_e2e')
     def test_real_dotnet_dispatch_start_result_and_dashboard(self):
         dll=Path(settings.BASE_DIR)/'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         self.assertTrue(dll.exists(),'Build Windows tests in Release before this E2E.')

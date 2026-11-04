@@ -7,6 +7,9 @@ on:
       - 'config/**'
       - 'dashboard/**'
       - 'requirements.txt'
+      - 'NightOwl.Agent.*/**'
+      - 'tests/**'
+      - 'static/**'
       - '.github/workflows/enrollment-identity.yml'
   workflow_dispatch:
 
@@ -59,13 +62,42 @@ jobs:
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
-          dashboard.test_agent_install_workflow --noinput --verbosity 1
+          dashboard.test_agent_install_workflow --exclude-tag windows_e2e --noinput --verbosity 1
       - name: PostgreSQL concurrency gate (no SQLite substitution)
         if: matrix.database == 'postgresql'
         run: >-
           python manage.py test
           agents.test_enrollment_identity.PostgreSQLEnrollmentIdentityTests
-          agents.test_enrollment_identity.IdentityAuditTests --noinput --verbosity 2
+          agents.test_enrollment_identity.IdentityAuditTests
+          agents.test_manual_batch_postgresql --noinput --verbosity 2
+
+  windows-e2e:
+    name: Windows .NET and terminal E2E
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings_test_browser
+      DJANGO_DEBUG: 'True'
+      DJANGO_SECRET_KEY: synthetic-enrollment-ci-key-not-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - name: Build the Windows agent test executable
+        run: dotnet build NightOwl.Agent.Windows.Tests/NightOwl.Agent.Windows.Tests.csproj -c Release
+      - name: Verify required Windows E2E selection
+        run: python manage.py test agents.test_ci_partition --noinput --verbosity 2
+      - name: Run real Windows .NET, ConPTY and browser contracts
+        run: python manage.py test agents --tag windows_e2e --testrunner agents.ci_runner.WindowsE2ERunner --noinput --verbosity 2
 
   windows-bootstrap:
     name: Windows deployment contract

@@ -2364,8 +2364,8 @@ Write-Output 'DEPLOYMENT_COMMAND_OK'
     @override_settings(NIGHTOWL_PUBLIC_URL='https://nightowl.test')
     def test_generated_command_network_failure_is_short_and_keeps_host_alive(self):
         _, token, payload = self.create_deployment()
-        powershell = shutil.which('powershell.exe') or shutil.which('pwsh')
-        if not powershell:
+        powershells = list(dict.fromkeys(filter(None, (shutil.which('powershell.exe'), shutil.which('pwsh')))))
+        if not powershells:
             self.skipTest('PowerShell indisponivel')
         harness = f"""
 $ProgressPreference='Continue'
@@ -2376,13 +2376,17 @@ if (Test-Path Env:\\NIGHTOWL_DEPLOYMENT_TOKEN) {{ throw 'token nao foi removido'
 if ($ProgressPreference -ne 'Continue') {{ throw 'progresso nao restaurado' }}
 Write-Output 'HOST_ALIVE'
 """
-        result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-Command', harness],
-                                capture_output=True, text=True, timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('HOST_ALIVE', result.stdout)
-        self.assertIn('Log, se existente:', result.stdout)
-        self.assertNotIn('synthetic-secret-network-detail', result.stderr + result.stdout)
-        self.assertNotIn(token, result.stderr + result.stdout)
+        for powershell in powershells:
+            with self.subTest(shell=Path(powershell).name):
+                environment = os.environ.copy()
+                environment.pop('TEMP', None)
+                result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-Command', harness],
+                                        capture_output=True, text=True, timeout=30, env=environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('HOST_ALIVE', result.stdout)
+                self.assertIn('Log, se existente:', result.stdout)
+                self.assertNotIn('synthetic-secret-network-detail', result.stderr + result.stdout)
+                self.assertNotIn(token, result.stderr + result.stdout)
 
     def test_generated_deployment_command_failure_keeps_host_alive(self):
         _, token, payload = self.create_deployment()

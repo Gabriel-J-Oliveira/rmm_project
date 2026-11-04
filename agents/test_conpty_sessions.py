@@ -1,4 +1,5 @@
 import asyncio
+from django.test import tag
 import codecs
 import json
 import os
@@ -126,6 +127,7 @@ class ConPtyTransportTests(TransactionTestCase):
             self.assertEqual((await operator.until('closed'))['code'], 'invalid_process_confirmation')
             await operator.close(); await agent.close()
 
+    @tag('windows_e2e')
     async def test_real_powershell_stream_over_websocket_and_disconnect(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         self.assertTrue(dll.exists())

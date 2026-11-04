@@ -1,4 +1,5 @@
 import asyncio
+from django.test import tag
 import hashlib
 import json
 import os
@@ -355,6 +356,7 @@ class TerminalTransportTests(TransactionTestCase):
                 self.assertEqual((await operator.until('closed'))['code'], 'control_timeout')
             await operator.close(); await agent.close()
 
+    @tag('windows_e2e')
     async def test_native_dotnet_loopback_synthetic_echo(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         self.assertTrue(dll.exists(), 'Build affected .NET tests in Release first')

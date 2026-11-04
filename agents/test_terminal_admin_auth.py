@@ -1,4 +1,5 @@
 import asyncio
+from django.test import tag
 import json
 import os
 import uuid
@@ -131,6 +132,7 @@ class AdminAuthIntegrationTests(TransactionTestCase):
             self.assertEqual((await browser.read())[9:], b'synthetic-output')
             await browser.close(); await agent.close()
 
+    @tag('windows_e2e')
     async def test_simulated_browser_real_backend_agent_and_windows_rejection(self):
         machine, token, operator = await sync_to_async(fixture)('admin-auth-integration')
         await sync_to_async(enable_admin)(machine, operator)

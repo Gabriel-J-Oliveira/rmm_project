@@ -1,4 +1,5 @@
 """Actual loopback HTTP to the .NET test executable. Synthetic identities only."""
+from django.test import tag
 import os
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ from .models import AgentMachine, EndpointPerformanceSample
 
 
 class TelemetryProtocolE2ETests(LiveServerTestCase):
+    @tag('windows_e2e')
     def test_dotnet_windows_and_live_points_via_real_http(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         if not dll.exists():

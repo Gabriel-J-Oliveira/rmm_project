@@ -9,7 +9,7 @@ foreach ($name in @('Write-NightOwlBoundedLog','Write-InstallLog','Write-Step','
 $root=Join-Path ([IO.Path]::GetTempPath()) ('nightowl-boot02-logs-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
 $script:NightOwlPaths=@{Logs=$root;InstallLog=(Join-Path $root 'installer.log');Diagnostics=(Join-Path $root 'diagnostics')}
-$EnrollmentToken='deploy_sensitive_fixture_123456'; $AgentToken='rmm_live_fixture_token_123'; $ManualValidationToken='manual-secret-fixture'
+$EnrollmentToken='deploy_' + 'sensitive_fixture_123456'; $AgentToken='rmm_live_' + 'fixture_token_123'; $ManualValidationToken='manual-secret-fixture'
 $script:Operation='install'; $ServiceName='fixture'
 $script:Report=[pscustomobject]@{completed_at='';status='';error_code='';error_message='';service_status=''}
 function Get-Service { param($Name,$ErrorAction) return $null }
@@ -21,10 +21,10 @@ try {
     $reportOutput=@(Write-OperationReport -Status 'failed' -ErrorCode 'TEST' -ErrorMessage "failure $EnrollmentToken $AgentToken $ManualValidationToken")
     if ($reportOutput.Count) { throw 'Silent installer emitted operation report' }
     $log=Get-Content -Raw -LiteralPath $script:NightOwlPaths.InstallLog
-    if ($log -match 'deploy_sensitive_fixture_123456|rmm_live_fixture_token_123|manual-secret-fixture') { throw 'Secret leaked to installer log' }
+    if ($log.Contains($EnrollmentToken) -or $log.Contains($AgentToken) -or $log.Contains($ManualValidationToken)) { throw 'Secret leaked to installer log' }
     if ($log -notmatch 'Validacao concluida' -or $log -notmatch '\[REDACTED\]') { throw 'Diagnostic or redaction missing' }
     $report=Get-Content -Raw -LiteralPath (Get-ChildItem -LiteralPath $script:NightOwlPaths.Diagnostics -Filter '*report*.json').FullName
-    if ($report -match 'deploy_sensitive_fixture_123456|rmm_live_fixture_token_123|manual-secret-fixture') { throw 'Secret leaked to operation report' }
+    if ($report.Contains($EnrollmentToken) -or $report.Contains($AgentToken) -or $report.Contains($ManualValidationToken)) { throw 'Secret leaked to operation report' }
     Write-Host 'PASS: silent installer step and log redaction.'
 } finally {
     Remove-Item Env:\NIGHTOWL_INSTALLER_SILENT -ErrorAction SilentlyContinue
