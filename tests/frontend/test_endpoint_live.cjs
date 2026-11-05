@@ -1,7 +1,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {chart, escape} = require('../../static/js/endpoint_live.js');
+const {chart, escape, errorMessage} = require('../../static/js/endpoint_live.js');
+assert.match(errorMessage('live_cache_unavailable'), /Cache do monitoramento indisponível/);
+assert.match(errorMessage('session_owned_by_another_operator'), /Outro operador/);
+assert.doesNotMatch(errorMessage('<script>secret</script>'), /<script>|secret/);
 const now = Date.now();
 const points = Array.from({length:12}, (_, i) => ({sample_id:'synthetic-' + i,
     collected_at:new Date(now - (11-i)*10000).toISOString(),
