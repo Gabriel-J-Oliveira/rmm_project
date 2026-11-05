@@ -1,0 +1,4 @@
+# Hashes pin the exact bytes consumed by Django and embedded in the agent.
+agents/approved_scripts/environment_diagnostic_v1.ps1 text eol=lf
+# Preserve npm package bytes for the checked-in VT integrity manifest.
+static/vendor/xterm/* -text

@@ -233,7 +233,7 @@ public sealed class JobStore
         Validate(record);
         Directory.CreateDirectory(_directory);
         string path = PathFor(record.JobId);
-        NightOwlFileStore.WriteAllText(path, JsonSerializer.Serialize(record, JsonOptions));
+        NightOwlFileStore.WriteAllTextDurable(path, JsonSerializer.Serialize(record, JsonOptions));
     }
 
     public JobStateRecord Mark(string jobId, string jobType, string status, int attempt, string correlationId = "", string errorCode = "", string errorMessage = "")
@@ -321,6 +321,10 @@ public sealed class JobStore
             bool tooOld = files[i].LastWriteTimeUtc < cutoff.UtcDateTime;
             if (tooMany || tooOld)
             {
+                JobStateRecord? record;
+                try { record = Load(Path.GetFileNameWithoutExtension(files[i].Name)); }
+                catch (Exception) { continue; }
+                if (record is null || !record.IsFinal || record.ExternalRunnerActive) continue;
                 try { files[i].Delete(); } catch { }
             }
         }
@@ -414,6 +418,7 @@ public sealed class PendingResultRecord
 
 public sealed class PendingResultQueue
 {
+    private readonly object _gate = new();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly TimeSpan[] BackoffSchedule =
     {
@@ -451,12 +456,20 @@ public sealed class PendingResultQueue
 
     public IReadOnlyList<PendingResultQuarantineEvent> DrainQuarantineEvents()
     {
+        lock (_gate)
+        {
         PendingResultQuarantineEvent[] events = _quarantineEvents.ToArray();
         _quarantineEvents.Clear();
         return events;
+        }
     }
 
     public PendingResultRecord Enqueue<TPayload>(string jobType, TPayload payload, bool critical = false, string? resultId = null)
+    {
+        lock (_gate) return EnqueueCore(jobType, payload, critical, resultId);
+    }
+
+    private PendingResultRecord EnqueueCore<TPayload>(string jobType, TPayload payload, bool critical, string? resultId)
     {
         Directory.CreateDirectory(_directory);
         JsonElement element = JsonSerializer.SerializeToElement(payload, JsonOptions);
@@ -480,7 +493,7 @@ public sealed class PendingResultQueue
             PayloadSha256 = Sha256Hex(payloadBytes),
             Critical = critical
         };
-        EnforceLimits(record.Critical);
+        EnforceLimits(record);
         Save(record);
         return record;
     }
@@ -491,6 +504,11 @@ public sealed class PendingResultQueue
     }
 
     public IReadOnlyList<PendingResultRecord> LoadAll(DateTimeOffset? now = null, bool dueOnly = false)
+    {
+        lock (_gate) return LoadAllCore(now, dueOnly);
+    }
+
+    private IReadOnlyList<PendingResultRecord> LoadAllCore(DateTimeOffset? now, bool dueOnly)
     {
         if (!Directory.Exists(_directory))
         {
@@ -520,6 +538,11 @@ public sealed class PendingResultQueue
 
     public void MarkAttemptFailed(PendingResultRecord record, string errorCode, string errorMessage)
     {
+        lock (_gate) MarkAttemptFailedCore(record, errorCode, errorMessage);
+    }
+
+    private void MarkAttemptFailedCore(PendingResultRecord record, string errorCode, string errorMessage)
+    {
         record.AttemptCount++;
         record.LastAttemptAt = DateTimeOffset.UtcNow;
         record.LastErrorCode = errorCode;
@@ -536,6 +559,21 @@ public sealed class PendingResultQueue
 
     public void MarkSent(PendingResultRecord record)
     {
+        lock (_gate) MarkSentCore(record);
+    }
+
+    public bool HasResult(string resultId)
+    {
+        lock (_gate) return File.Exists(PathFor(resultId)) || IsAcknowledged(resultId);
+    }
+
+    public bool IsAcknowledged(string resultId)
+    {
+        lock (_gate) return Directory.Exists(SentDirectory) && Directory.EnumerateFiles(SentDirectory, resultId+"-*.json").Any();
+    }
+
+    private void MarkSentCore(PendingResultRecord record)
+    {
         Directory.CreateDirectory(SentDirectory);
         string source = PathFor(record.ResultId);
         if (!File.Exists(source))
@@ -544,63 +582,38 @@ public sealed class PendingResultQueue
         }
         string destination = Path.Combine(SentDirectory, $"{record.ResultId}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
         File.Move(source, destination, overwrite: true);
+        // Archive retention starts at ACK, not at the original offline result date.
+        File.SetLastWriteTimeUtc(destination, DateTime.UtcNow);
+        FileInfo[] archive = new DirectoryInfo(SentDirectory).GetFiles("*.json").OrderByDescending(file=>file.LastWriteTimeUtc).ToArray();
+        foreach (FileInfo file in archive.Skip(1000).Concat(archive.Take(1000).Where(file=>file.LastWriteTimeUtc<DateTime.UtcNow-_retention)))
+            file.Delete();
     }
 
     public void Prune()
     {
-        EnforceLimits(false);
+        lock (_gate) EnforceLimits();
     }
 
-    private void EnforceLimits(bool incomingCritical)
+    private void EnforceLimits(PendingResultRecord? incoming = null)
     {
         Directory.CreateDirectory(_directory);
-        FileInfo[] files = new DirectoryInfo(_directory)
-            .GetFiles("*.json", SearchOption.TopDirectoryOnly)
-            .OrderBy(file => file.CreationTimeUtc)
-            .ToArray();
-
-        long totalBytes = files.Sum(file => file.Length);
-        DateTimeOffset cutoff = DateTimeOffset.UtcNow.Subtract(_retention);
-        foreach (FileInfo file in files)
+        FileInfo[] files = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly);
+        FileInfo[] quarantined = Directory.Exists(QuarantineDirectory)
+            ? new DirectoryInfo(QuarantineDirectory).GetFiles("*.json", SearchOption.TopDirectoryOnly) : Array.Empty<FileInfo>();
+        // Corrupt unacknowledged evidence still occupies the queue's budget.
+        long totalBytes = files.Sum(file => file.Length) + quarantined.Sum(file => file.Length);
+        int count = files.Length + quarantined.Length;
+        if (incoming is not null)
         {
-            if (files.Length <= _maxRecords && totalBytes <= _maxTotalBytes && file.LastWriteTimeUtc >= cutoff.UtcDateTime)
-            {
-                continue;
-            }
-
-            PendingResultRecord? record = TryLoad(file.FullName);
-            if (record?.Critical == true)
-            {
-                continue;
-            }
-
-            try
-            {
-                totalBytes -= file.Length;
-                file.Delete();
-            }
-            catch { }
-            files = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly).OrderBy(f => f.CreationTimeUtc).ToArray();
+            string path = PathFor(incoming.ResultId);
+            FileInfo? previous = files.FirstOrDefault(file => file.FullName.Equals(path, StringComparison.OrdinalIgnoreCase));
+            count += previous is null ? 1 : 0;
+            totalBytes += JsonSerializer.SerializeToUtf8Bytes(incoming, JsonOptions).LongLength - (previous?.Length ?? 0);
         }
-
-        int currentCount = Directory.GetFiles(_directory, "*.json", SearchOption.TopDirectoryOnly).Length;
-        long currentBytes = new DirectoryInfo(_directory).GetFiles("*.json", SearchOption.TopDirectoryOnly).Sum(file => file.Length);
-        if ((currentCount >= _maxRecords || currentBytes >= _maxTotalBytes) && incomingCritical == false)
-        {
+        // Age and Critical never authorize deleting unacknowledged evidence.
+        // Corruption is handled by LoadAll quarantine; capacity applies to new admission.
+        if (count > _maxRecords || totalBytes > _maxTotalBytes)
             throw new InvalidOperationException(JobErrorCodes.ResultQueueFull);
-        }
-    }
-
-    private PendingResultRecord? TryLoad(string path)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<PendingResultRecord>(File.ReadAllText(path), JsonOptions);
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private void Save(PendingResultRecord record)
@@ -608,7 +621,7 @@ public sealed class PendingResultQueue
         Validate(record);
         Directory.CreateDirectory(_directory);
         string path = PathFor(record.ResultId);
-        NightOwlFileStore.WriteAllText(path, JsonSerializer.Serialize(record, JsonOptions));
+        NightOwlFileStore.WriteAllTextDurable(path, JsonSerializer.Serialize(record, JsonOptions));
     }
 
     private void Quarantine(string path, string reason)
@@ -616,8 +629,8 @@ public sealed class PendingResultQueue
         try
         {
             Directory.CreateDirectory(QuarantineDirectory);
-            string destination = Path.Combine(QuarantineDirectory, $"{Path.GetFileNameWithoutExtension(path)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-            File.Move(path, destination, overwrite: true);
+            string destination = Path.Combine(QuarantineDirectory, $"{Path.GetFileNameWithoutExtension(path)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}.json");
+            File.Move(path, destination);
             _quarantineEvents.Add(new PendingResultQuarantineEvent(path, destination, reason));
         }
         catch { }

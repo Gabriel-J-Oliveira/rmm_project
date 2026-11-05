@@ -418,6 +418,7 @@ class AgentDeploymentBootstrapScriptView(APIView):
         return response
 
 
+
 class AgentDeploymentMetadataView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -464,6 +465,7 @@ class AgentDeploymentMetadataView(APIView):
                 'platform': deployment.platform,
                 'channel': deployment.channel,
                 'expires_at': deployment.expires_at.isoformat(),
+                'manual_validation_required': bool(deployment.metadata.get('manual_validation_id')),
                 'server_url': base_url,
                 'completion_url': request.build_absolute_uri(reverse('agent-deployment-complete')),
                 'release': {
@@ -558,23 +560,41 @@ class AgentDeploymentCompleteView(APIView):
             )
             return Response({'status': 'failed', 'deployment_id': str(deployment.id)})
 
-        if status_value != 'completed':
+        if status_value not in ('completed', 'pending'):
             return Response({'error': 'invalid_status', 'detail': 'Status de deployment invalido.'}, status=status.HTTP_400_BAD_REQUEST)
         if release_version != deployment.release.version:
             return Response({'error': 'release_mismatch', 'detail': 'Release confirmada diverge do deployment.'}, status=status.HTTP_409_CONFLICT)
         if service_status.lower() != 'running' or not health_check:
             return Response({'error': 'health_not_confirmed', 'detail': 'Servico/health check nao confirmados.'}, status=status.HTTP_409_CONFLICT)
 
+        heartbeat = InventorySnapshot.objects.filter(
+            machine=machine, received_at__gt=deployment.installing_at,
+            raw_payload__snapshot_source='heartbeat', raw_payload__machine_id=machine.machine_id,
+            raw_payload__agent_version=deployment.release.version,
+        ).order_by('received_at', 'pk').first() if machine.machine_id and deployment.installing_at else None
         if deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
             if deployment.endpoint_id == machine.id:
+                if not heartbeat:
+                    return Response({'error': 'heartbeat_not_confirmed'}, status=status.HTTP_409_CONFLICT)
                 mark_machine_installed_from_deployment(machine, deployment)
                 return Response({'status': 'completed', 'deployment_id': str(deployment.id), 'idempotent': True})
             return Response({'error': 'deployment_machine_mismatch', 'detail': 'Deployment concluido para outro endpoint.'}, status=status.HTTP_409_CONFLICT)
+
+        if deployment.status != AgentDeploymentToken.STATUS_INSTALLING or deployment.is_expired or not deployment.installing_at:
+            return Response({'error': 'deployment_not_active'}, status=status.HTTP_409_CONFLICT)
+        if not heartbeat:
+            deployment.endpoint = machine
+            deployment.metadata = {**(deployment.metadata or {}), 'reported_service_status': 'Running',
+                'communication_status': 'heartbeat_timeout' if status_value == 'pending' else 'awaiting_heartbeat'}
+            deployment.save(update_fields=['endpoint', 'metadata'])
+            return Response({'status': 'pending' if status_value == 'pending' else 'awaiting_heartbeat', 'deployment_id': str(deployment.id)}, status=status.HTTP_202_ACCEPTED)
 
         deployment.mark_completed(machine)
         deployment.metadata = {
             **(deployment.metadata or {}),
             'reported_service_status': 'Running',
+            'communication_status': 'operational',
+            'heartbeat_snapshot_id': str(heartbeat.pk),
         }
         deployment.save(update_fields=['metadata'])
         mark_machine_installed_from_deployment(machine, deployment)
@@ -606,7 +626,7 @@ def mark_machine_installed_from_deployment(machine, deployment):
         and AgentMachine.objects.filter(machine_id__iexact=machine.machine_id).count() == 1
         and InventorySnapshot.objects.filter(
             machine=machine,
-            received_at__gte=deployment.used_at or deployment.created_at,
+            received_at__gte=(deployment.used_at if (deployment.metadata or {}).get('remote_install_job_id') else deployment.installing_at) or deployment.used_at or deployment.created_at,
             raw_payload__snapshot_source='heartbeat',
             raw_payload__machine_id=machine.machine_id,
             raw_payload__agent_version=deployment.release.version,
@@ -629,6 +649,36 @@ def mark_machine_installed_from_deployment(machine, deployment):
         'agent_uninstall_source',
         'updated_at',
     ])
+
+
+@transaction.atomic
+def reconcile_pending_deployment_heartbeat(machine, snapshot):
+    """Complete only a locally confirmed, current and unexpired deployment."""
+    raw = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    if (raw.get('snapshot_source') != 'heartbeat' or not machine.machine_id or
+            raw.get('machine_id') != machine.machine_id):
+        return
+    candidates = AgentDeploymentToken.objects.select_for_update().select_related('release').filter(
+        endpoint=machine, status=AgentDeploymentToken.STATUS_INSTALLING,
+        expires_at__gt=timezone.now(), installing_at__lt=snapshot.received_at,
+    ).order_by('-created_at', '-pk')
+    for deployment in candidates:
+        metadata = deployment.metadata or {}
+        if (metadata.get('remote_install_job_id') or metadata.get('reported_service_status') != 'Running' or
+                metadata.get('communication_status') not in ('awaiting_heartbeat', 'heartbeat_timeout') or
+                raw.get('agent_version') != deployment.release.version):
+            continue
+        if AgentDeploymentToken.objects.filter(endpoint=machine, created_at__gt=deployment.created_at).exists():
+            continue
+        deployment.mark_completed(machine)
+        deployment.metadata = {**metadata, 'communication_status': 'operational', 'heartbeat_snapshot_id': str(snapshot.pk)}
+        deployment.save(update_fields=['metadata'])
+        mark_machine_installed_from_deployment(machine, deployment)
+        create_audit_event(event_type='agent.deployment.completed', title='Deployment de agente concluido',
+            description='Heartbeat posterior confirmou o deployment.', endpoint=machine,
+            actor_type=AuditEvent.ACTOR_AGENT, actor_name='NightOwlAgent',
+            metadata={'deployment_id': str(deployment.pk), 'release_id': str(deployment.release_id)})
+        break
 
 
 def _payload_sha256(payload):
@@ -996,6 +1046,9 @@ class AgentHeartbeatView(APIView):
                     raw_payload=request.data,
                 )
                 machine.refresh_from_db(fields=['machine_id'])
+                transaction.on_commit(lambda: reconcile_pending_deployment_heartbeat(machine, snapshot), robust=True)
+                from dashboard.remote_install import reconcile_remote_install_heartbeat
+                transaction.on_commit(lambda: reconcile_remote_install_heartbeat(machine, snapshot), robust=True)
                 diagnostic_payload = request.data.get('diagnostics') or request.data.get('operational_status') or request.data.get('status')
                 if isinstance(diagnostic_payload, dict):
                     diagnostic_payload.setdefault('machine_id', request.data.get('machine_id') or serializer.validated_data.get('machine_id'))
@@ -1202,9 +1255,11 @@ class AgentJobsPullView(APIView):
     authentication_classes = []
     permission_classes = []
 
+    @transaction.atomic
     def get(self, request):
         machine = authenticate_agent_token(request)
         now = timezone.now()
+        protocol_v2 = request.headers.get('X-NightOwl-Job-Protocol') == '2'
         expired = machine.jobs.filter(
             status=AgentJob.STATUS_QUEUED,
             expires_at__isnull=False,
@@ -1252,9 +1307,61 @@ class AgentJobsPullView(APIView):
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
 
-        jobs = list(machine.jobs.filter(status=AgentJob.STATUS_QUEUED).order_by('queued_at')[:5])
+        if protocol_v2:
+            from .job_control import delivery_candidates
+            candidates = delivery_candidates(machine, now)
+        else:
+            candidates = machine.jobs.filter(status=AgentJob.STATUS_QUEUED)
+        jobs = list(candidates.select_for_update().order_by('queued_at')[:5])
         response_jobs = []
         for job in jobs:
+            if job.job_type == 'operational_action':
+                from .operational_actions import validate_dispatch
+                try:
+                    if not protocol_v2:
+                        raise ValueError('action_requires_jobs_v2')
+                    validate_dispatch(job)
+                except (PermissionError, ValueError):
+                    job.status = AgentJob.STATUS_CANCELLED
+                    job.error_code = 'ACTION_AUTHORIZATION_REVOKED'
+                    job.finished_at = now
+                    job.save(update_fields=['status', 'error_code', 'finished_at', 'updated_at'])
+                    create_audit_event(event_type='job.cancelled', title='Acao operacional bloqueada',
+                        description='Autorizacao, capacidade ou contrato invalido.', endpoint=machine,
+                        actor_type=AuditEvent.ACTOR_SYSTEM, actor_name='Sistema', metadata={'job_id': str(job.pk)})
+                    continue
+            if not protocol_v2 and hasattr(job,'automation_occurrence'):
+                continue
+            from .automation import validate_scheduled_dispatch
+            try:
+                validate_scheduled_dispatch(job)
+            except (PermissionError, ValueError):
+                job.status=AgentJob.STATUS_CANCELLED
+                job.error_code='AUTOMATION_AUTHORIZATION_REVOKED'
+                job.finished_at=now
+                job.save(update_fields=['status','error_code','finished_at','updated_at'])
+                create_audit_event(event_type='job.cancelled',title='Autorizacao de automacao revogada',
+                    description='Identidade, permissao ou capacidade deixou de ser valida.',endpoint=machine,
+                    actor_type=AuditEvent.ACTOR_SYSTEM,actor_name='Sistema',metadata={'job_id':str(job.pk)})
+                continue
+            if job.job_type in ('collect_services','install_software'):
+                from django.conf import settings
+                from .internal_jobs import validate_internal_payload, internal_capability
+                flag = 'NIGHTOWL_SERVICE_COLLECTION_ENABLED' if job.job_type=='collect_services' else 'NIGHTOWL_SOFTWARE_INSTALL_ENABLED'
+                try:
+                    if not getattr(settings,flag,False) or not internal_capability(machine,job.job_type):
+                        raise ValueError('internal_job_disabled')
+                    validate_internal_payload(job.job_type,job.payload)
+                except ValueError:
+                    job.status=AgentJob.STATUS_UNSUPPORTED
+                    job.error_code='INTERNAL_CAPABILITY_DISABLED'
+                    job.finished_at=now
+                    job.save(update_fields=['status','error_code','finished_at','updated_at'])
+                    create_audit_event(event_type='job.unsupported',title='Capacidade interna bloqueada',
+                        description='Flag, capacidade ou contrato invalido.',endpoint=machine,
+                        severity=AuditEvent.SEVERITY_WARNING,actor_type=AuditEvent.ACTOR_AGENT,actor_name='NightOwlAgent',
+                        metadata={'job_id':str(job.pk),'job_type':job.job_type})
+                    continue
             if job.job_type == AgentJob.TYPE_CONFIGURE_TELEMETRY:
                 from .telemetry_configuration import telemetry_capability, validate_configuration
                 try:
@@ -1277,7 +1384,7 @@ class AgentJobsPullView(APIView):
                     continue
             job.status = AgentJob.STATUS_SENT
             job.dispatched_at = now
-            job.started_at = now
+            job.started_at = None if protocol_v2 else now
             job.save(update_fields=['status', 'dispatched_at', 'started_at', 'updated_at'])
             if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT:
                 uninstall_request = getattr(job, 'uninstall_request', None)
@@ -1334,9 +1441,9 @@ class AgentJobsPullView(APIView):
                 metadata={'job_id': str(job.id), 'job_type': job.job_type},
             )
             create_audit_event(
-                event_type='job.started',
-                title='Job iniciado pelo agente',
-                description=f'Job {job.job_type} iniciou execucao em {machine.hostname}.',
+                event_type='job.delivered',
+                title='Job entregue; inicio ainda nao confirmado',
+                description=f'Job {job.job_type} entregue a {machine.hostname}.',
                 severity=AuditEvent.SEVERITY_INFO,
                 actor_type=AuditEvent.ACTOR_AGENT,
                 actor_name='NightOwlAgent',
@@ -1522,6 +1629,18 @@ class AgentJobsResultView(APIView):
                     )
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
+            if job.job_type == 'operational_action' and incoming_status == AgentJob.STATUS_COMPLETED:
+                from .operational_actions import validate_completion
+                try:
+                    validate_completion(job, _payload_result(payload))
+                except ValueError:
+                    return Response({'error': 'action_confirmation_invalid'}, status=400)
+            if job.job_type in ('collect_services','install_software') and incoming_status==AgentJob.STATUS_COMPLETED:
+                from .internal_jobs import validate_internal_completion
+                try:
+                    validate_internal_completion(job,_payload_result(payload))
+                except ValueError:
+                    return Response({'error':'internal_confirmation_invalid'},status=400)
             if job.job_type == AgentJob.TYPE_CONFIGURE_TELEMETRY and incoming_status == AgentJob.STATUS_COMPLETED:
                 from .telemetry_configuration import validate_completion
                 try:
@@ -1551,6 +1670,7 @@ class AgentJobsResultView(APIView):
                         'status': 'ok',
                         'ignored': True,
                         'reason': 'job_already_final',
+                        'result_id': result_id,
                         'machine_id': machine.machine_id or str(machine.id),
                         'job_id': str(job.id),
                         'job_status': job.status,
@@ -2002,21 +2122,6 @@ class AgentEnrollView(APIView):
                            status.HTTP_409_CONFLICT, enrollment_token=enrollment_token,
                            endpoint=endpoint, metadata={'code': error.code})
 
-    def _active_enrollment_tokens(self):
-        now = timezone.now()
-        return AgentEnrollmentToken.objects.select_for_update().filter(is_active=True).filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-        ).filter(
-            Q(max_uses__isnull=True) | Q(used_count__lt=models.F('max_uses')),
-        )
-
-    def _auto_enrollment_token_for_domain(self, domain):
-        normalized_domain = (domain or '').strip().lower()
-        if not normalized_domain:
-            return None
-        return self._active_enrollment_tokens().filter(allowed_domain__iexact=normalized_domain).exclude(
-            name__istartswith='NightOwlGpo-').order_by('-created_at').first()
-
     def _validate_enrollment_token(self, request, payload, token_value):
         if not token_value.startswith('enroll_'):
             return None, self._error(
@@ -2110,6 +2215,20 @@ class AgentEnrollView(APIView):
                 status.HTTP_403_FORBIDDEN,
                 metadata={'deployment_id': str(deployment_token.id), 'platform': deployment_token.platform},
             )
+        metadata = deployment_token.metadata or {}
+        if metadata.get('manual_install_kind') or metadata.get('batch_id'):
+            from dashboard.views import _deployment_release_is_usable, _usable_deployment_trust_bundle
+            trust = _usable_deployment_trust_bundle()
+            if (not trust or deployment_token.release.status not in ('published', 'paused') or
+                    not _deployment_release_is_usable(deployment_token.release, trust)):
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_release_unavailable', 'Release ou trust indisponivel.', status.HTTP_403_FORBIDDEN)
+            if str(payload.get('agent_version') or '') != deployment_token.release.version:
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_release_mismatch', 'Release do deployment nao corresponde ao instalador.', status.HTTP_403_FORBIDDEN)
+            if metadata.get('allowed_domain') and normalized_domain(payload.get('domain')) != normalized_domain(metadata['allowed_domain']):
+                return None, self._error(request, payload, AgentEnrollmentLog.STATUS_DENIED,
+                    'deployment_domain_mismatch', 'Dominio informado nao corresponde ao lote.', status.HTTP_403_FORBIDDEN)
         target = deployment_token.metadata.get('target_fqdn') if deployment_token.metadata.get('remote_install_job_id') else None
         if target:
             hostname = str(payload.get('hostname') or '').strip().rstrip('.').casefold()
@@ -2160,7 +2279,7 @@ class AgentEnrollView(APIView):
             )
         return None
 
-    def _validate_manual_token(self, request, payload, manual_token_value, enrollment_token=None, domain_reason='domain_not_allowed'):
+    def _validate_manual_token(self, request, payload, manual_token_value, enrollment_token=None, domain_reason='domain_not_allowed', deployment_token=None):
         if not manual_token_value.startswith('manual_'):
             return None, self._error(
                 request,
@@ -2188,6 +2307,12 @@ class AgentEnrollView(APIView):
                 metadata={'reason': domain_reason},
             )
 
+        bound = manual_validation_token.deployment or AgentDeploymentToken.objects.filter(
+            metadata__manual_validation_id=str(manual_validation_token.pk)).first()
+        if bound and (deployment_token is None or bound.pk != deployment_token.pk):
+            return None, self._error(request, payload, AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                'invalid_manual_validation_token', 'Token manual pertence a outro deployment.', status.HTTP_403_FORBIDDEN)
+
         if enrollment_token and manual_validation_token.enrollment_token_id and manual_validation_token.enrollment_token_id != enrollment_token.id:
             return None, self._error(
                 request,
@@ -2197,7 +2322,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual nao pertence a este enrollment token.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
 
         if not enrollment_token and manual_validation_token.enrollment_token_id:
@@ -2215,7 +2340,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual inativo.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
 
         if manual_validation_token.is_expired:
@@ -2227,7 +2352,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual expirado.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
 
         if manual_validation_token.is_used:
@@ -2239,7 +2364,7 @@ class AgentEnrollView(APIView):
                 'Token de validacao manual ja utilizado.',
                 status.HTTP_403_FORBIDDEN,
                 enrollment_token=enrollment_token,
-                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix},
+                metadata={'reason': domain_reason, 'manual_validation_token_prefix': manual_validation_token.prefix[:10]},
             )
         return (manual_validation_token, enrollment_token), None
 
@@ -2282,6 +2407,18 @@ class AgentEnrollView(APIView):
                 enrollment_token, token_error = self._validate_enrollment_token(request, payload, token_value)
             if token_error:
                 return token_error
+            if deployment_token is not None and deployment_token.metadata.get('manual_validation_id'):
+                if not manual_token_value:
+                    return self._error(request, payload, AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
+                        'manual_validation_required', 'Informe o token manual desta instalacao.', status.HTTP_403_FORBIDDEN)
+                manual_result, manual_error = self._validate_manual_token(request, payload, manual_token_value, deployment_token=deployment_token)
+                if manual_error:
+                    return manual_error
+                manual_validation_token, linked_enrollment = manual_result
+                if linked_enrollment is not None or str(manual_validation_token.pk) != deployment_token.metadata['manual_validation_id']:
+                    return self._error(request, payload, AgentEnrollmentLog.STATUS_INVALID_MANUAL_VALIDATION_TOKEN,
+                        'invalid_manual_validation_token', 'Token manual nao corresponde ao deployment.', status.HTTP_403_FORBIDDEN)
+                domain_validation = 'manual'
         elif manual_token_value:
             manual_result, manual_error = self._validate_manual_token(
                 request,
@@ -2295,21 +2432,14 @@ class AgentEnrollView(APIView):
             manual_validation_token, enrollment_token = manual_result
             domain_validation = 'manual'
         else:
-            enrollment_token = self._auto_enrollment_token_for_domain(domain)
-            if enrollment_token is None:
+            bearer_machine, _ = _authenticated_bearer_machine(request)
+            if bearer_machine is None:
                 return self._error(
-                    request,
-                    payload,
-                    AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
-                    'manual_validation_required',
-                    'Esta maquina nao esta no dominio autorizado. Informe um token de validacao manual.',
-                    status.HTTP_403_FORBIDDEN,
-                    metadata={
-                        'reason': 'domain_not_allowed',
-                        'reported_domain': domain,
-                    },
+                    request, payload, AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
+                    'manual_validation_required', 'Informe uma autorizacao valida para esta instalacao.',
+                    status.HTTP_403_FORBIDDEN, metadata={'reason': 'authorization_required'},
                 )
-            domain_validation = 'domain'
+            domain_validation = 'authenticated_agent'
 
         if enrollment_token and enrollment_token.name.casefold().startswith('nightowlgpo-'):
             expected_hostname = enrollment_token.name[len('NightOwlGpo-'):].strip().casefold()
@@ -2441,7 +2571,7 @@ class AgentEnrollView(APIView):
                         'machine_id': machine.machine_id,
                         'domain_validation': domain_validation,
                         'manual_validation_used': manual_validation_token is not None,
-                        'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                        'manual_validation_token_prefix': manual_validation_token.prefix[:10] if manual_validation_token else '',
                         'domain_reason': 'domain_not_allowed' if manual_validation_token else 'domain_allowed',
                         'deployment_id': str(deployment_token.id) if deployment_token else '',
                         'deployment_release_id': str(deployment_token.release_id) if deployment_token else '',
@@ -2485,7 +2615,7 @@ class AgentEnrollView(APIView):
                         'enrollment_token_prefix': enrollment_token.prefix if enrollment_token else '',
                         'domain_validation': domain_validation,
                         'manual_validation_used': manual_validation_token is not None,
-                        'manual_validation_token_prefix': manual_validation_token.prefix if manual_validation_token else '',
+                        'manual_validation_token_prefix': manual_validation_token.prefix[:10] if manual_validation_token else '',
                         'deployment_id': str(deployment_token.id) if deployment_token else '',
                         'deployment_release_version': deployment_token.release.version if deployment_token else '',
                     },

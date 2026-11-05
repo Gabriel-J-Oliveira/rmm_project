@@ -31,13 +31,20 @@ param(
     [switch]$ForceRecovery,
     [switch]$TrustLocalPackage,
     [switch]$AllowReleaseBundledTrustForLab,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$PrepareWinRM,
+    [string[]]$WinRMAllowedSources = @()
 )
 
 $ErrorActionPreference = "Stop"
+if ($env:NIGHTOWL_INSTALLER_SILENT -eq '1') { $NonInteractive = $true }
 
 if ([string]::IsNullOrWhiteSpace($EnrollmentToken) -and -not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
     $EnrollmentToken = [string]$env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN
+}
+if ([string]::IsNullOrWhiteSpace($ManualValidationToken) -and -not [string]::IsNullOrWhiteSpace($env:NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN)) {
+    $ManualValidationToken = [string]$env:NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN
+    Remove-Item Env:\NIGHTOWL_INSTALLER_MANUAL_VALIDATION_TOKEN -ErrorAction SilentlyContinue
 }
 
 function New-NightOwlPaths([string]$RequestedInstallPath) {
@@ -197,10 +204,15 @@ function Write-OperationReport([string]$Status, [string]$ErrorCode = "", [string
         New-Item -ItemType Directory -Force -Path $diagDir | Out-Null
         $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
         $path = Join-Path $diagDir ("{0}-report-{1}.json" -f $script:Operation, $stamp)
-        $script:Report | ConvertTo-Json -Depth 8 | Set-Content -Path $path -Encoding UTF8
+        $reportJson = $script:Report | ConvertTo-Json -Depth 8
+        foreach ($sensitive in @($EnrollmentToken, $AgentToken, $ManualValidationToken, $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
+            if (-not [string]::IsNullOrWhiteSpace($sensitive)) { $reportJson = $reportJson.Replace($sensitive, '[REDACTED]') }
+        }
+        $reportJson = $reportJson -replace '(?i)(deploy_|enroll_|rmm_live_)[A-Za-z0-9_-]+', '[REDACTED]'
+        $reportJson | Set-Content -Path $path -Encoding UTF8
         Write-InstallLog "operation.report.written" "Relatorio da operacao gravado." @{ operation = $script:Operation; path = $path; status = $Status; error_code = $ErrorCode }
-        if ($NonInteractive) {
-            $script:Report | ConvertTo-Json -Depth 8
+        if ($NonInteractive -and $env:NIGHTOWL_INSTALLER_SILENT -ne '1') {
+            $reportJson
         }
     }
     catch {
@@ -209,7 +221,78 @@ function Write-OperationReport([string]$Status, [string]$ErrorCode = "", [string
 }
 
 function Write-Step($Status, $Message) {
-    Write-Host ("[{0}] {1}" -f $Status, $Message)
+    if ($env:NIGHTOWL_INSTALLER_SILENT -eq '1') {
+        $safeMessage = if ($Message -match '(?i)https?://|token|secret|password|bearer|deploy_|enroll_|rmm_live_') { '[redacted]' } else { [string]$Message }
+        if ($safeMessage.Length -gt 256) { $safeMessage = $safeMessage.Substring(0, 256) }
+        Write-InstallLog 'operation.step' 'Etapa do instalador.' @{ status = [string]$Status; detail = $safeMessage }
+    } else { Write-Host ("[{0}] {1}" -f $Status, $Message) }
+}
+
+# Kept in both standalone lifecycle scripts: bootstrap/uninstall cannot depend on installed DLLs.
+function Write-NightOwlBoundedLog([string]$Path, [string]$Json, [long]$MaxBytes = 10485760,
+    [int]$Archives = 5, [int]$MaxRecordBytes = 65536) {
+    if ($MaxBytes -lt 256 -or $Archives -lt 1 -or $Archives -gt 20 -or
+        $MaxRecordBytes -lt 128 -or $MaxRecordBytes -gt $MaxBytes) { throw 'Invalid log limits' }
+    $Path = [IO.Path]::GetFullPath($Path)
+    $directory = [IO.Path]::GetDirectoryName($Path)
+    $current = New-Object IO.DirectoryInfo($directory)
+    while ($null -ne $current) {
+        if ($current.Exists -and ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Log reparse path rejected' }
+        $current = $current.Parent
+    }
+    [IO.Directory]::CreateDirectory($directory) | Out-Null
+    $owned = @($Path, ($Path + '.lock')) + @(1..$Archives | ForEach-Object { $Path + '.' + $_ })
+    foreach ($file in $owned) {
+        if ([IO.File]::Exists($file) -and ([IO.File]::GetAttributes($file) -band [IO.FileAttributes]::ReparsePoint)) { throw 'Log reparse file rejected' }
+    }
+    # Existing lifecycle callers supply structured records. Redact known credential fields
+    # and bearer values before writing or calculating the record size.
+    $Json = [regex]::Replace($Json, '(?i)("[^"\\]*(?:token|password|secret|authorization|cookie|api_key)[^"\\]*"\s*:\s*)"(?:\\.|[^"\\])*"', '$1"[REDACTED]"')
+    $Json = [regex]::Replace($Json, '(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}', '$1[REDACTED]')
+    $Json = [regex]::Replace($Json, '(?i)((?:agentToken|agent_token|token|password|secret|api_key|apikey|cookie)=)[^&\s"\\]+', '$1[REDACTED]')
+    $Json = [regex]::Replace($Json, '(https?://[^\s?"\\]+)\?[^\s"\\]*', '$1')
+    $Json = ($Json | ConvertFrom-Json | ConvertTo-Json -Depth 8 -Compress)
+    $encoding = New-Object Text.UTF8Encoding($false)
+    if ($encoding.GetByteCount($Json) + 1 -gt $MaxRecordBytes) { $Json = '{"event_type":"log.record_omitted","reason":"record_limit"}' }
+    $bytes = $encoding.GetBytes($Json + "`n")
+    $lease = $null
+    $output = $null
+    try {
+        for ($attempt = 0; $null -eq $lease; $attempt++) {
+            try { $lease = [IO.File]::Open(($Path + '.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+            catch [IO.IOException] { if ($attempt -ge 40) { throw }; Start-Sleep -Milliseconds 10 }
+        }
+        foreach ($i in 1..$Archives) {
+            $archive = $Path + '.' + $i
+            if ([IO.File]::Exists($archive) -and [IO.File]::GetLastWriteTimeUtc($archive) -lt [datetime]::UtcNow.AddDays(-30)) { [IO.File]::Delete($archive) }
+        }
+        $length = 0
+        $separatePartial = $false
+        if ([IO.File]::Exists($Path)) {
+            $reader = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try {
+                $length = $reader.Length
+                if ($length -gt 0) { $reader.Position = $length - 1; $separatePartial = $reader.ReadByte() -ne 10 }
+            }
+            finally { $reader.Dispose() }
+        }
+        if ($length -gt ($MaxBytes - $bytes.Length - [int]$separatePartial)) {
+            [IO.File]::Delete(($Path + '.' + $Archives))
+            for ($i = $Archives - 1; $i -ge 1; $i--) {
+                if ([IO.File]::Exists(($Path + '.' + $i))) { [IO.File]::Move(($Path + '.' + $i), ($Path + '.' + ($i + 1))) }
+            }
+            [IO.File]::Move($Path, ($Path + '.1'))
+            $separatePartial = $false
+        }
+        $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $output = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, $share)
+        if ($separatePartial) { $output.WriteByte(10) }
+        $output.Write($bytes, 0, $bytes.Length)
+    }
+    finally {
+        if ($null -ne $output) { $output.Dispose() }
+        if ($null -ne $lease) { $lease.Dispose() }
+    }
 }
 
 function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
@@ -222,7 +305,12 @@ function Write-InstallLog($EventType, $Message, $Metadata = @{}) {
             message = $Message
             metadata = $Metadata
         }
-        $entry | ConvertTo-Json -Depth 6 -Compress | Add-Content -Path ([string]$script:NightOwlPaths.InstallLog) -Encoding UTF8
+        $json = $entry | ConvertTo-Json -Depth 6 -Compress
+        foreach ($sensitive in @($EnrollmentToken, $AgentToken, $ManualValidationToken, $env:NIGHTOWL_INSTALLER_ENROLLMENT_TOKEN)) {
+            if (-not [string]::IsNullOrWhiteSpace($sensitive)) { $json = $json.Replace($sensitive, '[REDACTED]') }
+        }
+        $json = $json -replace '(?i)(deploy_|enroll_|rmm_live_)[A-Za-z0-9_-]+', '[REDACTED]'
+        Write-NightOwlBoundedLog -Path ([string]$script:NightOwlPaths.InstallLog) -Json $json
     }
     catch {}
 }
@@ -502,9 +590,26 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
         throw "INSTALL_PACKAGE_INSECURE_URL: download de pacote exige HTTPS."
     }
     New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+    $cacheMutex = $null
+    $cacheLocked = $false
+    $cacheFile = $null
+    $cacheHit = $false
+    try {
+    if ($ExpectedPackageSha256 -match '^[a-fA-F0-9]{64}$') {
+        $cacheMutex = New-Object System.Threading.Mutex($false, 'Global\NightOwlInstallerPackageCache')
+        try { $cacheLocked = $cacheMutex.WaitOne(120000) } catch [System.Threading.AbandonedMutexException] { $cacheLocked = $true }
+        if (-not $cacheLocked) { throw 'INSTALL_PACKAGE_CACHE_LOCK_TIMEOUT' }
+        $cacheFile = Join-Path ([string]$script:NightOwlPaths.Cache) ('installer-' + $ExpectedPackageSha256.ToLowerInvariant() + '.zip')
+    }
     $zipPath = Join-Path $WorkDir "NightOwl.Agent.Windows.zip"
-    Write-Step "OK" ("Baixando pacote: {0}" -f $Url)
-    Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+    if ($cacheFile -and (Test-Path -LiteralPath $cacheFile -PathType Leaf) -and (Get-FileSha256 $cacheFile) -eq $ExpectedPackageSha256.ToLowerInvariant()) {
+        Copy-Item -LiteralPath $cacheFile -Destination $zipPath
+        $cacheHit = $true
+        Write-Step "OK" "Pacote encontrado no cache; validacao completa sera executada"
+    } else {
+        Write-Step "OK" ("Baixando pacote: {0}" -f $Url)
+        Invoke-WebRequest -Uri $Url -OutFile $zipPath -UseBasicParsing -TimeoutSec 120
+    }
     if (-not (Test-Path $zipPath) -or (Get-Item $zipPath).Length -le 0) {
         throw "Download do pacote falhou ou retornou arquivo vazio."
     }
@@ -539,11 +644,25 @@ function Download-AgentPackage([string]$Url, [string]$WorkDir) {
     Assert-RequiredPackageFiles -SourceDir $extractPath -RequireTrust
     $trustedKeysPath = Resolve-TrustedPublicKeysForInstaller -ReleaseBundledTrustPath $releaseBundledTrustPath
     $script:ValidatedReleaseMetadata = Assert-DownloadedPackageTrust -ExtractPath $extractPath -ZipPath $zipPath -ManifestPath $manifestPath -SignaturePath $signaturePath -TrustedKeysPath $trustedKeysPath
+    if ($cacheFile -and -not $cacheHit) {
+        $cacheCandidate = $cacheFile + '.' + [guid]::NewGuid().ToString('N') + '.partial'
+        $cacheBackup = $cacheCandidate + '.backup'
+        try {
+            Copy-Item -LiteralPath $zipPath -Destination $cacheCandidate
+            if ((Get-FileSha256 $cacheCandidate) -ne $ExpectedPackageSha256.ToLowerInvariant()) { throw 'INSTALL_PACKAGE_CACHE_INVALID' }
+            if (Test-Path -LiteralPath $cacheFile) { [IO.File]::Replace($cacheCandidate, $cacheFile, $cacheBackup) }
+            else { [IO.File]::Move($cacheCandidate, $cacheFile) }
+        } finally { foreach ($temporary in @($cacheCandidate, $cacheBackup)) { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue } } }
+    }
     $exe = Get-ChildItem -Path $extractPath -Filter "NightOwl.Agent.Windows.exe" -Recurse | Select-Object -First 1
     if (-not $exe) {
         throw "Pacote extraido sem NightOwl.Agent.Windows.exe."
     }
     return $exe.DirectoryName
+    } finally {
+        if ($cacheLocked) { $cacheMutex.ReleaseMutex() }
+        if ($cacheMutex) { $cacheMutex.Dispose() }
+    }
 }
 
 function Resolve-TrustedPublicKeysForInstaller([string]$ReleaseBundledTrustPath) {
@@ -999,14 +1118,42 @@ function Get-TelemetryConfig($ExistingConfig) {
     if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetryEnabled') {
         $enabled = $ExistingConfig.telemetryEnabled -is [bool] -and $ExistingConfig.telemetryEnabled
     }
-    return [ordered]@{
+    # Missing mode has always loaded as legacy in installer-generated configs.
+    $result = [ordered]@{
         telemetryEnabled = [bool]$enabled
-        telemetrySampleSeconds = if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetrySampleSeconds') { $ExistingConfig.telemetrySampleSeconds } else { 300 }
-        telemetryFlushSeconds = if ($null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains 'telemetryFlushSeconds') { $ExistingConfig.telemetryFlushSeconds } elseif ($null -ne $ExistingConfig) { 3600 } else { 900 }
+        telemetryMode = 'legacy'
+        telemetrySampleSeconds = 300
+        telemetryFlushSeconds = $(if ($null -ne $ExistingConfig) { 3600 } else { 900 })
+        telemetryBufferMaxSamples = 2304
+        telemetryBufferMaxAgeHours = 192
+        telemetryWindowMaxBytes = 134217728
+        telemetryWindowMaxAgeHours = 192
     }
+    foreach ($key in @($result.Keys)) {
+        if ($key -ne 'telemetryEnabled' -and $null -ne $ExistingConfig -and $ExistingConfig.PSObject.Properties.Name -contains $key) {
+            $result[$key] = $ExistingConfig.$key
+        }
+    }
+    return $result
 }
 
-function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTokenValue, [string]$MachineIdValue, [string]$ServerBaseValue, [string]$VersionValue) {
+function Merge-AgentRuntimeConfig($GeneratedConfig, $ExistingConfig, [bool]$ServerChanged = $false) {
+    # Identity/credentials/version/installPath belong to the lifecycle entrypoint.
+    # Keep explicit configuration, including removals from allowedJobTypes.
+    $authoritative = @('agentToken', 'machineId', 'agentVersion', 'installPath')
+    $routes = @('serverBaseUrl', 'heartbeatUrl', 'collectUrl', 'jobsPullUrl', 'jobsResultUrl', 'telemetryUrl')
+    if ($null -ne $ExistingConfig) {
+        foreach ($property in $ExistingConfig.PSObject.Properties) {
+            if ($property.Name -in $authoritative -or ($ServerChanged -and $property.Name -in $routes)) { continue }
+            $GeneratedConfig[$property.Name] = $property.Value
+        }
+    }
+    $telemetry = Get-TelemetryConfig $ExistingConfig
+    foreach ($key in $telemetry.Keys) { $GeneratedConfig[$key] = $telemetry[$key] }
+    return $GeneratedConfig
+}
+
+function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTokenValue, [string]$MachineIdValue, [string]$ServerBaseValue, [string]$VersionValue, [bool]$ServerChanged = $false) {
     $checkpoint = [ordered]@{
         agentToken = $AgentTokenValue
         machineId = $MachineIdValue
@@ -1031,8 +1178,7 @@ function Save-AgentCredentialCheckpoint($Path, $ExistingConfig, [string]$AgentTo
             $checkpoint.agentVersion = $existingVersion
         }
     }
-    $telemetry = Get-TelemetryConfig $ExistingConfig
-    foreach ($key in $telemetry.Keys) { $checkpoint[$key] = $telemetry[$key] }
+    $checkpoint = Merge-AgentRuntimeConfig $checkpoint $ExistingConfig $ServerChanged
     Save-AgentConfig -Path $Path -Config $checkpoint
     $reloaded = Read-JsonFile $Path
     $reloadedToken = Get-ConfigAgentToken $reloaded
@@ -1102,11 +1248,119 @@ function Test-ProtectedPayloadRelativePath([string]$RelativePath) {
     return $false
 }
 
+function Test-PayloadUnchanged([string]$SourceDir, [string]$DestinationDir) {
+    try {
+        Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust
+        foreach ($item in Get-ChildItem -LiteralPath $SourceDir -File -Recurse -Force -ErrorAction Stop) {
+            $relative = $item.FullName.Substring($SourceDir.Length).TrimStart('\', '/')
+            if ((Test-ProtectedPayloadRelativePath $relative) -or $item.Name -like '*.pdb' -or $relative -eq 'agent.version.json') { continue }
+            $target = Join-Path $DestinationDir $relative
+            if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { return $false }
+            if ((Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction Stop).Hash -ne
+                (Get-FileHash -LiteralPath $target -Algorithm SHA256 -ErrorAction Stop).Hash) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Test-NoOpHeartbeat($State, [string]$ExpectedMachineId) {
+    try {
+        if ((Get-JsonProperty $State @('machine_id', 'machineId')) -ne $ExpectedMachineId) { return $false }
+        $value = Get-JsonProperty $State @('lastHeartbeatAt')
+        $when = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse($value, [ref]$when)) { return $false }
+        $age = [DateTimeOffset]::UtcNow - $when.ToUniversalTime()
+        return $age.TotalSeconds -ge 0 -and $age.TotalMinutes -le 10
+    } catch { return $false }
+}
+
+function Test-NoOpServiceBinding([string]$Name, [string]$ExePath) {
+    try {
+        $services = @(Get-CimInstance Win32_Service -ErrorAction Stop | Where-Object { $_.Name -eq $Name })
+        if ($services.Count -ne 1) { return $false }
+        $path = ([string]$services[0].PathName).Trim()
+        if ($path -match '^"([^"]+)"(?:\s.*)?$') { $path = $matches[1] }
+        elseif ($path -match '^(.*?\.exe)(?:\s.*)?$') { $path = $matches[1] }
+        else { return $false }
+        return [string]::Equals([IO.Path]::GetFullPath($path), [IO.Path]::GetFullPath($ExePath), [StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
+}
+
+function Invoke-OptionalWinRMPreparation([string[]]$Sources) {
+    try {
+        if (-not $Sources -or $Sources.Count -gt 32) { return 'invalid_sources' }
+        $normalized = @()
+        foreach ($source in $Sources) {
+            if ($source -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})(?:/(\d{1,2}))?$') { return 'invalid_sources' }
+            $ipText = $matches[1]; $prefix = if ($matches[2]) { [int]$matches[2] } else { 32 }
+            $ip = $null
+            if (-not [Net.IPAddress]::TryParse($ipText, [ref]$ip) -or $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+                $prefix -lt 1 -or $prefix -gt 32 -or $ipText -eq '0.0.0.0' -or $ip.GetAddressBytes()[0] -ge 224) { return 'invalid_sources' }
+            $normalized += $ip.ToString() + '/' + $prefix
+        }
+        $normalized = @($normalized | Sort-Object -Unique)
+        if ((Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Service') -or
+            (Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile') -or
+            (Test-Path 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules')) { return 'policy_managed' }
+        $svc = Get-CimInstance Win32_Service -Filter "Name='WinRM'" -ErrorAction Stop
+        if (-not $svc -or $svc.State -ne 'Running' -or $svc.StartMode -eq 'Disabled') { return 'service_not_ready' }
+        if (-not @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $_.NetworkCategory -eq 'DomainAuthenticated' }).Count) { return 'domain_profile_required' }
+        $listener = $null
+        foreach ($item in @(Get-ChildItem 'WSMan:\localhost\Listener' -ErrorAction Stop)) {
+            $values = @{}
+            foreach ($entry in @(Get-ChildItem -LiteralPath $item.PSPath -ErrorAction Stop)) { $values[[string]$entry.Name] = [string]$entry.Value }
+            if ($values.Transport -eq 'HTTPS' -and $values.Port -eq '5986' -and $values.Enabled -eq 'true' -and $values.CertificateThumbprint -match '^[a-fA-F0-9]{40}$') { $listener = $values; break }
+        }
+        if (-not $listener) { return 'https_listener_required' }
+        $cert = Get-Item -LiteralPath ('Cert:\LocalMachine\My\' + $listener.CertificateThumbprint) -ErrorAction Stop
+        if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt (Get-Date) -or $cert.NotAfter -le (Get-Date)) { return 'certificate_invalid' }
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($normalized -join ','))
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $id = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').Substring(0,16) } finally { $sha.Dispose() }
+        $name = 'NightOwl-WinRM-HTTPS-' + $id
+        # An additional scoped allow rule cannot restrict an existing broad allow.
+        # Refuse preparation if an effective inbound rule might also permit 5986
+        # from a scope other than the explicitly approved sources.
+        foreach ($rule in @(Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -Action Allow -ErrorAction Stop)) {
+            if ([string]$rule.Profile -in @('Private','Public','Private, Public','Public, Private')) { continue }
+            $filters = @($rule | Get-NetFirewallPortFilter -ErrorAction Stop)
+            if (-not $filters.Count) { return 'firewall_scope_conflict' }
+            foreach ($filter in $filters) {
+                if ([string]$filter.Protocol -in @('UDP','17','ICMPv4','ICMPv6')) { continue }
+                $overlaps = $false
+                foreach ($port in ([string]$filter.LocalPort -split ',')) {
+                    $port = $port.Trim()
+                    if ($port -match '^\d+$') { if ([int]$port -eq 5986) { $overlaps = $true } }
+                    elseif ($port -match '^(\d+)-(\d+)$') { if ([int]$matches[1] -le 5986 -and [int]$matches[2] -ge 5986) { $overlaps = $true } }
+                    else { $overlaps = $true }
+                }
+                if ($overlaps) {
+                    $scope = @($rule | Get-NetFirewallAddressFilter -ErrorAction Stop | ForEach-Object { $_.RemoteAddress } | Sort-Object -Unique)
+                    if (-not $scope.Count -or @($scope | Where-Object { $_ -notin $normalized }).Count) { return 'firewall_scope_conflict' }
+                }
+            }
+        }
+        $existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
+        if ($existing) {
+            $addresses = @($existing | Get-NetFirewallAddressFilter -ErrorAction Stop | ForEach-Object { $_.RemoteAddress } | Sort-Object -Unique)
+            $ports = @($existing | Get-NetFirewallPortFilter -ErrorAction Stop)
+            if ($existing.Enabled -eq 'True' -and $existing.Direction -eq 'Inbound' -and $existing.Action -eq 'Allow' -and
+                [string]$existing.Profile -eq 'Domain' -and $ports.Count -eq 1 -and [string]$ports[0].Protocol -in @('TCP','6') -and
+                [string]$ports[0].LocalPort -eq '5986' -and (($addresses -join ',') -eq ($normalized -join ','))) { return 'already_configured' }
+            return 'firewall_rule_conflict'
+        }
+        New-NetFirewallRule -Name $name -DisplayName 'NightOwl WinRM HTTPS (restricted)' -Direction Inbound -Action Allow -Enabled True -Profile Domain -Protocol TCP -LocalPort 5986 -RemoteAddress $normalized -ErrorAction Stop | Out-Null
+        return 'firewall_prepared'
+    } catch { return 'inspection_or_preparation_failed' }
+}
+
 function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
     Assert-RequiredPackageFiles -SourceDir $SourceDir -RequireTrust:(-not $TrustLocalPackage)
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
     $started = Get-Date
     $deadline = $started.AddSeconds(30)
+    $copiedCount = 0
+    $unchangedCount = 0
     foreach ($item in Get-ChildItem -Path $SourceDir -Force -Recurse) {
         $relative = $item.FullName.Substring($SourceDir.Length).TrimStart("\", "/")
         if (Test-ProtectedPayloadRelativePath $relative) {
@@ -1125,7 +1379,14 @@ function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
             while ($true) {
                 $attempt++
                 try {
+                    if ((Test-Path -LiteralPath $destination -PathType Leaf) -and
+                        (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256 -ErrorAction Stop).Hash -eq
+                        (Get-FileHash -LiteralPath $destination -Algorithm SHA256 -ErrorAction Stop).Hash) {
+                        $unchangedCount++
+                        break
+                    }
                     Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
+                    $copiedCount++
                     break
                 }
                 catch [System.UnauthorizedAccessException] {
@@ -1149,7 +1410,7 @@ function Copy-AgentBinaries([string]$SourceDir, [string]$DestinationDir) {
             }
         }
     }
-    Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir }
+    Add-ReportAction "binaries.copied" @{ source = $SourceDir; destination = $DestinationDir; copied = $copiedCount; unchanged = $unchangedCount }
 }
 
 function Get-CopyRetryDelayMilliseconds([int]$Attempt) {
@@ -1729,10 +1990,38 @@ Set-NightOwlSecureAcl -Paths @(
     [string]$script:NightOwlPaths.Cache
 )
 
+if ($PrepareWinRM) {
+    $winrmPreparation = Invoke-OptionalWinRMPreparation -Sources $WinRMAllowedSources
+    Add-ReportAction 'winrm.preparation' @{ result = $winrmPreparation }
+    Write-InstallLog 'winrm.preparation' 'Resultado da preparacao opcional WinRM.' @{ result = $winrmPreparation }
+    $winrmStepStatus = if ($winrmPreparation -in @('already_configured','firewall_prepared')) { 'OK' } else { 'WARN' }
+    Write-Step $winrmStepStatus ("Preparacao WinRM: {0}" -f $winrmPreparation)
+}
+
 $configInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_CONFIG_INVALID" } else { "INSTALL_CONFIG_INVALID" }
 $identityInvalidCode = if ($script:Operation -eq "repair") { "REPAIR_IDENTITY_INVALID" } else { "INSTALL_IDENTITY_INVALID" }
 Repair-JsonFileIfInvalid -Path $configPath -ErrorCode $configInvalidCode
 Repair-JsonFileIfInvalid -Path ([string]$script:NightOwlPaths.IdentityPath) -ErrorCode $identityInvalidCode
+
+$preservedConfig = Read-JsonFile $configPath
+if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
+    Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
+    Write-InstallLog "path.file.migrated" "Config legado copiado para Config." @{ source = $legacyConfigPath; destination = $configPath }
+    $preservedConfig = Read-JsonFile $configPath
+}
+elseif (Test-Path $legacyConfigPath) {
+    Write-InstallLog "path.legacy.preserved" "Config legado preservado; Config ja existe." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
+}
+
+$serverChangedExplicitly = $PSBoundParameters.ContainsKey('ServerUrl') -and
+    -not [string]::IsNullOrWhiteSpace((Get-ConfigServerUrl $preservedConfig)) -and
+    (Normalize-ServerUrl (Get-ConfigServerUrl $preservedConfig)) -ne $serverBase
+$existingToken = Get-ConfigAgentToken $preservedConfig
+$existingServer = Get-ConfigServerUrl $preservedConfig
+if (-not [string]::IsNullOrWhiteSpace($existingServer) -and (-not $PSBoundParameters.ContainsKey('ServerUrl'))) {
+    $serverBase = Normalize-ServerUrl $existingServer
+}
+
 
 $localExe = Join-Path $sourcePath "NightOwl.Agent.Windows.exe"
 $tempPackageDir = $null
@@ -1754,20 +2043,42 @@ Write-InstallLog "release.metadata.resolved" "Metadata da release resolvida para
     source = [string]$releaseMetadata.source
 }
 
-$preservedConfig = Read-JsonFile $configPath
-if ($null -eq $preservedConfig -and (Test-Path $legacyConfigPath)) {
-    Copy-Item -Path $legacyConfigPath -Destination $configPath -Force
-    Write-InstallLog "path.file.migrated" "Config legado copiado para Config." @{ source = $legacyConfigPath; destination = $configPath }
-    $preservedConfig = Read-JsonFile $configPath
-}
-elseif (Test-Path $legacyConfigPath) {
-    Write-InstallLog "path.legacy.preserved" "Config legado preservado; Config ja existe." @{ legacy_path = $legacyConfigPath; config_path = $configPath }
-}
-
-$existingToken = Get-ConfigAgentToken $preservedConfig
-$existingServer = Get-ConfigServerUrl $preservedConfig
-if (-not [string]::IsNullOrWhiteSpace($existingServer) -and [string]::IsNullOrWhiteSpace($ServerUrl)) {
-    $serverBase = Normalize-ServerUrl $existingServer
+# A no-op is allowed only after signed package validation and under the existing
+# update lock. Explicit configuration/lifecycle changes still take the full path.
+$noOpAllowedParameters = @('ServerUrl','PackageUrl','TrustedPublicKeysPath','ExpectedVersion','ExpectedChannel',
+    'ExpectedPackageSha256','ExpectedReleaseId','ExpectedGitCommit','InstallPath','ServiceName','DisplayName',
+    'InstallAsService','RunCheck','NoGui','NonInteractive','Install','Repair','DebugLog','PrepareWinRM','WinRMAllowedSources')
+$noOpHasOtherParameters = @($PSBoundParameters.Keys | Where-Object { $_ -notin $noOpAllowedParameters }).Count -gt 0
+if ($existingInstallation -and $InstallAsService -and -not $noOpHasOtherParameters -and
+    $null -ne $script:ValidatedReleaseMetadata -and -not $serverChangedExplicitly -and
+    -not [string]::IsNullOrWhiteSpace($existingToken) -and -not [string]::IsNullOrWhiteSpace($existingServer) -and
+    (Normalize-ServerUrl $existingServer) -eq $serverBase -and
+    [string]::IsNullOrWhiteSpace($EnrollmentToken) -and [string]::IsNullOrWhiteSpace($AgentToken) -and
+    [string]::IsNullOrWhiteSpace($ManualValidationToken)) {
+    $noOpId = Get-JsonProperty $preservedConfig @('machineId', 'machine_id')
+    $noOpIdentity = Read-JsonFile ([string]$script:NightOwlPaths.IdentityPath)
+    $noOpState = Read-JsonFile $statePath
+    if ((Test-MachineId $noOpId) -and (Get-JsonProperty $noOpIdentity @('machine_id', 'machineId')) -eq $noOpId -and
+        (Test-NoOpHeartbeat $noOpState $noOpId) -and
+        (Test-NoOpServiceBinding $ServiceName (Join-Path $InstallPath 'NightOwl.Agent.Windows.exe')) -and
+        (Test-PayloadUnchanged $sourcePath $InstallPath)) {
+        $noOpHealth = @(Test-AgentLifecycleHealth -Name $ServiceName -ConfigPath $configPath `
+            -IdentityPath ([string]$script:NightOwlPaths.IdentityPath) -ExpectedMachineId $noOpId `
+            -ExePath (Join-Path $InstallPath 'NightOwl.Agent.Windows.exe') -VersionPath (Join-Path $InstallPath 'agent.version.json') `
+            -ExpectedReleaseMetadata $releaseMetadata -LegacyConfigPath $legacyConfigPath -RequireNoLegacyConfig:$false `
+            -RequireTrayTask:$true -TrayTaskName 'NightOwl Agent Tray' -TrayExePath (Join-Path $InstallPath 'NightOwl.Agent.Tray.exe') `
+            -StartMenuShortcutPath (Get-StartMenuShortcutPath))
+        if ($noOpHealth.Count -eq 0) {
+            $script:Report.machine_id = Protect-SecretValue $noOpId
+            $script:Report.identity_preserved = $true
+            $script:Report.previous_version = [string]$releaseMetadata.version
+            $script:Report.installed_version = [string]$releaseMetadata.version
+            Add-ReportAction 'operation.unchanged' @{ reason = 'verified_payload_and_recent_health' }
+            Write-OperationReport -Status 'completed'
+            Write-Step 'OK' 'Pacote e instalacao saudavel ja correspondem; nenhuma parada necessaria.'
+            return
+        }
+    }
 }
 
 if ((-not (Test-Path $statePath)) -and (Test-Path $legacyStatePath)) {
@@ -1821,7 +2132,7 @@ elseif ([string]::IsNullOrWhiteSpace($AgentToken)) {
         Write-Step "OK" "Config de intervalos recebida do servidor"
     }
     if ($isDeploymentEnrollment) {
-        Save-AgentCredentialCheckpoint -Path $configPath -ExistingConfig $preservedConfig -AgentTokenValue $AgentToken -MachineIdValue $machineId -ServerBaseValue $serverBase -VersionValue (Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig)
+        Save-AgentCredentialCheckpoint -Path $configPath -ExistingConfig $preservedConfig -AgentTokenValue $AgentToken -MachineIdValue $machineId -ServerBaseValue $serverBase -VersionValue (Read-AgentVersion -InstallDir $InstallPath -Config $preservedConfig) -ServerChanged $serverChangedExplicitly
         Write-InstallLog "credential.persisted" "Credencial de deployment persistida antes da instalacao." @{
             machine_id = (Protect-SecretValue $machineId)
             credential_source = if ($existingToken -eq $AgentToken) { "preserved" } else { "recovered" }
@@ -1891,8 +2202,7 @@ $config = [ordered]@{
     jobsPath = [string]$script:NightOwlPaths.StateDir
     allowedJobTypes = @("ping", "collect_logs", "collect_disks", "collect_software", "collect_security", "windows_update_scan", "force_inventory", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent")
 }
-$telemetry = Get-TelemetryConfig $preservedConfig
-foreach ($key in $telemetry.Keys) { $config[$key] = $telemetry[$key] }
+$config = Merge-AgentRuntimeConfig $config $preservedConfig $serverChangedExplicitly
 Save-AgentConfig -Path $configPath -Config $config
 if (-not $existingInstallation -and (Test-Path $legacyConfigPath)) {
     Remove-Item -Path $legacyConfigPath -Force
@@ -2021,10 +2331,6 @@ else {
 }
 
 Write-InstalledState -Path $statePath -MachineId $machineId
-
-if ($tempPackageDir -and (Test-Path $tempPackageDir)) {
-    Remove-Item -Path $tempPackageDir -Recurse -Force -ErrorAction SilentlyContinue
-}
 
 Write-OperationReport -Status "completed"
 Write-InstallLog ("operation.{0}.completed" -f $script:Operation) "Operacao do agente concluida." @{ operation = $script:Operation; version = $packageVersion; machine_id = (Protect-SecretValue $machineId) }

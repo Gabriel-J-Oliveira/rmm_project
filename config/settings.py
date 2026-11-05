@@ -30,6 +30,9 @@ if env_file.exists():
 
 PUBLIC_NIGHTOWL_URL = 'https://nightowl.controlsul.com.br'
 PUBLIC_NIGHTOWL_HOST = 'nightowl.controlsul.com.br'
+NIGHTOWL_JOB_AUTOMATIONS_ENABLED = env.bool('NIGHTOWL_JOB_AUTOMATIONS_ENABLED', default=False)
+NIGHTOWL_APPROVED_SCRIPTS_ENABLED = env.bool('NIGHTOWL_APPROVED_SCRIPTS_ENABLED', default=False)
+NIGHTOWL_REVOKED_SCRIPT_VERSIONS = env.list('NIGHTOWL_REVOKED_SCRIPT_VERSIONS', default=[])
 
 
 def clean_env_list(name, default=None):
@@ -363,3 +366,32 @@ AD_AUTH_CONFIG = {
     'TECH_GROUP': env('AD_TECH_GROUP', default=''),
     'TIMEOUT': env.int('AD_TIMEOUT', default=8),
 }
+
+# Dedicated single-host, cross-worker cache. Never put this private pickle cache in a web root.
+CACHES = {
+    'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'},
+    'telemetry_live': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': env('NIGHTOWL_TELEMETRY_LIVE_CACHE', default=str(BASE_DIR.parent / '.nightowl-telemetry-live')),
+        'TIMEOUT': 120,
+        'OPTIONS': {'MAX_ENTRIES': 500},
+    },
+}
+NIGHTOWL_TELEMETRY_RETENTION_DAYS = {
+    60: env.int('NIGHTOWL_TELEMETRY_RETENTION_1M_DAYS', default=7),
+    300: env.int('NIGHTOWL_TELEMETRY_RETENTION_5M_DAYS', default=30),
+    3600: env.int('NIGHTOWL_TELEMETRY_RETENTION_1H_DAYS', default=90),
+}
+
+# Closed operational catalog, explicitly opt-in on both backend and agent.
+NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED = env.bool('NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', default=False)
+
+# D.1 relay is process-local; deployment must explicitly assert one ASGI process.
+NIGHTOWL_TERMINAL_ENABLED = env.bool('NIGHTOWL_TERMINAL_ENABLED', default=False)
+NIGHTOWL_TERMINAL_SINGLE_PROCESS = env.bool('NIGHTOWL_TERMINAL_SINGLE_PROCESS', default=False)
+NIGHTOWL_TERMINAL_TEST_LOOPBACK = False
+NIGHTOWL_TERMINAL_CONPTY_ENABLED = env.bool('NIGHTOWL_TERMINAL_CONPTY_ENABLED', default=False)
+NIGHTOWL_TERMINAL_BROWSER_ENABLED = env.bool('NIGHTOWL_TERMINAL_BROWSER_ENABLED', default=False)
+NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED = env.bool('NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', default=False)
+NIGHTOWL_ADMIN_ACTIONS_ENABLED = env.bool('NIGHTOWL_ADMIN_ACTIONS_ENABLED', default=False)
+NIGHTOWL_ADMIN_ACTION_SCOPES = env.json('NIGHTOWL_ADMIN_ACTION_SCOPES', default={})

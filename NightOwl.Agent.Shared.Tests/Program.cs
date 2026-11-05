@@ -4,12 +4,20 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using NightOwl.Agent.Shared;
 
+if (args.Length == 3 && args[0] == "--log-writer")
+{
+    RetentionClosureTests.WriteChild(args[1], args[2]);
+    return;
+}
+
 string root = Path.Combine(Path.GetTempPath(), "NightOwlPathsTests", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 Environment.SetEnvironmentVariable("NIGHTOWL_HOME", root);
 
 try
 {
+    RetentionClosureTests.Run(root);
+    LocalFootprintTests.Run(root);
     NightOwlPaths paths = NightOwlPaths.FromEnvironment();
     Require(NightOwlPaths.SystemSid == "S-1-5-18", "SYSTEM SID constant mismatch.");
     Require(NightOwlPaths.AdministratorsSid == "S-1-5-32-544", "Builtin Administrators SID constant mismatch.");
@@ -521,8 +529,12 @@ try
     jobStore.Mark(Guid.NewGuid().ToString(), "ping", JobFinalStatuses.Completed, 1);
     jobStore.Mark(Guid.NewGuid().ToString(), "ping", JobFinalStatuses.Completed, 1);
     jobStore.Mark(Guid.NewGuid().ToString(), "ping", JobFinalStatuses.Completed, 1);
+    string retainedActiveId = Guid.NewGuid().ToString();
+    jobStore.Mark(retainedActiveId, "repair_agent", "running", 1);
+    jobStore.MarkExternalRunnerStarted(retainedActiveId, "repair_agent", repairRunnerPath, 900);
     jobStore.Prune();
-    Require(Directory.GetFiles(jobsDir, "*.json").Length <= 2, "Job retention did not prune old records.");
+    Require(jobStore.LoadAll().Count(record => record.IsFinal) <= 2, "Job retention did not prune terminal records.");
+    Require(jobStore.Load(retainedActiveId)?.ExternalRunnerActive == true, "Retention removed an externally owned operation.");
 
     string resultQueueDir = Path.Combine(paths.StateDir, "pending-results-test");
     PendingResultQueue resultQueue = new(resultQueueDir, maxRecords: 5, maxTotalBytes: 512 * 1024, maxPayloadBytes: 64 * 1024);
@@ -566,7 +578,7 @@ try
     Require(resultQueue.DrainQuarantineEvents().Count == 1, "Quarantine reason should be available for logging.");
 
     bool queueFull = false;
-    PendingResultQueue tinyQueue = new(Path.Combine(paths.StateDir, "pending-results-full"), maxRecords: 1, maxTotalBytes: 512, maxPayloadBytes: 64 * 1024);
+    PendingResultQueue tinyQueue = new(Path.Combine(paths.StateDir, "pending-results-full"), maxRecords: 1, maxTotalBytes: 16 * 1024, maxPayloadBytes: 64 * 1024);
     tinyQueue.Enqueue("update_agent", resultPayload, critical: true);
     try
     {

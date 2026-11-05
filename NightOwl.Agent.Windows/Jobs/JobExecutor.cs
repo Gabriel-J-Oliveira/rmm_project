@@ -15,14 +15,16 @@ public sealed class JobExecutor
     private readonly JsonlLogger _logger;
     private readonly JobExecutionPolicy _policy;
     private readonly TelemetryConfigurationService? _telemetryConfiguration;
+    private readonly OperationalActions _operationalActions;
 
     public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger, JobExecutionPolicy policy,
-        TelemetryConfigurationService? telemetryConfiguration = null)
+        TelemetryConfigurationService? telemetryConfiguration = null, OperationalActions? operationalActions = null)
     {
         _collector = collector;
         _logger = logger;
         _policy = policy;
         _telemetryConfiguration = telemetryConfiguration;
+        _operationalActions = operationalActions ?? new OperationalActions();
     }
 
     public async Task<JobExecutionResult> ExecuteAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
@@ -105,17 +107,25 @@ public sealed class JobExecutor
                 return uninstallResult;
             }
 
-            object result = job.Type switch
+            ApprovedScriptExecution? script = null;
+            if (job.Type == "operational_action" && OperationalActions.Validate(config, job).Id == "run_approved_script")
+                script = await ApprovedScripts.ExecuteAsync(config, job, jobToken);
+            object result = script?.Output ?? (job.Type switch
             {
-                "force_inventory" => _collector.BuildCollectPayload(config),
+                "operational_action" => await RunCollectionAsync("operational_action", () => _operationalActions.Execute(config, job, jobToken), jobToken),
+                "force_inventory" => await RunCollectionAsync("inventory", () => _collector.BuildCollectPayload(config), jobToken),
                 "collect_disks" => new { disks = await RunCollectionAsync("disks", _collector.GetDisks, jobToken), collected_at = DateTimeOffset.UtcNow },
                 "collect_software" => new { installed_software = await RunCollectionAsync("software", _collector.GetSoftware, jobToken), collected_at = DateTimeOffset.UtcNow },
                 "collect_security" => await RunCollectionAsync("security", _collector.GetSecurity, jobToken),
                 "windows_update_scan" => await RunCollectionAsync("patches", _collector.GetPatchStatus, jobToken),
                 "collect_logs" => CollectLogs(config, job),
                 "ping" => await RunPingAsync(config, job, jobToken),
+                "collect_services" => await RunCollectionAsync("services", () => WindowsServicesCollector.Collect(
+                    job.Payload.TryGetValue("names",out object? names) ? JsonSerializer.Deserialize<string[]>(JsonSerializer.Serialize(names))! : Array.Empty<string>(),
+                    GetPayloadInt(job,"limit",50),GetPayloadBool(job,"include_details",false)), jobToken),
+                "install_software" => await new SoftwareInstallation().InstallAsync(config,GetPayloadString(job,"package_id",""),jobToken),
                 _ => throw new NotSupportedException("unsupported_job_type")
-            };
+            });
 
             stopwatch.Stop();
             JobExecutionResult completed = new()
@@ -126,7 +136,8 @@ public sealed class JobExecutor
                 FinishedAt = DateTimeOffset.UtcNow,
                 DurationSeconds = Math.Round(stopwatch.Elapsed.TotalSeconds, 3),
                 ExitCode = 0,
-                Stdout = "ok",
+                Stdout = script?.Stdout ?? "ok",
+                Stderr = script?.Stderr ?? "",
                 Result = result
             };
             completed = LimitResult(config, job, completed);
@@ -150,15 +161,26 @@ public sealed class JobExecutor
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
             stopwatch.Stop();
-            JobExecutionResult timedOut = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.TimedOut, JobErrorCodes.JobTimeout, "Job timed out.", ex.ToString());
+            JobExecutionResult timedOut = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.TimedOut, JobErrorCodes.JobTimeout, "Job timed out.", job.Type == "operational_action" ? "action_timeout" : ex.ToString());
             _policy.MarkFinal(config, job, timedOut, JobErrorCodes.JobTimeout);
             await _logger.LogAsync("job.timed_out", "Job timed out.", BuildJobLog(job, timedOut.Status, JobErrorCodes.JobTimeout, timedOut.DurationSeconds, decision.TimeoutSeconds), CancellationToken.None, "error");
             return timedOut;
         }
+        catch (ScriptExecutionFailure ex)
+        {
+            stopwatch.Stop();
+            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed,
+                ex.Message, "Approved script failed.", ex.Message);
+            failed.ExitCode = ex.ExitCode;
+            _policy.MarkFinal(config, job, failed, ex.Message);
+            await _logger.LogAsync("job.failed", "Approved script failed.",
+                BuildJobLog(job, failed.Status, ex.Message, failed.DurationSeconds, decision.TimeoutSeconds), CancellationToken.None, "error");
+            return failed;
+        }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobExecutionFailed, ex.Message, ex.ToString());
+            JobExecutionResult failed = BuildFailure(config, job, started, stopwatch, JobFinalStatuses.Failed, JobErrorCodes.JobExecutionFailed, ex.Message, job.Type == "operational_action" ? ex.Message : ex.ToString());
             _policy.MarkFinal(config, job, failed, JobErrorCodes.JobExecutionFailed);
             await _logger.LogAsync("job.failed", ex.Message, BuildJobLog(job, failed.Status, JobErrorCodes.JobExecutionFailed, failed.DurationSeconds, decision.TimeoutSeconds), ct, "error");
             return failed;
@@ -174,7 +196,7 @@ public sealed class JobExecutor
             "tray" => NightOwlPaths.Current.TrayLogPath,
             _ => config.LogPath
         };
-        int maxLines = GetPayloadInt(job, "max_lines", 200);
+        int maxLines = GetPayloadInt(job, "max_lines", GetPayloadInt(job, "lines", 200));
         int maxBytes = GetPayloadInt(job, "max_bytes", 64 * 1024);
         maxLines = Math.Clamp(maxLines, 1, 1000);
         maxBytes = Math.Clamp(maxBytes, 1024, JobExecutionPolicy.MaxOutputBytes);
@@ -200,7 +222,7 @@ public sealed class JobExecutor
         Task<T>? task = null;
         try
         {
-            task = Task.Run(collect, ct);
+            task = Task.Run(() => { using var scope=WindowsInventoryCollector.WithJobCancellation(ct); return collect(); }, ct);
             T result = await task.WaitAsync(ct);
             await _logger.LogAsync($"collection.{section}.completed", $"{section} collection completed by job.", null, ct);
             return result;
@@ -208,6 +230,9 @@ public sealed class JobExecutor
         catch (OperationCanceledException) when (task is not null && !task.IsCompleted)
         {
             await _logger.LogAsync($"collection.{section}.cancel_pending", $"{section} collection did not respond immediately to cancellation.", null, CancellationToken.None, "warning");
+            // Cancellation is not proof that a synchronous collector has stopped.
+            // Keep ownership until its real completion; independent dispatch stays alive.
+            try { await task; } catch (Exception) { }
             throw;
         }
         catch (Exception ex)
@@ -231,14 +256,27 @@ public sealed class JobExecutor
         int timeoutMs = Math.Clamp(timeoutSeconds * 1000, 1000, 30000);
 
         using Ping ping = new();
-        PingReply reply = await ping.SendPingAsync(target, timeoutMs).WaitAsync(ct);
+        List<object> replies = new();
+        PingReply? lastReply = null;
+        bool success = true;
+        int count = GetPayloadInt(job, "count", 1);
+        for (int index = 0; index < count; index++)
+        {
+            ct.ThrowIfCancellationRequested();
+            PingReply item = await ping.SendPingAsync(target, TimeSpan.FromMilliseconds(timeoutMs), cancellationToken:ct);
+            lastReply = item;
+            success &= item.Status == IPStatus.Success;
+            replies.Add(new { status=item.Status.ToString(), roundtrip_time_ms=item.Status == IPStatus.Success ? item.RoundtripTime : (long?)null });
+        }
         return new
         {
             target,
-            status = reply.Status.ToString(),
-            roundtrip_time_ms = reply.Status == IPStatus.Success ? reply.RoundtripTime : null as long?,
-            address = reply.Address?.ToString() ?? "",
-            success = reply.Status == IPStatus.Success
+            count,
+            replies,
+            status = lastReply?.Status.ToString(),
+            roundtrip_time_ms = lastReply?.Status == IPStatus.Success ? lastReply.RoundtripTime : (long?)null,
+            address = lastReply?.Address?.ToString() ?? "",
+            success
         };
     }
 
@@ -250,7 +288,7 @@ public sealed class JobExecutor
             new JobExecutionResult
             {
                 JobId = job.Id,
-                Status = "completed",
+                Status = "running",
                 StartedAt = started,
                 FinishedAt = DateTimeOffset.UtcNow,
                 DurationSeconds = 0,
@@ -261,7 +299,7 @@ public sealed class JobExecutor
                     type = "restart_agent",
                     restart_status = "requested",
                     message = $"{NightOwlPaths.ServiceName} restart requested successfully.",
-                    completed_at = DateTimeOffset.UtcNow
+                    confirmed = false
                 }
             });
 
@@ -899,11 +937,13 @@ public sealed class JobExecutor
         script.AppendLine("}");
         script.AppendLine("try {");
         script.AppendLine("    $installArgs = @(");
-        script.AppendLine("        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', " + QuotePsSingle(installerPath) + ",");
-        script.AppendLine("        '-Repair', '-InstallAsService', '-ServerUrl', " + QuotePsSingle(config.ServerBaseUrl) + ",");
-        script.AppendLine("        '-PackageUrl', " + QuotePsSingle(packageUrl) + ", '-TrustedPublicKeysPath', " + QuotePsSingle(trustBundlePath) + ",");
-        script.AppendLine("        '-ExpectedVersion', " + QuotePsSingle(targetVersion) + ", '-ExpectedChannel', " + QuotePsSingle(channel) + ",");
-        script.AppendLine("        '-ExpectedPackageSha256', " + QuotePsSingle(sha256) + ", '-ExpectedReleaseId', " + QuotePsSingle(releaseId) + ",");
+        // Start-Process joins ArgumentList with spaces; PowerShell string quoting alone
+        // does not preserve a native argument containing spaces.
+        script.AppendLine("        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', " + QuotePsSingle(QuoteArg(installerPath)) + ",");
+        script.AppendLine("        '-Repair', '-InstallAsService', '-ServerUrl', " + QuotePsSingle(QuoteArg(config.ServerBaseUrl)) + ",");
+        script.AppendLine("        '-PackageUrl', " + QuotePsSingle(QuoteArg(packageUrl)) + ", '-TrustedPublicKeysPath', " + QuotePsSingle(QuoteArg(trustBundlePath)) + ",");
+        script.AppendLine("        '-ExpectedVersion', " + QuotePsSingle(QuoteArg(targetVersion)) + ", '-ExpectedChannel', " + QuotePsSingle(QuoteArg(channel)) + ",");
+        script.AppendLine("        '-ExpectedPackageSha256', " + QuotePsSingle(QuoteArg(sha256)) + ", '-ExpectedReleaseId', " + QuotePsSingle(QuoteArg(releaseId)) + ",");
         script.AppendLine("        '-RunCheck', '-NonInteractive'");
         script.AppendLine("    )");
         script.AppendLine("    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath");
@@ -980,7 +1020,7 @@ public sealed class JobExecutor
         return bool.TryParse(value.ToString(), out bool parsed) ? parsed : fallback;
     }
 
-    private static string QuoteArg(string arg)
+    internal static string QuoteArg(string arg)
     {
         if (string.IsNullOrEmpty(arg))
         {
@@ -990,7 +1030,18 @@ public sealed class JobExecutor
         {
             return arg;
         }
-        return "\"" + arg.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        StringBuilder quoted = new("\"");
+        int slashes = 0;
+        foreach (char character in arg)
+        {
+            if (character == '\\') { slashes++; continue; }
+            quoted.Append('\\', character == '"' ? slashes * 2 + 1 : slashes);
+            quoted.Append(character);
+            slashes = 0;
+        }
+        quoted.Append('\\', slashes * 2);
+        quoted.Append('"');
+        return quoted.ToString();
     }
 
     private static string QuotePsSingle(string value)

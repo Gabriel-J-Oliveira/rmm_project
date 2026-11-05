@@ -5,6 +5,9 @@ namespace NightOwl.Agent.Windows.Services;
 
 public sealed record TelemetrySettings(bool Enabled, int SampleSeconds, int FlushSeconds)
 {
+    internal const int MinimumIntervalSeconds = 60;
+    internal const int MaximumSampleSeconds = 3600;
+    internal const int MaximumFlushSeconds = 86400;
     public static TelemetrySettings FromConfig(AgentConfig config) =>
         new(config.TelemetryEnabled, config.TelemetrySampleSeconds, config.TelemetryFlushSeconds);
 
@@ -16,7 +19,8 @@ public sealed record TelemetrySettings(bool Enabled, int SampleSeconds, int Flus
             || value.GetProperty(fields[0]).ValueKind is not (JsonValueKind.True or JsonValueKind.False)
             || !value.GetProperty(fields[1]).TryGetInt32(out int sample)
             || !value.GetProperty(fields[2]).TryGetInt32(out int flush)
-            || sample is < 60 or > 3600 || flush is < 60 or > 86400)
+            || sample is < MinimumIntervalSeconds or > MaximumSampleSeconds
+            || flush is < MinimumIntervalSeconds or > MaximumFlushSeconds)
             throw new InvalidOperationException("Invalid telemetry parameters.");
         return new(value.GetProperty(fields[0]).GetBoolean(), sample, flush);
     }

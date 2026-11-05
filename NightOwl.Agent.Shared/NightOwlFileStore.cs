@@ -13,6 +13,18 @@ public static class NightOwlFileStore
         WriteWithRetry(path, tempPath => File.WriteAllText(tempPath, content, encoding ?? Utf8NoBom));
     }
 
+    public static void WriteAllTextDurable(string path, string content)
+    {
+        WriteWithRetry(path, tempPath =>
+        {
+            using FileStream stream = new(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+            using StreamWriter writer = new(stream, Utf8NoBom, 4096, leaveOpen: true);
+            writer.Write(content);
+            writer.Flush();
+            stream.Flush(flushToDisk: true);
+        });
+    }
+
     public static async Task WriteAllTextAsync(string path, string content, Encoding? encoding = null, CancellationToken ct = default)
     {
         await WriteWithRetryAsync(path, tempPath => File.WriteAllTextAsync(tempPath, content, encoding ?? Utf8NoBom, ct), ct);

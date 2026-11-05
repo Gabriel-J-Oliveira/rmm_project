@@ -807,6 +807,58 @@ class WinRMTrustTests(TestCase):
         self.assertEqual(session.verify, os.path.realpath(requests.certs.where()))
         session.close()
 
+    def test_pinned_https_actually_validates_fqdn_over_loopback(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'ok')
+
+            def log_message(self, *args):
+                pass
+
+        ca_key, ca = self.make_ca('test-pin-root')
+        key = ec.generate_private_key(ec.SECP256R1())
+        now = datetime.now(timezone.utc)
+        leaf = (x509.CertificateBuilder()
+                .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'lab-01.control.local')]))
+                .issuer_name(ca.subject).public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName('lab-01.control.local')]), critical=False)
+                .sign(ca_key, hashes.SHA256()))
+        with TemporaryDirectory() as directory:
+            ca_path, cert_path, key_path = (Path(directory) / name for name in ('ca.pem', 'cert.pem', 'key.pem'))
+            ca_path.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+            cert_path.write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+            server = HTTPServer(('127.0.0.1', 0), Handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(cert_path), str(key_path))
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                with requests.Session() as session:
+                    session.trust_env = False
+                    session.mount('https://', preflight._PinnedAddressAdapter('127.0.0.1'))
+                    port = server.server_port
+                    response = session.get(f'https://lab-01.control.local:{port}/', verify=str(ca_path), timeout=3)
+                    self.assertEqual(response.content, b'ok')
+                    with self.assertRaises(requests.exceptions.SSLError):
+                        session.get(f'https://other.control.local:{port}/', verify=str(ca_path), timeout=3)
+            finally:
+                server.shutdown()
+                server.server_close()
+                worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+
     def test_missing_unreadable_empty_and_invalid_bundle_fail_closed(self):
         with TemporaryDirectory() as directory:
             missing = Path(directory) / 'missing.pem'

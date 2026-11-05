@@ -14,6 +14,9 @@ public sealed class JobExecutionPolicy
     private static readonly HashSet<string> Allowlist = new(StringComparer.OrdinalIgnoreCase)
     {
         "ping",
+        "collect_services",
+        "install_software",
+        "operational_action",
         "force_inventory",
         "collect_disks",
         "collect_software",
@@ -91,6 +94,7 @@ public sealed class JobExecutionPolicy
 
         try
         {
+            if (job.Type == "operational_action") OperationalActions.Validate(config, job);
             ValidateParameters(job);
         }
         catch (Exception ex)
@@ -100,8 +104,11 @@ public sealed class JobExecutionPolicy
         }
 
         int timeoutSeconds = ResolveTimeoutSeconds(job);
-        _store.Mark(jobId, jobType, "validated", attempt, correlationId);
-        _store.Prune();
+        if (existing?.Status != "validated")
+        {
+            _store.Mark(jobId, jobType, "validated", attempt, correlationId);
+            _store.Prune();
+        }
         return JobDecision.Execute(timeoutSeconds);
     }
 
@@ -116,6 +123,8 @@ public sealed class JobExecutionPolicy
         {
             return;
         }
+        if (result.Status == JobFinalStatuses.Duplicate && _store.Load(result.JobId)?.IsFinal == true) return;
+        new JobJournal(config, _store).Result(result);
         RemoteJobResult remoteResult = ToRemoteResult(config, job, result, errorCode);
         _store.MarkFinal(remoteResult, job.CorrelationId);
     }
@@ -125,7 +134,8 @@ public sealed class JobExecutionPolicy
         TimeSpan fallback = GetDefaultTimeout(job.Type);
         int requested = job.TimeoutSeconds <= 0 ? (int)fallback.TotalSeconds : job.TimeoutSeconds;
         int min = 5;
-        int max = job.Type.Equals("windows_update_scan", StringComparison.OrdinalIgnoreCase) ? 900 :
+        int max = job.Type.Equals("operational_action", StringComparison.OrdinalIgnoreCase) ? OperationalActions.MaxTimeoutSeconds :
+            job.Type.Equals("windows_update_scan", StringComparison.OrdinalIgnoreCase) ? 900 :
             job.Type.Equals("force_inventory", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("collect_software", StringComparison.OrdinalIgnoreCase) ? 300 :
             job.Type.Equals("collect_logs", StringComparison.OrdinalIgnoreCase) ? 180 :
             job.Type.Equals("restart_agent", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("update_agent", StringComparison.OrdinalIgnoreCase) ? 60 :
@@ -137,6 +147,7 @@ public sealed class JobExecutionPolicy
 
     public static TimeSpan GetDefaultTimeout(string jobType) => jobType switch
     {
+        "operational_action" => TimeSpan.FromSeconds(OperationalActions.MaxTimeoutSeconds),
         "ping" => TimeSpan.FromSeconds(30),
         "force_inventory" => TimeSpan.FromSeconds(300),
         "collect_software" => TimeSpan.FromSeconds(300),
@@ -154,11 +165,33 @@ public sealed class JobExecutionPolicy
         Dictionary<string, object?> p = job.Payload;
         switch (job.Type)
         {
+            case "operational_action":
+                // Full envelope and local permissions were checked by OperationalActions.Validate.
+                break;
+            case "collect_services":
+                EnsureAllowedFields(p, "names", "limit", "include_details");
+                if (StrictInt(p,"limit",50) is < 1 or > 100) throw new InvalidOperationException("Invalid service limit.");
+                if (p.TryGetValue("names",out object? rawNames))
+                {
+                    string[] names=JsonSerializer.Deserialize<string[]>(JsonSerializer.Serialize(rawNames)) ?? throw new InvalidOperationException("Invalid service names.");
+                    if(names.Length>10 || names.Any(name=>string.IsNullOrWhiteSpace(name) || name.Length>256 || name.Any(c=>!char.IsLetterOrDigit(c) && c!='_' && c!='-' && c!='.')))
+                        throw new InvalidOperationException("Invalid service names.");
+                }
+                if(p.TryGetValue("include_details",out object? details) && JsonSerializer.Serialize(details) is not ("true" or "false"))
+                    throw new InvalidOperationException("Invalid service details flag.");
+                break;
+            case "install_software":
+                EnsureAllowedFields(p,"package_id");
+                if(!Regex.IsMatch(GetString(p,"package_id",""),"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"))
+                    throw new InvalidOperationException("Invalid package identity.");
+                break;
             case "configure_telemetry":
                 TelemetrySettings.Parse(p);
                 break;
             case "ping":
-                EnsureAllowedFields(p, "target");
+                EnsureAllowedFields(p, "target", "count");
+                int count = StrictInt(p, "count", 1);
+                if (count is < 1 or > 10) throw new InvalidOperationException("Invalid ping count.");
                 string target = GetString(p, "target", "");
                 if (target.Length > 253 || target.Contains(';') || target.Contains('&') || target.Contains('|'))
                 {
@@ -166,15 +199,17 @@ public sealed class JobExecutionPolicy
                 }
                 break;
             case "collect_logs":
-                EnsureAllowedFields(p, "source", "max_lines", "max_bytes", "since_minutes");
+                EnsureAllowedFields(p, "source", "max_lines", "lines", "max_bytes", "since_minutes");
+                if (p.ContainsKey("lines") && p.ContainsKey("max_lines") && GetInt(p,"lines",-1) != GetInt(p,"max_lines",-2))
+                    throw new InvalidOperationException("Conflicting log limits.");
                 string source = GetString(p, "source", "agent");
                 if (!source.Equals("agent", StringComparison.OrdinalIgnoreCase) && !source.Equals("updater", StringComparison.OrdinalIgnoreCase) && !source.Equals("tray", StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException("Invalid log source.");
                 }
-                int maxLines = GetInt(p, "max_lines", 200);
-                int maxBytes = GetInt(p, "max_bytes", 64 * 1024);
-                int sinceMinutes = GetInt(p, "since_minutes", 1440);
+                int maxLines = StrictInt(p, "max_lines", StrictInt(p, "lines", 200));
+                int maxBytes = StrictInt(p, "max_bytes", 64 * 1024);
+                int sinceMinutes = StrictInt(p, "since_minutes", 1440);
                 if (maxLines is < 1 or > 1000 || maxBytes is < 1024 or > MaxOutputBytes || sinceMinutes is < 1 or > 10080)
                 {
                     throw new InvalidOperationException("Invalid collect_logs limits.");
@@ -439,6 +474,14 @@ public sealed class JobExecutionPolicy
             return parsedElement;
         }
         return int.TryParse(value.ToString(), out int parsed) ? parsed : fallback;
+    }
+
+    private static int StrictInt(Dictionary<string, object?> parameters,string key,int fallback)
+    {
+        if (!parameters.TryGetValue(key,out object? value)) return fallback;
+        JsonElement json=JsonSerializer.SerializeToElement(value);
+        if(json.ValueKind!=JsonValueKind.Number || !json.TryGetInt32(out int parsed)) throw new InvalidOperationException("Integer field required: "+key);
+        return parsed;
     }
 
     private static long GetLong(Dictionary<string, object?> parameters, string key, long fallback)

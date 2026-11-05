@@ -28,6 +28,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if ($AllowUnsignedDevelopment) { throw "-AllowUnsignedDevelopment nao e permitido; assinatura e obrigatoria." }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $releaseRoot = Join-Path $repoRoot "artifacts\nightowl-agent\releases"
@@ -46,6 +47,7 @@ $installScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Install-Nig
 $uninstallScript = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Uninstall-NightOwlAgentDotNet.ps1"
 $lifecycleScriptTest = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Test-NightOwlAgentLifecycleScripts.ps1"
 $installerTrustTest = Join-Path $repoRoot "NightOwl.Agent.Windows\scripts\Test-NightOwlInstallerTrustBootstrap.ps1"
+$lifecycleLogTest = Join-Path $repoRoot "tests\Test-NightOwlLifecycleLogRetention.ps1"
 $iconPath = Join-Path $repoRoot "assets\icons\NightOwl.ico"
 if ([string]::IsNullOrWhiteSpace($TrustRootsPath)) {
     $TrustRootsPath = $env:NIGHTOWL_RELEASE_TRUST_ROOTS_PATH
@@ -673,8 +675,8 @@ function Validate-Release([string]$Path) {
     if ([string]$versionManifest.version -ne $Version) { throw "version.json com versao inconsistente." }
     if ([string]$versionManifest.sha256 -ne $zipSha) { throw "version.json com SHA256 inconsistente." }
     if ([long]$versionManifest.size -ne (Get-Item $zipPath).Length) { throw "version.json com tamanho inconsistente." }
-    if (-not (Test-Path $signaturePath) -and (-not [bool]$versionManifest.legacyUnsigned -or [string]$versionManifest.channel -ne "development")) {
-        throw "release-manifest.sig ausente. Releases pilot/stable e releases assinadas exigem assinatura."
+    if ([bool]$versionManifest.legacyUnsigned -or -not (Test-Path $signaturePath)) {
+        throw "Release assinada obrigatoria; release legada sem assinatura ou release-manifest.sig ausente."
     }
 
     $checksums = Get-Content -Raw -Path $checksumsPath | ConvertFrom-Json
@@ -848,6 +850,8 @@ try {
         Invoke-Checked "dotnet" @("run", "--project", $uninstallerTestProject, "-c", "Release", "--no-restore")
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleScriptTest)
         Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installerTrustTest)
+        Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $lifecycleLogTest)
+        Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repoRoot 'tests\Test-NightOwlInstallerConfiguration.ps1'))
     }
 
     foreach ($project in @($agentProject, $trayProject, $updaterProject, $uninstallerProject, $diagnosticsProject)) {
@@ -888,8 +892,8 @@ try {
     $manifestPath = Join-Path $ReleaseDir "release-manifest.json"
     $signaturePath = Join-Path $ReleaseDir "release-manifest.sig"
     $signed = -not [string]::IsNullOrWhiteSpace($SigningKeyPath)
-    if (-not $signed -and (-not $AllowUnsignedDevelopment -or $Channel -ne "development")) {
-        throw "Chave privada obrigatoria para assinar release. Use -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY. Bypass somente com -AllowUnsignedDevelopment em development."
+    if (-not $signed) {
+        throw "Chave privada obrigatoria para assinar release. Use -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY."
     }
     $versionManifest = [ordered]@{
         product = "NightOwl Agent Windows"

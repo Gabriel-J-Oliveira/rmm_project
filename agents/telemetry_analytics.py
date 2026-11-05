@@ -66,10 +66,21 @@ def build_endpoint_telemetry_summary(endpoint, start, end, *, sample_rows=None):
     negative_lags = 0
     samples = sample_rows
     if samples is None:
-        samples = (EndpointPerformanceSample.objects
+        persisted = list(EndpointPerformanceSample.objects
                    .filter(endpoint=endpoint, collected_at__gte=start, collected_at__lt=end)
                    .order_by('collected_at', 'id')
-                   .values_list('collected_at', 'created_at', *fields))
+                   .values_list('collected_at', 'created_at', *fields, 'schema_version', 'resolution_seconds', 'window_end_at', 'metric_summaries'))
+        offset = 2 + len(fields)
+        from types import SimpleNamespace
+        consolidated = [SimpleNamespace(collected_at=row[0], created_at=row[1], resolution_seconds=row[offset+1],
+                        window_end_at=row[offset+2], metric_summaries=row[offset+3]) for row in persisted if row[offset] == 2]
+        if consolidated:
+            from .telemetry_continuous import continuous_summary
+            result = continuous_summary(endpoint, start, end, consolidated)
+            result['data_sources'] = {'consolidated_windows': len(consolidated),
+                                      'legacy_raw_samples': sum(row[offset] == 1 for row in persisted)}
+            return result
+        samples = [row[:offset] for row in persisted]
     for row in samples:
         collected_at, created_at, *values = row
         received += 1

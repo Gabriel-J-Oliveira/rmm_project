@@ -32,15 +32,13 @@ class AgentInstallTokenTests(TestCase):
         self.assertContains(response, 'id="ad-scan-button" class="agent-secondary-button"')
         self.assertNotContains(response, 'class="panel how-to-panel"')
 
-    def test_advanced_manual_installation_is_collapsed_with_existing_controls(self):
+    def test_manual_forms_replace_legacy_generator(self):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="agent-advanced-toggle" aria-expanded="false" aria-controls="agent-advanced-content"')
-        self.assertContains(response, 'id="agent-advanced-content" hidden')
-        self.assertContains(response, 'js/agent_install_advanced.js')
-        self.assertContains(response, 'id="generated-install-command"')
-        self.assertContains(response, 'data-copy-target=".generated-command-block"')
-        self.assertContains(response, 'NightOwl.Agent.Windows.zip')
+        self.assertContains(response, 'data-manual-install="ad"')
+        self.assertContains(response, 'data-manual-install="external"')
+        self.assertContains(response, 'js/manual_install_forms.js')
+        self.assertNotContains(response, 'id="generated-install-command"')
 
     def test_default_one_and_72_hours_are_accepted(self):
         for hours, expected in [(None, 2), ('1', 1), ('72', 72)]:
@@ -67,9 +65,6 @@ class AgentInstallTokenTests(TestCase):
     def test_non_ajax_fallback_keeps_one_time_token(self):
         response = self.post_enrollment('2', ajax=False)
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="created-enrollment-token"')
-        self.assertContains(response, 'Gerar novo comando')
-        self.assertContains(response, 'Revogar token')
         self.assertEqual(AgentEnrollmentToken.objects.count(), 1)
         self.assertNotIn(f'data-copy-value="{response.context["created_token"]}"', response.content.decode())
         self.assertEqual(response['Cache-Control'], 'no-store, no-cache, must-revalidate')

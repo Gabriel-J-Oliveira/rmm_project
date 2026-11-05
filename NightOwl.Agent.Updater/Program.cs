@@ -385,24 +385,16 @@ internal static class Program
             WriteJson(targetOlder);
             return 25;
         }
-        if (versionAction == VersionUpdateAction.AlreadyCurrent)
+        if (versionAction == VersionUpdateAction.AlreadyCurrent && (manifest.LegacyUnsigned || string.IsNullOrWhiteSpace(manifest.KeyId)))
         {
-            WriteLog("updater.update.skipped", "Nenhuma atualizacao disponivel.", new { installed = installed.Version, available = manifest.Version });
-            state.HealthCheckConfirmed = true;
-            MarkStage(state, UpdateStages.Completed, UpdateStatuses.Completed);
-            var skipped = new { ok = true, updated = false, reason = "already_current", installedVersion = installed.Version, targetVersion = manifest.Version, availableVersion = manifest.Version };
-            if (jobContext.IsJob)
-            {
-                WritePendingUpdateResult(jobContext, state, "completed", 10, installed.Version, installed.Version, "Agent already up to date.", skipped, "");
-            }
-            WriteJson(skipped);
-            if (interactive)
-            {
-                ShowMessage("O agente ja esta atualizado.", MessageBoxIcon.Information);
-            }
-            return jobContext.IsJob ? 10 : 0;
+            const string message = "A signed package is required to verify installed files; repair is required.";
+            MarkFailed(state, UpdateErrorCodes.UpdatePackageInvalid, message);
+            var unverified = new { ok = false, updated = false, reason = "repair_required", error_code = UpdateErrorCodes.UpdatePackageInvalid,
+                installedVersion = installed.Version, targetVersion = manifest.Version };
+            if (jobContext.IsJob) WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, unverified, "");
+            WriteJson(unverified);
+            return 25;
         }
-
         if (!IsAdministrator())
         {
             WriteLog("updater.update.elevation_required", "Atualizacao requer elevacao administrativa.");
@@ -435,6 +427,9 @@ internal static class Program
         try
         {
             ValidateFile(downloadPath, packageChecksum);
+            if (versionAction == VersionUpdateAction.AlreadyCurrent &&
+                 !Sha256(downloadPath).Equals(GetManifestPackageSha(manifest), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Signed package integrity unavailable.");
         }
         catch (Exception ex)
         {
@@ -463,6 +458,31 @@ internal static class Program
         }
         MarkStage(state, UpdateStages.Staged);
         WriteLog("staging.ready", "Staging directory ready.", new { stagingPath, version = manifest.Version });
+
+        if (versionAction == VersionUpdateAction.AlreadyCurrent)
+        {
+            bool intact = InstalledPayloadMatches(stagingPath, config.InstallPathOrDefault);
+            if (!intact)
+            {
+                const string message = "Installed files do not match the verified package; repair is required.";
+                MarkFailed(state, UpdateErrorCodes.UpdatePackageInvalid, message);
+                var failed = new { ok = false, updated = false, reason = "repair_required", error_code = UpdateErrorCodes.UpdatePackageInvalid,
+                    installedVersion = installed.Version, targetVersion = manifest.Version };
+                if (jobContext.IsJob) WritePendingUpdateResult(jobContext, state, "failed", 25, installed.Version, installed.Version, message, failed, "");
+                WriteJson(failed);
+                CleanupStaging(stagingPath);
+                return 25;
+            }
+            state.MarkStage(UpdateStages.Completed, UpdateStatuses.Completed);
+            state.HealthCheckConfirmed = false; // File integrity is not a service health check.
+            RequirePersisted(state);
+            var skipped = new { ok = true, updated = false, reason = "already_current", installedVersion = installed.Version, targetVersion = manifest.Version, availableVersion = manifest.Version };
+            if (jobContext.IsJob) WritePendingUpdateResult(jobContext, state, "completed", 10, installed.Version, installed.Version, "Agent files match the verified package.", skipped, "");
+            WriteJson(skipped);
+            CleanupStaging(stagingPath);
+            if (interactive) ShowMessage("O agente ja esta atualizado.", MessageBoxIcon.Information);
+            return jobContext.IsJob ? 10 : 0;
+        }
 
         string manifestPath = Path.Combine(stagingPath, "version.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions));
@@ -1506,16 +1526,7 @@ internal static class Program
         string signatureUrl = string.IsNullOrWhiteSpace(manifest.SignatureUrl)
             ? InferSiblingUrl(manifest.PackageUrl, "release-manifest.sig")
             : manifest.SignatureUrl;
-        bool legacyUnsigned = manifest.LegacyUnsigned || string.IsNullOrWhiteSpace(manifest.KeyId);
-        if (legacyUnsigned && manifest.Channel.Equals("development", StringComparison.OrdinalIgnoreCase))
-        {
-            WriteLog("release.manifest.legacy_unsigned", "Legacy unsigned development release accepted with warning.", new { version = manifest.Version, channel = manifest.Channel });
-            return;
-        }
-        if (legacyUnsigned && manifest.Channel.Equals("stable", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureMissing}: stable release requires signature.");
-        }
+        RequireSignedRelease(manifest.LegacyUnsigned, manifest.KeyId);
         EnsurePackageUrlAllowed(config, manifestUrl);
         EnsurePackageUrlAllowed(config, signatureUrl);
 
@@ -1596,6 +1607,12 @@ internal static class Program
         manifest.KeyId = signedManifest.KeyId;
         manifest.LegacyUnsigned = false;
         WriteLog("release.signature.valid", "Release manifest signature validated.", new { version = manifest.Version, channel = manifest.Channel, key_id = signedManifest.KeyId });
+    }
+
+    internal static void RequireSignedRelease(bool legacyUnsigned, string? keyId)
+    {
+        if (legacyUnsigned || string.IsNullOrWhiteSpace(keyId))
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureMissing}: signed release required.");
     }
 
     internal static bool VerifyReleaseManifestSignatureForTest(byte[] manifestBytes, byte[] signature, string publicKeyXml)
@@ -2226,6 +2243,28 @@ internal static class Program
         }
         string[] segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
         return segments.Any(segment => ProtectedInstallDirectoryNames.Contains(segment, StringComparer.OrdinalIgnoreCase));
+    }
+
+    internal static bool InstalledPayloadMatches(string stagedPath, string installPath)
+    {
+        try
+        {
+            string[] required = { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe", "NightOwl.Agent.Tray.exe",
+                "NightOwl.Agent.Uninstaller.exe", "NightOwl.Agent.Diagnostics.exe" };
+            if (!Directory.Exists(stagedPath) || !Directory.Exists(installPath) ||
+                required.Any(name => !File.Exists(Path.Combine(stagedPath, name)))) return false;
+            int compared = 0;
+            foreach (string file in Directory.EnumerateFiles(stagedPath, "*", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(stagedPath, file);
+                if (IsProtectedRelativePath(relative) || relative.Equals("agent.version.json", StringComparison.OrdinalIgnoreCase)) continue;
+                string target = Path.Combine(installPath, relative);
+                if (!File.Exists(target) || !Sha256(file).Equals(Sha256(target), StringComparison.OrdinalIgnoreCase)) return false;
+                compared++;
+            }
+            return compared >= required.Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return false; }
     }
 
     private static string NormalizeRelativePath(string path)
@@ -3326,7 +3365,7 @@ $shortcut.Save()
                 message,
                 metadata = metadata ?? new { }
             };
-            File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            RotatingJsonlLog.Append(LogPath, JsonSerializer.Serialize(entry));
         }
         catch
         {

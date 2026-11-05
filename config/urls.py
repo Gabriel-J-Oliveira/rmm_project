@@ -18,9 +18,11 @@ from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
+from dashboard import automation_views
 
 from dashboard import views as dashboard_views
 from dashboard import ad_install_views
+from dashboard import agent_recovery_views
 from dashboard import remote_install_batch_views
 from dashboard import capacity_views
 from dashboard import fleet_views
@@ -45,6 +47,8 @@ urlpatterns = [
     path('api/endpoints/<str:pk>/', dashboard_views.endpoint_detail_data, name='api-endpoint-detail'),
     path('api/deployments/windows/', dashboard_views.deployment_create, name='api-deployment-create'),
     path('api/deployments/windows/history/', dashboard_views.deployment_history, name='api-deployment-history'),
+    path('api/deployments/windows/batches/<uuid:pk>/issue/', dashboard_views.deployment_batch_issue, name='api-deployment-batch-issue'),
+    path('api/deployments/windows/batches/<uuid:pk>/revoke/', dashboard_views.deployment_batch_revoke, name='api-deployment-batch-revoke'),
     path('api/deployments/windows/<uuid:pk>/', dashboard_views.deployment_status, name='api-deployment-status'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
     path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
@@ -72,6 +76,11 @@ urlpatterns = [
     path('api/capacity/<uuid:pk>/series/', capacity_views.capacity_series, name='api-capacity-series'),
     path('events/', dashboard_views.events_list, name='events-list'),
     path('jobs/', dashboard_views.jobs_list, name='jobs-list'),
+    path('jobs/data/', dashboard_views.jobs_data, name='jobs-data'),
+    path('jobs/automations/', automation_views.automations, name='job-automations'),
+    path('jobs/automations/targets/', automation_views.targets, name='job-automation-targets'),
+    path('jobs/automations/<uuid:definition_id>/', automation_views.automations, name='job-automation-detail'),
+    path('jobs/occurrences/<uuid:occurrence_id>/cancel/', automation_views.occurrence_cancel, name='job-occurrence-cancel'),
     path('maintenance/', dashboard_views.maintenance_list, name='maintenance-list'),
     path('maintenance/email-outbox/', dashboard_views.email_outbox_list, name='email-outbox-list'),
     path('maintenance/email-outbox/process/', dashboard_views.email_outbox_process, name='email-outbox-process'),
@@ -83,6 +92,9 @@ urlpatterns = [
     path('agent-install/ad-computers/scan/', ad_install_views.scan_ad_computers, name='agent-install-ad-scan'),
     path('agent-install/ad-computers/preflight/', ad_install_views.preflight_ad_computer, name='agent-install-ad-preflight'),
     path('agent-install/ad-computers/install/', ad_install_views.install_ad_computer, name='agent-install-ad-install'),
+    path('agent-install/endpoints/<uuid:pk>/recover/', agent_recovery_views.recover, name='agent-offline-recovery'),
+    path('agent-install/endpoints/<uuid:pk>/winrm-check/', agent_recovery_views.connectivity, name='agent-winrm-check'),
+    path('agent-install/endpoints/<uuid:pk>/recovery-status/', agent_recovery_views.recovery_status, name='agent-recovery-status'),
     path('agent-install/install-jobs/<uuid:pk>/', ad_install_views.remote_install_status, name='agent-install-job-status'),
     path('agent-install/install-batches/', remote_install_batch_views.batches, name='agent-install-batches'),
     path('agent-install/install-batches/<uuid:pk>/', remote_install_batch_views.batch_detail, name='agent-install-batch-detail'),

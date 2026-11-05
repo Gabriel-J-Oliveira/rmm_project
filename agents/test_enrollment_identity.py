@@ -146,6 +146,32 @@ class EnrollmentIdentityTests(IdentityTestSupport, TestCase):
         rejected = self.enroll('CS-NEW', 'another-id', enrollment_token='')
         self.assertEqual(rejected.status_code, 403)
 
+    def test_declared_domain_without_authorization_cannot_create_endpoint(self):
+        response = self.enroll('CS-UNAUTHORIZED', str(uuid.uuid4()), enrollment_token='')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()['error'], 'manual_validation_required')
+        self.assertFalse(AgentMachine.objects.filter(hostname='CS-UNAUTHORIZED').exists())
+        self.authorization.refresh_from_db()
+        self.assertEqual(self.authorization.used_count, 0)
+
+    def test_existing_authenticated_agent_needs_no_new_enrollment_token(self):
+        existing = self.machine()
+        original_hash = existing.agent_token_hash
+        response = self.enroll(existing.hostname, existing.machine_id,
+            bearer='rmm_live_test_' + existing.hostname, enrollment_token='')
+        self.assertEqual(response.status_code, 200)
+        existing.refresh_from_db()
+        self.assertEqual(existing.agent_token_hash, original_hash)
+        self.authorization.refresh_from_db()
+        self.assertEqual(self.authorization.used_count, 0)
+
+    def test_authenticated_agent_cannot_authorize_a_different_machine(self):
+        existing = self.machine()
+        response = self.enroll('CS-OTHER', str(uuid.uuid4()),
+            bearer='rmm_live_test_' + existing.hostname, enrollment_token='')
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(AgentMachine.objects.filter(hostname='CS-OTHER').exists())
+
     def test_mid_name_case_and_domain_trailing_dot(self):
         existing = self.machine()
         response = self.enroll(existing.hostname.lower(), existing.machine_id.upper(),

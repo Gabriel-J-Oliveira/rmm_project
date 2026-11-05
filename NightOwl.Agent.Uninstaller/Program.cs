@@ -555,7 +555,7 @@ public static class Program
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             string line = JsonSerializer.Serialize(new { timestamp = DateTimeOffset.UtcNow, event_type = eventType, metadata }, JsonOptions);
-            File.AppendAllText(path, line + Environment.NewLine, Encoding.UTF8);
+            RotatingJsonlLog.Append(path, line);
         }
         catch { }
     }

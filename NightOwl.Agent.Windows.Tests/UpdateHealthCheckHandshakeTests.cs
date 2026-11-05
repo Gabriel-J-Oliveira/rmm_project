@@ -439,13 +439,21 @@ internal static class UpdateHealthCheckHandshakeTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             string path = request.RequestUri?.AbsolutePath ?? "";
+            string response = path == "/jobs/pull" ? "{\"jobs\":[]}" : "{}";
+            if (path.EndsWith("/jobs/signal/")) response = "{\"protocol\":2,\"available\":true}";
             if (path == "/heartbeat") Heartbeat.TrySetResult(true);
             if (path == "/jobs/pull") JobPull.TrySetResult(true);
             if (path == "/jobs/result")
-                Result.TrySetResult(await request.Content!.ReadAsStringAsync(ct));
+            {
+                string body = await request.Content!.ReadAsStringAsync(ct);
+                Result.TrySetResult(body);
+                using JsonDocument document = JsonDocument.Parse(body);
+                response = JsonSerializer.Serialize(new {job_id=document.RootElement.GetProperty("job_id").GetString(),
+                    result_id=request.Headers.GetValues("Idempotency-Key").First()});
+            }
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(path == "/jobs/pull" ? "{\"jobs\":[]}" : "{}")
+                Content = new StringContent(response)
             };
         }
     }

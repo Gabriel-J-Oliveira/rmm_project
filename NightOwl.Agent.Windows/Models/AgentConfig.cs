@@ -9,6 +9,14 @@ public sealed class AgentConfig
     [JsonPropertyName("agentToken")]
     public string AgentToken { get; set; } = "";
 
+    [JsonPropertyName("jobSignalSeconds")]
+    public int JobSignalSeconds { get; set; } = 2;
+
+    [JsonPropertyName("softwareInstallEnabled")]
+    public bool SoftwareInstallEnabled { get; set; }
+    [JsonPropertyName("softwareCatalogSha256")]
+    public string SoftwareCatalogSha256 { get; set; } = "";
+
     [JsonPropertyName("machineId")]
     public string MachineId { get; set; } = "";
 
@@ -32,6 +40,13 @@ public sealed class AgentConfig
 
     [JsonPropertyName("telemetryEnabled")]
     public bool TelemetryEnabled { get; set; } = true;
+
+    [JsonPropertyName("telemetryMode")]
+    public string TelemetryMode { get; set; } = "continuous";
+    [JsonPropertyName("telemetryWindowMaxBytes")]
+    public long TelemetryWindowMaxBytes { get; set; } = 128L * 1024 * 1024;
+    [JsonPropertyName("telemetryWindowMaxAgeHours")]
+    public int TelemetryWindowMaxAgeHours { get; set; } = 192;
 
     [JsonPropertyName("telemetrySampleSeconds")]
     public int TelemetrySampleSeconds { get; set; } = 300;
@@ -79,6 +94,7 @@ public sealed class AgentConfig
     public List<string> AllowedJobTypes { get; set; } = new()
     {
         "ping",
+        "collect_services",
         "collect_logs",
         "collect_disks",
         "collect_software",
@@ -95,6 +111,41 @@ public sealed class AgentConfig
 
     [JsonIgnore]
     public string MachineIdSource { get; set; } = "";
+
+    // Both the job type and individual action must be explicitly enabled locally.
+    [JsonPropertyName("operationalActionsEnabled")]
+    public bool OperationalActionsEnabled { get; set; } = false;
+    [JsonPropertyName("remoteTerminalTransportEnabled")]
+    public bool RemoteTerminalTransportEnabled { get; set; } = false;
+    [JsonPropertyName("terminalAdministrativeAuthenticationEnabled")]
+    public bool TerminalAdministrativeAuthenticationEnabled { get; set; } = false;
+    [JsonPropertyName("terminalConPtyEnabled")]
+    public bool TerminalConPtyEnabled { get; set; } = false;
+    [JsonPropertyName("terminalServiceConsentHomologated")]
+    public bool TerminalServiceConsentHomologated { get; set; } = false;
+    [JsonPropertyName("terminalAuthorizedUserSid")]
+    public string TerminalAuthorizedUserSid { get; set; } = "";
+    [JsonPropertyName("terminalWindowsSessionId")]
+    public int? TerminalWindowsSessionId { get; set; }
+    [JsonPropertyName("terminalShell")]
+    public string TerminalShell { get; set; } = "powershell51";
+    [JsonPropertyName("allowedOperationalActions")]
+    public List<string> AllowedOperationalActions { get; set; } = new();
+
+    [JsonPropertyName("approvedScriptsEnabled")]
+    public bool ApprovedScriptsEnabled { get; set; } = false;
+    [JsonPropertyName("allowedScriptVersions")]
+    public List<string> AllowedScriptVersions { get; set; } = new();
+
+    [JsonPropertyName("administrativeActionsEnabled")]
+    public bool AdministrativeActionsEnabled { get; set; } = false;
+    [JsonPropertyName("allowedServiceOperations")]
+    public Dictionary<string, List<string>> AllowedServiceOperations { get; set; } = new();
+    [JsonPropertyName("allowComputerPolicyRefresh")]
+    public bool AllowComputerPolicyRefresh { get; set; } = false;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement> ExtensionData { get; set; } = new();
 
     [JsonIgnore]
     public bool HasValidToken => !IsPlaceholderToken(AgentToken);
@@ -139,6 +190,17 @@ public sealed class AgentState
 
     [JsonPropertyName("lastCollectionAt")]
     public DateTimeOffset? LastCollectionAt { get; set; }
+
+    [JsonPropertyName("lastBasicInventoryAt")]
+    public DateTimeOffset? LastBasicInventoryAt { get; set; }
+    [JsonPropertyName("lastDetailedHardwareAt")]
+    public DateTimeOffset? LastDetailedHardwareAt { get; set; }
+    [JsonPropertyName("lastVolumesAt")]
+    public DateTimeOffset? LastVolumesAt { get; set; }
+    [JsonPropertyName("lastNetworkInventoryAt")]
+    public DateTimeOffset? LastNetworkInventoryAt { get; set; }
+    [JsonPropertyName("lastAncillaryInventoryAt")]
+    public DateTimeOffset? LastAncillaryInventoryAt { get; set; }
 
     [JsonPropertyName("lastJobPullAt")]
     public DateTimeOffset? LastJobPullAt { get; set; }

@@ -94,6 +94,8 @@ public sealed class ConfigService
             document.RootElement.EnumerateObject().Any(property =>
                 property.Name.Equals("telemetryEnabled", StringComparison.OrdinalIgnoreCase));
         if (!hasTelemetryFlag) config.TelemetryEnabled = false;
+        if (!document.RootElement.EnumerateObject().Any(property => property.Name.Equals("telemetryMode", StringComparison.OrdinalIgnoreCase)))
+            config.TelemetryMode = "legacy";
         if (document.RootElement.ValueKind == JsonValueKind.Object && !document.RootElement.EnumerateObject().Any(property =>
             property.Name.Equals("telemetryFlushSeconds", StringComparison.OrdinalIgnoreCase)))
             config.TelemetryFlushSeconds = 3600;
@@ -108,7 +110,6 @@ public sealed class ConfigService
     private static void Normalize(AgentConfig config)
     {
         NightOwlPaths paths = NightOwlPaths.Current;
-        config.AllowedJobTypes = NormalizeAllowedJobTypes(config.AllowedJobTypes);
         config.ServerBaseUrl = (config.ServerBaseUrl ?? "").TrimEnd('/');
         if (string.IsNullOrWhiteSpace(config.ServerBaseUrl) && !string.IsNullOrWhiteSpace(config.HeartbeatUrl))
         {
@@ -126,8 +127,8 @@ public sealed class ConfigService
         {
             config.TelemetryUrl = $"{config.ServerBaseUrl}/api/agent/telemetry/";
         }
-        config.TelemetrySampleSeconds = Math.Clamp(config.TelemetrySampleSeconds, 60, 3600);
-        config.TelemetryFlushSeconds = Math.Clamp(config.TelemetryFlushSeconds, 60, 86400);
+        config.TelemetrySampleSeconds = Math.Clamp(config.TelemetrySampleSeconds, TelemetrySettings.MinimumIntervalSeconds, TelemetrySettings.MaximumSampleSeconds);
+        config.TelemetryFlushSeconds = Math.Clamp(config.TelemetryFlushSeconds, TelemetrySettings.MinimumIntervalSeconds, TelemetrySettings.MaximumFlushSeconds);
         config.TelemetryBufferMaxSamples = Math.Clamp(config.TelemetryBufferMaxSamples, 6, 2304);
         config.TelemetryBufferMaxAgeHours = Math.Clamp(config.TelemetryBufferMaxAgeHours, 1, 192);
         if (string.IsNullOrWhiteSpace(config.JobsPullUrl))
@@ -242,7 +243,7 @@ public sealed class ConfigService
         {
             NightOwlPaths paths = NightOwlPaths.Current;
             Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
-            File.AppendAllText(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.applied") + Environment.NewLine);
+            RotatingJsonlLog.Append(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.applied"));
         }
         catch
         {
@@ -256,7 +257,7 @@ public sealed class ConfigService
         {
             NightOwlPaths paths = NightOwlPaths.Current;
             Directory.CreateDirectory(Path.GetDirectoryName(paths.AgentLogPath) ?? ".");
-            File.AppendAllText(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.persist_failed", SanitizeLogMessage(errorMessage)) + Environment.NewLine);
+            RotatingJsonlLog.Append(paths.AgentLogPath, BuildConfigMigrationLogLine(result, "config.migration.persist_failed", SanitizeLogMessage(errorMessage)));
         }
         catch
         {

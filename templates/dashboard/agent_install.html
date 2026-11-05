@@ -22,16 +22,7 @@
     </div>
 </section>
 
-{% if can_deploy_agents %}<section class="panel manual-deployment-entry" id="manual-deployment">
-    <div>
-        <span class="section-kicker">INSTALA&Ccedil;&Atilde;O MANUAL &mdash; WINDOWS</span>
-        <h2>Instalar neste computador</h2>
-        <p>Gere o comando individual, execute no PowerShell como administrador e acompanhe a confirma&ccedil;&atilde;o do agente.</p>
-    </div>
-    <button type="button" data-deployment-open><i data-lucide="download"></i>Gerar instala&ccedil;&atilde;o manual</button>
-</section>
-{% include 'dashboard/manual_deployment_modal.html' %}
-{% endif %}
+{{ deployment_release_options|json_script:"deployment-release-options" }}
 
 <section class="metric-grid agent-install-metrics" aria-label="Resumo da instalação">
     <article class="metric-card command-metric">
@@ -129,9 +120,6 @@
     <div id="ad-detail-content" class="ad-detail-content"></div>
 </aside>
 
-<details class="agent-install-legacy" id="agent-install-legacy" {% if created_token or created_manual_token %}open{% endif %}>
-<summary>Compatibilidade: tokens e comandos legados</summary>
-<p>Para novas instala&ccedil;&otilde;es, use <a href="#manual-deployment">Gerar instala&ccedil;&atilde;o manual</a> no in&iacute;cio da p&aacute;gina.</p>
 <div class="agent-install-section-heading">
     <div><span class="section-kicker">Tokens e comandos</span><h2>Instalação manual</h2></div>
     <span class="agent-install-manual-meta">{{ expired_count }} tokens expirados · {{ uses_24h_count }} usos nas últimas 24h</span>
@@ -143,27 +131,27 @@
         <div class="panel-heading">
             <div>
                 <span class="section-kicker">Novo token</span>
-                <h2>Gerar enrollment token</h2>
-                <p>Opcional para legado ou lotes controlados. O comando padr&atilde;o j&aacute; tenta auto-enrollment sem token em linha de comando.</p>
+                <h2>Computadores do AD</h2>
+                <p>O domínio informado é um filtro e não comprova identidade no AD.</p>
             </div>
             <div class="agent-help-wrap">
                 <button type="button" id="agent-help-button" class="agent-help-button" aria-label="Ajuda para instalação guiada" aria-controls="agent-help-popover" aria-expanded="false" title="Ajuda para instalação guiada"><i data-lucide="info"></i></button>
                 <div id="agent-help-popover" class="agent-help-popover" role="region" aria-label="Instalação guiada" hidden>
                     <h3>Instala&ccedil;&atilde;o guiada</h3>
                     <ol>
-                        <li>Escolha a URL p&uacute;blica do servidor NightOwl.</li>
-                        <li>Copie o comando PowerShell sem token sens&iacute;vel.</li>
+                        <li>Selecione o canal e a release assinada.</li>
+                        <li>Copie o comando de instala&ccedil;&atilde;o e proteja-o como uma credencial.</li>
                         <li>Execute como administrador no endpoint.</li>
-                        <li>No dom&iacute;nio autorizado, a ativa&ccedil;&atilde;o &eacute; autom&aacute;tica.</li>
-                        <li>Fora do dom&iacute;nio, gere um token manual e cole na janela NightOwl do instalador.</li>
+                        <li>Para o lote AD, o domínio &eacute; um filtro informado pelo cliente, n&atilde;o prova de identidade.</li>
+                        <li>Para computadores externos, informe o token manual quando solicitado.</li>
                         <li>Valide em <code>Endpoints &gt; Detalhe &gt; Agente</code>.</li>
                     </ol>
                 </div>
             </div>
         </div>
-        <form method="post" class="agent-token-form" id="enrollment-token-form">
+        <form method="post" action="{{ deployment_create_url }}" class="agent-token-form" id="enrollment-token-form" data-manual-install="ad" data-create-url="{{ deployment_create_url }}" data-history-url="{{ deployment_history_url }}" data-trust-ready="{{ deployment_trust_ready|yesno:'true,false' }}">
             {% csrf_token %}
-            <input type="hidden" name="action" value="enrollment">
+            <input type="hidden" name="install_kind" value="ad">
             <label class="filter-field">
                 <span>Nome</span>
                 <input name="name" required placeholder="Piloto TI">
@@ -179,9 +167,11 @@
                 </label>
                 <label class="filter-field">
                     <span>Limite de usos</span>
-                    <input name="max_uses" type="number" min="1" placeholder="20">
+                    <input name="max_uses" type="number" min="1" max="100" value="1" required>
                 </label>
             </div>
+            <div class="agent-form-row"><label class="filter-field"><span>Canal</span><select name="channel" data-channel><option value="stable">Stable</option><option value="development">Development</option></select></label><label class="filter-field"><span>Distribuição</span><select name="release_id" data-release required></select></label></div>
+            <p data-release-message role="status"></p>
             <label class="filter-field">
                 <span>Notas</span>
                 <textarea name="notes" rows="4" placeholder="Uso interno, lote piloto, respons&aacute;vel..."></textarea>
@@ -192,19 +182,8 @@
             <p class="agent-token-error" role="alert" hidden></p>
         </form>
     </article>
-    <section class="panel enrollment-created-panel agent-token-result" id="enrollment-token-result" aria-live="polite" {% if not created_token %}hidden{% endif %}>
-        {% if created_token %}
-        <div class="panel-heading">
-            <div><span class="section-kicker">Token criado</span><h2>Copie este token agora</h2><p>O token completo aparece apenas uma vez. Depois, somente o prefixo fica vis&iacute;vel.</p></div>
-            <div class="agent-created-actions">
-                <a class="copy-button" href="#agent-command-generator"><i data-lucide="terminal"></i>Gerar novo comando</a>
-                <form method="post" action="{% url 'agent-enrollment-revoke' created_enrollment.id %}">{% csrf_token %}<button class="danger-subtle" type="submit"><i data-lucide="ban"></i>Revogar token</button></form>
-            </div>
-        </div>
-        <p class="agent-token-result-meta">Domínio: {{ created_enrollment.allowed_domain|default:"Qualquer" }} · Expira em: {{ created_enrollment.expires_at|date:"d/m/Y H:i" }}</p>
-        <div class="created-token-box"><div class="copy-value-content"><span>Enrollment token</span><code id="created-enrollment-token">{{ created_token }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-token"><i data-lucide="copy"></i>Copiar token</button></div>
-        <div class="terminal-block created-command-block"><div class="copy-value-content"><span>Comando PowerShell recomendado</span><code id="created-enrollment-command">{{ created_command }}</code></div><button class="copy-button" type="button" data-copy-target="#created-enrollment-command"><i data-lucide="copy"></i>Copiar comando</button></div>
-        {% endif %}
+    <section class="panel enrollment-created-panel agent-token-result" id="enrollment-token-result" aria-live="polite" hidden>
+
     </section>
     </div>
 
@@ -213,17 +192,19 @@
         <div class="panel-heading">
             <div>
                 <span class="section-kicker">Valida&ccedil;&atilde;o manual</span>
-                <h2>Gerar token para m&aacute;quina externa</h2>
+                <h2>Computadores externos</h2>
                 <p>Use quando o instalador avisar que a m&aacute;quina n&atilde;o pertence ao dom&iacute;nio autorizado.</p>
             </div>
         </div>
-        <form method="post" class="agent-token-form" id="manual-token-form">
+        <form method="post" action="{{ deployment_create_url }}" class="agent-token-form" id="manual-token-form" data-manual-install="external" data-create-url="{{ deployment_create_url }}" data-history-url="{{ deployment_history_url }}" data-trust-ready="{{ deployment_trust_ready|yesno:'true,false' }}">
             {% csrf_token %}
-            <input type="hidden" name="action" value="manual_validation">
+            <input type="hidden" name="install_kind" value="external">
             <label class="filter-field">
                 <span>Nome</span>
-                <input name="name" placeholder="Notebook externo - tecnico">
+                <input name="name" required placeholder="Notebook externo - tecnico">
             </label>
+            <div class="agent-form-row"><label class="filter-field"><span>Canal</span><select name="channel" data-channel><option value="stable">Stable</option><option value="development">Development</option></select></label><label class="filter-field"><span>Distribuição</span><select name="release_id" data-release required></select></label></div>
+            <p data-release-message role="status"></p>
             <label class="filter-field">
                 <span>Validade em minutos</span>
                 <input name="expires_minutes" type="number" min="1" value="30">
@@ -233,147 +214,13 @@
                 <textarea name="notes" rows="3" placeholder="Quem solicitou, m&aacute;quina, contexto..."></textarea>
             </label>
             <div class="agent-form-actions">
-                <button type="submit"><i data-lucide="shield-check"></i>Gerar token de valida&ccedil;&atilde;o manual</button>
+                <button type="submit"><i data-lucide="shield-check"></i>Gerar token</button>
             </div>
             <p class="agent-token-error" role="alert" hidden></p>
         </form>
     </article>
-    <section class="panel enrollment-created-panel agent-token-result" id="manual-token-result" aria-live="polite" {% if not created_manual_token %}hidden{% endif %}>
-        {% if created_manual_token %}
-        <div class="panel-heading"><div><span class="section-kicker">Token manual criado</span><h2>Copie o token de valida&ccedil;&atilde;o manual</h2><p>Use este token apenas em m&aacute;quinas confi&aacute;veis. Ele expira e possui uso &uacute;nico.</p></div></div>
-        <p class="agent-token-result-meta">Expira em: {{ created_manual_validation.expires_at|date:"d/m/Y H:i" }}</p>
-        <div class="created-token-box"><div class="copy-value-content"><span>Manual validation token</span><code id="created-manual-token">{{ created_manual_token }}</code></div><button class="copy-button" type="button" data-copy-target="#created-manual-token"><i data-lucide="copy"></i>Copiar token manual</button></div>
-        {% endif %}
-    </section>
-    </div>
-</section>
+    <section class="panel enrollment-created-panel agent-token-result" id="manual-token-result" aria-live="polite" hidden>
 
-<section class="agent-install-advanced" id="agent-command-generator" aria-label="Instalação manual avançada">
-    <button type="button" class="agent-advanced-toggle" id="agent-advanced-toggle" aria-expanded="false" aria-controls="agent-advanced-content">
-        <span><strong>Instalação manual avançada</strong><small>Gerador PowerShell, pacote do agente e informações técnicas.</small></span>
-        <i data-lucide="chevron-down" aria-hidden="true"></i>
-    </button>
-    <div class="agent-advanced-content" id="agent-advanced-content" hidden>
-    <section class="agent-command-panel" aria-labelledby="agent-command-title">
-        <div class="panel-heading">
-            <div>
-                <h2 id="agent-command-title">Gerador PowerShell</h2>
-                <p>Configure o modo de instala&ccedil;&atilde;o conforme o endpoint e copie o comando final.</p>
-            </div>
-            <div class="agent-mode-badges">
-                <span class="badge badge-security" data-mode-badge>Servi&ccedil;o Windows</span>
-                <span class="badge badge-muted" data-origin-badge>HTTPS</span>
-            </div>
-        </div>
-
-        <div class="agent-command-config"
-             data-default-server-url="{{ server_url }}"
-             data-default-installer-url="{{ source_path }}"
-             data-default-share-path="{{ legacy_share_path }}"
-             data-default-local-path="{{ local_package_path }}">
-            <label class="filter-field">
-                <span>Server URL / URL do NightOwl</span>
-                <input id="agent-server-url" value="{{ server_url }}" placeholder="https://nightowl.controlsul.com.br">
-            </label>
-            <label class="filter-field">
-                <span>Endpoint mode / formato de URL</span>
-                <select id="agent-endpoint-mode">
-                    <option value="base" selected>Server base URL recomendado</option>
-                    <option value="heartbeat">Heartbeat endpoint legado: /api/agent/heartbeat/</option>
-                </select>
-            </label>
-
-            <div class="agent-form-row">
-                <label class="filter-field">
-                    <span>Origem do pacote</span>
-                    <select id="agent-package-origin">
-                        <option value="https" selected>HTTPS 443 recomendado</option>
-                        <option value="share">Compartilhamento de rede legado</option>
-                        <option value="local">Caminho local de teste</option>
-                    </select>
-                </label>
-                <label class="filter-field">
-                    <span>Modo de instala&ccedil;&atilde;o</span>
-                    <select id="agent-install-mode">
-                        <option value="service" selected>Servi&ccedil;o Windows recomendado</option>
-                        <option value="noservice">Apenas preparar arquivos/config</option>
-                    </select>
-                </label>
-            </div>
-
-            <label class="filter-field">
-                <span>Caminho do pacote</span>
-                <input id="agent-package-path" value="{{ source_path }}" placeholder="https://nightowl.controlsul.com.br/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1">
-            </label>
-
-            <div class="agent-options-grid">
-                <label><input id="agent-run-check" type="checkbox" checked> RunCheck</label>
-                <label><input id="agent-keep-fallback" type="checkbox" checked> Preservar agente PowerShell legado</label>
-                <label><input id="agent-force-config" type="checkbox"> Force reinstall/update</label>
-                <label><input id="agent-debug-logs" type="checkbox"> DebugLog</label>
-            </div>
-        </div>
-
-        <div class="agent-context-alerts">
-            <div class="agent-advanced-note agent-advanced-warning" data-warning-localhost>
-                <strong>Ambiente:</strong> <code>127.0.0.1</code> s&oacute; deve ser usado quando o backend estiver na pr&oacute;pria m&aacute;quina.
-            </div>
-            <div class="agent-advanced-note">
-                Para instalar em outros endpoints, use DNS/IP acess&iacute;vel do servidor NightOwl. Caminho local s&oacute; funciona na pr&oacute;pria m&aacute;quina; para rede, use UNC ou HTTPS quando dispon&iacute;vel.
-            </div>
-            <div class="agent-advanced-note">
-                O modo servi&ccedil;o exige PowerShell como administrador. Para m&aacute;quinas fora do dom&iacute;nio, use HTTPS com certificado p&uacute;blico confi&aacute;vel.
-            </div>
-            <div class="agent-advanced-note">
-                O comando padr&atilde;o n&atilde;o inclui token. Se o backend exigir valida&ccedil;&atilde;o manual, o instalador abre uma janela local para colar o token gerado nesta tela.
-            </div>
-        </div>
-
-        <div class="terminal-block generated-command-block" data-copy-value="">
-            <div class="copy-value-content">
-                <span>Comando PowerShell gerado</span>
-                <code id="generated-install-command"></code>
-            </div>
-            <button class="copy-button" type="button" data-copy-target=".generated-command-block"><i data-lucide="copy"></i>Copiar comando</button>
-        </div>
-    </section>
-
-    <section class="agent-package-panel" aria-labelledby="agent-package-title">
-        <div class="panel-heading">
-            <div>
-                <h2 id="agent-package-title">Informações do pacote</h2>
-            </div>
-        </div>
-        <h3 class="agent-package-subheading">Arquivos esperados</h3>
-        <ul class="agent-package-checklist">
-            <li><i data-lucide="check"></i><span>NightOwl.Agent.Windows.zip</span></li>
-            <li><i data-lucide="check"></i><span>Install-NightOwlAgentDotNet.ps1</span></li>
-            <li><i data-lucide="check"></i><span>Uninstall-NightOwlAgentDotNet.ps1</span></li>
-            <li><i data-lucide="check"></i><span>checksums.json</span></li>
-            <li><i data-lucide="check"></i><span>version.json</span></li>
-        </ul>
-        <dl class="agent-settings-list">
-            <div>
-                <dt>URL do pacote</dt>
-                <dd>{{ package_url }}</dd>
-            </div>
-            <div>
-                <dt>Estrutura servi&ccedil;o</dt>
-                <dd>C:\ProgramData\NightOwl\AgentDotNet</dd>
-            </div>
-            <div>
-                <dt>Logs servi&ccedil;o</dt>
-                <dd>C:\ProgramData\NightOwl\Logs</dd>
-            </div>
-            <div>
-                <dt>Packages/jobs</dt>
-                <dd>C:\ProgramData\NightOwl\Packages / Jobs</dd>
-            </div>
-            <div>
-                <dt>Fallback legado</dt>
-                <dd>C:\RMM / RMM-Agent-Heartbeat</dd>
-            </div>
-        </dl>
     </section>
     </div>
 </section>
@@ -417,7 +264,6 @@
                     <td>{{ row.token.created_at|date:"d/m/Y H:i" }}</td>
                     <td>
                         <div class="agent-row-actions">
-                            <button class="copy-button subtle" type="button" data-copy-row-command><i data-lucide="copy"></i>Copiar comando</button>
                             <details class="logs-details">
                                 <summary><i data-lucide="history"></i>Ver usos</summary>
                                 <div class="logs-popover">
@@ -461,7 +307,6 @@
     </nav>
 </section>
 
-</details>
 <div id="copy-feedback" class="copy-feedback" hidden>Copiado</div>
 {% include 'dashboard/_install_batches.html' %}
 {% endblock %}
@@ -471,175 +316,7 @@
 <script src="{% static 'js/install_batches.js' %}" defer></script>
 <script src="{% static 'js/agent_install_discovery.js' %}" defer></script>
 <script src="{% static 'js/agent_install_workflow.js' %}" defer></script>
-<script src="{% static 'js/agent_install_advanced.js' %}" defer></script>
-<script>
-    window.addEventListener("DOMContentLoaded", function () {
-        if (window.lucide && typeof window.lucide.createIcons === "function") {
-            window.lucide.createIcons();
-        }
+<script src="{% static 'js/manual_install_forms.js' %}" defer></script>
 
-        const feedback = document.getElementById("copy-feedback");
-        const config = document.querySelector(".agent-command-config");
-        const commandOutput = document.getElementById("generated-install-command");
-        const commandBlock = document.querySelector(".generated-command-block");
-        const serverInput = document.getElementById("agent-server-url");
-        const endpointMode = document.getElementById("agent-endpoint-mode");
-        const originSelect = document.getElementById("agent-package-origin");
-        const packageInput = document.getElementById("agent-package-path");
-        const installMode = document.getElementById("agent-install-mode");
-        const runCheck = document.getElementById("agent-run-check");
-        const keepFallback = document.getElementById("agent-keep-fallback");
-        const forceConfig = document.getElementById("agent-force-config");
-        const debugLogs = document.getElementById("agent-debug-logs");
-        const modeBadge = document.querySelector("[data-mode-badge]");
-        const originBadge = document.querySelector("[data-origin-badge]");
-        const localhostWarning = document.querySelector("[data-warning-localhost]");
 
-        function showFeedback(text) {
-            feedback.textContent = text || "Copiado";
-            feedback.hidden = false;
-            feedback.classList.add("is-visible");
-            window.setTimeout(function () {
-                feedback.classList.remove("is-visible");
-                feedback.hidden = true;
-            }, 1800);
-        }
-
-        function normalizeServerUrl(value) {
-            let url = (value || "").trim().replace(/\/+$/, "");
-            url = url.replace(/\/api\/agent\/heartbeat\/?$/, "");
-            return url;
-        }
-
-        function normalizePowerShellPath(value) {
-            let path = (value || "").trim().replace(/^"|"$/g, "");
-            while (path.startsWith("\\\\\\\\")) {
-                path = "\\\\" + path.slice(4);
-            }
-            if (path.startsWith("\\\\")) {
-                return "\\\\" + path.slice(2).replace(/\\\\/g, "\\");
-            }
-            return path.replace(/\\\\/g, "\\");
-        }
-
-        function heartbeatUrl() {
-            const base = normalizeServerUrl(serverInput.value);
-            if (endpointMode.value === "base") {
-                return base;
-            }
-            return base ? `${base}/api/agent/heartbeat/` : "";
-        }
-
-        function packagePath() {
-            const raw = normalizePowerShellPath(packageInput.value || "");
-            if (originSelect.value === "https") {
-                return raw || `${normalizeServerUrl(serverInput.value)}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1`;
-            }
-            if (/\.ps1$/i.test(raw)) {
-                return raw;
-            }
-            return `${raw.replace(/[\\\\/]+$/, "")}\\Install-NightOwlAgentDotNet.ps1`;
-        }
-
-        function buildCommand() {
-            const flags = [];
-            if (installMode.value === "service") {
-                flags.push("-InstallAsService");
-            }
-            if (runCheck.checked) {
-                flags.push("-RunCheck");
-            }
-            if (!keepFallback.checked && installMode.value === "service") {
-                flags.push("-KeepPowerShellAgent:$false");
-            }
-            if (forceConfig.checked) {
-                flags.push("-Force");
-            }
-            if (debugLogs.checked) {
-                flags.push("-DebugLog");
-            }
-            if (originSelect.value === "https") {
-                return `$dir = "$env:TEMP\\NightOwlAgent"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Invoke-WebRequest "${packagePath()}" -OutFile "$dir\\Install-NightOwlAgentDotNet.ps1" -UseBasicParsing; powershell.exe -ExecutionPolicy Bypass -File "$dir\\Install-NightOwlAgentDotNet.ps1" -ServerUrl "${heartbeatUrl()}" ${flags.join(" ")}`.trim();
-            }
-            return `powershell.exe -ExecutionPolicy Bypass -File "${packagePath()}" -ServerUrl "${heartbeatUrl()}" ${flags.join(" ")}`.trim();
-        }
-
-        function updateBadges() {
-            const modeLabels = {
-                service: "Servi\u00e7o Windows",
-                noservice: "Sem servi\u00e7o"
-            };
-            const originLabels = {
-                share: "Share",
-                local: "Local teste",
-                https: "HTTPS"
-            };
-            modeBadge.textContent = modeLabels[installMode.value] || "Servi\u00e7o Windows";
-            originBadge.textContent = originLabels[originSelect.value] || "Share";
-            localhostWarning.style.display = /127\.0\.0\.1|localhost/i.test(serverInput.value || "") ? "" : "none";
-        }
-
-        function updateCommand() {
-            const command = buildCommand();
-            commandOutput.textContent = command;
-            commandBlock.dataset.copyValue = command;
-            updateBadges();
-        }
-
-        originSelect.addEventListener("change", function () {
-            if (originSelect.value === "share") {
-                packageInput.value = normalizePowerShellPath(config.dataset.defaultSharePath || "");
-            } else if (originSelect.value === "local") {
-                packageInput.value = normalizePowerShellPath(config.dataset.defaultLocalPath || "C:\\NightOwlAgents");
-            } else {
-                packageInput.value = `${normalizeServerUrl(serverInput.value)}/downloads/nightowl-agent/Install-NightOwlAgentDotNet.ps1`;
-            }
-            updateCommand();
-        });
-
-        installMode.addEventListener("change", function () {
-            if (installMode.value === "noservice") {
-                keepFallback.checked = false;
-            }
-            updateCommand();
-        });
-
-        [serverInput, endpointMode, packageInput, runCheck, keepFallback, forceConfig, debugLogs].forEach(function (input) {
-            input.addEventListener("input", updateCommand);
-            input.addEventListener("change", updateCommand);
-        });
-
-        document.querySelectorAll(".copy-button").forEach(function (button) {
-            button.addEventListener("click", async function () {
-                let value = button.dataset.copyValue || "";
-                if (button.dataset.copyRowCommand !== undefined) {
-                    value = buildCommand();
-                }
-                if (!value && button.dataset.copyTarget) {
-                    const target = document.querySelector(button.dataset.copyTarget);
-                    value = target ? (target.dataset.copyValue || target.textContent || "") : "";
-                }
-                value = value.trim();
-                if (!value) {
-                    return;
-                }
-                try {
-                    await navigator.clipboard.writeText(value);
-                    showFeedback("Copiado");
-                } catch (error) {
-                    const textarea = document.createElement("textarea");
-                    textarea.value = value;
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    document.execCommand("copy");
-                    textarea.remove();
-                    showFeedback("Copiado");
-                }
-            });
-        });
-
-        updateCommand();
-    });
-</script>
-{% if can_deploy_agents %}<script src="{% static 'js/manual_deployment.js' %}"></script>{% endif %}
 {% endblock %}

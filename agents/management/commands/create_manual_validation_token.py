@@ -41,7 +41,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS('Manual validation token criado.'))
         self.stdout.write(f'ID: {manual_token.id}')
         self.stdout.write(f'Token: {token}')
-        self.stdout.write(f'Prefixo: {manual_token.prefix}')
+        self.stdout.write(f'Prefixo: {manual_token.prefix[:10]}')
         self.stdout.write(f'Expira em: {expires_at.isoformat()}')
         if enrollment_token:
             self.stdout.write(f'Vinculado ao enrollment token: {enrollment_token.prefix}')

@@ -7,6 +7,37 @@ using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Models;
 
+if (args.Contains("--signature-only", StringComparer.Ordinal))
+{
+    TestSignatureRequirement();
+    using RSA key = RSA.Create(2048);
+    using RSA other = RSA.Create(2048);
+    byte[] body = Encoding.UTF8.GetBytes("synthetic-signed-manifest");
+    byte[] signature = key.SignData(body, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    Require(UpdaterProgram.VerifyReleaseManifestSignatureForTest(body, signature, key.ToXmlString(false)), "Valid signature rejected.");
+    Require(!UpdaterProgram.VerifyReleaseManifestSignatureForTest(body, signature, other.ToXmlString(false)), "Untrusted key accepted.");
+    body[0] ^= 1;
+    Require(!UpdaterProgram.VerifyReleaseManifestSignatureForTest(body, signature, key.ToXmlString(false)), "Tampered manifest accepted.");
+    Console.WriteLine("PASS required signing, RSA-PSS, tampering and wrong key.");
+    return;
+}
+
+if (args.Contains("--already-current-only", StringComparer.Ordinal))
+{
+    TestInstalledPayloadIntegrity();
+    using (RSA key = RSA.Create(2048))
+    {
+        byte[] content = Encoding.UTF8.GetBytes("signed-fixture");
+        byte[] signature = key.SignData(content, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        Require(UpdaterProgram.VerifyReleaseManifestSignatureForTest(content, signature, key.ToXmlString(false)), "Signature should verify.");
+        content[0] ^= 1;
+        Require(!UpdaterProgram.VerifyReleaseManifestSignatureForTest(content, signature, key.ToXmlString(false)), "Tampered signature content must fail.");
+    }
+    TestFullAutomaticRollback();
+    Console.WriteLine("PASS already-current: matching, changed, missing, signed fixture and simulated rollback.");
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--hold-runner-lock")
 {
     using UpdateRunnerLifetimeLock childLock = UpdateRunnerLifetimeLock.TryAcquire(args[1]);
@@ -60,6 +91,7 @@ try
         "Updater should reject a release manifest signature verified with a different key.");
 
     TestSignedManifestChannelGate();
+    TestSignatureRequirement();
 
     TestCopyNormal();
     TestBackupManifestIsNotManaged();
@@ -98,6 +130,38 @@ static void Require(bool condition, string message)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static void TestSignatureRequirement()
+{
+    UpdaterProgram.RequireSignedRelease(false, "trusted-key");
+    foreach (var input in new[] { (true, "trusted-key"), (false, ""), (true, "") })
+    {
+        bool rejected = false;
+        try { UpdaterProgram.RequireSignedRelease(input.Item1, input.Item2); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected, "Unsigned or unkeyed release must be rejected.");
+    }
+}
+
+static void TestInstalledPayloadIntegrity()
+{
+    using TempTree tree = TempTree.Create();
+    string staged = tree.CreateDirectory("staged-integrity"), install = tree.CreateDirectory("installed-integrity");
+    string[] required = { "NightOwl.Agent.Windows.exe", "NightOwl.Agent.Updater.exe", "NightOwl.Agent.Tray.exe",
+        "NightOwl.Agent.Uninstaller.exe", "NightOwl.Agent.Diagnostics.exe" };
+    foreach (string name in required) { File.WriteAllText(Path.Combine(staged, name), name); File.WriteAllText(Path.Combine(install, name), name); }
+    File.WriteAllText(Path.Combine(staged, "agent.version.json"), "package metadata");
+    File.WriteAllText(Path.Combine(install, "agent.version.json"), "installed metadata");
+    File.WriteAllText(Path.Combine(staged, "agent.config.json"), "package config");
+    File.WriteAllText(Path.Combine(install, "agent.config.json"), "identity-and-token");
+    Require(UpdaterProgram.InstalledPayloadMatches(staged, install), "Identical verified payload should match.");
+    File.WriteAllText(Path.Combine(install, required[0]), "corrupted");
+    Require(!UpdaterProgram.InstalledPayloadMatches(staged, install), "Changed binary must fail.");
+    File.Delete(Path.Combine(install, required[0]));
+    Require(!UpdaterProgram.InstalledPayloadMatches(staged, install), "Missing binary must fail.");
+    Require(File.ReadAllText(Path.Combine(install, "agent.config.json")) == "identity-and-token", "Configuration must stay unchanged.");
+    Require(UpdaterProgram.DecideVersionAction("1.0", "1.1", false) == UpdaterProgram.VersionUpdateAction.UpdateAllowed, "New version must still update.");
 }
 
 static void TestCopyNormal()

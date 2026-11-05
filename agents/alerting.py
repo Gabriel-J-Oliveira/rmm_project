@@ -309,7 +309,7 @@ def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False):
         endpoint=endpoint,
         status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
         is_temporary=False,
-    )
+    ).exclude(source='continuous_telemetry')
 
     existing_by_key = {
         alert.metadata.get('dedupe_key'): alert

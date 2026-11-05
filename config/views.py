@@ -23,6 +23,11 @@ class NightOwlLoginView(LoginView):
 
 
 def nightowl_logout(request):
+    if request.user.is_authenticated:
+        from agents.models import TerminalSession
+        from agents.terminal_sessions import close_session
+        for session_id in TerminalSession.objects.filter(operator=request.user, status__in=TerminalSession.ACTIVE).values_list('pk', flat=True):
+            close_session(session_id, 'operator_logout', 'cancelled')
     logout(request)
     messages.success(request, 'Sessao encerrada com sucesso.')
     return redirect('login')

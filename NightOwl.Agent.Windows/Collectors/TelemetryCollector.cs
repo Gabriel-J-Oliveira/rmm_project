@@ -7,6 +7,7 @@ namespace NightOwl.Agent.Windows.Collectors;
 
 public sealed class TelemetryCollector
 {
+    private readonly object _readGate = new();
     private readonly TelemetryCollectorHooks? _hooks;
     private (ulong Idle, ulong Kernel, ulong User)? _lastCpu;
     private Dictionary<string, (long Received, long Sent)> _lastNetwork = new(StringComparer.OrdinalIgnoreCase);
@@ -17,7 +18,14 @@ public sealed class TelemetryCollector
 
     internal TelemetryCollector(TelemetryCollectorHooks hooks) => _hooks = hooks;
 
-    public TelemetrySample Collect(string machineId, CancellationToken ct)
+    public TelemetrySample Collect(string machineId, CancellationToken ct, bool includeProcesses = true, bool includeNetwork = true)
+    {
+        if (!Monitor.TryEnter(_readGate)) throw new InvalidOperationException("Previous native telemetry read remains active.");
+        try { return CollectCore(machineId, ct, includeProcesses, includeNetwork); }
+        finally { Monitor.Exit(_readGate); }
+    }
+
+    private TelemetrySample CollectCore(string machineId, CancellationToken ct, bool includeProcesses, bool includeNetwork)
     {
         Stopwatch clock = Stopwatch.StartNew();
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -33,10 +41,10 @@ public sealed class TelemetryCollector
         try { CopyMemory((_hooks?.Memory ?? ReadMemory)(), sample.Memory); }
         catch (Exception ex) when (ex is not OperationCanceledException) { sample.TelemetryErrorsCount++; }
         ct.ThrowIfCancellationRequested();
-        try { CopyNetwork((_hooks?.Network ?? ReadNetwork)(), sample.Network); }
+        try { if (includeNetwork) CopyNetwork((_hooks?.Network ?? ReadNetwork)(), sample.Network); }
         catch (Exception ex) when (ex is not OperationCanceledException) { sample.TelemetryErrorsCount++; }
         ct.ThrowIfCancellationRequested();
-        try { sample.TopProcesses = (_hooks?.Processes ?? ReadProcesses)(now, ct); }
+        try { if (includeProcesses) sample.TopProcesses = (_hooks?.Processes ?? ReadProcesses)(now, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { sample.TelemetryErrorsCount++; }
         ct.ThrowIfCancellationRequested();
         try { sample.AgentWorkingSetBytes = Process.GetCurrentProcess().WorkingSet64; }

@@ -1,0 +1,14 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('static/js/endpoint_detail.js','utf8');
+const start=source.indexOf('    function firstDiskValue('),end=source.indexOf('    function renderDiskList(',start);
+assert(start>=0&&end>start);
+const ctx={asObject:x=>x&&typeof x==='object'?x:{},asArray:x=>Array.isArray(x)?x:[],escapeHtml:x=>String(x??''),actionButton:()=>''};
+vm.runInNewContext(source.slice(start,end)+';this.percent=diskUsedPercent;this.render=renderDiskUsageRow;',ctx);
+assert.equal(ctx.percent({usedPercent:null}),null);
+assert.equal(ctx.percent({usedPercent:0}),0);
+assert.equal(ctx.percent({usedPercent:100}),100);
+const unknown=ctx.render({name:'C:',usedPercent:null,totalGb:10,freeGb:null},false);
+assert(unknown.includes('Uso desconhecido'));assert(!unknown.includes('width:'));
+const zero=ctx.render({name:'D:',usedPercent:100,totalGb:1,freeGb:0},false);
+assert(zero.includes('100% usado'));assert(zero.includes('Livre: 0 GiB'));
+console.log('disk UI: unknown, zero and GiB OK');

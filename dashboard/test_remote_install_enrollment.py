@@ -89,6 +89,38 @@ class RemoteDeploymentEnrollmentTests(TestCase):
         self.assertIsNone(deployment.used_at)
         self.assertFalse(AgentMachine.objects.exists())
 
+    def test_real_light_heartbeat_completes_deployment_but_inventory_cannot(self):
+        from agents.services import record_collection
+
+        def command(*args, **kwargs):
+            token = kwargs.get('enrollment_token')
+            if token is not None:
+                response = self.enroll(token)
+                self.assertEqual(response.status_code, 200)
+                machine = AgentMachine.objects.get(pk=response.json()['endpoint_id'])
+                deployment = AgentDeploymentToken.objects.get()
+                record_collection(machine, 'full_inventory', {
+                    'machine_id': machine.machine_id, 'agent_version': CONTRACT['version'],
+                    'collected_at': timezone.now().isoformat(),
+                    'system': {'hostname': machine.hostname, 'domain': machine.domain},
+                })
+                self.assertIsNone(runner._deployment_heartbeat(deployment, machine, CONTRACT['version']))
+                heartbeat = Client().post('/api/agent/heartbeat/', data=json.dumps({
+                    'hostname': machine.hostname, 'machine_id': machine.machine_id,
+                    'domain': machine.domain, 'agent_version': CONTRACT['version'],
+                    'agent_mode': 'dotnet-service', 'uptime_seconds': 10,
+                }), content_type='application/json',
+                    HTTP_AUTHORIZATION='Bearer ' + response.json()['agent_token'])
+                self.assertEqual(heartbeat.status_code, 200, heartbeat.content)
+                self.assertIsNotNone(runner._deployment_heartbeat(deployment, machine, CONTRACT['version']))
+                kwargs['on_event']('STARTED', None)
+                kwargs['on_event']('FINISHED', 0)
+            return 0
+
+        self.run_attempt(command)
+        self.assertEqual(self.job.status, 'COMPLETED', self.job.diagnostics)
+        self.assertEqual(AgentDeploymentToken.objects.get().status, 'completed')
+
     def test_safe_failure_invalidates_token_and_next_attempt_has_new_credential(self):
         secrets = []
         def command(*args, **kwargs):

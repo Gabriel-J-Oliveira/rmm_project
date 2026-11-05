@@ -249,6 +249,4 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    bindTokenForm('enrollment-token-form', 'enrollment-token-result', 'enrollment');
-    bindTokenForm('manual-token-form', 'manual-token-result', 'manual_validation');
 });

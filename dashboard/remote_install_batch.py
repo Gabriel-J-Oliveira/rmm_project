@@ -56,7 +56,7 @@ ERRORS = {
     'AD_COMPUTER_DISABLED': 'O computador esta desabilitado no Active Directory.',
     'CORRELATION_UNAVAILABLE': 'Nao foi possivel confirmar a correlacao do computador no NightOwl.',
     'CREDENTIAL_REQUIRED': 'Informe uma credencial administrativa valida para o preflight.',
-    'WINRM_UNAVAILABLE': 'WinRM indisponivel no transporte autorizado; verifique conectividade e a porta configurada.',
+    'WINRM_UNAVAILABLE': 'WinRM indisponivel. Revise o acesso ou utilize instalacao manual ou GPO autorizada.',
     'WINRM_HTTP_CONFIG_INVALID': 'A configuracao do piloto WinRM HTTP nao e valida; nenhum transporte HTTP foi tentado.',
     'WINRM_PORT_NOT_ALLOWED': 'A porta solicitada para WinRM nao esta autorizada.',
     'WINRM_REDIRECT_BLOCKED': 'O servidor redirecionou a conexao WinRM; acesso bloqueado por seguranca.',
@@ -75,6 +75,7 @@ ERRORS = {
     'ENROLLMENT_UNAVAILABLE': 'O enrollment nao esta disponivel para esta operacao.',
     'ENROLLMENT_TIMEOUT': 'O enrollment nao foi confirmado dentro da janela de verificacao.',
     'HEARTBEAT_TIMEOUT': 'O primeiro heartbeat nao foi confirmado; revise o resultado antes de repetir.',
+    'REPAIR_REQUIRED': 'O agente necessita de reparo autorizado antes de ser considerado operacional.',
     'SERVICE_NOT_FOUND': 'O servico NightOwl nao foi encontrado na verificacao.',
     'SERVICE_NOT_RUNNING': 'O servico NightOwl nao esta em execucao na verificacao.',
     'REMOTE_COMMAND_TIMEOUT': 'A resposta remota excedeu a janela; resultado pode exigir revisao.',
@@ -232,6 +233,30 @@ def start_batch(batch, username, password):
         if process and process.stdin and not process.stdin.closed:
             process.stdin.close()
         password = payload = None
+
+
+def installation_display_status(item, job):
+    if job and job.status == 'COMPLETED': return 'operational'
+    if job and job.status == 'OUTCOME_UNKNOWN': return 'unknown'
+    if job and job.status == 'INSTALLED_UNVERIFIED':
+        return 'pending' if (getattr(job, 'diagnostics', None) or {}).get('service_validation_status') == 'PASS' else 'pending_unverified'
+    if job and job.status in ('QUEUED', 'RUNNING') and job.stage in ('WAITING_ENROLLMENT', 'WAITING_HEARTBEAT'):
+        return 'pending'
+    if item.error_code == 'REPAIR_REQUIRED': return 'repair_required'
+    if item.status == 'REVIEW_REQUIRED': return 'unknown'
+    if item.status in ('COMPLETED', 'SKIPPED'): return 'unknown'
+    if item.status in ('FAILED', 'INTERRUPTED'): return 'failed'
+    if item.status == 'WAITING': return 'waiting'
+    if item.status == 'PREFLIGHT': return 'checking'
+    return 'installing'
+
+
+def installation_error_message(code):
+    if not code: return ''
+    message = ERRORS.get(code, 'Falha segura; revisar o computador')
+    if code.startswith(('TCP_5985_', 'TCP_5986_')) or code in ('WINRM_CONNECTION_FAILED', 'WINRM_REQUEST_TIMEOUT'):
+        message += ' Considere instalacao manual ou GPO autorizada.'
+    return message
 
 
 def _finish_item(item, status, code=''):
@@ -502,11 +527,12 @@ def batch_payload(batch, *, detail=False):
         code = safe_code(item.error_code) if item.error_code else ''
         projected.append({'id': str(item.pk), 'position': item.position, 'hostname': item.target_hostname,
             'fqdn': item.target_fqdn, 'status': item.status, 'stage': item.stage,
+            'display_status': installation_display_status(item, job),
             'progress_percentage': item.progress_percentage,
             'progress_message': PROGRESS.get(item.stage, (0, 'Operacao em revisao'))[1]
                                 if item.status not in ITEM_TERMINAL else
                                 PROGRESS['COMPLETED'][1] if item.status == 'COMPLETED' else 'Operacao encerrada; revisar resultado',
-            'error_code': code, 'error_message': ERRORS.get(code, 'Falha segura; revisar o computador') if code else '',
+            'error_code': code, 'error_message': installation_error_message(code),
             'job_id': str(item.remote_install_job_id) if job else None,
             'updated_at': item.updated_at, 'started_at': item.started_at, 'finished_at': item.finished_at,
             'is_stalled': stalled, 'stale_seconds': round(seconds),

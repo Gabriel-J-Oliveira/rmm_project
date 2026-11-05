@@ -2,17 +2,17 @@ from rest_framework import serializers
 
 
 class OperatingSystemSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    version = serializers.CharField(max_length=128, allow_blank=True, required=False)
-    build = serializers.CharField(max_length=128, allow_blank=True, required=False)
+    name = serializers.CharField(max_length=255, allow_blank=True, required=False, allow_null=True)
+    version = serializers.CharField(max_length=128, allow_blank=True, required=False, allow_null=True)
+    build = serializers.CharField(max_length=128, allow_blank=True, required=False, allow_null=True)
 
 
 class HardwareSerializer(serializers.Serializer):
-    cpu = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    cpu = serializers.CharField(max_length=255, allow_blank=True, required=False, allow_null=True)
     memory_total_bytes = serializers.IntegerField(min_value=0, required=False, allow_null=True)
-    manufacturer = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    model = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    serial_number = serializers.CharField(max_length=255, allow_blank=True, required=False)
+    manufacturer = serializers.CharField(max_length=255, allow_blank=True, required=False, allow_null=True)
+    model = serializers.CharField(max_length=255, allow_blank=True, required=False, allow_null=True)
+    serial_number = serializers.CharField(max_length=255, allow_blank=True, required=False, allow_null=True)
 
 
 class DiskSerializer(serializers.Serializer):
@@ -66,9 +66,9 @@ class HeartbeatSerializer(serializers.Serializer):
     logged_user = serializers.CharField(max_length=255, allow_blank=True, required=False)
     username = serializers.CharField(max_length=255, allow_blank=True, required=False)
     ip_address = serializers.CharField(max_length=64, allow_blank=True, required=False)
-    os_name = serializers.CharField(max_length=255, allow_blank=True, required=False)
-    os_version = serializers.CharField(max_length=128, allow_blank=True, required=False)
-    windows_build = serializers.CharField(max_length=128, allow_blank=True, required=False)
+    os_name = serializers.CharField(max_length=255, allow_blank=True, required=False, allow_null=True)
+    os_version = serializers.CharField(max_length=128, allow_blank=True, required=False, allow_null=True)
+    windows_build = serializers.CharField(max_length=128, allow_blank=True, required=False, allow_null=True)
     agent_version = serializers.CharField(max_length=255, allow_blank=True, required=False)
     tray_version = serializers.CharField(max_length=255, allow_blank=True, required=False)
     updater_version = serializers.CharField(max_length=255, allow_blank=True, required=False)
@@ -79,8 +79,8 @@ class HeartbeatSerializer(serializers.Serializer):
         allow_empty=True,
         required=False,
     )
-    os = OperatingSystemSerializer(required=False)
-    hardware = HardwareSerializer(required=False)
+    os = OperatingSystemSerializer(required=False, allow_null=True)
+    hardware = HardwareSerializer(required=False, allow_null=True)
     disks = DiskSerializer(many=True, required=False)
     uptime_seconds = serializers.IntegerField(min_value=0, required=False)
     installed_software = InstalledSoftwareSerializer(many=True, required=False)

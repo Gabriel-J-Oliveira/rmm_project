@@ -15,8 +15,26 @@ from .views import (
     AgentUpdatePolicyView,
 )
 from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, EndpointTelemetryView
+from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
+from .job_control import AgentJobSignalView, AgentJobStartedView
+from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView, TerminalOperatorStatusView, TerminalOperatorConnectView, TerminalAgentConsentView
+from .operational_actions import OperationalActionView
+from .script_library import ApprovedScriptCatalogView
 
 urlpatterns = [
+    path('terminal/status/<uuid:session_id>/', TerminalOperatorStatusView.as_view(), name='terminal-session-status'),
+    path('terminal/connect/<uuid:session_id>/', TerminalOperatorConnectView.as_view(), name='terminal-session-connect'),
+    path('terminal/consent/<uuid:session_id>/', TerminalAgentConsentView.as_view(), name='terminal-agent-consent'),
+    path('terminal/sessions/<uuid:endpoint_id>/', TerminalOperatorView.as_view(), name='terminal-session-request'),
+    path('terminal/cancel/<uuid:session_id>/', TerminalCancelView.as_view(), name='terminal-session-cancel'),
+    path('terminal/poll/', TerminalAgentPollView.as_view(), name='terminal-agent-poll'),
+    path('approved-scripts/', ApprovedScriptCatalogView.as_view(), name='approved-script-catalog'),
+    path('operational-actions/<uuid:endpoint_id>/', OperationalActionView.as_view(), name='operational-action-create'),
+    path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),
+    path('jobs/<uuid:job_id>/started/', AgentJobStartedView.as_view(), name='agent-jobs-started'),
+    path('telemetry/control/', LiveAgentControlView.as_view(), name='agent-telemetry-control'),
+    path('telemetry/live/', LiveAgentPointsView.as_view(), name='agent-telemetry-live'),
+    path('telemetry/live/<uuid:endpoint_id>/', LiveOperatorView.as_view(), name='endpoint-telemetry-live'),
     path('telemetry/', AgentTelemetryView.as_view(), name='agent-telemetry'),
     path('telemetry/<uuid:endpoint_id>/', EndpointTelemetryView.as_view(), name='endpoint-telemetry'),
     path('telemetry/<uuid:endpoint_id>/summary/', EndpointTelemetrySummaryView.as_view(), name='endpoint-telemetry-summary'),

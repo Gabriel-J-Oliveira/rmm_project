@@ -9,7 +9,7 @@ internal static class TrayLog
     {
         try
         {
-            string logPath = NightOwlPaths.Current.TrayLogPath;
+            string logPath = NightOwlPaths.InteractiveTrayLogPath;
             string? dir = Path.GetDirectoryName(logPath);
             if (!string.IsNullOrWhiteSpace(dir))
             {
@@ -23,7 +23,7 @@ internal static class TrayLog
                 message,
                 metadata = metadata ?? new { }
             };
-            File.AppendAllText(logPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
+            RotatingJsonlLog.Append(logPath, JsonSerializer.Serialize(entry));
         }
         catch
         {

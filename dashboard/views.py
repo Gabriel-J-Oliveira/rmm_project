@@ -10,19 +10,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib import messages
 from django.contrib.auth import authenticate
+from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Case, Count, IntegerField, Max, Q, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 
 from agents.models import (
+    AgentDeploymentBatch,
     AgentDeploymentToken,
     AgentEnrollmentLog,
     AgentEnrollmentToken,
@@ -635,10 +637,14 @@ def build_deployment_command(request, deployment_token):
     escaped_url = bootstrap_url.replace("'", "''")
     return (
         f"$env:NIGHTOWL_DEPLOYMENT_TOKEN='{escaped_token}'; "
+        "$nightOwlPreviousProgress=$ProgressPreference; $ProgressPreference='SilentlyContinue'; "
         "try { "
-        f"$script=(Invoke-WebRequest -UseBasicParsing -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
+        f"$script=(Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Headers @{{'X-NightOwl-Deployment-Token'=$env:NIGHTOWL_DEPLOYMENT_TOKEN}} '{escaped_url}').Content; "
         "Invoke-Expression $script "
-        "} finally { Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }"
+        "} catch { $global:NightOwlDeploymentBootstrapExitCode=1; "
+        "Write-Host ('NightOwl: nao foi possivel iniciar o bootstrap. Verifique rede/backend. Log, se existente: {0}' -f (Join-Path ([IO.Path]::GetTempPath()) 'NightOwlDeployment\\bootstrap.log')) -ForegroundColor Red "
+        "} finally { $ProgressPreference=$nightOwlPreviousProgress; "
+        "Remove-Item Env:\\NIGHTOWL_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue }"
     )
 
 
@@ -831,20 +837,19 @@ def build_disk_rows(disks):
         disk = ensure_dict(disk)
         if not disk:
             continue
-        size = disk.get('size_bytes') or disk.get('total_bytes') or 0
-        free = disk.get('free_bytes') or 0
-        try:
-            size = int(size)
-            free = int(free)
-        except (TypeError, ValueError):
-            size = 0
-            free = 0
+        def valid_bytes(value):
+            try:
+                value = int(value) if value is not None and value != '' else None
+                return value if value is not None and value >= 0 else None
+            except (TypeError, ValueError, OverflowError):
+                return None
+        size = valid_bytes(disk.get('size_bytes') if disk.get('size_bytes') is not None else disk.get('total_bytes'))
+        free = valid_bytes(disk.get('free_bytes'))
+        used_percent = round(((size - free) / size) * 100) if size and free is not None and free <= size else None
 
-        used_percent = 0
-        if size > 0:
-            used_percent = round(((size - free) / size) * 100)
-
-        if used_percent >= 90:
+        if used_percent is None:
+            level = 'unknown'
+        elif used_percent >= 90:
             level = 'critical'
         elif used_percent >= 80:
             level = 'warning'
@@ -879,11 +884,12 @@ def get_primary_disk(disks):
         }
 
     primary = next((disk for disk in rows if str(disk['name']).upper().startswith('C:')), rows[0])
-    total = f"{primary['size_gb']} GB" if primary['size_gb'] is not None else '-'
-    free = f"{primary['free_gb']} GB" if primary['free_gb'] is not None else '-'
+    total = f"{primary['size_gb']} GiB" if primary['size_gb'] is not None else '-'
+    free = f"{primary['free_gb']} GiB" if primary['free_gb'] is not None else '-'
+    used = f"{primary['used_percent']}% usado" if primary['used_percent'] is not None else 'uso desconhecido'
     return {
         **primary,
-        'summary': f"{primary['name']} · {primary['used_percent']}% usado · {free} livre de {total}",
+        'summary': f"{primary['name']} · {used} · {free} livre de {total}",
         'has_data': True,
     }
 
@@ -2030,12 +2036,47 @@ def events_list(request):
     return render(request, 'dashboard/events.html', context)
 
 
+@login_required
 def jobs_list(request):
     context = {
         'active_nav': 'jobs',
-        'using_mock_rmm_data': True,
+        'using_mock_rmm_data': False,
     }
     return render(request, 'dashboard/jobs.html', context)
+
+
+@login_required
+@require_GET
+def jobs_data(request):
+    if not is_nightowl_technical_user(request.user) or not request.user.has_perm('agents.view_agentjob'):
+        return JsonResponse({'error':'forbidden'},status=403)
+    query=AgentJob.objects.select_related('endpoint','agent_release').order_by('-created_at')
+    if request.GET.get('job'):
+        try:
+            query=query.filter(pk=uuid.UUID(request.GET['job']))
+        except ValueError:
+            return JsonResponse({'error':'invalid_job_id'},status=400)
+    jobs=list(query[:200])
+    histories={str(job.pk):[] for job in jobs}
+    events=AuditEvent.objects.filter(metadata__job_id__in=list(histories),event_type__startswith='job.').order_by('-created_at')[:1000]
+    for event in events:
+        history=histories.get(str(event.metadata.get('job_id')))
+        if history is not None and len(history)<20:
+            history.append({'event':event.event_type,'at':event.created_at.isoformat(),'actor':event.actor_name})
+    rows=[]
+    endpoints={}
+    heartbeats = {row['machine_id']: row['latest'] for row in InventorySnapshot.objects.filter(
+        machine_id__in={job.endpoint_id for job in jobs}, raw_payload__snapshot_source='heartbeat'
+    ).values('machine_id').annotate(latest=Max('received_at'))}
+    for job in jobs:
+        row=serialize_agent_job(job)
+        row.update(endpointId=str(job.endpoint_id),history=list(reversed(histories[str(job.pk)])),
+                   communication=job.endpoint.status,lastHeartbeatAt=_iso_or_none(heartbeats.get(job.endpoint_id)))
+        rows.append(row)
+        endpoints[str(job.endpoint_id)]={'id':str(job.endpoint_id),'hostname':job.endpoint.hostname}
+    response=JsonResponse({'jobs':rows,'endpoints':list(endpoints.values()),'source':'persisted','limit':200})
+    response['Cache-Control']='no-store'
+    return response
 
 
 def maintenance_list(request):
@@ -2675,17 +2716,23 @@ def _agent_indicator_from_status(endpoint, diagnostic, recommended_version):
         return diagnostic.health_indicator
     if agent_version_state(endpoint.agent_version, recommended_version) == 'outdated':
         return 'attention'
-    return 'healthy'
+    return 'unknown'
 
 
-def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version, *, can_view_technical=False, can_view_admin=False):
+def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version, *, can_view_technical=False, can_view_admin=False, last_heartbeat=None):
     installed_version = endpoint.agent_version or (diagnostic.installed_version if diagnostic else '')
     available_version = (diagnostic.available_version if diagnostic else '') or recommended_version
-    running_jobs = [job for job in jobs if job.status in {AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING}]
     last_error_message = diagnostic.last_error_message if diagnostic and can_view_admin else (diagnostic.last_error_message[:160] if diagnostic and can_view_technical else '')
     update_error_message = diagnostic.update_error_message if diagnostic and can_view_admin else (diagnostic.update_error_message[:160] if diagnostic and can_view_technical else '')
     rollback_error_message = diagnostic.rollback_error_message if diagnostic and can_view_admin else (diagnostic.rollback_error_message[:160] if diagnostic and can_view_technical else '')
     result_last_send_error = diagnostic.result_last_send_error if diagnostic and can_view_admin else (diagnostic.result_last_send_error[:160] if diagnostic and can_view_technical else '')
+    diagnostic_raw = ensure_dict(diagnostic.raw_payload if diagnostic else {})
+    raw_queue = ensure_dict(diagnostic_raw.get('result_queue') or diagnostic_raw.get('pending_results') or diagnostic_raw.get('queue'))
+    raw_agent_status = ensure_dict(diagnostic_raw.get('agent') or diagnostic_raw.get('agent_status') or diagnostic_raw)
+    raw_updater = ensure_dict(diagnostic_raw.get('updater') or diagnostic_raw.get('update_state'))
+    def reported_count(key, value):
+        raw = raw_queue.get(key)
+        return value if type(raw) is int and raw >= 0 else None
     return {
         'visible': bool(can_view_technical),
         'admin': bool(can_view_admin),
@@ -2693,15 +2740,17 @@ def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version,
         'summary': {
             'installed_version': installed_version or '',
             'available_version': available_version or '',
-            'last_heartbeat_at': _iso_or_none((diagnostic.last_heartbeat_at if diagnostic else None) or endpoint.last_seen_at),
+            'last_heartbeat_at': _iso_or_none(last_heartbeat),
+            'last_communication_at': _iso_or_none(endpoint.last_seen_at),
+            'diagnostic_reported_at': _iso_or_none(diagnostic.updated_at if diagnostic else None),
             'last_inventory_at': _iso_or_none(diagnostic.last_inventory_at if diagnostic else None),
             'last_agent_start_at': _iso_or_none(diagnostic.last_agent_start_at if diagnostic else None),
-            'agent_uptime_seconds': diagnostic.agent_uptime_seconds if diagnostic else None,
-            'service_status': (diagnostic.service_status if diagnostic else '') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE else ''),
+            'agent_uptime_seconds': diagnostic.agent_uptime_seconds if diagnostic and type(raw_agent_status.get('agent_uptime_seconds')) is int else None,
+            'service_status': (diagnostic.service_status if diagnostic else '') or '',
             'current_user': diagnostic.current_user if diagnostic else endpoint.last_logged_user,
             'current_ip': str((diagnostic.current_ip if diagnostic else None) or endpoint.last_ip or ''),
-            'pending_result_count': diagnostic.pending_result_count if diagnostic else 0,
-            'running_job_count': diagnostic.running_job_count if diagnostic else len(running_jobs),
+            'pending_result_count': reported_count('pending_count', diagnostic.pending_result_count) if diagnostic else None,
+            'running_job_count': diagnostic.running_job_count if diagnostic and type(raw_agent_status.get('running_job_count')) is int else None,
         },
         'last_error': {
             'component': diagnostic.last_error_component if diagnostic else '',
@@ -2719,8 +2768,8 @@ def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version,
             'started_at': _iso_or_none(diagnostic.update_started_at if diagnostic else None),
             'completed_at': _iso_or_none(diagnostic.update_completed_at if diagnostic else None),
             'rollback_status': diagnostic.rollback_status if diagnostic else '',
-            'rollback_attempt': diagnostic.rollback_attempt if diagnostic else 0,
-            'health_check_confirmed': diagnostic.health_check_confirmed if diagnostic else False,
+            'rollback_attempt': diagnostic.rollback_attempt if diagnostic and type(raw_updater.get('rollback_attempt')) is int else None,
+            'health_check_confirmed': diagnostic.health_check_confirmed if diagnostic and type(raw_updater.get('health_check_confirmed')) is bool else None,
             'error_code': diagnostic.update_error_code if diagnostic else '',
             'error_message': update_error_message,
             'rollback_error_code': diagnostic.rollback_error_code if diagnostic else '',
@@ -2728,11 +2777,11 @@ def _serialize_agent_diagnostic(endpoint, diagnostic, jobs, recommended_version,
             'package_url': diagnostic.package_url_sanitized if diagnostic and can_view_admin else '',
         },
         'queue': {
-            'pending_count': diagnostic.result_pending_count if diagnostic else 0,
+            'pending_count': reported_count('pending_count', diagnostic.result_pending_count) if diagnostic else None,
             'oldest_pending_at': _iso_or_none(diagnostic.result_oldest_pending_at if diagnostic else None),
-            'retrying_count': diagnostic.result_retrying_count if diagnostic else 0,
-            'quarantined_count': diagnostic.result_quarantined_count if diagnostic else 0,
-            'queue_full': diagnostic.result_queue_full if diagnostic else False,
+            'retrying_count': reported_count('retrying_count', diagnostic.result_retrying_count) if diagnostic else None,
+            'quarantined_count': reported_count('quarantined_count', diagnostic.result_quarantined_count) if diagnostic else None,
+            'queue_full': diagnostic.result_queue_full if diagnostic and type(raw_queue.get('queue_full')) is bool else None,
             'last_send_error': result_last_send_error,
         },
     }
@@ -2901,6 +2950,11 @@ def select_deployment_release(channel, release_id=''):
         ordered = [item for item in ordered if _deployment_release_is_usable(item, trust_bundle)] if trust_bundle else []
         if not ordered:
             raise ValidationError('Nao ha release stable compativel com o trust bundle publicado.')
+        if release_id:
+            selected = next((item for item in ordered if str(item.pk) == release_id), None)
+            if selected is None:
+                raise ValidationError('Release stable selecionada nao esta disponivel para deployment manual.')
+            return selected
         return ordered[0]
     raise ValidationError('Canal invalido para deployment.')
 
@@ -2929,7 +2983,9 @@ def _deployment_heartbeat(deployment):
     if (not endpoint or not endpoint.machine_id or
             AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
         return None
-    enrolled_at = deployment.used_at or deployment.created_at
+    metadata = deployment.metadata or {}
+    enrolled_at = ((deployment.used_at if metadata.get('remote_install_job_id') else deployment.installing_at)
+                   or deployment.used_at or deployment.created_at)
     return InventorySnapshot.objects.filter(
         machine=endpoint,
         received_at__gte=enrolled_at,
@@ -2953,7 +3009,10 @@ def serialize_deployment_status(deployment):
     elif deployment.status == AgentDeploymentToken.STATUS_COMPLETED:
         ui_status = 'confirmed' if heartbeat else 'confirmation_pending'
     elif deployment.status == AgentDeploymentToken.STATUS_INSTALLING:
-        ui_status = 'installing'
+        metadata = deployment.metadata or {}
+        ui_status = ('confirmation_pending' if metadata.get('reported_service_status') == 'Running'
+                     and metadata.get('communication_status') in ('awaiting_heartbeat', 'heartbeat_timeout')
+                     else 'installing')
     else:
         ui_status = 'waiting'
 
@@ -2976,6 +3035,7 @@ def serialize_deployment_status(deployment):
     return {
         'id': str(deployment.pk),
         'status': deployment.status,
+        'batch_id': (deployment.metadata or {}).get('batch_id', ''),
         'ui_status': ui_status,
         'failure_code': (deployment.failure_code if deployment.failure_code in SAFE_DEPLOYMENT_FAILURE_CODES else 'BOOTSTRAP_FAILED') if ui_status == 'failed' else '',
         'failure_message': failure_messages.get(deployment.failure_code, 'A instalacao falhou. Revise o codigo e os logs locais antes de tentar novamente.') if ui_status == 'failed' else '',
@@ -2995,7 +3055,7 @@ def serialize_deployment_status(deployment):
             'machine_id': endpoint.machine_id,
             'agent_version': endpoint.agent_version,
             'service_status': service_status,
-            'last_heartbeat_at': _iso_or_none(endpoint.last_seen_at),
+            'last_heartbeat_at': _iso_or_none(endpoint.inventory_snapshots.filter(raw_payload__snapshot_source='heartbeat').order_by('-received_at').values_list('received_at', flat=True).first()),
             'url': reverse('endpoint-detail', args=[endpoint.pk]),
         } if endpoint else None),
     }
@@ -3037,6 +3097,46 @@ def deployment_create(request):
             (trust_bundle.valid_until and trust_bundle.valid_until <= now) or
             not trust_bundle.bundle_url or not trust_bundle.bundle_sha256):
         return JsonResponse({'error': 'trust_bundle_unavailable', 'detail': 'O trust bundle publicado esta fora da validade ou incompleto.'}, status=409)
+    kind = (request.POST.get('install_kind') or '').strip()
+    if kind not in ('', 'ad', 'external'):
+        return _deployment_json_response({'error': 'invalid_kind'}, status=400)
+    if kind:
+        name = (request.POST.get('name') or '').strip()
+        notes = (request.POST.get('notes') or '').strip()
+        try:
+            duration = int(request.POST.get('expires_hours' if kind == 'ad' else 'expires_minutes') or 0)
+            limit = int(request.POST.get('max_uses') or 1) if kind == 'ad' else 1
+        except ValueError:
+            return _deployment_json_response({'error': 'invalid_limits', 'detail': 'Validade ou limite invalido.'}, status=400)
+        if not name or len(name) > 150 or not 1 <= duration <= (72 if kind == 'ad' else 1440) or not 1 <= limit <= 100:
+            return _deployment_json_response({'error': 'invalid_limits', 'detail': 'Informe nome, validade e limite validos.'}, status=400)
+        expires = now + (timedelta(hours=duration) if kind == 'ad' else timedelta(minutes=duration))
+        if kind == 'ad':
+            domain = (request.POST.get('allowed_domain') or '').strip().lower().rstrip('.')
+            if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,149}', domain):
+                return _deployment_json_response({'error': 'invalid_domain', 'detail': 'Informe um dominio valido.'}, status=400)
+            batch = AgentDeploymentBatch.objects.create(name=name, release=release, created_by=request.user,
+                allowed_domain=domain, expires_at=expires, max_uses=limit, notes=notes)
+            create_audit_event(event_type='agent.deployment.batch_created', title='Lote manual criado',
+                description='Lote manual limitado criado pelo operador.', actor_type=AuditEvent.ACTOR_USER,
+                actor_name=request.user.get_username(), metadata={'batch_id': str(batch.pk), 'release_id': str(release.pk),
+                'max_uses': limit, 'allowed_domain': domain}, request=request)
+            return _deployment_json_response({'status': 'ok', 'kind': 'ad', 'batch': {'id': str(batch.pk),
+                'expires_at': expires.isoformat(), 'release_version': release.version, 'remaining': limit,
+                'issue_url': reverse('api-deployment-batch-issue', kwargs={'pk': batch.pk}),
+                'revoke_url': reverse('api-deployment-batch-revoke', kwargs={'pk': batch.pk})}}, status=201)
+        with transaction.atomic():
+            manual, manual_token = AgentManualValidationToken.create_with_token(name=name, expires_at=expires, notes=notes)
+            deployment, token = AgentDeploymentToken.create_with_token(platform=platform, channel=channel, release=release,
+                created_by=request.user, expires_at=expires, metadata={'manual_install_kind': 'external',
+                'manual_validation_id': str(manual.pk), 'trust_bundle_id': str(trust_bundle.pk), 'name': name})
+            manual.deployment = deployment
+            manual.save(update_fields=['deployment'])
+        create_audit_event(event_type='agent.deployment.created', title='Deployment externo criado',
+            description='Deployment externo com validação manual criada.', actor_type=AuditEvent.ACTOR_USER,
+            actor_name=request.user.get_username(), metadata={'deployment_id': str(deployment.pk), 'release_id': str(release.pk)}, request=request)
+        return _deployment_json_response({'status': 'ok', 'kind': 'external', 'manual_token': manual_token,
+            'deployment': serialize_deployment(deployment, command=build_deployment_command(request, {'token': token}))}, status=201)
     deployment, token = AgentDeploymentToken.create_with_token(
         platform=platform,
         channel=channel,
@@ -3071,10 +3171,73 @@ def deployment_create(request):
     return _deployment_json_response({'status': 'ok', 'deployment': serialize_deployment(deployment, command=command)}, status=201)
 
 
+@require_POST
+@transaction.atomic
+def deployment_batch_issue(request, pk):
+    if not is_nightowl_technical_user(request.user):
+        return _deployment_json_response({'error': 'forbidden'}, status=403)
+    try:
+        request_id = str(uuid.UUID(request.POST.get('request_id', '')))
+    except (ValueError, AttributeError):
+        return _deployment_json_response({'error': 'invalid_request_id'}, status=400)
+    batch = get_object_or_404(AgentDeploymentBatch.objects.select_for_update(), pk=pk, created_by=request.user)
+    if AgentDeploymentToken.objects.filter(metadata__batch_id=str(batch.pk), metadata__issue_request_id=request_id).exists():
+        return _deployment_json_response({'error': 'duplicate_request', 'detail': 'Esta emissão já foi processada; consulte o acompanhamento.'}, status=409)
+    now = timezone.now()
+    if not batch.is_active or batch.expires_at <= now or batch.used_count >= batch.max_uses:
+        return _deployment_json_response({'error': 'batch_unavailable', 'detail': 'Lote expirado, revogado ou sem usos disponíveis.'}, status=409)
+    release = AgentRelease.objects.select_for_update().get(pk=batch.release_id)
+    trust = _usable_deployment_trust_bundle()
+    if trust:
+        trust = AgentReleaseTrustBundle.objects.select_for_update().get(pk=trust.pk)
+    if (not trust or trust.status != AgentReleaseTrustBundle.STATUS_PUBLISHED or
+            (trust.valid_from and trust.valid_from > now) or (trust.valid_until and trust.valid_until <= now) or
+            release.status not in ('published', 'paused') or not _deployment_release_is_usable(release, trust)):
+        return _deployment_json_response({'error': 'release_unavailable', 'detail': 'Release ou trust indisponível.'}, status=409)
+    base = getattr(settings, 'NIGHTOWL_PUBLIC_URL', '').strip().rstrip('/') or request.build_absolute_uri('/').rstrip('/')
+    if not base.lower().startswith('https://'):
+        return _deployment_json_response({'error': 'https_required'}, status=409)
+    deployment, token = AgentDeploymentToken.create_with_token(channel=release.channel, release=release,
+        created_by=request.user, expires_at=min(batch.expires_at, now + timedelta(minutes=30)),
+        metadata={'batch_id': str(batch.pk), 'issue_request_id': request_id, 'allowed_domain': batch.allowed_domain,
+                  'release_version': release.version, 'trust_bundle_id': str(trust.pk)})
+    batch.used_count += 1
+    batch.save(update_fields=['used_count'])
+    create_audit_event(event_type='agent.deployment.batch_issued', title='Deployment individual emitido',
+        description='Comando individual emitido pelo operador.', actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(), metadata={'batch_id': str(batch.pk), 'deployment_id': str(deployment.pk)}, request=request)
+    return _deployment_json_response({'deployment': serialize_deployment(deployment, command=build_deployment_command(request, {'token': token})),
+                                      'remaining': batch.max_uses - batch.used_count}, status=201)
+
+
+@require_POST
+@transaction.atomic
+def deployment_batch_revoke(request, pk):
+    if not is_nightowl_technical_user(request.user):
+        return _deployment_json_response({'error': 'forbidden'}, status=403)
+    batch = get_object_or_404(AgentDeploymentBatch.objects.select_for_update(), pk=pk, created_by=request.user)
+    batch.is_active = False
+    batch.save(update_fields=['is_active'])
+    create_audit_event(event_type='agent.deployment.batch_revoked', title='Lote revogado',
+        description='Emissões futuras do lote foram revogadas.', actor_type=AuditEvent.ACTOR_USER,
+        actor_name=request.user.get_username(), metadata={'batch_id': str(batch.pk)}, request=request)
+    return _deployment_json_response({'status': 'revoked'})
+
+
 def deployment_history(request):
     if not is_nightowl_technical_user(getattr(request, 'user', None)):
         return _deployment_json_response({'error': 'forbidden'}, status=403)
-    deployments = AgentDeploymentToken.objects.select_related('release', 'endpoint').order_by('-created_at')[:20]
+    deployments = AgentDeploymentToken.objects.select_related('release', 'endpoint').order_by('-created_at')
+    batch_id = (request.GET.get('batch_id') or '').strip()
+    if batch_id:
+        try:
+            batch_id = str(uuid.UUID(batch_id))
+        except ValueError:
+            return _deployment_json_response({'error': 'invalid_batch'}, status=400)
+        batch = get_object_or_404(AgentDeploymentBatch, pk=batch_id, created_by=request.user)
+        deployments = deployments.filter(metadata__batch_id=str(batch.pk))[:100]
+    else:
+        deployments = deployments[:20]
     return _deployment_json_response({'deployments': [serialize_deployment_status(item) for item in deployments]})
 
 
@@ -3113,6 +3276,48 @@ def _update_policy_message(reason_code):
     return messages_by_reason.get(reason_code or '', 'Este endpoint nao possui uma release autorizada para atualizacao neste momento.')
 
 
+def operational_action_availability(endpoint, user):
+    from agents import administrative_actions as admin
+    from agents.internal_jobs import internal_capability
+    from agents.operational_actions import authorize
+    actions = ('flush_dns', 'query_service', 'gpupdate', 'start_service', 'stop_service', 'restart_service')
+    result = {name: {'enabled': False, 'services': []} for name in actions}
+    if (not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False) or
+            endpoint.status != AgentMachine.STATUS_ONLINE or not endpoint.machine_id or
+            AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
+        return result
+    scopes = getattr(settings, 'NIGHTOWL_ADMIN_ACTION_SCOPES', {})
+    scope = scopes.get(str(endpoint.pk), {}) if isinstance(scopes, dict) else {}
+    scope = scope if isinstance(scope, dict) else {}
+    for name in actions:
+        try:
+            authorize(user, name)
+            if not internal_capability(endpoint, f'operational_action:{name}:1'):
+                continue
+            if name in admin.PERMISSIONS:
+                if not getattr(settings, 'NIGHTOWL_ADMIN_ACTIONS_ENABLED', False):
+                    continue
+                if name == 'gpupdate':
+                    if scope.get(name) is not True:
+                        continue
+                else:
+                    allowed = scope.get(name)
+                    if not isinstance(allowed, list):
+                        continue
+                    for service in allowed:
+                        try:
+                            admin.validate_parameters(name, {'service_name': service})
+                            result[name]['services'].append(service)
+                        except ValueError:
+                            continue
+                    if not result[name]['services']:
+                        continue
+            result[name]['enabled'] = True
+        except PermissionError:
+            continue
+    return result
+
+
 def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention, endpoint_sector, endpoint_type, endpoint_alerts, audit_events, related_tickets, *, request=None):
     update_decision = evaluate_agent_update_policy(endpoint, manual=False)
     recommended_version = update_decision.target_version or latest_agent_version()
@@ -3120,6 +3325,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     user = getattr(request, 'user', None)
     can_view_admin = bool(user and getattr(user, 'is_authenticated', False) and (getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False)))
     diagnostic = _endpoint_diagnostic(endpoint)
+    latest_heartbeat = endpoint.inventory_snapshots.filter(raw_payload__snapshot_source='heartbeat').order_by('-received_at').first()
     raw_payload = ensure_dict(snapshot.raw_payload if snapshot else {})
     raw_agent = ensure_dict(raw_payload.get('agent'))
     system = _normalize_collection_dict(_raw_collection(snapshot, 'system'))
@@ -3146,7 +3352,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'updater_version': raw_agent.get('updater_version') or raw_payload.get('updater_version') or '',
         'install_mode': raw_agent.get('install_mode') or ('service' if (endpoint.agent_mode or '').lower() == 'service' else ''),
         'service_name': raw_agent.get('service_name') or endpoint.agent_task_name or 'NightOwlAgent',
-        'service_status': raw_agent.get('service_status') or ('Running' if endpoint.status == AgentMachine.STATUS_ONLINE and (endpoint.agent_mode or '').lower() == 'service' else ''),
+        'service_status': raw_agent.get('service_status') or '',
         'service_start_type': raw_agent.get('service_start_type') or '',
         'service_account': raw_agent.get('service_account') or '',
         'install_path': endpoint.agent_install_path or raw_agent.get('install_path') or r'C:\ProgramData\NightOwl\Agent',
@@ -3158,7 +3364,8 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'jobs_pull_url': raw_agent.get('jobs_pull_url') or '',
         'jobs_result_url': raw_agent.get('jobs_result_url') or '',
         'collection_endpoints': raw_agent.get('collection_endpoints') or {},
-        'last_heartbeat_at': _iso_or_none(endpoint.last_seen_at),
+        'last_heartbeat_at': _iso_or_none(latest_heartbeat.received_at if latest_heartbeat else None),
+        'last_communication_at': _iso_or_none(endpoint.last_seen_at),
         'last_inventory_at': full_inventory.get('collected_at') or system.get('collected_at') or hardware.get('collected_at') or network.get('collected_at'),
         'last_software_inventory_at': software_collection.get('collected_at') or full_inventory.get('collected_at'),
         'last_security_inventory_at': security_collection.get('collected_at') or full_inventory.get('collected_at'),
@@ -3199,6 +3406,15 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'biosReleaseDate': bios.get('release_date') or hardware.get('bios_release_date') or '',
             'motherboard': hardware.get('motherboard') or '',
             'cpuManufacturer': hardware.get('cpu_manufacturer') or '',
+            'cpuDetails': ensure_dict(hardware.get('cpu')),
+            'memoryDetails': ensure_dict(hardware.get('memory')),
+            'baseboardDetails': ensure_dict(hardware.get('baseboard')),
+            'batteryDetails': ensure_dict(hardware.get('battery')),
+            'systemSku': hardware.get('system_sku') or '',
+            'systemFamily': hardware.get('system_family') or '',
+            'oemProduct': ensure_dict(hardware.get('oem_product')),
+            'hardwareCollectedAt': hardware.get('detailed_collected_at') or hardware.get('collected_at'),
+            'sectionStates': ensure_dict(raw_payload.get('inventory_observations')),
             'physicalCores': hardware.get('physical_cores') or '',
             'logicalProcessors': hardware.get('logical_processors') or '',
             'tpmPresent': hardware.get('tpm_present'),
@@ -3211,8 +3427,10 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             'dnsServers': network.get('dns_servers') or [],
             'adapters': network_adapters,
             'macs': macs,
-            'uptime': format_uptime(system.get('uptime_seconds') or (snapshot.uptime_seconds if snapshot else None)),
-            'lastFullInventory': full_inventory.get('collected_at') or system.get('collected_at') or hardware.get('collected_at'),
+            'uptime': format_uptime(latest_heartbeat.uptime_seconds if latest_heartbeat else None),
+            'uptimeObservedAt': _iso_or_none(latest_heartbeat.received_at if latest_heartbeat else None),
+            'lastFullInventory': full_inventory.get('collected_at') if full_inventory.get('collection_scope') != 'scheduled' else None,
+            'networkCollectedAt': network.get('collected_at'),
             'raw': {
                 'system': system,
                 'hardware': hardware,
@@ -3358,6 +3576,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
 
     return {
         'data_source': 'real',
+        'operational_actions': operational_action_availability(endpoint, user),
         'endpoint': {
             'id': str(endpoint.id),
             'machine_id': endpoint.machine_id or str(endpoint.id),
@@ -3392,6 +3611,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
         'trusted_release_keys_bundle': _trust_bundle_payload(latest_trust_bundle),
         'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
+        'live_monitoring_allowed': bool(can_view_technical and user and user.has_perm('agents.view_agentmachine') and user.has_perm('agents.view_endpointperformancesample')),
         'uninstall_request': serialize_uninstall_request(uninstall_request),
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
@@ -3403,6 +3623,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             recommended_version,
             can_view_technical=can_view_technical,
             can_view_admin=can_view_admin,
+            last_heartbeat=latest_heartbeat.received_at if latest_heartbeat else None,
         ),
         'inventory': inventory,
         'hardware': hardware or None,
@@ -3492,6 +3713,78 @@ def endpoint_detail(request, pk):
         'patch_rows': build_endpoint_patch_rows(endpoint),
         'task_rows': build_endpoint_task_rows(endpoint),
     }
+    context['winrm_recovery_available'] = bool(
+        request.is_secure() and request.user.is_authenticated and request.user.is_active
+        and (request.user.is_staff or request.user.is_superuser)
+        and endpoint.is_active and not endpoint.has_terminal_lifecycle and endpoint.machine_id
+        and endpoint.agent_token_hash and endpoint.agent_version and endpoint.fqdn
+        and endpoint.last_seen_at and endpoint.last_seen_at < timezone.now() - timedelta(minutes=5)
+        and AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() == 1
+        and endpoint.status == AgentMachine.STATUS_OFFLINE
+    )
+    context['winrm_observability_available'] = bool(
+        request.is_secure() and request.user.is_authenticated and request.user.is_active
+        and (request.user.is_staff or request.user.is_superuser) and endpoint.is_active
+    )
+    if context['winrm_observability_available']:
+        from dashboard.models import RemoteInstallJob
+        raw = snapshot.raw_payload if snapshot and isinstance(snapshot.raw_payload, dict) else {}
+        context['winrm_local'] = (raw.get('collections') or {}).get('winrm') or {}
+        received_at = parse_datetime(context['winrm_local'].get('received_at', ''))
+        context['winrm_local_stale'] = (endpoint.status != AgentMachine.STATUS_ONLINE or not received_at
+            or received_at < timezone.now() - timedelta(hours=26))
+        local_data = context['winrm_local'].get('data')
+        local_data = local_data if isinstance(local_data, dict) else {}
+        service = local_data.get('service') if isinstance(local_data.get('service'), dict) else {}
+        listeners = local_data.get('listeners') if isinstance(local_data.get('listeners'), list) else []
+        context['winrm_local_state'] = ('não verificado' if not local_data else
+            'serviço e listener informados' if service.get('state') == 'Running'
+            and any(str(item.get('enabled')).lower() == 'true' for item in listeners if isinstance(item, dict))
+            else 'indisponível ou configuração incompleta')
+        last_check = RemoteInstallJob.objects.filter(endpoint=endpoint, diagnostics__operation='winrm_connectivity').order_by('-created_at').first()
+        context['winrm_remote'] = (last_check.diagnostics or {}).get('result', {}) if last_check else {}
+        last_recovery = RemoteInstallJob.objects.filter(endpoint=endpoint, diagnostics__operation='offline_recovery').order_by('-created_at').first()
+        context['winrm_authentication'] = 'validada na última recuperação' if last_recovery and last_recovery.status == 'COMPLETED' else 'não verificada'
+        context['winrm_authentication_at'] = last_recovery.finished_at if last_recovery else None
+    from agents.terminal_sessions import authorize as authorize_terminal, validate_mode as validate_terminal_mode, enabled as terminal_enabled
+    from agents.internal_jobs import internal_capability
+    context['terminal_available'] = False
+    context['terminal_admin_auth_available'] = False
+    if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False):
+        try:
+            authorize_terminal(request.user, endpoint)
+            validate_terminal_mode(request.user, endpoint, 'admin_auth')
+            if not internal_capability(endpoint, 'remote_terminal_transport:1'):
+                raise ValueError('transport_capability_unconfirmed')
+            context['terminal_admin_auth_available'] = True
+        except (ValueError, PermissionError):
+            pass
+    if not context['terminal_admin_auth_available'] and terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
+        try:
+            authorize_terminal(request.user, endpoint)
+            validate_terminal_mode(request.user, endpoint, 'conpty')
+            context['terminal_available'] = True
+        except (ValueError, PermissionError):
+            pass
+    # Page-only eligibility hints; dispatch repeats every authorization check.
+    from agents.script_library import CATALOG as approved_script_catalog
+    from agents.operational_actions import validate_dispatch as validate_operational_dispatch
+    script_availability = {}
+    for script in approved_script_catalog.values():
+        key = f'{script.script_id}:{script.version}:{script.sha256}'
+        script_availability[key] = False
+        if endpoint.status != AgentMachine.STATUS_ONLINE:
+            continue
+        candidate = AgentJob(endpoint=endpoint, job_type='operational_action', created_by=request.user.get_username(),
+            timeout_seconds=15, payload={'action_id': 'run_approved_script', 'action_version': 1,
+                'parameters': {'script_id': script.script_id, 'script_version': script.version,
+                    'sha256': script.sha256, 'parameters': {}}})
+        try:
+            validate_operational_dispatch(candidate, creating=True)
+            script_availability[key] = True
+        except (ValueError, PermissionError):
+            pass
+    context['approved_script_availability'] = script_availability
     context['endpoint_detail_payload'] = build_endpoint_detail_payload(
         endpoint,
         snapshot,
@@ -3883,7 +4176,7 @@ def endpoint_job_create(request, pk):
         'configure_telemetry': AgentJob.TYPE_CONFIGURE_TELEMETRY,
     }
     selected_type = action_map.get(action) or action_map.get(job_type) or job_type
-    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES}
+    allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES} - {'collect_services', 'install_software', 'operational_action'}
     if selected_type not in allowed_types:
         return JsonResponse(
             {
@@ -3892,6 +4185,10 @@ def endpoint_job_create(request, pk):
             },
             status=400,
         )
+
+    endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint.pk)
+    if endpoint.jobs.filter(status__in=('queued','sent','running')).count() >= 50:
+        return JsonResponse({'error':'endpoint_job_queue_full','detail':'Limite de 50 jobs pendentes neste endpoint.'},status=409)
 
     lifecycle_types = {
         AgentJob.TYPE_UPDATE_AGENT,
@@ -3931,7 +4228,7 @@ def endpoint_job_create(request, pk):
         payload['target'] = request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname)
         payload['count'] = 2
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
-        payload['lines'] = 120
+        payload['max_lines'] = 120
     elif selected_type == AgentJob.TYPE_UPDATE_AGENT:
         selected_release_id = (request.POST.get('release_id') or request.POST.get('agent_release_id') or '').strip()
         force_update = (request.POST.get('force') or '').strip().lower() in {'1', 'true', 'on', 'yes'}
@@ -4646,7 +4943,7 @@ def agent_install(request):
                     severity=AuditEvent.SEVERITY_INFO,
                     metadata={
                         'manual_validation_token_id': str(created_manual_validation.id),
-                        'prefix': created_manual_validation.prefix,
+                        'prefix': created_manual_validation.prefix[:10],
                     },
                     request=request,
                 )

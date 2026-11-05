@@ -487,6 +487,7 @@ try {{
     if ($enrollmentToken -notmatch '^deploy_[A-Za-z0-9_-]{{20,200}}$') {{ Stop-BeforeInstaller 28 }}
     $childScript = @'
 $ErrorActionPreference = 'Stop'
+$env:NIGHTOWL_INSTALLER_SILENT = '1'
 $token = [Console]::In.ReadLine()
 if ($token -notmatch '^deploy_[A-Za-z0-9_-]{{20,200}}$') {{ exit 28 }}
 & '__INSTALLER_PATH__' -EnrollmentToken $token -ServerUrl '{base}' -PackageUrl '{package}' -TrustedPublicKeysPath '__TRUST_PATH__' -ExpectedVersion '{contract['version']}' -ExpectedChannel '{contract['channel']}' -ExpectedPackageSha256 '{contract['package_sha256']}' -ExpectedGitCommit '{contract['git_commit']}' -InstallAsService -RunCheck -NoGui -NonInteractive
@@ -614,6 +615,56 @@ def preview_install_confirmation(job_id):
                   heartbeat_snapshot_id=str(heartbeat.pk) if heartbeat else None)
     result['eligible'] = not result['reasons']
     return result
+
+
+@transaction.atomic
+def reconcile_remote_install_heartbeat(machine, snapshot):
+    raw = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    if raw.get('snapshot_source') != 'heartbeat' or not machine.machine_id or raw.get('machine_id') != machine.machine_id:
+        return
+    deployments = AgentDeploymentToken.objects.select_for_update().select_related('release').filter(
+        endpoint=machine, status=AgentDeploymentToken.STATUS_FAILED, failure_code='remote_install_unverified',
+        expires_at__gt=timezone.now(), used_at__lt=snapshot.received_at).order_by('-created_at', '-pk')
+    for deployment in deployments:
+        metadata = deployment.metadata or {}
+        job_id = metadata.get('remote_install_job_id')
+        if not job_id or raw.get('agent_version') != deployment.release.version:
+            continue
+        if AgentDeploymentToken.objects.filter(endpoint=machine, created_at__gt=deployment.created_at).exists():
+            continue
+        try:
+            job = RemoteInstallJob.objects.select_for_update().filter(pk=job_id, endpoint=machine).first()
+        except (ValueError, TypeError):
+            continue
+        if not job or RemoteInstallJob.objects.filter(target_fqdn__iexact=job.target_fqdn, created_at__gt=job.created_at).exists():
+            continue
+        proof = preview_install_confirmation(job.pk)
+        if not proof['eligible']:
+            continue
+        deployment.mark_completed(machine)
+        deployment.failure_code = ''; deployment.failure_message = ''; deployment.failed_at = None
+        deployment.metadata = {**metadata, 'communication_status':'operational', 'heartbeat_snapshot_id':str(snapshot.pk)}
+        deployment.save(update_fields=['failure_code','failure_message','failed_at','metadata'])
+        job.status = job.stage = 'COMPLETED'; job.error_code = ''
+        job.diagnostics = {**(job.diagnostics or {}), 'outcome':'SUCCESS', 'late_heartbeat_reconciled':True,
+            'heartbeat_snapshot_id':str(snapshot.pk)}
+        job.finished_at = timezone.now(); job.save(update_fields=['status','stage','error_code','diagnostics','finished_at','updated_at'])
+        from agents.views import mark_machine_installed_from_deployment
+        from agents.audit import create_audit_event
+        mark_machine_installed_from_deployment(machine, deployment)
+        create_audit_event(event_type='agent.deployment.completed', title='Remote deployment completed',
+            description='Late heartbeat confirmed installation.', endpoint=machine,
+            metadata={'deployment_id':str(deployment.pk), 'remote_install_job_id':str(job.pk), 'late_heartbeat':True})
+        break
+
+
+def _check_installer_exit(code):
+    if code == 2:
+        raise InstallFailure('INSTALL_CONFIRMATION_PENDING', installed=True)
+    if code == 25:
+        raise InstallFailure('NIGHTOWL_INSTALLATION_DETECTED')
+    if code != 0:
+        raise InstallFailure('INSTALLER_EXIT_NONZERO')
 
 
 def run_remote_install(job_id, username, password):
@@ -748,10 +799,7 @@ def run_remote_install(job_id, username, password):
             raise InstallFailure('INSTALLER_RESULT_UNKNOWN')
         if not installer_finished or code != installer_exit_code:
             raise InstallFailure('INSTALLER_RESULT_UNKNOWN')
-        if code == 25:
-            raise InstallFailure('NIGHTOWL_INSTALLATION_DETECTED')
-        if code != 0:
-            raise InstallFailure('INSTALLER_EXIT_NONZERO')
+        _check_installer_exit(code)
         installed = True
         stage = 'VALIDATING_SERVICE'
         _update(job_id, 'VALIDATING_SERVICE')

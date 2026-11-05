@@ -254,6 +254,17 @@ class CapacityDashboardTests(TestCase):
         self.assertFalse(any(query['sql'].lstrip().upper().startswith(('INSERT ', 'UPDATE ', 'DELETE '))
                              for query in queries))
 
+    def test_process_observation_survives_intervening_metric_only_windows(self):
+        self.login()
+        at = timezone.now() - timedelta(minutes=5)
+        self.sample(collected_at=at)
+        self.sample(collected_at=timezone.now() - timedelta(minutes=1), process_consumers={})
+        detail = self.client.get(self.detail_url).json()
+        self.assertEqual(detail['processes'][0]['name'], 'synthetic-worker')
+        self.assertEqual(detail['processes_observed_at'], at.isoformat())
+        overview = self.client.get(self.overview_url).json()
+        self.assertEqual(overview['endpoints'][0]['processes'][0]['name'], 'synthetic-worker')
+
     def test_missing_inventory_and_telemetry_degrade_gracefully(self):
         self.login()
         overview = self.client.get(self.overview_url).json()

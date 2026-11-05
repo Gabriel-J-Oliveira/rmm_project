@@ -1,0 +1,31 @@
+<section class="jobs-tab-panel" data-task-tab-panel="automations" data-automations-root
+    data-url="{% url 'job-automations' %}" data-targets-url="{% url 'job-automation-targets' %}" hidden>
+    <header class="section-heading"><h2>Agendamentos de jobs</h2><span role="status" data-automation-health>Scheduler: sem leitura</span>
+        <button type="button" class="refresh-button" data-automation-refresh title="Atualizar agendamentos"><i data-lucide="refresh-cw"></i></button></header>
+    <p role="status" data-automation-message></p>
+    <form class="automation-form" data-automation-form>
+        {% csrf_token %}
+        <input type="hidden" name="id"><input type="hidden" name="revision">
+        <label>Nome<input name="name" required maxlength="120"></label>
+        <label>Job<select name="job_type"><option value="force_inventory">Inventario completo</option><option value="collect_disks">Discos</option><option value="collect_security">Seguranca</option><option value="collect_software">Software instalado</option><option value="collect_logs">Logs</option><option value="ping">Ping do endpoint</option><option value="windows_update_scan">Consulta Windows Update</option></select></label>
+        <label>Execucao<select name="kind"><option value="immediate">Imediata</option><option value="once">Data e horario</option><option value="daily">Diaria</option><option value="weekly">Semanal</option><option value="monthly">Mensal</option><option value="interval">Intervalo</option></select></label>
+        <label data-schedule-time>Inicio<input type="datetime-local" name="starts_at" required></label>
+        <label>Fuso IANA<input name="timezone" value="America/Sao_Paulo" required maxlength="80" list="automation-timezones"><datalist id="automation-timezones"><option value="America/Sao_Paulo"><option value="UTC"></datalist></label>
+        <label data-schedule-time>Termino opcional<input type="datetime-local" name="ends_at"></label>
+        <label data-recurrence="monthly" hidden>Dia do mes<input type="number" name="monthday" min="1" max="31" value="1"></label>
+        <label data-recurrence="interval" hidden>Intervalo (minutos)<input type="number" name="minutes" min="15" max="43200" value="60"></label>
+        <fieldset data-recurrence="weekly" hidden><legend>Dias da semana</legend><div class="automation-weekdays">
+            <label><input type="checkbox" name="weekday" value="0">Seg</label><label><input type="checkbox" name="weekday" value="1">Ter</label><label><input type="checkbox" name="weekday" value="2">Qua</label><label><input type="checkbox" name="weekday" value="3">Qui</label><label><input type="checkbox" name="weekday" value="4">Sex</label><label><input type="checkbox" name="weekday" value="5">Sab</label><label><input type="checkbox" name="weekday" value="6">Dom</label>
+        </div></fieldset>
+        <label>Validade (minutos)<input type="number" name="validity" min="1" max="1440" value="15" required></label>
+        <label>Endpoint offline<select name="offline_policy"><option value="expire">Expirar se offline</option><option value="wait">Aguardar dentro da validade</option><option value="skip">Ignorar se offline</option></select></label>
+        <label data-parameter="collect_logs" hidden>Linhas de log<input type="number" name="max_lines" min="1" max="500" value="120"></label>
+        <label data-parameter="ping" hidden>Quantidade de pings<input type="number" name="count" min="1" max="10" value="2"></label>
+        <label>Buscar endpoint<input type="search" name="target_query" data-automation-search></label>
+        <label class="automation-targets">Endpoints <span data-automation-selected>0 / 50</span><select name="targets" multiple size="6" required></select></label>
+        <div class="filter-actions automation-actions"><button type="submit"><i data-lucide="calendar-plus"></i><span data-automation-submit>Criar execucao</span></button><button type="button" data-automation-reset><i data-lucide="x"></i>Limpar</button></div>
+    </form>
+    <div class="table-wrap"><table class="endpoint-table"><thead><tr><th>Automacao</th><th>Estado</th><th>Job / endpoints</th><th>Recorrencia / fuso</th><th>Proxima execucao</th><th>Acoes</th></tr></thead><tbody data-automation-definitions></tbody></table></div>
+    <header class="section-heading"><h3>Ocorrencias e resultados</h3><select aria-label="Filtrar historico por automacao" data-automation-history><option value="">Todas</option></select></header>
+    <div class="table-wrap"><table class="endpoint-table"><thead><tr><th>Automacao / revisao</th><th>Endpoint</th><th>Horario previsto</th><th>Validade</th><th>Estado / motivo</th><th>Resultado</th><th>Acao</th></tr></thead><tbody data-automation-occurrences></tbody></table></div>
+</section>

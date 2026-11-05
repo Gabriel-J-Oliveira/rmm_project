@@ -15,7 +15,10 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _timer;
     private readonly Icon _icon;
     private AgentLocalState _state = AgentLocalState.Load();
-    private string _serviceStatus = "Running";
+    private string _serviceStatus = "Unknown";
+    private readonly ServiceObservation _serviceObservation = new();
+    private readonly long _observationStarted = Stopwatch.GetTimestamp();
+    private readonly TerminalConsentPresenter _terminalConsent;
 
     public TrayApplicationContext()
     {
@@ -24,10 +27,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             ContextMenuStrip = BuildMenu(),
             Icon = _icon,
-            Text = BuildTooltip("Running"),
+            Text = BuildTooltip(_serviceStatus),
             Visible = true
         };
         _notifyIcon.DoubleClick += (_, _) => ShowStatusWindow();
+        _terminalConsent = new TerminalConsentPresenter();
 
         _timer = new System.Windows.Forms.Timer
         {
@@ -38,12 +42,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _timer.Start();
     }
 
-    public static bool IsServiceRunning()
+    public static bool IsServicePresent()
     {
         try
         {
             using ServiceController service = new(NightOwlPaths.ServiceName);
-            return service.Status == ServiceControllerStatus.Running;
+            _ = service.Status;
+            return true;
         }
         catch
         {
@@ -56,6 +61,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             _timer.Stop();
+            _terminalConsent.Dispose();
             _timer.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
@@ -70,6 +76,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ContextMenuStrip menu = new();
         menu.Items.Add("Abrir NightOwl", null, (_, _) => OpenNightOwl());
         menu.Items.Add("Status do agente", null, (_, _) => ShowStatusWindow());
+        menu.Items.Add("Encerrar terminal remoto", null, (_, _) => _terminalConsent.Revoke());
         menu.Items.Add("Atualizar agente", null, (_, _) => UpdateAgent());
         menu.Items.Add("Reiniciar agente", null, (_, _) => RestartAgentService());
         menu.Items.Add("Desinstalar NightOwl", null, (_, _) => UninstallAgent());
@@ -90,7 +97,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         using (ServiceController currentService = service!)
         {
             _serviceStatus = currentService.Status.ToString();
-            if (currentService.Status != ServiceControllerStatus.Running)
+            var observation = _serviceObservation.Observe(_serviceStatus, Stopwatch.GetElapsedTime(_observationStarted));
+            if (observation.Changed)
+                TrayLog.Write(_serviceStatus == "Running" ? "tray.service.running" : "tray.service.waiting",
+                    "Estado do servico NightOwlAgentDotNet.", new { status = _serviceStatus });
+            if (observation.Exit)
             {
                 TrayLog.Write("tray.service.stopped", "Servico NightOwlAgentDotNet nao esta em execucao.", new { status = _serviceStatus });
                 ExitTray();
@@ -98,7 +109,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
         }
 
-        TrayLog.Write("tray.service.running", "Servico NightOwlAgentDotNet em execucao.");
         _notifyIcon.Text = BuildTooltip(_serviceStatus);
     }
 
@@ -198,6 +208,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private bool TryGetService(out ServiceController? service)
     {
+        service = null;
         try
         {
             service = new ServiceController(_state.ServiceName);
@@ -206,6 +217,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         catch
         {
+            service?.Dispose();
             service = null;
             return false;
         }

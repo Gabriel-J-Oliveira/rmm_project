@@ -11,6 +11,124 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--ci-terminal-facts", StringComparer.Ordinal))
+    {
+        var facts = TerminalUserIdentity.CurrentFacts();
+        Console.WriteLine("CI_TERMINAL_FACTS=" + JsonSerializer.Serialize(new {
+            interactive_session = facts.SessionId > 0, facts.Interactive, facts.Elevated,
+            facts.Administrator, facts.Integrity, facts.DangerousPrivileges,
+            service_identity = facts.Sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20"
+        }));
+        return;
+    }
+    if (args.Contains("--winrm-contract", StringComparer.Ordinal))
+    {
+        var payload = new AgentCollectPayload { MachineId = "lab-id", CollectionScope = "scheduled",
+            WinRm = WindowsInventoryCollector.CollectWinRm() };
+        if (!payload.WinRm.ContainsKey("version") || !payload.WinRm.ContainsKey("result") || !payload.WinRm.ContainsKey("collected_at"))
+            throw new InvalidOperationException("Missing WinRM collection contract fields");
+        var capture = new WinRmContractHttpFactory();
+        var config = new AgentConfig { CollectUrl = "https://fixture.invalid/api/agent/collect/", AgentToken = "fixture-token" };
+        await new AgentApiClient(capture).PostCollectionAsync(config, payload, CancellationToken.None);
+        if (capture.Body is null || capture.Authorization != "Bearer fixture-token" || capture.Path != "/api/agent/collect/")
+            throw new InvalidOperationException("WinRM collection HTTP contract was not sent");
+        Console.WriteLine(capture.Body);
+        return;
+    }
+    if (args.Contains("--terminal-admin-auth-agent", StringComparer.Ordinal))
+    {
+        var baseUrl = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_SERVER")!;
+        if (!new Uri(baseUrl).IsLoopback) throw new InvalidOperationException("Loopback only");
+        var config = new AgentConfig { ServerBaseUrl = baseUrl, MachineId = Environment.GetEnvironmentVariable("NIGHTOWL_TEST_MACHINE")!,
+            RemoteTerminalTransportEnabled = true, TerminalAdministrativeAuthenticationEnabled = true };
+        using var session = JsonDocument.Parse(Console.In.ReadToEnd());
+        var runtime = new RemoteTerminalTransport(null!, null!);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await runtime.ConnectAsync(config, session.RootElement, timeout.Token);
+        return;
+    }
+    if (args.Contains("--terminal-admin-auth-only", StringComparer.Ordinal)) { TerminalAdministrativeAuthenticationTests.Run(); return; }
+    if (args.Contains("--terminal-consent-only", StringComparer.Ordinal)) { TerminalConsentTests.Run(); return; }
+    if (args.Contains("--terminal-browser-agent", StringComparer.Ordinal)) { await ConPtyTests.BrowserAgentAsync(); return; }
+    if (args.Contains("--conpty-only", StringComparer.Ordinal)) { await ConPtyTests.RunAsync(); return; }
+    if (args.Contains("--conpty-e2e", StringComparer.Ordinal)) { await ConPtyTests.E2EAsync(); return; }
+    if (args.Contains("--terminal-transport-only", StringComparer.Ordinal)) { await TerminalTransportTests.RunAsync(); return; }
+    if (args.Contains("--terminal-transport-e2e", StringComparer.Ordinal)) { await TerminalTransportTests.E2EAsync(); return; }
+    if (args.Contains("--administrative-actions-only", StringComparer.Ordinal)) { await AdministrativeActionTests.RunAsync(); return; }
+    if (args.Contains("--approved-scripts-only", StringComparer.Ordinal)) { await ApprovedScriptTests.RunAsync(); return; }
+    if (args.Contains("--approved-scripts-e2e", StringComparer.Ordinal)) { await JobRuntimeTests.ProtocolE2E(approvedScripts: true); return; }
+    if (args.Contains("--operational-actions-only", StringComparer.Ordinal)) { await OperationalActionTests.RunAsync(); return; }
+    if (args.Contains("--operational-actions-e2e", StringComparer.Ordinal)) { await JobRuntimeTests.ProtocolE2E(operationalActions: true); return; }
+    if (args.Contains("--installer-config-contract", StringComparer.Ordinal))
+    {
+        AgentConfig config = ConfigService.DeserializeExistingConfig(Console.In.ReadToEnd());
+        typeof(ConfigService).GetMethod("Normalize", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, new object[] { config });
+        ConfigService.ApplyConfigMigrations(config);
+        Console.WriteLine(JsonSerializer.Serialize(new { config.MachineId, config.TelemetryEnabled, config.TelemetryMode,
+            config.TelemetryWindowMaxBytes, config.TelemetryWindowMaxAgeHours, config.TelemetryBufferMaxSamples,
+            config.JobSignalSeconds, config.AllowedJobTypes, config.SoftwareInstallEnabled, config.SoftwareCatalogSha256,
+            config.ServerBaseUrl, config.HeartbeatUrl, config.Intervals, config.ConfigMigrationVersion,
+            futureSettingPreserved = config.ExtensionData.TryGetValue("futureSetting", out JsonElement future) && future.GetString() == "preserve-me"
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        return;
+    }
+    if (args.FirstOrDefault() == "--echo-arguments")
+    {
+        Console.WriteLine(JsonSerializer.Serialize(args.Skip(1).ToArray()));
+        return;
+    }
+    if (args.Contains("--repair-only", StringComparer.Ordinal))
+    {
+        TestNativeArgumentQuoting();
+        TestRepairRunnerScriptPersistsCompletedResult();
+        TestRepairRunnerScriptPersistsFailedResult();
+        TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
+        TestRepairRunnerScriptSupportsSpacedPaths();
+        Console.WriteLine("Repair runner functional tests passed.");
+        return;
+    }
+    if (args.Contains("--configuration-consolidation-only", StringComparer.Ordinal)) { ConfigurationConsolidationTests.Run(); await TrayProjectionTests.RunAsync(); return; }
+    if (args.Contains("--heartbeat-contract", StringComparer.Ordinal)) { await LightweightHeartbeatTests.EmitHeartbeatContractAsync(); return; }
+    if (args.Contains("--footprint-observation", StringComparer.Ordinal)) { await LightweightHeartbeatTests.EmitHeartbeatContractAsync(observeFootprint: true); return; }
+    if (args.Contains("--cleanup-baseline", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: true); return; }
+    if (args.Contains("--cleanup-only", StringComparer.Ordinal)) { CleanupPhase1Tests.Run(baseline: false); return; }
+    if (args.Contains("--jobs-only", StringComparer.Ordinal)) { await JobRuntimeTests.RunAsync(); return; }
+    if (args.Contains("--jobs-e2e", StringComparer.Ordinal)) { await JobRuntimeTests.ProtocolE2E(); return; }
+    if (args.Contains("--continuous-e2e", StringComparer.Ordinal)) { await ContinuousTelemetryTests.ProtocolE2E(); return; }
+    if (args.Contains("--continuous-native", StringComparer.Ordinal)) { await ContinuousTelemetryTests.NativeCost(); return; }
+    if (args.Contains("--continuous-native-minute", StringComparer.Ordinal)) { await ContinuousTelemetryTests.NativeCost(minute:true); return; }
+    if (args.Contains("--continuous-only", StringComparer.Ordinal)) { await ContinuousTelemetryTests.RunAsync(); return; }
+    if (args.Length == 0)
+    {
+        await TrayProjectionTests.RunAsync();
+        await JobRuntimeTests.RunAsync();
+        await ContinuousTelemetryTests.RunAsync();
+    }
+    HardwareCadenceTests.Run();
+    if (args.Contains("--hardware-only", StringComparer.Ordinal))
+    {
+        TestHardwareInventoryV2();
+        TestHardwareEnrichmentIsolation();
+        await LightweightHeartbeatTests.RunAsync();
+        return;
+    }
+    if (args.Contains("--lightweight-heartbeat-only", StringComparer.Ordinal))
+    {
+        await LightweightHeartbeatTests.RunAsync();
+        TestPreservesIdentityAndEndpoints();
+        TestPreservesIntervals();
+        TestAgentStateHeartbeatPreservesInstalledLifecycle();
+        TestAgentStateJobPullAndCollectionPreserveLifecycle();
+        TestAgentStateRuntimeDoesNotRewriteUninstalledLifecycle();
+        TestAgentStateRuntimePreservesUnknownPropertiesAndRecentJobs();
+        TestStateSaveFailureDoesNotEscapeWorkerBoundary();
+        TestStateSaveFailureBackoffPreventsAcceleratedLoop();
+        TestHardwareInventoryV2();
+        TestHardwareEnrichmentIsolation();
+        Console.WriteLine("Heartbeat regression tests passed (10 existing identity/state/hardware groups).");
+        return;
+    }
+    await LightweightHeartbeatTests.RunAsync();
     if (args.Contains("--telemetry-configuration-only", StringComparer.Ordinal))
     {
         await TelemetryConfigurationTests.RunAsync();
@@ -61,9 +179,11 @@ try
     TestRepairRunnerScriptUsesPinnedReleaseAndNoEnrollment();
     TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
     TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
+    TestNativeArgumentQuoting();
     TestRepairRunnerScriptPersistsCompletedResult();
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
+    TestRepairRunnerScriptSupportsSpacedPaths();
     TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
     TestRunningUpdateWaitsForActiveHandshakeBeforeRecovery();
     TestCompletedUpdateJobIsIgnoredOnLaterRestart();
@@ -419,6 +539,16 @@ static void TestHardwareEnrichmentIsolation()
         new object[] { "Write-Host 'not-json'; [pscustomobject]@{ value = 1 }", 5 })!;
     Require(timedOut.Count == 0 && invalidJson.Count == 0,
         "Controlled timeout and malformed PowerShell JSON must produce empty enrichment results.");
+
+    using (CancellationTokenSource externalStop = new(TimeSpan.FromMilliseconds(250)))
+    using (WindowsInventoryCollector.WithJobCancellation(externalStop.Token))
+    {
+        bool cancelled = false;
+        try { powerShellObject.Invoke(null, new object[] { "Start-Sleep -Seconds 3; [pscustomobject]@{ value = 1 }", 10 }); }
+        catch (System.Reflection.TargetInvocationException error) when (error.InnerException is OperationCanceledException)
+        { cancelled = true; }
+        Require(cancelled, "External job cancellation must propagate after the PowerShell process is stopped.");
+    }
 
     foreach (Dictionary<string, object?> failedDetails in new[] { timedOut, invalidJson, new Dictionary<string, object?>() })
     {
@@ -1165,14 +1295,37 @@ static void TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery()
         "Expired repair external runner marker should allow JOB_INTERRUPTED recovery.");
 }
 
+static void TestNativeArgumentQuoting()
+{
+    string[] arguments = { "", @"C:\Program Files\NightOwl\file.ps1", @"path with trailing slash\", "embedded\"quote", "apostrophe's file", @"no-spaces\path" };
+    using Process child = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        Arguments = "--echo-arguments " + string.Join(" ", arguments.Select(JobExecutor.QuoteArg)),
+        UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+    }) ?? throw new InvalidOperationException("Could not start argument quoting fixture.");
+    string output = child.StandardOutput.ReadToEnd();
+    Require(child.WaitForExit(15000) && child.ExitCode == 0, "Argument quoting fixture did not complete.");
+    string[] actual = JsonSerializer.Deserialize<string[]>(output)!;
+    Require(actual.SequenceEqual(arguments), "Native argument quoting changed spaces, slashes, quotes or empty arguments.");
+}
+
 static void TestRepairRunnerScriptPersistsCompletedResult()
 {
-    RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Completed);
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Completed);
+    DeleteTempDir(result.RootDir);
 }
 
 static void TestRepairRunnerScriptPersistsFailedResult()
 {
-    RunRepairRunnerScriptFunctionalTest(installerExitCode: 7, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Failed);
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 7, breakPendingDirectory: false, expectedStatus: JobFinalStatuses.Failed);
+    DeleteTempDir(result.RootDir);
+}
+
+static void TestRepairRunnerScriptSupportsSpacedPaths()
+{
+    RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(0, false, JobFinalStatuses.Completed, spacedPaths: true);
+    DeleteTempDir(result.RootDir);
 }
 
 static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
@@ -1183,6 +1336,9 @@ static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
     string log = File.ReadAllText(runnerLog);
     Require(log.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) || log.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include a failure stage.");
     Require(log.Contains(result.JobId, StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include job_id.");
+    Require(new JobStore(Path.Combine(result.RootDir, "jobs")).Load(result.JobId)!.ExternalRunnerActive,
+        "Unavailable result queue must retain uncertain external ownership.");
+    DeleteTempDir(result.RootDir);
 }
 
 static void TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart()
@@ -1648,7 +1804,7 @@ static RemoteJobResult NewCompletedRemoteUpdateResult(string jobId)
     };
 }
 
-static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus)
+static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus, bool spacedPaths = false)
 {
     string powershell = GetWindowsPowerShellPath();
     Require(File.Exists(powershell), "Windows PowerShell 5.1 is required for repair runner functional tests.");
@@ -1660,7 +1816,7 @@ static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerE
         string pendingDir = Path.Combine(root, "pending-results");
         string jobsDir = Path.Combine(root, "jobs");
         string runnerDir = Path.Combine(root, "runner");
-        string trustPath = Path.Combine(root, "Trust", "release-public-keys.json");
+        string trustPath = Path.Combine(root, spacedPaths ? "Trust Bundle" : "Trust", "release-public-keys.json");
         Directory.CreateDirectory(installPath);
         Directory.CreateDirectory(pendingDir);
         Directory.CreateDirectory(jobsDir);
@@ -1669,7 +1825,7 @@ static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerE
         File.WriteAllText(trustPath, "{}");
         File.WriteAllText(Path.Combine(installPath, "agent.config.json"), "{}");
 
-        string installerPath = Path.Combine(root, "FakeInstall-NightOwlAgentDotNet.ps1");
+        string installerPath = Path.Combine(root, spacedPaths ? "Fake Install NightOwl's Agent.ps1" : "FakeInstall-NightOwlAgentDotNet.ps1");
         File.WriteAllText(installerPath, @"
 param(
     [switch]$Repair,
@@ -1684,6 +1840,8 @@ param(
     [switch]$RunCheck,
     [switch]$NonInteractive
 )
+if (-not (Test-Path -LiteralPath $TrustedPublicKeysPath)) { exit 98 }
+if ($ExpectedVersion -ne '0.1.1.0-rc23' -or $ExpectedReleaseId -ne 'release-id-123') { exit 99 }
 Set-Content -Path '" + Path.Combine(installPath, "agent.version.json").Replace("'", "''") + @"' -Value ('{""version"":""' + $ExpectedVersion + '""}') -Encoding UTF8
 Write-Output 'status=completed'
 Write-Output 'operation=repair'
@@ -1746,10 +1904,16 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             RedirectStandardOutput = true,
             RedirectStandardError = true
         }) ?? throw new InvalidOperationException("Failed to start repair runner functional test.");
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit(15000);
-        Require(process.HasExited, "Repair runner script did not exit.");
+        Task<string> stdoutRead = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrRead = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(15000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            throw new InvalidOperationException("Repair runner script did not exit.");
+        }
+        string stdout = stdoutRead.GetAwaiter().GetResult();
+        string stderr = stderrRead.GetAwaiter().GetResult();
 
         if (!breakPendingDirectory)
         {
@@ -1868,6 +2032,24 @@ sealed class FakeTelemetryHttpClientFactory : IHttpClientFactory
             {
                 Content = new StringContent(owner.Succeed ? "{}" : "offline"),
             };
+        }
+    }
+}
+
+sealed class WinRmContractHttpFactory : IHttpClientFactory
+{
+    internal string? Body;
+    internal string? Authorization;
+    internal string? Path;
+    public HttpClient CreateClient(string name) => new(new Handler(this));
+    private sealed class Handler(WinRmContractHttpFactory owner) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            owner.Body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            owner.Authorization = request.Headers.Authorization?.ToString();
+            owner.Path = request.RequestUri?.AbsolutePath;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
         }
     }
 }
