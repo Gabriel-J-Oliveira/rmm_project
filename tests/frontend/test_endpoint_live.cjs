@@ -40,7 +40,7 @@ if (process.argv.includes('--visual')) (async () => {
                 }
                 return route.fulfill({contentType:'application/json', body:JSON.stringify({state:expired?'expired':'active', points, last_sample_at:points.at(-1).collected_at, stale:false})});
             }
-            return route.fulfill({contentType:'text/html', body:'<!doctype html><meta name="viewport" content="width=device-width"><style>'+css+'</style><body class="page-endpoint-detail"><main style="padding:16px"><h1>Fixture sintetica: monitoramento ao vivo</h1><section data-endpoint-detail data-live-allowed="yes" data-endpoint-id="synthetic"></section></main></body>'});
+            return route.fulfill({contentType:'text/html', body:'<!doctype html><meta name="viewport" content="width=device-width"><style>'+css+'</style><body class="page-endpoint-detail"><main style="padding:16px"><h1>Fixture sintetica: monitoramento ao vivo</h1><section data-endpoint-detail data-live-allowed="yes" data-endpoint-id="synthetic"><section data-endpoint-tab-panel="monitoring"><div data-live-placement></div></section></section></main></body>'});
         });
         await page.goto('http://isolated.invalid/');
         await page.addScriptTag({path:path.join(__dirname,'../../static/js/endpoint_live.js')});

@@ -7,7 +7,7 @@ from django.test import Client, RequestFactory, TestCase
 from django.utils import timezone
 
 from dashboard.views import endpoint_job_create
-from .models import AgentJob, AgentJobResultReceipt, AgentMachine, InventorySnapshot
+from .models import AgentJob, AgentJobResultReceipt, AgentMachine, InventorySnapshot, EndpointPerformanceSample
 from .telemetry_configuration import monitoring_summary, validate_configuration
 
 
@@ -87,6 +87,17 @@ class TelemetryConfigurationTests(TestCase):
         self.assertTrue(summary['compatible'])
         self.assertEqual(summary['effective'], self.config)
         self.assertEqual(self.create().status_code, 201)
+
+    def test_monitoring_summary_returns_real_values_and_preserves_missing_metrics(self):
+        self.assertIsNone(monitoring_summary(self.machine)['last_metrics'])
+        EndpointPerformanceSample.objects.create(endpoint=self.machine, sample_id=uuid.uuid4(),
+            collected_at=timezone.now(), cpu_percent=0, memory_used_percent=42,
+            disk_read_bytes_per_sec=0, collection_duration_ms=1)
+        metrics = monitoring_summary(self.machine)['last_metrics']
+        self.assertEqual(metrics['cpu_percent'], 0)
+        self.assertEqual(metrics['memory_used_percent'], 42)
+        self.assertEqual(metrics['disk_read_bytes_per_sec'], 0)
+        self.assertIsNone(metrics['network_received_bytes'])
 
     def test_compatible_job_is_bounded_and_audited(self):
         job = self.job()

@@ -168,6 +168,7 @@ class ContinuousTelemetryTests(TestCase):
         second = Client()
         second.force_login(other_operator)
         self.assertEqual(second.post(self.live_url, {'action':'renew','session_id':sid}, content_type='application/json').status_code, 409)
+        self.assertEqual(second.get(self.live_url).status_code, 403)
         csrf_client = Client(enforce_csrf_checks=True)
         csrf_client.force_login(self.operator)
         self.assertEqual(csrf_client.post(self.live_url, {}, content_type='application/json').status_code, 403)

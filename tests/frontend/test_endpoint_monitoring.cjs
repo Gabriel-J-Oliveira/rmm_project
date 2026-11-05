@@ -19,6 +19,14 @@ test('requested and effective differ; success is not a sample receipt', () => {
     assert.match(html, /Concluido/);
     assert.match(html, /Ainda nao confirmadas/);
 });
+test('summary distinguishes real zero values from missing measurements', () => {
+    const html = render({last_metrics: {cpu_percent: 0, memory_used_percent: 55, disk_read_bytes_per_sec: 0}, last_sample_at: '2026-11-05T12:00:00Z'});
+    assert.match(html, /0\.0 %/);
+    assert.match(html, /55\.0 %/);
+    assert.match(html, /0\.0 B\/s/);
+    assert.match(html, /Nao informado/);
+    assert.match(html, /2026-11-05T12:00:00Z/);
+});
 test('pending jobs disable duplicate requests; safe output escapes all remote values', () => {
     const html = render({ compatible: true, effective: enabled, job_status: 'running',
         reported_at: '<img src=x onerror=alert(1)>', samples_after_application: true });
@@ -34,6 +42,20 @@ test('frontend submits only bounded telemetry fields over existing CSRF job path
     assert.match(source, /form\.reportValidity\(\)/);
     assert.match(source, /body\.set\("configuration", JSON\.stringify\(options\.configuration\)\)/);
     assert.match(source, /"X-CSRFToken": getCookie\("csrftoken"\)/);
+});
+test('monitoring retains the existing live panel during refresh and keeps it inside its tab', () => {
+    const detail = fs.readFileSync(path.join(__dirname, '../../static/js/endpoint_detail.js'), 'utf8');
+    const live = fs.readFileSync(path.join(__dirname, '../../static/js/endpoint_live.js'), 'utf8');
+    const html = render({ compatible: true, effective: enabled });
+    assert.match(html, /data-live-placement/);
+    assert.doesNotMatch(html, /max-width:800px|style=/);
+    assert.match(detail, /if \(live\) live\.remove\(\)/);
+    assert.match(detail, /querySelector\('\[data-live-placement\]'\)\.appendChild\(live\)/);
+    assert.match(live, /data-endpoint-tab-panel="monitoring"/);
+    assert.match(live, /new MutationObserver/);
+    assert.match(live, /observer\.disconnect\(\)/);
+    assert.doesNotMatch(live, /root\.appendChild\(panel\)/);
+    assert.match(live, /Aguardando dados do agente/);
 });
 test('monitoring renders at desktop/mobile without overflow or executable remote text', async () => {
     const { chromium } = require('playwright');

@@ -1272,7 +1272,12 @@
         if (!endpointDetail) return;
         renderOverviewSlots(endpointDetail);
         const monitoring = panel("monitoring");
-        if (monitoring && window.NightOwlMonitoring) monitoring.innerHTML = window.NightOwlMonitoring.render(realEndpointPayload && realEndpointPayload.monitoring);
+        if (monitoring && window.NightOwlMonitoring) {
+            const live = monitoring.querySelector('.endpoint-live');
+            if (live) live.remove();
+            monitoring.innerHTML = window.NightOwlMonitoring.render(realEndpointPayload && realEndpointPayload.monitoring);
+            if (live) monitoring.querySelector('[data-live-placement]').appendChild(live);
+        }
         const renderers = {
             inventory: renderInventory,
             software: renderSoftware,

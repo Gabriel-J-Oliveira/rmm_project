@@ -1,0 +1,9 @@
+# RC46 — monitoramento ao vivo
+
+A telemetria periódica e a sessão ao vivo são fluxos distintos. A sessão exige operador técnico com permissões `agents.view_agentmachine` e `agents.view_endpointperformancesample`; o agente contínuo consulta o controle aproximadamente a cada 30 s quando ocioso e a cada 10 s enquanto ativo. A sessão renova a concessão de 45 s, limitada a 15 minutos. Nenhuma amostra recebida significa apenas que ainda não há evidência de entrega.
+
+O cache deve ser compartilhado entre os workers que atendem operador e agente, fora dos diretórios públicos, com diretório privado acessível pela identidade do serviço. A configuração informada para o laboratório é FileBasedCache; a execução real no endpoint RC46 ainda não foi confirmada. Sessão e pontos são temporários; métricas periódicas continuam no fluxo existente.
+
+Para diagnóstico **somente leitura**, no ambiente do serviço Django correto, consultar `settings.CACHES['telemetry_live']` sem imprimir outras configurações; conferir a identidade do serviço com `systemctl show <servico-gunicorn> -p User -p Group` e o caminho configurado com `stat -c '%U %G %a %n' <diretorio-cache>`. Consultar logs sanitizados do agente por `telemetry.control.failed` e `telemetry.live.failed`, sem tokens. Selecionar o endpoint por UUID e machine_id, nunca apenas pelo hostname.
+
+Caso haja erro de cache, comparar caminho, permissões e identidade entre os workers; preparar correção manual com backup e validação, sem abrir permissões públicas. Não alterar o servidor nesta etapa. Os dados reais de monitoramento ao vivo, as políticas de expiração e a apresentação visual devem ser homologados na VM antes de afirmar funcionamento. Não houve correção do agente ou publicação de release nesta alteração.
