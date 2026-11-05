@@ -31,6 +31,8 @@ try {
     $out = Join-Path $work 'stdout.txt'
     $err = Join-Path $work 'stderr.txt'
     $dotnet = (Get-Command dotnet -CommandType Application | Select-Object -First 1).Source
+    $chromeVersion = (Get-Item -LiteralPath 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion
+    Write-Output ("CI_CHROME_VERSION=" + $chromeVersion)
     $facts = Start-Process -FilePath $dotnet -ArgumentList @('NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll', '--ci-terminal-facts') `
         -Credential $credential -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
     Get-Content $out

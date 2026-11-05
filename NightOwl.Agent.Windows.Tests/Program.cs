@@ -14,10 +14,13 @@ try
     if (args.Contains("--ci-terminal-facts", StringComparer.Ordinal))
     {
         var facts = TerminalUserIdentity.CurrentFacts();
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         Console.WriteLine("CI_TERMINAL_FACTS=" + JsonSerializer.Serialize(new {
             interactive_session = facts.SessionId > 0, facts.Interactive, facts.Elevated,
             facts.Administrator, facts.Integrity, facts.DangerousPrivileges,
-            service_identity = facts.Sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20"
+            service_identity = facts.Sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20",
+            os_profile_exists = Directory.Exists(profile),
+            environment_matches_os_profile = string.Equals(profile.TrimEnd('\\'), (Environment.GetEnvironmentVariable("USERPROFILE") ?? "").TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
         }));
         return;
     }
