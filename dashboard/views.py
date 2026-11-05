@@ -1090,11 +1090,17 @@ def defender_filter_state(defender_status):
     return defender_state(defender_status)['key']
 
 
-def build_endpoint_row(endpoint):
-    snapshot = get_endpoint_detail_snapshot(endpoint)
+_ENDPOINT_ROW_UNSET = object()
+
+
+def build_endpoint_row(endpoint, *, snapshot=_ENDPOINT_ROW_UNSET, recommended_version=_ENDPOINT_ROW_UNSET):
+    if snapshot is _ENDPOINT_ROW_UNSET:
+        snapshot = get_endpoint_detail_snapshot(endpoint)
     primary_disk = get_primary_disk(snapshot.disks if snapshot else [])
     defender_key = defender_filter_state(snapshot.defender_status if snapshot else {})
-    software_count = len(ensure_list(snapshot.installed_software if snapshot else [])) if snapshot else None
+    software_count = getattr(snapshot, 'list_software_count', _ENDPOINT_ROW_UNSET) if snapshot else None
+    if software_count is _ENDPOINT_ROW_UNSET:
+        software_count = len(ensure_list(snapshot.installed_software))
     os_name = endpoint.os_name or (snapshot.os_name if snapshot else '')
     domain = endpoint.domain or (snapshot.domain if snapshot else '')
     logged_user = endpoint.last_logged_user or (snapshot.logged_user if snapshot else '')
@@ -1108,7 +1114,10 @@ def build_endpoint_row(endpoint):
     health_basis = SimpleNamespace(status=endpoint.status, last_seen_at=endpoint.last_seen_at)
     defender = detail_defender_state(snapshot.defender_status if snapshot else {}, snapshot.installed_software if snapshot else [])
     health = calculate_health(health_basis, primary_disk, defender)
-    attention = endpoint_attention_summary(endpoint, primary_disk, defender_key, health, snapshot)
+    attention = endpoint_attention_summary(
+        endpoint, primary_disk, defender_key, health, snapshot,
+        recommended_version=recommended_version,
+    )
 
     return {
         'endpoint': endpoint,
@@ -1130,7 +1139,10 @@ def build_endpoint_row(endpoint):
         'health': health,
         'attention': attention,
         'agent_version': endpoint.agent_version,
-        'agent_version_state': agent_version_state(endpoint.agent_version, latest_agent_version()),
+        'agent_version_state': agent_version_state(
+            endpoint.agent_version,
+            latest_agent_version() if recommended_version is _ENDPOINT_ROW_UNSET else recommended_version,
+        ),
     }
 
 
@@ -1197,7 +1209,7 @@ def infer_endpoint_sector(hostname, domain, logged_user):
     return domain or 'Sem setor'
 
 
-def endpoint_attention_summary(endpoint, primary_disk, defender_key, health, snapshot=None):
+def endpoint_attention_summary(endpoint, primary_disk, defender_key, health, snapshot=None, *, recommended_version=_ENDPOINT_ROW_UNSET):
     if endpoint.status == AgentMachine.STATUS_OFFLINE:
         if endpoint.last_seen_at:
             delta = timezone.now() - endpoint.last_seen_at
@@ -1214,8 +1226,11 @@ def endpoint_attention_summary(endpoint, primary_disk, defender_key, health, sna
         return {'label': f"Disco {primary_disk.get('used_percent', 0)}%", 'level': 'critical', 'key': 'disk'}
     if primary_disk.get('level') == 'warning':
         return {'label': f"Disco {primary_disk.get('used_percent', 0)}%", 'level': 'warning', 'key': 'disk'}
-    if endpoint.agent_version and agent_version_state(endpoint.agent_version, latest_agent_version()) == 'outdated':
-        return {'label': 'Agente desatualizado', 'level': 'warning', 'key': 'agent'}
+    if endpoint.agent_version:
+        if recommended_version is _ENDPOINT_ROW_UNSET:
+            recommended_version = latest_agent_version()
+        if agent_version_state(endpoint.agent_version, recommended_version) == 'outdated':
+            return {'label': 'Agente desatualizado', 'level': 'warning', 'key': 'agent'}
     if defender_key == 'unknown':
         return {'label': 'Inventario vencido', 'level': 'muted', 'key': 'inventory'}
     score = health.get('score')
@@ -2357,8 +2372,30 @@ def endpoint_list(request):
         }
         return render(request, 'dashboard/endpoint_list.html', context)
 
-    rows = [build_endpoint_row(endpoint) for endpoint in AgentMachine.objects.order_by('hostname', 'domain')]
+    from .endpoint_list_data import load_endpoint_list_data
+    endpoints, snapshots = load_endpoint_list_data()
     filters = endpoint_filters_from_request(request)
+    recommended_version = latest_agent_version()
+    rows = []
+    option_rows = []
+    for endpoint in endpoints:
+        snapshot = snapshots.get(endpoint.pk)
+        os_name = endpoint.os_name or (snapshot.os_name if snapshot else '')
+        domain = endpoint.domain or (snapshot.domain if snapshot else '')
+        logged_user = endpoint.last_logged_user or (snapshot.logged_user if snapshot else '')
+        option_rows.append({
+            'os_name': os_name, 'domain': domain,
+            'sector': infer_endpoint_sector(endpoint.hostname, domain, logged_user),
+        })
+        # Keep filter choices fleet-wide, but avoid health/presentation work for
+        # machines already excluded by exact identity/status criteria.
+        if ((filters['status'] and endpoint.status != filters['status'])
+                or (filters['os'] and os_name != filters['os'])
+                or (filters['domain'] and domain != filters['domain'])):
+            continue
+        rows.append(build_endpoint_row(
+            endpoint, snapshot=snapshot, recommended_version=recommended_version,
+        ))
     filtered_rows = filter_endpoint_rows(rows, filters)
 
     context = {
@@ -2372,7 +2409,7 @@ def endpoint_list(request):
         'can_deploy_agents': is_nightowl_technical_user(request.user),
         'deployment_trust_ready': bool(_usable_deployment_trust_bundle()),
         **endpoint_summary_counts(filtered_rows),
-        **endpoint_filter_options(rows),
+        **endpoint_filter_options(option_rows),
     }
     return render(request, 'dashboard/endpoint_list.html', context)
 
