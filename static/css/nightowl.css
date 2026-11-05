@@ -34159,6 +34159,17 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 .endpoint-live-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .endpoint-live-grid > div { min-width: 0; }
 .endpoint-live-grid svg { display: block; width: 100%; aspect-ratio: 600 / 130; }
+.endpoint-live-grid svg { aspect-ratio: 600 / 190; overflow: visible; }
+.endpoint-live-grid svg text { fill: var(--text-muted); font-size: 14px; }
+.endpoint-live-grid .live-gridline { stroke: var(--border); stroke-width: 1; }
+.endpoint-live-grid .live-line { fill: none; stroke-width: 2; }
+.endpoint-live-grid .live-series-0 { stroke: #39b7cf; color: #39b7cf; }
+.endpoint-live-grid .live-series-1 { stroke: #8fd174; color: #8fd174; }
+.endpoint-live-grid .live-point { fill: var(--night-black); stroke-width: 2; cursor: pointer; }
+.endpoint-live-grid .live-point:focus { outline: none; stroke-width: 4; }
+.endpoint-live-grid .live-legends { display: grid; gap: 4px; font-size: 12px; }
+.endpoint-live-grid .live-tooltip { min-height: 1.5em; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.endpoint-live .live-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .endpoint-live h3 { font-size: 16px; }
 @media (max-width: 700px) { .endpoint-live-grid { grid-template-columns: minmax(0, 1fr); } }
 
