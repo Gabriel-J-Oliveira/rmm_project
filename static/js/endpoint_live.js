@@ -36,9 +36,18 @@
     const id = root.dataset.endpointId;
     if (!id) return;
     const panel = document.createElement('section');
-    panel.className = 'endpoint-live panel';
+    panel.className = 'endpoint-live panel endpoint-dense-card';
     panel.innerHTML = '<header><h2>Monitoramento ao vivo</h2><button type="button" class="copy-btn" data-live-toggle><i data-lucide="activity"></i>Iniciar</button></header><p data-live-state>Sessao inativa</p><div data-live-body hidden><label>Interface<select data-live-interface></select></label><label>Disco apresentado pelo Windows<select data-live-disk></select></label><div class="endpoint-live-grid"><div><h3>CPU (%)</h3><div data-live-cpu></div></div><div><h3>RAM utilizada / disponivel (%)</h3><div data-live-memory></div></div><div><h3>RX / TX (bytes/s)</h3><div data-live-network></div></div><div><h3>Latencia de leitura / escrita (ms)</h3><div data-live-storage></div></div></div><dl data-live-facts class="endpoint-fact-list"></dl></div>';
-    root.appendChild(panel);
+    function mount() {
+        const placement = root.querySelector('[data-endpoint-tab-panel="monitoring"] [data-live-placement]');
+        if (!placement) return false;
+        if (panel.parentNode !== placement) placement.appendChild(panel);
+        return true;
+    }
+    if (!mount()) {
+        const observer = new MutationObserver(() => { if (mount()) observer.disconnect(); });
+        observer.observe(root, {childList:true, subtree:true});
+    }
     if (scope.lucide) scope.lucide.createIcons();
     let session = null, points = [], timer = null, polling = false, lastRenewal = 0;
     const button = panel.querySelector('[data-live-toggle]');
@@ -109,7 +118,7 @@
             if (!response.ok) throw new Error(data.error || 'live_unavailable');
             if (data.state !== 'active') { expired('Sessao expirada'); return; }
             points = data.points || [];
-            status.textContent = (data.stale ? 'Sem dados recentes / offline' : 'Recebendo amostras') + (data.last_sample_at ? ' · Ultima amostra: ' + new Date(data.last_sample_at).toLocaleString() : '') + ' · Sem prova de saturacao da internet';
+            status.textContent = (!data.last_sample_at ? 'Aguardando dados do agente' : data.stale ? 'Sem dados recentes' : 'Recebendo amostras') + (data.last_sample_at ? ' · Ultima amostra: ' + new Date(data.last_sample_at).toLocaleString() : '');
             draw();
         } catch (error) { status.textContent = 'Dados indisponiveis: ' + error.message; }
         finally { polling = false; if (session) timer = setTimeout(poll, 5000); }

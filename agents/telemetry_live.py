@@ -62,6 +62,8 @@ class LiveOperatorView(PrivateLiveView):
         session = TelemetryLiveSession.objects.filter(endpoint_id=endpoint_id, expires_at__gt=timezone.now()).first()
         if not session:
             return Response({'state': 'expired', 'points': []})
+        if session.operator_id != request.user.pk:
+            return Response({'error': 'session_owned_by_another_operator'}, status=403)
         try:
             points = shared_cache().get('live:' + str(session.session_id), [])
         except Exception:

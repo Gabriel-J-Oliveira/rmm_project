@@ -79,7 +79,8 @@ def monitoring_summary(endpoint):
         except ValueError:
             pass
     last_sample = EndpointPerformanceSample.objects.filter(endpoint=endpoint).order_by('-collected_at').values(
-        'collected_at', 'created_at',
+        'collected_at', 'created_at', 'cpu_percent', 'memory_used_percent',
+        'disk_read_bytes_per_sec', 'disk_write_bytes_per_sec', 'network_received_bytes', 'network_sent_bytes',
     ).first()
     return {
         'compatible': compatible, 'minimum_version': MINIMUM_VERSION,
@@ -90,5 +91,6 @@ def monitoring_summary(endpoint):
         'job_id': str(job.id) if job else None, 'job_status': job.status if job else None,
         'last_sample_at': last_sample['collected_at'] if last_sample else None,
         'last_received_at': last_sample['created_at'] if last_sample else None,
+        'last_metrics': {key: last_sample[key] for key in ('cpu_percent', 'memory_used_percent', 'disk_read_bytes_per_sec', 'disk_write_bytes_per_sec', 'network_received_bytes', 'network_sent_bytes')} if last_sample else None,
         'samples_after_application': bool(last_sample and confirmed_at and last_sample['collected_at'] >= confirmed_at),
     }
