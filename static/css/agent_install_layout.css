@@ -1,0 +1,67 @@
+/* Manual install RC46: compact forms and full-width token results. */
+.page-agent-install .agent-form-row--name-validity {
+    grid-template-columns: minmax(0, 1.7fr) minmax(110px, 0.6fr);
+}
+
+.page-agent-install .agent-install-results {
+    display: grid;
+    min-width: 0;
+    gap: 0;
+}
+
+.page-agent-install .agent-install-results .agent-token-result {
+    display: grid;
+    min-width: 0;
+    gap: 12px;
+    margin: 0 0 18px;
+    padding: 16px 18px;
+    overflow: hidden;
+}
+
+.page-agent-install .agent-install-results .agent-token-result[hidden] {
+    display: none;
+}
+
+.page-agent-install .agent-install-results .agent-token-command-area {
+    display: grid;
+    min-width: 0;
+    gap: 12px;
+}
+
+.page-agent-install .agent-install-results .created-token-box {
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+}
+
+.page-agent-install .agent-install-results .agent-token-result-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 20px;
+    min-width: 0;
+    margin: 0;
+    padding: 0 2px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+}
+
+.page-agent-install .agent-install-results .agent-token-result-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+}
+
+.page-agent-install .agent-install-results .agent-token-result-controls p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+}
+
+@media (max-width: 640px) {
+    .page-agent-install .agent-form-row--name-validity {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
