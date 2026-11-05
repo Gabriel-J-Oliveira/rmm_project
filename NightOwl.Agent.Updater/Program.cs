@@ -1526,16 +1526,7 @@ internal static class Program
         string signatureUrl = string.IsNullOrWhiteSpace(manifest.SignatureUrl)
             ? InferSiblingUrl(manifest.PackageUrl, "release-manifest.sig")
             : manifest.SignatureUrl;
-        bool legacyUnsigned = manifest.LegacyUnsigned || string.IsNullOrWhiteSpace(manifest.KeyId);
-        if (legacyUnsigned && manifest.Channel.Equals("development", StringComparison.OrdinalIgnoreCase))
-        {
-            WriteLog("release.manifest.legacy_unsigned", "Legacy unsigned development release accepted with warning.", new { version = manifest.Version, channel = manifest.Channel });
-            return;
-        }
-        if (legacyUnsigned && manifest.Channel.Equals("stable", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureMissing}: stable release requires signature.");
-        }
+        RequireSignedRelease(manifest.LegacyUnsigned, manifest.KeyId);
         EnsurePackageUrlAllowed(config, manifestUrl);
         EnsurePackageUrlAllowed(config, signatureUrl);
 
@@ -1616,6 +1607,12 @@ internal static class Program
         manifest.KeyId = signedManifest.KeyId;
         manifest.LegacyUnsigned = false;
         WriteLog("release.signature.valid", "Release manifest signature validated.", new { version = manifest.Version, channel = manifest.Channel, key_id = signedManifest.KeyId });
+    }
+
+    internal static void RequireSignedRelease(bool legacyUnsigned, string? keyId)
+    {
+        if (legacyUnsigned || string.IsNullOrWhiteSpace(keyId))
+            throw new InvalidOperationException($"{UpdateErrorCodes.ReleaseSignatureMissing}: signed release required.");
     }
 
     internal static bool VerifyReleaseManifestSignatureForTest(byte[] manifestBytes, byte[] signature, string publicKeyXml)

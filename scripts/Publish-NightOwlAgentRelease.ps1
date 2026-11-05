@@ -332,10 +332,6 @@ function Assert-TrustRootsMaterial {
 }
 
 function Assert-SigningMaterial {
-    if ($AllowUnsignedDevelopment -and $Channel -eq "development") {
-        Write-Step "AllowUnsignedDevelopment ativo; assinatura forte nao sera exigida neste build de laboratorio."
-        return
-    }
     if ([string]::IsNullOrWhiteSpace($SigningKeyId)) {
         Fail "validation_failed" "SigningKeyId obrigatorio. Configure signing_key_id, -SigningKeyId ou NIGHTOWL_RELEASE_SIGNING_KEY_ID."
     }
@@ -403,8 +399,8 @@ function Assert-OptionCombination {
     if ($Ci -and $SaveConfig) {
         Fail "validation_failed" "-SaveConfig nao e permitido em -Ci."
     }
-    if ($Channel -ne "development" -and $AllowUnsignedDevelopment) {
-        Fail "validation_failed" "-AllowUnsignedDevelopment so e permitido em development."
+    if ($AllowUnsignedDevelopment) {
+        Fail "validation_failed" "-AllowUnsignedDevelopment nao e permitido; assinatura e obrigatoria."
     }
 }
 
@@ -785,10 +781,6 @@ function Read-ZipEntryJson([string]$ZipPath, [string]$EntryName) {
 
 function Assert-ReleaseSignatureWithPackagedBundle([string]$ReleaseDir, $VersionJson) {
     if ([bool]$VersionJson.legacyUnsigned) {
-        if ($Channel -eq "development" -and $AllowUnsignedDevelopment) {
-            Write-Step "Release development legacy_unsigned permitida apenas por -AllowUnsignedDevelopment."
-            return
-        }
         Fail "validation_failed" "Release assinada obrigatoria; legacyUnsigned=true nao e permitido neste fluxo."
     }
     $manifestPath = Join-Path $ReleaseDir "release-manifest.json"
@@ -1054,7 +1046,7 @@ cd $(ConvertTo-BashSingleQuoted $RemoteProjectPath)
 source .venv/bin/activate
 python manage.py import_agent_release --agent-version $(ConvertTo-BashSingleQuoted $Version) --channel $(ConvertTo-BashSingleQuoted $Channel) --release-status paused --version-json $(ConvertTo-BashSingleQuoted $versionJsonUrl)$forceFlag
 python manage.py verify_agent_release --agent-version $(ConvertTo-BashSingleQuoted $Version)
-python manage.py shell -c $(ConvertTo-BashSingleQuoted "from agents.models import AgentRelease, AgentReleaseSigningKey; r=AgentRelease.objects.get(version='$Version'); assert r.channel == '$Channel'; assert r.status == 'paused'; assert r.rollout_percentage == $Rollout; assert r.rollout_paused == $pyPaused; assert r.package_url == '$($LocalRelease.VersionJson.packageUrl)'; assert r.sha256 == '$($LocalRelease.ZipSha)'; assert r.signature_valid is True; assert r.legacy_unsigned is False; k=AgentReleaseSigningKey.objects.get(key_id='$signatureKeyId'); assert not k.revoked; print('release_import_verified')")
+python manage.py shell -c $(ConvertTo-BashSingleQuoted "from agents.models import AgentRelease, AgentReleaseSigningKey; r=AgentRelease.objects.get(version='$Version'); assert r.channel == '$Channel'; assert r.status == 'paused'; assert r.rollout_percentage == $Rollout; assert r.rollout_paused == $pyPaused; assert r.mandatory is False; assert r.package_url == '$($LocalRelease.VersionJson.packageUrl)'; assert r.sha256 == '$($LocalRelease.ZipSha)'; assert r.signature_valid is True; assert r.legacy_unsigned is False; k=AgentReleaseSigningKey.objects.get(key_id='$signatureKeyId'); assert not k.revoked; print('release_import_verified')")
 "@
     Invoke-Ssh $command "import_failed" | Out-Null
 }

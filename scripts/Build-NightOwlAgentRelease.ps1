@@ -28,6 +28,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if ($AllowUnsignedDevelopment) { throw "-AllowUnsignedDevelopment nao e permitido; assinatura e obrigatoria." }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $releaseRoot = Join-Path $repoRoot "artifacts\nightowl-agent\releases"
@@ -674,8 +675,8 @@ function Validate-Release([string]$Path) {
     if ([string]$versionManifest.version -ne $Version) { throw "version.json com versao inconsistente." }
     if ([string]$versionManifest.sha256 -ne $zipSha) { throw "version.json com SHA256 inconsistente." }
     if ([long]$versionManifest.size -ne (Get-Item $zipPath).Length) { throw "version.json com tamanho inconsistente." }
-    if (-not (Test-Path $signaturePath) -and (-not [bool]$versionManifest.legacyUnsigned -or [string]$versionManifest.channel -ne "development")) {
-        throw "release-manifest.sig ausente. Releases pilot/stable e releases assinadas exigem assinatura."
+    if ([bool]$versionManifest.legacyUnsigned -or -not (Test-Path $signaturePath)) {
+        throw "Release assinada obrigatoria; release legada sem assinatura ou release-manifest.sig ausente."
     }
 
     $checksums = Get-Content -Raw -Path $checksumsPath | ConvertFrom-Json
@@ -891,8 +892,8 @@ try {
     $manifestPath = Join-Path $ReleaseDir "release-manifest.json"
     $signaturePath = Join-Path $ReleaseDir "release-manifest.sig"
     $signed = -not [string]::IsNullOrWhiteSpace($SigningKeyPath)
-    if (-not $signed -and (-not $AllowUnsignedDevelopment -or $Channel -ne "development")) {
-        throw "Chave privada obrigatoria para assinar release. Use -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY. Bypass somente com -AllowUnsignedDevelopment em development."
+    if (-not $signed) {
+        throw "Chave privada obrigatoria para assinar release. Use -SigningKeyPath ou NIGHTOWL_RELEASE_SIGNING_KEY."
     }
     $versionManifest = [ordered]@{
         product = "NightOwl Agent Windows"

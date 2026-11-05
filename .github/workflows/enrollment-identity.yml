@@ -94,6 +94,12 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Build the Windows agent test executable
         run: dotnet build NightOwl.Agent.Windows.Tests/NightOwl.Agent.Windows.Tests.csproj -c Release
+      - name: Verify updater signature requirements
+        run: |
+          dotnet build NightOwl.Agent.Updater.Tests/NightOwl.Agent.Updater.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./NightOwl.Agent.Updater.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Updater.Tests.exe --signature-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Diagnose Windows E2E identity
         run: dotnet NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll --ci-terminal-facts
       - name: Verify required Windows E2E selection

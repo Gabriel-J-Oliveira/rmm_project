@@ -7,6 +7,21 @@ using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Jobs;
 using NightOwl.Agent.Windows.Models;
 
+if (args.Contains("--signature-only", StringComparer.Ordinal))
+{
+    TestSignatureRequirement();
+    using RSA key = RSA.Create(2048);
+    using RSA other = RSA.Create(2048);
+    byte[] body = Encoding.UTF8.GetBytes("synthetic-signed-manifest");
+    byte[] signature = key.SignData(body, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+    Require(UpdaterProgram.VerifyReleaseManifestSignatureForTest(body, signature, key.ToXmlString(false)), "Valid signature rejected.");
+    Require(!UpdaterProgram.VerifyReleaseManifestSignatureForTest(body, signature, other.ToXmlString(false)), "Untrusted key accepted.");
+    body[0] ^= 1;
+    Require(!UpdaterProgram.VerifyReleaseManifestSignatureForTest(body, signature, key.ToXmlString(false)), "Tampered manifest accepted.");
+    Console.WriteLine("PASS required signing, RSA-PSS, tampering and wrong key.");
+    return;
+}
+
 if (args.Contains("--already-current-only", StringComparer.Ordinal))
 {
     TestInstalledPayloadIntegrity();
@@ -76,6 +91,7 @@ try
         "Updater should reject a release manifest signature verified with a different key.");
 
     TestSignedManifestChannelGate();
+    TestSignatureRequirement();
 
     TestCopyNormal();
     TestBackupManifestIsNotManaged();
@@ -113,6 +129,18 @@ static void Require(bool condition, string message)
     if (!condition)
     {
         throw new InvalidOperationException(message);
+    }
+}
+
+static void TestSignatureRequirement()
+{
+    UpdaterProgram.RequireSignedRelease(false, "trusted-key");
+    foreach (var input in new[] { (true, "trusted-key"), (false, ""), (true, "") })
+    {
+        bool rejected = false;
+        try { UpdaterProgram.RequireSignedRelease(input.Item1, input.Item2); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected, "Unsigned or unkeyed release must be rejected.");
     }
 }
 

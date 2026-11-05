@@ -2122,21 +2122,6 @@ class AgentEnrollView(APIView):
                            status.HTTP_409_CONFLICT, enrollment_token=enrollment_token,
                            endpoint=endpoint, metadata={'code': error.code})
 
-    def _active_enrollment_tokens(self):
-        now = timezone.now()
-        return AgentEnrollmentToken.objects.select_for_update().filter(is_active=True).filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-        ).filter(
-            Q(max_uses__isnull=True) | Q(used_count__lt=models.F('max_uses')),
-        )
-
-    def _auto_enrollment_token_for_domain(self, domain):
-        normalized_domain = (domain or '').strip().lower()
-        if not normalized_domain:
-            return None
-        return self._active_enrollment_tokens().filter(allowed_domain__iexact=normalized_domain).exclude(
-            name__istartswith='NightOwlGpo-').order_by('-created_at').first()
-
     def _validate_enrollment_token(self, request, payload, token_value):
         if not token_value.startswith('enroll_'):
             return None, self._error(
@@ -2447,21 +2432,14 @@ class AgentEnrollView(APIView):
             manual_validation_token, enrollment_token = manual_result
             domain_validation = 'manual'
         else:
-            enrollment_token = self._auto_enrollment_token_for_domain(domain)
-            if enrollment_token is None:
+            bearer_machine, _ = _authenticated_bearer_machine(request)
+            if bearer_machine is None:
                 return self._error(
-                    request,
-                    payload,
-                    AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
-                    'manual_validation_required',
-                    'Esta maquina nao esta no dominio autorizado. Informe um token de validacao manual.',
-                    status.HTTP_403_FORBIDDEN,
-                    metadata={
-                        'reason': 'domain_not_allowed',
-                        'reported_domain': domain,
-                    },
+                    request, payload, AgentEnrollmentLog.STATUS_MANUAL_VALIDATION_REQUIRED,
+                    'manual_validation_required', 'Informe uma autorizacao valida para esta instalacao.',
+                    status.HTTP_403_FORBIDDEN, metadata={'reason': 'authorization_required'},
                 )
-            domain_validation = 'domain'
+            domain_validation = 'authenticated_agent'
 
         if enrollment_token and enrollment_token.name.casefold().startswith('nightowlgpo-'):
             expected_hostname = enrollment_token.name[len('NightOwlGpo-'):].strip().casefold()
