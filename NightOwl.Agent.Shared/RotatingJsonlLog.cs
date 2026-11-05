@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -10,6 +11,7 @@ public sealed record LogRetentionPolicy(long MaxFileBytes = 10 * 1024 * 1024,
 public static class RotatingJsonlLog
 {
     private static readonly LogRetentionPolicy DefaultPolicy = new();
+    private static readonly TimeSpan LockAcquireTimeout = TimeSpan.FromSeconds(5);
 
     public static void Append(string path, string json, LogRetentionPolicy? policy = null)
         => AppendCore(path, json, policy ?? DefaultPolicy, null);
@@ -84,10 +86,18 @@ public static class RotatingJsonlLog
 
     private static FileStream Acquire(string path)
     {
-        for (int attempt = 0; ; attempt++)
+        Stopwatch wait = Stopwatch.StartNew();
+        int attempt = 0;
+        while (true)
         {
             try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-            catch (IOException) when (attempt < 40) { Thread.Sleep(10); }
+            catch (IOException) when (wait.Elapsed < LockAcquireTimeout)
+            {
+                // Keep cross-process coordination file-based, but allow a short
+                // rotation queue to drain before reporting a real lock failure.
+                Thread.Sleep(Math.Min(10 + attempt, 50));
+                attempt++;
+            }
         }
     }
 
