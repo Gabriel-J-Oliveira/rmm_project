@@ -3,6 +3,7 @@
 
 {% block title %}Instala&ccedil;&atilde;o do Agente | Night Owl{% endblock %}
 {% block body_class %}page-agent-install{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/agent_install_layout.css' %}">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -152,14 +153,16 @@
         <form method="post" action="{{ deployment_create_url }}" class="agent-token-form" id="enrollment-token-form" data-manual-install="ad" data-create-url="{{ deployment_create_url }}" data-history-url="{{ deployment_history_url }}" data-trust-ready="{{ deployment_trust_ready|yesno:'true,false' }}">
             {% csrf_token %}
             <input type="hidden" name="install_kind" value="ad">
-            <label class="filter-field">
-                <span>Nome</span>
-                <input name="name" required placeholder="Piloto TI">
-            </label>
-            <label class="filter-field">
-                <span>Dom&iacute;nio permitido</span>
-                <input name="allowed_domain" value="{{ default_allowed_domain }}" placeholder="control.local">
-            </label>
+            <div class="agent-form-row">
+                <label class="filter-field">
+                    <span>Nome</span>
+                    <input name="name" required placeholder="Piloto TI">
+                </label>
+                <label class="filter-field">
+                    <span>Dom&iacute;nio permitido</span>
+                    <input name="allowed_domain" value="{{ default_allowed_domain }}" placeholder="control.local">
+                </label>
+            </div>
             <div class="agent-form-row">
                 <label class="filter-field">
                     <span>Validade em horas</span>
@@ -182,9 +185,6 @@
             <p class="agent-token-error" role="alert" hidden></p>
         </form>
     </article>
-    <section class="panel enrollment-created-panel agent-token-result" id="enrollment-token-result" aria-live="polite" hidden>
-
-    </section>
     </div>
 
     <div class="agent-token-column">
@@ -199,16 +199,18 @@
         <form method="post" action="{{ deployment_create_url }}" class="agent-token-form" id="manual-token-form" data-manual-install="external" data-create-url="{{ deployment_create_url }}" data-history-url="{{ deployment_history_url }}" data-trust-ready="{{ deployment_trust_ready|yesno:'true,false' }}">
             {% csrf_token %}
             <input type="hidden" name="install_kind" value="external">
-            <label class="filter-field">
-                <span>Nome</span>
-                <input name="name" required placeholder="Notebook externo - tecnico">
-            </label>
+            <div class="agent-form-row agent-form-row--name-validity">
+                <label class="filter-field">
+                    <span>Nome</span>
+                    <input name="name" required placeholder="Notebook externo - tecnico">
+                </label>
+                <label class="filter-field">
+                    <span>Validade em minutos</span>
+                    <input name="expires_minutes" type="number" min="1" value="30">
+                </label>
+            </div>
             <div class="agent-form-row"><label class="filter-field"><span>Canal</span><select name="channel" data-channel><option value="stable">Stable</option><option value="development">Development</option></select></label><label class="filter-field"><span>Distribuição</span><select name="release_id" data-release required></select></label></div>
             <p data-release-message role="status"></p>
-            <label class="filter-field">
-                <span>Validade em minutos</span>
-                <input name="expires_minutes" type="number" min="1" value="30">
-            </label>
             <label class="filter-field">
                 <span>Notas</span>
                 <textarea name="notes" rows="3" placeholder="Quem solicitou, m&aacute;quina, contexto..."></textarea>
@@ -219,11 +221,13 @@
             <p class="agent-token-error" role="alert" hidden></p>
         </form>
     </article>
-    <section class="panel enrollment-created-panel agent-token-result" id="manual-token-result" aria-live="polite" hidden>
-
-    </section>
     </div>
 </section>
+
+<div class="agent-install-results" aria-label="Tokens e comandos gerados">
+    <section class="panel enrollment-created-panel agent-token-result" id="enrollment-token-result" aria-live="polite" hidden></section>
+    <section class="panel enrollment-created-panel agent-token-result" id="manual-token-result" aria-live="polite" hidden></section>
+</div>
 
 <section class="panel agent-token-list-panel">
     <div class="panel-heading">
