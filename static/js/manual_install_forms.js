@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const error = form.querySelector('.agent-token-error');
         const button = form.querySelector('[type=submit]');
         const panel = document.getElementById(form.dataset.manualInstall === 'ad' ? 'enrollment-token-result' : 'manual-token-result');
-        let timer;
+        let timer = null;
         const refreshOptions = () => {
             release.replaceChildren();
             releases.filter(item => item.channel === channel.value &&
@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         form.addEventListener('submit', async (event) => {
             event.preventDefault(); button.disabled = true; error.hidden = true;
-            if (timer) clearInterval(timer);
+            if (timer !== null) { clearInterval(timer); timer = null; }
             try {
                 const response = await fetch(form.dataset.createUrl, {method:'POST', credentials:'same-origin', cache:'no-store',
                     headers:{'X-CSRFToken':form.querySelector('[name=csrfmiddlewaretoken]').value, 'Accept':'application/json'}, body:new FormData(form)});
@@ -45,6 +45,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!response.ok) throw new Error(data.detail || 'Não foi possível gerar a instalação.');
                 const item = data.deployment || data.batch;
                 panel.replaceChildren(); panel.hidden = false;
+                let resultOpen = true;
+                const toolbar = document.createElement('div'); toolbar.className = 'agent-token-result-toolbar';
+                const heading = document.createElement('strong');
+                heading.textContent = data.kind === 'ad' ? 'Comandos gerados' : 'Comando e token gerados';
+                const close = document.createElement('button');
+                close.type = 'button'; close.className = 'agent-token-result-close';
+                close.textContent = 'Fechar';
+                close.title = 'Ocultar resultado (não revoga a autorização)';
+                close.addEventListener('click', () => {
+                    resultOpen = false;
+                    if (timer !== null) { clearInterval(timer); timer = null; }
+                    panel.replaceChildren();
+                    panel.hidden = true;
+                });
+                toolbar.append(heading, close);
+                panel.append(toolbar);
                 const commandArea = document.createElement('div'); commandArea.className = 'agent-token-command-area'; panel.append(commandArea);
                 if (data.kind !== 'ad') commandArea.append(makeBlock('Comando PowerShell', item.command, 'Copiar comando'));
                 if (data.manual_token) panel.append(makeBlock('Token manual', data.manual_token, 'Copiar token'));
@@ -71,10 +87,12 @@ document.addEventListener('DOMContentLoaded', () => {
                                 throw new Error(result.detail || 'Não foi possível emitir o comando.');
                             }
                             pendingId = null;
+                            if (!resultOpen) return;
                             commandArea.replaceChildren(makeBlock('Comando PowerShell', result.deployment.command, 'Copiar comando'));
                             message.textContent = `Usos restantes: ${result.remaining}`;
                             next.disabled = result.remaining === 0;
                         } catch (failure) {
+                            if (!resultOpen) return;
                             message.textContent = failure.message || 'Não foi possível emitir o comando.';
                             next.disabled = false;
                         }
@@ -82,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     next.addEventListener('click', issue);
                     await issue();
                 }
+                if (!resultOpen) return;
                 panel.append(metadata);
                 const update = async () => {
                     try {
@@ -89,9 +108,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         const r = await fetch(url, {credentials:'same-origin', cache:'no-store'});
                         if (!r.ok) throw new Error();
                         const body = await r.json();
+                        if (!resultOpen) return;
                         const rows = data.kind === 'ad' ? body.deployments.filter(x => x.batch_id === item.id) : [body.deployment];
                         status.textContent = rows.length ? rows.map(x => `${x.endpoint?.hostname || 'Instalação'}: ${labels[x.ui_status] || 'Estado indisponível'}`).join(' · ') : 'Instalação: aguardando execução.';
-                    } catch (_) { status.textContent = 'Acompanhamento temporariamente indisponível.'; }
+                    } catch (_) { if (resultOpen) status.textContent = 'Acompanhamento temporariamente indisponível.'; }
                 };
                 update(); timer = setInterval(update, 5000);
             } catch (failure) { error.textContent = failure.message || 'Falha ao gerar instalação.'; error.hidden = false; }

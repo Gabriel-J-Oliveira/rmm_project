@@ -22,6 +22,41 @@
     display: none;
 }
 
+.page-agent-install .agent-install-results .agent-token-result-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    min-width: 0;
+}
+
+.page-agent-install .agent-install-results .agent-token-result-toolbar strong {
+    color: var(--text-primary);
+    font-size: 0.86rem;
+}
+
+.page-agent-install .agent-install-results .agent-token-result-close {
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: transparent;
+    padding: 7px 12px;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.page-agent-install .agent-install-results .agent-token-result-close:hover {
+    border-color: var(--module-accent);
+    color: var(--text-primary);
+}
+
+.page-agent-install .agent-install-results .agent-token-result-close:focus-visible {
+    outline: 2px solid var(--module-accent);
+    outline-offset: 2px;
+}
+
 .page-agent-install .agent-install-results .agent-token-command-area {
     display: grid;
     min-width: 0;
