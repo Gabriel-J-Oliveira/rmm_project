@@ -71,9 +71,27 @@ test('AD issues a fresh command through the authenticated batch endpoint', async
     ready(); await form.handlers.submit({preventDefault(){}});
     assert.equal(calls,1);
     assert.equal(panel.children[0].children[0].children[0].children[1].textContent,'deploy_1');
-    const next=panel.children[2];
+    const next=panel.children[1].children[0];
     await next.handlers.click();
     assert.equal(calls,2);
     assert.equal(panel.children[0].children[0].children[0].children[1].textContent,'deploy_2');
     assert.equal(next.disabled,true);
+});
+
+test('manual install forms use compact fields and full-width results', () => {
+    const html=fs.readFileSync('templates/dashboard/agent_install.html','utf8');
+    const css=fs.readFileSync('static/css/agent_install_layout.css','utf8');
+    const start=html.indexOf('<section class="agent-install-grid">');
+    const end=html.indexOf('<section class="panel agent-token-list-panel">');
+    assert.ok(start>=0 && end>start);
+    const section=html.slice(start,end);
+    const results=section.indexOf('<div class="agent-install-results"');
+    assert.ok(results>section.indexOf('id="manual-token-form"'));
+    assert.ok(results>section.indexOf('id="enrollment-token-form"'));
+    assert.equal((section.match(/id="enrollment-token-result"/g)||[]).length,1);
+    assert.equal((section.match(/id="manual-token-result"/g)||[]).length,1);
+    assert.match(section, /<div class="agent-form-row">\s*<label class="filter-field">\s*<span>Nome<\/span>\s*<input name="name" required placeholder="Piloto TI">\s*<\/label>\s*<label class="filter-field">\s*<span>Dom&iacute;nio permitido<\/span>/);
+    assert.match(section, /<div class="agent-form-row agent-form-row--name-validity">[\s\S]*?<input name="expires_minutes"/);
+    assert.match(css, /\.agent-token-result\[hidden\]\s*\{\s*display: none;/);
+    assert.doesNotMatch(source,/localStorage|sessionStorage|innerHTML/);
 });
