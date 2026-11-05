@@ -84,6 +84,9 @@ def monitoring_summary(endpoint):
     ).first()
     return {
         'compatible': compatible, 'minimum_version': MINIMUM_VERSION,
+        'reported_mode': ((heartbeat.raw_payload.get('agent') or {}).get('telemetry_mode')
+                          if heartbeat and isinstance(heartbeat.raw_payload.get('agent'), dict) else None),
+        'mode_reported_at': heartbeat.received_at if heartbeat else None,
         'continuous': ((heartbeat.raw_payload.get('agent') or {}).get('continuous_telemetry')
                        if heartbeat and isinstance(heartbeat.raw_payload.get('agent'), dict) else None),
         'effective': effective, 'reported_at': reported_at, 'applied_at': confirmed_at,

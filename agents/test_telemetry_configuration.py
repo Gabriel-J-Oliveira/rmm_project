@@ -88,6 +88,14 @@ class TelemetryConfigurationTests(TestCase):
         self.assertEqual(summary['effective'], self.config)
         self.assertEqual(self.create().status_code, 201)
 
+    def test_monitoring_summary_reports_mode_from_heartbeat(self):
+        heartbeat = self.machine.inventory_snapshots.order_by('-received_at').first()
+        heartbeat.raw_payload['agent']['telemetry_mode'] = 'legacy'
+        heartbeat.save(update_fields=['raw_payload'])
+        summary = monitoring_summary(self.machine)
+        self.assertEqual(summary['reported_mode'], 'legacy')
+        self.assertEqual(summary['mode_reported_at'], heartbeat.received_at)
+
     def test_monitoring_summary_returns_real_values_and_preserves_missing_metrics(self):
         self.assertIsNone(monitoring_summary(self.machine)['last_metrics'])
         EndpointPerformanceSample.objects.create(endpoint=self.machine, sample_id=uuid.uuid4(),

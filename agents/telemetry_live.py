@@ -1,5 +1,6 @@
 """Outbound-only live telemetry. Durable leases, ephemeral points, no jobs."""
 import json
+import logging
 import secrets
 import uuid
 import os
@@ -19,6 +20,24 @@ from config.authz import is_nightowl_technical_user
 from .authentication import authenticate_agent_token
 from .models import AgentMachine, TelemetryLiveSession
 from .telemetry_continuous import number
+
+logger = logging.getLogger(__name__)
+
+
+def _log_cache_failure(stage, error):
+    # Log only a fixed category: exception messages can contain paths or data.
+    if isinstance(error, PermissionError):
+        category = 'permission_denied'
+    elif isinstance(error, FileNotFoundError):
+        category = 'directory_missing'
+    elif isinstance(error, ValueError) and str(error) in {
+        'shared_live_cache_required', 'live_cache_must_not_be_web_served',
+        'private_live_cache_directory_required', 'cache_unavailable',
+    }:
+        category = str(error)
+    else:
+        category = 'cache_error'
+    logger.warning('telemetry.live.cache_unavailable stage=%s category=%s', stage, category)
 
 
 def shared_cache():
@@ -66,7 +85,8 @@ class LiveOperatorView(PrivateLiveView):
             return Response({'error': 'session_owned_by_another_operator'}, status=403)
         try:
             points = shared_cache().get('live:' + str(session.session_id), [])
-        except Exception:
+        except Exception as error:
+            _log_cache_failure('read', error)
             return Response({'error': 'live_cache_unavailable'}, status=503)
         last = parse_datetime(points[-1]['collected_at']) if points else None
         return Response({**session_state(session), 'state': 'active', 'points': points,
@@ -107,7 +127,8 @@ class LiveOperatorView(PrivateLiveView):
                 if cache.get(key) != 'ok':
                     raise ValueError('cache_unavailable')
                 cache.delete(key)
-            except Exception:
+            except Exception as error:
+                _log_cache_failure('start', error)
                 return Response({'error': 'live_cache_unavailable'}, status=503)
             session, _ = TelemetryLiveSession.objects.update_or_create(endpoint=endpoint, defaults={
                 'session_id': uuid.uuid4(), 'operator': request.user, 'created_at': now,
@@ -180,6 +201,7 @@ class LiveAgentPointsView(PrivateLiveView):
             cache.set(key, sorted(unique.values(), key=lambda item: item['collected_at'])[-180:], 90)
         except (ValueError, KeyError, TypeError):
             return Response({'error': 'invalid_live_points'}, status=400)
-        except Exception:
+        except Exception as error:
+            _log_cache_failure('write', error)
             return Response({'error': 'live_cache_unavailable'}, status=503)
         return Response({'status': 'ok'})

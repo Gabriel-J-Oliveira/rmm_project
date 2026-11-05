@@ -25,6 +25,8 @@
             + row("Rede: recebido / enviado (contadores)", number(metrics.network_received_bytes, 'bytes') + ' / ' + number(metrics.network_sent_bytes, 'bytes'))
             + row("Medicao coletada em", data.last_sample_at)
             + row("Telemetria reportada", state)
+            + row("Modo no ultimo heartbeat", data.reported_mode || "Nao reportado")
+            + row("Modo reportado em", data.mode_reported_at)
             + row("Coleta", continuous ? continuous.sample_seconds + " segundos (continuo)" : effective ? effective.telemetrySampleSeconds + " segundos" : "Nao reportado")
             + row("Envio", continuous ? continuous.upload_seconds + " segundos (resumos)" : effective ? effective.telemetryFlushSeconds + " segundos" : "Nao reportado")
             + row("Reportada em", data.reported_at)
@@ -33,7 +35,7 @@
             + row("Solicitada: estado / coleta / envio", requestedText)
             + row("Job", statuses[data.job_status] || data.job_status || "Nenhum")
             + row("Amostras posteriores a aplicacao", data.samples_after_application ? "Recebidas" : "Ainda nao confirmadas")
-            + '</dl></section><div data-live-placement></div><section class="panel endpoint-dense-card endpoint-telemetry-config"><header><h2>Configuração da telemetria</h2></header><form data-telemetry-form><fieldset' + (!data.compatible || pending ? " disabled" : "") + '>'
+            + '</dl></section>' + (data.reported_mode === 'legacy' ? '<p class="muted">O modo legacy reportado não envia amostras ao monitoramento ao vivo. Confirme o modo atual do agente antes de iniciar.</p>' : '') + '<div data-live-placement></div><section class="panel endpoint-dense-card endpoint-telemetry-config"><header><h2>Configuração da telemetria</h2></header><form data-telemetry-form><fieldset' + (!data.compatible || pending ? " disabled" : "") + '>'
             + '<label class="endpoint-telemetry-toggle"><input type="checkbox" name="telemetryEnabled"' + (config.telemetryEnabled ? " checked" : "") + '> Telemetria habilitada</label>'
             + '<label>Coleta do perfil legado (segundos)<input type="number" name="telemetrySampleSeconds" min="60" max="3600" step="1" required' + (continuous ? ' readonly' : '') + ' value="' + escape(config.telemetrySampleSeconds) + '"></label>'
             + '<label>Envio do perfil legado (segundos)<input type="number" name="telemetryFlushSeconds" min="60" max="86400" step="1" required' + (continuous ? ' readonly' : '') + ' value="' + escape(config.telemetryFlushSeconds) + '"></label>'

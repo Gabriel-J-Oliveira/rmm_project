@@ -34150,7 +34150,20 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 .endpoint-telemetry-config label { display: grid; gap: 6px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle { display: flex; align-items: center; gap: 8px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle input { width: auto; margin: 0; }
-.endpoint-telemetry-config input[type="number"] { width: 100%; max-width: 280px; }
+.endpoint-telemetry-config input[type="number"] {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 280px;
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--night-black);
+    color: var(--text-primary);
+    font: inherit;
+}
+.endpoint-telemetry-config input[type="number"]:focus-visible { outline: 2px solid var(--soft-purple); outline-offset: 2px; }
+.endpoint-telemetry-config input[type="number"]:read-only { opacity: .7; }
 .endpoint-telemetry-config button { justify-self: start; }
 .endpoint-live { margin: 0; }
 .endpoint-live > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }

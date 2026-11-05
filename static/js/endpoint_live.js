@@ -1,6 +1,15 @@
 (function (scope) {
     "use strict";
     function escape(value) { return String(value == null ? "-" : value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+    function errorMessage(code) {
+        return ({
+            live_cache_unavailable: 'Cache do monitoramento indisponível. Solicite ao administrador que verifique o serviço.',
+            forbidden: 'Seu usuário não tem permissão para monitoramento ao vivo.',
+            session_owned_by_another_operator: 'Outro operador já iniciou uma sessão neste endpoint.',
+            endpoint_unavailable: 'Endpoint indisponível para monitoramento ao vivo.',
+            session_expired: 'Sessão expirada. Inicie uma nova sessão.'
+        })[code] || 'Não foi possível comunicar com o monitoramento. Verifique sua conexão e tente novamente.';
+    }
     function chart(points, names, maximum, labels) {
         const valid = points.slice(-90);
         const numbers = valid.flatMap(p => names.map(name => p.metrics[name])).filter(Number.isFinite);
@@ -29,7 +38,7 @@
             '<br>Escala: 0 a ' + cap.toFixed(2) + ' · ' + escape(new Date(valid[0].collected_at).toLocaleTimeString()) + ' a ' +
             escape(new Date(last.collected_at).toLocaleTimeString()) + '</small>';
     }
-    if (typeof module !== "undefined" && module.exports) module.exports = {chart, escape};
+    if (typeof module !== "undefined" && module.exports) module.exports = {chart, escape, errorMessage};
     if (typeof document === "undefined") return;
     const root = document.querySelector('[data-endpoint-detail]');
     if (!root || root.dataset.liveAllowed !== 'yes') return;
@@ -120,7 +129,7 @@
             points = data.points || [];
             status.textContent = (!data.last_sample_at ? 'Aguardando dados do agente' : data.stale ? 'Sem dados recentes' : 'Recebendo amostras') + (data.last_sample_at ? ' · Ultima amostra: ' + new Date(data.last_sample_at).toLocaleString() : '');
             draw();
-        } catch (error) { status.textContent = 'Dados indisponiveis: ' + error.message; }
+        } catch (error) { status.textContent = 'Dados indisponíveis: ' + errorMessage(error.message); }
         finally { polling = false; if (session) timer = setTimeout(poll, 5000); }
     }
     button.addEventListener('click', async () => {
@@ -128,7 +137,7 @@
         try {
             if (session) { await request('stop'); expired(); }
             else { session = await request('start'); button.textContent = 'Encerrar'; lastRenewal = Date.now(); await poll(); }
-        } catch (error) { status.textContent = 'Nao foi possivel iniciar: ' + error.message; }
+        } catch (error) { status.textContent = errorMessage(error.message); }
         finally { button.disabled = false; }
     });
     panel.querySelectorAll('select').forEach(select => select.addEventListener('change', draw));

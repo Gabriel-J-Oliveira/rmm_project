@@ -27,6 +27,12 @@ test('summary distinguishes real zero values from missing measurements', () => {
     assert.match(html, /Nao informado/);
     assert.match(html, /2026-11-05T12:00:00Z/);
 });
+test('reported legacy mode explains why live samples are unavailable', () => {
+    const html = render({reported_mode: 'legacy', mode_reported_at: '2026-11-05T19:00:00Z'});
+    assert.match(html, /modo legacy reportado não envia amostras/);
+    assert.match(html, /2026-11-05T19:00:00Z/);
+    assert.doesNotMatch(render({reported_mode: 'continuous'}), /modo legacy reportado/);
+});
 test('pending jobs disable duplicate requests; safe output escapes all remote values', () => {
     const html = render({ compatible: true, effective: enabled, job_status: 'running',
         reported_at: '<img src=x onerror=alert(1)>', samples_after_application: true });
