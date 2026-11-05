@@ -20,7 +20,12 @@ assert(chart(points, ['cpu.usage_percent'], 100).includes('<path'));
 assert(!chart([{metrics:{},collected_at:new Date().toISOString()}], ['cpu.usage_percent'], 100).includes('NaN'));
 const legend = chart(points, ['cpu.usage_percent'], 100, ['<script>alert(1)</script>']);
 assert(legend.includes('&lt;script&gt;') && !legend.includes('<script>'));
-assert(legend.includes('Escala: 0 a 100.00'));
+assert(legend.includes('100') && legend.includes('mín') && legend.includes('máx'));
+assert(legend.includes('data-live-tip') && legend.includes('tabindex="0"'));
+assert(chart(points, ['network.nic.received_bytes_per_sec'], null).includes('KiB/s'));
+assert(chart([{collected_at:new Date().toISOString(),metrics:{'network.nic.received_bytes_per_sec':1048576}}], ['network.nic.received_bytes_per_sec'], null).includes('MiB/s'));
+assert(chart(points, ['disk.os.read_latency_ms'], null).includes('ms'));
+assert(chart([{collected_at:new Date().toISOString(),metrics:{}}], ['cpu.usage_percent'], 100).includes('Sem medição'));
 const missing = points.map(p => ({...p, metrics:{...p.metrics}}));
 delete missing[5].metrics['cpu.usage_percent'];
 assert(chart(missing, ['cpu.usage_percent'],100).split(' M').length >= 3, 'Missing evidence must break the chart line');
@@ -57,10 +62,13 @@ if (process.argv.includes('--visual')) (async () => {
             await page.screenshot({path:path.join(process.env.TEMP,`nightowl-live-${width}.png`), fullPage:true});
         }
         await page.getByRole('button',{name:'Encerrar',exact:true}).click();
+        await page.getByText(/Análise encerrada/).waitFor();
+        assert(await page.locator('.endpoint-live svg path').count() >= 6);
+        await page.getByRole('button',{name:'Limpar',exact:true}).click();
         await page.locator('[data-live-body]').waitFor({state:'hidden'});
         expired = true;
         await page.getByRole('button',{name:'Iniciar',exact:true}).click();
-        await page.getByText('Sessao expirada',{exact:true}).waitFor();
+        await page.getByText(/Sessão expirada/).waitFor();
         console.log('PASS synthetic browser: authorized start, four charts, safe labels, selectors, stop/expiry, desktop/mobile screenshots.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
