@@ -45,13 +45,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!response.ok) throw new Error(data.detail || 'Não foi possível gerar a instalação.');
                 const item = data.deployment || data.batch;
                 panel.replaceChildren(); panel.hidden = false;
-                const commandArea = document.createElement('div'); panel.append(commandArea);
+                const commandArea = document.createElement('div'); commandArea.className = 'agent-token-command-area'; panel.append(commandArea);
                 if (data.kind !== 'ad') commandArea.append(makeBlock('Comando PowerShell', item.command, 'Copiar comando'));
                 if (data.manual_token) panel.append(makeBlock('Token manual', data.manual_token, 'Copiar token'));
-                const expiry = document.createElement('p'); expiry.textContent = `Validade: ${new Date(item.expires_at).toLocaleString('pt-BR')}`; panel.append(expiry);
+                const expiry = document.createElement('span'); expiry.textContent = `Validade: ${new Date(item.expires_at).toLocaleString('pt-BR')}`;
+                const status = document.createElement('span'); status.textContent = 'Instalação: aguardando execução.';
+                const metadata = document.createElement('div'); metadata.className = 'agent-token-result-meta';
+                metadata.append(expiry, status);
                 if (data.kind === 'ad') {
+                    const controls = document.createElement('div'); controls.className = 'agent-token-result-controls';
                     const next = document.createElement('button'); next.type = 'button'; next.textContent = 'Gerar próximo comando';
-                    const message = document.createElement('p'); panel.append(next, message);
+                    const message = document.createElement('p'); controls.append(next, message); panel.append(controls);
                     let pendingId = null;
                     const issue = async () => {
                         next.disabled = true;
@@ -78,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     next.addEventListener('click', issue);
                     await issue();
                 }
-                const status = document.createElement('p'); status.textContent = 'Aguardando execução.'; panel.append(status);
+                panel.append(metadata);
                 const update = async () => {
                     try {
                         const url = data.kind === 'ad' ? `${form.dataset.historyUrl}?batch_id=${encodeURIComponent(item.id)}` : `${form.dataset.createUrl}${encodeURIComponent(item.id)}/`;
@@ -86,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (!r.ok) throw new Error();
                         const body = await r.json();
                         const rows = data.kind === 'ad' ? body.deployments.filter(x => x.batch_id === item.id) : [body.deployment];
-                        status.textContent = rows.length ? rows.map(x => `${x.endpoint?.hostname || 'Instalação'}: ${labels[x.ui_status] || 'Estado indisponível'}`).join(' · ') : 'Aguardando execução.';
+                        status.textContent = rows.length ? rows.map(x => `${x.endpoint?.hostname || 'Instalação'}: ${labels[x.ui_status] || 'Estado indisponível'}`).join(' · ') : 'Instalação: aguardando execução.';
                     } catch (_) { status.textContent = 'Acompanhamento temporariamente indisponível.'; }
                 };
                 update(); timer = setInterval(update, 5000);
