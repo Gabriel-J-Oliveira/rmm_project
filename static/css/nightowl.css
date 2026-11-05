@@ -34166,3 +34166,9 @@ body.page-endpoint-detail .endpoint-hardware-evidence .endpoint-fact-list dd {
         grid-template-columns: minmax(0, 1fr) !important;
     }
 }
+
+/* Action groups share the existing controls and collapse naturally on narrow screens. */
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group { margin: 1.25rem 0; }
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group h3 { margin: 0 0 .75rem; }
+body.page-endpoint-detail .endpoint-actions-card .endpoint-remote-actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .75rem; }
+body.page-endpoint-detail .endpoint-actions-card .endpoint-actions-danger { border-top: 1px solid var(--critical); padding-top: 1rem; }

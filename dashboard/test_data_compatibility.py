@@ -15,6 +15,29 @@ class DataCompatibilityTests(TestCase):
     def setUp(self):
         self.machine, _ = AgentMachine.create_with_token(hostname='SYNTH-COMPAT', machine_id='synthetic-compat')
 
+    def test_legacy_defender_collection_error_is_not_presented_as_critical_or_disabled(self):
+        security = {'overall_status': 'critical', 'defender': {'defender_present': False,
+                    'defender_enabled': False, 'realtime_protection_enabled': False,
+                    'raw': {'error': 'collection failed'}}}
+        snapshot = record_collection(self.machine, 'security', {'machine_id': self.machine.machine_id, **security})
+        with patch('dashboard.views.evaluate_agent_update_policy') as policy:
+            policy.return_value.target_version = ''
+            data = build_endpoint_detail_payload(self.machine, snapshot, {'score': 100}, [], '', 'workstation', [], [], [])
+        self.assertEqual(data['security']['status'], 'unknown')
+        self.assertEqual(data['security']['defenderStatus'], 'Erro de coleta')
+        self.assertIsNone(data['security']['defenderEnabled'])
+        self.assertIsNone(data['security']['realtimeEnabled'])
+
+    def test_defender_collection_error_preserves_independent_firewall_warning(self):
+        security = {'overall_status': 'critical', 'firewall': {'domain_enabled': False},
+                    'defender': {'defender_present': False, 'raw': {'error': 'collection failed'}}}
+        snapshot = record_collection(self.machine, 'security', {'machine_id': self.machine.machine_id, **security})
+        with patch('dashboard.views.evaluate_agent_update_policy') as policy:
+            policy.return_value.target_version = ''
+            data = build_endpoint_detail_payload(self.machine, snapshot, {'score': 100}, [], '', 'workstation', [], [], [])
+        self.assertEqual(data['security']['status'], 'attention')
+        self.assertEqual(data['security']['defenderStatus'], 'Erro de coleta')
+
     def test_missing_free_and_actual_zero_remain_distinct(self):
         one = 1024 ** 3
         normalized = _normalize_disk_rows([{'name': 'C:', 'size_bytes': one}, {'name': 'D:', 'size_bytes': one, 'free_bytes': 0}])

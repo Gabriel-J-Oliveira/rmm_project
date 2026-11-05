@@ -1137,6 +1137,7 @@
         return '<div class="endpoint-compact-grid security-grid">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield") + 'Protecao local</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
                 { label: "Antivirus", value: security.antivirus },
+                { label: "Estado do Defender", value: security.defenderStatus || "Desconhecido" },
                 { label: "Defender ativo", value: security.defenderEnabled == null ? "-" : security.defenderEnabled ? "Sim" : "Nao" },
                 { label: "Tempo real", value: security.realtimeEnabled == null ? "-" : security.realtimeEnabled ? "Sim" : "Nao" },
                 { label: "Assinatura", value: security.signature, mono: true },
@@ -1182,20 +1183,23 @@
         const lifecycleButtons = agentLifecycleActionButtons(detail);
         const purgeButtons = purgeActionButtons(detail);
         const agentManagementButtons = agentManagementActionButtons(detail);
-        return '<section class="panel endpoint-dense-card"><header><h2>' + icon("list-checks") + 'Acoes e Jobs</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar lista</button></header>' +
-            '<div class="endpoint-remote-actions-grid">' +
+        return '<section class="panel endpoint-dense-card endpoint-actions-card"><header><h2>' + icon("list-checks") + 'Acoes e Jobs</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar lista</button></header>' +
+            '<section class="endpoint-action-group"><h3>Diagnósticos</h3><div class="endpoint-remote-actions-grid">' +
             actionButton("ping", "Ping", "activity") +
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
             actionButton("collect_disks", "Coletar discos", "hard-drive") +
             actionButton("collect_software", "Coletar software", "package-search") +
+            '</div></section><section class="endpoint-action-group"><h3>Ações operacionais</h3><div class="endpoint-remote-actions-grid">' +
             Object.keys(operationalLabels).map(function (action) {
                 const available = asObject(asObject(detail.operationalActions)[action]);
                 return '<button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="Ação indisponível para este operador ou endpoint"') + '><span>' + escapeHtml(operationalLabels[action]) + '</span></button>';
             }).join("") +
+            '</div></section><div data-approved-scripts-placement></div><section class="endpoint-action-group"><h3>Manutenção do agente</h3><div class="endpoint-remote-actions-grid">' +
             agentManagementButtons.join("") +
+            '</div></section><section class="endpoint-action-group endpoint-actions-danger"><h3>Ações destrutivas</h3><div class="endpoint-remote-actions-grid">' +
             lifecycleButtons.join("") +
             purgeButtons.join("") +
-            "</div>" +
+            "</div></section>" +
             renderJobs(detail.jobs, 80) +
             "</section>";
     }
