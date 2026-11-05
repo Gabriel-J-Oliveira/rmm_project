@@ -67,7 +67,8 @@
             const button = element('button','Executar','endpoint-quick-action-button'); button.type='button'; button.disabled=!eligible;
             button.addEventListener('click',() => modal(script)); row.append(button); card.append(row);
         });
-        section.append(card);
+        const placement = section.querySelector('[data-approved-scripts-placement]');
+        if (placement) placement.append(card); else section.append(card);
     }
     async function load() {
         if (catalog || loading || failure) return;

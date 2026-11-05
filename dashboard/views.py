@@ -896,25 +896,35 @@ def get_primary_disk(disks):
 
 def defender_state(defender_status):
     status = ensure_dict(defender_status)
-    enabled = status.get('enabled') is True
-    realtime = status.get('real_time_protection_enabled') is True
+    raw = ensure_dict(status.get('raw'))
+    source = ensure_dict(raw.get('raw'))
+    if raw.get('error') or source.get('error'):
+        return {'label': 'Erro de coleta', 'class': 'security-warning', 'detail': 'N&atilde;o foi poss&iacute;vel consultar o Defender.', 'key': 'unknown'}
+    present = raw.get('defender_present')
+    enabled = status.get('enabled')
+    realtime = status.get('real_time_protection_enabled')
 
-    if enabled and realtime:
+    if raw.get('state') == 'not_present':
+        return {'label': 'Ausente', 'class': 'security-warning', 'detail': 'Defender informado como ausente.', 'key': 'attention'}
+    if present is not False and enabled is True and realtime is True:
         return {
             'label': 'Protegido',
             'class': 'security-good',
             'detail': 'Defender ativo com prote&ccedil;&atilde;o em tempo real.',
+            'key': 'ok',
         }
-    if status:
+    if present is True and (enabled is False or realtime is False):
         return {
-            'label': 'Aten&ccedil;&atilde;o',
+            'label': 'Inativo ou parcial',
             'class': 'security-warning',
-            'detail': 'Defender ausente ou prote&ccedil;&atilde;o parcial.',
+            'detail': 'Defender ou prote&ccedil;&atilde;o em tempo real desativado.',
+            'key': 'attention',
         }
     return {
-        'label': 'Indispon&iacute;vel',
-        'class': 'security-critical',
+        'label': 'Desconhecido',
+        'class': 'security-warning',
         'detail': 'Status de seguran&ccedil;a n&atilde;o recebido.',
+        'key': 'unknown',
     }
 
 
@@ -985,38 +995,7 @@ def build_software_rows(installed_software):
 
 def detail_defender_state(defender_status, installed_software):
     state = defender_state(defender_status)
-    has_security = has_software_match(installed_software, SECURITY_TERMS)
-    has_bitdefender = has_software_match(installed_software, ['bitdefender'])
-
-    status = ensure_dict(defender_status)
-    defender_ok = status.get('enabled') is True and status.get('real_time_protection_enabled') is True
-
-    if defender_ok:
-        return {
-            **state,
-            'key': 'ok',
-        }
-
-    if has_bitdefender:
-        return {
-            'label': 'Protegido por terceiro',
-            'class': 'security-good',
-            'detail': 'Defender n&atilde;o identificado, mas Bitdefender foi detectado nos softwares instalados.',
-            'key': 'ok',
-        }
-
-    if has_security:
-        return {
-            'label': 'Antiv&iacute;rus detectado',
-            'class': 'security-warning',
-            'detail': 'Defender n&atilde;o identificado, mas outro software de seguran&ccedil;a foi detectado.',
-            'key': 'attention',
-        }
-
-    return {
-        **state,
-        'key': 'attention' if status else 'unknown',
-    }
+    return state
 
 
 def calculate_health(endpoint, primary_disk, defender):
@@ -1108,12 +1087,7 @@ def build_smart_badges(endpoint, primary_disk, defender, installed_software):
 
 
 def defender_filter_state(defender_status):
-    status = ensure_dict(defender_status)
-    if not status:
-        return 'unknown'
-    if status.get('enabled') is True and status.get('real_time_protection_enabled') is True:
-        return 'ok'
-    return 'attention'
+    return defender_state(defender_status)['key']
 
 
 def build_endpoint_row(endpoint):
@@ -1129,7 +1103,7 @@ def build_endpoint_row(endpoint):
     if not primary_ip and snapshot and snapshot.ips:
         primary_ip = snapshot.ips[0]
 
-    endpoint_type = infer_endpoint_type(endpoint.hostname, os_name)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, os_name, snapshot)
     sector = infer_endpoint_sector(endpoint.hostname, domain, logged_user)
     health_basis = SimpleNamespace(status=endpoint.status, last_seen_at=endpoint.last_seen_at)
     defender = detail_defender_state(snapshot.defender_status if snapshot else {}, snapshot.installed_software if snapshot else [])
@@ -1177,13 +1151,23 @@ def row_matches_query(row, query):
     return query.lower() in haystack
 
 
-def infer_endpoint_type(hostname, os_name):
-    text = f'{hostname or ""} {os_name or ""}'.casefold()
-    if any(term in text for term in ['server', 'srv', 'dc-', 'erp', 'print']):
+def infer_endpoint_type(hostname, os_name, snapshot=None):
+    system = ensure_dict(_raw_collection(snapshot, 'system'))
+    product_type = system.get('product_type')
+    if str(product_type) in ('2', '3'):
         return 'server'
-    if any(term in text for term in ['nb', 'notebook', 'laptop']):
-        return 'notebook'
-    return 'workstation'
+    if str(product_type) == '1':
+        return 'notebook' if system.get('machine_type') == 'notebook' else 'workstation'
+    # Older agents report only the derived machine type, not ProductType.
+    reported = system.get('machine_type')
+    if reported in ('server', 'workstation', 'notebook') and system.get('os_name'):
+        return reported
+    os_text = str(os_name or '').casefold()
+    if 'windows server' in os_text:
+        return 'server'
+    if re.search(r'\bwindows\s+(?:10|11)\b', os_text):
+        return 'workstation'
+    return 'unknown'
 
 
 def endpoint_type_label(value):
@@ -1191,7 +1175,7 @@ def endpoint_type_label(value):
         'server': 'Servidor',
         'workstation': 'Workstation',
         'notebook': 'Notebook',
-    }.get(value or '', 'Workstation')
+    }.get(value or '', 'Desconhecido')
 
 
 def infer_endpoint_sector(hostname, domain, logged_user):
@@ -2501,7 +2485,7 @@ def build_mock_endpoint_detail_context(pk):
         if getattr(getattr(event, 'endpoint', None), 'id', None) == endpoint.id
     ][:8])
     endpoint_sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
-    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name, snapshot)
     endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status), health, snapshot)
 
     return {
@@ -3474,7 +3458,17 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     security = None
     if has_security:
         defender = ensure_dict(security_collection.get('defender'))
+        defender_observation = defender_state({'enabled': defender.get('defender_enabled', defender.get('antivirus_enabled')), 'real_time_protection_enabled': defender.get('realtime_protection_enabled', defender.get('real_time_protection_enabled')), 'raw': defender})
+        defender_unconfirmed = defender_observation['key'] == 'unknown'
         firewall = ensure_dict(security_collection.get('firewall'))
+        overall_status = security_collection.get('overall_status') or 'unknown'
+        if defender_unconfirmed and overall_status == 'critical':
+            # The legacy collector attributed critical exclusively to Defender.
+            # Keep independent firewall/RDP/tool warnings visible.
+            overall_status = 'warning' if (any(value is False for value in firewall.values()) or
+                security_collection.get('rdp_enabled') is True or security_collection.get('remote_access_tools')) else 'unknown'
+        elif defender_observation['key'] != 'ok' and overall_status == 'ok':
+            overall_status = 'unknown'
         bitlocker = ensure_dict(security_collection.get('bitlocker') or security_collection.get('bitlocker_summary'))
         av_products = [
             ensure_dict(item)
@@ -3497,14 +3491,15 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
             if name:
                 local_admins.append(name)
         security = {
-            'status': 'critical' if security_collection.get('overall_status') == 'critical' else 'attention' if security_collection.get('overall_status') == 'warning' else security_collection.get('overall_status') or 'unknown',
-            'antivirus': ', '.join([item.get('name', '') for item in av_products if item.get('name')]) or ('Microsoft Defender' if defender else '-'),
+            'status': 'attention' if overall_status == 'warning' else overall_status,
+            'antivirus': ', '.join([item.get('name', '') for item in av_products if item.get('name')]) or ('Microsoft Defender' if defender.get('defender_present') is True and not defender_unconfirmed else '-'),
+            'defenderStatus': defender_observation['label'],
             'signature': defender.get('antivirus_signature_version') or defender.get('engine_version') or '',
             'signatureUpdatedAt': defender.get('antivirus_signature_last_updated') or '',
             'lastQuickScan': defender.get('last_quick_scan') or '',
             'lastFullScan': defender.get('last_full_scan') or '',
-            'defenderEnabled': defender.get('defender_enabled') if defender.get('defender_enabled') is not None else defender.get('antivirus_enabled'),
-            'realtimeEnabled': defender.get('realtime_protection_enabled') if defender.get('realtime_protection_enabled') is not None else defender.get('real_time_protection_enabled'),
+            'defenderEnabled': None if defender_unconfirmed else defender.get('defender_enabled') if defender.get('defender_enabled') is not None else defender.get('antivirus_enabled'),
+            'realtimeEnabled': None if defender_unconfirmed else defender.get('realtime_protection_enabled') if defender.get('realtime_protection_enabled') is not None else defender.get('real_time_protection_enabled'),
             'firewall': 'Dominio: {0} · Privada: {1} · Publica: {2}'.format(
                 'on' if firewall.get('domain_enabled') else 'off' if firewall.get('domain_enabled') is False else '?',
                 'on' if firewall.get('private_enabled') else 'off' if firewall.get('private_enabled') is False else '?',
@@ -3678,7 +3673,7 @@ def endpoint_detail(request, pk):
         status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
     ).order_by('-last_seen_at')[:8]
     endpoint_sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
-    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name, snapshot)
     endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status if snapshot else {}), health, snapshot)
 
     audit_events = endpoint.audit_events.select_related('alert').order_by('-created_at')[:8]
@@ -3816,7 +3811,7 @@ def endpoint_detail_data(request, pk):
         status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
     ).order_by('-last_seen_at')[:8]
     endpoint_sector = infer_endpoint_sector(endpoint.hostname, endpoint.domain, endpoint.last_logged_user)
-    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name)
+    endpoint_type = infer_endpoint_type(endpoint.hostname, endpoint.os_name, snapshot)
     endpoint_attention = endpoint_attention_summary(endpoint, primary_disk, defender_filter_state(snapshot.defender_status if snapshot else {}), health, snapshot)
     audit_events = endpoint.audit_events.select_related('alert').order_by('-created_at')[:8]
     related_tickets = endpoint.tickets.exclude(

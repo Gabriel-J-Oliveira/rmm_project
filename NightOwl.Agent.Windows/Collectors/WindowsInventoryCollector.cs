@@ -288,20 +288,24 @@ try { foreach ($path in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Servi
             .OrderBy(name => name)
             .ToList();
 
-        bool defenderPresent = ToBool(defender.GetValueOrDefault("defender_present")) == true;
-        bool defenderEnabled = ToBool(defender.GetValueOrDefault("defender_enabled")) == true;
-        bool realtimeEnabled = ToBool(defender.GetValueOrDefault("realtime_protection_enabled")) == true;
+        bool? defenderPresent = ToBool(defender.GetValueOrDefault("defender_present"));
+        bool? defenderEnabled = ToBool(defender.GetValueOrDefault("defender_enabled"));
+        bool? realtimeEnabled = ToBool(defender.GetValueOrDefault("realtime_protection_enabled"));
         bool hasThirdPartyAv = antivirusProducts.Count > 0;
         bool firewallWarning = firewall.Values.Any(value => value is bool enabled && !enabled);
         bool rdpEnabled = IsRdpEnabled();
         string overall = "ok";
-        if ((defenderPresent && (!defenderEnabled || !realtimeEnabled) && !hasThirdPartyAv) || (!defenderPresent && !hasThirdPartyAv))
+        if ((defenderPresent == false || (defenderPresent == true && (defenderEnabled == false || realtimeEnabled == false))) && !hasThirdPartyAv)
         {
             overall = "critical";
         }
         else if (firewallWarning || rdpEnabled || detectedRemoteTools.Count > 0)
         {
             overall = "warning";
+        }
+        else if (defenderPresent != true || defenderEnabled != true || realtimeEnabled != true)
+        {
+            overall = "unknown";
         }
 
         return new Dictionary<string, object?>
@@ -405,7 +409,8 @@ try { foreach ($path in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Servi
             ["timezone"] = ps.GetValueOrDefault("timezone")?.ToString() ?? TimeZoneInfo.Local.Id,
             ["locale"] = ps.GetValueOrDefault("locale")?.ToString() ?? CultureInfo.CurrentCulture.Name,
             ["language"] = ps.GetValueOrDefault("locale")?.ToString() ?? CultureInfo.CurrentUICulture.Name,
-            ["machine_type"] = ps.GetValueOrDefault("machine_type")?.ToString() ?? "workstation",
+            ["machine_type"] = ps.GetValueOrDefault("machine_type")?.ToString() ?? "unknown",
+            ["product_type"] = ps.GetValueOrDefault("product_type"),
             ["manufacturer"] = ps.GetValueOrDefault("manufacturer")?.ToString() ?? "",
             ["model"] = ps.GetValueOrDefault("model")?.ToString() ?? "",
             ["serial_number"] = ps.GetValueOrDefault("serial_number")?.ToString() ?? "",
@@ -442,7 +447,8 @@ try { foreach ($path in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Servi
               last_boot_time = if ($os.LastBootUpTime) { ([DateTime]$os.LastBootUpTime).ToUniversalTime().ToString("o") } else { $null }
               uptime_seconds = if ($os.LastBootUpTime) { [int64]((Get-Date) - ([DateTime]$os.LastBootUpTime)).TotalSeconds } else { $null }
               timezone = [TimeZoneInfo]::Local.Id; locale = [System.Globalization.CultureInfo]::CurrentCulture.Name
-              machine_type = if ($os.ProductType -ne 1) { "server" } elseif ($cs.PCSystemTypeEx -eq 2) { "notebook" } else { "workstation" }
+              product_type = $os.ProductType
+              machine_type = if ($os.ProductType -in @(2, 3)) { "server" } elseif ($os.ProductType -eq 1 -and $cs.PCSystemTypeEx -eq 2) { "notebook" } elseif ($os.ProductType -eq 1) { "workstation" } else { "unknown" }
               manufacturer = $cs.Manufacturer
               model = $cs.Model
               system_sku = $cs.SystemSKUNumber; system_family = $cs.SystemFamily
@@ -906,7 +912,7 @@ try { foreach ($path in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Servi
                 product_version = $mp.AMProductVersion
               }
             } catch {
-              [pscustomobject]@{ defender_present = $false; error = $_.Exception.Message }
+              [pscustomobject]@{ defender_present = $null; error = 'collection_failed' }
             }
         """, timeoutSeconds: 10);
         return result;
