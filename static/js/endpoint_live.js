@@ -1,6 +1,15 @@
 (function (scope) {
     "use strict";
     function escape(value) { return String(value == null ? "-" : value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+    function errorMessage(code) {
+        return ({
+            live_cache_unavailable: 'Cache do monitoramento indisponível. Solicite ao administrador que verifique o serviço.',
+            forbidden: 'Seu usuário não tem permissão para monitoramento ao vivo.',
+            session_owned_by_another_operator: 'Outro operador já iniciou uma sessão neste endpoint.',
+            endpoint_unavailable: 'Endpoint indisponível para monitoramento ao vivo.',
+            session_expired: 'Sessão expirada. Inicie uma nova sessão.'
+        })[code] || 'Não foi possível comunicar com o monitoramento. Verifique sua conexão e tente novamente.';
+    }
     function chart(points, names, maximum, labels) {
         const valid = points.slice(-90).filter(p => p && p.metrics && Number.isFinite(Date.parse(p.collected_at)));
         const numbers = valid.flatMap(p => names.map(name => p.metrics[name])).filter(Number.isFinite);
@@ -35,7 +44,7 @@
         }).join('');
         return `<svg viewBox="0 0 600 190" role="group" aria-label="Gráfico de medições; selecione um ponto para detalhes"><text x="55" y="13">${unit}</text>${grid}${series}<text x="55" y="169">${escape(time(first))}</text><text x="585" y="169" text-anchor="end">${escape(time(lastTime))}</text></svg><div class="live-legends">${legend}</div><p class="live-tooltip" data-chart-tooltip aria-live="polite">Selecione um ponto para ver horário e valor.</p>`;
     }
-    if (typeof module !== "undefined" && module.exports) module.exports = {chart, escape};
+    if (typeof module !== "undefined" && module.exports) module.exports = {chart, escape, errorMessage};
     if (typeof document === "undefined") return;
     const root = document.querySelector('[data-endpoint-detail]');
     if (!root || root.dataset.liveAllowed !== 'yes') return;
@@ -152,7 +161,7 @@
         } catch (error) {
             if (generation === epoch && state === 'active') {
                 if (error.message === 'session_expired') freeze('Sessão expirada');
-                else status.textContent = 'Dados indisponíveis: ' + error.message;
+                else status.textContent = 'Dados indisponíveis: ' + errorMessage(error.message);
             }
         } finally {
             polling = false;
@@ -170,7 +179,7 @@
             if (stopped.state !== 'expired') throw new Error('Encerramento não confirmado');
             if (discard) reset(); else freeze('Análise encerrada', true);
         } catch (error) {
-            status.textContent = 'Não foi possível encerrar a sessão: ' + error.message;
+            status.textContent = 'Não foi possível encerrar a sessão: ' + errorMessage(error.message);
         } finally {
             busy = false; button.disabled = clear.disabled = false;
             if (state === 'active' && !timer) timer = setTimeout(() => { timer = null; poll(); }, 5000);
@@ -183,7 +192,7 @@
         try {
             session = await request('start'); ++epoch; state = 'active'; points = [];
             lastRenewal = Date.now(); status.textContent = 'Aguardando dados do agente'; draw();
-        } catch (error) { status.textContent = 'Não foi possível iniciar: ' + error.message; }
+        } catch (error) { status.textContent = errorMessage(error.message); }
         finally { busy = false; button.disabled = false; }
         if (state === 'active') poll();
     });

@@ -152,6 +152,16 @@ class ContinuousTelemetryTests(TestCase):
         with self.settings(CACHES={'telemetry_live': {'BACKEND':'django.core.cache.backends.locmem.LocMemCache'}}):
             self.assertEqual(self.client.post(self.live_url, {}, content_type='application/json').status_code, 503)
 
+    def test_live_cache_permission_failure_is_safe_and_leaves_no_session(self):
+        with patch('agents.telemetry_live.shared_cache', side_effect=PermissionError('private-path-secret')):
+            with self.assertLogs('agents.telemetry_live', level='WARNING') as logs:
+                response = self.client.post(self.live_url, {}, content_type='application/json')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error'], 'live_cache_unavailable')
+        self.assertIn('stage=start category=permission_denied', logs.output[0])
+        self.assertNotIn('private-path-secret', '\n'.join(logs.output))
+        self.assertFalse(TelemetryLiveSession.objects.filter(endpoint=self.machine).exists())
+
     def test_simulated_100_endpoint_ingestion(self):
         # Synthetic load measures this isolated database, never a production capacity claim.
         import time
