@@ -2,7 +2,7 @@
 
 Estado da auditoria: o terminal assistido usa ConPTY, credenciais temporárias de uso único, autorização `TerminalAccessGrant` por operador/endpoint e aprovação local do Tray. O processo Windows é criado sob o token interativo explicitamente autorizado, com verificações de SID, sessão, integridade e privilégios; SYSTEM e elevação são rejeitados. O relay limita sessões, frames e buffers; logout, revogação, expiração e desconexão são tratados pelo ciclo de vida existente. Há testes locais/CI, mas **não há homologação positiva nessa VM através do proxy Linux**.
 
-O relay `HUB` e seu owner são locais a um processo/event loop. O Gunicorn WSGI atual não aceita WebSocket. O servidor ASGI/WebSocket não está declarado em `requirements.txt`; `uvicorn`, `websockets` e `daphne` não estavam disponíveis no ambiente local desta revisão. Não foi instalado ou iniciado nenhum serviço. Verificar a disponibilidade e versão autorizada de um servidor ASGI com implementação WebSocket na venv Linux antes de seguir; não tratar o WSGI ou a flag como substituto. Testar a combinação efetivamente instalada; esta revisão não comprova comportamento de proxy nem disponibilidade no servidor.
+O relay `HUB` e seu owner são locais a um processo/event loop. O Gunicorn WSGI não aceita WebSocket. `requirements.txt` declara Uvicorn e websockets para reproduzir o servidor ASGI; a instalação das dependências no servidor continua sendo uma etapa operacional separada. Não tratar WSGI ou a flag como substituto do ASGI.
 
 ## Desenho proposto: um relay, backend existente
 
@@ -72,6 +72,6 @@ WinRM não é transporte do ConPTY. Na VM workgroup, recuperação vinculada a i
 
 ## Limites desta revisão
 
-Sem acesso ao servidor Linux ou à VM, não se confirma servidor ASGI, proxy efetivo, flags, grants, identidade Windows ou latências reais. O procedimento acima é proposta sujeita à revisão operacional, não deployment. Nenhuma mudança funcional do agente foi necessária nesta preparação; eventual correção no executável, Tray ou ConPTY exigirá nova release Windows assinada e homologada, sem sobrescrever a RC46 atual.
+O operador informou que uma sessão assistida real na VM RC46 funcionou através de NPM, Nginx e Uvicorn, com consentimento do Tray, identidade não elevada, I/O e Ctrl+C. Isso não homologa os demais cenários nem comprova a política de validação TLS do upstream pelo NPM: verificar a validação da CA e do certificado interno. A correção PATHEXT exige uma nova release Windows assinada, sem sobrescrever a RC46 atual. Ao terminar o piloto, revogar os grants e retornar as flags temporárias ao estado seguro mediante procedimento operacional autorizado.
 
 O teste local nesta revisão usou processo Windows interativo não elevado e consentimento simulado; para 100 marcadores locais mediu p50 8,0 ms e p95 9,5 ms, sem rede. Isso não mede a VM, o Nginx ou WSS e não é previsão de produção. Os testes de contrato do backend e loopback não comprovam o servidor ASGI recomendado nem o proxy efetivamente implantado.
