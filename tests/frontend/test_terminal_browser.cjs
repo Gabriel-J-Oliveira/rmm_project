@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {spawn,execFileSync} = require('node:child_process');
+const {snapshot} = require('./chrome_process_snapshot.cjs');
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
 let phase='launch';
 class CDP {
@@ -30,6 +31,8 @@ class CDP {
     assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(server));
     const profile=fs.mkdtempSync(path.join(os.tmpdir(),'nightowl-terminal-browser-'));
     const launchStarted=performance.now();
+    const launchStartedUtc=new Date().toISOString();
+    let firstProfileEntryMs=null;
     const chrome=spawn('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',[
         '--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check',
         '--disable-sync','--disable-background-networking','--disable-background-timer-throttling','--disable-renderer-backgrounding',
@@ -50,7 +53,12 @@ class CDP {
     let cdp;
     try {
         const portFile=path.join(profile,'DevToolsActivePort');
-        for(let i=0;i<100 && !fs.existsSync(portFile);i++) await sleep(100);
+        for(let i=0;i<100 && !fs.existsSync(portFile);i++) {
+            if(firstProfileEntryMs===null) {
+                try {if(fs.readdirSync(profile).length) firstProfileEntryMs=Math.round(performance.now()-launchStarted);} catch {}
+            }
+            await sleep(100);
+        }
         const portReady=fs.existsSync(portFile);
         if (!portReady) {
             let processCount=null, rootAlive=null;
@@ -65,10 +73,13 @@ class CDP {
             console.log('TERMINAL_BROWSER_LAUNCH='+JSON.stringify({
                 stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,
                 signal:chromeSignal,error_code:chromeSpawnError,elapsed_ms:Math.round(performance.now()-launchStarted),
+                started_utc:launchStartedUtc,first_profile_entry_ms:firstProfileEntryMs,
                 root_alive:rootAlive,chrome_process_count:processCount,profile_exists:fs.existsSync(profile),
                 profile_local_state:fs.existsSync(path.join(profile,'Local State')),profile_default:fs.existsSync(path.join(profile,'Default')),
                 diagnostics:[...chromeDiagnostics]
             }));
+            // Capture the failing process before cleanup; failure stays decisive.
+            console.log('TERMINAL_BROWSER_PROCESS_SNAPSHOT='+JSON.stringify(await snapshot(chrome.pid,profile,'smoke_failed')));
         }
         assert(portReady,'Existing Chrome did not start');
         const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);

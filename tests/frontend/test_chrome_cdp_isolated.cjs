@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {spawn, execFileSync} = require('node:child_process');
+const {snapshot} = require('./chrome_process_snapshot.cjs');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function access(dir) {
@@ -44,6 +45,8 @@ async function main() {
         environment:Object.fromEntries(['USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP'].map(name=>[name,access(process.env[name])]))};
     let chrome, ws, exitCode=null, spawnError=null, closeRequested=false;
     const started=performance.now();
+    result.started_utc=new Date().toISOString();
+    let firstProfileEntryMs=null;
     try {
         if (!result.windows_profile || !result.windows_profile.loaded || !result.windows_profile.hive_loaded ||
             !result.windows_profile.record_present || !result.windows_profile.profile_exists || !result.windows_profile.matches_environment)
@@ -63,12 +66,21 @@ async function main() {
         chrome.on('exit',code=>{exitCode=code;});
         chrome.on('error',error=>{spawnError=error.code || 'spawn_failed';});
         const portFile=path.join(profile,'DevToolsActivePort');
-        for(let i=0;i<100 && !fs.existsSync(portFile) && !spawnError && exitCode===null;i++) await sleep(100);
+        for(let i=0;i<100 && !fs.existsSync(portFile) && !spawnError && exitCode===null;i++) {
+            if(firstProfileEntryMs===null) {
+                try {if(fs.readdirSync(profile).length) firstProfileEntryMs=Math.round(performance.now()-started);} catch {}
+            }
+            await sleep(100);
+        }
         result.elapsed_ms=Math.round(performance.now()-started);
+        result.first_profile_entry_ms=firstProfileEntryMs;
         result.port_file_present=fs.existsSync(portFile);
         result.process_running=!!chrome.pid && exitCode===null;
         result.exit_code=exitCode; result.spawn_error=spawnError; result.categories=[...categories];
-        if (!result.port_file_present) throw new Error(spawnError?'spawn_failed':'port_unavailable');
+        if (!result.port_file_present) {
+            result.process_snapshot=await snapshot(chrome.pid,profile,'cdp_unavailable');
+            throw new Error(spawnError?'spawn_failed':'port_unavailable');
+        }
         const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);
         assert(/^\d+$/.test(port) && /^\/devtools\/browser\/[a-z0-9-]+$/i.test(endpoint));
         result.phase='cdp_connect';
@@ -84,6 +96,7 @@ async function main() {
         const version=await request(1,'Browser.getVersion');
         assert(/^Chrome\//.test(version.product));
         result.chrome_version=version.product;
+        result.process_snapshot=await snapshot(chrome.pid,profile,'cdp_success');
         result.phase='close';
         await request(2,'Browser.close'); closeRequested=true;
     } catch(error) {

@@ -140,7 +140,7 @@ class TerminalBrowserSmokeTests(TransactionTestCase):
                 try:
                     stdout,stderr=await asyncio.wait_for(browser.communicate(),110)
                     for line in stdout.decode().splitlines():
-                        if line.startswith(('BROWSER_TERMINAL_MEASURED=','TERMINAL_BROWSER_FAILURE=','TERMINAL_BROWSER_STATE=','TERMINAL_BROWSER_EVAL_ERROR=','TERMINAL_BROWSER_LAUNCH=')):print(line)
+                        if line.startswith(('BROWSER_TERMINAL_MEASURED=','TERMINAL_BROWSER_FAILURE=','TERMINAL_BROWSER_STATE=','TERMINAL_BROWSER_EVAL_ERROR=','TERMINAL_BROWSER_LAUNCH=','TERMINAL_BROWSER_PROCESS_SNAPSHOT=')):print(line)
                     if browser.returncode:
                         print('TERMINAL_BROWSER_AGENT='+json.dumps({'running': agent.returncode is None,
                             'exit_code': agent.returncode}))
@@ -151,7 +151,9 @@ class TerminalBrowserSmokeTests(TransactionTestCase):
                             'NIGHTOWL_TEST_SERVER':server.origin,'NIGHTOWL_TEST_COOKIE':cookie,
                             'NIGHTOWL_TEST_ENDPOINT_PATH':reverse('endpoint-detail',args=[machine.pk])})
                         try:
-                            probe_output,_=await asyncio.wait_for(probe.communicate(),30)
+                            # Only post-failure diagnostics include a bounded process snapshot;
+                            # this does not change the smoke's own timeout or result.
+                            probe_output,_=await asyncio.wait_for(probe.communicate(),50)
                             for line in probe_output.decode(errors='replace').splitlines():
                                 if line.startswith('CHROME_CDP_ISOLATED='):
                                     print('TERMINAL_BROWSER_CONCURRENT_PROBE='+line.split('=',1)[1])
