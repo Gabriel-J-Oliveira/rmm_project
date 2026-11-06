@@ -127,14 +127,108 @@ class ConPtyTransportTests(TransactionTestCase):
             self.assertEqual((await operator.until('closed'))['code'], 'invalid_process_confirmation')
             await operator.close(); await agent.close()
 
+    async def _isolated_shell_checks(self, checks):
+        """Exercise a fresh authorized ConPTY; do not expose terminal output."""
+        dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
+        self.assertTrue(dll.exists())
+        async with LoopbackASGI() as server:
+            process = await asyncio.create_subprocess_exec('dotnet', str(dll), '--conpty-e2e',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, 'NIGHTOWL_TEST_SERVER': server.origin,
+                     'NIGHTOWL_TEST_TERMINAL_INFO': json.dumps(self.agent_info),
+                     'NIGHTOWL_E2E_SECRET_SENTINEL': 'synthetic-must-not-be-inherited'})
+            operator = await WSClient.connect(server, self.info['websocket_path'], self.info['credential'])
+            decoder = codecs.getincrementaldecoder('utf-8')()
+            text, sequence, stage = '', 0, 'ready'
+            async def write(value):
+                nonlocal sequence
+                sequence += 1
+                await operator.binary(0, sequence, value.encode())
+            async def wait_for(marker):
+                nonlocal text
+                for _ in range(100):
+                    if 'NIGHTOWL_CHECK_FAIL' in text:
+                        self.fail('Isolated ConPTY check failed at ' + stage)
+                    if marker in text:
+                        return
+                    message = await operator.read()
+                    if isinstance(message, bytes):
+                        part = decoder.decode(message[9:]); text = (text + part)[-65536:]
+                        if '\x1b[6n' in part: await write('\x1b[1;1R')
+                    elif message.get('type') == 'ping':
+                        await operator.control({'type': 'pong', 'nonce': message['nonce']})
+                    else:
+                        self.assertNotEqual(message.get('type'), 'closed', 'Native session closed unexpectedly')
+                self.fail('Isolated ConPTY marker not received at ' + stage)
+            try:
+                await operator.until('ready')
+                for stage, command, marker in checks:
+                    await write(command + '\r')
+                    try:
+                        await wait_for(marker)
+                    except TimeoutError:
+                        facts = {'stage': stage, 'date_started': 'NIGHTOWL_DATE_START' in text,
+                                 'agent_running': process.returncode is None, 'interrupt_responded': False,
+                                 'utility_module_loaded': None}
+                        if stage == 'date':
+                            # A post-failure probe on the SAME ConPTY, never a retry or an extended gate.
+                            try:
+                                await write('\x03')
+                                await write("$m=[bool](Get-Module -Name Microsoft.PowerShell.Utility); "
+                                    "[Console]::WriteLine('NIGHTOWL_'+'PROBE_'+[int]$m)\r")
+                                await wait_for('NIGHTOWL_PROBE_')
+                                facts['interrupt_responded'] = True
+                                if 'NIGHTOWL_PROBE_1' in text: facts['utility_module_loaded'] = True
+                                elif 'NIGHTOWL_PROBE_0' in text: facts['utility_module_loaded'] = False
+                            except (TimeoutError, AssertionError):
+                                pass
+                        print('CONPTY_ISOLATED_DIAGNOSTIC=' + json.dumps(facts))
+                        self.fail('Isolated ConPTY timed out at ' + stage)
+                await operator.close()
+                stdout, _ = await asyncio.wait_for(process.communicate(), 10)
+                self.assertEqual(process.returncode, 0, 'Real ConPTY integration failed; output withheld')
+                self.assertIn(b'PASS real ConPTY WebSocket cleanup', stdout)
+            finally:
+                await operator.close()
+                if process.returncode is None:
+                    process.kill(); await process.wait()
+
+    @staticmethod
+    def _native_checks():
+        checks = []
+        for command, label in (('whoami', 'WHOAMI'), ('hostname', 'HOSTNAME'), ('ipconfig', 'IPCONFIG')):
+            checks.append((label, f"& {command} | Out-Null; $ok=$? -and ($LASTEXITCODE -eq 0); "
+                f"if ($ok) {{$r='{label}_OK'}} else {{$r='FAIL'}}; [Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)",
+                'NIGHTOWL_CHECK_' + label + '_OK'))
+        checks.append(('environment', "if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$r='FAIL'} else {$r='ENV_OK'}; "
+            "[Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)", 'NIGHTOWL_CHECK_ENV_OK'))
+        return checks
+
+    @staticmethod
+    def _date_check():
+        return ('date', "[Console]::WriteLine('NIGHTOWL_'+'DATE_START'); "
+            "try {Get-Date -ErrorAction Stop | Out-Null; $r='DATE_OK'} catch {$r='FAIL'}; "
+            "[Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)", 'NIGHTOWL_CHECK_DATE_OK')
+
+    @tag('windows_e2e')
+    async def test_native_commands_resolve_without_inheriting_parent_environment(self):
+        await self._isolated_shell_checks(self._native_checks())
+
+    @tag('windows_e2e')
+    async def test_get_date_in_separate_authorized_conpty(self):
+        await self._isolated_shell_checks([self._date_check()])
+
+    @tag('windows_e2e')
+    async def test_get_date_after_native_commands_in_same_conpty(self):
+        await self._isolated_shell_checks([*self._native_checks(), self._date_check()])
+
     @tag('windows_e2e')
     async def test_real_powershell_stream_over_websocket_and_disconnect(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
         self.assertTrue(dll.exists())
         async with LoopbackASGI() as server:
             process = await asyncio.create_subprocess_exec('dotnet', str(dll), '--conpty-e2e', stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, 'NIGHTOWL_TEST_SERVER': server.origin, 'NIGHTOWL_TEST_TERMINAL_INFO': json.dumps(self.agent_info),
-                     'NIGHTOWL_E2E_SECRET_SENTINEL': 'synthetic-must-not-be-inherited'})
+                env={**os.environ, 'NIGHTOWL_TEST_SERVER': server.origin, 'NIGHTOWL_TEST_TERMINAL_INFO': json.dumps(self.agent_info)})
             operator = await WSClient.connect(server, self.info['websocket_path'], self.info['credential'])
             sequence = 0
             decoder = codecs.getincrementaldecoder('utf-8')()
@@ -146,58 +240,10 @@ class ConPtyTransportTests(TransactionTestCase):
             async def until_marker(marker):
                 nonlocal text
                 for _ in range(100):
-                    try:
-                        message = await operator.read()
-                    except TimeoutError:
-                        stage = marker if marker.startswith('NIGHTOWL_CHECK_') else 'interactive_io'
-                        if marker == 'NIGHTOWL_CHECK_DATE_OK':
-                            print('CONPTY_DATE_STAGE=' + json.dumps({'started': 'NIGHTOWL_CHECK_DATE_START' in text,
-                                'failed': 'NIGHTOWL_CHECK_DATE_FAIL' in text}))
-                            # Compare the token's actual profile with the harness environment,
-                            # without logging either path or any profile contents.
-                            import ctypes
-                            from ctypes import wintypes
-                            profile_facts = {'available': False}
-                            token = wintypes.HANDLE()
-                            try:
-                                if ctypes.windll.advapi32.OpenProcessToken(ctypes.windll.kernel32.GetCurrentProcess(), 8, ctypes.byref(token)):
-                                    size = wintypes.DWORD(32768)
-                                    path = ctypes.create_unicode_buffer(size.value)
-                                    if ctypes.windll.userenv.GetUserProfileDirectoryW(token, path, ctypes.byref(size)):
-                                        profile = Path(path.value)
-                                        temp = profile / 'AppData/Local/Temp'
-                                        profile_facts = {'available': True, 'profile_exists': profile.is_dir(),
-                                            'temp_exists': temp.is_dir(), 'temp_writable': os.access(temp, os.W_OK),
-                                            'matches_environment_profile': os.path.normcase(str(profile)) == os.path.normcase(os.environ.get('USERPROFILE', ''))}
-                            finally:
-                                if token.value:
-                                    ctypes.windll.kernel32.CloseHandle(token)
-                            print('CONPTY_PROFILE_FACTS=' + json.dumps(profile_facts))
-                            # Diagnostic runs only after failure: never warm or extend the E2E gate.
-                            shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-                            probe = await asyncio.create_subprocess_exec(str(shell), '-NoProfile', '-NonInteractive', '-Command',
-                                "$s=[Diagnostics.Stopwatch]::StartNew(); Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop; "
-                                "$m=$s.ElapsedMilliseconds; Get-Date -ErrorAction Stop | Out-Null; "
-                                "@{module_ms=$m; total_ms=$s.ElapsedMilliseconds} | ConvertTo-Json -Compress",
-                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-                            try:
-                                output, _ = await asyncio.wait_for(probe.communicate(), 12)
-                                result = json.loads(output) if probe.returncode == 0 else None
-                                if isinstance(result, dict) and all(isinstance(result.get(k), int) for k in ('module_ms', 'total_ms')):
-                                    print('CONPTY_DATE_PROBE=' + json.dumps({k: result[k] for k in ('module_ms', 'total_ms')}))
-                                else:
-                                    print('CONPTY_DATE_PROBE=' + json.dumps({'category': 'probe_failed'}))
-                            except (TimeoutError, ValueError):
-                                if probe.returncode is None:
-                                    probe.kill(); await probe.wait()
-                                print('CONPTY_DATE_PROBE=' + json.dumps({'category': 'probe_timeout_or_invalid'}))
-                        self.fail('Terminal output timed out at stage: ' + stage)
+                    message = await operator.read()
                     if isinstance(message, bytes):
                         part = decoder.decode(message[9:]); text = (text + part)[-65536:]
                         if '\x1b[6n' in part: await write('\x1b[1;1R')
-                        for check in ('WHOAMI', 'HOSTNAME', 'IPCONFIG', 'DATE', 'ENV'):
-                            if 'NIGHTOWL_CHECK_' + check + '_FAIL' in text:
-                                self.fail('Native ConPTY check failed: ' + check)
                         if marker in text: return time.perf_counter()
                     elif message.get('type') == 'ping': await operator.control({'type': 'pong', 'nonce': message['nonce']})
                     else: self.assertNotEqual(message.get('type'), 'closed', 'Native session closed unexpectedly')
@@ -206,15 +252,6 @@ class ConPtyTransportTests(TransactionTestCase):
                 opened = time.perf_counter()
                 await operator.until('ready')
                 ready_ms = (time.perf_counter() - opened) * 1000
-                # Exercise actual command resolution in the closed ConPTY environment.
-                # Build the marker at runtime so terminal input echo cannot satisfy it.
-                for command, check in (('whoami', 'WHOAMI'), ('hostname', 'HOSTNAME'), ('ipconfig', 'IPCONFIG')):
-                    await write(f"& {command} | Out-Null; $ok=$? -and ($LASTEXITCODE -eq 0); if ($ok) {{$r='OK'}} else {{$r='FAIL'}}; [Console]::WriteLine('NIGHTOWL_CHECK_'+ '{check}_' + $r)\r")
-                    await until_marker('NIGHTOWL_CHECK_' + check + '_OK')
-                await write("[Console]::WriteLine('NIGHTOWL_CHECK_'+'DATE_START'); try {Get-Date -ErrorAction Stop | Out-Null; $r='OK'} catch {$r='FAIL'}; [Console]::WriteLine('NIGHTOWL_CHECK_'+'DATE_'+$r)\r")
-                await until_marker('NIGHTOWL_CHECK_DATE_OK')
-                await write("if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$r='FAIL'} else {$r='OK'}; [Console]::WriteLine('NIGHTOWL_CHECK_'+'ENV_'+$r)\r")
-                await until_marker('NIGHTOWL_CHECK_ENV_OK')
                 values = []
                 echoes = []
                 for index in range(100):
