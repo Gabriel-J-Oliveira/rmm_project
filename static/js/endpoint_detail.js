@@ -1192,7 +1192,8 @@
             '</div></section><section class="endpoint-action-group"><h3>Ações operacionais</h3><div class="endpoint-remote-actions-grid">' +
             Object.keys(operationalLabels).map(function (action) {
                 const available = asObject(asObject(detail.operationalActions)[action]);
-                return '<button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="Ação indisponível para este operador ou endpoint"') + '><span>' + escapeHtml(operationalLabels[action]) + '</span></button>';
+                const reason = available.reason || 'Ação indisponível para este operador ou endpoint';
+                return '<div class="endpoint-action-availability"><button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="' + escapeHtml(reason) + '"') + '><span>' + escapeHtml(operationalLabels[action]) + '</span></button>' + (available.enabled ? '' : '<small>' + escapeHtml(reason) + '</small>') + '</div>';
             }).join("") +
             '</div></section><div data-approved-scripts-placement></div><section class="endpoint-action-group"><h3>Manutenção do agente</h3><div class="endpoint-remote-actions-grid">' +
             agentManagementButtons.join("") +

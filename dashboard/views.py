@@ -3300,12 +3300,17 @@ def _update_policy_message(reason_code):
 def operational_action_availability(endpoint, user):
     from agents import administrative_actions as admin
     from agents.internal_jobs import internal_capability
-    from agents.operational_actions import authorize
+    from agents.operational_actions import authorize, authorize_scope
     actions = ('flush_dns', 'query_service', 'gpupdate', 'start_service', 'stop_service', 'restart_service')
-    result = {name: {'enabled': False, 'services': []} for name in actions}
-    if (not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False) or
-            endpoint.status != AgentMachine.STATUS_ONLINE or not endpoint.machine_id or
-            AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
+    result = {name: {'enabled': False, 'services': [], 'reason': ''} for name in actions}
+    if not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False):
+        for entry in result.values(): entry['reason'] = 'Ações operacionais desativadas no backend.'
+        return result
+    if endpoint.status != AgentMachine.STATUS_ONLINE:
+        for entry in result.values(): entry['reason'] = 'Agente não está online.'
+        return result
+    if not endpoint.machine_id or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1:
+        for entry in result.values(): entry['reason'] = 'Identidade do agente não confirmada.'
         return result
     scopes = getattr(settings, 'NIGHTOWL_ADMIN_ACTION_SCOPES', {})
     scope = scopes.get(str(endpoint.pk), {}) if isinstance(scopes, dict) else {}
@@ -3313,17 +3318,22 @@ def operational_action_availability(endpoint, user):
     for name in actions:
         try:
             authorize(user, name)
+            authorize_scope(user, endpoint, name)
             if not internal_capability(endpoint, f'operational_action:{name}:1'):
+                result[name]['reason'] = 'Capacidade do agente não confirmada em heartbeat recente.'
                 continue
             if name in admin.PERMISSIONS:
                 if not getattr(settings, 'NIGHTOWL_ADMIN_ACTIONS_ENABLED', False):
+                    result[name]['reason'] = 'Ações administrativas desativadas no backend.'
                     continue
                 if name == 'gpupdate':
                     if scope.get(name) is not True:
+                        result[name]['reason'] = 'Recurso não autorizado para este endpoint.'
                         continue
                 else:
                     allowed = scope.get(name)
                     if not isinstance(allowed, list):
+                        result[name]['reason'] = 'Recurso não autorizado para este endpoint.'
                         continue
                     for service in allowed:
                         try:
@@ -3332,9 +3342,11 @@ def operational_action_availability(endpoint, user):
                         except ValueError:
                             continue
                     if not result[name]['services']:
+                        result[name]['reason'] = 'Nenhum serviço autorizado para este endpoint.'
                         continue
             result[name]['enabled'] = True
         except PermissionError:
+            result[name]['reason'] = 'Operação não autorizada para este usuário ou endpoint.'
             continue
     return result
 
@@ -3802,10 +3814,21 @@ def endpoint_detail(request, pk):
     from agents.script_library import CATALOG as approved_script_catalog
     from agents.operational_actions import validate_dispatch as validate_operational_dispatch
     script_availability = {}
+    script_reasons = {}
+    script_reason_messages = {
+        'operational_actions_disabled': 'Ações operacionais desativadas no backend.',
+        'approved_scripts_disabled': 'Scripts aprovados desativados no backend.',
+        'action_capability_unconfirmed': 'Capacidade de execução não confirmada no heartbeat.',
+        'script_capability_unconfirmed': 'Versão do script não confirmada no heartbeat.',
+        'script_revoked': 'Esta versão foi revogada.',
+        'script_integrity_mismatch': 'Integridade do script não confirmada.',
+        'script_content_unavailable': 'Conteúdo do script indisponível no backend.',
+    }
     for script in approved_script_catalog.values():
         key = f'{script.script_id}:{script.version}:{script.sha256}'
         script_availability[key] = False
         if endpoint.status != AgentMachine.STATUS_ONLINE:
+            script_reasons[key] = 'Agente não está online.'
             continue
         candidate = AgentJob(endpoint=endpoint, job_type='operational_action', created_by=request.user.get_username(),
             timeout_seconds=15, payload={'action_id': 'run_approved_script', 'action_version': 1,
@@ -3814,9 +3837,12 @@ def endpoint_detail(request, pk):
         try:
             validate_operational_dispatch(candidate, creating=True)
             script_availability[key] = True
-        except (ValueError, PermissionError):
-            pass
+        except PermissionError:
+            script_reasons[key] = 'Operação não autorizada para este usuário ou endpoint.'
+        except ValueError as error:
+            script_reasons[key] = script_reason_messages.get(str(error), 'Script indisponível para este endpoint.')
     context['approved_script_availability'] = script_availability
+    context['approved_script_reasons'] = script_reasons
     context['endpoint_detail_payload'] = build_endpoint_detail_payload(
         endpoint,
         snapshot,

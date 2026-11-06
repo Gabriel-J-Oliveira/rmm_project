@@ -29,5 +29,6 @@ vm.runInNewContext(fs.readFileSync('static/js/endpoint_approved_scripts.js','utf
  assert(events.includes('nightowl:approved-script-queued'));assert.equal(body.children.length,0);
  script.revoked=true;section.children=[];notifyMutation();
  assert.equal(section.children[0].children[1].children.at(-1).disabled,true);
+ assert(section.children[0].children[1].children.some(node=>node.textContent==='Esta versão foi revogada.'));
  console.log('approved scripts: catalog, confirmation and pinned execution OK');
 })().catch(e=>{console.error(e);process.exitCode=1});

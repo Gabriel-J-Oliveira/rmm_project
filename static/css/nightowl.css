@@ -34166,6 +34166,8 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 .endpoint-telemetry-config input[type="number"]:read-only { opacity: .7; }
 .endpoint-telemetry-config button { justify-self: start; }
 .endpoint-live { margin: 0; }
+.endpoint-actions-card .endpoint-action-availability { min-width: 0; }
+.endpoint-actions-card .endpoint-action-availability small { display: block; margin-top: 4px; color: var(--text-muted); overflow-wrap: anywhere; }
 .endpoint-live > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .endpoint-live label { display: inline-flex; flex-direction: column; gap: 6px; margin: 8px 16px 12px 0; max-width: 100%; }
 .endpoint-live select { max-width: 100%; }
