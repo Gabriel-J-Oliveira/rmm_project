@@ -144,6 +144,22 @@ class TerminalBrowserSmokeTests(TransactionTestCase):
                     if browser.returncode:
                         print('TERMINAL_BROWSER_AGENT='+json.dumps({'running': agent.returncode is None,
                             'exit_code': agent.returncode}))
+                        # Diagnostic only after failure, while this same agent is still
+                        # running. The original smoke remains failed regardless of the probe.
+                        probe=await asyncio.create_subprocess_exec('node',str(root/'tests/frontend/test_chrome_cdp_isolated.cjs'),
+                            stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,env={**os.environ,
+                            'NIGHTOWL_TEST_SERVER':server.origin,'NIGHTOWL_TEST_COOKIE':cookie,
+                            'NIGHTOWL_TEST_ENDPOINT_PATH':reverse('endpoint-detail',args=[machine.pk])})
+                        try:
+                            probe_output,_=await asyncio.wait_for(probe.communicate(),30)
+                            for line in probe_output.decode(errors='replace').splitlines():
+                                if line.startswith('CHROME_CDP_ISOLATED='):
+                                    print('TERMINAL_BROWSER_CONCURRENT_PROBE='+line.split('=',1)[1])
+                            print('TERMINAL_BROWSER_CONCURRENT_PROBE_EXIT='+json.dumps({'exit_code':probe.returncode,
+                                'agent_running':agent.returncode is None}))
+                        except TimeoutError:
+                            probe.kill(); await probe.wait()
+                            print('TERMINAL_BROWSER_CONCURRENT_PROBE_EXIT='+json.dumps({'category':'probe_timeout'}))
                         state=await sync_to_async(lambda:list(TerminalSession.objects.filter(endpoint=machine).values('status','reason','consent_at','operator_ticket_used','agent_ticket_used')))()
                         print('TERMINAL_BROWSER_DB_STATE='+json.dumps(state,default=str))
                         if agent.returncode is not None:
