@@ -143,6 +143,10 @@
         } catch (_) { if (gen===generation) end('Erro de autorização'); }
     }
     start.addEventListener('click',async () => {
+        const taskPanel = document.querySelector('[data-endpoint-tab-panel="tasks"]');
+        if (taskPanel?.hidden) document.querySelector('[data-endpoint-tab="tasks"]')?.click();
+        const disclosure = document.querySelector('[data-terminal-conpty-panel]');
+        if (disclosure) disclosure.open = true;
         start.disabled=true; stop.disabled=false; show('Aguardando autorização');
         const gen=++generation, at=performance.now();
         try {

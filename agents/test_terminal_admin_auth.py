@@ -39,10 +39,14 @@ class AdminAuthControlTests(TestCase):
         machine.status = 'offline'
         machine.save(update_fields=['status'])
         self.assertContains(self.client.get(url), 'data-terminal-open disabled')
+        machine.status = 'online'
+        machine.save(update_fields=['status'])
         snapshot = InventorySnapshot.objects.get(machine=machine)
         snapshot.raw_payload['agent']['capabilities'].remove('remote_terminal_transport:1')
         snapshot.save(update_fields=['raw_payload'])
-        self.assertNotContains(self.client.get(url), 'data-terminal-open')
+        response = self.client.get(url)
+        self.assertContains(response, 'data-terminal-open disabled')
+        self.assertContains(response, 'Terminal indispon')
 
     def test_logout_closes_session_and_prevents_ticket_reuse(self):
         machine, _, operator = fixture('admin-auth-logout')
