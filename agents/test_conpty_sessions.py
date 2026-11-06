@@ -146,10 +146,17 @@ class ConPtyTransportTests(TransactionTestCase):
             async def until_marker(marker):
                 nonlocal text
                 for _ in range(100):
-                    message = await operator.read()
+                    try:
+                        message = await operator.read()
+                    except TimeoutError:
+                        stage = marker if marker.startswith('NIGHTOWL_CHECK_') else 'interactive_io'
+                        self.fail('Terminal output timed out at stage: ' + stage)
                     if isinstance(message, bytes):
                         part = decoder.decode(message[9:]); text = (text + part)[-65536:]
                         if '\x1b[6n' in part: await write('\x1b[1;1R')
+                        for check in ('WHOAMI', 'HOSTNAME', 'IPCONFIG', 'DATE', 'ENV'):
+                            if 'NIGHTOWL_CHECK_' + check + '_FAIL' in text:
+                                self.fail('Native ConPTY check failed: ' + check)
                         if marker in text: return time.perf_counter()
                     elif message.get('type') == 'ping': await operator.control({'type': 'pong', 'nonce': message['nonce']})
                     else: self.assertNotEqual(message.get('type'), 'closed', 'Native session closed unexpectedly')
@@ -160,8 +167,13 @@ class ConPtyTransportTests(TransactionTestCase):
                 ready_ms = (time.perf_counter() - opened) * 1000
                 # Exercise actual command resolution in the closed ConPTY environment.
                 # Build the marker at runtime so terminal input echo cannot satisfy it.
-                await write("$ok=$true; foreach($c in @('whoami','hostname','ipconfig')) { & $c | Out-Null; $ran=$?; if (-not $ran -or $LASTEXITCODE -ne 0) {$ok=$false} }; try { Get-Date -ErrorAction Stop | Out-Null } catch {$ok=$false}; if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$ok=$false}; if ($ok) {[Console]::WriteLine('NIGHTOWL_NATIVE_'+'PASS')} else {[Console]::WriteLine('NIGHTOWL_NATIVE_'+'FAIL')}\r")
-                await until_marker('NIGHTOWL_NATIVE_PASS')
+                for command, check in (('whoami', 'WHOAMI'), ('hostname', 'HOSTNAME'), ('ipconfig', 'IPCONFIG')):
+                    await write(f"& {command} | Out-Null; $ok=$? -and ($LASTEXITCODE -eq 0); if ($ok) {{$r='OK'}} else {{$r='FAIL'}}; [Console]::WriteLine('NIGHTOWL_CHECK_'+ '{check}_' + $r)\r")
+                    await until_marker('NIGHTOWL_CHECK_' + check + '_OK')
+                await write("try {Get-Date -ErrorAction Stop | Out-Null; $r='OK'} catch {$r='FAIL'}; [Console]::WriteLine('NIGHTOWL_CHECK_'+'DATE_'+$r)\r")
+                await until_marker('NIGHTOWL_CHECK_DATE_OK')
+                await write("if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$r='FAIL'} else {$r='OK'}; [Console]::WriteLine('NIGHTOWL_CHECK_'+'ENV_'+$r)\r")
+                await until_marker('NIGHTOWL_CHECK_ENV_OK')
                 values = []
                 echoes = []
                 for index in range(100):
