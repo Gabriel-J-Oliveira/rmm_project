@@ -200,7 +200,7 @@ class ConPtyTransportTests(TransactionTestCase):
             checks.append((label, f"& {command} | Out-Null; $ok=$? -and ($LASTEXITCODE -eq 0); "
                 f"if ($ok) {{$r='{label}_OK'}} else {{$r='FAIL'}}; [Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)",
                 'NIGHTOWL_CHECK_' + label + '_OK'))
-        checks.append(('environment', "if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$r='FAIL'} else {$r='ENV_OK'}; "
+        checks.append(('environment', "if ($null -ne [Environment]::GetEnvironmentVariable('NIGHTOWL_E2E_SECRET_SENTINEL')) {$r='FAIL'} else {$r='ENV_OK'}; "
             "[Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)", 'NIGHTOWL_CHECK_ENV_OK'))
         return checks
 
