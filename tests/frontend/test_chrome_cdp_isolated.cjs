@@ -45,6 +45,9 @@ async function main() {
     let chrome, ws, exitCode=null, spawnError=null, closeRequested=false;
     const started=performance.now();
     try {
+        if (!result.windows_profile || !result.windows_profile.loaded || !result.windows_profile.hive_loaded ||
+            !result.windows_profile.record_present || !result.windows_profile.profile_exists || !result.windows_profile.matches_environment)
+            throw new Error('windows_profile_unavailable');
         chrome=spawn(chromePath,['--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,
             '--no-first-run','--no-default-browser-check','--disable-sync','--disable-background-networking',
             '--enable-logging=stderr','about:blank'],{windowsHide:true,stdio:['ignore','ignore','pipe']});
@@ -82,7 +85,7 @@ async function main() {
         result.phase='close';
         await request(2,'Browser.close'); closeRequested=true;
     } catch(error) {
-        result.error=['spawn_failed','port_unavailable','cdp_timeout','cdp_error'].includes(error.message)?error.message:'probe_error';
+        result.error=['spawn_failed','port_unavailable','cdp_timeout','cdp_error','windows_profile_unavailable'].includes(error.message)?error.message:'probe_error';
     } finally {
         if(ws) ws.close();
         if(chrome && chrome.pid && chrome.exitCode===null) {
