@@ -5,6 +5,8 @@
 
 O fechamento técnico, as evidências de homologação parcial e as restrições operacionais da RC46 constam de `docs/rc46-final-closure-rc47-handoff.md`. A correção de resolução de comandos via PATHEXT depende de integração e de uma nova release Windows assinada; a release RC46 já publicada não deve ser sobrescrita. A validação TLS do upstream NPM, o modo administrativo e os demais cenários de encerramento permanecem sujeitos a homologação.
 
+O comportamento de `Get-Date` no ConPTY restrito do runner Windows está em investigação independente na [issue #19](https://github.com/Gabriel-J-Oliveira/rmm_project/issues/19). Até a conclusão dessa investigação e dos testes operacionais pendentes, o terminal assistido não está homologado para distribuição ampla.
+
 **Repositório:** Gabriel-J-Oliveira/rmm_project  
 **Base consultada:** main em cbd72f544a6287a0952ba64bfc5df884c5e85f3c.  
 **Escopo:** simplificação da arquitetura de coletas; inventário de hardware; telemetria contínua e retenção; última análise persistida; agendamentos/políticas; ajustes pontuais de interface; validação e rollout da RC47.  
