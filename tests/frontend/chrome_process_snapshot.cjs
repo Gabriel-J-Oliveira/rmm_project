@@ -6,13 +6,17 @@ const path = require('node:path');
 function httpProbe(listener) {
     return new Promise(resolve=>{
         const result={pid:listener.pid,port:listener.port,cdp_response:false};
+        let settled=false;
+        const finish=()=>{if(!settled){settled=true;clearTimeout(watchdog);resolve(result);}};
+        const watchdog=setTimeout(()=>{request.destroy();finish();},900);
         const request=http.get({host:'127.0.0.1',port:listener.port,path:'/json/version',timeout:700},response=>{
             let body=''; response.on('data',chunk=>{body+=chunk; if(body.length>16384) request.destroy();});
             response.on('end',()=>{try {const data=JSON.parse(body); result.cdp_response=typeof data.Browser==='string' &&
                 /^Chrome\//.test(data.Browser) && typeof data.webSocketDebuggerUrl==='string';} catch {}
-                result.status_code=response.statusCode; resolve(result);});
+                result.status_code=response.statusCode; finish();});
+            response.on('aborted',finish); response.on('error',finish); response.on('close',finish);
         });
-        request.on('timeout',()=>request.destroy()); request.on('error',()=>resolve(result));
+        request.on('timeout',()=>{request.destroy();finish();}); request.on('error',finish);
     });
 }
 
@@ -34,7 +38,7 @@ async function snapshot(pid, profile, scenario) {
             if(error) return resolve(null);
             const matches=[];
             for(const line of stdout.split(/\r?\n/)) {
-                const m=line.trim().match(/^TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)$/i);
+                const m=line.trim().match(/^TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+(?:LISTENING|ESTABLISHED)\s+(\d+)$/i);
                 if(m && pids.has(Number(m[2]))) matches.push({pid:Number(m[2]),port:Number(m[1])});
             }
             resolve(matches);
