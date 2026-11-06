@@ -51,7 +51,7 @@ function makePage(count = 64) {
     };
     const rows = Array.from({ length: count }, (_, index) => {
         const row = new Element({ endpoint: `host-${index + 1}` });
-        row.checkbox = new Element();
+        row.checkbox = new Element({ fleetEndpointId: `id-${index + 1}` });
         return row;
     });
     const rowChecks = rows.map(row => row.checkbox);
@@ -69,6 +69,7 @@ function makePage(count = 64) {
         '[data-endpoint-view]': views,
         '[data-endpoint-view-panel]': panels,
         '[data-endpoint-select]': rowChecks,
+        '[data-endpoint-row]': rows,
         'tr[data-endpoint-row]': rows,
         '[data-endpoint-menu-toggle]': [],
         '.endpoint-action-popover': [],
@@ -80,10 +81,17 @@ function makePage(count = 64) {
     const document = {
         querySelector: selector => selector === '[data-endpoint-ops]' ? root : selectors[selector] || null,
         querySelectorAll: () => [],
-        addEventListener() {}
+        addEventListener() {},
+        dispatchEvent() {}
     };
-    const window = {};
-    vm.runInNewContext(source, { document, window, navigator: {}, console });
+    const window = {
+        location: { href: 'http://localhost/endpoints/' },
+        history: { pushState() {} },
+        addEventListener() {},
+        clearTimeout,
+        setTimeout
+    };
+    vm.runInNewContext(source, { document, window, navigator: {}, console, URL, URLSearchParams, FormData, CustomEvent });
     return { rows, rowChecks, selectAll, selectedCount, bulkBar, pagination, pageSize,
         pageSummary, pageCurrent, controls, views };
 }
@@ -113,10 +121,10 @@ test('page size stays within 50 and selection survives page navigation', () => {
     assert.equal(page.selectedCount.textContent, '24');
 });
 
-test('pagination is hidden for other views; only summary cards keep hover', () => {
+test('pagination follows the current result set in every lazy view; only summary cards keep hover', () => {
     const page = makePage();
     page.views[1].fire('click');
-    assert.equal(page.pagination.hidden, true);
+    assert.equal(page.pagination.hidden, false);
     assert.doesNotMatch(css, /\.endpoint-card-item:hover\s*\{/);
     assert.match(css, /\.panel:not\(\.endpoint-ops-filter-panel\):not\(\.endpoint-ops-panel\):hover/);
     assert.match(css, /\.endpoint-metric-card:hover/);
@@ -203,4 +211,55 @@ test('empty and single-page tables do not expose invalid navigation', () => {
     single.pageSize.fire('change');
     assert.equal(single.rows.filter(row => !row.hidden).length, 8);
     assert.equal(single.pageCurrent.textContent, '1 / 1');
+});
+
+test('server paging keeps selected endpoint IDs and requests non-table views only when opened', async () => {
+    const { chromium } = require('playwright');
+    const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || 'chrome', headless: true });
+    try {
+        const page = await browser.newPage();
+        await page.route('http://localhost/**', route => route.fulfill({ status: 200, body: '<html><body></body></html>' }));
+        await page.goto('http://localhost/endpoints/');
+        await page.setContent(`<form data-endpoint-filter-form><input name="q" value=""><input type="hidden" name="quick" value="all"></form>
+            <strong data-endpoint-visible-count>21</strong><strong data-endpoint-count="total_endpoints">21</strong>
+            <section data-endpoint-ops data-endpoint-server-paginated="true" data-endpoint-url="/endpoints/" data-endpoint-result-count="21" data-endpoint-page="1" data-endpoint-page-count="3" data-endpoint-page-size-value="10">
+                <div data-endpoint-bulk-bar hidden><span data-endpoint-selected-count>0</span><span data-endpoint-selection-hidden hidden></span><button data-endpoint-selection-clear></button></div>
+                <input type="checkbox" data-endpoint-select-all>
+                <button data-endpoint-view="table" class="is-active"></button><button data-endpoint-view="cards"></button><button data-endpoint-view="health"></button>
+                <div data-endpoint-view-panel="table" data-endpoint-loaded="true"><table><tbody data-endpoint-table-body><tr data-endpoint-row data-endpoint="host-1"><td><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="id-1"></td></tr></tbody></table></div>
+                <div data-endpoint-view-panel="cards" data-endpoint-loaded="false" hidden></div><div data-endpoint-view-panel="health" data-endpoint-loaded="false" hidden></div>
+                <nav data-endpoint-pagination><span data-endpoint-pagination-summary></span><select data-endpoint-page-size><option value="10" selected>10</option><option value="25">25</option><option value="50">50</option></select>
+                    <button data-endpoint-page-first></button><button data-endpoint-page-previous></button><span data-endpoint-page-current>1 / 3</span><button data-endpoint-page-next></button><button data-endpoint-page-last></button></nav>
+            </section><div data-endpoint-toast hidden></div>`);
+        await page.evaluate(() => {
+            window.requests = [];
+            window.fetch = async (input) => {
+                const url = new URL(input, location.href);
+                window.requests.push(url.pathname + url.search);
+                const pageNumber = Number(url.searchParams.get('page') || 1);
+                const view = url.searchParams.get('view') || 'table';
+                const html = view === 'cards'
+                    ? '<article class="endpoint-card-item">host-card</article>'
+                    : `<tr data-endpoint-row data-endpoint="host-${pageNumber * 10 + 1}"><td><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="id-${pageNumber * 10 + 1}"></td></tr>`;
+                return new Response(JSON.stringify({html, view, page: pageNumber, page_count: 3, page_size: 10, result_count: 21,
+                    endpoint_ids: [`id-${pageNumber * 10 + 1}`], total_endpoints: 21, online_count: 20, offline_critical_count: 1,
+                    agent_outdated_count: 0, security_attention_count: 0, disk_critical_count: 0}), {headers: {'Content-Type': 'application/json'}});
+            };
+        });
+        await page.addScriptTag({ content: source });
+        await page.locator('[data-endpoint-select]').check();
+        await page.locator('[data-endpoint-select]').dispatchEvent('change', { bubbles: true });
+        await page.locator('[data-endpoint-page-next]').click();
+        await page.waitForFunction(() => document.querySelector('[data-endpoint-page-current]').textContent === '2 / 3');
+        assert.equal(await page.locator('[data-endpoint-selected-count]').textContent(), '1');
+        assert.equal(await page.locator('[data-endpoint-selection-hidden]').textContent(), '1 fora da página atual');
+        assert.match(await page.evaluate(() => window.requests[0]), /page=2/);
+
+        await page.locator('[data-endpoint-view="cards"]').click();
+        await page.waitForSelector('.endpoint-card-item');
+        assert.equal(await page.locator('[data-endpoint-view-panel="cards"]').isVisible(), true);
+        assert.equal(await page.locator('[data-endpoint-view-panel="table"]').isVisible(), false);
+        assert.match(await page.evaluate(() => window.requests.at(-1)), /view=cards/);
+        assert.deepEqual(await page.evaluate(() => window.NightOwlEndpointSelection.getIds()), ['id-1']);
+    } finally { await browser.close(); }
 });
