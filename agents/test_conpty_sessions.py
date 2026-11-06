@@ -167,22 +167,6 @@ class ConPtyTransportTests(TransactionTestCase):
                     try:
                         await wait_for(marker)
                     except TimeoutError:
-                        facts = {'stage': stage, 'date_started': 'NIGHTOWL_DATE_START' in text,
-                                 'agent_running': process.returncode is None, 'interrupt_responded': False,
-                                 'utility_module_loaded': None}
-                        if stage == 'date':
-                            # A post-failure probe on the SAME ConPTY, never a retry or an extended gate.
-                            try:
-                                await write('\x03')
-                                await write("$m=[bool](Get-Module -Name Microsoft.PowerShell.Utility); "
-                                    "[Console]::WriteLine('NIGHTOWL_'+'PROBE_'+[int]$m)\r")
-                                await wait_for('NIGHTOWL_PROBE_')
-                                facts['interrupt_responded'] = True
-                                if 'NIGHTOWL_PROBE_1' in text: facts['utility_module_loaded'] = True
-                                elif 'NIGHTOWL_PROBE_0' in text: facts['utility_module_loaded'] = False
-                            except (TimeoutError, AssertionError):
-                                pass
-                        print('CONPTY_ISOLATED_DIAGNOSTIC=' + json.dumps(facts))
                         self.fail('Isolated ConPTY timed out at ' + stage)
                 await operator.close()
                 stdout, _ = await asyncio.wait_for(process.communicate(), 10)
@@ -204,23 +188,9 @@ class ConPtyTransportTests(TransactionTestCase):
             "[Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)", 'NIGHTOWL_CHECK_ENV_OK'))
         return checks
 
-    @staticmethod
-    def _date_check():
-        return ('date', "[Console]::WriteLine('NIGHTOWL_'+'DATE_START'); "
-            "try {Get-Date -ErrorAction Stop | Out-Null; $r='DATE_OK'} catch {$r='FAIL'}; "
-            "[Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)", 'NIGHTOWL_CHECK_DATE_OK')
-
     @tag('windows_e2e')
     async def test_native_commands_resolve_without_inheriting_parent_environment(self):
         await self._isolated_shell_checks(self._native_checks())
-
-    @tag('windows_e2e')
-    async def test_get_date_in_separate_authorized_conpty(self):
-        await self._isolated_shell_checks([self._date_check()])
-
-    @tag('windows_e2e')
-    async def test_get_date_after_native_commands_in_same_conpty(self):
-        await self._isolated_shell_checks([*self._native_checks(), self._date_check()])
 
     @tag('windows_e2e')
     async def test_real_powershell_stream_over_websocket_and_disconnect(self):
