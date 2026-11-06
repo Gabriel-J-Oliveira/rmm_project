@@ -153,6 +153,26 @@ class ConPtyTransportTests(TransactionTestCase):
                         if marker == 'NIGHTOWL_CHECK_DATE_OK':
                             print('CONPTY_DATE_STAGE=' + json.dumps({'started': 'NIGHTOWL_CHECK_DATE_START' in text,
                                 'failed': 'NIGHTOWL_CHECK_DATE_FAIL' in text}))
+                            # Compare the token's actual profile with the harness environment,
+                            # without logging either path or any profile contents.
+                            import ctypes
+                            from ctypes import wintypes
+                            profile_facts = {'available': False}
+                            token = wintypes.HANDLE()
+                            try:
+                                if ctypes.windll.advapi32.OpenProcessToken(ctypes.windll.kernel32.GetCurrentProcess(), 8, ctypes.byref(token)):
+                                    size = wintypes.DWORD(32768)
+                                    path = ctypes.create_unicode_buffer(size.value)
+                                    if ctypes.windll.userenv.GetUserProfileDirectoryW(token, path, ctypes.byref(size)):
+                                        profile = Path(path.value)
+                                        temp = profile / 'AppData/Local/Temp'
+                                        profile_facts = {'available': True, 'profile_exists': profile.is_dir(),
+                                            'temp_exists': temp.is_dir(), 'temp_writable': os.access(temp, os.W_OK),
+                                            'matches_environment_profile': os.path.normcase(str(profile)) == os.path.normcase(os.environ.get('USERPROFILE', ''))}
+                            finally:
+                                if token.value:
+                                    ctypes.windll.kernel32.CloseHandle(token)
+                            print('CONPTY_PROFILE_FACTS=' + json.dumps(profile_facts))
                             # Diagnostic runs only after failure: never warm or extend the E2E gate.
                             shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
                             probe = await asyncio.create_subprocess_exec(str(shell), '-NoProfile', '-NonInteractive', '-Command',
