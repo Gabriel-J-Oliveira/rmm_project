@@ -150,6 +150,9 @@ class ConPtyTransportTests(TransactionTestCase):
                         message = await operator.read()
                     except TimeoutError:
                         stage = marker if marker.startswith('NIGHTOWL_CHECK_') else 'interactive_io'
+                        if marker == 'NIGHTOWL_CHECK_DATE_OK':
+                            print('CONPTY_DATE_STAGE=' + json.dumps({'started': 'NIGHTOWL_CHECK_DATE_START' in text,
+                                'failed': 'NIGHTOWL_CHECK_DATE_FAIL' in text}))
                         self.fail('Terminal output timed out at stage: ' + stage)
                     if isinstance(message, bytes):
                         part = decoder.decode(message[9:]); text = (text + part)[-65536:]
