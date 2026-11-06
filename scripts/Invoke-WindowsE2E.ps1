@@ -41,7 +41,30 @@ try {
         -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
     Get-Content $out
     Get-Content $err
-    if ($process.ExitCode -ne 0) { throw "Windows E2E failed with exit code $($process.ExitCode)" }
+    $e2eExitCode = $process.ExitCode
+
+    # The independent probe runs AFTER the full E2E, even on failure: it cannot
+    # warm Chrome before the smoke or turn an E2E failure into success.
+    $node = (Get-Command node -CommandType Application | Select-Object -First 1).Source
+    $probeArgs = @('tests/frontend/test_chrome_cdp_isolated.cjs')
+    $negative = Start-Process -FilePath $node -ArgumentList ($probeArgs + '--missing-executable') -Credential $credential `
+        -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+    $negativeLines = @(Get-Content $out)
+    $negativeLines
+    $negativeData = @($negativeLines | Where-Object { $_ -like 'CHROME_CDP_ISOLATED=*' })
+    $negativeValid = $false
+    if ($negativeData.Count -eq 1) {
+        $negativeResult = $negativeData[0].Substring('CHROME_CDP_ISOLATED='.Length) | ConvertFrom-Json
+        $negativeValid = $negative.ExitCode -ne 0 -and $negativeResult.error -eq 'spawn_failed' -and
+            $negativeResult.process_exited -and $negativeResult.profile_removed -and $negativeResult.remaining_profile_processes -eq 0
+    }
+    $probe = Start-Process -FilePath $node -ArgumentList $probeArgs -Credential $credential `
+        -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+    Get-Content $out
+    Get-Content $err
+    if (-not $negativeValid) { throw 'Chrome CDP negative control did not reject the missing executable cleanly' }
+    if ($probe.ExitCode -ne 0) { throw "Isolated Chrome CDP probe failed with exit code $($probe.ExitCode)" }
+    if ($e2eExitCode -ne 0) { throw "Windows E2E failed with exit code $e2eExitCode" }
 }
 finally {
     if ($created) {
