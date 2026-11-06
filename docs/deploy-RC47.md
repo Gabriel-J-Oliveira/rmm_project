@@ -3,6 +3,8 @@
 > **Estado: documento de planejamento, não autorização de implementação ou deploy.**
 > Consolidado em 05/11/2026 com base nas decisões e discussões do projeto; **atualizado em 06/11/2026** com a homologação do terminal RC46 e requisitos funcionais para o frontend da RC47. Alterações futuras devem atualizar este mesmo documento. Diferenciar decisões acordadas, hipóteses e pendências de validação.
 
+O fechamento técnico, as evidências de homologação parcial e as restrições operacionais da RC46 constam de `docs/rc46-final-closure-rc47-handoff.md`. A correção de resolução de comandos via PATHEXT depende de integração e de uma nova release Windows assinada; a release RC46 já publicada não deve ser sobrescrita. A validação TLS do upstream NPM, o modo administrativo e os demais cenários de encerramento permanecem sujeitos a homologação.
+
 **Repositório:** Gabriel-J-Oliveira/rmm_project  
 **Base consultada:** main em cbd72f544a6287a0952ba64bfc5df884c5e85f3c.  
 **Escopo:** simplificação da arquitetura de coletas; inventário de hardware; telemetria contínua e retenção; última análise persistida; agendamentos/políticas; ajustes pontuais de interface; validação e rollout da RC47.  
