@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
+const {spawn,execFileSync} = require('node:child_process');
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
 let phase='launch';
 class CDP {
@@ -29,6 +29,7 @@ class CDP {
     const server=process.env.NIGHTOWL_TEST_SERVER;
     assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(server));
     const profile=fs.mkdtempSync(path.join(os.tmpdir(),'nightowl-terminal-browser-'));
+    const launchStarted=performance.now();
     const chrome=spawn('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',[
         '--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check',
         '--disable-sync','--disable-background-networking','--disable-background-timer-throttling','--disable-renderer-backgrounding',
@@ -50,10 +51,26 @@ class CDP {
     try {
         const portFile=path.join(profile,'DevToolsActivePort');
         for(let i=0;i<100 && !fs.existsSync(portFile);i++) await sleep(100);
-        if (!fs.existsSync(portFile)) console.log('TERMINAL_BROWSER_LAUNCH='+JSON.stringify({
-            stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,signal:chromeSignal,error_code:chromeSpawnError,diagnostics:[...chromeDiagnostics]
-        }));
-        assert(fs.existsSync(portFile),'Existing Chrome did not start');
+        const portReady=fs.existsSync(portFile);
+        if (!portReady) {
+            let processCount=null, rootAlive=null;
+            try {
+                if (Number.isSafeInteger(chrome.pid) && chrome.pid>0) {
+                    try {process.kill(chrome.pid,0);rootAlive=true;} catch {rootAlive=false;}
+                    const rows=execFileSync('tasklist.exe',['/FO','CSV','/NH','/FI','IMAGENAME eq chrome.exe'],
+                        {encoding:'utf8',timeout:3000,stdio:['ignore','pipe','ignore']});
+                    processCount=rows.split(/\r?\n/).filter(row=>/^"chrome\.exe",/i.test(row)).length;
+                }
+            } catch { /* Diagnostics cannot turn the failed launch into success. */ }
+            console.log('TERMINAL_BROWSER_LAUNCH='+JSON.stringify({
+                stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,
+                signal:chromeSignal,error_code:chromeSpawnError,elapsed_ms:Math.round(performance.now()-launchStarted),
+                root_alive:rootAlive,chrome_process_count:processCount,profile_exists:fs.existsSync(profile),
+                profile_local_state:fs.existsSync(path.join(profile,'Local State')),profile_default:fs.existsSync(path.join(profile,'Default')),
+                diagnostics:[...chromeDiagnostics]
+            }));
+        }
+        assert(portReady,'Existing Chrome did not start');
         const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);
         const ws=new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
         await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});

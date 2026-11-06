@@ -50,6 +50,8 @@ async function main() {
             throw new Error('windows_profile_unavailable');
         chrome=spawn(chromePath,['--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,
             '--no-first-run','--no-default-browser-check','--disable-sync','--disable-background-networking',
+            '--disable-background-timer-throttling','--disable-renderer-backgrounding',
+            '--disable-backgrounding-occluded-windows','--disable-features=BackForwardCache',
             '--enable-logging=stderr','about:blank'],{windowsHide:true,stdio:['ignore','ignore','pipe']});
         const categories=new Set();
         chrome.stderr.on('data',data=>{const s=data.toString();
