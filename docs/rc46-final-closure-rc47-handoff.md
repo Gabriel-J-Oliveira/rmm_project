@@ -3,7 +3,7 @@
 ## Estado verificado
 
 - **APROVADO:** `main` inicial `138473d0473ee4aa37ed8ce57390487351ebef4d`. PR #15 integrada em `99a892daa44db157e80986b53886226618f6783b`; seus quatro checks passaram no head `c763d2b0e56a1ffc7c1bf43c27232daf8199a728`. O projeto declara Uvicorn e `websockets` para o relay ASGI de processo único; o teste local do handshake não autenticado retornou 403.
-- **BLOQUEADO:** PR #16 ainda depende do resultado do gate Windows. O teste local com ConPTY real executou `whoami`, `hostname`, `ipconfig` e `Get-Date`, sem herdar variável sintética do processo pai. O head anterior `02651f712c08af33de84a33bfec0f4566fc6f6d2` falhou no CI `42231041202`: Chrome sem porta CDP e timeout ConPTY; o diagnóstico PowerShell passou. A correção no agente depende de integração e nova release Windows assinada. Não substituir a release RC46 já assinada.
+- **BLOQUEADO:** PR #16 no head `06aae505cd04da6766a7dcbeb601f5677118a31a` falhou no CI `42232091965`: SQLite, PostgreSQL e deployment passaram; no gate Windows, `whoami`, `hostname` e `ipconfig` passaram, mas a etapa `Get-Date` esgotou a espera de saída e o Chrome não abriu a porta CDP. O diagnóstico PowerShell passou. O teste local executou os quatro comandos e não herdou variável sintética do processo pai. A correção no agente depende de integração e nova release Windows assinada. Não substituir a release RC46 já assinada.
 - **APROVADO:** conforme evidência operacional informada pelo operador, na VM RC46 houve sessão WSS/ConPTY assistida com consentimento Tray, identidade não elevada, entrada/saída e Ctrl+C. Isso não é homologação do modo administrativo.
 - **APROVADO:** conforme resultado informado pelo operador, `query_service`, `environment_diagnostic` e `flush_dns` concluíram na VM piloto, cada um com ACK único. Heartbeat e monitoramento ao vivo receberam dados reais.
 - **NÃO HOMOLOGADO:** modo `admin_auth`, encerramento de filhos em todos os caminhos, revogação e logout em infraestrutura real; validar com conta de laboratório autorizada. GPO/SYSTEM permanece NO-GO.
@@ -12,7 +12,7 @@
 
 ## Validação local e riscos
 
-No Windows local: dez E2Es reais sem skips em duas execuções (Chrome e ConPTY; clique de consentimento simulado), 38 testes Django de terminal, 75 testes focados de ações, telemetria e instalação; build .NET e testes simulados do updater/rollback, além de testes PowerShell 5.1 de no-op, staging, assinatura inválida e WinRM simulado. `manage.py check`, verificação de migrations e `git diff --check` passaram. CI da PR #16 ainda precisa ser avaliado no HEAD final.
+No Windows local: dez E2Es reais sem skips em duas execuções (Chrome e ConPTY; clique de consentimento simulado), 38 testes Django de terminal, 75 testes focados de ações, telemetria e instalação; build .NET e testes simulados do updater/rollback, além de testes PowerShell 5.1 de no-op, staging, assinatura inválida e WinRM simulado. `manage.py check`, verificação de migrations e `git diff --check` passaram. O gate Windows da PR #16 permanece reprovado.
 
 A execução histórica `42224344768` teve falhas em ConPTY, diagnóstico PowerShell e inicialização Chrome sem porta CDP. Os dados disponíveis não demonstram causa raiz comum nem permitem afirmar correção da intermitência. Preservar timeouts, testes obrigatórios e diagnósticos sanitizados; não usar aprovação do teste local como prova de estabilidade de runner.
 
