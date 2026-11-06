@@ -14,6 +14,8 @@
 
 No Windows local: dez E2Es reais sem skips em três execuções (Chrome e ConPTY; clique de consentimento simulado), 38 testes Django de terminal, 75 testes focados de ações, telemetria e instalação; build .NET e testes simulados do updater/rollback, além de testes PowerShell 5.1 de no-op, staging, assinatura inválida e WinRM simulado. `manage.py check`, verificação de migrations e `git diff --check` passaram. O CI histórico dos testes de investigação falhou; consultar os checks do HEAD atual da PR #16 separadamente.
 
+A PR #16 foi limitada ao PATHEXT, aos dez E2Es existentes e ao teste adicional de executáveis e isolamento. No CI `42254876833`, SQLite, PostgreSQL e deployment passaram; o gate Windows teve 10/11 aprovações, com falha no smoke do Chrome sem porta CDP. A PR permanece aberta: não tratar a correção PATHEXT como integrada ou publicada.
+
 A execução histórica `42224344768` teve falhas em ConPTY, diagnóstico PowerShell e inicialização Chrome sem porta CDP. Os dados disponíveis não demonstram causa raiz comum nem permitem afirmar correção da intermitência. Preservar timeouts, testes obrigatórios e diagnósticos sanitizados; não usar aprovação do teste local como prova de estabilidade de runner.
 
 Próxima investigação: após o gate falho e antes de limpar a identidade temporária, medir separadamente, sob essa identidade e sem aquecer previamente os testes, a descoberta/carregamento de `Microsoft.PowerShell.Utility` e a duração de `Get-Date`; registrar apenas etapas e tempos. Investigar a árvore de processos e a inicialização do perfil Chrome exclusivo, sem cookies ou dados de navegação. Comparar com runner limpo da `main`, sem aumentar prazos, remover testes ou usar repetições para mascarar falhas.
