@@ -171,7 +171,6 @@ class ConPtyTransportTests(TransactionTestCase):
                     await write(f"& {command} | Out-Null; $ok=$? -and ($LASTEXITCODE -eq 0); if ($ok) {{$r='OK'}} else {{$r='FAIL'}}; [Console]::WriteLine('NIGHTOWL_CHECK_'+ '{check}_' + $r)\r")
                     await until_marker('NIGHTOWL_CHECK_' + check + '_OK')
                 await write("[Console]::WriteLine('NIGHTOWL_CHECK_'+'DATE_START'); try {Get-Date -ErrorAction Stop | Out-Null; $r='OK'} catch {$r='FAIL'}; [Console]::WriteLine('NIGHTOWL_CHECK_'+'DATE_'+$r)\r")
-                await until_marker('NIGHTOWL_CHECK_DATE_START')
                 await until_marker('NIGHTOWL_CHECK_DATE_OK')
                 await write("if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$r='FAIL'} else {$r='OK'}; [Console]::WriteLine('NIGHTOWL_CHECK_'+'ENV_'+$r)\r")
                 await until_marker('NIGHTOWL_CHECK_ENV_OK')
