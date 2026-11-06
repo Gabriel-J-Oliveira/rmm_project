@@ -320,6 +320,24 @@ class TerminalTransportTests(TransactionTestCase):
                 self.assertEqual((await peer.read())['type'], 'error')
                 await peer.close()
 
+    async def test_proxy_scope_requires_wss_and_exact_operator_origin(self):
+        scope = {'path': self.info['websocket_path'], 'scheme': 'wss', 'client': ('192.0.2.9', 1),
+            'headers': [(b'host', b'testserver:443'), (b'origin', b'https://testserver:443')],
+            'subprotocols': ['nightowl-terminal.v1'], 'query_string': b''}
+        with override_settings(NIGHTOWL_TERMINAL_TEST_LOOPBACK=False, ALLOWED_HOSTS=['testserver']):
+            self.assertTrue(transport.secure_scope(scope))
+            scope['scheme'] = 'ws'
+            scope['headers'].append((b'x-forwarded-proto', b'https'))
+            self.assertFalse(transport.secure_scope(scope))
+            scope['scheme'] = 'wss'
+            scope['headers'][1] = (b'origin', b'https://untrusted.invalid')
+            self.assertFalse(transport.secure_scope(scope))
+            scope['headers'][1] = (b'origin', b'https://testserver')
+            self.assertFalse(transport.secure_scope(scope))  # Origin and Host ports differ.
+            scope['headers'][1] = (b'origin', b'https://testserver:443')
+            scope['query_string'] = b'credential=forbidden'
+            self.assertFalse(transport.secure_scope(scope))
+
     async def test_bounded_buffers_rate_concurrency_and_send_timeout(self):
         peer = transport.Peer('agent')
         with self.assertRaises(transport.ProtocolError):
