@@ -133,7 +133,8 @@ class ConPtyTransportTests(TransactionTestCase):
         self.assertTrue(dll.exists())
         async with LoopbackASGI() as server:
             process = await asyncio.create_subprocess_exec('dotnet', str(dll), '--conpty-e2e', stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, 'NIGHTOWL_TEST_SERVER': server.origin, 'NIGHTOWL_TEST_TERMINAL_INFO': json.dumps(self.agent_info)})
+                env={**os.environ, 'NIGHTOWL_TEST_SERVER': server.origin, 'NIGHTOWL_TEST_TERMINAL_INFO': json.dumps(self.agent_info),
+                     'NIGHTOWL_E2E_SECRET_SENTINEL': 'synthetic-must-not-be-inherited'})
             operator = await WSClient.connect(server, self.info['websocket_path'], self.info['credential'])
             sequence = 0
             decoder = codecs.getincrementaldecoder('utf-8')()
@@ -157,6 +158,10 @@ class ConPtyTransportTests(TransactionTestCase):
                 opened = time.perf_counter()
                 await operator.until('ready')
                 ready_ms = (time.perf_counter() - opened) * 1000
+                # Exercise actual command resolution in the closed ConPTY environment.
+                # Build the marker at runtime so terminal input echo cannot satisfy it.
+                await write("$ok=$true; foreach($c in @('whoami','hostname','ipconfig')) { & $c | Out-Null; $ran=$?; if (-not $ran -or $LASTEXITCODE -ne 0) {$ok=$false} }; try { Get-Date -ErrorAction Stop | Out-Null } catch {$ok=$false}; if (Test-Path Env:NIGHTOWL_E2E_SECRET_SENTINEL) {$ok=$false}; if ($ok) {[Console]::WriteLine('NIGHTOWL_NATIVE_'+'PASS')} else {[Console]::WriteLine('NIGHTOWL_NATIVE_'+'FAIL')}\r")
+                await until_marker('NIGHTOWL_NATIVE_PASS')
                 values = []
                 echoes = []
                 for index in range(100):
