@@ -3,6 +3,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..", "..");
 const source = fs.readFileSync(path.join(root, "static", "js", "endpoint_detail.js"), "utf8");
+const template = fs.readFileSync(path.join(root, "templates", "dashboard", "endpoint_detail.html"), "utf8");
 
 function assert(condition, message) {
   if (!condition) {
@@ -13,7 +14,7 @@ function assert(condition, message) {
 assert(source.includes("function renderJobs(jobs, limit)"), "renderJobs must exist");
 assert(source.includes("function renderJobItem(job, isActive)"), "renderJobItem must be explicit");
 assert(source.includes("endpoint-active-job"), "active job highlight must be rendered");
-assert(source.includes("Historico recente"), "recent history section must be rendered");
+assert(template.includes("&Uacute;ltimos jobs"), "jobs header must be rendered in the fixed panel");
 assert(source.includes("NightOwlJobDisplay.measuredProgress"), "only measured job progress may be displayed");
 assert(source.includes("data-copy-job-details"), "technical detail copy action must exist");
 assert(source.includes("data-mark-job-failed"), "manual stale failure action must exist");
@@ -25,6 +26,8 @@ assert(source.includes("Job de reparo do agente enfileirado"), "repair_agent mus
 assert(source.includes('uninstall_agent: "trash-2"'), "uninstall_agent jobs must render with the trash icon");
 assert(source.includes("function agentLifecycleActionButtons(detail)"), "uninstall lifecycle buttons must be shared by quick actions and tasks");
 assert(source.includes("function agentManagementActionButtons(detail)"), "agent management buttons must be shared by quick actions and tasks");
+assert(source.includes("function renderTaskPanel(detail)"), "task areas must update through stable containers");
+assert(template.includes('data-endpoint-jobs-content'), "jobs must render inside the dedicated scrolling container");
 assert(source.includes("const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);"), "quick actions must use shared lifecycle buttons");
 assert(source.includes("const lifecycleButtons = agentLifecycleActionButtons(detail);"), "tasks tab must use shared lifecycle buttons");
 assert(source.includes("const agentManagementButtons = agentManagementActionButtons(endpointDetail);"), "quick actions must use shared agent management buttons");

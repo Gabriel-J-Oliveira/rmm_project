@@ -1,0 +1,556 @@
+body.page-endpoint-detail .endpoint-actions-tab {
+    margin-top: 14px;
+}
+
+body.page-endpoint-detail .endpoint-actions-jobs-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 4fr) minmax(260px, 1fr);
+    align-items: start;
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-actions-column {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-quick-actions-card {
+    display: grid;
+    grid-template-columns: minmax(175px, .72fr) minmax(0, 1.7fr);
+    align-items: center;
+    gap: 18px;
+    padding: 16px;
+}
+
+body.page-endpoint-detail .endpoint-quick-actions-intro {
+    align-self: stretch;
+    display: grid;
+    align-content: center;
+    gap: 6px;
+    min-width: 0;
+    padding-right: 16px;
+    border-right: 1px solid var(--border);
+}
+
+body.page-endpoint-detail .endpoint-quick-actions-intro h2,
+body.page-endpoint-detail .endpoint-jobs-header h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 800;
+}
+
+body.page-endpoint-detail .endpoint-quick-actions-intro h2 svg,
+body.page-endpoint-detail .endpoint-jobs-header h2 svg {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 auto;
+    color: var(--soft-purple);
+}
+
+body.page-endpoint-detail .endpoint-quick-actions-intro p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-item,
+body.page-endpoint-detail .endpoint-quick-action-item form {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--sidebar);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 750;
+    text-align: center;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button svg {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:hover:not(:disabled) {
+    border-color: var(--border-active);
+    background: var(--card-hover);
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:focus-visible,
+body.page-endpoint-detail .endpoint-jobs-header button:focus-visible,
+body.page-endpoint-detail .endpoint-job-action-button:focus-visible,
+body.page-endpoint-detail .endpoint-action-category > summary:focus-visible,
+body.page-endpoint-detail .endpoint-terminal-disclosure > summary:focus-visible {
+    outline: 2px solid var(--soft-purple);
+    outline-offset: 2px;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:disabled {
+    color: var(--text-disabled);
+    cursor: not-allowed;
+    opacity: .72;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-item small {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-winrm-feedback {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+
+body.page-endpoint-detail .endpoint-winrm-feedback p {
+    min-width: 0;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-winrm-feedback .winrm-indicator {
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-winrm-feedback button {
+    min-height: 30px;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--sidebar);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-winrm-feedback button:disabled {
+    color: var(--text-disabled);
+    cursor: not-allowed;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details {
+    grid-column: 1 / -1;
+    min-width: 0;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details > summary {
+    width: fit-content;
+    padding-top: 10px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details > div {
+    display: grid;
+    gap: 4px;
+    padding-top: 8px;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-action-groups {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-action-category {
+    min-width: 0;
+    padding: 0 12px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+}
+
+body.page-endpoint-detail .endpoint-action-category > summary,
+body.page-endpoint-detail .endpoint-terminal-disclosure > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 42px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    list-style: none;
+}
+
+body.page-endpoint-detail .endpoint-action-category > summary::-webkit-details-marker,
+body.page-endpoint-detail .endpoint-terminal-disclosure > summary::-webkit-details-marker {
+    display: none;
+}
+
+body.page-endpoint-detail .endpoint-action-category > summary::after,
+body.page-endpoint-detail .endpoint-terminal-disclosure > summary::after {
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--text-muted);
+    border-bottom: 1.5px solid var(--text-muted);
+    content: "";
+    transform: rotate(45deg) translateY(-2px);
+    transition: transform .15s ease;
+}
+
+body.page-endpoint-detail .endpoint-action-category[open] > summary::after,
+body.page-endpoint-detail .endpoint-terminal-disclosure[open] > summary::after {
+    transform: rotate(225deg) translate(-2px, -1px);
+}
+
+body.page-endpoint-detail .endpoint-category-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-category-heading svg {
+    width: 15px;
+    height: 15px;
+    color: var(--soft-purple);
+}
+
+body.page-endpoint-detail .endpoint-action-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-action-grid[data-action-grid="three"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-action-grid[data-action-grid="two"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-action-availability {
+    display: grid;
+    align-content: start;
+    gap: 5px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-action-availability small {
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-actions-danger {
+    border-color: rgba(239, 68, 68, .5);
+}
+
+body.page-endpoint-detail .endpoint-actions-danger > summary,
+body.page-endpoint-detail .endpoint-actions-danger > summary .endpoint-category-heading svg {
+    color: var(--critical);
+}
+
+body.page-endpoint-detail .endpoint-actions-danger .endpoint-quick-action-button {
+    border-color: rgba(239, 68, 68, .35);
+}
+
+body.page-endpoint-detail .endpoint-approved-scripts-body {
+    display: grid;
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-approved-script-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--border);
+}
+
+body.page-endpoint-detail .endpoint-approved-script-row > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-approved-script-row p,
+body.page-endpoint-detail .endpoint-approved-script-row small {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-terminal-disclosure {
+    min-width: 0;
+    padding: 0 12px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+}
+
+body.page-endpoint-detail .endpoint-terminal-disclosure .endpoint-terminal {
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-jobs-panel {
+    display: flex;
+    flex-direction: column;
+    height: clamp(360px, calc(100dvh - 350px), 760px);
+    min-height: 360px;
+    padding: 0;
+    overflow: hidden;
+}
+
+body.page-endpoint-detail .endpoint-jobs-header {
+    position: sticky;
+    z-index: 1;
+    top: 0;
+    flex: 0 0 auto;
+    min-height: 48px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+}
+
+body.page-endpoint-detail .endpoint-jobs-header button {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--sidebar);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-jobs-header button:hover {
+    background: var(--card-hover);
+}
+
+body.page-endpoint-detail .endpoint-jobs-header button svg {
+    width: 14px;
+    height: 14px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-color: var(--border-active) transparent;
+    scrollbar-width: thin;
+}
+
+body.page-endpoint-detail .endpoint-jobs-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-scroll::-webkit-scrollbar-thumb {
+    border-radius: 6px;
+    background: var(--border-active);
+}
+
+body.page-endpoint-detail .endpoint-jobs-content {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    min-height: 100%;
+    padding: 10px;
+}
+
+body.page-endpoint-detail .endpoint-job-list,
+body.page-endpoint-detail .endpoint-active-job,
+body.page-endpoint-detail .endpoint-job-history {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-active-job h3 {
+    margin: 2px 0 0;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+body.page-endpoint-detail .endpoint-job-item {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: stretch;
+    gap: 9px !important;
+    min-width: 0;
+    min-height: 0 !important;
+    padding: 10px !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 7px !important;
+    background: var(--sidebar) !important;
+}
+
+body.page-endpoint-detail .endpoint-job-card-content {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-job-card-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-job-card-heading .agent-version-pill {
+    flex: 0 0 auto;
+}
+
+body.page-endpoint-detail .endpoint-job-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+body.page-endpoint-detail .endpoint-job-result {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+}
+
+body.page-endpoint-detail .endpoint-job-stage,
+body.page-endpoint-detail .endpoint-job-unconfirmed,
+body.page-endpoint-detail .endpoint-job-stale {
+    color: var(--unknown);
+    font-size: 10px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-job-actions {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 5px;
+    min-width: 62px;
+    max-width: 86px;
+}
+
+body.page-endpoint-detail .endpoint-job-action-button {
+    width: 100%;
+    min-height: 27px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--card);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-job-action-button:hover {
+    background: var(--card-hover);
+}
+
+body.page-endpoint-detail .endpoint-job-item.is-active {
+    border-color: var(--border-active) !important;
+}
+
+@media (max-width: 1050px) {
+    body.page-endpoint-detail .endpoint-actions-jobs-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-jobs-panel {
+        height: min(70dvh, 640px);
+        min-height: 340px;
+    }
+}
+
+@media (max-width: 720px) {
+    body.page-endpoint-detail .endpoint-quick-actions-card {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 12px;
+    }
+
+    body.page-endpoint-detail .endpoint-quick-actions-intro {
+        padding: 0 0 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+    }
+
+    body.page-endpoint-detail .endpoint-quick-action-list {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-winrm-feedback {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-action-grid,
+    body.page-endpoint-detail .endpoint-action-grid[data-action-grid="three"],
+    body.page-endpoint-detail .endpoint-action-grid[data-action-grid="two"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}

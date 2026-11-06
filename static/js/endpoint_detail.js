@@ -757,9 +757,9 @@
         const rows = sourceRows.filter(function (job) {
             return !activeJob || String(job.id) !== String(activeJob.id);
         }).slice(0, limit || sourceRows.length);
-        if (!rows.length && !activeJob) return emptyState("Nenhuma tarefa tecnica executada neste endpoint", "Use as acoes rapidas para enfileirar jobs reais para o agente.", "list-checks");
-        const activeMarkup = activeJob ? '<section class="endpoint-active-job"><h3>Job em execucao</h3>' + renderJobItem(activeJob, true) + '</section>' : "";
-        const historyMarkup = rows.length ? '<section class="endpoint-job-history"><h3>Historico recente</h3>' + rows.map(function (job) { return renderJobItem(job, false); }).join("") + '</section>' : "";
+        if (!rows.length && !activeJob) return emptyState("Nenhum job registrado neste endpoint", "As execuções reais aparecerão aqui quando forem solicitadas.", "list-checks");
+        const activeMarkup = activeJob ? '<section class="endpoint-active-job"><h3>Em andamento</h3>' + renderJobItem(activeJob, true) + '</section>' : "";
+        const historyMarkup = rows.length ? '<section class="endpoint-job-history">' + rows.map(function (job) { return renderJobItem(job, false); }).join("") + '</section>' : "";
         return '<div class="endpoint-job-list">' + activeMarkup + historyMarkup + "</div>";
     }
 
@@ -767,28 +767,24 @@
             const progress = jobProgress(job);
             const result = jobResultLabel(job);
             const primaryTime = job.finishedAt || job.startedAt || job.dispatchedAt || job.createdAt;
-            const steps = window.NightOwlJobDisplay.milestones(job);
-            const evidence = steps.map(function (step) { return escapeHtml(step.label) + ': ' + escapeHtml(formatDate(step.at)); }).join(' · ');
-            const progressMarkup = progress == null ? '<div class="endpoint-job-stage">' + escapeHtml(window.NightOwlJobDisplay.status(job)) + '</div>' : '<div class="endpoint-job-progressline"><div class="endpoint-job-progress"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>';
+            const progressMarkup = isActive && progress != null ? '<div class="endpoint-job-progressline"><div class="endpoint-job-progress"><span style="width:' + escapeHtml(progress) + '%"></span></div><strong>' + escapeHtml(progress) + '%</strong></div>' : "";
             const stale = job.isStale || job.is_stale;
             const staleText = stale ? '<div class="endpoint-job-stale">Possivelmente travado - ' + escapeHtml(staleReasonLabel(job.staleReason || job.stale_reason)) + '</div>' : "";
             const versionLine = job.targetVersion || job.previousVersion ? '<small class="endpoint-job-version">' + escapeHtml([job.previousVersion, job.targetVersion].filter(Boolean).join(" -> ")) + '</small>' : "";
+            const hasOutput = Boolean(job.stdout || job.stderr || job.errorMessage || job.output);
+            const stage = job.stage && String(job.stage).toLowerCase() !== String(job.status || "").toLowerCase()
+                ? '<small class="endpoint-job-stage">' + escapeHtml(job.stage) + '</small>' : "";
             return '<article class="endpoint-job-item ' + (isActive ? "is-active " : "") + 'endpoint-job-item-' + escapeHtml(job.status || "pending") + (stale ? " is-stale" : "") + '">' +
-                '<div class="endpoint-job-identity">' +
-                    jobBadge(job.status, window.NightOwlJobDisplay.status(job)) + jobType(job.type, job) + '<small>por ' + escapeHtml(job.createdBy || "-") + '</small>' + versionLine +
-                '</div>' +
-                '<div class="endpoint-job-output">' +
-                    progressMarkup + (evidence ? '<small>' + evidence + '</small>' : '') + (window.NightOwlJobDisplay.unconfirmed(job) ? '<div>Resultado não confirmado</div>' : '') +
-                    '<div class="endpoint-job-stage">' + escapeHtml(job.stage || "-") + '</div>' +
-                    '<div class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</div>' + staleText +
-                '</div>' +
-                '<div class="endpoint-job-time">' +
-                    '<span><b>Horario</b>' + escapeHtml(formatDate(primaryTime)) + '</span>' +
-                    '<span><b>Duracao</b>' + escapeHtml(formatDuration(job.durationMs)) + '</span>' +
+                '<div class="endpoint-job-card-content">' +
+                    '<div class="endpoint-job-card-heading">' + jobBadge(job.status, window.NightOwlJobDisplay.status(job)) + jobType(job.type, job) + versionLine + '</div>' +
+                    '<div class="endpoint-job-card-meta"><time>' + escapeHtml(formatDate(primaryTime)) + '</time><span>' + escapeHtml(formatDuration(job.durationMs)) + '</span></div>' +
+                    progressMarkup + stage +
+                    '<p class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</p>' +
+                    (window.NightOwlJobDisplay.unconfirmed(job) ? '<small class="endpoint-job-unconfirmed">Resultado n&atilde;o confirmado</small>' : '') + staleText +
                 '</div>' +
                 '<div class="endpoint-job-actions">' +
                     '<button class="endpoint-job-action-button" type="button" data-open-job="' + escapeHtml(job.id) + '">Detalhes</button>' +
-                    '<button class="endpoint-job-action-button" type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar saida</button>' +
+                    (hasOutput ? '<button class="endpoint-job-action-button" type="button" data-copy-job="' + escapeHtml(job.id) + '">Copiar</button>' : '') +
                     cancelUninstallJobButton(job) +
                     (stale ? '<button class="endpoint-job-action-button endpoint-job-action-danger" type="button" data-mark-job-failed="' + escapeHtml(job.id) + '">Marcar falha</button>' : "") +
                 '</div>' +
@@ -1179,30 +1175,35 @@
             renderEvents(detail.events, 30, true) + "</section>";
     }
 
+    function renderTaskCategory(title, iconName, buttons, options) {
+        options = options || {};
+        if (!buttons.length) return "";
+        return '<details class="endpoint-action-category' + (options.danger ? ' endpoint-actions-danger' : '') + '" data-action-category="' + escapeHtml(options.id || '') + '"' + (options.open ? ' open' : '') + '>' +
+            '<summary><span class="endpoint-category-heading">' + icon(iconName) + escapeHtml(title) + '</span></summary>' +
+            '<div class="endpoint-action-grid" data-action-grid="' + escapeHtml(options.grid || 'default') + '">' + buttons.join("") + '</div></details>';
+    }
+
     function renderTasks(detail) {
         const lifecycleButtons = agentLifecycleActionButtons(detail);
         const purgeButtons = purgeActionButtons(detail);
         const agentManagementButtons = agentManagementActionButtons(detail);
-        return '<section class="panel endpoint-dense-card endpoint-actions-card"><header><h2>' + icon("list-checks") + 'Acoes e Jobs</h2><button type="button" data-refresh-endpoint>' + icon("refresh-ccw") + 'Atualizar lista</button></header>' +
-            '<section class="endpoint-action-group"><h3>Diagnósticos</h3><div class="endpoint-remote-actions-grid">' +
-            actionButton("ping", "Ping", "activity") +
-            actionButton("force_inventory", "Forcar inventario", "refresh-ccw") +
-            actionButton("collect_disks", "Coletar discos", "hard-drive") +
-            actionButton("collect_software", "Coletar software", "package-search") +
-            '</div></section><section class="endpoint-action-group"><h3>Ações operacionais</h3><div class="endpoint-remote-actions-grid">' +
-            Object.keys(operationalLabels).map(function (action) {
+        const diagnosticButtons = [
+            actionButton("ping", "Ping", "activity"),
+            actionButton("collect_disks", "Coletar discos", "hard-drive"),
+            actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
+            actionButton("collect_software", "Coletar software", "package-search")
+        ];
+        const operationalButtons = Object.keys(operationalLabels).map(function (action) {
                 const available = asObject(asObject(detail.operationalActions)[action]);
                 const reason = available.reason || 'Ação indisponível para este operador ou endpoint';
-                return '<div class="endpoint-action-availability"><button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="' + escapeHtml(reason) + '"') + '><span>' + escapeHtml(operationalLabels[action]) + '</span></button>' + (available.enabled ? '' : '<small>' + escapeHtml(reason) + '</small>') + '</div>';
-            }).join("") +
-            '</div></section><div data-approved-scripts-placement></div><section class="endpoint-action-group"><h3>Manutenção do agente</h3><div class="endpoint-remote-actions-grid">' +
-            agentManagementButtons.join("") +
-            '</div></section><section class="endpoint-action-group endpoint-actions-danger"><h3>Ações destrutivas</h3><div class="endpoint-remote-actions-grid">' +
-            lifecycleButtons.join("") +
-            purgeButtons.join("") +
-            "</div></section>" +
-            renderJobs(detail.jobs, 80) +
-            "</section>";
+                return '<div class="endpoint-action-availability"><button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="' + escapeHtml(reason) + '"') + '><i data-lucide="' + escapeHtml({flush_dns:'network',query_service:'search',gpupdate:'refresh-cw',start_service:'play',stop_service:'square',restart_service:'rotate-cw'}[action] || 'circle') + '"></i><span>' + escapeHtml(operationalLabels[action]) + '</span></button>' + (available.enabled ? '' : '<small>' + escapeHtml(reason) + '</small>') + '</div>';
+        });
+        return {
+            core: renderTaskCategory("Diagnósticos", "stethoscope", diagnosticButtons, {id:"diagnostics",grid:"four",open:true}) +
+                renderTaskCategory("Operações", "settings-2", operationalButtons, {id:"operations",grid:"three",open:true}),
+            maintenance: renderTaskCategory("Manutenção do agente", "wrench", agentManagementButtons, {id:"maintenance",grid:"four"}),
+            critical: renderTaskCategory("Ações críticas", "shield-alert", lifecycleButtons.concat(purgeButtons), {id:"critical",grid:"two",danger:true})
+        };
     }
 
     function renderDiagnostics(detail) {
@@ -1269,6 +1270,33 @@
         return root.querySelector('[data-endpoint-tab-panel="' + name + '"]');
     }
 
+    function renderTaskPanel(detail) {
+        const target = panel("tasks");
+        if (!target) return;
+        const slots = renderTasks(detail);
+        const core = target.querySelector("[data-endpoint-actions-core]");
+        const maintenance = target.querySelector("[data-endpoint-actions-maintenance]");
+        const critical = target.querySelector("[data-endpoint-actions-critical]");
+        const signature = JSON.stringify({
+            operationalActions: detail.operationalActions || {},
+            lifecycleStatus: detail.agent && detail.agent.lifecycleStatus,
+            uninstallRequest: detail.uninstallRequest || null
+        });
+        if (core && core.dataset.actionSignature !== signature) {
+            core.innerHTML = slots.core;
+            if (maintenance) maintenance.innerHTML = slots.maintenance;
+            if (critical) critical.innerHTML = slots.critical;
+            core.dataset.actionSignature = signature;
+        }
+        const scroll = target.querySelector("[data-endpoint-jobs-scroll]");
+        const content = target.querySelector("[data-endpoint-jobs-content]");
+        if (content) {
+            const scrollTop = scroll ? scroll.scrollTop : 0;
+            content.innerHTML = renderJobs(detail.jobs, 80);
+            if (scroll) scroll.scrollTop = scrollTop;
+        }
+    }
+
     function renderActivePanel() {
         if (!endpointDetail) return;
         renderOverviewSlots(endpointDetail);
@@ -1285,7 +1313,6 @@
             security: renderSecurity,
             patches: renderPatches,
             activity: renderActivity,
-            tasks: renderTasks,
             diagnostics: renderDiagnostics
         };
         Object.keys(renderers).forEach(function (name) {
@@ -1294,6 +1321,7 @@
                 target.innerHTML = renderers[name](endpointDetail);
             }
         });
+        renderTaskPanel(endpointDetail);
         if (window.lucide && typeof window.lucide.createIcons === "function") {
             window.lucide.createIcons();
         }

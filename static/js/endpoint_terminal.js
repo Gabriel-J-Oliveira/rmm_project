@@ -155,4 +155,10 @@
     stop.addEventListener('click',() => end('Encerrado'));
     window.addEventListener('pagehide',() => end('Encerrado',true,true));
     start.disabled=false;
+    const launchButton = document.querySelector('[data-endpoint-detail][data-terminal-mode="conpty"] [data-terminal-open]');
+    launchButton?.addEventListener('click', () => {
+        const disclosure = document.querySelector('[data-terminal-conpty-panel]');
+        if (disclosure) disclosure.open = true;
+        if (!start.disabled) start.click();
+    });
 })();

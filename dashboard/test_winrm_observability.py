@@ -86,9 +86,14 @@ class WinRmObservabilityTests(TestCase):
         self.machine.status = AgentMachine.STATUS_OFFLINE; self.machine.save(update_fields=['status'])
         client = self.client; client.force_login(self.actor)
         response = client.get(reverse('endpoint-detail', args=[self.machine.pk]), secure=True)
-        self.assertContains(response, 'informação desatualizada')
+        self.assertContains(response, 'informa&ccedil;&atilde;o desatualizada')
         self.assertContains(response, 'Stopped')
-        self.assertContains(response, 'Verificar conectividade WinRM')
+        self.assertContains(response, 'Testar WinRM')
+        self.assertContains(response, 'endpoint-actions-jobs-layout')
+        self.assertContains(response, 'data-winrm-check')
+        self.assertContains(response, 'data-winrm-recovery-open')
+        self.assertContains(response, 'data-endpoint-jobs-scroll')
+        self.assertNotContains(response, 'Diagnóstico e recuperação WinRM')
 
     def test_dotnet_winrm_serialization_reaches_inventory_contract(self):
         dll = Path(__file__).resolve().parent.parent / 'NightOwl.Agent.Windows.Tests' / 'bin' / 'Release' / 'net8.0-windows' / 'NightOwl.Agent.Windows.Tests.dll'
