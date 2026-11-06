@@ -153,6 +153,24 @@ class ConPtyTransportTests(TransactionTestCase):
                         if marker == 'NIGHTOWL_CHECK_DATE_OK':
                             print('CONPTY_DATE_STAGE=' + json.dumps({'started': 'NIGHTOWL_CHECK_DATE_START' in text,
                                 'failed': 'NIGHTOWL_CHECK_DATE_FAIL' in text}))
+                            # Diagnostic runs only after failure: never warm or extend the E2E gate.
+                            shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+                            probe = await asyncio.create_subprocess_exec(str(shell), '-NoProfile', '-NonInteractive', '-Command',
+                                "$s=[Diagnostics.Stopwatch]::StartNew(); Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop; "
+                                "$m=$s.ElapsedMilliseconds; Get-Date -ErrorAction Stop | Out-Null; "
+                                "@{module_ms=$m; total_ms=$s.ElapsedMilliseconds} | ConvertTo-Json -Compress",
+                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                            try:
+                                output, _ = await asyncio.wait_for(probe.communicate(), 12)
+                                result = json.loads(output) if probe.returncode == 0 else None
+                                if isinstance(result, dict) and all(isinstance(result.get(k), int) for k in ('module_ms', 'total_ms')):
+                                    print('CONPTY_DATE_PROBE=' + json.dumps({k: result[k] for k in ('module_ms', 'total_ms')}))
+                                else:
+                                    print('CONPTY_DATE_PROBE=' + json.dumps({'category': 'probe_failed'}))
+                            except (TimeoutError, ValueError):
+                                if probe.returncode is None:
+                                    probe.kill(); await probe.wait()
+                                print('CONPTY_DATE_PROBE=' + json.dumps({'category': 'probe_timeout_or_invalid'}))
                         self.fail('Terminal output timed out at stage: ' + stage)
                     if isinstance(message, bytes):
                         part = decoder.decode(message[9:]); text = (text + part)[-65536:]
