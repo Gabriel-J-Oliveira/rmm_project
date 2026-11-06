@@ -5,6 +5,8 @@
     if (!root || !hint) return;
     let availability = {};
     try { availability = JSON.parse(hint.textContent); } catch (_) { return; }
+    let reasons = {};
+    try { reasons = JSON.parse(document.getElementById('approved-script-reasons')?.textContent || '{}') || {}; } catch (_) {}
     let catalog = null, loading = false, failure = false;
     const element = (tag, text, className) => {
         const node = document.createElement(tag);
@@ -63,7 +65,8 @@
             const row = element('article'), title = element('strong',script.script_id || 'Script');
             row.append(title, element('p',script.description || ''), element('small',`Versão ${script.version}`));
             const eligible = script.approved === true && script.revoked === false && availability[key(script)] === true && schemaSupported(script);
-            row.append(element('p',eligible ? 'Disponível' : 'Indisponível para este endpoint ou operador'));
+            const reason = script.revoked ? 'Esta versão foi revogada.' : !schemaSupported(script) ? 'Parâmetros não suportados nesta interface.' : reasons[key(script)];
+            row.append(element('p',eligible ? 'Disponível' : typeof reason === 'string' && reason ? reason : 'Indisponível para este endpoint ou operador'));
             const button = element('button','Executar','endpoint-quick-action-button'); button.type='button'; button.disabled=!eligible;
             button.addEventListener('click',() => modal(script)); row.append(button); card.append(row);
         });

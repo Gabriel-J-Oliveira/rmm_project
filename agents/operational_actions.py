@@ -56,12 +56,41 @@ def authorize(operator, action):
         raise PermissionError('action_forbidden')
 
 
+def authorize_scope(operator, endpoint, action, parameters=None):
+    """When enabled, scope every action to an explicit endpoint, identity and operator."""
+    if not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTION_SCOPED_ONLY', False):
+        return
+    scopes = getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTION_SCOPES', {})
+    scope = scopes.get(str(endpoint.pk)) if isinstance(scopes, dict) else None
+    if (not isinstance(scope, dict) or not {'machine_id', 'operator_ids', 'actions'} <= set(scope)
+            or set(scope) - {'machine_id', 'operator_ids', 'actions', 'scripts'}):
+        raise PermissionError('action_scope_forbidden')
+    if action == 'run_approved_script':
+        scripts = scope.get('scripts')
+        params = parameters if isinstance(parameters, dict) else {}
+        identity = f"{params.get('script_id')}:{params.get('script_version')}:{params.get('sha256')}"
+        if (not isinstance(scripts, list) or not scripts or
+                any(not isinstance(item, str) or not re.fullmatch(r'[a-z0-9_]+:[1-9][0-9]*:[0-9a-f]{64}', item) for item in scripts)
+                or identity not in scripts):
+            raise PermissionError('action_scope_forbidden')
+    operators, actions = scope['operator_ids'], scope['actions']
+    if (not isinstance(scope['machine_id'], str) or not scope['machine_id'] or
+            scope['machine_id'] != endpoint.machine_id or
+            not isinstance(operators, list) or not operators or
+            any(not isinstance(item, str) or not item.isascii() or not item.isdecimal() for item in operators) or
+            not isinstance(actions, list) or not actions or
+            any(not isinstance(item, str) or item not in CATALOG for item in actions) or
+            str(operator.pk) not in operators or action not in actions):
+        raise PermissionError('action_scope_forbidden')
+
+
 def validate_dispatch(job, *, creating=False):
     payload = validate_payload(job.payload)
     operator = get_user_model().objects.filter(username=job.created_by).first()
     authorize(operator, payload['action_id'])
     if not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False):
         raise ValueError('operational_actions_disabled')
+    authorize_scope(operator, job.endpoint, payload['action_id'], payload['parameters'])
     if payload['action_id'] in admin.PERMISSIONS:
         admin.validate_dispatch(job, operator, creating)
     endpoint = job.endpoint

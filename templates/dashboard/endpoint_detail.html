@@ -393,6 +393,7 @@
 {{ endpoint_detail_payload|json_script:"endpoint-detail-real-payload" }}
 {% endif %}
 {{ approved_script_availability|json_script:"approved-script-availability" }}
+{{ approved_script_reasons|json_script:"approved-script-reasons" }}
 {% if winrm_observability_available %}{{ winrm_remote|json_script:"winrm-last-check" }}<div data-winrm-context data-endpoint="{{ endpoint.pk }}" data-user="{{ request.user.pk }}" data-agent-status="{{ endpoint.get_status_display }}" data-status-url="{% url 'agent-recovery-status' endpoint.id %}"></div>{% endif %}
 {% endblock %}
 
@@ -412,7 +413,7 @@
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-2"></script>
 <script src="{% static 'js/job_display.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=job-status-1"></script>
-<script src="{% static 'js/endpoint_approved_scripts.js' %}"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=operational-scope-1"></script>
+<script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=continuous-graphs-2"></script>
 {% endblock %}

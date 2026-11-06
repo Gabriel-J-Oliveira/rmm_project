@@ -12,7 +12,9 @@ class ApprovedScriptsPageTests(ScriptLibraryTests):
         url = reverse('endpoint-detail', args=[self.machine.pk])
         self.assertTrue(self.client.get(url).context['approved_script_availability'][key])
         with override_settings(NIGHTOWL_APPROVED_SCRIPTS_ENABLED=False):
-            self.assertFalse(self.client.get(url).context['approved_script_availability'][key])
+            response = self.client.get(url)
+            self.assertFalse(response.context['approved_script_availability'][key])
+            self.assertIn('desativados', response.context['approved_script_reasons'][key])
         with override_settings(NIGHTOWL_REVOKED_SCRIPT_VERSIONS=[f'{DEMO.script_id}:{DEMO.version}']):
             self.assertFalse(self.client.get(url).context['approved_script_availability'][key])
         self.snapshot.raw_payload['agent']['capabilities'] = []
