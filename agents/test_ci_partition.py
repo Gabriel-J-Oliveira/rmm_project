@@ -3,7 +3,7 @@ from django.test import SimpleTestCase
 from django.test.runner import DiscoverRunner
 from types import SimpleNamespace
 
-from agents.ci_runner import WindowsE2ERunner
+from agents.ci_runner import WindowsE2ERunner, WindowsBrowserE2ERunner
 
 
 WINDOWS_E2E = {
@@ -29,6 +29,16 @@ def flatten(suite):
 
 
 class WindowsE2EPartitionTests(SimpleTestCase):
+    def test_isolated_browser_gate_fails_for_skipped_or_missing_tests(self):
+        runner = WindowsBrowserE2ERunner(verbosity=0)
+        result = SimpleNamespace(failures=[], errors=[], unexpectedSuccesses=[], skipped=[], testsRun=1)
+        self.assertEqual(runner.suite_result(None, result), 0)
+        result.testsRun = 0
+        self.assertNotEqual(runner.suite_result(None, result), 0)
+        result.testsRun = 1
+        result.skipped = [('test', 'reason')]
+        self.assertNotEqual(runner.suite_result(None, result), 0)
+
     def test_every_windows_e2e_is_selected_for_its_required_job(self):
         runner = DiscoverRunner(tags={'windows_e2e'}, verbosity=0)
         actual = {test.id() for test in flatten(runner.build_suite(['agents']))}

@@ -73,6 +73,8 @@ jobs:
 
   windows-e2e:
     name: Windows .NET and terminal E2E
+    needs: windows-browser-isolated
+    if: always()
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -106,6 +108,37 @@ jobs:
         run: python manage.py test agents.test_ci_partition --noinput --verbosity 2
       - name: Run real Windows .NET, ConPTY and browser contracts
         run: ./scripts/Invoke-WindowsE2E.ps1
+      - name: Require isolated browser comparison
+        if: always()
+        env:
+          BROWSER_COMPARISON_RESULT: ${{ needs.windows-browser-isolated.result }}
+        run: |
+          if ($env:BROWSER_COMPARISON_RESULT -ne 'success') { throw 'Isolated browser comparison did not pass' }
+
+  windows-browser-isolated:
+    name: Windows isolated browser comparison
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings_test_browser
+      DJANGO_DEBUG: 'True'
+      DJANGO_SECRET_KEY: synthetic-enrollment-ci-key-not-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - run: dotnet build NightOwl.Agent.Windows.Tests/NightOwl.Agent.Windows.Tests.csproj -c Release
+      - name: Run real browser and ConPTY on a clean runner
+        run: ./scripts/Invoke-WindowsE2E.ps1 -BrowserOnly
 
   windows-bootstrap:
     name: Windows deployment contract

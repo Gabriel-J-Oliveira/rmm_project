@@ -1,3 +1,4 @@
+param([switch]$BrowserOnly)
 $ErrorActionPreference = 'Stop'
 
 # GitHub's hosted runner is elevated. The real assisted ConPTY contract requires
@@ -49,8 +50,13 @@ try {
     $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
     $env:TMP = $env:TEMP
     New-Item -ItemType Directory -Path $env:APPDATA, $env:LOCALAPPDATA, $env:TEMP -Force | Out-Null
-    $arguments = @('manage.py', 'test', 'agents', '--tag', 'windows_e2e', '--testrunner',
-        'agents.ci_runner.WindowsE2ERunner', '--noinput', '--verbosity', '2')
+    if ($BrowserOnly) {
+        $arguments = @('manage.py', 'test', 'agents.test_terminal_browser.TerminalBrowserSmokeTests.test_real_browser_real_pty_simulated_local_consent_click',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+    } else {
+        $arguments = @('manage.py', 'test', 'agents', '--tag', 'windows_e2e', '--testrunner',
+            'agents.ci_runner.WindowsE2ERunner', '--noinput', '--verbosity', '2')
+    }
     $process = Start-Process -FilePath $python -ArgumentList $arguments -Credential $credential -LoadUserProfile `
         -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
     Get-Content $out
