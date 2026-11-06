@@ -1596,23 +1596,40 @@ def index(request):
         item['status']: item['count']
         for item in AgentMachine.objects.values('status').annotate(count=Count('id'))
     }
-    endpoints = AgentMachine.objects.order_by('hostname', 'domain')
     open_alerts = EndpointAlert.objects.filter(status=EndpointAlert.STATUS_OPEN).filter(
         Q(muted_until__isnull=True) | Q(muted_until__lte=now),
     )
-    recent_alerts = open_alerts.select_related('endpoint').order_by('-last_seen_at')[:8]
-    endpoint_rows = [build_endpoint_row(endpoint) for endpoint in endpoints]
+    from .endpoint_list_data import load_endpoint_list_data
+
+    endpoints, snapshots = load_endpoint_list_data()
+    recommended_version = latest_agent_version()
+    endpoint_rows = [
+        build_endpoint_row(
+            endpoint,
+            snapshot=snapshots.get(endpoint.pk),
+            recommended_version=recommended_version,
+        )
+        for endpoint in endpoints
+    ]
+    open_alert_rows = list(open_alerts.select_related('endpoint'))
+    recent_alerts = sorted(
+        open_alert_rows,
+        key=lambda alert: alert.last_seen_at,
+        reverse=True,
+    )[:8]
     events = AuditEvent.objects.select_related('endpoint', 'alert').order_by('-created_at')[:12]
-    pulse_context = build_pulse_context(endpoint_rows, list(open_alerts.select_related('endpoint')), events)
+    pulse_context = build_pulse_context(endpoint_rows, open_alert_rows, events)
 
     context = {
-        'total_endpoints': AgentMachine.objects.count(),
+        'total_endpoints': len(endpoints),
         'online_count': status_counts.get(AgentMachine.STATUS_ONLINE, 0),
         'offline_count': status_counts.get(AgentMachine.STATUS_OFFLINE, 0),
         'unknown_count': status_counts.get(AgentMachine.STATUS_UNKNOWN, 0),
         'endpoints': endpoints,
-        'open_alerts_count': open_alerts.count(),
-        'critical_alerts_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_CRITICAL).count(),
+        'open_alerts_count': len(open_alert_rows),
+        'critical_alerts_count': sum(
+            alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in open_alert_rows
+        ),
         'recent_alerts': recent_alerts,
         **pulse_context,
     }
