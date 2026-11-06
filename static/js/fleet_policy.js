@@ -62,6 +62,7 @@
     document.querySelector("[data-fleet-open]").addEventListener("click", () => { invalidate(); dialog.showModal(); });
     dialog.querySelector("[data-fleet-close]").addEventListener("click", () => dialog.close());
     form.addEventListener("input", invalidate);
+    document.addEventListener("nightowl:endpoint-selection-change", invalidate);
     document.querySelectorAll("[data-endpoint-select], [data-endpoint-select-all]").forEach(input => input.addEventListener("change", invalidate));
     confirm.addEventListener("change", () => { apply.disabled = busy || !confirm.checked || !plan || plan.rejected_count > 0 || plan.applied; });
     function render(data) {
@@ -79,7 +80,11 @@
                 if (form.elements.edit_pin.checked) changes.pinned_agent_version = form.elements.pinned_agent_version.value;
                 if (form.elements.edit_window.checked) ["maintenance_window_start", "maintenance_window_end", "maintenance_window_timezone"].forEach(key => { changes[key] = form.elements[key].value || (key === "maintenance_window_timezone" ? "" : null); });
                 if (form.elements.group_action.value) changes.groups = {action: form.elements.group_action.value, ids: selected(form.elements.group_ids)};
-                request = {endpoint_ids: Array.from(document.querySelectorAll("[data-fleet-endpoint-id]:checked"), input => input.dataset.fleetEndpointId), changes, reason: form.elements.reason.value, apply: false};
+                const selection = window.NightOwlEndpointSelection;
+                const endpointIds = selection && typeof selection.getIds === "function"
+                    ? selection.getIds()
+                    : Array.from(document.querySelectorAll("[data-fleet-endpoint-id]:checked"), input => input.dataset.fleetEndpointId);
+                request = {endpoint_ids: [...new Set(endpointIds)], changes, reason: form.elements.reason.value, apply: false};
             }
             const payload = isApply ? {...request, apply: true, confirmed_count: plan.selected_count, expected_bulk_change_hash: plan.bulk_change_hash} : request;
             const result = await post("/api/endpoints/bulk-policy/", payload, form); render(result);

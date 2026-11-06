@@ -1,0 +1,3 @@
+{% for row in rows %}
+<a class="endpoint-health-tile {{ row.health.class }} attention-{{ row.attention.level }}" data-endpoint-row data-endpoint-id="{{ row.endpoint.id }}" data-endpoint="{{ row.hostname|default:'Endpoint'|escape }}" href="{% url 'endpoint-detail' row.endpoint.id %}" title="{{ row.hostname }} - {{ row.attention.label }}"><strong class="mono">{{ row.hostname|default:"Endpoint" }}</strong><span>{% if row.health.score != None %}{{ row.health.score }}{% else %}--{% endif %}</span><small>{{ row.attention.label }}</small></a>
+{% empty %}<div class="empty-state endpoint-empty">Nenhum endpoint para o mapa de sa&uacute;de.</div>{% endfor %}

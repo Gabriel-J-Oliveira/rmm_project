@@ -14,10 +14,12 @@ from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, IntegerField, Max, Q, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
@@ -2356,60 +2358,78 @@ def endpoint_list(request):
         rows = mock_endpoint_rows()
         filters = endpoint_filters_from_request(request)
         filtered_rows = filter_endpoint_rows(rows, filters)
-        context = {
-            **fleet_context,
-            'active_nav': 'endpoints',
-            'rows': filtered_rows,
-            'filters': filters,
-            'deployment_release_options': deployment_release_options(),
-            'deployment_create_url': reverse('api-deployment-create'),
-            'deployment_history_url': reverse('api-deployment-history'),
-            'can_deploy_agents': is_nightowl_technical_user(request.user),
-            'deployment_trust_ready': bool(_usable_deployment_trust_bundle()),
-            **endpoint_summary_counts(filtered_rows),
-            **endpoint_filter_options(rows),
-            'using_mock_rmm_data': True,
-        }
-        return render(request, 'dashboard/endpoint_list.html', context)
+        option_rows = rows
+        mock_data = True
+    else:
+        from .endpoint_list_data import load_endpoint_list_data
+        endpoints, snapshots = load_endpoint_list_data()
+        filters = endpoint_filters_from_request(request)
+        recommended_version = latest_agent_version()
+        rows = []
+        option_rows = []
+        for endpoint in endpoints:
+            snapshot = snapshots.get(endpoint.pk)
+            os_name = endpoint.os_name or (snapshot.os_name if snapshot else '')
+            domain = endpoint.domain or (snapshot.domain if snapshot else '')
+            logged_user = endpoint.last_logged_user or (snapshot.logged_user if snapshot else '')
+            option_rows.append({
+                'os_name': os_name, 'domain': domain,
+                'sector': infer_endpoint_sector(endpoint.hostname, domain, logged_user),
+            })
+            if ((filters['status'] and endpoint.status != filters['status'])
+                    or (filters['os'] and os_name != filters['os'])
+                    or (filters['domain'] and domain != filters['domain'])):
+                continue
+            rows.append(build_endpoint_row(
+                endpoint, snapshot=snapshot, recommended_version=recommended_version,
+            ))
+        filtered_rows = filter_endpoint_rows(rows, filters)
+        mock_data = False
 
-    from .endpoint_list_data import load_endpoint_list_data
-    endpoints, snapshots = load_endpoint_list_data()
-    filters = endpoint_filters_from_request(request)
-    recommended_version = latest_agent_version()
-    rows = []
-    option_rows = []
-    for endpoint in endpoints:
-        snapshot = snapshots.get(endpoint.pk)
-        os_name = endpoint.os_name or (snapshot.os_name if snapshot else '')
-        domain = endpoint.domain or (snapshot.domain if snapshot else '')
-        logged_user = endpoint.last_logged_user or (snapshot.logged_user if snapshot else '')
-        option_rows.append({
-            'os_name': os_name, 'domain': domain,
-            'sector': infer_endpoint_sector(endpoint.hostname, domain, logged_user),
+    page_size_raw = request.GET.get('page_size', '10')
+    page_size = int(page_size_raw) if page_size_raw in {'10', '25', '50'} else 10
+    page_obj = Paginator(filtered_rows, page_size).get_page(request.GET.get('page', 1))
+    page_rows = list(page_obj.object_list)
+    summary = endpoint_summary_counts(filtered_rows)
+    page_context = {
+        'active_nav': 'endpoints',
+        'rows': page_rows,
+        'filters': filters,
+        'active_view': request.GET.get('view') if request.GET.get('view') in {'table', 'cards', 'health'} else 'table',
+        'page_size': page_size,
+        'page_number': page_obj.number if page_obj.paginator.count else 0,
+        'page_count': page_obj.paginator.num_pages if page_obj.paginator.count else 0,
+        'result_count': page_obj.paginator.count,
+        **summary,
+    }
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        view = page_context['active_view']
+        fragments = {
+            'table': 'dashboard/partials/endpoint_list_table_rows.html',
+            'cards': 'dashboard/partials/endpoint_list_cards.html',
+            'health': 'dashboard/partials/endpoint_list_health.html',
+        }
+        return JsonResponse({
+            **summary,
+            'html': render_to_string(fragments[view], page_context, request=request),
+            'view': view,
+            'page': page_context['page_number'],
+            'page_count': page_context['page_count'],
+            'page_size': page_size,
+            'result_count': page_context['result_count'],
+            'endpoint_ids': [str(row['endpoint'].pk) for row in page_rows],
         })
-        # Keep filter choices fleet-wide, but avoid health/presentation work for
-        # machines already excluded by exact identity/status criteria.
-        if ((filters['status'] and endpoint.status != filters['status'])
-                or (filters['os'] and os_name != filters['os'])
-                or (filters['domain'] and domain != filters['domain'])):
-            continue
-        rows.append(build_endpoint_row(
-            endpoint, snapshot=snapshot, recommended_version=recommended_version,
-        ))
-    filtered_rows = filter_endpoint_rows(rows, filters)
 
     context = {
         **fleet_context,
-        'active_nav': 'endpoints',
-        'rows': filtered_rows,
-        'filters': filters,
+        **page_context,
         'deployment_release_options': deployment_release_options(),
         'deployment_create_url': reverse('api-deployment-create'),
         'deployment_history_url': reverse('api-deployment-history'),
         'can_deploy_agents': is_nightowl_technical_user(request.user),
         'deployment_trust_ready': bool(_usable_deployment_trust_bundle()),
-        **endpoint_summary_counts(filtered_rows),
         **endpoint_filter_options(option_rows),
+        'using_mock_rmm_data': mock_data,
     }
     return render(request, 'dashboard/endpoint_list.html', context)
 

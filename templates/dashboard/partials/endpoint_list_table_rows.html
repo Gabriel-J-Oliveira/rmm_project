@@ -1,0 +1,48 @@
+{% load nightowl_time %}
+{% for row in rows %}
+<tr data-endpoint-row
+    data-endpoint-id="{{ row.endpoint.id }}"
+    data-endpoint="{{ row.hostname|default:'Endpoint'|escape }}"
+    data-ip="{{ row.primary_ip|default:''|escape }}"
+    data-detail-url="{% url 'endpoint-detail' row.endpoint.id %}"
+    data-alerts-url="{% url 'alerts-list' %}?q={{ row.hostname|urlencode }}"
+    data-events-url="{% url 'events-list' %}?endpoint={{ row.endpoint.id }}"
+    data-ticket-url="{% url 'tickets:create' %}?endpoint={{ row.endpoint.id }}">
+    <td class="select-col"><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="{{ row.endpoint.id }}" aria-label="Selecionar {{ row.hostname|default:'endpoint' }}"></td>
+    <td><span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span></td>
+    <td>
+        <a class="endpoint-name table-link mono" href="{% url 'endpoint-detail' row.endpoint.id %}">{{ row.hostname|default:"&mdash;" }}</a>
+        <span class="endpoint-subtext">{{ row.domain|default:"sem dominio" }}</span>
+    </td>
+    <td><span class="endpoint-type-chip endpoint-type-{{ row.endpoint_type }}">{{ row.endpoint_type_label }}</span></td>
+    <td><strong class="endpoint-main-value">{{ row.logged_user|default:"&mdash;" }}</strong><span class="endpoint-subtext">{{ row.sector|default:"Sem setor" }}</span></td>
+    <td><strong class="mono endpoint-main-value">{{ row.primary_ip|default:"&mdash;" }}</strong><span class="endpoint-subtext">{{ row.domain|default:"CONTROL" }}</span></td>
+    <td>{{ row.os_name|default:"&mdash;" }}</td>
+    <td><span class="endpoint-health-pill {{ row.health.class }}">{% if row.health.score != None %}{{ row.health.score }}{% else %}--{% endif %}</span></td>
+    <td><span class="endpoint-attention-pill attention-{{ row.attention.level }}">{{ row.attention.label }}</span></td>
+    <td><span class="agent-version-pill agent-{{ row.agent_version_state }}">{% if row.agent_version %}{{ row.agent_version }}{% else %}Sem vers&atilde;o{% endif %}</span></td>
+    <td>
+        {% if row.last_seen_at %}<span title="{{ row.last_seen_at|date:'d/m/Y H:i:s' }}">{{ row.last_seen_at|date:"d/m/Y H:i" }}</span><span class="endpoint-subtext">{{ row.last_seen_at|relative_time }}</span>{% else %}&mdash;{% endif %}
+    </td>
+    <td>
+        <div class="endpoint-row-actions">
+            <a href="{% url 'endpoint-detail' row.endpoint.id %}" title="Abrir endpoint"><i data-lucide="external-link"></i></a>
+            <button type="button" data-endpoint-copy="hostname" title="Copiar hostname"><i data-lucide="copy"></i></button>
+            <button type="button" data-endpoint-copy="ip" title="Copiar IP"><i data-lucide="clipboard"></i></button>
+            <div class="endpoint-action-menu">
+                <button type="button" data-endpoint-menu-toggle aria-label="Mais a&ccedil;&otilde;es"><i data-lucide="more-horizontal"></i></button>
+                <div class="endpoint-action-popover" hidden>
+                    <a href="{% url 'alerts-list' %}?q={{ row.hostname|urlencode }}"><i data-lucide="bell"></i>Ver alertas</a>
+                    <a href="{% url 'events-list' %}?endpoint={{ row.endpoint.id }}"><i data-lucide="history"></i>Ver eventos</a>
+                    <a href="{% url 'tickets:create' %}?endpoint={{ row.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
+                    <button type="button" data-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
+                    <button type="button" data-endpoint-action="execute_check"><i data-lucide="scan-line"></i>Executar verifica&ccedil;&atilde;o</button>
+                    <button type="button" data-endpoint-action="ping"><i data-lucide="terminal"></i>Ping</button>
+                </div>
+            </div>
+        </div>
+    </td>
+</tr>
+{% empty %}
+<tr><td colspan="12" class="empty-state endpoint-empty"><i data-lucide="search-x"></i><strong>Nenhum endpoint encontrado</strong><span>Ajuste busca, chips ou filtros avan&ccedil;ados para ampliar o resultado.</span></td></tr>
+{% endfor %}
