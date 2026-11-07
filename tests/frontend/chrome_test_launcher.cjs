@@ -47,8 +47,10 @@ async function launchChrome({missing=false}={}) {
         result.phase='ready';result.chrome_version=version.product;console.log('CHROME_CDP_LAUNCH='+JSON.stringify(result));
         return {cdp,cleanup};
     } catch(error) {
-        result.error=error.message;console.log('CHROME_CDP_LAUNCH='+JSON.stringify(result));
-        await cleanup();throw error;
+        const allowed=['chrome_not_configured','chrome_not_found','spawn_failed','port_unavailable','cdp_endpoint_invalid','cdp_connect_failed','cdp_process_mismatch','cdp_version_invalid','cdp_timeout','cdp_command_failed'];
+        result.error=allowed.includes(error.message)?error.message:'launch_failed';
+        console.log('CHROME_CDP_LAUNCH='+JSON.stringify(result));
+        await cleanup();throw new Error(result.error);
     }
 }
 module.exports={launchChrome,sleep};
