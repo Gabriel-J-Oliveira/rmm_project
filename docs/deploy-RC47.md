@@ -1,7 +1,11 @@
 # NightOwl RMM — RC47: planejamento consolidado e preparação de publicação
 
 > **Estado: documento de planejamento, não autorização de implementação ou deploy.**
-> Consolidado em 05/11/2026 com base nas decisões e discussões do projeto; **atualizado em 06/11/2026** com a homologação do terminal RC46 e requisitos funcionais para o frontend da RC47. Alterações futuras devem atualizar este mesmo documento. Diferenciar decisões acordadas, hipóteses e pendências de validação.
+> Consolidado em 05/11/2026 com base nas decisões e discussões do projeto; atualizado em 06/11/2026 com a homologação do terminal RC46 e requisitos funcionais para o frontend da RC47; **estado de integração revisado em 07/11/2026**. Alterações futuras devem atualizar este mesmo documento. Diferenciar decisões acordadas, hipóteses e pendências de validação.
+
+O fechamento técnico, as evidências de homologação parcial e as restrições operacionais da RC46 constam de `docs/rc46-final-closure-rc47-handoff.md`. A correção PATHEXT foi integrada na PR #16; agentes instalados só receberão essa correção por uma nova release Windows assinada e homologada. A release RC46 já publicada não deve ser sobrescrita. A validação TLS do upstream NPM, o modo administrativo e os demais cenários de encerramento permanecem sujeitos a homologação.
+
+O comportamento de `Get-Date` no ConPTY restrito do runner Windows está em investigação independente na [issue #19](https://github.com/Gabriel-J-Oliveira/rmm_project/issues/19). Até a conclusão dessa investigação e dos testes operacionais pendentes, o terminal assistido não está homologado para distribuição ampla.
 
 **Repositório:** Gabriel-J-Oliveira/rmm_project  
 **Base consultada:** main em cbd72f544a6287a0952ba64bfc5df884c5e85f3c.  
@@ -19,6 +23,9 @@
 7. **Políticas centralizadas:** na RC47, a tela **Políticas** será o local de administração de execuções padronizadas, únicas e recorrentes; a página do endpoint poderá listar políticas aplicadas e oferecer execução manual autorizada.
 8. **Ajustes visuais pontuais no Monitoramento e evolução do terminal:** integrar os seletores de **Ethernet/interface** e **Disco** ao tema, remover o **hover dos cards grandes** e tratar **scroll, cópia, colagem e workspace do terminal** como frente separada RC47-07. Não confundir esta evolução com redesenho geral do Inventário.
 9. **Preservação de segurança e compatibilidade:** migração de `legacy` para `continuous` não é automática; exige validação de capacidade, fila antiga, versões anteriores e nova versão Windows assinada.
+10. **Canal de atualização por endpoint:** permitir ao operador técnico trocar entre `stable`, `pilot` e `development` no fluxo de atualização, com preview de releases e auditoria, sem alterar GPO, instalador ou distribuição interna. Aproveitar `AgentMachine.update_channel` e a API já existentes; confirmar a coerência com a configuração local do updater antes do rollout.
+11. **WinRM integrado à aba Ações e Jobs:** retirar painel solto e indicador externo, consolidar diagnóstico, conectividade, recuperação e histórico em card do tema NightOwl, com as mesmas permissões e contratos.
+12. **Regressão de visibilidade do terminal:** antes de redesenhar a UX da RC47, diagnosticar por que o acionamento não aparece no endpoint. Distinguir botão `admin_auth`, card assistido `conpty`, flags, grants, permissões e capacidade do heartbeat. Não habilitar gates ou contornar consentimento para tornar um botão visível.
 
 ## 2. Estado conhecido da RC46 e dependências para RC47
 
@@ -30,8 +37,11 @@
 - A documentação [rc46-telemetry-mode-policy.md](rc46-telemetry-mode-policy.md) mostra uma divergência **intencionalmente não corrigida**: o objeto .NET novo define `continuous`, mas o instalador canônico RC46 grava `legacy` em instalações novas; atualizações preservam configurações anteriores.
 - A fila v1 `State/telemetry-buffer.json` não é drenada pelo pipeline contínuo. Na VM foi mencionada uma amostra antiga pendente; verificar entrega/reconciliação antes de migração permanente, sem apagar nem presumir perda.
 - **Piloto real de terminal em 06/11/2026:** na VM `CS-CVEL-0281` (UUID `c97045f2-35ff-48f1-afa5-095173fbb3dd`) o operador `gabriel.oliveira` abriu sessão ConPTY real via navegador → Nginx Proxy Manager → Nginx → Uvicorn ASGI único → agente RC46. Consentimento explícito apareceu no Tray, SID/sessão 2/integridade não elevada foram confirmados, e entrada/saída e `Ctrl+C` funcionaram. **Isso valida o caminho assistido no piloto, não o modo administrativo, o encerramento/revogação completo ou o rollout.** O certificado interno do Nginx foi renovado e validado; ainda falta verificar a política de validação do certificado upstream no NPM.
-- **Defeito identificado no piloto:** `whoami`, `hostname` e `ipconfig` sem extensão não eram reconhecidos porque o ambiente fechado do ConPTY não declarava `PATHEXT`. Ajustar `$env:PATHEXT='.COM;.EXE;.BAT;.CMD'` na sessão corrigiu os três comandos; a correção permanente está na [PR #16](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/16), **ainda aberta e não instalada no agente**. Exige CI íntegra, merge e nova release Windows assinada antes de considerar corrigido em produção.
-- **PR #15** ([piloto assistido de terminal e WinRM](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/15)) permanece aberta; a documentação e os testes adicionais ainda precisam de integração aprovada.
+- **Defeito identificado no piloto:** `whoami`, `hostname` e `ipconfig` sem extensão não eram reconhecidos porque o ambiente fechado do ConPTY não declarava `PATHEXT`. Ajustar `$env:PATHEXT='.COM;.EXE;.BAT;.CMD'` na sessão corrigiu os três comandos; a correção permanente foi integrada pela [PR #16](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/16), merge `133ef73f41a496daff05007ce31f01f3fc999754`. Os cinco checks passaram. Isso ainda não corrige agentes instalados: exige nova release Windows assinada, seguida de homologação.
+- **PR #15** ([piloto assistido de terminal e WinRM](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/15)) foi integrada à `main`; Uvicorn e `websockets` estão declarados.
+- **PRs #17 e #20** (paginação/listagem de Endpoints e carregamento inicial do Dashboard) foram integradas à `main`. O operador relata ambas em produção; esta documentação não constitui uma validação independente do deploy. Revalidar integração de abas/Ações e Jobs em cima dessas mudanças.
+- **PR #22** ([redesign de Ações e Jobs](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/22)) foi integrada pela merge `bde4a740757ee54597e42a7eaed887f905b79bce`; os cinco checks passaram. O deploy backend/frontend continua pendente de validação operacional.
+- **Visibilidade do terminal:** o template `endpoint_detail.html` só exibe o botão superior `Abrir terminal` quando `terminal_admin_auth_available`; o modo assistido é um card `endpoint_terminal.html` condicionado a `terminal_available`, que exige backend, permissão, grant válido e capacidade do agente. O desaparecimento observado precisa de diagnóstico da sessão/flags/grant/heartbeat, não de bypass.
 - **A RC46 ainda possui frentes de homologação próprias** (encerramento/revogação de sessão, modo administrativo separado, WinRM, updater/repair e outras validações do piloto). A RC47 pode iniciar por auditoria e tarefas isoladas, mas sua publicação não deve ser desculpa para pular os gates de segurança da RC46.
 
 ## 3. Inventário de Hardware (antiga Capacidade)
@@ -135,9 +145,32 @@ O ConPTY/WSS **já funciona** em uma VM real com conta interativa não elevada, 
 3. **Colagem com botão direito:** abrir menu de contexto do terminal com `Colar` e opção explícita `Colar e executar` para o operador; suportar `Ctrl+Shift+V` e botão alternativo. Respeitar políticas e permissões de `navigator.clipboard` em contexto HTTPS, com fallback acessível de colagem manual. **Não executar automaticamente texto ao mero clique direito**; para comandos multilinha ou potencialmente inesperados, exigir ação inequívoca e confirmação apropriada antes de enviar Enter. Preservar limite de entrada, backpressure e contrato binário do WSS. O clipboard não deve ser lido pelo servidor, agente ou terminal via OSC 52.
 4. **Interação e organização:** manter atalhos PowerShell (incluindo Ctrl+C), foco do teclado, indicadores de conectado/aguardando aprovação/desconectado/expirado, identidade/sessão não elevada, botão Encerrar, espaço útil e responsividade. Evoluir o workspace do terminal na página do endpoint conforme desenho funcional aprovado, sem assumir que o card atual ou o diálogo WinForms serão definitivos.
 5. **Consentimento e modos:** redesenho do fluxo visual de autorização/consentimento é decisão de produto **pendente de reconciliação com o desenho original**. Manter grant por operador+endpoint, consentimento local por sessão para o modo assistido, validade e revogação; não remover consentimento como atalho de UX. O modo administrativo é distinto e continua desligado/não homologado.
-6. **Correção Windows associada, separada do frontend:** adicionar `PATHEXT=.COM;.EXE;.BAT;.CMD` ao ambiente controlado em `NightOwl.Agent.Windows/Services/ConPtyTerminal.cs` ([PR #16](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/16)); não herdar PATH/segredos/variáveis arbitrárias de SYSTEM. Após CI/merge, gerar **novo agente assinado** (não alterar binário RC46 publicado) e comprovar `whoami`, `hostname`, `ipconfig` e `Get-Date` em nova sessão sem ajuste manual.
+6. **Correção Windows associada, separada do frontend:** `PATHEXT=.COM;.EXE;.BAT;.CMD` foi integrado ao ambiente controlado em `NightOwl.Agent.Windows/Services/ConPtyTerminal.cs` ([PR #16](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/16)); não herdar PATH/segredos/variáveis arbitrárias de SYSTEM. Gerar **novo agente assinado** (não alterar binário RC46 publicado) e comprovar `whoami`, `hostname`, `ipconfig` e `Get-Date` em nova sessão sem ajuste manual. `Get-Date` continua sendo investigação separada da issue #19.
 
 **Aceite em VM real:** rolagem de histórico sob saída prolongada, seleção/cópia fiel, botão direito→Colar sem execução implícita, comando colado→execução somente por Enter ou ação explícita, Ctrl+C interrompendo processo, Unicode, resize, sessão desconectada, expiração e revogação; confirmar que nenhum conteúdo do terminal ou clipboard é persistido. Testar negados/sem permissão de clipboard, navegadores suportados, session cleanup, e comportamento em endpoints não autorizados. Não confundir aprovação de testes JS isolados com homologação ponta a ponta.
+
+### RC47-08 — Mudança controlada de canal no modal de atualização
+
+**Necessidade de produto:** selecionar máquinas adicionais para homologar RC47 sem editar GPO, instalador do NightOwl, share de deploy ou reinstalar agentes. O `AgentMachine` já possui `update_channel`, `update_policy`, pausa, pin e grupos; `endpoint_update_policy_update` permite alterar a política e registra `AgentReleaseAudit`. Contudo, `static/js/endpoint_detail.js` restringe `getManualUpdateReleases()` ao canal atual e o modal apenas o informa: não oferece troca.
+
+- No modal **Atualizar agente**, oferecer canal atual, seleção explícita `stable`/`pilot`/`development`, lista de releases elegíveis atualizada pela origem autoritativa e confirmação separada entre **salvar canal** e **executar atualização**; não iniciar automaticamente um job por apenas alterar canal.
+- Preservar seleção por endpoint/UUID, permissões técnicas, CSRF, transação, auditoria de antes/depois e motivo, controle de rollout/grupos, estados pausado/revogado, assinatura, versão mínima, prevenção de downgrade, pendências e rollback. O retorno de `pilot` para `stable` deve ser simples e auditado.
+- Auditar se canal de política do backend, `source_channel` da release assinada e configuração local do updater permanecem coerentes após a mudança; não assumir que atualizar `AgentMachine.update_channel` altera automaticamente o `agent.config.json`. Não permitir que rótulos de canal alterem o conteúdo ou hash de release assinada.
+- Validar casos endpoint offline, release ausente, seleção não autorizada, troca durante job existente, troca posterior, persistência após update/repair e instalação de versão idêntica. Pilotar em poucos endpoints, sem criar/alterar GPO.
+- Considerar separadamente uma opção **usar release de outro canal apenas nesta atualização**, se os contratos existentes suportarem de forma segura; não confundir override temporário com mudança persistente de política. A escolha entre ambos é pendência de desenho e deve ser evidenciada na auditoria RC47.
+
+### RC47-09 — WinRM dentro de Ações e Jobs
+
+- Hoje o cabeçalho contém `data-winrm-indicator`, há uma seção autônoma de diagnóstico/recuperação acima das abas, e `endpoint_winrm_recovery.js` adiciona dinamicamente outro card em `data-endpoint-tab-panel="tasks"`. Consolidar **somente** na aba Ações e Jobs, em componente único e visualmente integrado, sem duplicar card ou indicar controles fora do contexto.
+- Preservar estado local e teste remoto TCP/WS-Man/autenticação, horário de verificação, feedback e motivos de indisponibilidade, recuperação restrita a endpoints elegíveis, modal de credenciais, acompanhamento e histórico. Não armazenar senhas, não ampliar permissões, não iniciar recuperação automaticamente.
+- Levar em conta que `renderTasks()` substitui o conteúdo dinâmico da aba; usar um slot estável e sincronizado com o ciclo de renderização, em vez de depender de observadores que reintroduzem elementos duplicados. Manter responsividade, acessibilidade e tema NightOwl.
+- Validar sem alterar serviços WinRM, firewall, AD, certificados, GPO ou contratos de backend. Testar estados online/offline, acesso não técnico, dados não verificados, recarregamento e job de recuperação.
+
+### Gate antes da RC47-07 — investigar botão do terminal ausente
+
+- Verificar, no endpoint específico e na implantação efetiva, `NIGHTOWL_TERMINAL_ENABLED`, `NIGHTOWL_TERMINAL_SINGLE_PROCESS`, `NIGHTOWL_TERMINAL_BROWSER_ENABLED`, `NIGHTOWL_TERMINAL_CONPTY_ENABLED`, permissão `agents.open_terminalsession`, `TerminalAccessGrant` não expirado e capacidade `remote_terminal_conpty:1` no heartbeat recente. Para o botão superior, conferir separadamente o gate `admin_auth`, que não está homologado.
+- Diagnóstico inicial somente leitura e por UUID/machine_id, sem exibir credenciais. Não recomendar habilitar `admin_auth` nem recriar grants de piloto apenas para esconder o defeito. Se o modo assistido estiver autorizado, assegurar acesso claro ao card/acionamento no lugar definido pelo produto; a UX definitiva continua em RC47-07.
+- Registrar causa e teste de regressão se for mudança de template/fluxo, especialmente após as alterações de carregamento das PRs #17 e #20.
 
 ## 9. Regras de segurança, dados e compatibilidade
 
@@ -161,6 +194,8 @@ O ConPTY/WSS **já funciona** em uma VM real com conta interativa não elevada, 
 | RC47-05 | Ajustes pontuais de selects Ethernet/Disco e hover dos cards grandes | Tema, responsividade, foco acessível e sem mudança funcional |
 | RC47-06 | Homologar `continuous` em grupo pequeno, fila legacy e custos; decidir alteração do instalador | Piloto mensurado, rollback, pacote Windows assinado se necessário |
 | RC47-07 | Evoluir frontend do terminal: scrollback, seleção/cópia, menu de contexto Colar / Colar e executar, atalhos, estados e fluxo visual | UX homologada em navegador e VM; Ctrl+C preservado, consentimento/grants intactos, sem persistir saída; correção PATHEXT disponível em agente assinado |
+| RC47-08 | Trocar canal por endpoint no modal de atualização, com política persistente, auditoria e release elegível | Sem GPO/reinstalação; rollback de canal; assinatura/rollout/compatibilidade preservados |
+| RC47-09 | Consolidar WinRM na aba Ações e Jobs, sem painel ou indicador externo | Tema consistente, estados/permissões íntegros, sem duplicações no rerender |
 
 A ordem é provisória; pode ser reorganizada conforme dependências. Não iniciar PRs, scripts, merges, migração de banco ou deploy por causa deste documento.
 
@@ -174,6 +209,9 @@ A ordem é provisória; pode ser reorganizada conforme dependências. Não inici
 - **Compatibilidade:** agente RC46/`legacy` preservado, filas v1 conciliadas, proteção de grants, rollback e sem regressão em alertas.
 - **Visual:** selects Ethernet/Disco no tema, sem hover indevido nos cards grandes, sem quebra de navegação ou acessibilidade.
 - **Terminal RC47:** rolagem, cópia/colagem por menu e teclado, confirmação explícita de execução, Ctrl+C preservado, limpeza ao fechar; comandos nativos funcionando sem patch manual somente após nova release assinada, com auditoria e gates de consentimento intactos.
+- **Canal/Updater:** seleção autorizada por endpoint, visibilidade de elegibilidade antes do job, auditoria de troca e reversão para stable, sem alteração em GPO; conferir backend/cliente sem suposições.
+- **WinRM:** toda a experiência integrada à aba Ações e Jobs; nenhum botão ou indicador WinRM solto no topo, sem alterar autorização de recuperação.
+- **Terminal pré-RC47:** visibilidade do acionamento explicada por flags, grant, permissão, capacidade ou regressão de UI, com evidência read-only antes de alterar o frontend.
 
 ## 12. Perguntas ainda abertas
 
@@ -187,6 +225,8 @@ A ordem é provisória; pode ser reorganizada conforme dependências. Não inici
 - Qual redução real de armazenamento o esquema consolidado fornece? **Não declarar economia antes da medição.**
 - Qual é o desenho de produto aprovado para abrir terminal, indicar conexão, encerrar e apresentar consentimento local? O painel e pop-up da RC46 não são automaticamente a UX final.
 - Quais navegadores e limites de scrollback/clipboard serão suportados na RC47? Confirmar `Colar e executar` apenas por ação explícita, especialmente para texto multilinha.
+- A mudança de canal deve persistir até reversão manual ou existir opção de atualização única em canal alternativo? Confirmar contrato entre política backend, release assinada e updater local antes de prometer comportamento.
+- Em qual ponto do produto ficará o acionamento do terminal assistido, sem depender do botão do modo administrativo desabilitado?
 
 ## 13. Referências de implementação
 
@@ -205,6 +245,8 @@ A ordem é provisória; pode ser reorganizada conforme dependências. Não inici
 - [Telemetria contínua no backend](../agents/telemetry_continuous.py)
 - [Sessão ao vivo](../agents/telemetry_live.py)
 - [Modelo de desempenho e sessões](../agents/models.py)
+- [Política de update por endpoint](../dashboard/views.py), [modelo AgentMachine](../agents/models.py) e [modal de atualização](../static/js/endpoint_detail.js)
+- [WinRM local/remoto](../templates/dashboard/endpoint_detail.html), [verificação](../static/js/endpoint_winrm_check.js) e [recuperação](../static/js/endpoint_winrm_recovery.js)
 - [Frontend terminal RC46](../static/js/endpoint_terminal.js) e [template do terminal](../templates/dashboard/endpoint_terminal.html)
 - [ConPTY e ambiente restrito](../NightOwl.Agent.Windows/Services/ConPtyTerminal.cs) e [consentimento do Tray](../NightOwl.Agent.Tray/TerminalConsentPresenter.cs)
 - [PR #15 — piloto terminal/WinRM](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/15) e [PR #16 — PATHEXT no ConPTY](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/16)
