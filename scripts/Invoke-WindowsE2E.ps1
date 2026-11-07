@@ -75,9 +75,23 @@ try {
     $negativeValid = $false
     if ($negativeData.Count -eq 1) {
         $negativeResult = $negativeData[0].Substring('CHROME_CDP_ISOLATED='.Length) | ConvertFrom-Json
-        $negativeValid = $negative.ExitCode -ne 0 -and $negativeResult.error -eq 'spawn_failed' -and
+        $negativeValid = $negative.ExitCode -ne 0 -and $negativeResult.error -eq 'chrome_not_found' -and
             $negativeResult.process_exited -and $negativeResult.profile_removed -and $negativeResult.remaining_profile_processes -eq 0
     }
+    $configuredChrome = $env:NIGHTOWL_TEST_CHROME
+    try {
+        Remove-Item Env:NIGHTOWL_TEST_CHROME -ErrorAction SilentlyContinue
+        $unconfigured = Start-Process -FilePath $node -ArgumentList $probeArgs -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        $unconfiguredLines = @(Get-Content $out)
+        $unconfiguredLines
+        $unconfiguredData = @($unconfiguredLines | Where-Object { $_ -like 'CHROME_CDP_ISOLATED=*' })
+        if ($unconfiguredData.Count -ne 1) { throw 'Missing configuration control did not return a result' }
+        $unconfiguredResult = $unconfiguredData[0].Substring('CHROME_CDP_ISOLATED='.Length) | ConvertFrom-Json
+        if ($unconfigured.ExitCode -eq 0 -or $unconfiguredResult.error -ne 'chrome_not_configured' -or
+            -not $unconfiguredResult.process_exited -or -not $unconfiguredResult.profile_removed -or
+            $unconfiguredResult.remaining_profile_processes -ne 0) { throw 'Missing Chrome configuration was not rejected cleanly' }
+    } finally { $env:NIGHTOWL_TEST_CHROME = $configuredChrome }
     $probe = Start-Process -FilePath $node -ArgumentList $probeArgs -Credential $credential -LoadUserProfile `
         -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
     Get-Content $out
