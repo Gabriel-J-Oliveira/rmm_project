@@ -10,6 +10,7 @@ WINDOWS_E2E = {
     'agents.test_automation_protocol_e2e.AutomationProtocolE2ETests.test_calendar_occurrence_uses_existing_dotnet_execution_and_exact_receipt',
     'agents.test_automation_protocol_e2e.AutomationProtocolE2ETests.test_actual_worker_capability_allows_immediate_and_recurring_first_occurrence',
     'agents.test_conpty_sessions.ConPtyTransportTests.test_real_powershell_stream_over_websocket_and_disconnect',
+    'agents.test_conpty_sessions.ConPtyTransportTests.test_native_commands_resolve_without_inheriting_parent_environment',
     'agents.test_jobs_protocol_e2e.JobsProtocolE2ETests.test_real_dotnet_dispatch_start_result_and_dashboard',
     'agents.test_operational_actions.OperationalActionE2ETests.test_native_query_through_dotnet_runtime_result_and_ack',
     'agents.test_script_library.ScriptLibraryE2ETests.test_actual_powershell_diagnostic_v2_persisted_with_exact_ack',

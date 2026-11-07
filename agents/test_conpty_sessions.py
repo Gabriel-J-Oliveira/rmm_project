@@ -127,6 +127,71 @@ class ConPtyTransportTests(TransactionTestCase):
             self.assertEqual((await operator.until('closed'))['code'], 'invalid_process_confirmation')
             await operator.close(); await agent.close()
 
+    async def _isolated_shell_checks(self, checks):
+        """Exercise a fresh authorized ConPTY; do not expose terminal output."""
+        dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'
+        self.assertTrue(dll.exists())
+        async with LoopbackASGI() as server:
+            process = await asyncio.create_subprocess_exec('dotnet', str(dll), '--conpty-e2e',
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, 'NIGHTOWL_TEST_SERVER': server.origin,
+                     'NIGHTOWL_TEST_TERMINAL_INFO': json.dumps(self.agent_info),
+                     'NIGHTOWL_E2E_SECRET_SENTINEL': 'synthetic-must-not-be-inherited'})
+            operator = await WSClient.connect(server, self.info['websocket_path'], self.info['credential'])
+            decoder = codecs.getincrementaldecoder('utf-8')()
+            text, sequence, stage = '', 0, 'ready'
+            async def write(value):
+                nonlocal sequence
+                sequence += 1
+                await operator.binary(0, sequence, value.encode())
+            async def wait_for(marker):
+                nonlocal text
+                for _ in range(100):
+                    if 'NIGHTOWL_CHECK_FAIL' in text:
+                        self.fail('Isolated ConPTY check failed at ' + stage)
+                    if marker in text:
+                        return
+                    message = await operator.read()
+                    if isinstance(message, bytes):
+                        part = decoder.decode(message[9:]); text = (text + part)[-65536:]
+                        if '\x1b[6n' in part: await write('\x1b[1;1R')
+                    elif message.get('type') == 'ping':
+                        await operator.control({'type': 'pong', 'nonce': message['nonce']})
+                    else:
+                        self.assertNotEqual(message.get('type'), 'closed', 'Native session closed unexpectedly')
+                self.fail('Isolated ConPTY marker not received at ' + stage)
+            try:
+                await operator.until('ready')
+                for stage, command, marker in checks:
+                    await write(command + '\r')
+                    try:
+                        await wait_for(marker)
+                    except TimeoutError:
+                        self.fail('Isolated ConPTY timed out at ' + stage)
+                await operator.close()
+                stdout, _ = await asyncio.wait_for(process.communicate(), 10)
+                self.assertEqual(process.returncode, 0, 'Real ConPTY integration failed; output withheld')
+                self.assertIn(b'PASS real ConPTY WebSocket cleanup', stdout)
+            finally:
+                await operator.close()
+                if process.returncode is None:
+                    process.kill(); await process.wait()
+
+    @staticmethod
+    def _native_checks():
+        checks = []
+        for command, label in (('whoami', 'WHOAMI'), ('hostname', 'HOSTNAME'), ('ipconfig', 'IPCONFIG')):
+            checks.append((label, f"& {command} | Out-Null; $ok=$? -and ($LASTEXITCODE -eq 0); "
+                f"if ($ok) {{$r='{label}_OK'}} else {{$r='FAIL'}}; [Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)",
+                'NIGHTOWL_CHECK_' + label + '_OK'))
+        checks.append(('environment', "if ($null -ne [Environment]::GetEnvironmentVariable('NIGHTOWL_E2E_SECRET_SENTINEL')) {$r='FAIL'} else {$r='ENV_OK'}; "
+            "[Console]::WriteLine('NIGHTOWL_'+'CHECK_'+$r)", 'NIGHTOWL_CHECK_ENV_OK'))
+        return checks
+
+    @tag('windows_e2e')
+    async def test_native_commands_resolve_without_inheriting_parent_environment(self):
+        await self._isolated_shell_checks(self._native_checks())
+
     @tag('windows_e2e')
     async def test_real_powershell_stream_over_websocket_and_disconnect(self):
         dll = Path(settings.BASE_DIR) / 'NightOwl.Agent.Windows.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Windows.Tests.dll'

@@ -262,6 +262,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             {
                 ["SystemRoot"] = windows, ["WINDIR"] = windows,
                 ["PATH"] = Path.Combine(windows, "System32") + ";" + windows + ";" + Path.GetDirectoryName(shell),
+                ["PATHEXT"] = ".COM;.EXE;.BAT;.CMD",
                 ["PSModulePath"] = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "Modules"),
                 ["USERPROFILE"] = profile, ["APPDATA"] = Path.Combine(profile, "AppData", "Roaming"),
                 ["LOCALAPPDATA"] = Path.Combine(profile, "AppData", "Local"),
