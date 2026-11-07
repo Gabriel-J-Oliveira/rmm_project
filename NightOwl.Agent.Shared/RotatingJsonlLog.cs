@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -10,14 +11,21 @@ public sealed record LogRetentionPolicy(long MaxFileBytes = 10 * 1024 * 1024,
 public static class RotatingJsonlLog
 {
     private static readonly LogRetentionPolicy DefaultPolicy = new();
+    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(5);
 
     public static void Append(string path, string json, LogRetentionPolicy? policy = null)
-        => AppendCore(path, json, policy ?? DefaultPolicy, null);
+        => AppendCore(path, json, policy ?? DefaultPolicy, null, null);
 
     internal static void AppendWithWriterForTest(string path, string json, LogRetentionPolicy policy,
-        Action<FileStream, byte[]> writer) => AppendCore(path, json, policy, writer);
+        Action<FileStream, byte[]> writer) => AppendCore(path, json, policy, writer, null);
 
-    private static void AppendCore(string path, string json, LogRetentionPolicy policy, Action<FileStream, byte[]>? writer)
+    internal static void AppendObservedForTest(string path, string json, LogRetentionPolicy policy,
+        Action<string> observer, Action<FileStream, byte[]>? writer = null)
+        => AppendCore(path, json, policy, writer, observer);
+
+    internal static FileStream AcquireForTest(string path, TimeSpan timeout) => Acquire(path, timeout);
+
+    private static void AppendCore(string path, string json, LogRetentionPolicy policy, Action<FileStream, byte[]>? writer, Action<string>? observer)
     {
         if (policy.MaxFileBytes < 256 || policy.ArchiveCount is < 1 or > 20
             || policy.MaxRecordBytes < 128 || policy.MaxRecordBytes > policy.MaxFileBytes
@@ -49,7 +57,9 @@ public static class RotatingJsonlLog
 
         // A zero-byte sidecar stays in place: deleting it creates competing lock inodes.
         // File sharing coordinates all instances/processes/sessions without new ACL grants.
-        using FileStream lease = Acquire(path + ".lock");
+        observer?.Invoke("wait_start");
+        using FileStream lease = Acquire(path + ".lock", LockTimeout);
+        observer?.Invoke("acquired");
         RejectReparse(path);
         for (int i = 1; i <= policy.ArchiveCount; i++) RejectReparse(path + "." + i);
         for (int i = 1; i <= policy.ArchiveCount; i++)
@@ -69,27 +79,46 @@ public static class RotatingJsonlLog
         }
         if (length > 0 && length > policy.MaxFileBytes - bytes.Length - (separatePartialRecord ? 1 : 0))
         {
+            observer?.Invoke("rotation_start");
             // No truncate-on-error fallback. A denied rename stops this write.
             File.Delete(path + "." + policy.ArchiveCount);
             for (int i = policy.ArchiveCount - 1; i >= 1; i--)
                 if (File.Exists(path + "." + i)) File.Move(path + "." + i, path + "." + (i + 1), true);
             File.Move(path, path + ".1");
             separatePartialRecord = false;
+            observer?.Invoke("rotation_end");
         }
         using FileStream output = new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
         if (separatePartialRecord) output.WriteByte((byte)'\n');
         if (writer is null) output.Write(bytes);
         else writer(output, bytes);
+        observer?.Invoke("write_complete");
     }
 
-    private static FileStream Acquire(string path)
+    private static FileStream Acquire(string path, TimeSpan timeout)
     {
-        for (int attempt = 0; ; attempt++)
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        Stopwatch elapsed = Stopwatch.StartNew();
+        IOException? lastContention = null;
+        while (true)
         {
+            if (lastContention is not null && elapsed.Elapsed >= timeout)
+                throw new IOException("Timed out acquiring the log file lock.", lastContention);
             try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-            catch (IOException) when (attempt < 40) { Thread.Sleep(10); }
+            catch (IOException ex) when (IsSharingViolation(ex))
+            {
+                lastContention = ex;
+                TimeSpan remaining = timeout - elapsed.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                    throw new IOException("Timed out acquiring the log file lock.", ex);
+                Thread.Sleep(remaining < TimeSpan.FromMilliseconds(10) ? remaining : TimeSpan.FromMilliseconds(10));
+            }
         }
     }
+
+    private static bool IsSharingViolation(IOException error)
+        => OperatingSystem.IsWindows() ? (error.HResult & 0xffff) is 32 or 33
+            : (error.HResult & 0xffff) == 11;
 
     private static void RejectReparseAncestors(string directory)
     {

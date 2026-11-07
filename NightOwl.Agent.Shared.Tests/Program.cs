@@ -4,6 +4,24 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using NightOwl.Agent.Shared;
 
+if (args.Length == 2 && args[0] == "--contention-only")
+{
+    LogContentionTests.Run(args[1]);
+    return;
+}
+
+if (args.Length == 3 && args[0] == "--contention-child")
+{
+    LogContentionTests.Child(args[1], args[2]);
+    return;
+}
+
+if (args.Length == 2 && args[0] == "--contention-baseline")
+{
+    LogContentionTests.Baseline(args[1]);
+    return;
+}
+
 if (args.Length == 3 && args[0] == "--log-writer")
 {
     RetentionClosureTests.WriteChild(args[1], args[2]);
@@ -17,6 +35,7 @@ Environment.SetEnvironmentVariable("NIGHTOWL_HOME", root);
 try
 {
     RetentionClosureTests.Run(root);
+    LogContentionTests.Run(root);
     LocalFootprintTests.Run(root);
     NightOwlPaths paths = NightOwlPaths.FromEnvironment();
     Require(NightOwlPaths.SystemSid == "S-1-5-18", "SYSTEM SID constant mismatch.");
