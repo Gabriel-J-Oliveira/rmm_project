@@ -16,9 +16,9 @@ No Windows local: dez E2Es reais sem skips em três execuções (Chrome e ConPTY
 
 A PR #16 foi limitada ao PATHEXT, aos dez E2Es existentes e ao teste adicional de executáveis e isolamento. No CI `42254876833`, SQLite, PostgreSQL e deployment passaram; o gate Windows teve 10/11 aprovações, com falha no smoke do Chrome sem porta CDP. A PR permanece aberta: não tratar a correção PATHEXT como integrada ou publicada.
 
-A execução histórica `42224344768` teve falhas em ConPTY, diagnóstico PowerShell e inicialização Chrome sem porta CDP. Os dados disponíveis não demonstram causa raiz comum nem permitem afirmar correção da intermitência. Preservar timeouts, testes obrigatórios e diagnósticos sanitizados; não usar aprovação do teste local como prova de estabilidade de runner.
+A [PR #21](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/21) integrou o Chrome for Testing `156.0.8078.80` fixado e verificado por SHA-256 no CI Windows (merge `1f50a8b396d31d8dd313c4e91eee5cdfb96ddf9f`). Três execuções independentes passaram com os dez E2Es e uma verificação após rebase também passou. O smoke real, a conta não administrativa e a sonda CDP permanecem obrigatórios. A causa interna da falha histórica do Chrome pré-instalado não foi identificada; não há alegação de correção desse executável.
 
-Próxima investigação: após o gate falho e antes de limpar a identidade temporária, medir separadamente, sob essa identidade e sem aquecer previamente os testes, a descoberta/carregamento de `Microsoft.PowerShell.Utility` e a duração de `Get-Date`; registrar apenas etapas e tempos. Investigar a árvore de processos e a inicialização do perfil Chrome exclusivo, sem cookies ou dados de navegação. Comparar com runner limpo da `main`, sem aumentar prazos, remover testes ou usar repetições para mascarar falhas.
+A investigação de `Get-Date` permanece independente na issue #19. O terminal assistido continua sem homologação para distribuição ampla até concluir essa investigação e os testes operacionais pendentes. A PR #16 permanece aberta e deve ser avaliada pelo CI do seu HEAD atual.
 
 ## Operação, reversão e próxima release
 
