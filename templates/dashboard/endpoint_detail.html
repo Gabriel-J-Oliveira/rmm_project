@@ -5,6 +5,7 @@
 {% block body_class %}page-endpoint-detail{% endblock %}
 {% block icon_script %}{% if not terminal_available and not terminal_admin_auth_available %}{{ block.super }}{% endif %}{% endblock %}
 {% block styles %}
+<link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
 {% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
@@ -19,7 +20,7 @@
 {% endblock %}
 
 {% block content %}
-<section class="endpoint-detail-shell" data-endpoint-detail data-live-allowed="{{ endpoint_detail_payload.live_monitoring_allowed|yesno:'yes,no' }}" data-endpoint-id="{{ endpoint.id }}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}" data-ip="{{ primary_ip|default:''|escape }}">
+<section class="endpoint-detail-shell" data-endpoint-detail data-live-allowed="{{ endpoint_detail_payload.live_monitoring_allowed|yesno:'yes,no' }}" data-endpoint-id="{{ endpoint.id }}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}" data-ip="{{ primary_ip|default:''|escape }}" data-terminal-mode="{% if terminal_admin_auth_available %}admin-auth{% elif terminal_available %}conpty{% else %}unavailable{% endif %}" data-endpoint-status="{{ endpoint.status }}">
     <header class="endpoint-ops-header">
         <div class="endpoint-ops-title">
             <a class="back-link" href="{% url 'endpoint-list' %}">&larr; Voltar para endpoints</a>
@@ -39,8 +40,6 @@
         </div>
 
         <div class="endpoint-ops-actions">
-            {% if winrm_observability_available %}<span class="winrm-indicator" data-winrm-indicator role="status">WinRM: não verificado</span>{% endif %}
-            {% if terminal_admin_auth_available %}<button class="terminal-open-button" type="button" data-terminal-open {% if endpoint.status != 'online' %}disabled title="Agente offline"{% endif %}>Abrir terminal</button>{% endif %}
             <button class="copy-btn" type="button" data-copy="{{ endpoint.hostname }}"><i data-lucide="copy"></i>Hostname</button>
             <button class="copy-btn" type="button" data-copy="{{ primary_ip|default:'' }}"><i data-lucide="clipboard"></i>IP</button>
             <a class="copy-btn link-btn" href="{% url 'tickets:create' %}?endpoint={{ endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
@@ -54,34 +53,6 @@
             <div><dt>Agente</dt><dd><span class="agent-version-pill agent-{{ agent_version_state }}">{{ endpoint.agent_version|default:"sem versao" }}</span></dd></div>
         </dl>
     </header>
-    {% if terminal_available %}{% include 'dashboard/endpoint_terminal.html' %}{% endif %}
-    {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}
-    {% if winrm_observability_available %}
-    <section class="panel" aria-label="Recuperação WinRM">
-        <h2>Diagnóstico e recuperação WinRM</h2>
-        {% if winrm_local.data %}
-        <p>Configuração local: {{ winrm_local_state }} ({{ winrm_local.data.result }}) — recebida em {{ winrm_local.received_at }}{% if winrm_local_stale %} (informação desatualizada){% endif %}.</p>
-        <p>Serviço: {{ winrm_local.data.service.state|default:'indisponível' }}; inicialização: {{ winrm_local.data.service.startup|default:'não verificada' }}.</p>
-        <p>Listeners: {% for listener in winrm_local.data.listeners %}{{ listener.transport }}:{{ listener.port }} (ativo: {{ listener.enabled }}) {% empty %}nenhum informado{% endfor %}</p>
-        <p>Perfis: {{ winrm_local.data.profiles|join:', '|default:'não verificados' }}. Firewall: {% for rule in winrm_local.data.firewall %}{{ rule.action }} / {{ rule.profile }} / {{ rule.port }} / {{ rule.remote_addresses|join:', ' }}; {% empty %}nenhuma regra informada{% endfor %}</p>
-        <p>Política: {{ winrm_local.data.policy|join:', '|default:'não informada' }}. Erros: {{ winrm_local.data.errors|join:', '|default:'nenhum informado' }}.</p>
-        {% else %}<p>Configuração local: não verificada.</p>{% endif %}
-        <p data-winrm-remote-result>{% if winrm_remote.checked_at %}Último teste remoto: TCP {{ winrm_remote.tcp }}, WS-Man {{ winrm_remote.wsman }}, autenticação {{ winrm_remote.authentication }} — {{ winrm_remote.checked_at }}. {{ winrm_remote.error }}{% else %}Teste remoto e autenticação: não verificados.{% endif %}</p>
-        <p>Autenticação administrativa: {{ winrm_authentication }}{% if winrm_authentication_at %} em {{ winrm_authentication_at|date:'d/m/Y H:i:s' }}{% endif %}.</p>
-        <form data-winrm-check action="{% url 'agent-winrm-check' endpoint.id %}" method="post">{% csrf_token %}<button type="submit">Verificar conectividade WinRM</button></form>
-        {% if winrm_recovery_available %}
-        <div class="install-credential-overlay winrm-credential-overlay" data-recovery-modal hidden><section class="install-credential-modal" role="dialog" aria-modal="true" aria-label="Recuperar agente"><h2>Recuperar agente</h2><form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
-            {% csrf_token %}
-            <label>Conta conhecida <select data-recovery-known><option value="">Usar outra conta</option></select></label>
-            <label>Conta administrativa <input name="username" required maxlength="256" autocomplete="username"></label>
-            <label>Senha <input name="password" type="password" required maxlength="512" autocomplete="new-password"></label>
-            <label><input name="restart_running" type="checkbox"> Permitir reiniciar serviço em execução</label>
-            <footer><button type="button" data-recovery-cancel>Cancelar</button><button type="submit">Recuperar agente</button></footer>
-            <p role="status" data-winrm-recovery-status></p>
-        </form></section></div>
-        {% endif %}
-    </section>
-    {% endif %}
 
     <nav class="endpoint-tabs" aria-label="Se&ccedil;&otilde;es do endpoint">
         <button class="is-active" type="button" data-endpoint-tab="overview"><i data-lucide="layout-dashboard"></i>Vis&atilde;o geral</button>
@@ -346,26 +317,76 @@
         </section>
     </section>
 
-    <section class="endpoint-tab-panel" data-endpoint-tab-panel="tasks" data-dynamic-endpoint-panel hidden>
-        <section class="panel endpoint-dense-card">
-            <header><h2><i data-lucide="list-checks"></i>Tarefas e a&ccedil;&otilde;es remotas</h2><button type="button" data-endpoint-action="execute_check">Executar a&ccedil;&atilde;o</button></header>
-            <div class="endpoint-task-list">
-                {% for task in task_rows %}
-                <article><span class="agent-version-pill agent-{{ task.status }}">{{ task.status }}</span><div><strong>{{ task.name }}</strong><p>{{ task.source }}{% if task.started_at %} &middot; {{ task.started_at|relative_time }}{% endif %}</p></div></article>
-                {% endfor %}
+    <section class="endpoint-tab-panel endpoint-actions-tab" data-endpoint-tab-panel="tasks" hidden>
+        <div class="endpoint-actions-jobs-layout">
+            <div class="endpoint-actions-column">
+                <section class="panel endpoint-dense-card endpoint-quick-actions-card" aria-labelledby="endpoint-quick-actions-title">
+                    <div class="endpoint-quick-actions-intro">
+                        <h2 id="endpoint-quick-actions-title"><i data-lucide="zap"></i>A&ccedil;&otilde;es r&aacute;pidas</h2>
+                        <p>Acesso, conectividade e recupera&ccedil;&atilde;o deste endpoint.</p>
+                    </div>
+                    <div class="endpoint-quick-action-list">
+                        <div class="endpoint-quick-action-item">
+                            <button class="endpoint-quick-action-button" type="button" data-terminal-open {% if endpoint.status != 'online' or not terminal_admin_auth_available and not terminal_available %}disabled{% endif %} {% if endpoint.status != 'online' %}title="O agente precisa estar online para solicitar o terminal."{% elif not terminal_admin_auth_available and not terminal_available %}title="Terminal indispon&iacute;vel: flags, grants, capability e consentimento continuam obrigat&oacute;rios."{% endif %}><i data-lucide="terminal-square"></i><span>Acessar terminal</span></button>
+                            {% if endpoint.status != 'online' or not terminal_admin_auth_available and not terminal_available %}<small>{% if endpoint.status != 'online' %}Agente offline{% else %}Indispon&iacute;vel pelas pol&iacute;ticas atuais{% endif %}</small>{% endif %}
+                        </div>
+                        <div class="endpoint-quick-action-item">
+                            {% if winrm_observability_available %}<form data-winrm-check action="{% url 'agent-winrm-check' endpoint.id %}" method="post">{% csrf_token %}<button class="endpoint-quick-action-button" type="submit"><i data-lucide="network"></i><span>Testar WinRM</span></button></form>
+                            {% else %}<button class="endpoint-quick-action-button" type="button" disabled title="Dispon&iacute;vel somente para operador autorizado em conex&atilde;o HTTPS."><i data-lucide="network"></i><span>Testar WinRM</span></button><small>Indispon&iacute;vel para este operador</small>{% endif %}
+                        </div>
+                        <div class="endpoint-quick-action-item">
+                            <button class="endpoint-quick-action-button" type="button" data-winrm-recovery-open disabled title="Aguardando valida&ccedil;&atilde;o de elegibilidade pelo backend."><i data-lucide="radio-tower"></i><span>Reativar agente</span></button>
+                            <small data-winrm-recovery-reason>{% if winrm_recovery_available %}Confirmando elegibilidade segura...{% else %}Somente endpoint offline eleg&iacute;vel, com identidade &iacute;ntegra e sem opera&ccedil;&atilde;o conflitante.{% endif %}</small>
+                        </div>
+                    </div>
+                    {% if winrm_observability_available %}
+                    <div class="endpoint-winrm-feedback" aria-label="Resultado do WinRM">
+                        <p class="winrm-indicator" data-winrm-indicator role="status">WinRM: n&atilde;o verificado</p>
+                        <p data-winrm-remote-result role="status" aria-live="polite">{% if winrm_remote.checked_at %}&Uacute;ltimo teste: TCP {{ winrm_remote.tcp }}, WS-Man {{ winrm_remote.wsman }}, autentica&ccedil;&atilde;o {{ winrm_remote.authentication }} &mdash; {{ winrm_remote.checked_at }}. {{ winrm_remote.error }}{% else %}Teste remoto ainda n&atilde;o executado.{% endif %}</p>
+                        <p data-winrm-recovery-summary role="status" aria-live="polite">Agente: {{ endpoint.get_status_display }}. &Uacute;ltima tentativa de recupera&ccedil;&atilde;o: n&atilde;o consultada.</p>
+                        <button type="button" data-winrm-recovery-follow disabled>Acompanhar recupera&ccedil;&atilde;o</button>
+                    </div>
+                    <details class="endpoint-winrm-local-details">
+                        <summary>Estado local reportado pelo agente</summary>
+                        <div>
+                        {% if winrm_local.data %}
+                            <p>Configura&ccedil;&atilde;o local: {{ winrm_local_state }} ({{ winrm_local.data.result }}) &mdash; recebida em {{ winrm_local.received_at }}{% if winrm_local_stale %} (informa&ccedil;&atilde;o desatualizada){% endif %}.</p>
+                            <p>Servi&ccedil;o: {{ winrm_local.data.service.state|default:'indispon&iacute;vel' }}; inicializa&ccedil;&atilde;o: {{ winrm_local.data.service.startup|default:'n&atilde;o verificada' }}.</p>
+                            <p>Listeners: {% for listener in winrm_local.data.listeners %}{{ listener.transport }}:{{ listener.port }} (ativo: {{ listener.enabled }}) {% empty %}nenhum informado{% endfor %}</p>
+                            <p>Perfis: {{ winrm_local.data.profiles|join:', '|default:'n&atilde;o verificados' }}. Firewall: {% for rule in winrm_local.data.firewall %}{{ rule.action }} / {{ rule.profile }} / {{ rule.port }} / {{ rule.remote_addresses|join:', ' }}; {% empty %}nenhuma regra informada{% endfor %}</p>
+                            <p>Pol&iacute;tica: {{ winrm_local.data.policy|join:', '|default:'n&atilde;o informada' }}. Erros: {{ winrm_local.data.errors|join:', '|default:'nenhum informado' }}.</p>
+                        {% else %}<p>Configura&ccedil;&atilde;o local n&atilde;o informada pelo agente.</p>{% endif %}
+                        <p>Autentica&ccedil;&atilde;o administrativa: {{ winrm_authentication }}{% if winrm_authentication_at %} em {{ winrm_authentication_at|date:'d/m/Y H:i:s' }}{% endif %}.</p>
+                        </div>
+                    </details>
+                    {% if winrm_recovery_available %}
+                    <div class="install-credential-overlay winrm-credential-overlay" data-recovery-modal hidden><section class="install-credential-modal" role="dialog" aria-modal="true" aria-label="Recuperar agente"><h2>Recuperar agente</h2><form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
+                        {% csrf_token %}
+                        <label>Conta conhecida <select data-recovery-known><option value="">Usar outra conta</option></select></label>
+                        <label>Conta administrativa <input name="username" required maxlength="256" autocomplete="username"></label>
+                        <label>Senha <input name="password" type="password" required maxlength="512" autocomplete="new-password"></label>
+                        <label><input name="restart_running" type="checkbox"> Permitir reiniciar servi&ccedil;o em execu&ccedil;&atilde;o</label>
+                        <footer><button type="button" data-recovery-cancel>Cancelar</button><button type="submit">Recuperar agente</button></footer>
+                        <p role="status" data-winrm-recovery-status></p>
+                    </form></section></div>
+                    {% endif %}
+                    {% endif %}
+                </section>
+                <div class="endpoint-action-groups" data-endpoint-actions-core></div>
+                <div data-endpoint-actions-maintenance></div>
+                <details class="endpoint-action-category endpoint-approved-scripts-category">
+                    <summary><span class="endpoint-category-heading"><i data-lucide="file-check-2"></i>Scripts aprovados</span></summary>
+                    <div class="endpoint-approved-scripts-body" data-approved-scripts-placement></div>
+                </details>
+                <div data-endpoint-actions-critical></div>
+                {% if terminal_available %}<details class="endpoint-terminal-disclosure" data-terminal-conpty-panel><summary>Terminal PowerShell assistido</summary>{% include 'dashboard/endpoint_terminal.html' %}</details>{% endif %}
+                {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}
             </div>
-            <div class="endpoint-remote-actions-grid">
-                <button type="button" data-endpoint-action="force_inventory"><i data-lucide="refresh-ccw"></i>For&ccedil;ar invent&aacute;rio</button>
-                <button type="button" data-endpoint-action="check_defender"><i data-lucide="shield-check"></i>Verificar Defender</button>
-                <button type="button" data-endpoint-action="check_disk"><i data-lucide="hard-drive"></i>Verificar disco</button>
-                <button type="button" data-endpoint-action="collect_logs"><i data-lucide="file-search"></i>Coletar logs</button>
-                <button type="button" data-endpoint-action="update_trusted_release_keys"><i data-lucide="key-round"></i>Sincronizar chaves de confian&ccedil;a</button>
-                <button type="button" data-endpoint-action="repair_agent"><i data-lucide="wrench"></i>Reparar agente</button>
-                <button type="button" data-endpoint-action="execute_check"><i data-lucide="rotate-cw"></i>Reiniciar servi&ccedil;o</button>
-                <button type="button" data-endpoint-action="ping"><i data-lucide="activity"></i>Ping</button>
-                <button type="button" data-endpoint-action="execute_check"><i data-lucide="code-2"></i>Executar script</button>
-            </div>
-        </section>
+            <aside class="panel endpoint-dense-card endpoint-jobs-panel" aria-labelledby="endpoint-jobs-title">
+                <header class="endpoint-jobs-header"><h2 id="endpoint-jobs-title"><i data-lucide="history"></i>&Uacute;ltimos jobs</h2><button type="button" data-refresh-endpoint aria-label="Atualizar jobs"><i data-lucide="refresh-ccw"></i></button></header>
+                <div class="endpoint-jobs-scroll" data-endpoint-jobs-scroll><div class="endpoint-jobs-content" data-endpoint-jobs-content></div></div>
+            </aside>
+        </div>
     </section>
 
     <section class="endpoint-tab-panel" data-endpoint-tab-panel="diagnostics" data-dynamic-endpoint-panel hidden>

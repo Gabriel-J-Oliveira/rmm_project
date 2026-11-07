@@ -54,24 +54,25 @@
         });
     }
     function insertCard() {
-        const section = root.querySelector('[data-endpoint-tab-panel="tasks"] > section');
-        if (!section || section.querySelector('[data-approved-scripts-card]')) return;
-        const card = element('section', undefined, 'endpoint-dense-card'); card.dataset.approvedScriptsCard = '';
-        card.append(element('h3','Scripts aprovados'));
-        if (failure) card.append(element('p','Catálogo indisponível ou acesso não autorizado.'));
-        else if (!catalog) card.append(element('p','Carregando catálogo...'));
-        else if (!catalog.length) card.append(element('p','Nenhum script aprovado disponível.'));
-        else catalog.forEach(script => {
-            const row = element('article'), title = element('strong',script.script_id || 'Script');
-            row.append(title, element('p',script.description || ''), element('small',`Versão ${script.version}`));
+        const placement = root.querySelector('[data-approved-scripts-placement]');
+        if (!placement) return;
+        placement.replaceChildren();
+        if (failure) { placement.append(element('p','Catálogo indisponível ou acesso não autorizado.')); return; }
+        if (!catalog) { placement.append(element('p','Abra a categoria para consultar o catálogo aprovado.')); return; }
+        if (!catalog.length) { placement.append(element('p','Nenhum script aprovado disponível.')); return; }
+        catalog.forEach(script => {
+            const row = element('article',undefined,'endpoint-approved-script-row'), body = element('div');
+            const title = element('strong',script.script_id || 'Script');
+            const version = element('small',`Versão ${script.version}`);
+            body.append(title, element('p',script.description || ''), version);
             const eligible = script.approved === true && script.revoked === false && availability[key(script)] === true && schemaSupported(script);
             const reason = script.revoked ? 'Esta versão foi revogada.' : !schemaSupported(script) ? 'Parâmetros não suportados nesta interface.' : reasons[key(script)];
-            row.append(element('p',eligible ? 'Disponível' : typeof reason === 'string' && reason ? reason : 'Indisponível para este endpoint ou operador'));
-            const button = element('button','Executar','endpoint-quick-action-button'); button.type='button'; button.disabled=!eligible;
-            button.addEventListener('click',() => modal(script)); row.append(button); card.append(row);
+            const button = element('button',eligible ? 'Executar' : 'Indisponível','endpoint-job-action-button');
+            button.type='button'; button.disabled=!eligible;
+            if (!eligible) button.title = typeof reason === 'string' && reason ? reason : 'Indisponível para este endpoint ou operador';
+            button.addEventListener('click',() => modal(script));
+            row.append(body,button); placement.append(row);
         });
-        const placement = section.querySelector('[data-approved-scripts-placement]');
-        if (placement) placement.append(card); else section.append(card);
     }
     async function load() {
         if (catalog || loading || failure) return;
@@ -83,9 +84,8 @@
             if (!Array.isArray(body.scripts)) throw new Error();
             catalog = body.scripts;
         } catch (_) { failure = true; }
-        finally { loading = false; const card = root.querySelector('[data-approved-scripts-card]'); card?.remove(); insertCard(); }
+        finally { loading = false; insertCard(); }
     }
     root.addEventListener('click', event => { if (event.target.closest('[data-endpoint-tab="tasks"]')) load(); });
-    new MutationObserver(insertCard).observe(root,{childList:true,subtree:true});
     insertCard();
 })();
