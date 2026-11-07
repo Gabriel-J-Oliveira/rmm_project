@@ -2,6 +2,20 @@
 $ErrorActionPreference = 'Stop'
 $rootId = [int]$env:NIGHTOWL_SNAPSHOT_PID
 $profile = $env:NIGHTOWL_SNAPSHOT_PROFILE
+$early = [ordered]@{ snapshot_utc=[DateTime]::UtcNow.ToString('o'); root_pid=$rootId; process_state='unavailable';
+    cpu_seconds=$null; handle_count=$null; threads=@(); profile_entry_count=$null }
+try {
+    $proc=Get-Process -Id $rootId -ErrorAction Stop
+    $early.process_state='running'; $early.cpu_seconds=$proc.CPU; $early.handle_count=$proc.HandleCount
+    $counts=@{}; foreach ($thread in $proc.Threads) {
+        $state=[string]$thread.ThreadState; $wait='not_waiting'
+        if ($state -eq 'Wait') { try { $wait=[string]$thread.WaitReason } catch { $wait='unavailable' } }
+        $key=$state+':'+$wait; if (-not $counts.ContainsKey($key)) {$counts[$key]=0}; $counts[$key]++
+    }
+    $early.threads=@($counts.GetEnumerator() | Sort-Object Name | Select-Object -First 20 | ForEach-Object { @{state=$_.Name;count=$_.Value} })
+} catch { }
+try { $early.profile_entry_count=@(Get-ChildItem -LiteralPath $profile -Force -ErrorAction Stop).Count } catch { }
+Write-Output ('CHROME_SNAPSHOT_EARLY='+($early | ConvertTo-Json -Compress -Depth 4))
 $report = [ordered]@{ snapshot_utc = [DateTime]::UtcNow.ToString('o'); root_pid = $rootId;
     process_query = 'unavailable'; processes = @(); listeners = $null; events = $null;
     profile = @{ exists = (Test-Path -LiteralPath $profile); local_state = (Test-Path -LiteralPath (Join-Path $profile 'Local State'));
