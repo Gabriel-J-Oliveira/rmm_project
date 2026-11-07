@@ -10,3 +10,13 @@ class WindowsE2ERunner(DiscoverRunner):
             self.log('Windows E2E gate requires every listed test to run without skips.', level='ERROR')
             return failures + 1
         return failures
+
+
+class WindowsBrowserE2ERunner(DiscoverRunner):
+    """The isolated browser comparison must execute its real E2E exactly once."""
+    def suite_result(self, suite, result, **kwargs):
+        failures = super().suite_result(suite, result, **kwargs)
+        if result.skipped or result.testsRun != 1:
+            self.log('Isolated browser E2E requires one executed test without skips.', level='ERROR')
+            return failures + 1
+        return failures

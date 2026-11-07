@@ -1,63 +1,13 @@
 /* Existing Chrome + Node built-ins only. Real browser/VT/network, no browser or tool installation. */
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const {spawn} = require('node:child_process');
-const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
+const {launchChrome,sleep}=require('./chrome_test_launcher.cjs');
 let phase='launch';
-class CDP {
-    constructor(ws) {
-        this.ws=ws; this.id=0; this.pending=new Map();
-        ws.addEventListener('message',event=>{
-            const message=JSON.parse(event.data);
-            if(message.id && this.pending.has(message.id)) {
-                const entry=this.pending.get(message.id);this.pending.delete(message.id);clearTimeout(entry.timer);
-                message.error ? entry.reject(new Error('cdp_command_failed')) : entry.resolve(message.result);
-            }
-        });
-    }
-    call(method,params={},sessionId) {
-        const id=++this.id;
-        return new Promise((resolve,reject)=>{
-            const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error('cdp_timeout'));},10000);
-            this.pending.set(id,{resolve,reject,timer});this.ws.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));
-        });
-    }
-}
 (async()=>{
     const server=process.env.NIGHTOWL_TEST_SERVER;
     assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(server));
-    const profile=fs.mkdtempSync(path.join(os.tmpdir(),'nightowl-terminal-browser-'));
-    const chrome=spawn('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',[
-        '--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check',
-        '--disable-sync','--disable-background-networking','--disable-background-timer-throttling','--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows','--disable-features=BackForwardCache','--enable-logging=stderr','about:blank'
-    ],{windowsHide:true,stdio:['ignore','ignore','pipe']});
-    let chromeExitCode=null, chromeSignal=null, chromeSpawnError=null;
-    const chromeDiagnostics = new Set();
-    chrome.stderr.on('data',data=>{
-        const value=data.toString();
-        if (/access is denied|access_denied/i.test(value)) chromeDiagnostics.add('access_denied');
-        if (/sandbox/i.test(value)) chromeDiagnostics.add('sandbox');
-        if (/profile|user.data/i.test(value)) chromeDiagnostics.add('profile');
-        if (/devtools listening/i.test(value)) chromeDiagnostics.add('devtools_listening');
-        if (/failed|error/i.test(value)) chromeDiagnostics.add('other_error');
-    });
-    chrome.on('exit',(code,signal)=>{chromeExitCode=code;chromeSignal=signal;});
-    chrome.on('error',error=>{chromeSpawnError=error.code || 'spawn_failed';});
-    let cdp;
+    const browser=await launchChrome();
+    const cdp=browser.cdp;
     try {
-        const portFile=path.join(profile,'DevToolsActivePort');
-        for(let i=0;i<100 && !fs.existsSync(portFile);i++) await sleep(100);
-        if (!fs.existsSync(portFile)) console.log('TERMINAL_BROWSER_LAUNCH='+JSON.stringify({
-            stage:'launch',category:chromeSpawnError?'spawn_failed':'port_unavailable',exit_code:chromeExitCode,signal:chromeSignal,error_code:chromeSpawnError,diagnostics:[...chromeDiagnostics]
-        }));
-        assert(fs.existsSync(portFile),'Existing Chrome did not start');
-        const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);
-        const ws=new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
-        await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});
-        cdp=new CDP(ws);
         const {targetId}=await cdp.call('Target.createTarget',{url:'about:blank'});
         const {sessionId}=await cdp.call('Target.attachToTarget',{targetId,flatten:true});
         const call=(method,params)=>cdp.call(method,params,sessionId);
@@ -177,12 +127,7 @@ class CDP {
             kind:'real_chrome_vt_real_powershell_loopback_no_tls_consent_click_simulated_in_test',automation_overhead_included:true}));
         console.log('PASS browser VT ANSI Unicode resize real input/output incremental manual close fresh session pagehide ephemeral buffers');
     } finally {
-        if(cdp) {try{await cdp.call('Browser.close');}catch{} cdp.ws.close();}
-        if(chrome.exitCode===null) await Promise.race([new Promise(resolve=>chrome.once('exit',resolve)),sleep(5000)]);
-        if(chrome.exitCode===null) chrome.kill();
-        const resolved=fs.realpathSync(profile), temp=fs.realpathSync(os.tmpdir());
-        assert(path.dirname(resolved)===temp && path.basename(resolved).startsWith('nightowl-terminal-browser-'));
-        try{fs.rmSync(resolved,{recursive:true,force:true,maxRetries:3,retryDelay:100});}catch{console.log('BROWSER_PROFILE_CLEANUP=deferred');}
+        await browser.cleanup();
     }
 })().catch(error=>{console.log('TERMINAL_BROWSER_FAILURE='+JSON.stringify({phase,error_type:error.name,
     code:['browser_evaluation_failed','cdp_command_failed','browser_condition_timeout','cdp_timeout'].includes(error.message)?error.message:'assertion'}));process.exitCode=1;});
