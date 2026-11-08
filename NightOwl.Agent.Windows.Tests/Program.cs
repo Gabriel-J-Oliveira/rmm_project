@@ -11,8 +11,20 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--repair-fixture-leaf", StringComparer.Ordinal))
+    {
+        Thread.Sleep(30000);
+        return;
+    }
     if (args.Contains("--repair-fixture-sleep", StringComparer.Ordinal))
     {
+        using Process leaf = Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.ProcessPath!, Arguments = "--repair-fixture-leaf",
+            UseShellExecute = false, CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start timeout fixture child.");
+        Console.WriteLine(leaf.Id);
+        Console.Out.Flush();
         Thread.Sleep(30000);
         return;
     }
@@ -1334,9 +1346,22 @@ static void TestRepairFixtureTimeoutKillsProcess()
     using Process child = Process.Start(new ProcessStartInfo
     {
         FileName = Environment.ProcessPath!, Arguments = "--repair-fixture-sleep",
-        UseShellExecute = false, CreateNoWindow = true
+        UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
     }) ?? throw new InvalidOperationException("Could not start timeout fixture.");
-    Require(!WaitForFixtureProcess(child, 400) && child.HasExited, "Timeout fixture process must be terminated.");
+    try
+    {
+        Task<string?> pidRead = child.StandardOutput.ReadLineAsync();
+        Require(pidRead.Wait(TimeSpan.FromSeconds(5)) && int.TryParse(pidRead.Result, out _), "Timeout fixture child did not start.");
+        int leafPid = int.Parse(pidRead.Result!, System.Globalization.CultureInfo.InvariantCulture);
+        Require(!WaitForFixtureProcess(child, 400) && child.HasExited, "Timeout fixture process must be terminated.");
+        try
+        {
+            using Process leaf = Process.GetProcessById(leafPid);
+            Require(leaf.WaitForExit(5000), "Timeout fixture descendant must be terminated.");
+        }
+        catch (ArgumentException) { /* Already exited. */ }
+    }
+    finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); child.WaitForExit(); } }
 }
 
 static void TestRepairRunnerScriptPersistsCompletedResult()
