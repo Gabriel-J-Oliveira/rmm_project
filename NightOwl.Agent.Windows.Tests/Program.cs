@@ -104,6 +104,7 @@ try
         TestRepairRunnerScriptPersistsFailedResult();
         TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
         TestRepairRunnerScriptSupportsSpacedPaths();
+        TestRepairRunnerScriptHandlesUnauthorizedTaskQuery();
         Console.WriteLine("Repair runner functional tests passed.");
         return;
     }
@@ -205,6 +206,7 @@ try
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
     TestRepairRunnerScriptSupportsSpacedPaths();
+    TestRepairRunnerScriptHandlesUnauthorizedTaskQuery();
     TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
     TestRunningUpdateWaitsForActiveHandshakeBeforeRecovery();
     TestCompletedUpdateJobIsIgnoredOnLaterRestart();
@@ -1382,6 +1384,16 @@ static void TestRepairRunnerScriptSupportsSpacedPaths()
     DeleteTempDir(result.RootDir);
 }
 
+static void TestRepairRunnerScriptHandlesUnauthorizedTaskQuery()
+{
+    foreach (int exitCode in new[] { 0, 7 })
+    {
+        string expectedStatus = exitCode == 0 ? JobFinalStatuses.Completed : JobFinalStatuses.Failed;
+        RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(exitCode, false, expectedStatus, denyTaskQuery: true);
+        DeleteTempDir(result.RootDir);
+    }
+}
+
 static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
 {
     RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: true, expectedStatus: "");
@@ -1861,7 +1873,7 @@ static RemoteJobResult NewCompletedRemoteUpdateResult(string jobId)
     };
 }
 
-static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus, bool spacedPaths = false)
+static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus, bool spacedPaths = false, bool denyTaskQuery = false)
 {
     string powershell = GetWindowsPowerShellPath();
     Require(File.Exists(powershell), "Windows PowerShell 5.1 is required for repair runner functional tests.");
@@ -1958,10 +1970,13 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
         // Instrument only the generated test fixture; production script remains unchanged.
         string trace = "$testClock = [Diagnostics.Stopwatch]::StartNew()" + Environment.NewLine +
             "function Write-TestStage([string]$s) { [IO.File]::AppendAllText((Join-Path $PSScriptRoot 'fixture-stages.txt'), ($s + ':' + $testClock.ElapsedMilliseconds + [Environment]::NewLine)) }" + Environment.NewLine;
-        script = trace + script;
+        string denyTaskFixture = denyTaskQuery
+            ? "function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) throw [System.UnauthorizedAccessException]::new('synthetic denied query') }" + Environment.NewLine
+            : "";
+        script = trace + denyTaskFixture + script;
         script = script.Replace("    $service = Get-Service -Name ", "    Write-TestStage 'service_start'" + Environment.NewLine + "    $service = Get-Service -Name ");
         script = script.Replace("    $versionPath = Join-Path ", "    Write-TestStage 'service_end'" + Environment.NewLine + "    $versionPath = Join-Path ");
-        script = script.Replace("        tray_task_status = $(if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } finally { Write-TestStage 'task_end' })");
+        script = script.Replace("        tray_task_status = $(try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' } } finally { Write-TestStage 'task_end' })");
         script = script.Replace("    $payload = New-RepairResultPayload ", "    Write-TestStage 'payload_start'" + Environment.NewLine + "    $payload = New-RepairResultPayload ");
         script = script.Replace("    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)", "    Write-TestStage 'payload_end'" + Environment.NewLine + "    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)");
         script = script.Replace("    Write-JsonAtomic $resultPath $payload 8", "    Write-TestStage 'persist_start'" + Environment.NewLine + "    Write-JsonAtomic $resultPath $payload 8" + Environment.NewLine + "    Write-TestStage 'persist_end'");
@@ -2009,6 +2024,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             Require(resultElement.GetProperty("type").GetString() == "repair_agent", "Repair runner result type mismatch.");
             Require(resultElement.GetProperty("error_code").GetString() == (installerExitCode == 0 ? "" : "REPAIR_FAILED"), "Repair runner error category mismatch.");
             Require(resultElement.GetProperty("installed_version").GetString() == "0.1.1.0-rc23", "Repair runner installed version mismatch.");
+            if (denyTaskQuery) Require(resultElement.GetProperty("tray_task_status").GetString() == "Unknown", "Denied Tray query must remain unknown.");
 
             JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Repair job state was not reloaded.");
             Require(!state.ExternalRunnerActive, "Repair runner should finalize external runner marker.");
@@ -2031,7 +2047,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             string[] stages = File.Exists(tracePath) ? File.ReadAllLines(tracePath)
                 .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^(service_start|service_end|task_start|task_end|payload_start|payload_end|persist_start|persist_end|state_start|state_end|installer_start|installer_end|installer_exit_-?[0-9]+|runner_failed):[0-9]+$")).ToArray() : Array.Empty<string>();
             string pending = Path.Combine(root, "pending-results");
-            string? status = null, errorCode = null; int? installerCode = null;
+            string? status = null, errorCode = null, trayStatus = null; int? installerCode = null;
             if (Directory.Exists(pending))
             {
                 string? result = Directory.GetFiles(pending, "job-result-*.json").FirstOrDefault();
@@ -2040,7 +2056,15 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
                     JsonElement resultRoot = resultDoc.RootElement;
                     if (resultRoot.TryGetProperty("status", out JsonElement st)) status = st.GetString();
                     if (resultRoot.TryGetProperty("exit_code", out JsonElement ec) && ec.TryGetInt32(out int code)) installerCode = code;
-                    if (resultRoot.TryGetProperty("result", out JsonElement detail) && detail.TryGetProperty("error_code", out JsonElement err)) errorCode = err.GetString();
+                    if (resultRoot.TryGetProperty("result", out JsonElement detail))
+                    {
+                        if (detail.TryGetProperty("error_code", out JsonElement err)) errorCode = err.GetString();
+                        if (detail.TryGetProperty("tray_task_status", out JsonElement tray) && tray.ValueKind == JsonValueKind.String)
+                        {
+                            string? value = tray.GetString();
+                            trayStatus = value is "Present" or "NotFound" or "Unknown" ? value : "other";
+                        }
+                    }
                 }
             }
             string jobs = Path.Combine(root, "jobs"); string? stateStatus = null; bool? active = null;
@@ -2073,7 +2097,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             }
             Console.WriteLine("REPAIR_TEST_DIAGNOSTIC=" + JsonSerializer.Serialize(new { stage = diagnosticStage, elapsed_ms = scenarioClock.ElapsedMilliseconds,
                 runner_exit_code = runnerExitCode, timed_out = runnerTimedOut, expected_installer_exit = installerExitCode, installer_exit_code = installerCode,
-                status, error_code = errorCode, state_status = stateStatus, external_runner_active = active, stages, stderr_category = stderrCategory, runner_category = runnerCategory, runner_exception_type = runnerExceptionType,
+                status, error_code = errorCode, tray_task_status = trayStatus, state_status = stateStatus, external_runner_active = active, stages, stderr_category = stderrCategory, runner_category = runnerCategory, runner_exception_type = runnerExceptionType,
                 installer_entered = File.Exists(Path.Combine(runnerDir, "fixture-installer-entered.txt")),
                 installer_stdout_present = File.Exists(Path.Combine(runnerDir, "repair.stdout.log")),
                 installer_stderr_present = File.Exists(Path.Combine(runnerDir, "repair.stderr.log")), runner_diagnostic_present = File.Exists(Path.Combine(runnerDir, "repair.runner.log")) }));
