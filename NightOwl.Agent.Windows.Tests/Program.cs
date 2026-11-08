@@ -2055,7 +2055,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             }
             string stderrFile = Path.Combine(runnerDir, "repair.stderr.log");
             string runnerFile = Path.Combine(runnerDir, "repair.runner.log");
-            string stderrCategory = "none", runnerCategory = "none";
+            string stderrCategory = "none", runnerCategory = "none", runnerExceptionType = "none";
             if (File.Exists(stderrFile))
             {
                 string data = File.ReadAllText(stderrFile);
@@ -2068,10 +2068,12 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
                 string data = File.ReadAllText(runnerFile);
                 runnerCategory = data.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase) ? "minimal_result_persist_failed"
                     : data.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) ? "runner_failed" : "other";
+                var typeMatch = System.Text.RegularExpressions.Regex.Match(data, "\"exception_type\"\\s*:\\s*\"([A-Za-z0-9_.]{1,128})\"");
+                if (typeMatch.Success) runnerExceptionType = typeMatch.Groups[1].Value;
             }
             Console.WriteLine("REPAIR_TEST_DIAGNOSTIC=" + JsonSerializer.Serialize(new { stage = diagnosticStage, elapsed_ms = scenarioClock.ElapsedMilliseconds,
                 runner_exit_code = runnerExitCode, timed_out = runnerTimedOut, expected_installer_exit = installerExitCode, installer_exit_code = installerCode,
-                status, error_code = errorCode, state_status = stateStatus, external_runner_active = active, stages, stderr_category = stderrCategory, runner_category = runnerCategory,
+                status, error_code = errorCode, state_status = stateStatus, external_runner_active = active, stages, stderr_category = stderrCategory, runner_category = runnerCategory, runner_exception_type = runnerExceptionType,
                 installer_entered = File.Exists(Path.Combine(runnerDir, "fixture-installer-entered.txt")),
                 installer_stdout_present = File.Exists(Path.Combine(runnerDir, "repair.stdout.log")),
                 installer_stderr_present = File.Exists(Path.Combine(runnerDir, "repair.stderr.log")), runner_diagnostic_present = File.Exists(Path.Combine(runnerDir, "repair.runner.log")) }));
