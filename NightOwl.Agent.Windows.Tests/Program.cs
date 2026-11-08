@@ -1969,14 +1969,16 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             jobStatePath);
         // Instrument only the generated test fixture; production script remains unchanged.
         string trace = "$testClock = [Diagnostics.Stopwatch]::StartNew()" + Environment.NewLine +
-            "function Write-TestStage([string]$s) { [IO.File]::AppendAllText((Join-Path $PSScriptRoot 'fixture-stages.txt'), ($s + ':' + $testClock.ElapsedMilliseconds + [Environment]::NewLine)) }" + Environment.NewLine;
+            "function Write-TestStage([string]$s) { [IO.File]::AppendAllText((Join-Path $PSScriptRoot 'fixture-stages.txt'), ($s + ':' + $testClock.ElapsedMilliseconds + [Environment]::NewLine)) }" + Environment.NewLine +
+            "function Get-TestCanonicalConfigStatus([string]$p) { Write-TestStage 'config_start'; try { $v = Test-Path $p; Write-TestStage 'config_returned'; return $v } catch { Write-TestStage 'config_error'; throw } finally { Write-TestStage 'config_end' } }" + Environment.NewLine;
         string denyTaskFixture = denyTaskQuery
             ? "function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) throw [System.UnauthorizedAccessException]::new('synthetic denied query') }" + Environment.NewLine
             : "";
         script = trace + denyTaskFixture + script;
         script = script.Replace("    $service = Get-Service -Name ", "    Write-TestStage 'service_start'" + Environment.NewLine + "    $service = Get-Service -Name ");
         script = script.Replace("    $versionPath = Join-Path ", "    Write-TestStage 'service_end'" + Environment.NewLine + "    $versionPath = Join-Path ");
-        script = script.Replace("        tray_task_status = $(try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' } } finally { Write-TestStage 'task_end' })");
+        script = script.Replace("        tray_task_status = $(try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { try { $task = Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue; Write-TestStage 'task_returned'; if ($task) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { Write-TestStage 'task_denied'; 'Unknown' } } catch { Write-TestStage 'task_error'; throw } finally { Write-TestStage 'task_end' })");
+        script = script.Replace("canonical_config_ok = [bool](Test-Path ", "canonical_config_ok = [bool](Get-TestCanonicalConfigStatus ");
         script = script.Replace("    $payload = New-RepairResultPayload ", "    Write-TestStage 'payload_start'" + Environment.NewLine + "    $payload = New-RepairResultPayload ");
         script = script.Replace("    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)", "    Write-TestStage 'payload_end'" + Environment.NewLine + "    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)");
         script = script.Replace("    Write-JsonAtomic $resultPath $payload 8", "    Write-TestStage 'persist_start'" + Environment.NewLine + "    Write-JsonAtomic $resultPath $payload 8" + Environment.NewLine + "    Write-TestStage 'persist_end'");
@@ -2045,7 +2047,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             string runnerDir = Path.Combine(root, "runner");
             string tracePath = Path.Combine(runnerDir, "fixture-stages.txt");
             string[] stages = File.Exists(tracePath) ? File.ReadAllLines(tracePath)
-                .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^(service_start|service_end|task_start|task_end|payload_start|payload_end|persist_start|persist_end|state_start|state_end|installer_start|installer_end|installer_exit_-?[0-9]+|runner_failed):[0-9]+$")).ToArray() : Array.Empty<string>();
+                .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^(service_start|service_end|task_start|task_end|task_returned|task_denied|task_error|config_start|config_returned|config_error|config_end|payload_start|payload_end|persist_start|persist_end|state_start|state_end|installer_start|installer_end|installer_exit_-?[0-9]+|runner_failed):[0-9]+$")).ToArray() : Array.Empty<string>();
             string pending = Path.Combine(root, "pending-results");
             string? status = null, errorCode = null, trayStatus = null; int? installerCode = null;
             if (Directory.Exists(pending))
