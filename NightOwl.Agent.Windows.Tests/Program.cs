@@ -1994,6 +1994,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
         string stdout = stdoutRead.GetAwaiter().GetResult();
         string stderr = stderrRead.GetAwaiter().GetResult();
 
+        Require(File.Exists(Path.Combine(runnerDir, "fixture-installer-entered.txt")), "Installer fixture must execute after parameter binding.");
         if (!breakPendingDirectory)
         {
             string resultPath = Path.Combine(pendingDir, $"job-result-{jobId}.json");
@@ -2001,14 +2002,17 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(resultPath));
             JsonElement rootElement = document.RootElement;
             Require(rootElement.GetProperty("status").GetString() == expectedStatus, $"Repair runner pending result should be {expectedStatus}.");
+            Require(rootElement.GetProperty("exit_code").GetInt32() == installerExitCode, "Repair runner must persist the installer exit code.");
             Require(rootElement.GetProperty("duration_seconds").ValueKind == JsonValueKind.Number, "Repair runner duration_seconds should be numeric.");
             Require(rootElement.GetProperty("duration_seconds").GetDouble() >= 0, "Repair runner duration_seconds should be non-negative.");
             JsonElement resultElement = rootElement.GetProperty("result");
             Require(resultElement.GetProperty("type").GetString() == "repair_agent", "Repair runner result type mismatch.");
+            Require(resultElement.GetProperty("error_code").GetString() == (installerExitCode == 0 ? "" : "REPAIR_FAILED"), "Repair runner error category mismatch.");
             Require(resultElement.GetProperty("installed_version").GetString() == "0.1.1.0-rc23", "Repair runner installed version mismatch.");
 
             JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Repair job state was not reloaded.");
             Require(!state.ExternalRunnerActive, "Repair runner should finalize external runner marker.");
+            Require(state.Status == expectedStatus, "Repair runner job state must reflect the persisted result.");
         }
 
         return new RepairRunnerTestResult(root, runnerDir, jobId, stdout, stderr);
