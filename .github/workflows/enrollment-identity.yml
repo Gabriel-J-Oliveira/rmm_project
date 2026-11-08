@@ -97,6 +97,10 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Build the Windows agent test executable
         run: dotnet build NightOwl.Agent.Windows.Tests/NightOwl.Agent.Windows.Tests.csproj -c Release
+      - name: Verify real Windows PowerShell repair runner
+        run: |
+          dotnet run --project NightOwl.Agent.Windows.Tests/NightOwl.Agent.Windows.Tests.csproj -c Release --no-build -- --repair-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify updater signature requirements
         run: |
           dotnet build NightOwl.Agent.Updater.Tests/NightOwl.Agent.Updater.Tests.csproj -c Release

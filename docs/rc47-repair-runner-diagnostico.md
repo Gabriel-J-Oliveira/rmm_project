@@ -1,0 +1,11 @@
+# RC47 — diagnóstico do gate Windows de repair
+
+A falha relatada pelo publicador (resultado diferente de `completed` e, em outra execução, timeout de 15 s) não foi reproduzida nesta estação Windows. Quatro execuções do cenário original e as execuções instrumentadas passaram. Portanto, a causa do status inesperado e a causa do timeout **permanecem não comprovadas**; não é seguro atribuí-las ao agente ou ao instalador.
+
+No fixture local, o instalador PowerShell levou cerca de 1,1 s, `Get-Service` 4–7 ms e `Get-ScheduledTask` 1,0–1,2 s. O cenário normalmente terminou em 2,6–2,9 s. São medições desta estação, não limites ou desempenho de produção. O instalador com código 0 gerou `completed`; código 7 gerou `failed` / `REPAIR_FAILED`. Com a fila indisponível não houve resultado e o JobStore permaneceu `running` com propriedade externa ativa; o diagnóstico de persistência foi criado.
+
+O fixture agora coleta somente etapas, duração, códigos, estado e categorias de erro, antes de limpar o diretório temporário. Não imprime conteúdo bruto de stdout/stderr, tokens ou caminhos. A instrumentação envolve apenas o script gerado no teste, sem alterar o runner funcional. `--repair-only` passou a integrar o gate Windows e inclui testes de propriedade externa e interrupção.
+
+Foi corrigido um defeito independente e concreto no teste de argumentos: `ReadToEnd()` era chamado antes do `WaitForExit(15000)`, podendo impedir que o próprio limite fosse aplicado. A leitura agora é assíncrona; em timeout o processo e sua árvore são encerrados. Um fixture de processo lento cobre esse caminho. Essa correção não demonstra ser a causa do timeout observado no teste de repair, que já usava leitura assíncrona.
+
+Antes de aceitar a correção como solução do bloqueio, executar o teste instrumentado no ambiente que reproduziu a falha, preservando somente as linhas `REPAIR_TEST_DIAGNOSTIC`; não compartilhar conteúdo bruto de logs. Correlacionar `installer_entered`, código, etapas `installer_*`, `service_*`, `task_*`, `payload_*`, `persist_*`, `state_*` e estado final. Se o erro persistir, tratar a causa demonstrada separadamente; não aumentar prazos por hipótese.
