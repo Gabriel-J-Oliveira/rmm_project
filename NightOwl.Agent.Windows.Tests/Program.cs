@@ -104,7 +104,6 @@ try
         TestRepairRunnerScriptPersistsFailedResult();
         TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
         TestRepairRunnerScriptSupportsSpacedPaths();
-        TestRepairRunnerScriptHandlesUnauthorizedTaskQuery();
         Console.WriteLine("Repair runner functional tests passed.");
         return;
     }
@@ -206,7 +205,6 @@ try
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
     TestRepairRunnerScriptSupportsSpacedPaths();
-    TestRepairRunnerScriptHandlesUnauthorizedTaskQuery();
     TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart();
     TestRunningUpdateWaitsForActiveHandshakeBeforeRecovery();
     TestCompletedUpdateJobIsIgnoredOnLaterRestart();
@@ -1384,16 +1382,6 @@ static void TestRepairRunnerScriptSupportsSpacedPaths()
     DeleteTempDir(result.RootDir);
 }
 
-static void TestRepairRunnerScriptHandlesUnauthorizedTaskQuery()
-{
-    foreach (int exitCode in new[] { 0, 7 })
-    {
-        string expectedStatus = exitCode == 0 ? JobFinalStatuses.Completed : JobFinalStatuses.Failed;
-        RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(exitCode, false, expectedStatus, denyTaskQuery: true);
-        DeleteTempDir(result.RootDir);
-    }
-}
-
 static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
 {
     RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: true, expectedStatus: "");
@@ -1873,7 +1861,7 @@ static RemoteJobResult NewCompletedRemoteUpdateResult(string jobId)
     };
 }
 
-static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus, bool spacedPaths = false, bool denyTaskQuery = false)
+static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerExitCode, bool breakPendingDirectory, string expectedStatus, bool spacedPaths = false)
 {
     string powershell = GetWindowsPowerShellPath();
     Require(File.Exists(powershell), "Windows PowerShell 5.1 is required for repair runner functional tests.");
@@ -1967,17 +1955,26 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             new string('c', 64),
             "nightowl-release-2026-02",
             jobStatePath);
+        // The generated production script checks the real canonical configuration. A test
+        // must never inspect that host path: point this one probe at fixture-owned data.
+        string fixtureConfigDir = Path.Combine(root, spacedPaths ? "Config NightOwl's Fixture" : "Config");
+        Directory.CreateDirectory(fixtureConfigDir);
+        string fixtureConfig = Path.Combine(fixtureConfigDir, "agent.config.json");
+        File.WriteAllText(fixtureConfig, "{}");
+        static string PsLiteral(string value) => "'" + value.Replace("'", "''") + "'";
+        string hostProbe = "canonical_config_ok = [bool](Test-Path " + PsLiteral(Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json")) + ")";
+        string fixtureProbe = "canonical_config_ok = [bool](Test-Path " + PsLiteral(fixtureConfig) + ")";
+        Require(script.Contains(hostProbe, StringComparison.Ordinal), "Canonical config probe was not found in repair runner fixture.");
+        script = script.Replace(hostProbe, fixtureProbe, StringComparison.Ordinal);
+
         // Instrument only the generated test fixture; production script remains unchanged.
         string trace = "$testClock = [Diagnostics.Stopwatch]::StartNew()" + Environment.NewLine +
             "function Write-TestStage([string]$s) { [IO.File]::AppendAllText((Join-Path $PSScriptRoot 'fixture-stages.txt'), ($s + ':' + $testClock.ElapsedMilliseconds + [Environment]::NewLine)) }" + Environment.NewLine +
             "function Get-TestCanonicalConfigStatus([string]$p) { Write-TestStage 'config_start'; try { $v = Test-Path $p; Write-TestStage 'config_returned'; return $v } catch { Write-TestStage 'config_error'; throw } finally { Write-TestStage 'config_end' } }" + Environment.NewLine;
-        string denyTaskFixture = denyTaskQuery
-            ? "function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName) throw [System.UnauthorizedAccessException]::new('synthetic denied query') }" + Environment.NewLine
-            : "";
-        script = trace + denyTaskFixture + script;
+        script = trace + script;
         script = script.Replace("    $service = Get-Service -Name ", "    Write-TestStage 'service_start'" + Environment.NewLine + "    $service = Get-Service -Name ");
         script = script.Replace("    $versionPath = Join-Path ", "    Write-TestStage 'service_end'" + Environment.NewLine + "    $versionPath = Join-Path ");
-        script = script.Replace("        tray_task_status = $(try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { try { $task = Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue; Write-TestStage 'task_returned'; if ($task) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { Write-TestStage 'task_denied'; 'Unknown' } } catch { Write-TestStage 'task_error'; throw } finally { Write-TestStage 'task_end' })");
+        script = script.Replace("        tray_task_status = $(if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { $task = Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue; Write-TestStage 'task_returned'; if ($task) { 'Present' } else { 'NotFound' } } catch { Write-TestStage 'task_error'; throw } finally { Write-TestStage 'task_end' })");
         script = script.Replace("canonical_config_ok = [bool](Test-Path ", "canonical_config_ok = [bool](Get-TestCanonicalConfigStatus ");
         script = script.Replace("    $payload = New-RepairResultPayload ", "    Write-TestStage 'payload_start'" + Environment.NewLine + "    $payload = New-RepairResultPayload ");
         script = script.Replace("    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)", "    Write-TestStage 'payload_end'" + Environment.NewLine + "    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)");
@@ -2026,7 +2023,7 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             Require(resultElement.GetProperty("type").GetString() == "repair_agent", "Repair runner result type mismatch.");
             Require(resultElement.GetProperty("error_code").GetString() == (installerExitCode == 0 ? "" : "REPAIR_FAILED"), "Repair runner error category mismatch.");
             Require(resultElement.GetProperty("installed_version").GetString() == "0.1.1.0-rc23", "Repair runner installed version mismatch.");
-            if (denyTaskQuery) Require(resultElement.GetProperty("tray_task_status").GetString() == "Unknown", "Denied Tray query must remain unknown.");
+            Require(resultElement.GetProperty("canonical_config_ok").GetBoolean(), "Repair fixture must use its own canonical config.");
 
             JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Repair job state was not reloaded.");
             Require(!state.ExternalRunnerActive, "Repair runner should finalize external runner marker.");

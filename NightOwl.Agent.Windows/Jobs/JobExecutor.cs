@@ -867,9 +867,7 @@ public sealed class JobExecutor
         script.AppendLine("            identity_preserved = $true");
         script.AppendLine("            enrollment_performed = $false");
         script.AppendLine("            service_status = $(if ($service) { [string]$service.Status } else { 'NotFound' })");
-        // A successful repair remains successful if the optional Tray task cannot be queried.
-        // Do not claim the task is absent when Windows denies the query.
-        script.AppendLine("            tray_task_status = $(try { if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' } } catch [System.UnauthorizedAccessException] { 'Unknown' })");
+        script.AppendLine("            tray_task_status = $(if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' })");
         script.AppendLine("            canonical_config_ok = [bool](Test-Path " + QuotePsSingle(Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json")) + ")");
         script.AppendLine("            health_ok = [bool]$healthOk");
         script.AppendLine("            error_code = $(if ($Status -eq 'completed') { '' } else { 'REPAIR_FAILED' })");
