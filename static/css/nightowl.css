@@ -34245,7 +34245,7 @@ body.page-endpoint-detail .endpoint-summary-row {
 }
 
 body.page-endpoint-detail .endpoint-operational-row {
-    grid-template-columns: minmax(0, 4fr) minmax(270px, 1fr) !important;
+    grid-template-columns: minmax(0, 7fr) minmax(270px, 3fr) !important;
 }
 
 body.page-endpoint-detail .endpoint-secondary-row {
@@ -34261,13 +34261,14 @@ body.page-endpoint-detail .endpoint-overview-layout .endpoint-dense-card:hover {
 }
 
 body.page-endpoint-detail .endpoint-health-body {
-    height: auto !important;
+    height: 100% !important;
+    flex: 1 1 auto;
     display: flex !important;
     flex-direction: column !important;
     align-items: stretch !important;
-    justify-content: flex-start !important;
-    gap: 14px !important;
-    padding: 16px !important;
+    justify-content: space-between !important;
+    gap: 18px !important;
+    padding: 18px 20px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
@@ -34277,12 +34278,12 @@ body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
 }
 
 body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
-    font-size: 58px !important;
+    font-size: 62px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body > .health-bar {
     width: 100% !important;
-    height: 10px !important;
+    height: 12px !important;
     align-self: stretch !important;
     margin: 0 !important;
 }
@@ -34291,14 +34292,14 @@ body.page-endpoint-detail .endpoint-health-body .health-breakdown {
     width: 100%;
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 12px !important;
+    gap: 18px 24px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-breakdown .health-component {
     min-width: 0;
     display: grid !important;
     grid-template-columns: minmax(0, 1fr);
-    gap: 6px !important;
+    gap: 9px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-component > div {
@@ -34306,12 +34307,17 @@ body.page-endpoint-detail .endpoint-health-body .health-component > div {
     display: flex !important;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 10px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-component span,
+body.page-endpoint-detail .endpoint-health-body .health-component strong {
+    font-size: 13px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-component em {
     width: 100%;
-    height: 5px !important;
+    height: 7px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-component em i {
