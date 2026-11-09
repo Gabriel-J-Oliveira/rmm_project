@@ -226,7 +226,7 @@ test('server paging keeps selected endpoint IDs and requests non-table views onl
                 <div data-endpoint-bulk-bar hidden><span data-endpoint-selected-count>0</span><span data-endpoint-selection-hidden hidden></span><button data-endpoint-selection-clear></button></div>
                 <input type="checkbox" data-endpoint-select-all>
                 <button data-endpoint-view="table" class="is-active"></button><button data-endpoint-view="cards"></button><button data-endpoint-view="health"></button>
-                <div data-endpoint-view-panel="table" data-endpoint-loaded="true"><table><tbody data-endpoint-table-body><tr data-endpoint-row data-endpoint="host-1"><td><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="id-1"></td></tr></tbody></table></div>
+                <div data-endpoint-view-panel="table" data-endpoint-loaded="true"><div class="table-wrap"><table class="endpoint-table"><thead><tr><th>Endpoint</th></tr></thead><tbody data-endpoint-table-body><tr data-endpoint-row data-endpoint="host-1"><td><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="id-1">host-1</td></tr></tbody></table></div></div>
                 <div data-endpoint-view-panel="cards" data-endpoint-loaded="false" hidden></div><div data-endpoint-view-panel="health" data-endpoint-loaded="false" hidden></div>
                 <nav data-endpoint-pagination><span data-endpoint-pagination-summary></span><select data-endpoint-page-size><option value="10" selected>10</option><option value="25">25</option><option value="50">50</option></select>
                     <button data-endpoint-page-first></button><button data-endpoint-page-previous></button><span data-endpoint-page-current>1 / 3</span><button data-endpoint-page-next></button><button data-endpoint-page-last></button></nav>
@@ -238,9 +238,10 @@ test('server paging keeps selected endpoint IDs and requests non-table views onl
                 window.requests.push(url.pathname + url.search);
                 const pageNumber = Number(url.searchParams.get('page') || 1);
                 const view = url.searchParams.get('view') || 'table';
+                const query = url.searchParams.get('q') || '';
                 const html = view === 'cards'
                     ? '<article class="endpoint-card-item">host-card</article>'
-                    : `<tr data-endpoint-row data-endpoint="host-${pageNumber * 10 + 1}"><td><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="id-${pageNumber * 10 + 1}"></td></tr>`;
+                    : `<tr data-endpoint-row data-endpoint="${query ? 'matched-host' : `host-${pageNumber * 10 + 1}`}"><td><input type="checkbox" data-endpoint-select data-fleet-endpoint-id="id-${pageNumber * 10 + 1}">${query ? 'matched-host' : `host-${pageNumber * 10 + 1}`}</td></tr>`;
                 return new Response(JSON.stringify({html, view, page: pageNumber, page_count: 3, page_size: 10, result_count: 21,
                     endpoint_ids: [`id-${pageNumber * 10 + 1}`], total_endpoints: 21, online_count: 20, offline_critical_count: 1,
                     agent_outdated_count: 0, security_attention_count: 0, disk_critical_count: 0}), {headers: {'Content-Type': 'application/json'}});
@@ -254,6 +255,19 @@ test('server paging keeps selected endpoint IDs and requests non-table views onl
         assert.equal(await page.locator('[data-endpoint-selected-count]').textContent(), '1');
         assert.equal(await page.locator('[data-endpoint-selection-hidden]').textContent(), '1 fora da página atual');
         assert.match(await page.evaluate(() => window.requests[0]), /page=2/);
+
+        const search = page.locator('[data-endpoint-filter-form] input[name="q"]');
+        await search.fill('needle');
+        await page.waitForFunction(() => document.querySelector('[data-endpoint-table-body]').textContent.includes('matched-host'));
+        assert.equal(await page.locator('[data-endpoint-view-panel="table"] thead th').textContent(), 'Endpoint');
+        assert.equal(await page.locator('[data-endpoint-pagination]').count(), 1);
+        assert.equal(await page.locator('[data-endpoint-table-body] tr').count(), 1);
+
+        await search.fill('');
+        await page.waitForFunction(() => document.querySelector('[data-endpoint-table-body]').textContent.includes('host-11'));
+        assert.equal(await page.locator('[data-endpoint-view-panel="table"] thead th').textContent(), 'Endpoint');
+        assert.equal(await page.locator('[data-endpoint-pagination]').count(), 1);
+        assert.equal(await page.locator('[data-endpoint-table-body] tr').count(), 1);
 
         await page.locator('[data-endpoint-view="cards"]').click();
         await page.waitForSelector('.endpoint-card-item');

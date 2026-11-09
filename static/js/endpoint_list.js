@@ -197,8 +197,12 @@
                 if (sequence !== requestSequence) return;
                 const panel = panels.find(item => item.dataset.endpointViewPanel === data.view);
                 if (!panel) return;
+                const contentTarget = data.view === "table"
+                    ? panel.querySelector("[data-endpoint-table-body]")
+                    : panel;
+                if (!contentTarget) throw new Error("Endpoint table body is unavailable");
                 syncFilterControls(params);
-                panel.innerHTML = data.html;
+                contentTarget.innerHTML = data.html;
                 panel.dataset.endpointLoaded = "true";
                 panels.filter(item => item !== panel).forEach(item => { item.dataset.endpointLoaded = "false"; });
                 updatePagination(data);

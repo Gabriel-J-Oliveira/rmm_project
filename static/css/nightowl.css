@@ -13841,6 +13841,10 @@ body.page-endpoint-detail .security-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+body.page-endpoint-detail .endpoint-security-layout > .panel {
+    align-self: stretch;
+}
+
 body.page-endpoint-detail .endpoint-task-list article {
     gap: 12px;
     padding: 10px;
