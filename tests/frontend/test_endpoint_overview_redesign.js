@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, "..", "..");
 const template = fs.readFileSync(path.join(root, "templates", "dashboard", "endpoint_detail.html"), "utf8");
 const source = fs.readFileSync(path.join(root, "static", "js", "endpoint_detail.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "static", "css", "nightowl.css"), "utf8");
+const actionCss = fs.readFileSync(path.join(root, "static", "css", "endpoint_actions_jobs.css"), "utf8");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -52,6 +53,8 @@ const actionsEnd = source.indexOf("function jobResultLabel(job)", actionsStart);
 const actions = source.slice(actionsStart, actionsEnd);
 for (const action of ["force_inventory", "collect_software", "check_disk", "check_defender", "restart_agent", "update_agent"])
   assert(actions.includes(`actionButton("${action}"`), `quick actions must preserve ${action}`);
+assert(actions.includes('], "inventory")'), "only the inventory group receives its stable grid identifier");
+assert(actionCss.includes('.endpoint-action-group[data-action-group="inventory"]'), "inventory grid is scoped by its stable data selector");
 assert(!actions.includes("windows_update_scan") && !actions.includes("collect_logs"), "quick actions must contain only the six specified operations");
 
 assert(source.includes("function latestOverviewJobs(jobs, activeJob, limit)"), "overview jobs must be sorted and bounded separately");

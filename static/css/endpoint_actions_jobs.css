@@ -247,7 +247,7 @@ body.page-endpoint-detail .endpoint-winrm-local-heading > small {
     line-height: 1.35;
 }
 
-body.page-endpoint-detail .endpoint-winrm-local-details > div {
+body.page-endpoint-detail .endpoint-winrm-local-details > div:not(.endpoint-winrm-local-heading) {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 4px;
@@ -729,5 +729,194 @@ body.page-endpoint-detail .endpoint-approved-scripts-category button:hover:not(:
 
     body.page-endpoint-detail .endpoint-approved-scripts-body {
         grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* Endpoint job drawer: one scroll surface, with unabridged content wrapping inside it. */
+body.page-endpoint-detail.endpoint-drawer-open {
+    overflow: hidden;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer {
+    box-sizing: border-box;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
+    overflow: hidden;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer > header {
+    flex: 0 0 auto;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer > header > div,
+body.page-endpoint-detail .endpoint-mini-drawer [data-endpoint-drawer-title],
+body.page-endpoint-detail .endpoint-mini-drawer [data-endpoint-drawer-subtitle] {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .event-drawer-body {
+    display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .event-drawer-body > section,
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-job-drawer-section,
+body.page-endpoint-detail .endpoint-mini-drawer .event-drawer-actions {
+    min-width: 0;
+    max-width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list div {
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list dd {
+    max-width: 100%;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+    word-break: normal;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer pre {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    min-width: 0;
+    margin: 10px 0 0;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    word-break: normal;
+    tab-size: 2;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-job-drawer-section {
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(6, 7, 13, 0.28);
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-job-drawer-section > summary {
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 750;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-job-drawer-section h4 {
+    margin: 12px 0 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-mini-drawer:focus-visible,
+body.page-endpoint-detail .endpoint-mini-drawer button:focus-visible,
+body.page-endpoint-detail .endpoint-mini-drawer summary:focus-visible {
+    outline: 2px solid var(--soft-purple);
+    outline-offset: 2px;
+}
+
+/* Inventory alone uses three controls per row when its card has enough room. */
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group[data-action-group="inventory"] {
+    container-type: inline-size;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group[data-action-group="inventory"] > div {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)) !important;
+}
+
+@container (min-width: 470px) {
+    body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group[data-action-group="inventory"] > div {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+}
+
+/* Keep overview metadata on one compact, naturally wrapping line. */
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-card-meta {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 3px 8px;
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-card-meta > span:not(.endpoint-job-result)::before {
+    content: "·";
+    margin-right: 8px;
+    color: var(--text-muted);
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-result {
+    display: inline;
+    max-width: 100%;
+    margin: 0;
+    overflow: visible;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    -webkit-line-clamp: unset;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-result::before {
+    content: "·";
+    margin-right: 8px;
+    color: var(--text-muted);
+}
+
+/* WinRM diagnostics stay compact without compressing the heading beside its explanation. */
+body.page-endpoint-detail .endpoint-winrm-feedback button {
+    justify-self: start;
+    width: max-content;
+    max-width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-heading > small {
+    max-width: none;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-heading {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details > div {
+    width: 100%;
+}
+
+@media (max-width: 600px) {
+    body.page-endpoint-detail .endpoint-mini-drawer {
+        width: 100vw;
+    }
+
+    body.page-endpoint-detail .endpoint-mini-drawer .event-drawer-body {
+        padding: 12px;
+    }
+
+    body.page-endpoint-detail .endpoint-winrm-feedback button {
+        width: max-content;
     }
 }

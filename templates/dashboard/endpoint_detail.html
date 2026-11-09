@@ -416,12 +416,12 @@
 
 <div class="alert-action-toast endpoint-detail-toast" data-endpoint-toast hidden></div>
 <div class="event-drawer-backdrop endpoint-drawer-backdrop" data-endpoint-drawer-backdrop hidden></div>
-<aside class="event-drawer endpoint-mini-drawer" data-endpoint-drawer aria-hidden="true">
+<aside class="event-drawer endpoint-mini-drawer" data-endpoint-drawer role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="endpoint-drawer-title" aria-describedby="endpoint-drawer-subtitle" tabindex="-1">
     <header>
         <div>
             <span data-endpoint-drawer-kicker>Detalhe</span>
-            <h2 data-endpoint-drawer-title>Selecione um item</h2>
-            <p data-endpoint-drawer-subtitle>Contexto operacional</p>
+            <h2 id="endpoint-drawer-title" data-endpoint-drawer-title>Selecione um item</h2>
+            <p id="endpoint-drawer-subtitle" data-endpoint-drawer-subtitle>Contexto operacional</p>
         </div>
         <button type="button" data-endpoint-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
     </header>

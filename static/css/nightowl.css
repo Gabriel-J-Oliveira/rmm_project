@@ -34179,32 +34179,37 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 .endpoint-monitoring-top-grid {
     display: grid;
     grid-template-columns: minmax(0, 7fr) minmax(280px, 3fr);
-    align-items: start;
+    align-items: stretch;
     gap: 14px;
     min-width: 0;
 }
 .endpoint-monitoring-summary,
 .endpoint-telemetry-config,
 .endpoint-monitoring-live { min-width: 0; }
+body.page-endpoint-detail .endpoint-monitoring-top-grid > .endpoint-monitoring-summary,
+body.page-endpoint-detail .endpoint-monitoring-top-grid > .endpoint-telemetry-config { align-self: stretch; }
 .endpoint-monitoring-facts {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
 }
 .endpoint-monitoring-facts dd { overflow-wrap: anywhere; }
 .endpoint-monitoring-legacy-note { margin: 10px 16px 14px; }
-.endpoint-telemetry-config fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.endpoint-telemetry-config { display: flex; flex-direction: column; }
+.endpoint-telemetry-config fieldset { border: 0; padding: 0; margin: 0; min-width: 0; width: 100%; display: flex; flex: 1; flex-direction: column; justify-content: space-between; gap: 16px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle,
 .endpoint-telemetry-config fieldset > button { grid-column: 1 / -1; }
-.endpoint-telemetry-config form, .endpoint-live > p, .endpoint-live > [data-live-body] { padding: 16px; }
+.endpoint-telemetry-config form { display: flex; flex: 1; min-height: 0; padding: 16px; }
+.endpoint-live > p, .endpoint-live > [data-live-body] { padding: 16px; }
 .endpoint-telemetry-config label { display: grid; gap: 6px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle { display: flex; align-items: center; gap: 8px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle input { width: auto; margin: 0; }
 .endpoint-telemetry-config input[type="number"] {
     box-sizing: border-box;
     width: 100%;
-    max-width: 280px;
+    max-width: none;
     min-width: 0;
-    padding: 11px 12px;
+    min-height: 42px;
+    padding: 11px 14px;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--night-black);

@@ -95,12 +95,22 @@ test('monitoring renders at desktop/mobile without overflow or executable remote
                 const layout = await page.evaluate(() => {
                     const cards = [...document.querySelectorAll('.endpoint-monitoring-top-grid > .panel')].map(card => card.getBoundingClientRect());
                     return { columns: getComputedStyle(document.querySelector('.endpoint-monitoring-top-grid')).gridTemplateColumns.trim().split(/\s+/).length,
+                        summaryAlign: getComputedStyle(document.querySelector('.endpoint-monitoring-summary')).alignSelf,
+                        configAlign: getComputedStyle(document.querySelector('.endpoint-telemetry-config')).alignSelf,
                         summary: cards[0], config: cards[1], live: document.querySelector('.endpoint-live').getBoundingClientRect(),
+                        fieldsetColumns: getComputedStyle(document.querySelector('[data-telemetry-form] fieldset')).gridTemplateColumns,
+                        inputs: [...document.querySelectorAll('[data-telemetry-form] input[type="number"]')].map(input => input.getBoundingClientRect()),
+                        applyButton: document.querySelector('[data-telemetry-form] button').getBoundingClientRect(),
                         width: document.documentElement.scrollWidth };
                 });
                 if (viewport.width > 1100) {
                     assert.equal(layout.columns, 2, 'summary/config use two columns at desktop');
                     assert(layout.summary.x < layout.config.x, 'summary stays left of config');
+                    assert(Math.abs(layout.summary.height - layout.config.height) <= 1, `telemetry configuration fills the summary card height (${layout.summary.height} vs ${layout.config.height}; align ${layout.summaryAlign}/${layout.configAlign})`);
+                    assert.equal(layout.inputs.length, 2, 'both legacy interval controls remain available');
+                    assert(Math.abs(layout.inputs[0].x - layout.inputs[1].x) <= 1, 'legacy interval inputs are vertically aligned in one column');
+                    assert(layout.inputs[0].width > 280, 'inputs use the available card width');
+                    assert(layout.applyButton.y > layout.inputs[1].bottom, 'apply action follows both inputs');
                 } else {
                     assert.equal(layout.columns, 1, 'summary/config stack on notebook/mobile');
                     assert(layout.config.y > layout.summary.y, 'configuration follows summary');

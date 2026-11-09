@@ -19,6 +19,8 @@
     const realPayloadScript = document.getElementById("endpoint-detail-real-payload");
 
     let endpointDetail = null;
+    let drawerReturnFocus = null;
+    let drawerScrollPosition = 0;
     let realEndpointPayload = null;
     let activeTab = "overview";
     let softwareSearch = "";
@@ -788,12 +790,12 @@
             const hasOutput = Boolean(job.stdout || job.stderr || job.errorMessage || job.output);
             const stage = job.stage && String(job.stage).toLowerCase() !== String(job.status || "").toLowerCase()
                 ? '<small class="endpoint-job-stage">' + escapeHtml(job.stage) + '</small>' : "";
+            const resultLine = result ? '<span class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</span>' : "";
             return '<article class="endpoint-job-item ' + (isActive ? "is-active " : "") + 'endpoint-job-item-' + escapeHtml(job.status || "pending") + (stale ? " is-stale" : "") + '">' +
                 '<div class="endpoint-job-card-content">' +
                     '<div class="endpoint-job-card-heading">' + jobBadge(job.status, window.NightOwlJobDisplay.status(job)) + jobType(job.type, job) + versionLine + '</div>' +
-                    '<div class="endpoint-job-card-meta"><time>' + escapeHtml(formatDate(primaryTime)) + '</time><span>' + escapeHtml(formatDuration(job.durationMs)) + '</span></div>' +
+                    '<div class="endpoint-job-card-meta"><time>' + escapeHtml(formatDate(primaryTime)) + '</time><span>' + escapeHtml(formatDuration(job.durationMs)) + '</span>' + resultLine + '</div>' +
                     progressMarkup + stage +
-                    '<p class="endpoint-job-result" title="' + escapeHtml(result) + '">' + escapeHtml(result) + '</p>' +
                     (window.NightOwlJobDisplay.unconfirmed(job) ? '<small class="endpoint-job-unconfirmed">Resultado n&atilde;o confirmado</small>' : '') + staleText +
                 '</div>' +
                 '<div class="endpoint-job-actions">' +
@@ -815,8 +817,8 @@
         }[value] || "sem atualizacao recente";
     }
 
-    function actionGroup(title, buttons) {
-        return '<section class="endpoint-action-group"><h3>' + escapeHtml(title) + '</h3><div>' + buttons.join("") + '</div></section>';
+    function actionGroup(title, buttons, groupId) {
+        return '<section class="endpoint-action-group"' + (groupId ? ' data-action-group="' + escapeHtml(groupId) + '"' : '') + '><h3>' + escapeHtml(title) + '</h3><div>' + buttons.join("") + '</div></section>';
     }
 
     function renderQuickActions() {
@@ -825,7 +827,7 @@
                 actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
                 actionButton("collect_software", "Coletar software", "package-search"),
                 actionButton("check_disk", "Coletar discos", "hard-drive")
-            ]) +
+            ], "inventory") +
             actionGroup("Seguranca", [
                 actionButton("check_defender", "Verificar Defender", "shield-check")
             ]) +
@@ -2250,23 +2252,80 @@
 
     function openDrawer(kind, title, subtitle, body) {
         if (!drawer || !drawerBody) return;
+        const wasOpen = drawer.classList.contains("is-open");
+        if (!wasOpen) {
+            drawerReturnFocus = document.activeElement;
+            drawerScrollPosition = window.scrollY || window.pageYOffset || 0;
+        }
         drawerKicker.textContent = kind || "Detalhe";
         drawerTitle.textContent = title || "Detalhe";
         drawerSubtitle.textContent = subtitle || "Contexto operacional";
         drawerBody.innerHTML = body || "";
         drawer.classList.add("is-open");
         drawer.setAttribute("aria-hidden", "false");
+        document.body.classList.add("endpoint-drawer-open");
         if (drawerBackdrop) drawerBackdrop.hidden = false;
         if (window.lucide && typeof window.lucide.createIcons === "function") {
             window.lucide.createIcons();
         }
+        const closeButton = drawer.querySelector("[data-endpoint-drawer-close]");
+        if (closeButton && typeof closeButton.focus === "function") closeButton.focus({ preventScroll: true });
     }
 
     function closeDrawer() {
-        if (!drawer) return;
+        if (!drawer || !drawer.classList.contains("is-open")) return;
         drawer.classList.remove("is-open");
         drawer.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("endpoint-drawer-open");
         if (drawerBackdrop) drawerBackdrop.hidden = true;
+        if (typeof window.scrollTo === "function") window.scrollTo(0, drawerScrollPosition);
+        if (drawerReturnFocus && drawerReturnFocus.isConnected && typeof drawerReturnFocus.focus === "function") {
+            drawerReturnFocus.focus({ preventScroll: true });
+        }
+        drawerReturnFocus = null;
+    }
+
+    function trapDrawerFocus(event) {
+        if (event.key !== "Tab") return;
+        const focusable = Array.from(drawer.querySelectorAll('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'))
+            .filter(function (element) {
+                return !element.hidden && element.getAttribute("aria-hidden") !== "true" &&
+                    (typeof element.getClientRects !== "function" || element.getClientRects().length > 0);
+            });
+        if (!focusable.length) {
+            event.preventDefault();
+            drawer.focus({ preventScroll: true });
+            return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (!drawer.contains(document.activeElement)) {
+            event.preventDefault();
+            (event.shiftKey ? last : first).focus({ preventScroll: true });
+        } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus({ preventScroll: true });
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus({ preventScroll: true });
+        }
+    }
+
+    function hasMeaningfulJobData(value) {
+        if (value == null) return false;
+        if (typeof value === "string") return value.trim() !== "" && value.trim() !== "-";
+        if (Array.isArray(value)) return value.some(hasMeaningfulJobData);
+        if (typeof value === "object") return Object.keys(value).some(function (key) { return hasMeaningfulJobData(value[key]); });
+        return true;
+    }
+
+    function jobFactsMarkup(items) {
+        return factList(items.filter(function (item) { return hasMeaningfulJobData(item.value); }));
+    }
+
+    function jobJsonSection(title, value) {
+        if (!hasMeaningfulJobData(value)) return "";
+        return '<details class="endpoint-job-drawer-section"><summary>' + escapeHtml(title) + '</summary><pre>' + escapeHtml(JSON.stringify(value, null, 2)) + '</pre></details>';
     }
 
     function openEventDrawer(id) {
@@ -2319,38 +2378,63 @@
         };
         job.__technicalDetails = technicalDetails;
         const staleAction = job.isStale || job.is_stale ? '<button type="button" class="danger" data-mark-job-failed="' + escapeHtml(job.id) + '">Marcar como falha</button>' : "";
-        openDrawer("Tarefa", job.name, job.command, '<section><h3>Execucao</h3>' + factList([
+        const resultSummary = jobResultLabel(job);
+        const errorMessage = job.errorMessage || result.error_message || result.message;
+        const jobTypeName = String(job.type || "").toLowerCase();
+        const versionRelevant = ["update_agent", "agent_offline_recovery", "recover_agent"].indexOf(jobTypeName) >= 0;
+        const rollbackRelevant = hasMeaningfulJobData(job.rollbackStatus) || Object.prototype.hasOwnProperty.call(result, "rollback_confirmed") || result.update_status === "rolled_back";
+        const versionFacts = versionRelevant ? [
+            { label: "Versao anterior", value: job.previousVersion || result.previous_version || result.previousVersion || (result.details && (result.details.previous_version || result.details.previousVersion)) },
+            { label: "Versao alvo", value: job.targetVersion || result.target_version || result.targetVersion },
+            { label: "Versao instalada", value: job.installedVersion || result.installed_version || result.installedVersion || (result.details && (result.details.installed_version || result.details.installedVersion)) || result.version }
+        ] : [];
+        const rollbackFacts = rollbackRelevant ? [{ label: "Rollback", value: job.rollbackStatus || (result.rollback_confirmed === true ? "Confirmado" : result.update_status === "rolled_back" ? "Aplicado" : result.rollback_confirmed === false ? "Nao confirmado" : null) }] : [];
+        const executionFacts = [
             { label: "Job ID", value: job.jobId || job.id, mono: true },
-            { label: "Result ID", value: job.resultId || "-", mono: true },
-            { label: "Correlation ID", value: job.correlationId || "-", mono: true },
             { label: "Status", value: window.NightOwlJobDisplay.status(job) },
-            { label: "Etapa", value: job.stage || "-" },
-            { label: "Progresso", value: jobProgress(job) == null ? "Não informado" : jobProgress(job) + "%" },
             { label: "Tipo", value: labels[job.type] || job.type },
-            { label: "Tentativa", value: job.attempt || "-" },
-            { label: "Timeout", value: job.timeoutSeconds ? job.timeoutSeconds + "s" : "-" },
-            { label: "Endpoint", value: job.endpoint || (endpointDetail && endpointDetail.hostname) || "-" },
-            { label: "Versao anterior", value: job.previousVersion || result.previous_version || result.previousVersion || (result.details && (result.details.previous_version || result.details.previousVersion)) || "-" },
-            { label: "Versao alvo", value: job.targetVersion || "-" },
-            { label: "Versao ativa", value: job.installedVersion || result.installed_version || result.installedVersion || (result.details && (result.details.installed_version || result.details.installedVersion)) || result.version || "-" },
-            { label: "Update ID", value: result.update_id || result.updateId || "-", mono: true },
-            { label: "From/Target", value: [job.previousVersion || result.from_version, job.targetVersion || result.target_version].filter(Boolean).join(" -> ") || "-" },
-            { label: "Falha em", value: result.failure_stage || "-" },
-            { label: "Rollback", value: job.rollbackStatus || (result.rollback_confirmed ? "Confirmado" : (result.update_status === "rolled_back" ? "Aplicado" : "-")) },
-            { label: "Codigo", value: job.errorCode || result.error_code || result.original_error_code || "-", mono: true },
-            { label: "Resultado", value: jobResultLabel(job) },
-            { label: "Stale", value: job.isStale ? staleReasonLabel(job.staleReason) : "Nao" },
+            { label: "Etapa", value: job.stage },
+            { label: "Progresso", value: jobProgress(job) == null ? null : jobProgress(job) + "%" },
             { label: "Criado por", value: job.createdBy },
+            { label: "Data/hora de execucao", value: formatDate(job.startedAt || job.finishedAt || job.createdAt) },
+            { label: "Duracao", value: formatDuration(job.durationMs) },
+            { label: "Exit code", value: job.exitCode },
+            { label: "Codigo de erro", value: job.errorCode || result.error_code || result.original_error_code, mono: true },
+            { label: "Mensagem de erro", value: errorMessage },
+            { label: "Resultado", value: resultSummary },
+            ...versionFacts,
+            ...rollbackFacts
+        ];
+        const technicalFacts = [
+            { label: "Result ID", value: job.resultId, mono: true },
+            { label: "Correlation ID", value: job.correlationId, mono: true },
+            { label: "Endpoint", value: job.endpoint || (endpointDetail && endpointDetail.hostname) },
+            { label: "Status original", value: job.rawStatus },
+            { label: "Tentativa", value: job.attempt },
+            { label: "Timeout", value: job.timeoutSeconds == null ? null : job.timeoutSeconds + "s" },
             { label: "Criado em", value: formatDate(job.createdAt) },
             { label: "Despachado em", value: formatDate(job.dispatchedAt) },
             { label: "Iniciado em", value: formatDate(job.startedAt) },
             { label: "Finalizado em", value: formatDate(job.finishedAt) },
             { label: "Ultima atualizacao", value: formatDate(job.lastUpdateAt) },
-            { label: "Recebido backend", value: formatDate(job.receivedAt) },
-            { label: "Duracao", value: formatDuration(job.durationMs) },
-            { label: "Exit code", value: job.exitCode == null ? "-" : job.exitCode },
-            { label: "Output truncado", value: job.outputTruncated ? "Sim" : "Nao" }
-        ]) + '</section><section><h3>Payload sanitizado</h3><pre>' + escapeHtml(JSON.stringify(job.payload || {}, null, 2)) + '</pre></section><section><h3>Resultado sanitizado</h3><pre>' + escapeHtml(JSON.stringify(job.resultJson || {}, null, 2)) + '</pre></section><section><h3>Stdout</h3><pre>' + escapeHtml(job.stdout || "Sem saida.") + '</pre></section><section><h3>Stderr</h3><pre>' + escapeHtml(job.stderr || job.errorMessage || "Sem erro.") + '</pre></section><section><h3>Timeline</h3><p>' + escapeHtml((job.timeline || []).join(" -> ") || "-") + '</p></section><div class="event-drawer-actions"><button type="button" data-copy-job-details="' + escapeHtml(job.id) + '">Copiar detalhes tecnicos</button>' + staleAction + '<button type="button" data-refresh-endpoint>Atualizar lista</button></div>');
+            { label: "Recebido pelo backend", value: formatDate(job.receivedAt) },
+            { label: "Output truncado", value: job.outputTruncated ? "Sim" : null },
+            { label: "Update ID", value: result.update_id || result.updateId, mono: true },
+            { label: "From/Target", value: [job.previousVersion || result.from_version, job.targetVersion || result.target_version].filter(Boolean).join(" -> ") },
+            { label: "Falha em", value: result.failure_stage },
+            { label: "Motivo de stale", value: job.isStale || job.is_stale ? staleReasonLabel(job.staleReason || job.stale_reason) : null }
+        ];
+        const timeline = Array.isArray(job.timeline) ? job.timeline.filter(hasMeaningfulJobData).map(function (item) {
+            return typeof item === "string" ? item : JSON.stringify(item);
+        }) : [];
+        const technicalSection = jobFactsMarkup(technicalFacts);
+        openDrawer("Tarefa", job.name, job.command, '<section><h3>Execucao</h3>' + jobFactsMarkup(executionFacts) + '</section>' +
+            (technicalFacts.some(function (item) { return hasMeaningfulJobData(item.value); }) || timeline.length ? '<details class="endpoint-job-drawer-section"><summary>Identificacao tecnica e diagnostico</summary>' + technicalSection + (timeline.length ? '<h4>Timeline</h4><p>' + escapeHtml(timeline.join(" -> ")) + '</p>' : '') + '</details>' : '') +
+            jobJsonSection("Payload sanitizado", job.payload) +
+            jobJsonSection("Resultado sanitizado", job.resultJson) +
+            (hasMeaningfulJobData(job.stdout) ? '<details class="endpoint-job-drawer-section"><summary>Stdout</summary><pre>' + escapeHtml(job.stdout) + '</pre></details>' : '') +
+            (hasMeaningfulJobData(job.stderr) ? '<details class="endpoint-job-drawer-section"><summary>Stderr</summary><pre>' + escapeHtml(job.stderr) + '</pre></details>' : '') +
+            '<div class="event-drawer-actions"><button type="button" data-copy-job-details="' + escapeHtml(job.id) + '">Copiar detalhes tecnicos</button>' + staleAction + '<button type="button" data-refresh-endpoint>Atualizar lista</button></div>');
     }
 
     function copyText(value) {
@@ -2616,9 +2700,12 @@
     });
 
     document.addEventListener("keydown", function (event) {
+        if (!drawer || !drawer.classList.contains("is-open")) return;
         if (event.key === "Escape") {
             closeDrawer();
+            return;
         }
+        trapDrawerFocus(event);
     });
 
     document.querySelectorAll("[data-copy]").forEach(function (button) {
