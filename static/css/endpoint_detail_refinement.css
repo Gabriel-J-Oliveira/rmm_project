@@ -1,0 +1,178 @@
+/* Visual refinement is intentionally limited to the individual endpoint page. */
+body.page-endpoint-detail {
+    --endpoint-detail-surface: #141827;
+    --endpoint-detail-inner-surface: rgba(14, 18, 30, .34);
+    --endpoint-detail-border: rgba(143, 160, 184, .17);
+    --endpoint-detail-primary: #e7edf5;
+    --endpoint-detail-heading: #c2cede;
+    --endpoint-detail-label: #9eafc4;
+    --endpoint-detail-secondary: #aab8ca;
+    --endpoint-detail-scroll-thumb: #53647c;
+    --endpoint-detail-scroll-track: #101522;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell {
+    color: var(--endpoint-detail-primary);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .panel,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card {
+    border-color: var(--endpoint-detail-border);
+    background: var(--endpoint-detail-surface);
+    box-shadow: none;
+    transition: none;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .panel:hover,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card:hover {
+    border-color: var(--endpoint-detail-border);
+    background: var(--endpoint-detail-surface);
+    box-shadow: none;
+    transform: none;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card > header,
+body.page-endpoint-detail .endpoint-detail-shell .rmm-card > .rmm-card__header {
+    border-color: var(--endpoint-detail-border);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card > header h2,
+body.page-endpoint-detail .endpoint-detail-shell .rmm-card__title,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-category-heading,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-action-group h3 {
+    color: var(--endpoint-detail-heading);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list {
+    gap: 2px 18px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div,
+body.page-endpoint-detail .endpoint-detail-shell .rmm-info-tile {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    padding: 9px 3px !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--endpoint-detail-border) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div:last-child {
+    border-bottom-color: transparent !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list dt,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dt {
+    color: var(--endpoint-detail-label) !important;
+    font-weight: 700 !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list dd,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dd {
+    color: var(--endpoint-detail-primary) !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell p,
+body.page-endpoint-detail .endpoint-detail-shell small,
+body.page-endpoint-detail .endpoint-detail-shell .muted-inline,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row p,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row small {
+    color: var(--endpoint-detail-secondary);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-agent-card .endpoint-agent-facts .endpoint-fact-list > .endpoint-agent-last-update,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-inventory-summary .endpoint-fact-list > .endpoint-inventory-primary-capacity,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-inventory-summary .endpoint-fact-list > .endpoint-inventory-sync-fact {
+    grid-column: auto;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-agent-header-actions > button {
+    display: inline-flex;
+    width: auto !important;
+    min-width: 0 !important;
+    min-height: 31px !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 9px !important;
+    color: var(--endpoint-detail-secondary) !important;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-agent-header-actions > button svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-job-item,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-action-category,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-alert-item,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-task-list > article,
+body.page-endpoint-detail .endpoint-detail-shell .disk-row,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-terminal-disclosure {
+    transition: none;
+    box-shadow: none;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-job-item:hover,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-action-category:hover,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-alert-item:hover,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-task-list > article:hover,
+body.page-endpoint-detail .endpoint-detail-shell .disk-row:hover,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-terminal-disclosure:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row {
+    border-color: var(--endpoint-detail-border);
+    background: var(--endpoint-detail-inner-surface);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row:hover {
+    border-color: rgba(167, 139, 250, .32);
+    background: rgba(124, 58, 237, .08);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell,
+body.page-endpoint-detail .endpoint-detail-shell * {
+    scrollbar-color: var(--endpoint-detail-scroll-thumb) var(--endpoint-detail-scroll-track);
+    scrollbar-width: thin;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell *::-webkit-scrollbar-track {
+    border-radius: 8px;
+    background: var(--endpoint-detail-scroll-track);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell *::-webkit-scrollbar-thumb {
+    border: 2px solid var(--endpoint-detail-scroll-track);
+    border-radius: 8px;
+    background: var(--endpoint-detail-scroll-thumb);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell *::-webkit-scrollbar-thumb:hover {
+    background: #71839c;
+}
+
+@media (max-width: 700px) {
+    body.page-endpoint-detail .endpoint-detail-shell .endpoint-agent-header-actions {
+        flex-wrap: wrap;
+    }
+
+    body.page-endpoint-detail .endpoint-detail-shell .endpoint-agent-header-actions > button {
+        min-height: 30px !important;
+        padding-inline: 7px !important;
+        font-size: 10px;
+    }
+}

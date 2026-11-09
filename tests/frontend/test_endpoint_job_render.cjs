@@ -14,6 +14,10 @@ for(const status of ['queued','running','completed','failed','expired','cancelle
  assert(html.includes('endpoint-job-actions'));
  assert(html.indexOf('endpoint-job-card-content') < html.indexOf('endpoint-job-actions'));
 }
+assert(!ctx.render({status:'running',progressPercentage:65,id:'active'},true).includes('65%'),
+ 'running jobs must not show estimates when the contract has no measured percentage');
+assert(!ctx.render({status:'completed',progressPercentage:100,id:'done'},true).includes('100%'),
+ 'terminal jobs must not show progress');
 const compact = ctx.render({status:'completed',id:'id',durationMs:2000,createdAt:'2026-11-09T09:22:00Z',errorMessage:'Job concluído.'},false);
 assert.match(compact,/<div class="endpoint-job-card-meta"><time>[^<]+<\/time><span>[^<]+<\/span><span class="endpoint-job-result"/,'job result is inline with its time and duration');
 assert(!compact.includes('<p class="endpoint-job-result"'),'result does not consume a dedicated row');

@@ -943,9 +943,7 @@
                 { label: "Ultima comunicacao", value: agent.lastRun },
                 { label: "Canal/politica", value: (agent.updateChannel || "stable") + " / " + (agent.updatePolicy || "manual") },
                 { label: "Lifecycle", value: agent.lifecycleStatus === "purged" ? "Purgado por " + (agent.uninstalledBy || "-") + " em " + formatDate(agent.uninstalledAt) : agent.lifecycleStatus === "uninstalled" ? "Desinstalado por " + (agent.uninstalledBy || "-") + " em " + formatDate(agent.uninstalledAt) : "Instalado" },
-                { label: "Ultimo job update", value: lastUpdateJobLabel(detail), className: "endpoint-fact-wide" },
-                { label: "Proximo heartbeat", value: agent.nextHeartbeat },
-                { label: "Rollout/motivo", value: (agent.rolloutPercentage == null ? "-" : agent.rolloutPercentage + "%") + " / " + (agent.updateReason || "-") },
+                { label: "Ultimo job update", value: lastUpdateJobLabel(detail), className: "endpoint-agent-last-update" },
                 { label: "Log atual", value: agent.logFile, mono: true, className: "endpoint-fact-wide" }
             ]) + '</div></div>'
         );
@@ -994,8 +992,8 @@
             { label: "Memória disponível", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "Não informado" },
             { label: "Placa-mãe", value: motherboard },
             { label: "Modelo do disco principal", value: "Não informado" },
-            { label: "Capacidade do disco principal", value: primaryDiskCapacity },
-            { label: "Última sincronização do inventário", value: inventorySyncAt ? formatDate(inventorySyncAt) : "Não informado", className: "endpoint-fact-wide" }
+            { label: "Capacidade do disco principal", value: primaryDiskCapacity, className: "endpoint-inventory-primary-capacity" },
+            { label: "Última sincronização do inventário", value: inventorySyncAt ? formatDate(inventorySyncAt) : "Não informado", className: "endpoint-inventory-sync-fact" }
         ]) + '</div>');
 
         setSlot("disks-body", renderDiskList(detail.disks, true));

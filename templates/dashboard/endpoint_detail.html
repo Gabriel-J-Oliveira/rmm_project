@@ -3,7 +3,6 @@
 
 {% block title %}Night Owl | {{ endpoint.hostname }}{% endblock %}
 {% block body_class %}page-endpoint-detail{% endblock %}
-{% block icon_script %}{% if not terminal_available and not terminal_admin_auth_available %}{{ block.super }}{% endif %}{% endblock %}
 {% block styles %}
 <link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-channel-update-2">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
@@ -11,6 +10,7 @@
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
 <link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
 {% endif %}
+<link rel="stylesheet" href="{% static 'css/endpoint_detail_refinement.css' %}?v=20261109-1">
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -101,8 +101,8 @@
                         <h2 class="rmm-card__title"><i data-lucide="bot"></i>Agente NightOwl</h2>
                         <div class="endpoint-agent-header-actions">
                             <span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span>
-                            <button type="button" data-endpoint-action="update_agent" aria-label="Atualizar agente" title="Atualizar agente"><i data-lucide="download-cloud"></i></button>
-                            <button type="button" data-endpoint-action="repair_agent" aria-label="Reparar agente" title="Reparar agente"><i data-lucide="wrench"></i></button>
+                            <button type="button" data-endpoint-action="update_agent" aria-label="Atualizar agente" title="Atualizar agente"><i data-lucide="download-cloud"></i><span>Atualizar</span></button>
+                            <button type="button" data-endpoint-action="repair_agent" aria-label="Reparar agente" title="Reparar agente"><i data-lucide="wrench"></i><span>Reparar</span></button>
                         </div>
                     </header>
                     <div class="rmm-card__body" data-overview-slot="agent-body">
