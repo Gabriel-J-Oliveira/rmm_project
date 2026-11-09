@@ -615,7 +615,7 @@
             '<div class="health-bar"><span class="health-fill ' + healthClass(detail.healthScore) + '" style="width:' + escapeHtml(detail.healthScore || 0) + '%"></span></div>' +
             '<div class="health-breakdown">' + parts.map(function (part) {
                 const cls = part.score < 50 ? "critical" : part.score < 75 ? "warning" : "good";
-                return '<div><span>' + escapeHtml(part.label) + '</span><strong class="health-part-' + cls + '">' + part.score + '</strong><em><i style="width:' + part.score + '%"></i></em></div>';
+                return '<div class="health-component"><div><span>' + escapeHtml(part.label) + '</span><strong class="health-part-' + cls + '">' + part.score + '</strong></div><em><i class="health-part-' + cls + '" style="width:' + part.score + '%"></i></em></div>';
             }).join("") + "</div></div>";
     }
 
@@ -763,6 +763,20 @@
         return '<div class="endpoint-job-list">' + activeMarkup + historyMarkup + "</div>";
     }
 
+    function latestOverviewJobs(jobs, activeJob, limit) {
+        const activeId = activeJob && activeJob.id != null ? String(activeJob.id) : "";
+        return asArray(jobs).filter(function (job) {
+            return !activeId || String(job.id) !== activeId;
+        }).slice().sort(function (left, right) {
+            function timestamp(job) {
+                const value = job.createdAt || job.created_at || job.dispatchedAt || job.dispatched_at || job.startedAt || job.started_at;
+                const parsed = value ? Date.parse(value) : 0;
+                return Number.isNaN(parsed) ? 0 : parsed;
+            }
+            return timestamp(right) - timestamp(left);
+        }).slice(0, limit);
+    }
+
     function renderJobItem(job, isActive) {
             const progress = jobProgress(job);
             const result = jobResultLabel(job);
@@ -806,25 +820,18 @@
     }
 
     function renderQuickActions() {
-        const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);
-        const agentManagementButtons = agentManagementActionButtons(endpointDetail);
         return '<div class="endpoint-action-groups">' +
             actionGroup("Inventario", [
                 actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
-                actionButton("collect_software", "Coletar software", "package-search")
+                actionButton("collect_software", "Coletar software", "package-search"),
+                actionButton("check_disk", "Coletar discos", "hard-drive")
             ]) +
             actionGroup("Seguranca", [
-                actionButton("check_defender", "Verificar Defender", "shield-check"),
-                actionButton("windows_update_scan", "Windows Update scan", "badge-check")
+                actionButton("check_defender", "Verificar Defender", "shield-check")
             ]) +
-            actionGroup("Diagnostico", [
-                actionButton("check_disk", "Coletar discos", "hard-drive"),
-                actionButton("collect_logs", "Coletar logs", "file-search"),
-                actionButton("ping", "Ping", "activity")
-            ]) +
-            actionGroup("Agente", agentManagementButtons.concat(lifecycleButtons)) +
-            actionGroup("Avancado", [
-                '<button type="button" class="endpoint-quick-action-button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + '<span>Script futuro</span></button>'
+            actionGroup("Agente", [
+                actionButton("restart_agent", "Reiniciar agente", "rotate-ccw"),
+                actionButton("update_agent", "Atualizar agente", "download-cloud")
             ]) +
         '</div>';
     }
@@ -955,18 +962,39 @@
             { label: "Dominio", value: detail.domain }
         ]) + '</div>');
 
+        const board = asObject(inv.baseboardDetails);
+        const cpu = asObject(inv.cpuDetails);
+        const primaryDisk = asArray(detail.disks).find(function (disk) {
+            disk = asObject(disk);
+            return disk.isSystemDrive === true || String(disk.name || "").toUpperCase().startsWith("C:");
+        }) || asArray(detail.disks)[0] || {};
+        const primaryDiskCapacity = primaryDisk.totalGb != null && primaryDisk.totalGb !== ""
+            ? primaryDisk.totalGb + " GiB"
+            : "Não informado";
+        const inventorySyncAt = inv.lastFullInventory || agent.lastInventoryAt;
+        const clockMhz = Number(cpu.max_clock_mhz);
+        const cpuClock = Number.isFinite(clockMhz) && clockMhz > 0
+            ? (clockMhz / 1000).toFixed(2) + " GHz (máx. reportado)"
+            : "Não informado";
+        const motherboard = (typeof inv.motherboard === "string" ? inv.motherboard : "") || [board.manufacturer, board.product].filter(Boolean).join(" ") || "Não informado";
         setSlot("inventory-body", '<div class="endpoint-overview-facts">' + factList([
-            { label: "Fabricante", value: inv.manufacturer },
-            { label: "Modelo", value: inv.model },
-            { label: "Serial", value: inv.serial, mono: true },
-            { label: "CPU", value: inv.cpu },
-            { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GiB" : "-" },
-            { label: "Disponivel na coleta de hardware", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "-" },
-            { label: "Ultimo inventario", value: inv.lastFullInventory, className: "endpoint-fact-wide" }
+            { label: "Fabricante / modelo", value: [inv.manufacturer, inv.model].filter(Boolean).join(" / ") || "Não informado" },
+            { label: "Serial", value: inv.serial || "Não informado", mono: true },
+            { label: "Sistema operacional", value: detail.os || "Não informado" },
+            { label: "Versão / build", value: [inv.osVersion, inv.build].filter(Boolean).join(" / ") || "Não informado" },
+            { label: "Processador", value: inv.cpu || "Não informado" },
+            { label: "Clock máximo da CPU", value: cpuClock },
+            { label: "Memória RAM", value: inv.memoryGb ? inv.memoryGb + " GiB" : "Não informado" },
+            { label: "Memória disponível", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "Não informado" },
+            { label: "Placa-mãe", value: motherboard },
+            { label: "Modelo do disco principal", value: "Não informado" },
+            { label: "Capacidade do disco principal", value: primaryDiskCapacity },
+            { label: "Última sincronização do inventário", value: inventorySyncAt ? formatDate(inventorySyncAt) : "Não informado", className: "endpoint-fact-wide" }
         ]) + '</div>');
 
         setSlot("disks-body", renderDiskList(detail.disks, true));
-        setSlot("jobs-body", renderJobs(detail.jobs, 5));
+        const overviewJobLimit = detail.activeJob ? 5 : 6;
+        setSlot("jobs-body", renderJobs(latestOverviewJobs(detail.jobs, detail.activeJob, overviewJobLimit), overviewJobLimit));
         setSlot("actions-body", renderQuickActions());
         setSlot("alerts-body", renderAlerts(detail.alerts, 4));
         setSlot("events-body", renderEvents(detail.events, 6, false));
@@ -986,18 +1014,19 @@
             const observation = asObject(states[name]);
             return known(observation.status) + (observation.last_attempt_at ? " / " + formatDate(observation.last_attempt_at) : "");
         }
-        return '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("cpu") + 'Identificacao tecnica</h2></header>' + factList([
-            { label: "CPU maxima reportada (nao instantanea)", value: cpu.max_clock_mhz > 0 ? (cpu.max_clock_mhz / 1000).toFixed(3) + " GHz / " + cpu.max_clock_mhz + " MHz" : "Desconhecido" },
-            { label: "Socket / ID CPU", value: known(cpu.socket) + " / " + known(cpu.processor_id), mono: true },
-            { label: "CPU coletada / ultima tentativa", value: formatDate(cpu.collected_at) + " / " + state("cpu") },
-            { label: "SKU OEM / familia", value: known(inv.systemSku) + " / " + known(inv.systemFamily) },
-            { label: "Referencia OEM / versao / SKU", value: known(product.name) + " / " + known(product.version) + " / " + known(product.sku) },
-            { label: "Placa-mae fabricante / produto", value: known(board.manufacturer) + " / " + known(board.product) },
-            { label: "Placa-mae revisao / serial", value: known(board.version) + " / " + known(board.serial_number), mono: true },
-            { label: "Hardware detalhado coletado", value: formatDate(inv.hardwareCollectedAt) },
-            { label: "Ultima tentativa detalhada", value: state("hardware_details") }
-        ]) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("memory-stick") + 'Memoria fisica</h2></header>' + factList([
+        return {
+            identification: '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("cpu") + 'Identificacao tecnica</h2></header>' + factList([
+                { label: "CPU maxima reportada (nao instantanea)", value: cpu.max_clock_mhz > 0 ? (cpu.max_clock_mhz / 1000).toFixed(3) + " GHz / " + cpu.max_clock_mhz + " MHz" : "Desconhecido" },
+                { label: "Socket / ID CPU", value: known(cpu.socket) + " / " + known(cpu.processor_id), mono: true },
+                { label: "CPU coletada / ultima tentativa", value: formatDate(cpu.collected_at) + " / " + state("cpu") },
+                { label: "SKU OEM / familia", value: known(inv.systemSku) + " / " + known(inv.systemFamily) },
+                { label: "Referencia OEM / versao / SKU", value: known(product.name) + " / " + known(product.version) + " / " + known(product.sku) },
+                { label: "Placa-mae fabricante / produto", value: known(board.manufacturer) + " / " + known(board.product) },
+                { label: "Placa-mae revisao / serial", value: known(board.version) + " / " + known(board.serial_number), mono: true },
+                { label: "Hardware detalhado coletado", value: formatDate(inv.hardwareCollectedAt) },
+                { label: "Ultima tentativa detalhada", value: state("hardware_details") }
+            ]) + '</article>',
+            memory: '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("memory-stick") + 'Memoria fisica</h2></header>' + factList([
                 { label: "Instalada", value: bytes(memory.total_bytes) },
                 { label: "Slots reportados pelo firmware: totais / usados / livres", value: known(memory.slots_total) + " / " + known(memory.slots_used) + " / " + known(memory.slots_free) },
                 { label: "Maximo reportado pelo firmware", value: bytes(memory.maximum_supported_bytes) },
@@ -1013,15 +1042,16 @@
                     { label: "Speed bruto do Windows (unidade nao normalizada)", value: known(module.speed_reported_value == null ? module.speed_mhz : module.speed_reported_value) },
                     { label: "Clock configurado reportado (nao medido)", value: known(module.configured_clock_mhz == null ? module.configured_speed_mhz : module.configured_clock_mhz) + " MHz" }
                 ]) + '</div>';
-            }).join("") : '') + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("battery") + 'Bateria</h2></header>' + factList([
+            }).join("") : '') + '</article>',
+            battery: '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("battery") + 'Bateria</h2></header>' + factList([
                 { label: "Presenca", value: battery.present == null ? "Desconhecida" : battery.present ? "Presente" : "Nao presente" },
                 { label: "Fabricante / modelo", value: known(battery.manufacturer) + " / " + known(battery.model) },
                 { label: "Part Number / serial", value: known(battery.part_number) + " / " + known(battery.serial_number), mono: true },
                 { label: "Capacidade original / carga completa", value: known(battery.design_capacity_mwh) + " / " + known(battery.full_charge_capacity_mwh) + " mWh" },
                 { label: "Saude / ciclos", value: known(battery.health_percent) + " % / " + known(battery.cycle_count) },
                 { label: "Ultima coleta / tentativa", value: formatDate(battery.collected_at) + " / " + state("battery") }
-            ]) + '</article>';
+            ]) + '</article>'
+        };
     }
 
     function renderInventory(detail) {
@@ -1029,7 +1059,9 @@
             return '<section class="panel endpoint-dense-card">' + emptyState("Inventario ainda nao coletado", "O agente ja comunicou heartbeat, mas a coleta completa de sistema/hardware/rede ainda nao chegou.", "cpu") + "</section>";
         }
         const inv = detail.inventory || {};
+        const evidence = renderHardwareEvidence(inv);
         return '<div class="endpoint-inventory-grid">' +
+            '<div class="endpoint-inventory-column">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("monitor") + 'Sistema operacional</h2></header>' + factList([
                 { label: "Sistema", value: detail.os },
                 { label: "Versao", value: inv.osVersion, mono: true },
@@ -1044,7 +1076,8 @@
                 { label: "Locale", value: inv.locale },
                 { label: "Uptime Windows no último heartbeat", value: inv.uptime },
                 { label: "Heartbeat do uptime", value: formatDate(inv.uptimeObservedAt) }
-            ]) + '</article>' +
+            ]) + '</article>' + evidence.battery + evidence.memory + '</div>' +
+            '<div class="endpoint-inventory-column">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("cpu") + 'Hardware</h2></header>' + factList([
                 { label: "Fabricante", value: inv.manufacturer },
                 { label: "Modelo", value: inv.model },
@@ -1060,9 +1093,9 @@
                 { label: "Placa-mae", value: inv.motherboard },
                 { label: "TPM", value: inv.tpmPresent == null ? "-" : inv.tpmPresent ? (inv.tpmEnabled ? "Presente/ativo" : "Presente/inativo") : "Ausente" },
                 { label: "Bateria", value: inv.batteryPresent == null ? "Desconhecida" : inv.batteryPresent ? ("Presente · " + (inv.batteryStatus || "-")) : "Nao presente" }
-            ]) + '</article>' +
-            renderHardwareEvidence(inv) +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
+            ]) + '</article>' + evidence.identification + '</div></div>' +
+            '<div class="endpoint-inventory-secondary-grid">' +
+            '<article class="panel endpoint-dense-card endpoint-inventory-network-card"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
                 { label: "IP principal", value: inv.primaryIp || detail.ip, mono: true },
                 { label: "MAC principal", value: inv.primaryMac, mono: true },
                 { label: "Gateway", value: inv.defaultGateway, mono: true },
@@ -1079,8 +1112,8 @@
                     { label: "DNS configurado na interface", value: (adapter.dns_servers || adapter.dns || []).join(", ") || "Desconhecido", mono: true },
                     { label: "Estado / velocidade do enlace", value: (adapter.status || "Desconhecido") + " / " + (adapter.link_speed > 0 ? (adapter.link_speed / 1000000) + " Mbps" : "Desconhecida") }
                 ]) + '</div></article>';
-            }).join("") + '</div>' : '') + '</article></div>' +
-            '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section>";
+            }).join("") + '</div>' : '') + '</article>' +
+            '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section></div>";
     }
 
     function softwareCounters(items) {
@@ -1130,7 +1163,7 @@
         const admins = detail.localAdmins || [];
         const violations = detail.policyViolations || [];
         const securityEvents = (detail.events || []).filter(function (event) { return event.category === "security" || event.eventType.indexOf("security") >= 0 || event.eventType.indexOf("policy") >= 0; });
-        return '<div class="endpoint-compact-grid security-grid">' +
+        return '<div class="endpoint-compact-grid security-grid endpoint-security-layout">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield") + 'Protecao local</h2>' + severityBadge(security.status === "critical" ? "critical" : security.status === "attention" ? "warning" : security.status === "ok" ? "success" : "info", security.status || "unknown") + '</header>' + factList([
                 { label: "Antivirus", value: security.antivirus },
                 { label: "Estado do Defender", value: security.defenderStatus || "Desconhecido" },
@@ -1145,11 +1178,11 @@
                 { label: "RDP", value: security.rdpEnabled == null ? "-" : security.rdpEnabled ? "Habilitado" : "Desabilitado" },
                 { label: "UAC", value: security.uacEnabled == null ? "-" : security.uacEnabled ? "Habilitado" : "Desabilitado" }
             ]) + '<div class="endpoint-remote-actions-grid">' + actionButton("check_defender", "Verificar Defender", "shield-check") + actionButton("execute_check", "Verificar seguranca", "shield-alert") + actionButton("create_ticket", "Criar chamado", "ticket") + actionButton("copy_summary", "Criar regra", "file-plus-2") + '</div></article>' +
-            '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield-check") + 'Produtos AV detectados</h2></header>' + ((security.antivirusProducts || []).length ? '<div class="endpoint-task-list">' + security.antivirusProducts.map(function (item) { item = asObject(item); return '<article><span class="severity-badge severity-info">AV</span><div><strong>' + escapeHtml(item.name || "Antivirus") + '</strong><p class="mono">' + escapeHtml(item.product_state || item.instance_guid || "-") + '</p></div></article>'; }).join("") + '</div>' : emptyState("Nenhum AV via SecurityCenter2", "Servidores podem nao expor essa classe WMI.", "shield")) + '</article>' +
+            '<article class="panel endpoint-dense-card endpoint-security-events"><header><h2>' + icon("history") + 'Ultimos eventos de seguranca</h2></header>' + renderEvents(securityEvents, 5, false) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("radio-tower") + 'Acesso remoto</h2></header>' + ((security.remoteTools || []).length ? '<div class="endpoint-task-list">' + security.remoteTools.map(function (tool) { return '<article><span class="severity-badge severity-security">Risco</span><div><strong>' + escapeHtml(tool) + '</strong><p>Ferramenta de acesso remoto detectada.</p></div></article>'; }).join("") + '</div>' : emptyState("Sem acesso remoto de risco", "Nenhuma ferramenta sensivel listada.", "check-circle")) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("users") + 'Administradores locais</h2></header>' + (admins.length ? '<div class="endpoint-task-list">' + admins.map(function (admin) { return '<article><span class="severity-badge severity-info">Admin</span><div><strong class="mono">' + escapeHtml(admin) + '</strong><p>Membro local detectado pelo agente.</p></div></article>'; }).join("") + '</div>' : emptyState("Sem administradores coletados", "A coleta ainda nao retornou membros locais.", "users")) + '</article>' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("shield-alert") + 'Politicas violadas</h2></header>' + (violations.length ? '<div class="endpoint-task-list">' + violations.map(function (item) { return '<article><span class="severity-badge severity-' + escapeHtml(item.severity) + '">' + escapeHtml(item.severity) + '</span><div><strong>' + escapeHtml(item.policy) + '</strong><p>' + escapeHtml(item.item) + '</p></div></article>'; }).join("") + '</div>' : emptyState("Sem violacoes de politica", "Nada pendente para este endpoint.", "check-circle")) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("history") + 'Ultimos eventos de seguranca</h2></header>' + renderEvents(securityEvents, 5, false) + '</article></div>';
+            '<article class="panel endpoint-dense-card endpoint-security-products"><header><h2>' + icon("shield-check") + 'Produtos AV detectados</h2></header>' + ((security.antivirusProducts || []).length ? '<div class="endpoint-task-list">' + security.antivirusProducts.map(function (item) { item = asObject(item); return '<article><span class="severity-badge severity-info">AV</span><div><strong>' + escapeHtml(item.name || "Antivirus") + '</strong><p class="mono">' + escapeHtml(item.product_state || item.instance_guid || "-") + '</p></div></article>'; }).join("") + '</div>' : emptyState("Nenhum AV via SecurityCenter2", "Servidores podem nao expor essa classe WMI.", "shield")) + '</article></div>';
     }
 
     function renderPatches(detail) {
@@ -1178,9 +1211,9 @@
     function renderTaskCategory(title, iconName, buttons, options) {
         options = options || {};
         if (!buttons.length) return "";
-        return '<details class="endpoint-action-category' + (options.danger ? ' endpoint-actions-danger' : '') + '" data-action-category="' + escapeHtml(options.id || '') + '"' + (options.open ? ' open' : '') + '>' +
-            '<summary><span class="endpoint-category-heading">' + icon(iconName) + escapeHtml(title) + '</span></summary>' +
-            '<div class="endpoint-action-grid" data-action-grid="' + escapeHtml(options.grid || 'default') + '">' + buttons.join("") + '</div></details>';
+        return '<section class="endpoint-action-category' + (options.danger ? ' endpoint-actions-danger' : '') + '" data-action-category="' + escapeHtml(options.id || '') + '">' +
+            '<h3 class="endpoint-category-heading">' + icon(iconName) + escapeHtml(title) + '</h3>' +
+            '<div class="endpoint-action-grid" data-action-grid="' + escapeHtml(options.grid || 'default') + '">' + buttons.join("") + '</div></section>';
     }
 
     function renderTasks(detail) {
@@ -1199,8 +1232,8 @@
                 return '<div class="endpoint-action-availability"><button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="' + escapeHtml(reason) + '"') + '><i data-lucide="' + escapeHtml({flush_dns:'network',query_service:'search',gpupdate:'refresh-cw',start_service:'play',stop_service:'square',restart_service:'rotate-cw'}[action] || 'circle') + '"></i><span>' + escapeHtml(operationalLabels[action]) + '</span></button>' + (available.enabled ? '' : '<small>' + escapeHtml(reason) + '</small>') + '</div>';
         });
         return {
-            core: renderTaskCategory("Diagnósticos", "stethoscope", diagnosticButtons, {id:"diagnostics",grid:"four",open:true}) +
-                renderTaskCategory("Operações", "settings-2", operationalButtons, {id:"operations",grid:"three",open:true}),
+            core: renderTaskCategory("Diagnósticos", "stethoscope", diagnosticButtons, {id:"diagnostics",grid:"four"}) +
+                renderTaskCategory("Operações", "settings-2", operationalButtons, {id:"operations",grid:"three"}),
             maintenance: renderTaskCategory("Manutenção do agente", "wrench", agentManagementButtons, {id:"maintenance",grid:"four"}),
             critical: renderTaskCategory("Ações críticas", "shield-alert", lifecycleButtons.concat(purgeButtons), {id:"critical",grid:"two",danger:true})
         };

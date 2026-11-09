@@ -24,13 +24,11 @@ assert(source.includes("repair_agent"), "repair_agent action must be exposed in 
 assert(source.includes("Deseja reparar o agente"), "repair_agent must ask for confirmation before creating a job");
 assert(source.includes("Job de reparo do agente enfileirado"), "repair_agent must show a queued job toast");
 assert(source.includes('uninstall_agent: "trash-2"'), "uninstall_agent jobs must render with the trash icon");
-assert(source.includes("function agentLifecycleActionButtons(detail)"), "uninstall lifecycle buttons must be shared by quick actions and tasks");
-assert(source.includes("function agentManagementActionButtons(detail)"), "agent management buttons must be shared by quick actions and tasks");
+assert(source.includes("function agentLifecycleActionButtons(detail)"), "uninstall lifecycle actions must remain available through the task catalog");
+assert(source.includes("function agentManagementActionButtons(detail)"), "agent management actions must remain available through the task catalog");
 assert(source.includes("function renderTaskPanel(detail)"), "task areas must update through stable containers");
 assert(template.includes('data-endpoint-jobs-content'), "jobs must render inside the dedicated scrolling container");
-assert(source.includes("const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);"), "quick actions must use shared lifecycle buttons");
 assert(source.includes("const lifecycleButtons = agentLifecycleActionButtons(detail);"), "tasks tab must use shared lifecycle buttons");
-assert(source.includes("const agentManagementButtons = agentManagementActionButtons(endpointDetail);"), "quick actions must use shared agent management buttons");
 assert(source.includes("const agentManagementButtons = agentManagementActionButtons(detail);"), "tasks tab must use shared agent management buttons");
 assert(source.includes('actionButton("uninstall_agent", "Desinstalar agente", "trash-2")'), "tasks catalog must expose the uninstall action for installed endpoints");
 assert(source.includes('if (isEndpointUninstalled(detail)) return [];'), "uninstalled endpoints must not offer a new uninstall action");

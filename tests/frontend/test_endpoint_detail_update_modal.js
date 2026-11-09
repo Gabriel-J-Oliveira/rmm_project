@@ -24,6 +24,9 @@ contains(/data-confirm-downgrade/, "downgrade must require an additional confirm
 contains(/downgrade exige/i, "downgrade validation message must be explicit");
 contains(/reason_code/, "API error handling must surface reason_code");
 doesNotContain(/function\s+chooseUpdateRelease\s*\(/, "legacy release selector helper must not remain active");
-doesNotContain(/window\.prompt\(/, "update flow must not use prompt-based release selection");
+const updateFlowStart = source.indexOf("function openUpdateModal(");
+const updateFlowEnd = source.indexOf("function runEndpointAction(", updateFlowStart);
+assert(updateFlowStart >= 0 && updateFlowEnd > updateFlowStart, "update flow must be locatable independently from operational actions");
+assert(!/window\.prompt\(/.test(source.slice(updateFlowStart, updateFlowEnd)), "update flow must not use prompt-based release selection");
 
 console.log("endpoint_detail update modal static checks passed");

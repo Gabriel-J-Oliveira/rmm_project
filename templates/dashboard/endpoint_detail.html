@@ -23,7 +23,6 @@
 <section class="endpoint-detail-shell" data-endpoint-detail data-live-allowed="{{ endpoint_detail_payload.live_monitoring_allowed|yesno:'yes,no' }}" data-endpoint-id="{{ endpoint.id }}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}" data-ip="{{ primary_ip|default:''|escape }}" data-terminal-mode="{% if terminal_admin_auth_available %}admin-auth{% elif terminal_available %}conpty{% else %}unavailable{% endif %}" data-endpoint-status="{{ endpoint.status }}">
     <header class="endpoint-ops-header">
         <div class="endpoint-ops-title">
-            <a class="back-link" href="{% url 'endpoint-list' %}">&larr; Voltar para endpoints</a>
             <div class="endpoint-title-line">
                 <h1 class="page-title"><span class="page-header-icon"><i data-lucide="monitor-cog"></i></span>{{ endpoint.hostname|default:"Endpoint" }}</h1>
                 <span class="status-badge status-{{ endpoint.status }}">{{ endpoint.get_status_display|default:"Unknown" }}</span>
@@ -83,8 +82,29 @@
                     </div>
                 </article>
 
+                <article class="panel endpoint-dense-card endpoint-inventory-summary rmm-card" data-overview-card="inventory">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="cpu"></i>Invent&aacute;rio</h2></header>
+                    <div class="rmm-card__body" data-overview-slot="inventory-body">
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                        </dl>
+                    </div>
+                </article>
+
                 <article class="panel endpoint-dense-card endpoint-agent-card rmm-card" data-overview-card="agent">
-                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="bot"></i>Agente NightOwl</h2><span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <header class="rmm-card__header">
+                        <h2 class="rmm-card__title"><i data-lucide="bot"></i>Agente NightOwl</h2>
+                        <div class="endpoint-agent-header-actions">
+                            <span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span>
+                            <button type="button" data-endpoint-action="update_agent" aria-label="Atualizar agente" title="Atualizar agente"><i data-lucide="download-cloud"></i></button>
+                            <button type="button" data-endpoint-action="repair_agent" aria-label="Reparar agente" title="Reparar agente"><i data-lucide="wrench"></i></button>
+                        </div>
+                    </header>
                     <div class="rmm-card__body" data-overview-slot="agent-body">
                         <div class="agent-version-panel endpoint-skeleton-panel"><span class="endpoint-skeleton-line endpoint-skeleton-version"></span><small>Carregando dados do agente</small></div>
                         <dl class="endpoint-fact-list endpoint-skeleton-facts">
@@ -93,19 +113,6 @@
                             <div><dt></dt><dd></dd></div>
                             <div><dt></dt><dd></dd></div>
                             <div class="endpoint-fact-wide"><dt></dt><dd></dd></div>
-                        </dl>
-                    </div>
-                    <div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent"><i data-lucide="download-cloud"></i>Atualizar agente</button><button type="button" data-endpoint-action="repair_agent"><i data-lucide="wrench"></i>Reparar agente</button></div>
-                </article>
-
-                <article class="panel endpoint-dense-card endpoint-security-summary rmm-card" data-overview-card="security">
-                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
-                    <div class="rmm-card__body" data-overview-slot="security-body">
-                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
                         </dl>
                     </div>
                 </article>
@@ -126,20 +133,6 @@
                     </div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-inventory-summary rmm-card" data-overview-card="inventory">
-                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="cpu"></i>Invent&aacute;rio r&aacute;pido</h2></header>
-                    <div class="rmm-card__body" data-overview-slot="inventory-body">
-                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                        </dl>
-                    </div>
-                </article>
-
                 <article class="panel endpoint-dense-card endpoint-disk-summary rmm-card" data-overview-card="disks">
                     <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="hard-drive"></i>Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver invent&aacute;rio</button></header>
                     <div class="rmm-card__body" data-overview-slot="disks-body">
@@ -147,6 +140,18 @@
                             <div><strong></strong><span></span><em><i></i></em><small></small></div>
                             <div><strong></strong><span></span><em><i></i></em><small></small></div>
                         </div>
+                    </div>
+                </article>
+
+                <article class="panel endpoint-dense-card endpoint-security-summary rmm-card" data-overview-card="security">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <div class="rmm-card__body" data-overview-slot="security-body">
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                        </dl>
                     </div>
                 </article>
             </section>
@@ -346,8 +351,8 @@
                         <p data-winrm-recovery-summary role="status" aria-live="polite">Agente: {{ endpoint.get_status_display }}. &Uacute;ltima tentativa de recupera&ccedil;&atilde;o: n&atilde;o consultada.</p>
                         <button type="button" data-winrm-recovery-follow disabled>Acompanhar recupera&ccedil;&atilde;o</button>
                     </div>
-                    <details class="endpoint-winrm-local-details">
-                        <summary>Estado local reportado pelo agente</summary>
+                    <section class="endpoint-winrm-local-details" aria-labelledby="endpoint-winrm-local-title">
+                        <div class="endpoint-winrm-local-heading"><h3 id="endpoint-winrm-local-title">Estado local reportado pelo agente</h3><small>Dados locais vêm do inventário. Autenticação vem do último registro de recuperação do backend; não é um teste atual.</small></div>
                         <div>
                         {% if winrm_local.data %}
                             <p>Configura&ccedil;&atilde;o local: {{ winrm_local_state }} ({{ winrm_local.data.result }}) &mdash; recebida em {{ winrm_local.received_at }}{% if winrm_local_stale %} (informa&ccedil;&atilde;o desatualizada){% endif %}.</p>
@@ -358,7 +363,7 @@
                         {% else %}<p>Configura&ccedil;&atilde;o local n&atilde;o informada pelo agente.</p>{% endif %}
                         <p>Autentica&ccedil;&atilde;o administrativa: {{ winrm_authentication }}{% if winrm_authentication_at %} em {{ winrm_authentication_at|date:'d/m/Y H:i:s' }}{% endif %}.</p>
                         </div>
-                    </details>
+                    </section>
                     {% if winrm_recovery_available %}
                     <div class="install-credential-overlay winrm-credential-overlay" data-recovery-modal hidden><section class="install-credential-modal" role="dialog" aria-modal="true" aria-label="Recuperar agente"><h2>Recuperar agente</h2><form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
                         {% csrf_token %}
@@ -374,10 +379,10 @@
                 </section>
                 <div class="endpoint-action-groups" data-endpoint-actions-core></div>
                 <div data-endpoint-actions-maintenance></div>
-                <details class="endpoint-action-category endpoint-approved-scripts-category">
-                    <summary><span class="endpoint-category-heading"><i data-lucide="file-check-2"></i>Scripts aprovados</span></summary>
+                <section class="endpoint-action-category endpoint-approved-scripts-category">
+                    <h3 class="endpoint-category-heading"><i data-lucide="file-check-2"></i>Scripts aprovados</h3>
                     <div class="endpoint-approved-scripts-body" data-approved-scripts-placement></div>
-                </details>
+                </section>
                 <div data-endpoint-actions-critical></div>
                 {% if terminal_available %}<details class="endpoint-terminal-disclosure" data-terminal-conpty-panel><summary>Terminal PowerShell assistido</summary>{% include 'dashboard/endpoint_terminal.html' %}</details>{% endif %}
                 {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}

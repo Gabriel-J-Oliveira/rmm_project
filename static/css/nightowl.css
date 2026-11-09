@@ -13749,6 +13749,32 @@ body.page-endpoint-detail .endpoint-compact-list {
 body.page-endpoint-detail .endpoint-inventory-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-bottom: 14px;
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-inventory-column {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-inventory-column > .panel {
+    align-self: stretch;
+    width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-inventory-secondary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 14px;
+    margin-top: 14px;
+}
+
+body.page-endpoint-detail .endpoint-inventory-secondary-grid > .panel {
+    align-self: start;
+    width: 100%;
 }
 
 body.page-endpoint-detail .endpoint-disk-panel {
@@ -13813,6 +13839,10 @@ body.page-endpoint-detail .software-actions {
 
 body.page-endpoint-detail .security-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body.page-endpoint-detail .endpoint-security-layout > .panel {
+    align-self: stretch;
 }
 
 body.page-endpoint-detail .endpoint-task-list article {
@@ -14093,6 +14123,7 @@ body.page-endpoint-detail .endpoint-attention-pill.attention-normal {
     body.page-endpoint-detail .endpoint-ops-header,
     body.page-endpoint-detail .endpoint-compact-grid,
     body.page-endpoint-detail .endpoint-inventory-grid,
+    body.page-endpoint-detail .endpoint-inventory-secondary-grid,
     body.page-endpoint-detail .security-grid,
     body.page-endpoint-detail .endpoint-two-lists,
     body.page-endpoint-detail .endpoint-fact-list {
@@ -34188,12 +34219,308 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 .endpoint-live h3 { font-size: 16px; }
 @media (max-width: 700px) { .endpoint-live-grid { grid-template-columns: minmax(0, 1fr); } }
 
+/* Endpoint overview layout: content-driven card rows, scoped to this tab. */
+body.page-endpoint-detail .endpoint-primary-row,
+body.page-endpoint-detail .endpoint-summary-row,
+body.page-endpoint-detail .endpoint-operational-row,
+body.page-endpoint-detail .endpoint-secondary-row {
+    align-items: stretch !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+body.page-endpoint-detail .endpoint-primary-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-summary-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-operational-row > .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-secondary-row > .endpoint-dense-card {
+    grid-column: auto !important;
+    min-width: 0;
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-summary-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) !important;
+}
+
+body.page-endpoint-detail .endpoint-operational-row {
+    grid-template-columns: minmax(0, 4fr) minmax(270px, 1fr) !important;
+}
+
+body.page-endpoint-detail .endpoint-secondary-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+body.page-endpoint-detail .endpoint-overview-layout .endpoint-dense-card,
+body.page-endpoint-detail .endpoint-overview-layout .endpoint-dense-card:hover {
+    transform: none !important;
+    transition: none !important;
+    border-color: var(--rmm-card-border) !important;
+    background: var(--rmm-card-bg) !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body {
+    height: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    gap: 14px !important;
+    padding: 16px !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
+    align-self: flex-start !important;
+    justify-self: auto !important;
+    min-width: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
+    font-size: 58px !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body > .health-bar {
+    width: 100% !important;
+    height: 10px !important;
+    align-self: stretch !important;
+    margin: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-breakdown .health-component {
+    min-width: 0;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-component > div {
+    min-width: 0;
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-component em {
+    width: 100%;
+    height: 5px !important;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-component em i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: currentColor;
+}
+
+body.page-endpoint-detail .endpoint-inventory-summary .endpoint-overview-facts,
+body.page-endpoint-detail .endpoint-security-summary .endpoint-security-body {
+    height: auto !important;
+    padding: 12px !important;
+}
+
+body.page-endpoint-detail .endpoint-inventory-summary .endpoint-fact-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 7px !important;
+}
+
+body.page-endpoint-detail .endpoint-inventory-summary .endpoint-fact-list > div {
+    min-height: 48px !important;
+    padding: 8px 9px !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-card > header {
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-header-actions {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-agent-header-actions > button {
+    width: 30px;
+    min-width: 30px !important;
+    min-height: 30px !important;
+    padding: 0 !important;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid var(--rmm-action-border) !important;
+    border-radius: 7px !important;
+    background: var(--rmm-action-bg) !important;
+    color: var(--text-primary) !important;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-agent-header-actions > button:hover,
+body.page-endpoint-detail .endpoint-quick-action-button:hover {
+    border-color: var(--rmm-card-border-strong) !important;
+    background: rgba(141, 104, 255, .2) !important;
+    color: var(--text-primary) !important;
+}
+
+body.page-endpoint-detail .endpoint-agent-header-actions > button:focus-visible,
+body.page-endpoint-detail .endpoint-quick-action-button:focus-visible {
+    outline: 2px solid #a990ff;
+    outline-offset: 2px;
+}
+
+body.page-endpoint-detail .endpoint-agent-header-actions > button:disabled,
+body.page-endpoint-detail .endpoint-quick-action-button:disabled {
+    cursor: not-allowed;
+}
+
+body.page-endpoint-detail .endpoint-agent-card > .rmm-card__body {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+body.page-endpoint-detail .endpoint-agent-card .endpoint-card-actions {
+    display: none !important;
+}
+
+body.page-endpoint-detail .endpoint-operational-row .endpoint-jobs-card,
+body.page-endpoint-detail .endpoint-operational-row .endpoint-actions-card {
+    min-height: 0 !important;
+}
+
+body.page-endpoint-detail .endpoint-secondary-row > .endpoint-dense-card > [data-overview-slot] {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    scrollbar-width: thin;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-history {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-item {
+    min-width: 0;
+    min-height: 0 !important;
+    padding: 9px !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: center;
+    gap: 8px !important;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-card-content {
+    min-width: 0;
+    display: grid;
+    gap: 5px;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-actions {
+    min-width: 68px;
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+}
+
+body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-action-button {
+    min-height: 26px !important;
+    padding: 0 7px !important;
+    white-space: nowrap;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-groups {
+    padding: 12px !important;
+    align-content: start;
+    gap: 12px !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-action-group > div {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 7px !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-card .endpoint-quick-action-button {
+    min-width: 0;
+    min-height: 40px;
+    padding: 7px !important;
+    justify-content: flex-start;
+    gap: 7px !important;
+    font-size: 11px !important;
+    line-height: 1.15;
+    text-align: left;
+}
+
+body.page-endpoint-detail .endpoint-secondary-row > .endpoint-dense-card {
+    min-height: clamp(290px, 31.5dvh, 340px) !important;
+    max-height: min(420px, 42dvh);
+    align-self: stretch !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+@media (max-width: 1100px) {
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-secondary-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    body.page-endpoint-detail .endpoint-operational-row {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+}
+
+@media (max-width: 700px) {
+    body.page-endpoint-detail .endpoint-primary-row,
+    body.page-endpoint-detail .endpoint-summary-row,
+    body.page-endpoint-detail .endpoint-operational-row,
+    body.page-endpoint-detail .endpoint-secondary-row {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    body.page-endpoint-detail .endpoint-operational-row > .endpoint-dense-card,
+    body.page-endpoint-detail .endpoint-secondary-row > .endpoint-dense-card {
+        min-height: 0 !important;
+        max-height: none !important;
+    }
+
+    body.page-endpoint-detail .endpoint-health-body .health-breakdown,
+    body.page-endpoint-detail .endpoint-jobs-card .endpoint-job-history {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    body.page-endpoint-detail .endpoint-agent-card > header {
+        flex-wrap: wrap;
+    }
+}
+
 body.page-endpoint-detail .endpoint-hardware-evidence .endpoint-fact-list dd {
     white-space: normal;
     overflow-wrap: anywhere;
     overflow: visible;
     text-overflow: clip;
     max-width: none;
+}
+
+body.page-endpoint-detail [data-endpoint-tab-panel="inventory"] .panel,
+body.page-endpoint-detail [data-endpoint-tab-panel="inventory"] .panel:hover {
+    transform: none !important;
+    transition: none !important;
+}
+
+body.page-endpoint-detail [data-endpoint-tab-panel="inventory"] .panel:hover {
+    border-color: var(--border) !important;
+    background: var(--card) !important;
+    box-shadow: none !important;
 }
 
 @media (max-width: 520px) {
