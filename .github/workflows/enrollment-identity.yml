@@ -97,6 +97,19 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Build the Windows agent test executable
         run: dotnet build NightOwl.Agent.Windows.Tests/NightOwl.Agent.Windows.Tests.csproj -c Release
+      - name: Build and run shared retention and locking contracts
+        run: |
+          dotnet build NightOwl.Agent.Shared.Tests/NightOwl.Agent.Shared.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./NightOwl.Agent.Shared.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Shared.Tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test delayed child startup without consuming lock deadline
+        run: |
+          $env:NIGHTOWL_TEST_SLOW_CHILD = '1'
+          $testRoot = Join-Path $env:RUNNER_TEMP ('nightowl-retention-slow-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $testRoot | Out-Null
+          ./NightOwl.Agent.Shared.Tests/bin/Release/net8.0-windows/NightOwl.Agent.Shared.Tests.exe --contention-only $testRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify updater signature requirements
         run: |
           dotnet build NightOwl.Agent.Updater.Tests/NightOwl.Agent.Updater.Tests.csproj -c Release
