@@ -11,6 +11,23 @@ using System.Text.Json;
 
 try
 {
+    if (args.Contains("--repair-fixture-leaf", StringComparer.Ordinal))
+    {
+        Thread.Sleep(30000);
+        return;
+    }
+    if (args.Contains("--repair-fixture-sleep", StringComparer.Ordinal))
+    {
+        using Process leaf = Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.ProcessPath!, Arguments = "--repair-fixture-leaf",
+            UseShellExecute = false, CreateNoWindow = true
+        }) ?? throw new InvalidOperationException("Could not start timeout fixture child.");
+        Console.WriteLine(leaf.Id);
+        Console.Out.Flush();
+        Thread.Sleep(30000);
+        return;
+    }
     if (args.Contains("--ci-terminal-facts", StringComparer.Ordinal))
     {
         var facts = TerminalUserIdentity.CurrentFacts();
@@ -80,6 +97,9 @@ try
     if (args.Contains("--repair-only", StringComparer.Ordinal))
     {
         TestNativeArgumentQuoting();
+        TestRepairFixtureTimeoutKillsProcess();
+        TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
+        TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
         TestRepairRunnerScriptPersistsCompletedResult();
         TestRepairRunnerScriptPersistsFailedResult();
         TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
@@ -180,6 +200,7 @@ try
     TestExternalRepairRunnerSkipsInterruptedRecoveryUntilTimeout();
     TestExternalRepairRunnerTimeoutAllowsInterruptedRecovery();
     TestNativeArgumentQuoting();
+    TestRepairFixtureTimeoutKillsProcess();
     TestRepairRunnerScriptPersistsCompletedResult();
     TestRepairRunnerScriptPersistsFailedResult();
     TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails();
@@ -1304,10 +1325,43 @@ static void TestNativeArgumentQuoting()
         Arguments = "--echo-arguments " + string.Join(" ", arguments.Select(JobExecutor.QuoteArg)),
         UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
     }) ?? throw new InvalidOperationException("Could not start argument quoting fixture.");
-    string output = child.StandardOutput.ReadToEnd();
-    Require(child.WaitForExit(15000) && child.ExitCode == 0, "Argument quoting fixture did not complete.");
+    Task<string> outputRead = child.StandardOutput.ReadToEndAsync();
+    bool finished = WaitForFixtureProcess(child, 15000);
+    Require(finished && child.ExitCode == 0, "Argument quoting fixture did not complete.");
+    string output = outputRead.GetAwaiter().GetResult();
     string[] actual = JsonSerializer.Deserialize<string[]>(output)!;
     Require(actual.SequenceEqual(arguments), "Native argument quoting changed spaces, slashes, quotes or empty arguments.");
+}
+
+static bool WaitForFixtureProcess(Process process, int timeoutMs)
+{
+    if (process.WaitForExit(timeoutMs)) return true;
+    process.Kill(entireProcessTree: true);
+    process.WaitForExit();
+    return false;
+}
+
+static void TestRepairFixtureTimeoutKillsProcess()
+{
+    using Process child = Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!, Arguments = "--repair-fixture-sleep",
+        UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+    }) ?? throw new InvalidOperationException("Could not start timeout fixture.");
+    try
+    {
+        Task<string?> pidRead = child.StandardOutput.ReadLineAsync();
+        Require(pidRead.Wait(TimeSpan.FromSeconds(5)) && int.TryParse(pidRead.Result, out _), "Timeout fixture child did not start.");
+        int leafPid = int.Parse(pidRead.Result!, System.Globalization.CultureInfo.InvariantCulture);
+        Require(!WaitForFixtureProcess(child, 400) && child.HasExited, "Timeout fixture process must be terminated.");
+        try
+        {
+            using Process leaf = Process.GetProcessById(leafPid);
+            Require(leaf.WaitForExit(5000), "Timeout fixture descendant must be terminated.");
+        }
+        catch (ArgumentException) { /* Already exited. */ }
+    }
+    finally { if (!child.HasExited) { child.Kill(entireProcessTree: true); child.WaitForExit(); } }
 }
 
 static void TestRepairRunnerScriptPersistsCompletedResult()
@@ -1331,14 +1385,17 @@ static void TestRepairRunnerScriptSupportsSpacedPaths()
 static void TestRepairRunnerScriptWritesDiagnosticWhenResultPersistenceFails()
 {
     RepairRunnerTestResult result = RunRepairRunnerScriptFunctionalTest(installerExitCode: 0, breakPendingDirectory: true, expectedStatus: "");
-    string runnerLog = Path.Combine(result.RunnerDir, "repair.runner.log");
-    Require(File.Exists(runnerLog), "Repair runner should write a diagnostic log when result persistence fails.");
-    string log = File.ReadAllText(runnerLog);
-    Require(log.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) || log.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include a failure stage.");
-    Require(log.Contains(result.JobId, StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include job_id.");
-    Require(new JobStore(Path.Combine(result.RootDir, "jobs")).Load(result.JobId)!.ExternalRunnerActive,
-        "Unavailable result queue must retain uncertain external ownership.");
-    DeleteTempDir(result.RootDir);
+    try
+    {
+        string runnerLog = Path.Combine(result.RunnerDir, "repair.runner.log");
+        Require(File.Exists(runnerLog), "Repair runner should write a diagnostic log when result persistence fails.");
+        string log = File.ReadAllText(runnerLog);
+        Require(log.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) || log.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include a failure stage.");
+        Require(log.Contains(result.JobId, StringComparison.OrdinalIgnoreCase), "Repair runner diagnostic should include job_id.");
+        Require(new JobStore(Path.Combine(result.RootDir, "jobs")).Load(result.JobId)!.ExternalRunnerActive,
+            "Unavailable result queue must retain uncertain external ownership.");
+    }
+    finally { DeleteTempDir(result.RootDir); }
 }
 
 static void TestPendingCompletedUpdateFinalizesLocalJobStateOnRestart()
@@ -1810,6 +1867,10 @@ static RepairRunnerTestResult RunRepairRunnerScriptFunctionalTest(int installerE
     Require(File.Exists(powershell), "Windows PowerShell 5.1 is required for repair runner functional tests.");
 
     string root = CreateTempDir();
+    Stopwatch scenarioClock = Stopwatch.StartNew();
+    string diagnosticStage = "setup";
+    int? runnerExitCode = null;
+    bool runnerTimedOut = false;
     try
     {
         string installPath = Path.Combine(root, "AgentDotNet");
@@ -1840,6 +1901,7 @@ param(
     [switch]$RunCheck,
     [switch]$NonInteractive
 )
+[IO.File]::WriteAllText('" + Path.Combine(runnerDir, "fixture-installer-entered.txt").Replace("'", "''") + @"', 'entered')
 if (-not (Test-Path -LiteralPath $TrustedPublicKeysPath)) { exit 98 }
 if ($ExpectedVersion -ne '0.1.1.0-rc23' -or $ExpectedReleaseId -ne 'release-id-123') { exit 99 }
 Set-Content -Path '" + Path.Combine(installPath, "agent.version.json").Replace("'", "''") + @"' -Value ('{""version"":""' + $ExpectedVersion + '""}') -Encoding UTF8
@@ -1893,8 +1955,37 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             new string('c', 64),
             "nightowl-release-2026-02",
             jobStatePath);
+        // The generated production script checks the real canonical configuration. A test
+        // must never inspect that host path: point this one probe at fixture-owned data.
+        string fixtureConfigDir = Path.Combine(root, spacedPaths ? "Config NightOwl's Fixture" : "Config");
+        Directory.CreateDirectory(fixtureConfigDir);
+        string fixtureConfig = Path.Combine(fixtureConfigDir, "agent.config.json");
+        File.WriteAllText(fixtureConfig, "{}");
+        static string PsLiteral(string value) => "'" + value.Replace("'", "''") + "'";
+        string hostProbe = "canonical_config_ok = [bool](Test-Path " + PsLiteral(Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json")) + ")";
+        string fixtureProbe = "canonical_config_ok = [bool](Test-Path " + PsLiteral(fixtureConfig) + ")";
+        Require(script.Contains(hostProbe, StringComparison.Ordinal), "Canonical config probe was not found in repair runner fixture.");
+        script = script.Replace(hostProbe, fixtureProbe, StringComparison.Ordinal);
+
+        // Instrument only the generated test fixture; production script remains unchanged.
+        string trace = "$testClock = [Diagnostics.Stopwatch]::StartNew()" + Environment.NewLine +
+            "function Write-TestStage([string]$s) { [IO.File]::AppendAllText((Join-Path $PSScriptRoot 'fixture-stages.txt'), ($s + ':' + $testClock.ElapsedMilliseconds + [Environment]::NewLine)) }" + Environment.NewLine +
+            "function Get-TestCanonicalConfigStatus([string]$p) { Write-TestStage 'config_start'; try { $v = Test-Path $p; Write-TestStage 'config_returned'; return $v } catch { Write-TestStage 'config_error'; throw } finally { Write-TestStage 'config_end' } }" + Environment.NewLine;
+        script = trace + script;
+        script = script.Replace("    $service = Get-Service -Name ", "    Write-TestStage 'service_start'" + Environment.NewLine + "    $service = Get-Service -Name ");
+        script = script.Replace("    $versionPath = Join-Path ", "    Write-TestStage 'service_end'" + Environment.NewLine + "    $versionPath = Join-Path ");
+        script = script.Replace("        tray_task_status = $(if (Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue) { 'Present' } else { 'NotFound' })", "        tray_task_status = $(Write-TestStage 'task_start'; try { $task = Get-ScheduledTask -TaskName 'NightOwl Agent Tray' -ErrorAction SilentlyContinue; Write-TestStage 'task_returned'; if ($task) { 'Present' } else { 'NotFound' } } catch { Write-TestStage 'task_error'; throw } finally { Write-TestStage 'task_end' })");
+        script = script.Replace("canonical_config_ok = [bool](Test-Path ", "canonical_config_ok = [bool](Get-TestCanonicalConfigStatus ");
+        script = script.Replace("    $payload = New-RepairResultPayload ", "    Write-TestStage 'payload_start'" + Environment.NewLine + "    $payload = New-RepairResultPayload ");
+        script = script.Replace("    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)", "    Write-TestStage 'payload_end'" + Environment.NewLine + "    $finishedAt = [datetimeoffset]::Parse([string]$payload.finished_at)");
+        script = script.Replace("    Write-JsonAtomic $resultPath $payload 8", "    Write-TestStage 'persist_start'" + Environment.NewLine + "    Write-JsonAtomic $resultPath $payload 8" + Environment.NewLine + "    Write-TestStage 'persist_end'");
+        script = script.Replace("    Complete-RepairJobState $Status $ExitCode $ErrorMessage $finishedAt", "    Write-TestStage 'state_start'" + Environment.NewLine + "    Complete-RepairJobState $Status $ExitCode $ErrorMessage $finishedAt" + Environment.NewLine + "    Write-TestStage 'state_end'");
+        script = script.Replace("    $process = Start-Process -FilePath 'powershell.exe'", "    Write-TestStage 'installer_start'" + Environment.NewLine + "    $process = Start-Process -FilePath 'powershell.exe'");
+        script = script.Replace("    $stdout = if (Test-Path $stdoutPath)", "    Write-TestStage ('installer_exit_' + $process.ExitCode)" + Environment.NewLine + "    Write-TestStage 'installer_end'" + Environment.NewLine + "    $stdout = if (Test-Path $stdoutPath)");
+        script = script.Replace("    Write-RepairRunnerDiagnostic 'runner_failed'", "    Write-TestStage 'runner_failed'" + Environment.NewLine + "    Write-RepairRunnerDiagnostic 'runner_failed'");
         string runnerScript = Path.Combine(runnerDir, "Run-NightOwlAgentRepair.ps1");
         File.WriteAllText(runnerScript, script);
+        diagnosticStage = "runner_start";
 
         using Process process = Process.Start(new ProcessStartInfo
         {
@@ -1906,15 +1997,18 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
         }) ?? throw new InvalidOperationException("Failed to start repair runner functional test.");
         Task<string> stdoutRead = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrRead = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(15000))
+        if (!WaitForFixtureProcess(process, 15000))
         {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
+            runnerTimedOut = true;
+            runnerExitCode = process.ExitCode;
             throw new InvalidOperationException("Repair runner script did not exit.");
         }
+        runnerExitCode = process.ExitCode;
+        diagnosticStage = "result_check";
         string stdout = stdoutRead.GetAwaiter().GetResult();
         string stderr = stderrRead.GetAwaiter().GetResult();
 
+        Require(File.Exists(Path.Combine(runnerDir, "fixture-installer-entered.txt")), "Installer fixture must execute after parameter binding.");
         if (!breakPendingDirectory)
         {
             string resultPath = Path.Combine(pendingDir, $"job-result-{jobId}.json");
@@ -1922,22 +2016,93 @@ exit " + installerExitCode.ToString(System.Globalization.CultureInfo.InvariantCu
             using JsonDocument document = JsonDocument.Parse(File.ReadAllText(resultPath));
             JsonElement rootElement = document.RootElement;
             Require(rootElement.GetProperty("status").GetString() == expectedStatus, $"Repair runner pending result should be {expectedStatus}.");
+            Require(rootElement.GetProperty("exit_code").GetInt32() == installerExitCode, "Repair runner must persist the installer exit code.");
             Require(rootElement.GetProperty("duration_seconds").ValueKind == JsonValueKind.Number, "Repair runner duration_seconds should be numeric.");
             Require(rootElement.GetProperty("duration_seconds").GetDouble() >= 0, "Repair runner duration_seconds should be non-negative.");
             JsonElement resultElement = rootElement.GetProperty("result");
             Require(resultElement.GetProperty("type").GetString() == "repair_agent", "Repair runner result type mismatch.");
+            Require(resultElement.GetProperty("error_code").GetString() == (installerExitCode == 0 ? "" : "REPAIR_FAILED"), "Repair runner error category mismatch.");
             Require(resultElement.GetProperty("installed_version").GetString() == "0.1.1.0-rc23", "Repair runner installed version mismatch.");
+            Require(resultElement.GetProperty("canonical_config_ok").GetBoolean(), "Repair fixture must use its own canonical config.");
 
             JobStateRecord state = store.Load(jobId) ?? throw new InvalidOperationException("Repair job state was not reloaded.");
             Require(!state.ExternalRunnerActive, "Repair runner should finalize external runner marker.");
+            Require(state.Status == expectedStatus, "Repair runner job state must reflect the persisted result.");
         }
 
         return new RepairRunnerTestResult(root, runnerDir, jobId, stdout, stderr);
     }
     catch
     {
-        DeleteTempDir(root);
+        diagnosticStage += ":failed";
         throw;
+    }
+    finally
+    {
+        try
+        {
+            string runnerDir = Path.Combine(root, "runner");
+            string tracePath = Path.Combine(runnerDir, "fixture-stages.txt");
+            string[] stages = File.Exists(tracePath) ? File.ReadAllLines(tracePath)
+                .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^(service_start|service_end|task_start|task_end|task_returned|task_denied|task_error|config_start|config_returned|config_error|config_end|payload_start|payload_end|persist_start|persist_end|state_start|state_end|installer_start|installer_end|installer_exit_-?[0-9]+|runner_failed):[0-9]+$")).ToArray() : Array.Empty<string>();
+            string pending = Path.Combine(root, "pending-results");
+            string? status = null, errorCode = null, trayStatus = null; int? installerCode = null;
+            if (Directory.Exists(pending))
+            {
+                string? result = Directory.GetFiles(pending, "job-result-*.json").FirstOrDefault();
+                if (result is not null) using (JsonDocument resultDoc = JsonDocument.Parse(File.ReadAllText(result)))
+                {
+                    JsonElement resultRoot = resultDoc.RootElement;
+                    if (resultRoot.TryGetProperty("status", out JsonElement st)) status = st.GetString();
+                    if (resultRoot.TryGetProperty("exit_code", out JsonElement ec) && ec.TryGetInt32(out int code)) installerCode = code;
+                    if (resultRoot.TryGetProperty("result", out JsonElement detail))
+                    {
+                        if (detail.TryGetProperty("error_code", out JsonElement err)) errorCode = err.GetString();
+                        if (detail.TryGetProperty("tray_task_status", out JsonElement tray) && tray.ValueKind == JsonValueKind.String)
+                        {
+                            string? value = tray.GetString();
+                            trayStatus = value is "Present" or "NotFound" or "Unknown" ? value : "other";
+                        }
+                    }
+                }
+            }
+            string jobs = Path.Combine(root, "jobs"); string? stateStatus = null; bool? active = null;
+            if (Directory.Exists(jobs))
+            {
+                string? stateFile = Directory.GetFiles(jobs, "*.json").FirstOrDefault();
+                if (stateFile is not null) using (JsonDocument stateDoc = JsonDocument.Parse(File.ReadAllText(stateFile)))
+                {
+                    if (stateDoc.RootElement.TryGetProperty("status", out JsonElement st)) stateStatus = st.GetString();
+                    if (stateDoc.RootElement.TryGetProperty("external_runner_active", out JsonElement ar)) active = ar.GetBoolean();
+                }
+            }
+            string stderrFile = Path.Combine(runnerDir, "repair.stderr.log");
+            string runnerFile = Path.Combine(runnerDir, "repair.runner.log");
+            string stderrCategory = "none", runnerCategory = "none", runnerExceptionType = "none";
+            if (File.Exists(stderrFile))
+            {
+                string data = File.ReadAllText(stderrFile);
+                stderrCategory = data.Contains("ParserError", StringComparison.OrdinalIgnoreCase) ? "parser_error"
+                    : data.Contains("ParameterBinding", StringComparison.OrdinalIgnoreCase) ? "parameter_binding"
+                    : string.IsNullOrWhiteSpace(data) ? "empty" : "other";
+            }
+            if (File.Exists(runnerFile))
+            {
+                string data = File.ReadAllText(runnerFile);
+                runnerCategory = data.Contains("minimal_result_persist_failed", StringComparison.OrdinalIgnoreCase) ? "minimal_result_persist_failed"
+                    : data.Contains("runner_failed", StringComparison.OrdinalIgnoreCase) ? "runner_failed" : "other";
+                var typeMatch = System.Text.RegularExpressions.Regex.Match(data, "\"exception_type\"\\s*:\\s*\"([A-Za-z0-9_.]{1,128})\"");
+                if (typeMatch.Success) runnerExceptionType = typeMatch.Groups[1].Value;
+            }
+            Console.WriteLine("REPAIR_TEST_DIAGNOSTIC=" + JsonSerializer.Serialize(new { stage = diagnosticStage, elapsed_ms = scenarioClock.ElapsedMilliseconds,
+                runner_exit_code = runnerExitCode, timed_out = runnerTimedOut, expected_installer_exit = installerExitCode, installer_exit_code = installerCode,
+                status, error_code = errorCode, tray_task_status = trayStatus, state_status = stateStatus, external_runner_active = active, stages, stderr_category = stderrCategory, runner_category = runnerCategory, runner_exception_type = runnerExceptionType,
+                installer_entered = File.Exists(Path.Combine(runnerDir, "fixture-installer-entered.txt")),
+                installer_stdout_present = File.Exists(Path.Combine(runnerDir, "repair.stdout.log")),
+                installer_stderr_present = File.Exists(Path.Combine(runnerDir, "repair.stderr.log")), runner_diagnostic_present = File.Exists(Path.Combine(runnerDir, "repair.runner.log")) }));
+        }
+        catch { Console.WriteLine("REPAIR_TEST_DIAGNOSTIC={\"category\":\"diagnostic_unavailable\"}"); }
+        if (diagnosticStage.EndsWith(":failed", StringComparison.Ordinal)) DeleteTempDir(root);
     }
 }
 
