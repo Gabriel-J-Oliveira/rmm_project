@@ -17,6 +17,12 @@ assert(source.includes("endpoint-active-job"), "active job highlight must be ren
 assert(template.includes("&Uacute;ltimos jobs"), "jobs header must be rendered in the fixed panel");
 assert(source.includes("NightOwlJobDisplay.measuredProgress"), "only measured job progress may be displayed");
 assert(source.includes("data-copy-job-details"), "technical detail copy action must exist");
+assert(source.includes('document.body.classList.add("endpoint-drawer-open")'), "endpoint job drawer uses a page-scoped scroll lock");
+assert(source.includes("window.scrollTo(0, drawerScrollPosition)"), "closing the drawer restores the page position");
+assert(source.includes("drawerReturnFocus.focus({ preventScroll: true })"), "closing the drawer restores focus");
+assert(source.includes("function trapDrawerFocus(event)"), "keyboard focus remains inside the open drawer");
+assert(template.includes('role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="endpoint-drawer-title"'), "endpoint drawer declares an accessible modal relationship");
+assert(/if \(event\.key === "Escape"\) \{\s*closeDrawer\(\);\s*return;/.test(source), "Escape continues to close the endpoint drawer");
 assert(source.includes("data-mark-job-failed"), "manual stale failure action must exist");
 assert(source.includes("document.hidden"), "polling must slow down in background tabs");
 assert(source.includes("String(endpointDetail.activeJob.id) === String(id)"), "active job must be findable from the drawer");
@@ -24,6 +30,12 @@ assert(source.includes("repair_agent"), "repair_agent action must be exposed in 
 assert(source.includes("Deseja reparar o agente"), "repair_agent must ask for confirmation before creating a job");
 assert(source.includes("Job de reparo do agente enfileirado"), "repair_agent must show a queued job toast");
 assert(source.includes('uninstall_agent: "trash-2"'), "uninstall_agent jobs must render with the trash icon");
+assert(source.includes("data-action-group=\"' + escapeHtml(groupId)"), "quick-action groups can be styled through a stable identifier");
+assert(source.includes('], "inventory")'), "inventory quick actions use their own stable layout group");
+assert(source.includes("function jobFactsMarkup(items)"), "job drawer filters unavailable facts from its presentation");
+assert(source.includes("Identificacao tecnica e diagnostico"), "secondary identifiers remain available in the drawer");
+assert(source.includes("jobJsonSection(\"Payload sanitizado\", job.payload)"), "sanitized payload is shown only when it contains data");
+assert(source.includes("jobJsonSection(\"Resultado sanitizado\", job.resultJson)"), "sanitized result is shown only when it contains data");
 assert(source.includes("function agentLifecycleActionButtons(detail)"), "uninstall lifecycle actions must remain available through the task catalog");
 assert(source.includes("function agentManagementActionButtons(detail)"), "agent management actions must remain available through the task catalog");
 assert(source.includes("function renderTaskPanel(detail)"), "task areas must update through stable containers");

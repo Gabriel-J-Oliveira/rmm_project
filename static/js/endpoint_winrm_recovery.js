@@ -5,6 +5,8 @@
     if (!root || !context) return;
 
     const indicator = root.querySelector('[data-winrm-indicator]');
+    const compactAgent = root.querySelector('[data-winrm-compact-agent]');
+    const compactLastTest = root.querySelector('[data-winrm-compact-last-test]');
     const summary = root.querySelector('[data-winrm-recovery-summary]');
     const reason = root.querySelector('[data-winrm-recovery-reason]');
     const openButton = root.querySelector('[data-winrm-recovery-open]');
@@ -47,6 +49,8 @@
     }
 
     function updateSummary() {
+        if (compactAgent) compactAgent.textContent = `Agente: ${context.dataset.agentStatus || 'Não verificado'}`;
+        if (compactLastTest) compactLastTest.textContent = remote.checked_at ? `Último teste: ${remote.checked_at}` : 'Último teste: não realizado';
         if (indicator) {
             indicator.textContent = `WinRM: ${winrmLabel()}`;
             indicator.title = `Última verificação: ${remote.checked_at || 'não informada'}; transporte HTTPS/${remote.port || 5986}; TCP: ${remote.tcp || 'não verificado'}; WS-Man: ${remote.wsman || 'não verificado'}; autenticação: ${remote.authentication || 'não verificada'}; ${remote.error || ''}`;

@@ -34176,17 +34176,40 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 
 .endpoint-monitoring { display: grid; gap: 20px; min-width: 0; }
 .endpoint-monitoring > * { min-width: 0; }
-.endpoint-telemetry-config fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
-.endpoint-telemetry-config form, .endpoint-live > p, .endpoint-live > [data-live-body] { padding: 16px; }
+.endpoint-monitoring-top-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(280px, 3fr);
+    align-items: stretch;
+    gap: 14px;
+    min-width: 0;
+}
+.endpoint-monitoring-summary,
+.endpoint-telemetry-config,
+.endpoint-monitoring-live { min-width: 0; }
+body.page-endpoint-detail .endpoint-monitoring-top-grid > .endpoint-monitoring-summary,
+body.page-endpoint-detail .endpoint-monitoring-top-grid > .endpoint-telemetry-config { align-self: stretch; }
+.endpoint-monitoring-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+.endpoint-monitoring-facts dd { overflow-wrap: anywhere; }
+.endpoint-monitoring-legacy-note { margin: 10px 16px 14px; }
+.endpoint-telemetry-config { display: flex; flex-direction: column; }
+.endpoint-telemetry-config fieldset { border: 0; padding: 0; margin: 0; min-width: 0; width: 100%; display: flex; flex: 1; flex-direction: column; justify-content: space-between; gap: 16px; }
+.endpoint-telemetry-config .endpoint-telemetry-toggle,
+.endpoint-telemetry-config fieldset > button { grid-column: 1 / -1; }
+.endpoint-telemetry-config form { display: flex; flex: 1; min-height: 0; padding: 16px; }
+.endpoint-live > p, .endpoint-live > [data-live-body] { padding: 16px; }
 .endpoint-telemetry-config label { display: grid; gap: 6px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle { display: flex; align-items: center; gap: 8px; }
 .endpoint-telemetry-config .endpoint-telemetry-toggle input { width: auto; margin: 0; }
 .endpoint-telemetry-config input[type="number"] {
     box-sizing: border-box;
     width: 100%;
-    max-width: 280px;
+    max-width: none;
     min-width: 0;
-    padding: 11px 12px;
+    min-height: 42px;
+    padding: 11px 14px;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--night-black);
@@ -34217,7 +34240,15 @@ body.page-jobs .install-batch-item-table .install-batch-status { white-space: no
 .endpoint-live-grid .live-tooltip { min-height: 1.5em; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .endpoint-live .live-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .endpoint-live h3 { font-size: 16px; }
+@media (max-width: 1100px) {
+    .endpoint-monitoring-top-grid { grid-template-columns: minmax(0, 1fr); }
+    .endpoint-monitoring-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 700px) { .endpoint-live-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 700px) {
+    .endpoint-monitoring-facts,
+    .endpoint-telemetry-config fieldset { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Endpoint overview layout: content-driven card rows, scoped to this tab. */
 body.page-endpoint-detail .endpoint-primary-row,
@@ -34245,7 +34276,7 @@ body.page-endpoint-detail .endpoint-summary-row {
 }
 
 body.page-endpoint-detail .endpoint-operational-row {
-    grid-template-columns: minmax(0, 4fr) minmax(270px, 1fr) !important;
+    grid-template-columns: minmax(0, 7fr) minmax(270px, 3fr) !important;
 }
 
 body.page-endpoint-detail .endpoint-secondary-row {
@@ -34261,13 +34292,14 @@ body.page-endpoint-detail .endpoint-overview-layout .endpoint-dense-card:hover {
 }
 
 body.page-endpoint-detail .endpoint-health-body {
-    height: auto !important;
+    height: 100% !important;
+    flex: 1 1 auto;
     display: flex !important;
     flex-direction: column !important;
     align-items: stretch !important;
-    justify-content: flex-start !important;
-    gap: 14px !important;
-    padding: 16px !important;
+    justify-content: space-between !important;
+    gap: 18px !important;
+    padding: 18px 20px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
@@ -34277,12 +34309,12 @@ body.page-endpoint-detail .endpoint-health-body .endpoint-score-block {
 }
 
 body.page-endpoint-detail .endpoint-health-body .endpoint-score-block strong {
-    font-size: 58px !important;
+    font-size: 62px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body > .health-bar {
     width: 100% !important;
-    height: 10px !important;
+    height: 12px !important;
     align-self: stretch !important;
     margin: 0 !important;
 }
@@ -34291,14 +34323,14 @@ body.page-endpoint-detail .endpoint-health-body .health-breakdown {
     width: 100%;
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 12px !important;
+    gap: 18px 24px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-breakdown .health-component {
     min-width: 0;
     display: grid !important;
     grid-template-columns: minmax(0, 1fr);
-    gap: 6px !important;
+    gap: 9px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-component > div {
@@ -34306,12 +34338,17 @@ body.page-endpoint-detail .endpoint-health-body .health-component > div {
     display: flex !important;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 10px;
+}
+
+body.page-endpoint-detail .endpoint-health-body .health-component span,
+body.page-endpoint-detail .endpoint-health-body .health-component strong {
+    font-size: 13px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-component em {
     width: 100%;
-    height: 5px !important;
+    height: 7px !important;
 }
 
 body.page-endpoint-detail .endpoint-health-body .health-component em i {

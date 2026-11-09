@@ -46,10 +46,11 @@ const inventoryHtml = context.renderInventory({
     }
 });
 assert(inventoryHtml.includes('endpoint-inventory-column'));
-assert(inventoryHtml.includes('endpoint-inventory-secondary-grid'));
+assert(!inventoryHtml.includes('endpoint-inventory-secondary-grid'));
+assert.equal((inventoryHtml.match(/class="endpoint-inventory-column"/g) || []).length, 2);
 assert(!inventoryHtml.includes('endpoint-span-2'));
 assert(inventoryHtml.indexOf('Bateria') < inventoryHtml.indexOf('Memoria fisica'));
-assert(inventoryHtml.indexOf('Rede e coleta') < inventoryHtml.indexOf('Discos'));
+assert(inventoryHtml.includes('Rede e coleta') && inventoryHtml.includes('Discos'));
 console.log('PASS: hardware/network/disk renderers, evidence order, adapters, original CPU units, unknowns and XSS');
 
 if (process.argv.includes('--visual')) {
@@ -92,7 +93,7 @@ if (process.argv.includes('--visual')) {
                     const columns = Array.from(document.querySelectorAll('.endpoint-inventory-column'));
                     return {
                         columns: getComputedStyle(document.querySelector('.endpoint-inventory-grid')).gridTemplateColumns.trim().split(/\s+/).length,
-                        secondaryColumns: getComputedStyle(document.querySelector('.endpoint-inventory-secondary-grid')).gridTemplateColumns.trim().split(/\s+/).length,
+                        cardColumns: columns.length,
                         inventoryCardsFillColumns: columns.every(column => Array.from(column.children).every(card => Math.abs(card.getBoundingClientRect().width - column.getBoundingClientRect().width) < 1)),
                         network: {x: network.x, y: network.y, width: network.width},
                         disks: {x: disks.x, y: disks.y, width: disks.width},
@@ -102,12 +103,10 @@ if (process.argv.includes('--visual')) {
                 });
                 if (width > 720) {
                     assert.equal(layout.columns, 2, 'Inventory columns at ' + width);
-                    assert.equal(layout.secondaryColumns, 2, 'Network/disks columns at ' + width);
+                    assert.equal(layout.cardColumns, 2, 'Inventory content flows through two columns at ' + width);
                     assert(layout.inventoryCardsFillColumns, 'Inventory cards should fill their columns at ' + width);
-                    assert.equal(layout.network.y, layout.disks.y, 'Network and disks must share a row at ' + width);
-                    assert(layout.network.x < layout.disks.x, 'Network must be left of disks at ' + width);
-                    assert(layout.network.width < 0.7 * width, 'Network card should not stretch across the page');
-                    assert(layout.disks.height < layout.network.height, 'Disks should retain a content-based height at ' + width);
+                    assert(layout.network.x > layout.disks.x, 'Network and disks occupy adjacent columns at ' + width);
+                    assert(Math.abs(layout.network.y - layout.disks.y) < 200, 'Network and disks remain close in the visual flow at ' + width);
                     assert(layout.batteryY < layout.memoryY, 'Battery card should move above the memory evidence card');
                     const card = page.locator('.endpoint-inventory-network-card');
                     const before = await card.evaluate(el => {
@@ -120,8 +119,7 @@ if (process.argv.includes('--visual')) {
                     assert.equal(after, before, 'Inventory cards must not change appearance on hover');
                 } else {
                     assert.equal(layout.columns, 1, 'Inventory should stack on narrow screens');
-                    assert.equal(layout.secondaryColumns, 1, 'Network/disks should stack on narrow screens');
-                    assert(layout.disks.y > layout.network.y, 'Disks should follow network on narrow screens');
+                    assert(layout.disks.y !== layout.network.y, 'Network and disks remain separate cards on narrow screens');
                 }
             }
             console.log('PASS: visual fixture 1920x1080/1366x900/390x844; screenshots: ' + screenshotDir);

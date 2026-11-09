@@ -344,26 +344,38 @@
                             <small data-winrm-recovery-reason>{% if winrm_recovery_available %}Confirmando elegibilidade segura...{% else %}Somente endpoint offline eleg&iacute;vel, com identidade &iacute;ntegra e sem opera&ccedil;&atilde;o conflitante.{% endif %}</small>
                         </div>
                     </div>
-                    {% if winrm_observability_available %}
-                    <div class="endpoint-winrm-feedback" aria-label="Resultado do WinRM">
-                        <p class="winrm-indicator" data-winrm-indicator role="status">WinRM: n&atilde;o verificado</p>
-                        <p data-winrm-remote-result role="status" aria-live="polite">{% if winrm_remote.checked_at %}&Uacute;ltimo teste: TCP {{ winrm_remote.tcp }}, WS-Man {{ winrm_remote.wsman }}, autentica&ccedil;&atilde;o {{ winrm_remote.authentication }} &mdash; {{ winrm_remote.checked_at }}. {{ winrm_remote.error }}{% else %}Teste remoto ainda n&atilde;o executado.{% endif %}</p>
-                        <p data-winrm-recovery-summary role="status" aria-live="polite">Agente: {{ endpoint.get_status_display }}. &Uacute;ltima tentativa de recupera&ccedil;&atilde;o: n&atilde;o consultada.</p>
-                        <button type="button" data-winrm-recovery-follow disabled>Acompanhar recupera&ccedil;&atilde;o</button>
+                    <div class="endpoint-quick-status" role="status" aria-live="polite">
+                        <span data-winrm-compact-agent>Agente: {{ endpoint.get_status_display }}</span>
+                        {% if winrm_observability_available %}
+                            <span class="winrm-indicator" data-winrm-indicator>WinRM: n&atilde;o verificado</span>
+                            <span data-winrm-compact-last-test>{% if winrm_remote.checked_at %}&Uacute;ltimo teste: {{ winrm_remote.checked_at }}{% else %}&Uacute;ltimo teste: n&atilde;o realizado{% endif %}</span>
+                        {% else %}
+                            <span>WinRM: indispon&iacute;vel para este operador</span>
+                            <span>Teste n&atilde;o dispon&iacute;vel</span>
+                        {% endif %}
                     </div>
-                    <section class="endpoint-winrm-local-details" aria-labelledby="endpoint-winrm-local-title">
-                        <div class="endpoint-winrm-local-heading"><h3 id="endpoint-winrm-local-title">Estado local reportado pelo agente</h3><small>Dados locais vêm do inventário. Autenticação vem do último registro de recuperação do backend; não é um teste atual.</small></div>
-                        <div>
-                        {% if winrm_local.data %}
-                            <p>Configura&ccedil;&atilde;o local: {{ winrm_local_state }} ({{ winrm_local.data.result }}) &mdash; recebida em {{ winrm_local.received_at }}{% if winrm_local_stale %} (informa&ccedil;&atilde;o desatualizada){% endif %}.</p>
-                            <p>Servi&ccedil;o: {{ winrm_local.data.service.state|default:'indispon&iacute;vel' }}; inicializa&ccedil;&atilde;o: {{ winrm_local.data.service.startup|default:'n&atilde;o verificada' }}.</p>
-                            <p>Listeners: {% for listener in winrm_local.data.listeners %}{{ listener.transport }}:{{ listener.port }} (ativo: {{ listener.enabled }}) {% empty %}nenhum informado{% endfor %}</p>
-                            <p>Perfis: {{ winrm_local.data.profiles|join:', '|default:'n&atilde;o verificados' }}. Firewall: {% for rule in winrm_local.data.firewall %}{{ rule.action }} / {{ rule.profile }} / {{ rule.port }} / {{ rule.remote_addresses|join:', ' }}; {% empty %}nenhuma regra informada{% endfor %}</p>
-                            <p>Pol&iacute;tica: {{ winrm_local.data.policy|join:', '|default:'n&atilde;o informada' }}. Erros: {{ winrm_local.data.errors|join:', '|default:'nenhum informado' }}.</p>
-                        {% else %}<p>Configura&ccedil;&atilde;o local n&atilde;o informada pelo agente.</p>{% endif %}
-                        <p>Autentica&ccedil;&atilde;o administrativa: {{ winrm_authentication }}{% if winrm_authentication_at %} em {{ winrm_authentication_at|date:'d/m/Y H:i:s' }}{% endif %}.</p>
+                    {% if winrm_observability_available %}
+                    <details class="endpoint-winrm-details">
+                        <summary>Detalhes t&eacute;cnicos</summary>
+                        <div class="endpoint-winrm-feedback" aria-label="Resultado do WinRM">
+                            <p data-winrm-remote-result role="status" aria-live="polite">{% if winrm_remote.checked_at %}&Uacute;ltimo teste: TCP {{ winrm_remote.tcp }}, WS-Man {{ winrm_remote.wsman }}, autentica&ccedil;&atilde;o {{ winrm_remote.authentication }} &mdash; {{ winrm_remote.checked_at }}. {{ winrm_remote.error }}{% else %}Teste remoto ainda n&atilde;o executado.{% endif %}</p>
+                            <p data-winrm-recovery-summary role="status" aria-live="polite">Agente: {{ endpoint.get_status_display }}. &Uacute;ltima tentativa de recupera&ccedil;&atilde;o: n&atilde;o consultada.</p>
+                            <button type="button" data-winrm-recovery-follow disabled>Acompanhar recupera&ccedil;&atilde;o</button>
                         </div>
-                    </section>
+                        <section class="endpoint-winrm-local-details" aria-labelledby="endpoint-winrm-local-title">
+                            <div class="endpoint-winrm-local-heading"><h3 id="endpoint-winrm-local-title">Estado local reportado pelo agente</h3><small>Dados locais v&ecirc;m do invent&aacute;rio. Autentica&ccedil;&atilde;o vem do &uacute;ltimo registro de recupera&ccedil;&atilde;o do backend; n&atilde;o &eacute; um teste atual.</small></div>
+                            <div>
+                            {% if winrm_local.data %}
+                                <p>Configura&ccedil;&atilde;o local: {{ winrm_local_state }} ({{ winrm_local.data.result }}) &mdash; recebida em {{ winrm_local.received_at }}{% if winrm_local_stale %} (informa&ccedil;&atilde;o desatualizada){% endif %}.</p>
+                                <p>Servi&ccedil;o: {{ winrm_local.data.service.state|default:'indispon&iacute;vel' }}; inicializa&ccedil;&atilde;o: {{ winrm_local.data.service.startup|default:'n&atilde;o verificada' }}.</p>
+                                <p>Listeners: {% for listener in winrm_local.data.listeners %}{{ listener.transport }}:{{ listener.port }} (ativo: {{ listener.enabled }}) {% empty %}nenhum informado{% endfor %}</p>
+                                <p>Perfis: {{ winrm_local.data.profiles|join:', '|default:'n&atilde;o verificados' }}. Firewall: {% for rule in winrm_local.data.firewall %}{{ rule.action }} / {{ rule.profile }} / {{ rule.port }} / {{ rule.remote_addresses|join:', ' }}; {% empty %}nenhuma regra informada{% endfor %}</p>
+                                <p>Pol&iacute;tica: {{ winrm_local.data.policy|join:', '|default:'n&atilde;o informada' }}. Erros: {{ winrm_local.data.errors|join:', '|default:'nenhum informado' }}.</p>
+                            {% else %}<p>Configura&ccedil;&atilde;o local n&atilde;o informada pelo agente.</p>{% endif %}
+                            <p>Autentica&ccedil;&atilde;o administrativa: {{ winrm_authentication }}{% if winrm_authentication_at %} em {{ winrm_authentication_at|date:'d/m/Y H:i:s' }}{% endif %}.</p>
+                            </div>
+                        </section>
+                    </details>
                     {% if winrm_recovery_available %}
                     <div class="install-credential-overlay winrm-credential-overlay" data-recovery-modal hidden><section class="install-credential-modal" role="dialog" aria-modal="true" aria-label="Recuperar agente"><h2>Recuperar agente</h2><form data-winrm-recovery action="{% url 'agent-offline-recovery' endpoint.id %}" method="post" autocomplete="off">
                         {% csrf_token %}
@@ -404,12 +416,12 @@
 
 <div class="alert-action-toast endpoint-detail-toast" data-endpoint-toast hidden></div>
 <div class="event-drawer-backdrop endpoint-drawer-backdrop" data-endpoint-drawer-backdrop hidden></div>
-<aside class="event-drawer endpoint-mini-drawer" data-endpoint-drawer aria-hidden="true">
+<aside class="event-drawer endpoint-mini-drawer" data-endpoint-drawer role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="endpoint-drawer-title" aria-describedby="endpoint-drawer-subtitle" tabindex="-1">
     <header>
         <div>
             <span data-endpoint-drawer-kicker>Detalhe</span>
-            <h2 data-endpoint-drawer-title>Selecione um item</h2>
-            <p data-endpoint-drawer-subtitle>Contexto operacional</p>
+            <h2 id="endpoint-drawer-title" data-endpoint-drawer-title>Selecione um item</h2>
+            <p id="endpoint-drawer-subtitle" data-endpoint-drawer-subtitle>Contexto operacional</p>
         </div>
         <button type="button" data-endpoint-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
     </header>

@@ -1,4 +1,5 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const path=require('node:path');
 class El {
  constructor(tag='div'){this.tag=tag;this.children=[];this.dataset={};this.events={};this.disabled=false;this.hidden=false;this.textContent='';this.parent=null;}
  append(...nodes){this.children.push(...nodes);for(const node of nodes)node.parent=this;}
@@ -8,6 +9,10 @@ class El {
  addEventListener(name,handler){this.events[name]=handler} setAttribute(){} focus(){}
 }
 const available={script_id:'environment_diagnostic',version:1,sha256:'a'.repeat(64),description:'Read only',approved:true,revoked:false,parameter_schema:{type:'object',properties:{},additionalProperties:false}};
+const scriptsCss=fs.readFileSync(path.join(__dirname,'../../static/css/endpoint_actions_jobs.css'),'utf8');
+assert.match(scriptsCss,/\.endpoint-approved-scripts-body\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,'approved scripts use two desktop columns');
+assert.match(scriptsCss,/\.endpoint-approved-script-row\s*\{[^}]*min-height:\s*132px/,'script cards have a consistent minimum height');
+assert.match(scriptsCss,/@media\s*\(max-width:\s*720px\)[\s\S]*?\.endpoint-approved-scripts-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,'approved scripts stack on small screens');
 const revoked={...available,script_id:'revoked_diagnostic',sha256:'b'.repeat(64),revoked:true};
 const placement=new El(),root=new El(),tasksButton=new El();root.dataset.endpointId='abc';
 root.nodes={'[data-approved-scripts-placement]':placement};

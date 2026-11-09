@@ -21,9 +21,9 @@ async function main() {
         const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
         const categories = ['Diagnósticos', 'Operações', 'Manutenção do agente', 'Scripts aprovados', 'Ações críticas'];
         const markup = categories.map((title, i) => `<section class="endpoint-action-category${i === 4 ? ' endpoint-actions-danger' : ''}"><h3 class="endpoint-category-heading">${title}</h3><div class="endpoint-action-grid"><button class="endpoint-quick-action-button">Ação de exemplo</button><button class="endpoint-quick-action-button">Outra ação</button></div></section>`).join('');
-        await page.setContent(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>${css}</style><body class="page-endpoint-detail"><main style="padding:24px"><header class="endpoint-ops-header"><div class="endpoint-ops-title"><div class="endpoint-title-line"><h1>CS-CVEL-0281</h1><span class="status-badge">Online</span></div><div class="endpoint-critical-strip">Windows · control.local · 192.168.1.10</div></div><div class="endpoint-ops-actions"><button class="copy-btn">Hostname</button></div></header><section class="endpoint-actions-tab" style="margin-top:16px"><div class="endpoint-actions-jobs-layout"><div class="endpoint-actions-column"><section class="panel endpoint-quick-actions-card"><div class="endpoint-quick-actions-intro"><h2>Ações rápidas</h2><p>Acesso, conectividade e recuperação.</p></div><div class="endpoint-quick-action-list"><button class="endpoint-quick-action-button">Acessar terminal</button><button class="endpoint-quick-action-button">Testar WinRM</button><button class="endpoint-quick-action-button">Reativar agente</button></div></section>${markup}</div><aside class="panel endpoint-jobs-panel"><header class="endpoint-jobs-header"><h2>Últimos jobs</h2><button aria-label="Atualizar">↻</button></header><div class="endpoint-jobs-scroll"><div class="endpoint-jobs-content"></div></div></aside></div></section></main></body>`);
+        await page.setContent(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>${css}</style><body class="page-endpoint-detail"><main style="padding:24px"><header class="endpoint-ops-header"><div class="endpoint-ops-title"><div class="endpoint-title-line"><h1>CS-CVEL-0281</h1><span class="status-badge">Online</span></div><div class="endpoint-critical-strip">Windows · control.local · 192.168.1.10</div></div><div class="endpoint-ops-actions"><button class="copy-btn">Hostname</button></div></header><section class="endpoint-actions-tab" style="margin-top:16px"><div class="endpoint-actions-jobs-layout"><div class="endpoint-actions-column"><section class="panel endpoint-quick-actions-card"><div class="endpoint-quick-actions-intro"><h2>Ações rápidas</h2><p>Acesso, conectividade e recuperação.</p></div><div class="endpoint-quick-action-list"><button class="endpoint-quick-action-button">Acessar terminal</button><button class="endpoint-quick-action-button">Testar WinRM</button><button class="endpoint-quick-action-button">Reativar agente</button></div></section><section class="panel"><div class="endpoint-winrm-feedback"><p>TCP e WS-Man verificados.</p><p>Última recuperação não consultada.</p><button>Acompanhar recuperação</button></div><section class="endpoint-winrm-local-details"><div class="endpoint-winrm-local-heading"><h3>Estado local reportado pelo agente</h3><small>Dados locais vêm do inventário; não representam um teste atual.</small></div><div><p>Serviço: Running</p><p>Listener: HTTPS 5986</p></div></section></section>${markup}</div><aside class="panel endpoint-jobs-panel"><header class="endpoint-jobs-header"><h2>Últimos jobs</h2><button aria-label="Atualizar">↻</button></header><div class="endpoint-jobs-scroll"><div class="endpoint-jobs-content"></div></div></aside></div></section></main></body>`);
         const setJobs = count => page.locator('.endpoint-jobs-content').evaluate((node, n) => {
-            node.innerHTML = n ? Array.from({ length: n }, (_, i) => `<article class="endpoint-job-item"><div class="endpoint-job-card-content"><div class="endpoint-job-card-heading"><span>Concluído</span><span>Coleta de inventário</span></div><div class="endpoint-job-card-meta"><time>09/11/2026 10:00</time><span>2s</span></div><p class="endpoint-job-result">${i % 2 ? 'Resumo curto.' : 'Resultado de leitura longo para validar a quebra de texto sem sobrepor os controles laterais. '.repeat(3)}</p></div><div class="endpoint-job-actions"><button class="endpoint-job-action-button">Detalhes</button><button class="endpoint-job-action-button">Copiar</button></div></article>`).join('') : '<p class="endpoint-empty-state">Nenhum job registrado neste endpoint</p>';
+            node.innerHTML = n ? Array.from({ length: n }, (_, i) => `<article class="endpoint-job-item"><div class="endpoint-job-card-content"><div class="endpoint-job-card-heading"><span>Concluído</span><span>Coleta de inventário</span></div><div class="endpoint-job-card-meta"><time>09/11/2026 10:00</time><span>2s</span><span class="endpoint-job-result">${i % 2 ? 'Resumo curto.' : 'Resultado de leitura longo para validar a quebra de texto sem sobrepor os controles laterais. '.repeat(3)}</span></div></div><div class="endpoint-job-actions"><button class="endpoint-job-action-button">Detalhes</button><button class="endpoint-job-action-button">Copiar</button></div></article>`).join('') : '<p class="endpoint-empty-state">Nenhum job registrado neste endpoint</p>';
         }, count);
 
         await setJobs(0);
@@ -36,12 +36,32 @@ async function main() {
             const actions = document.querySelector('.endpoint-actions-column').getBoundingClientRect();
             const jobs = document.querySelector('.endpoint-jobs-panel').getBoundingClientRect();
             const scroll = document.querySelector('.endpoint-jobs-scroll');
+            const jobTextFits = [...document.querySelectorAll('.endpoint-job-item')].every(card => {
+                const content = card.querySelector('.endpoint-job-card-content').getBoundingClientRect();
+                const buttons = card.querySelector('.endpoint-job-actions').getBoundingClientRect();
+                const results = [...card.querySelectorAll('.endpoint-job-result')];
+                return results.every(result => {
+                    const rect = result.getBoundingClientRect();
+                    return rect.left >= content.left - 1 && rect.right <= content.right + 1 && rect.right < buttons.left;
+                });
+            });
+            const winrmButton = document.querySelector('.endpoint-winrm-feedback button').getBoundingClientRect();
+            const feedback = document.querySelector('.endpoint-winrm-feedback').getBoundingClientRect();
+            const localTitle = document.querySelector('.endpoint-winrm-local-heading h3').getBoundingClientRect();
+            const localDescription = document.querySelector('.endpoint-winrm-local-heading small').getBoundingClientRect();
+            const localInfo = document.querySelector('.endpoint-winrm-local-details > div:last-child').getBoundingClientRect();
             return { actionsBottom: actions.bottom, jobsBottom: jobs.bottom, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight,
-                actionsWidth: actions.width, jobsWidth: jobs.width, cols: getComputedStyle(document.querySelector('.endpoint-actions-jobs-layout')).gridTemplateColumns };
+                actionsWidth: actions.width, jobsWidth: jobs.width, jobTextFits, cols: getComputedStyle(document.querySelector('.endpoint-actions-jobs-layout')).gridTemplateColumns,
+                winrmButton, feedback, localTitle, localDescription, localInfo };
         });
         assert(Math.abs(desktop.actionsBottom - desktop.jobsBottom) <= 1, 'desktop jobs panel shares the actions column bottom');
         assert(desktop.scrollHeight > desktop.clientHeight, 'long history scrolls inside its list');
         assert(desktop.jobsWidth > 0 && desktop.actionsWidth > desktop.jobsWidth * 3, 'desktop layout keeps the approximate 80/20 split');
+        assert.equal(desktop.jobTextFits, true, 'job summaries stay within the content column and do not overlap actions');
+        assert(desktop.winrmButton.width < desktop.feedback.width * 0.65, 'WinRM follow-up button uses natural width');
+        assert(desktop.winrmButton.left <= desktop.feedback.left + 1, 'WinRM follow-up button is left aligned');
+        assert(desktop.localDescription.top >= desktop.localTitle.bottom - 1, `local WinRM explanation follows its title (${JSON.stringify({title:desktop.localTitle,description:desktop.localDescription})})`);
+        assert(desktop.localInfo.top >= desktop.localDescription.bottom - 1, `local WinRM facts follow the heading (${JSON.stringify({description:desktop.localDescription,info:desktop.localInfo})})`);
         const quickButton = page.locator('.endpoint-quick-action-button').first();
         const quickCard = page.locator('.endpoint-quick-actions-card');
         const cardBefore = await quickCard.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor, shadow: getComputedStyle(e).boxShadow, transform: getComputedStyle(e).transform }));
@@ -55,10 +75,14 @@ async function main() {
         assert.deepEqual(cardAfter, cardBefore, 'card appearance does not change when hovered');
         const disabledButton = page.locator('.endpoint-quick-action-button').nth(2);
         await disabledButton.evaluate(e => e.disabled = true);
-        const disabledBefore = await disabledButton.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor }));
+        await page.mouse.move(0, 0);
+        await page.waitForTimeout(250);
         await disabledButton.hover();
-        const disabledAfter = await disabledButton.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor }));
-        assert.deepEqual(disabledAfter, disabledBefore, 'disabled action does not receive hover styling');
+        await page.waitForTimeout(250);
+        const disabledAfter = await disabledButton.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor, opacity: getComputedStyle(e).opacity, cursor: getComputedStyle(e).cursor }));
+        assert.notEqual(disabledAfter.background, hoverBackground, 'disabled action does not receive the interactive purple hover');
+        assert.equal(disabledAfter.opacity, '0.72', 'disabled action keeps disabled opacity');
+        assert.equal(disabledAfter.cursor, 'not-allowed', 'disabled action keeps disabled cursor');
         await disabledButton.evaluate(e => e.disabled = false);
         await page.mouse.move(0, 0);
         await page.screenshot({ path: path.join(output, 'desktop-many-jobs.png'), fullPage: true });

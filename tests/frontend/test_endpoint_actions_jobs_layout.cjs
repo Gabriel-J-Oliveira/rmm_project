@@ -16,6 +16,15 @@ assert(actions.includes('data-approved-scripts-placement'));
 assert(actions.includes('data-endpoint-jobs-scroll'));
 assert(actions.includes('data-winrm-check'));
 assert(actions.includes('data-winrm-recovery-open'));
+assert(actions.includes('data-winrm-compact-agent'));
+assert(actions.includes('data-winrm-compact-last-test'));
+assert.match(actions,/<details class="endpoint-winrm-details">[\s\S]*?<summary>Detalhes t&eacute;cnicos<\/summary>/,'technical WinRM information is collapsed by default');
+for (const hook of ['data-winrm-remote-result','data-winrm-recovery-summary','data-winrm-recovery-follow','endpoint-winrm-local-details']) {
+    assert(actions.includes(hook), 'technical WinRM hook is preserved: ' + hook);
+}
+assert.match(css,/\.endpoint-winrm-feedback button\s*\{[^}]*justify-self:\s*start;[^}]*width:\s*max-content;/,'WinRM follow-up button keeps its natural width and left alignment');
+assert.match(css,/\.endpoint-winrm-local-details\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/,'local WinRM heading can occupy its own row');
+assert.match(css,/\.endpoint-winrm-local-heading\s*>\s*small\s*\{[^}]*max-width:\s*none;/,'local WinRM explanation is not compressed beside the title');
 assert(!html.includes('Voltar para endpoints'));
 assert(!actions.includes('<details class="endpoint-action-category'),'action categories do not collapse');
 assert(!actions.includes('<summary>Estado local reportado'),'local WinRM state is always visible');
@@ -25,6 +34,7 @@ assert.match(css,/grid-template-columns:\s*minmax\(0,\s*4fr\)\s+minmax\(260px,\s
 assert.match(css,/\.endpoint-actions-jobs-layout\s*\{[^}]*align-items:\s*stretch/,'jobs panel stretches to the actions column');
 assert.doesNotMatch(css,/\.endpoint-jobs-panel\s*\{[^}]*?(?:^|[;\s])height\s*:/,'jobs panel has no fixed height');
 assert.match(css,/\.endpoint-jobs-scroll[\s\S]*?overflow-y:\s*auto/,'job scrolling is isolated to its list');
+assert.match(css,/\.endpoint-jobs-content\s*>\s*\.endpoint-job-list\s*\{[^}]*padding:\s*0\s*!important/,'the endpoint history resets the legacy important padding override');
 assert.match(css,/@media\s*\(max-width:\s*1050px\)[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/,'layout stacks when the 4:1 split no longer fits');
 assert.match(css,/endpoint-quick-action-button:hover:not\(:disabled\)[\s\S]*?background:\s*rgba\(124,\s*58,\s*237/,'interactive hover uses NightOwl purple');
 assert.match(css,/endpoint-actions-tab \.panel:hover[\s\S]*?box-shadow:\s*none/,'panel hover has no elevation');

@@ -14,6 +14,9 @@ for(const status of ['queued','running','completed','failed','expired','cancelle
  assert(html.includes('endpoint-job-actions'));
  assert(html.indexOf('endpoint-job-card-content') < html.indexOf('endpoint-job-actions'));
 }
+const compact = ctx.render({status:'completed',id:'id',durationMs:2000,createdAt:'2026-11-09T09:22:00Z',errorMessage:'Job concluído.'},false);
+assert.match(compact,/<div class="endpoint-job-card-meta"><time>[^<]+<\/time><span>[^<]+<\/span><span class="endpoint-job-result"/,'job result is inline with its time and duration');
+assert(!compact.includes('<p class="endpoint-job-result"'),'result does not consume a dedicated row');
 assert(ctx.render({status:'running',isStale:true,id:'id'},false).includes('Resultado n&atilde;o confirmado'));
 assert(!ctx.render({status:'completed',id:'id'},false).includes('data-copy-job='), 'copy is omitted without output');
 assert(ctx.render({status:'completed',id:'id',stdout:'safe output'},false).includes('>Copiar</button>'));
