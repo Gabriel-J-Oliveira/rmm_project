@@ -11,6 +11,7 @@ function assert(condition, message) {
 }
 
 assert(template.includes("css/endpoint_detail_refinement.css"), "detail refinement stylesheet is loaded on endpoint detail");
+assert(template.includes("js/endpoint_detail.js' %}?v=20261109-1"), "endpoint detail script uses a fresh cache key");
 assert(!base.includes("endpoint_detail_refinement.css"), "refinement stylesheet must not be global");
 assert(!template.includes("block icon_script"), "endpoint template must inherit the Lucide loader when terminal is enabled");
 assert(base.includes("unpkg.com/lucide@latest/dist/umd/lucide.min.js"), "base page provides Lucide to the endpoint detail");
