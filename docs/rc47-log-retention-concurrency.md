@@ -18,3 +18,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Publish-NightO
 ```
 
 Não usar `-SkipTests` nem publicar automaticamente. Confirmar o resultado do manifesto e da assinatura no fluxo oficial antes da publicação autorizada separadamente.
+
+## Investigação da falha intermitente na validação integrada
+
+O resultado original não continha tempos nem identificação do detentor, portanto não permite atribuir aquela ocorrência específica a contenção, starvation ou outro atraso. Dez execuções normais do teste anterior passaram nesta estação Windows; não são prova de ausência de falha sob carga.
+
+Foi identificado e reproduzido um defeito do fixture: os quatro threads começavam a esperar pelo lock antes de três processos completarem sua inicialização, enquanto o detentor permanecia bloqueado aguardando sua prontidão e depois dormia 800 ms. Com atraso de 4.400 ms no início de um dos processos, três execuções independentes falharam: o detentor manteve o lock por 5.340–5.348 ms e os quatro threads atingiram o timeout de aquisição de cinco segundos. O atraso foi deliberadamente introduzido apenas no teste; não é medição da estação da falha original.
+
+Os concorrentes agora sinalizam prontidão antes de o detentor adquirir o lock. Então todos recebem o sinal de partida, o lock fica intencionalmente ocupado por 800 ms e a carga continua com quatro threads, três processos, leitor e rotação. O cenário adicional de processo lento é executado no CI Windows sem repetir testes que falham. Em três execuções locais com atraso de 4.400 ms, a preparação levou 4.529–4.561 ms antes da aquisição; o lock controlado ficou ocupado por 802–810 ms, todos os processos terminaram com código 0 e os 421 registros permaneceram íntegros. O teste público ainda verifica o timeout real de cinco segundos.
+
+As métricas agora identificam processo, thread e trabalhador; falhas de I/O também registram etapa, tempo e códigos, sem conteúdo dos registros. O tempo de espera continua incluindo escalonamento; a medição da seção crítica termina antes do descarte dos streams. O lock não garante ordem justa entre processos, portanto starvation sob outras cargas permanece um risco residual não comprovado. Não houve alteração no mecanismo de produção ou no prazo de aquisição nesta investigação.
