@@ -67,6 +67,7 @@ from agents.audit import create_audit_event, get_client_ip
 from agents.telemetry_configuration import monitoring_summary
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
+    agent_release_artifact_channel,
     build_repair_agent_job_payload,
     build_update_agent_job_payload,
     change_agent_release_rollout,
@@ -2856,8 +2857,11 @@ def _manual_update_release_options(endpoint):
     channel = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     releases = list(AgentRelease.objects.select_related('replacement_release').filter(
         channel=channel,
-        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED},
-        revoked=False,
+        status__in=set(AGENT_RELEASE_AVAILABLE_STATUSES) | {
+            AgentRelease.STATUS_PAUSED,
+            AgentRelease.STATUS_REVOKED,
+            AgentRelease.STATUS_SUPERSEDED,
+        },
     ))
     releases = sort_releases_by_version(releases, reverse=True)[:20]
     rows = []
@@ -2868,6 +2872,7 @@ def _manual_update_release_options(endpoint):
             'id': str(release.id),
             'version': release.version,
             'channel': release.channel,
+            'source_channel': agent_release_artifact_channel(release),
             'status': release.status,
             'status_label': release.get_status_display() if hasattr(release, 'get_status_display') else release.status,
             'is_endpoint_channel': release.channel == channel,
@@ -2884,6 +2889,7 @@ def _manual_update_release_options(endpoint):
             'manifest_url': release.manifest_url,
             'eligible': decision.eligible,
             'reason_code': decision.reason_code,
+            'eligibility_detail': _update_policy_message(decision.reason_code),
             'requires_force': decision.reason_code == 'downgrade_requires_force' or (version_comparison is not None and version_comparison > 0),
             'same_version': version_comparison == 0,
             'metadata_complete': bool(release.package_url and release.sha256 and release.size),
@@ -3689,6 +3695,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'latest_agent_version': recommended_version,
         'recommended_agent_version': recommended_version,
         'agent_update_policy': update_decision.as_panel_payload(),
+        'can_change_update_policy': bool(can_view_technical),
         'agent_update_releases': _manual_update_release_options(endpoint) if can_view_technical else [],
         'trusted_release_keys_bundle': _trust_bundle_payload(latest_trust_bundle),
         'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
@@ -4723,44 +4730,64 @@ def endpoint_update_policy_update(request, pk):
 
     channel_before = endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE
     rollout_before = None
-    channel = (request.POST.get('update_channel') or endpoint.update_channel or AgentMachine.UPDATE_CHANNEL_STABLE).strip()
-    policy = (request.POST.get('update_policy') or endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL).strip()
-    if channel not in {choice[0] for choice in AgentMachine.UPDATE_CHANNEL_CHOICES}:
-        return JsonResponse({'error': 'invalid_channel', 'detail': 'Canal invalido.'}, status=400)
-    if policy not in {choice[0] for choice in AgentMachine.UPDATE_POLICY_CHOICES}:
-        return JsonResponse({'error': 'invalid_policy', 'detail': 'Politica invalida.'}, status=400)
+    changed_fields = set()
+    posted = request.POST
+    if 'update_channel' in posted:
+        channel = posted.get('update_channel', '').strip()
+        if channel not in {choice[0] for choice in AgentMachine.UPDATE_CHANNEL_CHOICES}:
+            return JsonResponse({'error': 'invalid_channel', 'detail': 'Canal invalido.'}, status=400)
+        endpoint.update_channel = channel
+        changed_fields.add('update_channel')
 
-    endpoint.update_channel = channel
-    endpoint.update_policy = policy
-    endpoint.auto_update_enabled = (request.POST.get('auto_update_enabled') or '').lower() in {'1', 'true', 'on', 'yes'}
-    endpoint.update_paused = (request.POST.get('update_paused') or '').lower() in {'1', 'true', 'on', 'yes'}
-    endpoint.pinned_agent_version = (request.POST.get('pinned_agent_version') or '').strip()[:50]
-    start = (request.POST.get('maintenance_window_start') or '').strip()
-    end = (request.POST.get('maintenance_window_end') or '').strip()
-    window_timezone = (request.POST.get('maintenance_window_timezone') or endpoint.maintenance_window_timezone or settings.TIME_ZONE).strip()
-    try:
-        endpoint.maintenance_window_start = time.fromisoformat(start) if start else None
-        endpoint.maintenance_window_end = time.fromisoformat(end) if end else None
-        ZoneInfo(window_timezone)
-        if bool(start) != bool(end) or (start and endpoint.maintenance_window_start == endpoint.maintenance_window_end):
-            raise ValueError('Invalid daily window')
-    except (ValueError, ZoneInfoNotFoundError):
-        return JsonResponse({'error': 'invalid_maintenance_window', 'detail': 'Janela de manutencao invalida.'}, status=400)
-    endpoint.maintenance_window_timezone = window_timezone
-    endpoint.save(update_fields=[
-        'update_channel',
-        'update_policy',
-        'auto_update_enabled',
-        'update_paused',
-        'pinned_agent_version',
-        'maintenance_window_start',
-        'maintenance_window_end',
-        'maintenance_window_timezone',
-        'updated_at',
-    ])
+    if 'update_policy' in posted:
+        policy = posted.get('update_policy', '').strip()
+        if policy not in {choice[0] for choice in AgentMachine.UPDATE_POLICY_CHOICES}:
+            return JsonResponse({'error': 'invalid_policy', 'detail': 'Politica invalida.'}, status=400)
+        endpoint.update_policy = policy
+        changed_fields.add('update_policy')
+
+    boolean_values = {'1': True, 'true': True, 'on': True, 'yes': True,
+                      '0': False, 'false': False, 'off': False, 'no': False}
+    for field in ('auto_update_enabled', 'update_paused'):
+        if field in posted:
+            raw = posted.get(field, '').strip().lower()
+            if raw not in boolean_values:
+                return JsonResponse({'error': 'invalid_boolean', 'detail': 'Valor booleano invalido.'}, status=400)
+            setattr(endpoint, field, boolean_values[raw])
+            changed_fields.add(field)
+
+    if 'pinned_agent_version' in posted:
+        endpoint.pinned_agent_version = posted.get('pinned_agent_version', '').strip()[:50]
+        changed_fields.add('pinned_agent_version')
+
+    window_fields = {'maintenance_window_start', 'maintenance_window_end', 'maintenance_window_timezone'}
+    if window_fields.intersection(posted):
+        start = posted.get('maintenance_window_start', endpoint.maintenance_window_start.isoformat() if endpoint.maintenance_window_start else '').strip()
+        end = posted.get('maintenance_window_end', endpoint.maintenance_window_end.isoformat() if endpoint.maintenance_window_end else '').strip()
+        window_timezone = (
+            posted.get('maintenance_window_timezone', endpoint.maintenance_window_timezone or settings.TIME_ZONE).strip()
+            or endpoint.maintenance_window_timezone
+            or settings.TIME_ZONE
+        )
+        try:
+            endpoint.maintenance_window_start = time.fromisoformat(start) if start else None
+            endpoint.maintenance_window_end = time.fromisoformat(end) if end else None
+            ZoneInfo(window_timezone)
+            if bool(start) != bool(end) or (start and endpoint.maintenance_window_start == endpoint.maintenance_window_end):
+                raise ValueError('Invalid daily window')
+        except (ValueError, ZoneInfoNotFoundError):
+            return JsonResponse({'error': 'invalid_maintenance_window', 'detail': 'Janela de manutencao invalida.'}, status=400)
+        endpoint.maintenance_window_timezone = window_timezone
+        changed_fields.update(window_fields)
+
+    if not changed_fields and 'rollout_groups' not in posted:
+        return JsonResponse({'error': 'empty_policy_update', 'detail': 'Nenhuma alteracao de politica foi informada.'}, status=400)
+
+    if changed_fields:
+        endpoint.save(update_fields=sorted(changed_fields | {'updated_at'}))
 
     group_ids = request.POST.getlist('rollout_groups')
-    if 'rollout_groups' in request.POST:
+    if 'rollout_groups' in posted:
         endpoint.rollout_groups.set(AgentReleaseGroup.objects.filter(id__in=[value for value in group_ids if value]))
 
     AgentReleaseAudit.objects.create(
@@ -4771,12 +4798,16 @@ def endpoint_update_policy_update(request, pk):
         channel_before=channel_before,
         channel_after=endpoint.update_channel,
         rollout_before=rollout_before,
-        reason=(request.POST.get('reason') or '').strip(),
+        reason=(request.POST.get('reason') or '').strip() or (
+            'Alteracao explicita do canal de atualizacao.' if 'update_channel' in posted
+            else 'Atualizacao parcial da politica de atualizacao.'
+        ),
         metadata={
             'update_policy': endpoint.update_policy,
             'auto_update_enabled': endpoint.auto_update_enabled,
             'update_paused': endpoint.update_paused,
             'pinned_agent_version': endpoint.pinned_agent_version,
+            'changed_fields': sorted(changed_fields | ({'rollout_groups'} if 'rollout_groups' in posted else set())),
         },
     )
     decision = evaluate_agent_update_policy(endpoint, manual=False)

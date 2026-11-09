@@ -402,6 +402,10 @@
                 lastError: agentHealth.last_error || "-",
                 updateChannel: agentUpdatePolicy.channel || endpoint.update_channel || "stable",
                 updatePolicy: agentUpdatePolicy.update_policy || endpoint.update_policy || "manual",
+                canChangeChannel: !!payload.can_change_update_policy,
+                autoUpdateEnabled: !!agentUpdatePolicy.auto_update_enabled,
+                maintenanceWindowStart: agentUpdatePolicy.maintenance_window_start || "",
+                maintenanceWindowEnd: agentUpdatePolicy.maintenance_window_end || "",
                 updateReason: agentUpdatePolicy.reason_code || "",
                 updateReleases: agentUpdateReleases,
                 trustBundle: trustBundle,
@@ -1694,7 +1698,8 @@
         dialog: null,
         origin: null,
         selectedRelease: null,
-        sending: false
+        sending: false,
+        savingChannel: false
     };
 
     function appendText(parent, tag, text, className) {
@@ -1725,9 +1730,9 @@
 
     function releaseStatusText(release) {
         if (!release) return "-";
-        if (release.revoked) return "Revogada";
+        if (release.revoked || release.status === "revoked") return "Revogada";
         if (release.status === "superseded" || release.superseded) return "Substituida";
-        if (release.status === "paused" || release.rollout_paused) return "Pausada - atualizacao manual permitida";
+        if (release.status === "paused" || release.rollout_paused) return "Pausada (rollout)";
         if (release.status === "published" || release.status === "available" || release.status === "active") return "Publicada";
         return release.status_label || release.status || "-";
     }
@@ -1736,7 +1741,7 @@
         const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
         const channel = agent.updateChannel || "stable";
         return ((agent.updateReleases || [])).filter(function (release) {
-            return release && release.id && release.channel === channel && !release.revoked;
+            return release && release.id && release.channel === channel;
         }).sort(function (left, right) {
             const comparison = compareVersions(right.version, left.version);
             if (comparison != null && comparison !== 0) return comparison;
@@ -1766,8 +1771,20 @@
         if (!updateModal.dialog) return;
         const submit = updateModal.dialog.querySelector("[data-update-submit]");
         if (!submit) return;
-        submit.disabled = updateModal.sending;
+        submit.disabled = updateModal.sending || updateModal.savingChannel;
         submit.textContent = updateModal.sending ? "Enviando..." : "Atualizar agente";
+    }
+
+    function updateChannelSaveState() {
+        if (!updateModal.dialog) return;
+        const save = updateModal.dialog.querySelector("[data-update-channel-save]");
+        if (!save) return;
+        const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
+        const persistedChannel = channelSelect ? channelSelect.dataset.persistedChannel || "stable" : "stable";
+        const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
+        if (channelSelect) channelSelect.disabled = updateModal.savingChannel || updateModal.sending || !agent.canChangeChannel;
+        save.disabled = updateModal.savingChannel || updateModal.sending || !channelSelect || channelSelect.value === persistedChannel;
+        save.textContent = updateModal.savingChannel ? "Salvando..." : "Salvar canal";
     }
 
     function selectedUpdateRelease() {
@@ -1797,8 +1814,12 @@
             if (showMessage) setModalError("Nenhuma release foi selecionada.");
             return null;
         }
-        if (release.revoked) {
+        if (release.revoked || release.status === "revoked") {
             if (showMessage) setModalError("Esta release foi revogada e nao pode ser instalada.");
+            return null;
+        }
+        if (!release.eligible) {
+            if (showMessage) setModalError(release.eligibility_detail || (release.reason_code ? "Release bloqueada pela política: " + release.reason_code : "Esta release não está elegível para este endpoint."));
             return null;
         }
         if (!release.metadata_complete || !release.size || !release.minimum_updater_version) {
@@ -1845,6 +1866,9 @@
         [
             ["Status", releaseStatusText(release)],
             ["Versao", release.version || "-"],
+            ["Canal da politica", release.channel || "-"],
+            ["Canal assinado do pacote", release.source_channel || release.channel || "-"],
+            ["Elegibilidade", release.eligible ? "Elegível para atualização manual" : (release.eligibility_detail || release.reason_code || "Bloqueada")],
             ["Publicada em", formatDate(release.released_at)],
             ["Tamanho", formatPackageSize(release.size)],
             ["Updater minimo", release.minimum_updater_version || "-"],
@@ -1916,6 +1940,38 @@
         });
         body.appendChild(summary);
 
+        const channelField = document.createElement("label");
+        channelField.className = "endpoint-update-release-field";
+        appendText(channelField, "span", "Canal de atualização");
+        const channelControls = document.createElement("div");
+        channelControls.className = "endpoint-update-channel-controls";
+        const channelSelect = document.createElement("select");
+        channelSelect.dataset.updateChannelSelect = "";
+        channelSelect.setAttribute("aria-label", "Canal de atualização");
+        [
+            ["stable", "Stable"],
+            ["pilot", "Pilot"],
+            ["development", "Development"]
+        ].forEach(function (item) {
+            const option = document.createElement("option");
+            option.value = item[0];
+            option.textContent = item[1];
+            channelSelect.appendChild(option);
+        });
+        channelControls.appendChild(channelSelect);
+        const saveChannel = appendButton(channelControls, "Salvar canal", "endpoint-update-modal__channel-save");
+        saveChannel.dataset.updateChannelSave = "";
+        channelField.appendChild(channelControls);
+        body.appendChild(channelField);
+
+        const channelStatus = document.createElement("div");
+        channelStatus.className = "endpoint-update-modal__channel-status";
+        channelStatus.dataset.updateChannelStatus = "";
+        channelStatus.setAttribute("role", "status");
+        channelStatus.setAttribute("aria-live", "polite");
+        channelStatus.hidden = true;
+        body.appendChild(channelStatus);
+
         const field = document.createElement("label");
         field.className = "endpoint-update-release-field";
         appendText(field, "span", "Release alvo");
@@ -1979,6 +2035,13 @@
         select.addEventListener("change", function () {
             renderReleaseDetails(selectedUpdateRelease());
         });
+        channelSelect.addEventListener("change", function () {
+            setModalError("");
+            const persistedChannel = endpointDetail && endpointDetail.agent ? endpointDetail.agent.updateChannel || "stable" : "stable";
+            channelStatus.hidden = true;
+            channelSelect.dataset.persistedChannel = persistedChannel;
+            updateChannelSaveState();
+        });
         advanced.addEventListener("change", function () {
             validateUpdateSelection(false);
         });
@@ -1989,6 +2052,9 @@
             }
             if (event.target.closest("[data-update-submit]")) {
                 submitUpdateFromModal();
+            }
+            if (event.target.closest("[data-update-channel-save]")) {
+                saveUpdateChannel();
             }
         });
         backdrop.addEventListener("click", closeUpdateModal);
@@ -2025,6 +2091,16 @@
         updateModal.dialog.querySelector('[data-update-summary="version"]').textContent = agent.version || "-";
         updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = agent.updateChannel || "stable";
         updateModal.dialog.querySelector('[data-update-summary="policy"]').textContent = agent.updatePolicy || "manual";
+        const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
+        const channelSave = updateModal.dialog.querySelector("[data-update-channel-save]");
+        const channelStatus = updateModal.dialog.querySelector("[data-update-channel-status]");
+        if (channelSelect) {
+            channelSelect.value = agent.updateChannel || "stable";
+            channelSelect.dataset.persistedChannel = agent.updateChannel || "stable";
+            channelSelect.disabled = !agent.canChangeChannel;
+        }
+        if (channelSave) channelSave.hidden = !agent.canChangeChannel;
+        if (channelStatus) { channelStatus.textContent = ""; channelStatus.hidden = true; channelStatus.classList.remove("is-success"); }
         const select = updateModal.dialog.querySelector("[data-update-release-select]");
         select.textContent = "";
         const placeholder = document.createElement("option");
@@ -2035,8 +2111,7 @@
         releases.forEach(function (release, index) {
             const option = document.createElement("option");
             option.value = release.id;
-            option.textContent = release.version + " / " + releaseStatusText(release) + (index === 0 ? " / mais recente" : "");
-            option.disabled = !!release.revoked;
+            option.textContent = release.version + " / " + releaseStatusText(release) + (!release.eligible ? " / bloqueada" : "") + (index === 0 ? " / mais recente" : "");
             select.appendChild(option);
         });
         select.value = suggestedReleaseId || "";
@@ -2048,8 +2123,9 @@
         if (activeJob) {
             setModalError("Ja existe uma atualizacao em execucao para este endpoint.");
         } else if (!releases.length) {
-            setModalError("Nao ha release disponivel para o canal deste endpoint.");
+            setModalError("Nao ha release disponivel para o canal persistido deste endpoint.");
         }
+        updateChannelSaveState();
         window.setTimeout(function () {
             select.focus();
         }, 0);
@@ -2057,14 +2133,125 @@
 
     function closeUpdateModal() {
         if (!updateModal.dialog) return;
+        if (updateModal.savingChannel) return;
         updateModal.dialog.classList.remove("is-open");
         updateModal.dialog.hidden = true;
         if (updateModal.backdrop) updateModal.backdrop.hidden = true;
         updateModal.sending = false;
+        updateModal.savingChannel = false;
         updateModalSubmitState();
         if (updateModal.origin && typeof updateModal.origin.focus === "function") {
             updateModal.origin.focus();
         }
+    }
+
+    function saveUpdateChannel() {
+        if (updateModal.savingChannel || updateModal.sending || !updateModal.dialog) return;
+        const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
+        const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
+        const channelStatus = updateModal.dialog.querySelector("[data-update-channel-status]");
+        const selectedChannel = channelSelect ? channelSelect.value : "";
+        const persistedChannel = agent.updateChannel || "stable";
+        if (!agent.canChangeChannel || !["stable", "pilot", "development"].includes(selectedChannel)) {
+            if (channelSelect) channelSelect.value = persistedChannel;
+            setModalError("Voce nao tem permissao para alterar o canal ou o canal informado e invalido.");
+            return;
+        }
+        if (selectedChannel === persistedChannel) {
+            if (channelStatus) { channelStatus.textContent = "Este canal ja esta salvo."; channelStatus.hidden = false; }
+            return;
+        }
+        updateModal.savingChannel = true;
+        updateChannelSaveState();
+        updateModalSubmitState();
+        setModalError("");
+        const body = new URLSearchParams();
+        body.set("update_channel", selectedChannel);
+        body.set("reason", "Solicitacao explicita de alteracao de canal pelo modal de atualizacao manual.");
+        let channelSaved = false;
+        fetch("/api/endpoints/" + encodeURIComponent(root.dataset.endpointId || "") + "/update-policy/", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                "X-CSRFToken": getCookie("csrftoken"),
+                "Accept": "application/json"
+            },
+            body: body.toString()
+        }).then(function (response) {
+            const contentType = response.headers && response.headers.get ? response.headers.get("content-type") || "" : "";
+            if (response.redirected || !contentType.includes("application/json")) {
+                throw new Error("Sessao expirada ou permissao insuficiente para alterar o canal.");
+            }
+            return response.json().then(function (payload) {
+                if (!response.ok) throw new Error(payload.detail || payload.error || "Nao foi possivel salvar o canal.");
+                return payload;
+            });
+        }).then(function () {
+            channelSaved = true;
+            agent.updateChannel = selectedChannel;
+            updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = selectedChannel;
+            if (channelSelect) channelSelect.dataset.persistedChannel = selectedChannel;
+            if (channelStatus) {
+                channelStatus.textContent = "Canal salvo. Atualizando releases elegiveis...";
+                channelStatus.hidden = false;
+                channelStatus.classList.add("is-success");
+            }
+            return fetchRealEndpointPayload().then(function () {
+                const refreshed = normalizeRealEndpointPayload(realEndpointPayload);
+                if (refreshed) endpointDetail = refreshed;
+                const currentAgent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : agent;
+                if (channelSelect) {
+                    channelSelect.value = currentAgent.updateChannel || selectedChannel;
+                    channelSelect.dataset.persistedChannel = currentAgent.updateChannel || selectedChannel;
+                }
+                const releaseSelect = updateModal.dialog.querySelector("[data-update-release-select]");
+                if (releaseSelect) {
+                    releaseSelect.textContent = "";
+                    const placeholder = document.createElement("option");
+                    placeholder.value = "";
+                    placeholder.textContent = "Selecione uma release";
+                    releaseSelect.appendChild(placeholder);
+                    getManualUpdateReleases().forEach(function (release, index) {
+                        const option = document.createElement("option");
+                        option.value = release.id;
+                        option.textContent = release.version + " / " + releaseStatusText(release) + (!release.eligible ? " / bloqueada" : "") + (index === 0 ? " / mais recente" : "");
+                        releaseSelect.appendChild(option);
+                    });
+                    releaseSelect.value = "";
+                }
+                updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = currentAgent.updateChannel || selectedChannel;
+                if (channelStatus) {
+                    channelStatus.textContent = "Canal salvo. Releases do canal " + (currentAgent.updateChannel || selectedChannel) + " carregadas.";
+                    channelStatus.hidden = false;
+                }
+                renderReleaseDetails(null);
+                updateModalSubmitState();
+            });
+        }).catch(function (error) {
+            if (channelSaved) {
+                agent.updateChannel = selectedChannel;
+                if (channelSelect) {
+                    channelSelect.value = selectedChannel;
+                    channelSelect.dataset.persistedChannel = selectedChannel;
+                }
+                updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = selectedChannel;
+                if (channelStatus) {
+                    channelStatus.classList.add("is-success");
+                    channelStatus.textContent = "Canal salvo, mas nao foi possivel atualizar a lista de releases. Feche e reabra o modal para tentar novamente.";
+                    channelStatus.hidden = false;
+                }
+                setModalError("");
+            } else {
+                if (channelSelect) channelSelect.value = persistedChannel;
+                if (channelStatus) { channelStatus.textContent = ""; channelStatus.hidden = true; }
+                setModalError(error.message || "Nao foi possivel salvar o canal.");
+            }
+        }).finally(function () {
+            updateModal.savingChannel = false;
+            updateChannelSaveState();
+            updateModalSubmitState();
+        });
     }
 
     function submitUpdateFromModal() {

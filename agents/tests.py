@@ -4195,12 +4195,16 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(response.status_code, 200)
         options = response.json()['agent_update_releases']
         versions = [item['version'] for item in options]
-        self.assertEqual(versions[:2], ['0.1.1.0-rc10', '0.1.1.0-rc9'])
+        self.assertEqual(versions[:2], ['0.1.1.0-rc11', '0.1.1.0-rc10'])
         self.assertIn(rc10.version, versions)
         self.assertIn(rc9.version, versions)
-        self.assertNotIn(revoked.version, versions)
+        self.assertIn(revoked.version, versions)
+        revoked_option = next(item for item in options if item['version'] == revoked.version)
+        self.assertTrue(revoked_option['revoked'])
+        self.assertFalse(revoked_option['eligible'])
+        self.assertEqual(revoked_option['reason_code'], 'release_revoked')
         self.assertNotIn(other_channel.version, versions)
-        self.assertEqual(options[0]['id'], str(rc10.id))
+        self.assertEqual(options[0]['id'], str(revoked.id))
 
     def test_endpoint_detail_exposes_latest_published_trust_bundle(self):
         user_model = get_user_model()

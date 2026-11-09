@@ -5,7 +5,7 @@
 {% block body_class %}page-endpoint-detail{% endblock %}
 {% block icon_script %}{% if not terminal_available and not terminal_admin_auth_available %}{{ block.super }}{% endif %}{% endblock %}
 {% block styles %}
-<link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}">
+<link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-channel-update-1">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
 {% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
@@ -439,7 +439,7 @@
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-2"></script>
 <script src="{% static 'js/job_display.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=operational-scope-1"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-channel-update-1"></script>
 <script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=continuous-graphs-2"></script>
 {% endblock %}

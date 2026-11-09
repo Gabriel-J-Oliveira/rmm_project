@@ -2,6 +2,49 @@ body.page-endpoint-detail .endpoint-actions-tab {
     margin-top: 14px;
 }
 
+body.page-endpoint-detail .endpoint-update-channel-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__channel-save {
+    min-height: 42px;
+    border: 1px solid rgba(99, 231, 177, .36);
+    border-radius: 9px;
+    padding: 0 14px;
+    background: rgba(99, 231, 177, .12);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 850;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__channel-save:disabled {
+    opacity: .58;
+    cursor: not-allowed;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__channel-status {
+    border: 1px solid rgba(124, 149, 255, .2);
+    border-radius: 8px;
+    padding: 9px 11px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__channel-status.is-success {
+    border-color: rgba(99, 231, 177, .3);
+    color: #a8f3d2;
+}
+
+@media (max-width: 720px) {
+    body.page-endpoint-detail .endpoint-update-channel-controls {
+        grid-template-columns: 1fr;
+    }
+}
+
 body.page-endpoint-detail .endpoint-actions-jobs-layout {
     display: grid;
     grid-template-columns: minmax(0, 4fr) minmax(260px, 1fr);

@@ -9,7 +9,7 @@ from django.db import connection
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
-from .models import AgentJob, AgentMachine, AgentRelease, AgentReleaseGroup, AgentReleaseSigningKey, AuditEvent, InventorySnapshot
+from .models import AgentJob, AgentMachine, AgentRelease, AgentReleaseAudit, AgentReleaseGroup, AgentReleaseSigningKey, AuditEvent, InventorySnapshot
 from .services import build_agent_rollout_preview, evaluate_agent_update_eligibility, record_collection, record_heartbeat
 
 
@@ -323,6 +323,141 @@ class AgentRolloutPreviewTests(TestCase):
         self.assertEqual(self.client.post(url, {'rollout_groups': ['']}).status_code, 200)
         self.assertFalse(self.machine.rollout_groups.exists())
         self.assertFalse(AgentJob.objects.exists())
+
+    def test_channel_only_policy_update_preserves_other_endpoint_settings(self):
+        user = get_user_model().objects.create_user(username='channel-operator', is_staff=True, is_superuser=True)
+        self.client.force_login(user)
+        group = AgentReleaseGroup.objects.get(slug='pilot')
+        self.machine.rollout_groups.add(group)
+        other = AgentMachine.objects.create(
+            hostname='UNTOUCHED-ENDPOINT', machine_id=str(uuid.uuid4()), agent_token_hash='untouched-channel-hash',
+            update_channel=AgentMachine.UPDATE_CHANNEL_STABLE,
+        )
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_STABLE
+        self.machine.update_policy = AgentMachine.UPDATE_POLICY_MAINTENANCE_WINDOW
+        self.machine.auto_update_enabled = False
+        self.machine.update_paused = False
+        self.machine.pinned_agent_version = '0.1.1.0-rc39'
+        self.machine.maintenance_window_start = time(22)
+        self.machine.maintenance_window_end = time(23)
+        self.machine.maintenance_window_timezone = 'America/Sao_Paulo'
+        self.machine.save()
+
+        url = reverse('api-endpoint-update-policy', kwargs={'pk': str(self.machine.pk)})
+        response = self.client.post(url, {
+            'update_channel': AgentMachine.UPDATE_CHANNEL_DEVELOPMENT,
+            'reason': 'Explicit manual update channel selection',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.update_channel, AgentMachine.UPDATE_CHANNEL_DEVELOPMENT)
+        self.assertEqual(self.machine.update_policy, AgentMachine.UPDATE_POLICY_MAINTENANCE_WINDOW)
+        self.assertFalse(self.machine.auto_update_enabled)
+        self.assertFalse(self.machine.update_paused)
+        self.assertEqual(self.machine.pinned_agent_version, '0.1.1.0-rc39')
+        self.assertEqual(self.machine.maintenance_window_start, time(22))
+        self.assertEqual(self.machine.maintenance_window_end, time(23))
+        self.assertEqual(self.machine.maintenance_window_timezone, 'America/Sao_Paulo')
+        self.assertQuerySetEqual(self.machine.rollout_groups.all(), [group], transform=lambda item: item)
+        self.assertFalse(AgentJob.objects.exists())
+        audit = AgentReleaseAudit.objects.get(endpoint=self.machine, action=AgentReleaseAudit.ACTION_ENDPOINT_POLICY_CHANGED)
+        self.assertEqual(audit.user, user)
+        self.assertEqual(audit.channel_before, AgentMachine.UPDATE_CHANNEL_STABLE)
+        self.assertEqual(audit.channel_after, AgentMachine.UPDATE_CHANNEL_DEVELOPMENT)
+        self.assertEqual(audit.reason, 'Explicit manual update channel selection')
+        self.assertEqual(audit.metadata['changed_fields'], ['update_channel'])
+
+        response = self.client.post(url, {
+            'update_channel': AgentMachine.UPDATE_CHANNEL_STABLE,
+            'reason': 'Return endpoint to the stable channel',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(self.machine.update_channel, AgentMachine.UPDATE_CHANNEL_STABLE)
+        self.assertEqual(other.update_channel, AgentMachine.UPDATE_CHANNEL_STABLE)
+        self.assertEqual(self.machine.update_policy, AgentMachine.UPDATE_POLICY_MAINTENANCE_WINDOW)
+        self.assertFalse(self.machine.auto_update_enabled)
+        self.assertFalse(self.machine.update_paused)
+        self.assertEqual(self.machine.pinned_agent_version, '0.1.1.0-rc39')
+        self.assertEqual(self.machine.maintenance_window_timezone, 'America/Sao_Paulo')
+        self.assertTrue(self.machine.rollout_groups.filter(pk=group.pk).exists())
+        self.assertEqual(AgentReleaseAudit.objects.filter(endpoint=self.machine).count(), 2)
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_channel_change_unlocks_only_selected_channel_manual_release_options(self):
+        from dashboard.views import _manual_update_release_options
+
+        user = get_user_model().objects.create_user(username='release-channel-operator', is_staff=True, is_superuser=True)
+        self.client.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_STABLE
+        self.machine.update_policy = AgentMachine.UPDATE_POLICY_MANUAL
+        self.machine.auto_update_enabled = False
+        self.machine.update_paused = False
+        self.machine.pinned_agent_version = self.release.version
+        self.machine.save(update_fields=['update_channel', 'update_policy', 'auto_update_enabled', 'update_paused', 'pinned_agent_version'])
+        self.release.status = AgentRelease.STATUS_PAUSED
+        self.release.rollout_paused = True
+        self.release.rollout_percentage = 0
+        self.release.save(update_fields=['status', 'rollout_paused', 'rollout_percentage'])
+        promoted_release = AgentRelease.objects.create(
+            version='0.1.1.0-rc40', channel=AgentRelease.CHANNEL_DEVELOPMENT,
+            source_channel=AgentRelease.CHANNEL_STABLE, status=AgentRelease.STATUS_PAUSED,
+            package_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/promoted.zip',
+            sha256='d' * 64, size=101, manifest_url='https://nightowl.controlsul.com.br/promoted.json',
+            manifest_sha256='e' * 64, signature_url='https://nightowl.controlsul.com.br/promoted.sig',
+            signature_sha256='f' * 64, signature_key_id=self.key.key_id, signature_valid=True,
+            legacy_unsigned=False, minimum_updater_version='0.1.1.0-rc6', rollout_percentage=0,
+            rollout_paused=True,
+        )
+        self.assertEqual(_manual_update_release_options(self.machine), [])
+
+        url = reverse('api-endpoint-update-policy', kwargs={'pk': str(self.machine.pk)})
+        response = self.client.post(url, {'update_channel': AgentMachine.UPDATE_CHANNEL_DEVELOPMENT})
+        self.assertEqual(response.status_code, 200)
+        self.machine.refresh_from_db()
+        audit = AgentReleaseAudit.objects.filter(endpoint=self.machine).order_by('-created_at').first()
+        self.assertEqual(audit.reason, 'Alteracao explicita do canal de atualizacao.')
+        releases = _manual_update_release_options(self.machine)
+        selected = next(item for item in releases if item['id'] == str(promoted_release.pk))
+        self.assertEqual(selected['channel'], AgentRelease.CHANNEL_DEVELOPMENT)
+        self.assertEqual(selected['source_channel'], AgentRelease.CHANNEL_STABLE)
+        self.assertEqual(selected['status'], AgentRelease.STATUS_PAUSED)
+        self.assertTrue(selected['eligible'])
+        self.assertEqual(selected['reason_code'], 'eligible')
+        self.assertEqual(selected['rollout_percentage'], 0)
+        self.assertTrue(selected['rollout_paused'])
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_channel_policy_api_rejects_unauthorized_and_invalid_channel(self):
+        url = reverse('api-endpoint-update-policy', kwargs={'pk': str(self.machine.pk)})
+        self.assertEqual(self.client.post(url, {'update_channel': 'development'}).status_code, 302)
+        unauthorized = get_user_model().objects.create_user(username='channel-no-access')
+        self.client.force_login(unauthorized)
+        self.assertEqual(self.client.post(url, {'update_channel': 'development'}).status_code, 302)
+        user = get_user_model().objects.create_user(username='channel-invalid-operator', is_staff=True, is_superuser=True)
+        self.client.force_login(user)
+        previous = self.machine.update_channel
+        response = self.client.post(url, {'update_channel': 'unknown'})
+        self.assertEqual(response.status_code, 400)
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.update_channel, previous)
+        self.assertFalse(AgentReleaseAudit.objects.filter(endpoint=self.machine).exists())
+
+    def test_channel_policy_api_requires_csrf_and_accepts_valid_token(self):
+        from django.middleware.csrf import _get_new_csrf_string
+
+        user = get_user_model().objects.create_user(username='channel-csrf-operator', is_staff=True, is_superuser=True)
+        url = reverse('api-endpoint-update-policy', kwargs={'pk': str(self.machine.pk)})
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(user)
+        response = client.post(url, {'update_channel': 'stable'})
+        self.assertEqual(response.status_code, 403)
+        token = _get_new_csrf_string()
+        client.cookies['csrftoken'] = token
+        response = client.post(url, {'update_channel': 'stable'}, HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(response.status_code, 200)
 
     def test_backfill_preserves_legacy_pilot_and_reported_versions_only(self):
         migration = importlib.import_module('agents.migrations.0030_rollout_eligibility_contract')
