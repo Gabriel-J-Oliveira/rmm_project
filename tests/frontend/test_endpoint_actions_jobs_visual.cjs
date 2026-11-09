@@ -55,10 +55,14 @@ async function main() {
         assert.deepEqual(cardAfter, cardBefore, 'card appearance does not change when hovered');
         const disabledButton = page.locator('.endpoint-quick-action-button').nth(2);
         await disabledButton.evaluate(e => e.disabled = true);
-        const disabledBefore = await disabledButton.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor }));
+        await page.mouse.move(0, 0);
+        await page.waitForTimeout(250);
         await disabledButton.hover();
-        const disabledAfter = await disabledButton.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor }));
-        assert.deepEqual(disabledAfter, disabledBefore, 'disabled action does not receive hover styling');
+        await page.waitForTimeout(250);
+        const disabledAfter = await disabledButton.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor, opacity: getComputedStyle(e).opacity, cursor: getComputedStyle(e).cursor }));
+        assert.notEqual(disabledAfter.background, hoverBackground, 'disabled action does not receive the interactive purple hover');
+        assert.equal(disabledAfter.opacity, '0.72', 'disabled action keeps disabled opacity');
+        assert.equal(disabledAfter.cursor, 'not-allowed', 'disabled action keeps disabled cursor');
         await disabledButton.evaluate(e => e.disabled = false);
         await page.mouse.move(0, 0);
         await page.screenshot({ path: path.join(output, 'desktop-many-jobs.png'), fullPage: true });

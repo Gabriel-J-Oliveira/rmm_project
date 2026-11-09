@@ -128,14 +128,58 @@ body.page-endpoint-detail .endpoint-quick-action-item small {
     overflow-wrap: anywhere;
 }
 
+body.page-endpoint-detail .endpoint-quick-status {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    min-width: 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+body.page-endpoint-detail .endpoint-quick-status > * {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-quick-status .winrm-indicator {
+    color: var(--text-secondary);
+    font-weight: 750;
+}
+
+body.page-endpoint-detail .endpoint-winrm-details {
+    grid-column: 1 / -1;
+    min-width: 0;
+    border-top: 1px solid var(--border);
+}
+
+body.page-endpoint-detail .endpoint-winrm-details > summary {
+    width: fit-content;
+    padding: 8px 0 2px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 750;
+    cursor: pointer;
+}
+
+body.page-endpoint-detail .endpoint-winrm-details > summary:focus-visible {
+    outline: 2px solid var(--soft-purple);
+    outline-offset: 3px;
+}
+
 body.page-endpoint-detail .endpoint-winrm-feedback {
     grid-column: 1 / -1;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
+    padding: 10px 0 4px;
 }
 
 body.page-endpoint-detail .endpoint-winrm-feedback p {
@@ -224,8 +268,10 @@ body.page-endpoint-detail .endpoint-action-groups {
 }
 
 body.page-endpoint-detail .endpoint-action-category {
+    box-sizing: border-box;
+    width: 100%;
     min-width: 0;
-    padding: 12px;
+    padding: 14px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--card);
@@ -237,7 +283,7 @@ body.page-endpoint-detail .endpoint-terminal-disclosure > summary {
     align-items: center;
     gap: 12px;
     min-height: 18px;
-    margin: 0 0 10px;
+    margin: 0 0 12px;
     color: var(--text-primary);
     font-size: 13px;
     font-weight: 800;
@@ -276,7 +322,7 @@ body.page-endpoint-detail .endpoint-category-heading svg {
 body.page-endpoint-detail .endpoint-action-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    gap: 10px;
     min-width: 0;
 }
 
@@ -317,16 +363,23 @@ body.page-endpoint-detail .endpoint-actions-danger .endpoint-quick-action-button
 
 body.page-endpoint-detail .endpoint-approved-scripts-body {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
     gap: 8px;
 }
 
 body.page-endpoint-detail .endpoint-approved-script-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 0 0;
-    border-top: 1px solid var(--border);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    align-items: stretch;
+    gap: 12px;
+    min-width: 0;
+    min-height: 132px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--sidebar);
 }
 
 body.page-endpoint-detail .endpoint-approved-script-row > div {
@@ -341,6 +394,12 @@ body.page-endpoint-detail .endpoint-approved-script-row small {
     color: var(--text-muted);
     font-size: 11px;
     overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-approved-script-row > button {
+    justify-self: start;
+    align-self: end;
+    min-height: 32px;
 }
 
 body.page-endpoint-detail .endpoint-terminal-disclosure {
@@ -419,21 +478,26 @@ body.page-endpoint-detail .endpoint-jobs-scroll::-webkit-scrollbar-thumb {
 body.page-endpoint-detail .endpoint-jobs-content {
     display: grid;
     align-content: start;
-    gap: 8px;
+    gap: 6px;
     min-height: 100%;
-    padding: 6px;
+    padding: 3px 4px 5px;
 }
 
 body.page-endpoint-detail .endpoint-job-list,
 body.page-endpoint-detail .endpoint-active-job,
 body.page-endpoint-detail .endpoint-job-history {
     display: grid;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
 }
 
+body.page-endpoint-detail .endpoint-jobs-content > .endpoint-job-list {
+    gap: 6px;
+    padding: 0 !important;
+}
+
 body.page-endpoint-detail .endpoint-active-job h3 {
-    margin: 2px 0 0;
+    margin: 0 0 2px;
     color: var(--text-secondary);
     font-size: 11px;
     font-weight: 800;
@@ -590,6 +654,12 @@ body.page-endpoint-detail .endpoint-action-availability button:hover:not(:disabl
     color: var(--text-primary) !important;
 }
 
+body.page-endpoint-detail .endpoint-quick-action-button:hover:disabled {
+    border-color: var(--border) !important;
+    background: var(--sidebar) !important;
+    color: var(--text-disabled) !important;
+}
+
 body.page-endpoint-detail .endpoint-quick-action-button:active:not(:disabled),
 body.page-endpoint-detail .endpoint-job-action-button:active:not(:disabled),
 body.page-endpoint-detail .endpoint-jobs-header button:active:not(:disabled),
@@ -636,6 +706,12 @@ body.page-endpoint-detail .endpoint-approved-scripts-category button:hover:not(:
         grid-template-columns: minmax(0, 1fr);
     }
 
+    body.page-endpoint-detail .endpoint-quick-status {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 5px;
+    }
+
     body.page-endpoint-detail .endpoint-winrm-feedback {
         grid-template-columns: minmax(0, 1fr);
     }
@@ -649,5 +725,9 @@ body.page-endpoint-detail .endpoint-approved-scripts-category button:hover:not(:
     body.page-endpoint-detail .endpoint-action-grid[data-action-grid="three"],
     body.page-endpoint-detail .endpoint-action-grid[data-action-grid="two"] {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    body.page-endpoint-detail .endpoint-approved-scripts-body {
+        grid-template-columns: minmax(0, 1fr);
     }
 }

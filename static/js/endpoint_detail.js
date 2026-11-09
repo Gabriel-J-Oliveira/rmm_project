@@ -1060,6 +1060,24 @@
         }
         const inv = detail.inventory || {};
         const evidence = renderHardwareEvidence(inv);
+        const networkCard = '<article class="panel endpoint-dense-card endpoint-inventory-network-card"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
+            { label: "IP principal", value: inv.primaryIp || detail.ip, mono: true },
+            { label: "MAC principal", value: inv.primaryMac, mono: true },
+            { label: "Gateway", value: inv.defaultGateway, mono: true },
+            { label: "DNS", value: (inv.dnsServers || []).join(", "), mono: true },
+            { label: "MACs", value: (inv.macs || []).join(", "), mono: true },
+            { label: "Último inventário completo", value: formatDate(inv.lastFullInventory) },
+            { label: "Última coleta de rede", value: formatDate(inv.networkCollectedAt) },
+            { label: "Agente", value: detail.agent && detail.agent.version, mono: true }
+        ]) + ((inv.adapters || []).length ? '<div class="endpoint-task-list">' + inv.adapters.map(function (adapter) {
+            adapter = asObject(adapter);
+            return '<article><span class="severity-badge severity-info">' + escapeHtml(adapter.adapter_type || adapter.type || "NIC") + '</span><div><strong>' + escapeHtml(adapter.name || adapter.description || "Adaptador") + '</strong>' + factList([
+                { label: "IPv4 / IPv6", value: (adapter.ipv4_addresses || adapter.ips || []).concat(adapter.ipv6_addresses || []).join(", "), mono: true },
+                { label: "MAC / gateway", value: (adapter.mac_address || adapter.mac || "-") + " / " + (adapter.gateway || "-"), mono: true },
+                { label: "DNS configurado na interface", value: (adapter.dns_servers || adapter.dns || []).join(", ") || "Desconhecido", mono: true },
+                { label: "Estado / velocidade do enlace", value: (adapter.status || "Desconhecido") + " / " + (adapter.link_speed > 0 ? (adapter.link_speed / 1000000) + " Mbps" : "Desconhecida") }
+            ]) + '</div></article>';
+        }).join("") + '</div>' : '') + '</article>';
         return '<div class="endpoint-inventory-grid">' +
             '<div class="endpoint-inventory-column">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("monitor") + 'Sistema operacional</h2></header>' + factList([
@@ -1076,7 +1094,8 @@
                 { label: "Locale", value: inv.locale },
                 { label: "Uptime Windows no último heartbeat", value: inv.uptime },
                 { label: "Heartbeat do uptime", value: formatDate(inv.uptimeObservedAt) }
-            ]) + '</article>' + evidence.battery + evidence.memory + '</div>' +
+            ]) + '</article>' + evidence.battery +
+            '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section>" + evidence.memory + '</div>' +
             '<div class="endpoint-inventory-column">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("cpu") + 'Hardware</h2></header>' + factList([
                 { label: "Fabricante", value: inv.manufacturer },
@@ -1093,27 +1112,7 @@
                 { label: "Placa-mae", value: inv.motherboard },
                 { label: "TPM", value: inv.tpmPresent == null ? "-" : inv.tpmPresent ? (inv.tpmEnabled ? "Presente/ativo" : "Presente/inativo") : "Ausente" },
                 { label: "Bateria", value: inv.batteryPresent == null ? "Desconhecida" : inv.batteryPresent ? ("Presente · " + (inv.batteryStatus || "-")) : "Nao presente" }
-            ]) + '</article>' + evidence.identification + '</div></div>' +
-            '<div class="endpoint-inventory-secondary-grid">' +
-            '<article class="panel endpoint-dense-card endpoint-inventory-network-card"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
-                { label: "IP principal", value: inv.primaryIp || detail.ip, mono: true },
-                { label: "MAC principal", value: inv.primaryMac, mono: true },
-                { label: "Gateway", value: inv.defaultGateway, mono: true },
-                { label: "DNS", value: (inv.dnsServers || []).join(", "), mono: true },
-                { label: "MACs", value: (inv.macs || []).join(", "), mono: true },
-                { label: "Último inventário completo", value: formatDate(inv.lastFullInventory) },
-                { label: "Última coleta de rede", value: formatDate(inv.networkCollectedAt) },
-                { label: "Agente", value: detail.agent && detail.agent.version, mono: true }
-            ]) + ((inv.adapters || []).length ? '<div class="endpoint-task-list">' + inv.adapters.map(function (adapter) {
-                adapter = asObject(adapter);
-                return '<article><span class="severity-badge severity-info">' + escapeHtml(adapter.adapter_type || adapter.type || "NIC") + '</span><div><strong>' + escapeHtml(adapter.name || adapter.description || "Adaptador") + '</strong>' + factList([
-                    { label: "IPv4 / IPv6", value: (adapter.ipv4_addresses || adapter.ips || []).concat(adapter.ipv6_addresses || []).join(", "), mono: true },
-                    { label: "MAC / gateway", value: (adapter.mac_address || adapter.mac || "-") + " / " + (adapter.gateway || "-"), mono: true },
-                    { label: "DNS configurado na interface", value: (adapter.dns_servers || adapter.dns || []).join(", ") || "Desconhecido", mono: true },
-                    { label: "Estado / velocidade do enlace", value: (adapter.status || "Desconhecido") + " / " + (adapter.link_speed > 0 ? (adapter.link_speed / 1000000) + " Mbps" : "Desconhecida") }
-                ]) + '</div></article>';
-            }).join("") + '</div>' : '') + '</article>' +
-            '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section></div>";
+            ]) + '</article>' + evidence.identification + networkCard + '</div></div>';
     }
 
     function softwareCounters(items) {

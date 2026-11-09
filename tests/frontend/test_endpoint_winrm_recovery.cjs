@@ -6,9 +6,9 @@ class El {
  addEventListener(name,handler){this.listeners[name]=handler}
  querySelector(selector){return this.nodes?.[selector]||null}
 }
-const root=new El(),context=new El(),indicator=new El(),summary=new El(),reason=new El(),openButton=new El(),followButton=new El(),form=new El(),modal=new El(),known=new El(),cancel=new El(),feedback=new El(),submit=new El(),body=new El();
+const root=new El(),context=new El(),indicator=new El(),compactAgent=new El(),compactLastTest=new El(),summary=new El(),reason=new El(),openButton=new El(),followButton=new El(),form=new El(),modal=new El(),known=new El(),cancel=new El(),feedback=new El(),submit=new El(),body=new El();
 context.dataset={endpoint:'e1',user:'u1',agentStatus:'Offline',statusUrl:'/status/'};
-root.nodes={'[data-winrm-indicator]':indicator,'[data-winrm-recovery-summary]':summary,'[data-winrm-recovery-reason]':reason,
+root.nodes={'[data-winrm-indicator]':indicator,'[data-winrm-compact-agent]':compactAgent,'[data-winrm-compact-last-test]':compactLastTest,'[data-winrm-recovery-summary]':summary,'[data-winrm-recovery-reason]':reason,
  '[data-winrm-recovery-open]':openButton,'[data-winrm-recovery-follow]':followButton,'[data-winrm-recovery]':form,'[data-recovery-modal]':modal};
 form.nodes={'[data-recovery-known]':known,'[data-recovery-cancel]':cancel,'[data-winrm-recovery-status]':feedback,'button[type="submit"]':submit};
 form.elements={username:new El(),password:new El(),restart_running:{checked:false},csrfmiddlewaretoken:{value:'csrf'}};form.action='/recover/';
@@ -23,10 +23,13 @@ vm.runInNewContext(fs.readFileSync('static/js/endpoint_winrm_recovery.js','utf8'
 (async()=>{
  await new Promise(setImmediate);
  assert.equal(openButton.disabled,false,'backend eligibility enables recovery only after status response');
+ assert.match(compactAgent.textContent,/Agente: Offline/);
+ assert.equal(compactLastTest.textContent,'Último teste: não realizado');
  assert.match(summary.textContent,/Agente: Offline/);
  assert.equal(reason.hidden,true);
  documentEvents['nightowl:winrm-checking']();assert.match(indicator.textContent,/Verificando/);
  documentEvents['nightowl:winrm-checked']({detail:{tcp:'open',wsman:'reachable',authentication:'not_tested',checked_at:'2026-11-06T12:00:00Z'}});
+ assert.equal(compactLastTest.textContent,'Último teste: 2026-11-06T12:00:00Z');
  assert.match(indicator.title,/TCP: open/);
  openButton.listeners.click();assert.equal(modal.hidden,false);
  form.elements.username.value='LAB\\admin';form.elements.password.value='fixture-secret';
