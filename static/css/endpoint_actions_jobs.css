@@ -539,6 +539,7 @@ body.page-endpoint-detail .endpoint-job-card-meta {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    min-width: 0;
     color: var(--text-muted);
     font-size: 10px;
 }
@@ -553,6 +554,14 @@ body.page-endpoint-detail .endpoint-job-result {
     overflow-wrap: anywhere;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
+}
+
+body.page-endpoint-detail .endpoint-job-card-meta .endpoint-job-result {
+    flex: 1 1 120px;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 body.page-endpoint-detail .endpoint-job-stage,

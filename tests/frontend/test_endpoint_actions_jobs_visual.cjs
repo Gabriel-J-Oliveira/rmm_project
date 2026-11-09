@@ -36,18 +36,28 @@ async function main() {
             const actions = document.querySelector('.endpoint-actions-column').getBoundingClientRect();
             const jobs = document.querySelector('.endpoint-jobs-panel').getBoundingClientRect();
             const scroll = document.querySelector('.endpoint-jobs-scroll');
+            const jobTextFits = [...document.querySelectorAll('.endpoint-job-item')].every(card => {
+                const content = card.querySelector('.endpoint-job-card-content').getBoundingClientRect();
+                const buttons = card.querySelector('.endpoint-job-actions').getBoundingClientRect();
+                const results = [...card.querySelectorAll('.endpoint-job-result')];
+                return results.every(result => {
+                    const rect = result.getBoundingClientRect();
+                    return rect.left >= content.left - 1 && rect.right <= content.right + 1 && rect.right < buttons.left;
+                });
+            });
             const winrmButton = document.querySelector('.endpoint-winrm-feedback button').getBoundingClientRect();
             const feedback = document.querySelector('.endpoint-winrm-feedback').getBoundingClientRect();
             const localTitle = document.querySelector('.endpoint-winrm-local-heading h3').getBoundingClientRect();
             const localDescription = document.querySelector('.endpoint-winrm-local-heading small').getBoundingClientRect();
             const localInfo = document.querySelector('.endpoint-winrm-local-details > div:last-child').getBoundingClientRect();
             return { actionsBottom: actions.bottom, jobsBottom: jobs.bottom, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight,
-                actionsWidth: actions.width, jobsWidth: jobs.width, cols: getComputedStyle(document.querySelector('.endpoint-actions-jobs-layout')).gridTemplateColumns,
+                actionsWidth: actions.width, jobsWidth: jobs.width, jobTextFits, cols: getComputedStyle(document.querySelector('.endpoint-actions-jobs-layout')).gridTemplateColumns,
                 winrmButton, feedback, localTitle, localDescription, localInfo };
         });
         assert(Math.abs(desktop.actionsBottom - desktop.jobsBottom) <= 1, 'desktop jobs panel shares the actions column bottom');
         assert(desktop.scrollHeight > desktop.clientHeight, 'long history scrolls inside its list');
         assert(desktop.jobsWidth > 0 && desktop.actionsWidth > desktop.jobsWidth * 3, 'desktop layout keeps the approximate 80/20 split');
+        assert.equal(desktop.jobTextFits, true, 'job summaries stay within the content column and do not overlap actions');
         assert(desktop.winrmButton.width < desktop.feedback.width * 0.65, 'WinRM follow-up button uses natural width');
         assert(desktop.winrmButton.left <= desktop.feedback.left + 1, 'WinRM follow-up button is left aligned');
         assert(desktop.localDescription.top >= desktop.localTitle.bottom - 1, `local WinRM explanation follows its title (${JSON.stringify({title:desktop.localTitle,description:desktop.localDescription})})`);
