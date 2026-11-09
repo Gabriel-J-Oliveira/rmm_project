@@ -615,7 +615,7 @@
             '<div class="health-bar"><span class="health-fill ' + healthClass(detail.healthScore) + '" style="width:' + escapeHtml(detail.healthScore || 0) + '%"></span></div>' +
             '<div class="health-breakdown">' + parts.map(function (part) {
                 const cls = part.score < 50 ? "critical" : part.score < 75 ? "warning" : "good";
-                return '<div><span>' + escapeHtml(part.label) + '</span><strong class="health-part-' + cls + '">' + part.score + '</strong><em><i style="width:' + part.score + '%"></i></em></div>';
+                return '<div class="health-component"><div><span>' + escapeHtml(part.label) + '</span><strong class="health-part-' + cls + '">' + part.score + '</strong></div><em><i class="health-part-' + cls + '" style="width:' + part.score + '%"></i></em></div>';
             }).join("") + "</div></div>";
     }
 
@@ -763,6 +763,20 @@
         return '<div class="endpoint-job-list">' + activeMarkup + historyMarkup + "</div>";
     }
 
+    function latestOverviewJobs(jobs, activeJob, limit) {
+        const activeId = activeJob && activeJob.id != null ? String(activeJob.id) : "";
+        return asArray(jobs).filter(function (job) {
+            return !activeId || String(job.id) !== activeId;
+        }).slice().sort(function (left, right) {
+            function timestamp(job) {
+                const value = job.createdAt || job.created_at || job.dispatchedAt || job.dispatched_at || job.startedAt || job.started_at;
+                const parsed = value ? Date.parse(value) : 0;
+                return Number.isNaN(parsed) ? 0 : parsed;
+            }
+            return timestamp(right) - timestamp(left);
+        }).slice(0, limit);
+    }
+
     function renderJobItem(job, isActive) {
             const progress = jobProgress(job);
             const result = jobResultLabel(job);
@@ -806,25 +820,18 @@
     }
 
     function renderQuickActions() {
-        const lifecycleButtons = agentLifecycleActionButtons(endpointDetail);
-        const agentManagementButtons = agentManagementActionButtons(endpointDetail);
         return '<div class="endpoint-action-groups">' +
             actionGroup("Inventario", [
                 actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
-                actionButton("collect_software", "Coletar software", "package-search")
+                actionButton("collect_software", "Coletar software", "package-search"),
+                actionButton("check_disk", "Coletar discos", "hard-drive")
             ]) +
             actionGroup("Seguranca", [
-                actionButton("check_defender", "Verificar Defender", "shield-check"),
-                actionButton("windows_update_scan", "Windows Update scan", "badge-check")
+                actionButton("check_defender", "Verificar Defender", "shield-check")
             ]) +
-            actionGroup("Diagnostico", [
-                actionButton("check_disk", "Coletar discos", "hard-drive"),
-                actionButton("collect_logs", "Coletar logs", "file-search"),
-                actionButton("ping", "Ping", "activity")
-            ]) +
-            actionGroup("Agente", agentManagementButtons.concat(lifecycleButtons)) +
-            actionGroup("Avancado", [
-                '<button type="button" class="endpoint-quick-action-button" disabled title="Execucao arbitraria sera habilitada em fase futura">' + icon("code-2") + '<span>Script futuro</span></button>'
+            actionGroup("Agente", [
+                actionButton("restart_agent", "Reiniciar agente", "rotate-ccw"),
+                actionButton("update_agent", "Atualizar agente", "download-cloud")
             ]) +
         '</div>';
     }
@@ -955,18 +962,39 @@
             { label: "Dominio", value: detail.domain }
         ]) + '</div>');
 
+        const board = asObject(inv.baseboardDetails);
+        const cpu = asObject(inv.cpuDetails);
+        const primaryDisk = asArray(detail.disks).find(function (disk) {
+            disk = asObject(disk);
+            return disk.isSystemDrive === true || String(disk.name || "").toUpperCase().startsWith("C:");
+        }) || asArray(detail.disks)[0] || {};
+        const primaryDiskCapacity = primaryDisk.totalGb != null && primaryDisk.totalGb !== ""
+            ? primaryDisk.totalGb + " GiB"
+            : "Não informado";
+        const inventorySyncAt = inv.lastFullInventory || agent.lastInventoryAt;
+        const clockMhz = Number(cpu.max_clock_mhz);
+        const cpuClock = Number.isFinite(clockMhz) && clockMhz > 0
+            ? (clockMhz / 1000).toFixed(2) + " GHz (máx. reportado)"
+            : "Não informado";
+        const motherboard = (typeof inv.motherboard === "string" ? inv.motherboard : "") || [board.manufacturer, board.product].filter(Boolean).join(" ") || "Não informado";
         setSlot("inventory-body", '<div class="endpoint-overview-facts">' + factList([
-            { label: "Fabricante", value: inv.manufacturer },
-            { label: "Modelo", value: inv.model },
-            { label: "Serial", value: inv.serial, mono: true },
-            { label: "CPU", value: inv.cpu },
-            { label: "Memoria", value: inv.memoryGb ? inv.memoryGb + " GiB" : "-" },
-            { label: "Disponivel na coleta de hardware", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "-" },
-            { label: "Ultimo inventario", value: inv.lastFullInventory, className: "endpoint-fact-wide" }
+            { label: "Fabricante / modelo", value: [inv.manufacturer, inv.model].filter(Boolean).join(" / ") || "Não informado" },
+            { label: "Serial", value: inv.serial || "Não informado", mono: true },
+            { label: "Sistema operacional", value: detail.os || "Não informado" },
+            { label: "Versão / build", value: [inv.osVersion, inv.build].filter(Boolean).join(" / ") || "Não informado" },
+            { label: "Processador", value: inv.cpu || "Não informado" },
+            { label: "Clock máximo da CPU", value: cpuClock },
+            { label: "Memória RAM", value: inv.memoryGb ? inv.memoryGb + " GiB" : "Não informado" },
+            { label: "Memória disponível", value: inv.availableMemoryGb ? inv.availableMemoryGb + " GiB" : "Não informado" },
+            { label: "Placa-mãe", value: motherboard },
+            { label: "Modelo do disco principal", value: "Não informado" },
+            { label: "Capacidade do disco principal", value: primaryDiskCapacity },
+            { label: "Última sincronização do inventário", value: inventorySyncAt ? formatDate(inventorySyncAt) : "Não informado", className: "endpoint-fact-wide" }
         ]) + '</div>');
 
         setSlot("disks-body", renderDiskList(detail.disks, true));
-        setSlot("jobs-body", renderJobs(detail.jobs, 5));
+        const overviewJobLimit = detail.activeJob ? 5 : 6;
+        setSlot("jobs-body", renderJobs(latestOverviewJobs(detail.jobs, detail.activeJob, overviewJobLimit), overviewJobLimit));
         setSlot("actions-body", renderQuickActions());
         setSlot("alerts-body", renderAlerts(detail.alerts, 4));
         setSlot("events-body", renderEvents(detail.events, 6, false));

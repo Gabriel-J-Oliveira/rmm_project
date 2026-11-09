@@ -82,8 +82,29 @@
                     </div>
                 </article>
 
+                <article class="panel endpoint-dense-card endpoint-inventory-summary rmm-card" data-overview-card="inventory">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="cpu"></i>Invent&aacute;rio</h2></header>
+                    <div class="rmm-card__body" data-overview-slot="inventory-body">
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                        </dl>
+                    </div>
+                </article>
+
                 <article class="panel endpoint-dense-card endpoint-agent-card rmm-card" data-overview-card="agent">
-                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="bot"></i>Agente NightOwl</h2><span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <header class="rmm-card__header">
+                        <h2 class="rmm-card__title"><i data-lucide="bot"></i>Agente NightOwl</h2>
+                        <div class="endpoint-agent-header-actions">
+                            <span data-overview-slot="agent-badge" class="endpoint-skeleton-pill">Carregando</span>
+                            <button type="button" data-endpoint-action="update_agent" aria-label="Atualizar agente" title="Atualizar agente"><i data-lucide="download-cloud"></i></button>
+                            <button type="button" data-endpoint-action="repair_agent" aria-label="Reparar agente" title="Reparar agente"><i data-lucide="wrench"></i></button>
+                        </div>
+                    </header>
                     <div class="rmm-card__body" data-overview-slot="agent-body">
                         <div class="agent-version-panel endpoint-skeleton-panel"><span class="endpoint-skeleton-line endpoint-skeleton-version"></span><small>Carregando dados do agente</small></div>
                         <dl class="endpoint-fact-list endpoint-skeleton-facts">
@@ -92,19 +113,6 @@
                             <div><dt></dt><dd></dd></div>
                             <div><dt></dt><dd></dd></div>
                             <div class="endpoint-fact-wide"><dt></dt><dd></dd></div>
-                        </dl>
-                    </div>
-                    <div class="endpoint-card-actions"><button type="button" data-endpoint-action="update_agent"><i data-lucide="download-cloud"></i>Atualizar agente</button><button type="button" data-endpoint-action="repair_agent"><i data-lucide="wrench"></i>Reparar agente</button></div>
-                </article>
-
-                <article class="panel endpoint-dense-card endpoint-security-summary rmm-card" data-overview-card="security">
-                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
-                    <div class="rmm-card__body" data-overview-slot="security-body">
-                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
                         </dl>
                     </div>
                 </article>
@@ -125,20 +133,6 @@
                     </div>
                 </article>
 
-                <article class="panel endpoint-dense-card endpoint-inventory-summary rmm-card" data-overview-card="inventory">
-                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="cpu"></i>Invent&aacute;rio r&aacute;pido</h2></header>
-                    <div class="rmm-card__body" data-overview-slot="inventory-body">
-                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                            <div><dt></dt><dd></dd></div>
-                        </dl>
-                    </div>
-                </article>
-
                 <article class="panel endpoint-dense-card endpoint-disk-summary rmm-card" data-overview-card="disks">
                     <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="hard-drive"></i>Discos</h2><button type="button" data-endpoint-tab-jump="inventory">Ver invent&aacute;rio</button></header>
                     <div class="rmm-card__body" data-overview-slot="disks-body">
@@ -146,6 +140,18 @@
                             <div><strong></strong><span></span><em><i></i></em><small></small></div>
                             <div><strong></strong><span></span><em><i></i></em><small></small></div>
                         </div>
+                    </div>
+                </article>
+
+                <article class="panel endpoint-dense-card endpoint-security-summary rmm-card" data-overview-card="security">
+                    <header class="rmm-card__header"><h2 class="rmm-card__title"><i data-lucide="shield"></i>Seguran&ccedil;a</h2><span data-overview-slot="security-badge" class="endpoint-skeleton-pill">Carregando</span></header>
+                    <div class="rmm-card__body" data-overview-slot="security-body">
+                        <dl class="endpoint-fact-list endpoint-skeleton-facts">
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                            <div><dt></dt><dd></dd></div>
+                        </dl>
                     </div>
                 </article>
             </section>
