@@ -22,7 +22,10 @@ contains(/openUpdateModal\(origin\)/, "update_agent action must route through th
 contains(/data-update-release-select/, "modal must render an internal release selector");
 contains(/data-update-channel-select/, "modal must render a channel selector");
 contains(/data-update-channel-save/, "channel change must require its separate explicit save action");
+contains(/data-update-channel-reload/, "failed release refresh must expose an explicit reload action");
 contains(/function\s+saveUpdateChannel\s*\(/, "channel save handler must exist");
+contains(/function\s+handleUpdateChannelSelectionChange\s*\(/, "pending channel changes must have a dedicated handler");
+contains(/function\s+reloadUpdateChannelReleases\s*\(/, "release options must be reloaded from the backend");
 contains(/data-force-downgrade/, "downgrade must require explicit advanced force control");
 contains(/data-confirm-downgrade/, "downgrade must require an additional confirmation");
 contains(/downgrade exige/i, "downgrade validation message must be explicit");
@@ -38,12 +41,14 @@ assert(saveFlowStart >= 0 && saveFlowEnd > saveFlowStart, "channel save flow mus
 const saveFlow = source.slice(saveFlowStart, saveFlowEnd);
 assert(saveFlow.includes('"/update-policy/"'), "channel change must use the existing update policy contract");
 assert(saveFlow.includes('body.set("update_channel", selectedChannel)'), "channel change must submit the selected policy channel");
-assert(saveFlow.includes("fetchRealEndpointPayload()"), "successful channel change must reload authoritative release options");
+assert(saveFlow.includes("reloadUpdateChannelReleases()"), "successful channel change must reload authoritative release options");
 assert(!saveFlow.includes("createRealJob("), "saving a channel must never create an update job");
 assert(source.includes('if (!release.eligible)'), "manual update submission must reject releases blocked by backend eligibility");
+assert(source.includes('Salve o canal selecionado para consultar as releases disponíveis.'), "pending channel changes must explain that saving is required");
+assert(source.includes("!updateChannelIsPending()") && source.includes("!selectionIsValid"), "update button must require a synchronized channel and valid selected release");
 assert(source.includes('if (release.revoked || release.status === "revoked")'), "revoked releases must remain visibly blocked in the selector details");
 assert(source.includes('release.source_channel || release.channel'), "release details must distinguish the signed artifact channel");
-assert(template.includes("endpoint_detail.js' %}?v=rc47-channel-update-1"), "endpoint detail JavaScript cache version must be bumped");
-assert(template.includes("endpoint_actions_jobs.css' %}?v=rc47-channel-update-1"), "endpoint detail stylesheet cache version must be bumped");
+assert(template.includes("endpoint_detail.js' %}?v=rc47-channel-update-2"), "endpoint detail JavaScript cache version must be bumped");
+assert(template.includes("endpoint_actions_jobs.css' %}?v=rc47-channel-update-2"), "endpoint detail stylesheet cache version must be bumped");
 
 console.log("endpoint_detail update modal static checks passed");

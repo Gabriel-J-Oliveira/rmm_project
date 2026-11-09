@@ -1699,7 +1699,10 @@
         origin: null,
         selectedRelease: null,
         sending: false,
-        savingChannel: false
+        savingChannel: false,
+        refreshingReleases: false,
+        releasesSynchronized: false,
+        releaseOptionsChannel: null
     };
 
     function appendText(parent, tag, text, className) {
@@ -1771,8 +1774,19 @@
         if (!updateModal.dialog) return;
         const submit = updateModal.dialog.querySelector("[data-update-submit]");
         if (!submit) return;
-        submit.disabled = updateModal.sending || updateModal.savingChannel;
+        const selectionIsValid = updateModal.releasesSynchronized &&
+            !updateChannelIsPending() &&
+            !!validateUpdateSelection(false);
+        submit.disabled = updateModal.sending || updateModal.savingChannel || updateModal.refreshingReleases || !selectionIsValid;
         submit.textContent = updateModal.sending ? "Enviando..." : "Atualizar agente";
+    }
+
+    function updateChannelIsPending() {
+        if (!updateModal.dialog) return false;
+        const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
+        if (!channelSelect) return false;
+        const persistedChannel = channelSelect.dataset.persistedChannel || "stable";
+        return channelSelect.value !== persistedChannel;
     }
 
     function updateChannelSaveState() {
@@ -1782,8 +1796,8 @@
         const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
         const persistedChannel = channelSelect ? channelSelect.dataset.persistedChannel || "stable" : "stable";
         const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
-        if (channelSelect) channelSelect.disabled = updateModal.savingChannel || updateModal.sending || !agent.canChangeChannel;
-        save.disabled = updateModal.savingChannel || updateModal.sending || !channelSelect || channelSelect.value === persistedChannel;
+        if (channelSelect) channelSelect.disabled = updateModal.savingChannel || updateModal.refreshingReleases || updateModal.sending || !updateModal.releasesSynchronized || !agent.canChangeChannel;
+        save.disabled = updateModal.savingChannel || updateModal.refreshingReleases || updateModal.sending || !updateModal.releasesSynchronized || !channelSelect || channelSelect.value === persistedChannel;
         save.textContent = updateModal.savingChannel ? "Salvando..." : "Salvar canal";
     }
 
@@ -1794,6 +1808,47 @@
         return getManualUpdateReleases().find(function (release) {
             return String(release.id) === String(select.value);
         }) || null;
+    }
+
+    function populateUpdateReleaseOptions(suggestedReleaseId, forceEmpty) {
+        if (!updateModal.dialog) return [];
+        const select = updateModal.dialog.querySelector("[data-update-release-select]");
+        if (!select) return [];
+        select.textContent = "";
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Selecione uma release";
+        select.appendChild(placeholder);
+        const releases = !forceEmpty && updateModal.releasesSynchronized ? getManualUpdateReleases() : [];
+        releases.forEach(function (release, index) {
+            const option = document.createElement("option");
+            option.value = release.id;
+            option.textContent = release.version + " / " + releaseStatusText(release) + (!release.eligible ? " / bloqueada" : "") + (index === 0 ? " / mais recente" : "");
+            select.appendChild(option);
+        });
+        select.value = suggestedReleaseId || "";
+        return releases;
+    }
+
+    function handleUpdateChannelSelectionChange() {
+        if (!updateModal.dialog) return;
+        const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
+        const channelStatus = updateModal.dialog.querySelector("[data-update-channel-status]");
+        const reloadButton = updateModal.dialog.querySelector("[data-update-channel-reload]");
+        if (!channelSelect) return;
+        const pending = updateChannelIsPending();
+        if (channelStatus) {
+            channelStatus.textContent = pending ? "Salve o canal selecionado para consultar as releases disponíveis." : "";
+            channelStatus.hidden = !pending;
+            channelStatus.classList.remove("is-success");
+            channelStatus.classList.toggle("is-warning", pending);
+        }
+        if (reloadButton) reloadButton.hidden = true;
+        populateUpdateReleaseOptions("", pending);
+        renderReleaseDetails(null);
+        setModalError("");
+        updateChannelSaveState();
+        updateModalSubmitState();
     }
 
     function isDowngradeRelease(release) {
@@ -1971,6 +2026,9 @@
         channelStatus.setAttribute("aria-live", "polite");
         channelStatus.hidden = true;
         body.appendChild(channelStatus);
+        const reloadReleases = appendButton(body, "Recarregar releases", "endpoint-update-modal__channel-reload");
+        reloadReleases.dataset.updateChannelReload = "";
+        reloadReleases.hidden = true;
 
         const field = document.createElement("label");
         field.className = "endpoint-update-release-field";
@@ -2036,11 +2094,7 @@
             renderReleaseDetails(selectedUpdateRelease());
         });
         channelSelect.addEventListener("change", function () {
-            setModalError("");
-            const persistedChannel = endpointDetail && endpointDetail.agent ? endpointDetail.agent.updateChannel || "stable" : "stable";
-            channelStatus.hidden = true;
-            channelSelect.dataset.persistedChannel = persistedChannel;
-            updateChannelSaveState();
+            handleUpdateChannelSelectionChange();
         });
         advanced.addEventListener("change", function () {
             validateUpdateSelection(false);
@@ -2055,6 +2109,9 @@
             }
             if (event.target.closest("[data-update-channel-save]")) {
                 saveUpdateChannel();
+            }
+            if (event.target.closest("[data-update-channel-reload]")) {
+                reloadUpdateChannelReleases().catch(function () {});
             }
         });
         backdrop.addEventListener("click", closeUpdateModal);
@@ -2087,34 +2144,32 @@
         updateModal.origin = origin || document.activeElement;
         updateModal.sending = false;
         const agent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : {};
+        const persistedChannel = agent.updateChannel || "stable";
+        if (updateModal.releaseOptionsChannel === null) updateModal.releaseOptionsChannel = persistedChannel;
+        updateModal.releasesSynchronized = updateModal.releaseOptionsChannel === persistedChannel;
         updateModal.dialog.querySelector('[data-update-summary="endpoint"]').textContent = endpointDetail.hostname || "-";
         updateModal.dialog.querySelector('[data-update-summary="version"]').textContent = agent.version || "-";
-        updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = agent.updateChannel || "stable";
+        updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = persistedChannel;
         updateModal.dialog.querySelector('[data-update-summary="policy"]').textContent = agent.updatePolicy || "manual";
         const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
         const channelSave = updateModal.dialog.querySelector("[data-update-channel-save]");
         const channelStatus = updateModal.dialog.querySelector("[data-update-channel-status]");
+        const reloadButton = updateModal.dialog.querySelector("[data-update-channel-reload]");
         if (channelSelect) {
-            channelSelect.value = agent.updateChannel || "stable";
-            channelSelect.dataset.persistedChannel = agent.updateChannel || "stable";
-            channelSelect.disabled = !agent.canChangeChannel;
+            channelSelect.value = persistedChannel;
+            channelSelect.dataset.persistedChannel = persistedChannel;
+            channelSelect.disabled = !agent.canChangeChannel || !updateModal.releasesSynchronized;
         }
         if (channelSave) channelSave.hidden = !agent.canChangeChannel;
-        if (channelStatus) { channelStatus.textContent = ""; channelStatus.hidden = true; channelStatus.classList.remove("is-success"); }
+        if (channelStatus) {
+            channelStatus.textContent = updateModal.releasesSynchronized ? "" : "O canal foi salvo, mas as releases ainda precisam ser recarregadas.";
+            channelStatus.hidden = updateModal.releasesSynchronized;
+            channelStatus.classList.remove("is-success");
+            channelStatus.classList.toggle("is-warning", !updateModal.releasesSynchronized);
+        }
+        if (reloadButton) reloadButton.hidden = updateModal.releasesSynchronized;
+        const releases = populateUpdateReleaseOptions(updateModal.releasesSynchronized ? (suggestedReleaseId || "") : "", !updateModal.releasesSynchronized);
         const select = updateModal.dialog.querySelector("[data-update-release-select]");
-        select.textContent = "";
-        const placeholder = document.createElement("option");
-        placeholder.value = "";
-        placeholder.textContent = "Selecione uma release";
-        select.appendChild(placeholder);
-        const releases = getManualUpdateReleases();
-        releases.forEach(function (release, index) {
-            const option = document.createElement("option");
-            option.value = release.id;
-            option.textContent = release.version + " / " + releaseStatusText(release) + (!release.eligible ? " / bloqueada" : "") + (index === 0 ? " / mais recente" : "");
-            select.appendChild(option);
-        });
-        select.value = suggestedReleaseId || "";
         updateModal.backdrop.hidden = false;
         updateModal.dialog.hidden = false;
         updateModal.dialog.classList.add("is-open");
@@ -2122,6 +2177,8 @@
         const activeJob = findActiveUpdateJob();
         if (activeJob) {
             setModalError("Ja existe uma atualizacao em execucao para este endpoint.");
+        } else if (!updateModal.releasesSynchronized) {
+            setModalError("");
         } else if (!releases.length) {
             setModalError("Nao ha release disponivel para o canal persistido deste endpoint.");
         }
@@ -2133,7 +2190,7 @@
 
     function closeUpdateModal() {
         if (!updateModal.dialog) return;
-        if (updateModal.savingChannel) return;
+        if (updateModal.savingChannel || updateModal.refreshingReleases) return;
         updateModal.dialog.classList.remove("is-open");
         updateModal.dialog.hidden = true;
         if (updateModal.backdrop) updateModal.backdrop.hidden = true;
@@ -2143,6 +2200,65 @@
         if (updateModal.origin && typeof updateModal.origin.focus === "function") {
             updateModal.origin.focus();
         }
+    }
+
+    function reloadUpdateChannelReleases() {
+        if (!updateModal.dialog || updateModal.refreshingReleases) return Promise.resolve();
+        updateModal.refreshingReleases = true;
+        updateModal.releasesSynchronized = false;
+        const channelStatus = updateModal.dialog.querySelector("[data-update-channel-status]");
+        const reloadButton = updateModal.dialog.querySelector("[data-update-channel-reload]");
+        if (channelStatus) {
+            channelStatus.textContent = "Recarregando releases elegíveis...";
+            channelStatus.hidden = false;
+            channelStatus.classList.remove("is-success");
+            channelStatus.classList.remove("is-warning");
+        }
+        if (reloadButton) reloadButton.hidden = true;
+        populateUpdateReleaseOptions("", true);
+        renderReleaseDetails(null);
+        updateChannelSaveState();
+        updateModalSubmitState();
+        return fetchRealEndpointPayload().then(function () {
+            const refreshed = normalizeRealEndpointPayload(realEndpointPayload);
+            if (!refreshed || !refreshed.agent) throw new Error("endpoint_payload_invalid");
+            endpointDetail = refreshed;
+            const currentAgent = refreshed.agent;
+            const persistedChannel = currentAgent.updateChannel || "stable";
+            const channelSelect = updateModal.dialog.querySelector("[data-update-channel-select]");
+            if (channelSelect) {
+                channelSelect.value = persistedChannel;
+                channelSelect.dataset.persistedChannel = persistedChannel;
+            }
+            updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = persistedChannel;
+            updateModal.releaseOptionsChannel = persistedChannel;
+            updateModal.releasesSynchronized = true;
+            populateUpdateReleaseOptions("");
+            renderReleaseDetails(null);
+            if (channelStatus) {
+                channelStatus.textContent = "Canal salvo. Releases do canal " + persistedChannel + " carregadas. Selecione uma release para continuar.";
+                channelStatus.hidden = false;
+                channelStatus.classList.add("is-success");
+                channelStatus.classList.remove("is-warning");
+            }
+            if (reloadButton) reloadButton.hidden = true;
+        }).catch(function (error) {
+            updateModal.releasesSynchronized = false;
+            populateUpdateReleaseOptions("", true);
+            renderReleaseDetails(null);
+            if (channelStatus) {
+                channelStatus.textContent = "Não foi possível recarregar as releases. A configuração do canal foi salva; tente recarregar os dados.";
+                channelStatus.hidden = false;
+                channelStatus.classList.remove("is-success");
+                channelStatus.classList.add("is-warning");
+            }
+            if (reloadButton) reloadButton.hidden = false;
+            throw error;
+        }).finally(function () {
+            updateModal.refreshingReleases = false;
+            updateChannelSaveState();
+            updateModalSubmitState();
+        });
     }
 
     function saveUpdateChannel() {
@@ -2192,42 +2308,16 @@
             agent.updateChannel = selectedChannel;
             updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = selectedChannel;
             if (channelSelect) channelSelect.dataset.persistedChannel = selectedChannel;
+            updateModal.releasesSynchronized = false;
+            populateUpdateReleaseOptions("", true);
+            renderReleaseDetails(null);
             if (channelStatus) {
                 channelStatus.textContent = "Canal salvo. Atualizando releases elegiveis...";
                 channelStatus.hidden = false;
                 channelStatus.classList.add("is-success");
+                channelStatus.classList.remove("is-warning");
             }
-            return fetchRealEndpointPayload().then(function () {
-                const refreshed = normalizeRealEndpointPayload(realEndpointPayload);
-                if (refreshed) endpointDetail = refreshed;
-                const currentAgent = endpointDetail && endpointDetail.agent ? endpointDetail.agent : agent;
-                if (channelSelect) {
-                    channelSelect.value = currentAgent.updateChannel || selectedChannel;
-                    channelSelect.dataset.persistedChannel = currentAgent.updateChannel || selectedChannel;
-                }
-                const releaseSelect = updateModal.dialog.querySelector("[data-update-release-select]");
-                if (releaseSelect) {
-                    releaseSelect.textContent = "";
-                    const placeholder = document.createElement("option");
-                    placeholder.value = "";
-                    placeholder.textContent = "Selecione uma release";
-                    releaseSelect.appendChild(placeholder);
-                    getManualUpdateReleases().forEach(function (release, index) {
-                        const option = document.createElement("option");
-                        option.value = release.id;
-                        option.textContent = release.version + " / " + releaseStatusText(release) + (!release.eligible ? " / bloqueada" : "") + (index === 0 ? " / mais recente" : "");
-                        releaseSelect.appendChild(option);
-                    });
-                    releaseSelect.value = "";
-                }
-                updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = currentAgent.updateChannel || selectedChannel;
-                if (channelStatus) {
-                    channelStatus.textContent = "Canal salvo. Releases do canal " + (currentAgent.updateChannel || selectedChannel) + " carregadas.";
-                    channelStatus.hidden = false;
-                }
-                renderReleaseDetails(null);
-                updateModalSubmitState();
-            });
+            return reloadUpdateChannelReleases();
         }).catch(function (error) {
             if (channelSaved) {
                 agent.updateChannel = selectedChannel;
@@ -2237,14 +2327,24 @@
                 }
                 updateModal.dialog.querySelector('[data-update-summary="channel"]').textContent = selectedChannel;
                 if (channelStatus) {
-                    channelStatus.classList.add("is-success");
-                    channelStatus.textContent = "Canal salvo, mas nao foi possivel atualizar a lista de releases. Feche e reabra o modal para tentar novamente.";
+                    channelStatus.classList.remove("is-success");
+                    channelStatus.classList.add("is-warning");
+                    channelStatus.textContent = "Canal salvo, mas nao foi possivel atualizar a lista de releases. Recarregue os dados antes de atualizar o agente.";
                     channelStatus.hidden = false;
                 }
+                const reloadButton = updateModal.dialog.querySelector("[data-update-channel-reload]");
+                if (reloadButton) reloadButton.hidden = false;
+                updateModal.releasesSynchronized = false;
+                populateUpdateReleaseOptions("", true);
                 setModalError("");
             } else {
                 if (channelSelect) channelSelect.value = persistedChannel;
-                if (channelStatus) { channelStatus.textContent = ""; channelStatus.hidden = true; }
+                updateModal.releasesSynchronized = updateModal.releaseOptionsChannel === persistedChannel;
+                populateUpdateReleaseOptions("", !updateModal.releasesSynchronized);
+                renderReleaseDetails(null);
+                if (channelStatus) { channelStatus.textContent = ""; channelStatus.hidden = true; channelStatus.classList.remove("is-success"); channelStatus.classList.remove("is-warning"); }
+                const reloadButton = updateModal.dialog.querySelector("[data-update-channel-reload]");
+                if (reloadButton) reloadButton.hidden = true;
                 setModalError(error.message || "Nao foi possivel salvar o canal.");
             }
         }).finally(function () {

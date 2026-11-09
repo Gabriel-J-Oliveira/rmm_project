@@ -39,6 +39,23 @@ body.page-endpoint-detail .endpoint-update-modal__channel-status.is-success {
     color: #a8f3d2;
 }
 
+body.page-endpoint-detail .endpoint-update-modal__channel-status.is-warning {
+    border-color: rgba(232, 183, 91, .28);
+    color: #e9d5ad;
+}
+
+body.page-endpoint-detail .endpoint-update-modal__channel-reload {
+    min-height: 34px;
+    margin-top: 8px;
+    border: 1px solid rgba(124, 149, 255, .3);
+    border-radius: 8px;
+    padding: 0 11px;
+    background: rgba(124, 149, 255, .08);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 750;
+}
+
 @media (max-width: 720px) {
     body.page-endpoint-detail .endpoint-update-channel-controls {
         grid-template-columns: 1fr;
