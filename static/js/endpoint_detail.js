@@ -1178,9 +1178,9 @@
     function renderTaskCategory(title, iconName, buttons, options) {
         options = options || {};
         if (!buttons.length) return "";
-        return '<details class="endpoint-action-category' + (options.danger ? ' endpoint-actions-danger' : '') + '" data-action-category="' + escapeHtml(options.id || '') + '"' + (options.open ? ' open' : '') + '>' +
-            '<summary><span class="endpoint-category-heading">' + icon(iconName) + escapeHtml(title) + '</span></summary>' +
-            '<div class="endpoint-action-grid" data-action-grid="' + escapeHtml(options.grid || 'default') + '">' + buttons.join("") + '</div></details>';
+        return '<section class="endpoint-action-category' + (options.danger ? ' endpoint-actions-danger' : '') + '" data-action-category="' + escapeHtml(options.id || '') + '">' +
+            '<h3 class="endpoint-category-heading">' + icon(iconName) + escapeHtml(title) + '</h3>' +
+            '<div class="endpoint-action-grid" data-action-grid="' + escapeHtml(options.grid || 'default') + '">' + buttons.join("") + '</div></section>';
     }
 
     function renderTasks(detail) {
@@ -1199,8 +1199,8 @@
                 return '<div class="endpoint-action-availability"><button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="' + escapeHtml(reason) + '"') + '><i data-lucide="' + escapeHtml({flush_dns:'network',query_service:'search',gpupdate:'refresh-cw',start_service:'play',stop_service:'square',restart_service:'rotate-cw'}[action] || 'circle') + '"></i><span>' + escapeHtml(operationalLabels[action]) + '</span></button>' + (available.enabled ? '' : '<small>' + escapeHtml(reason) + '</small>') + '</div>';
         });
         return {
-            core: renderTaskCategory("Diagnósticos", "stethoscope", diagnosticButtons, {id:"diagnostics",grid:"four",open:true}) +
-                renderTaskCategory("Operações", "settings-2", operationalButtons, {id:"operations",grid:"three",open:true}),
+            core: renderTaskCategory("Diagnósticos", "stethoscope", diagnosticButtons, {id:"diagnostics",grid:"four"}) +
+                renderTaskCategory("Operações", "settings-2", operationalButtons, {id:"operations",grid:"three"}),
             maintenance: renderTaskCategory("Manutenção do agente", "wrench", agentManagementButtons, {id:"maintenance",grid:"four"}),
             critical: renderTaskCategory("Ações críticas", "shield-alert", lifecycleButtons.concat(purgeButtons), {id:"critical",grid:"two",danger:true})
         };

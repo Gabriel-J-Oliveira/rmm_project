@@ -5,13 +5,13 @@ body.page-endpoint-detail .endpoint-actions-tab {
 body.page-endpoint-detail .endpoint-actions-jobs-layout {
     display: grid;
     grid-template-columns: minmax(0, 4fr) minmax(260px, 1fr);
-    align-items: start;
+    align-items: stretch;
     gap: 14px;
 }
 
 body.page-endpoint-detail .endpoint-actions-column {
-    display: grid;
-    align-content: start;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
     min-width: 0;
 }
@@ -110,7 +110,6 @@ body.page-endpoint-detail .endpoint-quick-action-button:hover:not(:disabled) {
 body.page-endpoint-detail .endpoint-quick-action-button:focus-visible,
 body.page-endpoint-detail .endpoint-jobs-header button:focus-visible,
 body.page-endpoint-detail .endpoint-job-action-button:focus-visible,
-body.page-endpoint-detail .endpoint-action-category > summary:focus-visible,
 body.page-endpoint-detail .endpoint-terminal-disclosure > summary:focus-visible {
     outline: 2px solid var(--soft-purple);
     outline-offset: 2px;
@@ -170,24 +169,45 @@ body.page-endpoint-detail .endpoint-winrm-feedback button:disabled {
 }
 
 body.page-endpoint-detail .endpoint-winrm-local-details {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 14px;
     grid-column: 1 / -1;
     min-width: 0;
     border-top: 1px solid var(--border);
     color: var(--text-muted);
 }
 
-body.page-endpoint-detail .endpoint-winrm-local-details > summary {
-    width: fit-content;
-    padding-top: 10px;
+body.page-endpoint-detail .endpoint-winrm-local-details > h3 {
     color: var(--text-secondary);
     font-size: 11px;
-    cursor: pointer;
+    font-weight: 750;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-heading {
+    display: grid;
+    align-content: start;
+    gap: 3px;
+    margin-top: 10px;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-heading > h3 {
+    margin: 0;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-heading > small {
+    max-width: 240px;
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.35;
 }
 
 body.page-endpoint-detail .endpoint-winrm-local-details > div {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 4px;
-    padding-top: 8px;
+    padding-top: 10px;
 }
 
 body.page-endpoint-detail .endpoint-winrm-local-details p {
@@ -199,38 +219,34 @@ body.page-endpoint-detail .endpoint-winrm-local-details p {
 
 body.page-endpoint-detail .endpoint-action-groups {
     display: grid;
-    gap: 10px;
+    gap: 12px;
     min-width: 0;
 }
 
 body.page-endpoint-detail .endpoint-action-category {
     min-width: 0;
-    padding: 0 12px 12px;
+    padding: 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--card);
 }
 
-body.page-endpoint-detail .endpoint-action-category > summary,
+body.page-endpoint-detail .endpoint-action-category > .endpoint-category-heading,
 body.page-endpoint-detail .endpoint-terminal-disclosure > summary {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
-    min-height: 42px;
+    min-height: 18px;
+    margin: 0 0 10px;
     color: var(--text-primary);
     font-size: 13px;
     font-weight: 800;
-    cursor: pointer;
-    list-style: none;
 }
 
-body.page-endpoint-detail .endpoint-action-category > summary::-webkit-details-marker,
 body.page-endpoint-detail .endpoint-terminal-disclosure > summary::-webkit-details-marker {
     display: none;
 }
 
-body.page-endpoint-detail .endpoint-action-category > summary::after,
 body.page-endpoint-detail .endpoint-terminal-disclosure > summary::after {
     width: 7px;
     height: 7px;
@@ -241,7 +257,6 @@ body.page-endpoint-detail .endpoint-terminal-disclosure > summary::after {
     transition: transform .15s ease;
 }
 
-body.page-endpoint-detail .endpoint-action-category[open] > summary::after,
 body.page-endpoint-detail .endpoint-terminal-disclosure[open] > summary::after {
     transform: rotate(225deg) translate(-2px, -1px);
 }
@@ -291,8 +306,8 @@ body.page-endpoint-detail .endpoint-actions-danger {
     border-color: rgba(239, 68, 68, .5);
 }
 
-body.page-endpoint-detail .endpoint-actions-danger > summary,
-body.page-endpoint-detail .endpoint-actions-danger > summary .endpoint-category-heading svg {
+body.page-endpoint-detail .endpoint-actions-danger > .endpoint-category-heading,
+body.page-endpoint-detail .endpoint-actions-danger > .endpoint-category-heading svg {
     color: var(--critical);
 }
 
@@ -343,8 +358,10 @@ body.page-endpoint-detail .endpoint-terminal-disclosure .endpoint-terminal {
 body.page-endpoint-detail .endpoint-jobs-panel {
     display: flex;
     flex-direction: column;
-    height: clamp(360px, calc(100dvh - 350px), 760px);
-    min-height: 360px;
+    align-self: stretch;
+    contain: size;
+    min-width: 0;
+    min-height: 0;
     padding: 0;
     overflow: hidden;
 }
@@ -404,7 +421,7 @@ body.page-endpoint-detail .endpoint-jobs-content {
     align-content: start;
     gap: 8px;
     min-height: 100%;
-    padding: 10px;
+    padding: 6px;
 }
 
 body.page-endpoint-detail .endpoint-job-list,
@@ -424,12 +441,12 @@ body.page-endpoint-detail .endpoint-active-job h3 {
 
 body.page-endpoint-detail .endpoint-job-item {
     display: grid !important;
-    grid-template-columns: minmax(0, 1fr) auto !important;
+    grid-template-columns: minmax(0, 1fr) minmax(56px, 72px) !important;
     align-items: stretch;
-    gap: 9px !important;
+    gap: 6px !important;
     min-width: 0;
     min-height: 0 !important;
-    padding: 10px !important;
+    padding: 7px !important;
     border: 1px solid var(--border) !important;
     border-radius: 7px !important;
     background: var(--sidebar) !important;
@@ -438,7 +455,7 @@ body.page-endpoint-detail .endpoint-job-item {
 body.page-endpoint-detail .endpoint-job-card-content {
     display: grid;
     align-content: start;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
 }
 
@@ -489,12 +506,15 @@ body.page-endpoint-detail .endpoint-job-actions {
     align-items: stretch;
     justify-content: center;
     gap: 5px;
-    min-width: 62px;
-    max-width: 86px;
+    min-width: 56px;
+    max-width: 72px;
 }
 
 body.page-endpoint-detail .endpoint-job-action-button {
     width: 100%;
+    min-width: 0 !important;
+    max-width: 100%;
+    height: auto !important;
     min-height: 27px;
     padding: 4px 6px;
     border: 1px solid var(--border);
@@ -506,6 +526,7 @@ body.page-endpoint-detail .endpoint-job-action-button {
     font-weight: 700;
     line-height: 1.2;
     overflow-wrap: anywhere;
+    flex: 0 0 auto;
     cursor: pointer;
 }
 
@@ -517,14 +538,85 @@ body.page-endpoint-detail .endpoint-job-item.is-active {
     border-color: var(--border-active) !important;
 }
 
+body.page-endpoint-detail .endpoint-approved-scripts-category > .endpoint-category-heading {
+    padding: 0;
+}
+
+body.page-endpoint-detail .endpoint-winrm-local-details > div > p {
+    min-width: 0;
+}
+
+body.page-endpoint-detail .endpoint-action-category,
+body.page-endpoint-detail .endpoint-quick-actions-card,
+body.page-endpoint-detail .endpoint-jobs-panel,
+body.page-endpoint-detail .endpoint-job-item,
+body.page-endpoint-detail .endpoint-terminal-disclosure {
+    transform: none;
+    box-shadow: none;
+    transition: none;
+}
+
+body.page-endpoint-detail .endpoint-actions-tab .panel:hover,
+body.page-endpoint-detail .endpoint-action-category:hover,
+body.page-endpoint-detail .endpoint-quick-actions-card:hover,
+body.page-endpoint-detail .endpoint-jobs-panel:hover,
+body.page-endpoint-detail .endpoint-job-item:hover,
+body.page-endpoint-detail .endpoint-terminal-disclosure:hover {
+    transform: none;
+    box-shadow: none;
+    border-color: var(--border);
+    background: var(--card);
+}
+
+body.page-endpoint-detail .endpoint-actions-tab .endpoint-job-item:hover {
+    border-color: var(--border) !important;
+    background: var(--sidebar) !important;
+}
+
+body.page-endpoint-detail .endpoint-actions-danger:hover {
+    border-color: rgba(239, 68, 68, .5);
+}
+
+body.page-endpoint-detail .endpoint-actions-tab .endpoint-job-item.is-active:hover {
+    border-color: var(--border-active) !important;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:hover:not(:disabled),
+body.page-endpoint-detail .endpoint-job-action-button:hover:not(:disabled),
+body.page-endpoint-detail .endpoint-jobs-header button:hover:not(:disabled),
+body.page-endpoint-detail .endpoint-action-availability button:hover:not(:disabled) {
+    border-color: var(--soft-purple) !important;
+    background: rgba(124, 58, 237, .18) !important;
+    color: var(--text-primary) !important;
+}
+
+body.page-endpoint-detail .endpoint-quick-action-button:active:not(:disabled),
+body.page-endpoint-detail .endpoint-job-action-button:active:not(:disabled),
+body.page-endpoint-detail .endpoint-jobs-header button:active:not(:disabled),
+body.page-endpoint-detail .endpoint-action-availability button:active:not(:disabled) {
+    background: rgba(124, 58, 237, .28) !important;
+}
+
+body.page-endpoint-detail .endpoint-action-category button:focus-visible,
+body.page-endpoint-detail .endpoint-approved-scripts-category button:focus-visible {
+    outline: 2px solid var(--soft-purple);
+    outline-offset: 2px;
+}
+
+body.page-endpoint-detail .endpoint-action-category button:hover:not(:disabled),
+body.page-endpoint-detail .endpoint-approved-scripts-category button:hover:not(:disabled) {
+    border-color: var(--soft-purple);
+    background: rgba(124, 58, 237, .18);
+}
+
 @media (max-width: 1050px) {
     body.page-endpoint-detail .endpoint-actions-jobs-layout {
         grid-template-columns: minmax(0, 1fr);
     }
 
     body.page-endpoint-detail .endpoint-jobs-panel {
-        height: min(70dvh, 640px);
-        min-height: 340px;
+        min-height: min(42dvh, 18rem);
+        max-height: 70dvh;
     }
 }
 
@@ -545,6 +637,11 @@ body.page-endpoint-detail .endpoint-job-item.is-active {
     }
 
     body.page-endpoint-detail .endpoint-winrm-feedback {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-endpoint-detail .endpoint-winrm-local-details,
+    body.page-endpoint-detail .endpoint-winrm-local-details > div {
         grid-template-columns: minmax(0, 1fr);
     }
 

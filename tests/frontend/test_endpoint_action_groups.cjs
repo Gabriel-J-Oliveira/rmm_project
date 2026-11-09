@@ -13,6 +13,8 @@ assert(groups.core.includes('Diagnósticos'));
 assert(groups.core.includes('Operações'));
 assert(groups.core.includes('data-action-grid="four"'));
 assert(groups.core.includes('data-action-grid="three"'));
+assert.match(groups.core, /<section class="endpoint-action-category/);
+assert.doesNotMatch(groups.core, /<details|<summary|<\/details>/, 'action categories remain open');
 assert(groups.core.includes('[ping]'));
 assert(groups.maintenance.includes('Manutenção do agente'));
 assert(groups.maintenance.indexOf('UPDATE') > groups.maintenance.indexOf('Manutenção do agente'));
