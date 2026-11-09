@@ -13749,6 +13749,32 @@ body.page-endpoint-detail .endpoint-compact-list {
 body.page-endpoint-detail .endpoint-inventory-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-bottom: 14px;
+    align-items: start;
+}
+
+body.page-endpoint-detail .endpoint-inventory-column {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 14px;
+}
+
+body.page-endpoint-detail .endpoint-inventory-column > .panel {
+    align-self: stretch;
+    width: 100%;
+}
+
+body.page-endpoint-detail .endpoint-inventory-secondary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 14px;
+    margin-top: 14px;
+}
+
+body.page-endpoint-detail .endpoint-inventory-secondary-grid > .panel {
+    align-self: start;
+    width: 100%;
 }
 
 body.page-endpoint-detail .endpoint-disk-panel {
@@ -14093,6 +14119,7 @@ body.page-endpoint-detail .endpoint-attention-pill.attention-normal {
     body.page-endpoint-detail .endpoint-ops-header,
     body.page-endpoint-detail .endpoint-compact-grid,
     body.page-endpoint-detail .endpoint-inventory-grid,
+    body.page-endpoint-detail .endpoint-inventory-secondary-grid,
     body.page-endpoint-detail .security-grid,
     body.page-endpoint-detail .endpoint-two-lists,
     body.page-endpoint-detail .endpoint-fact-list {
@@ -34478,6 +34505,18 @@ body.page-endpoint-detail .endpoint-hardware-evidence .endpoint-fact-list dd {
     overflow: visible;
     text-overflow: clip;
     max-width: none;
+}
+
+body.page-endpoint-detail [data-endpoint-tab-panel="inventory"] .panel,
+body.page-endpoint-detail [data-endpoint-tab-panel="inventory"] .panel:hover {
+    transform: none !important;
+    transition: none !important;
+}
+
+body.page-endpoint-detail [data-endpoint-tab-panel="inventory"] .panel:hover {
+    border-color: var(--border) !important;
+    background: var(--card) !important;
+    box-shadow: none !important;
 }
 
 @media (max-width: 520px) {

@@ -1014,18 +1014,19 @@
             const observation = asObject(states[name]);
             return known(observation.status) + (observation.last_attempt_at ? " / " + formatDate(observation.last_attempt_at) : "");
         }
-        return '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("cpu") + 'Identificacao tecnica</h2></header>' + factList([
-            { label: "CPU maxima reportada (nao instantanea)", value: cpu.max_clock_mhz > 0 ? (cpu.max_clock_mhz / 1000).toFixed(3) + " GHz / " + cpu.max_clock_mhz + " MHz" : "Desconhecido" },
-            { label: "Socket / ID CPU", value: known(cpu.socket) + " / " + known(cpu.processor_id), mono: true },
-            { label: "CPU coletada / ultima tentativa", value: formatDate(cpu.collected_at) + " / " + state("cpu") },
-            { label: "SKU OEM / familia", value: known(inv.systemSku) + " / " + known(inv.systemFamily) },
-            { label: "Referencia OEM / versao / SKU", value: known(product.name) + " / " + known(product.version) + " / " + known(product.sku) },
-            { label: "Placa-mae fabricante / produto", value: known(board.manufacturer) + " / " + known(board.product) },
-            { label: "Placa-mae revisao / serial", value: known(board.version) + " / " + known(board.serial_number), mono: true },
-            { label: "Hardware detalhado coletado", value: formatDate(inv.hardwareCollectedAt) },
-            { label: "Ultima tentativa detalhada", value: state("hardware_details") }
-        ]) + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("memory-stick") + 'Memoria fisica</h2></header>' + factList([
+        return {
+            identification: '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("cpu") + 'Identificacao tecnica</h2></header>' + factList([
+                { label: "CPU maxima reportada (nao instantanea)", value: cpu.max_clock_mhz > 0 ? (cpu.max_clock_mhz / 1000).toFixed(3) + " GHz / " + cpu.max_clock_mhz + " MHz" : "Desconhecido" },
+                { label: "Socket / ID CPU", value: known(cpu.socket) + " / " + known(cpu.processor_id), mono: true },
+                { label: "CPU coletada / ultima tentativa", value: formatDate(cpu.collected_at) + " / " + state("cpu") },
+                { label: "SKU OEM / familia", value: known(inv.systemSku) + " / " + known(inv.systemFamily) },
+                { label: "Referencia OEM / versao / SKU", value: known(product.name) + " / " + known(product.version) + " / " + known(product.sku) },
+                { label: "Placa-mae fabricante / produto", value: known(board.manufacturer) + " / " + known(board.product) },
+                { label: "Placa-mae revisao / serial", value: known(board.version) + " / " + known(board.serial_number), mono: true },
+                { label: "Hardware detalhado coletado", value: formatDate(inv.hardwareCollectedAt) },
+                { label: "Ultima tentativa detalhada", value: state("hardware_details") }
+            ]) + '</article>',
+            memory: '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("memory-stick") + 'Memoria fisica</h2></header>' + factList([
                 { label: "Instalada", value: bytes(memory.total_bytes) },
                 { label: "Slots reportados pelo firmware: totais / usados / livres", value: known(memory.slots_total) + " / " + known(memory.slots_used) + " / " + known(memory.slots_free) },
                 { label: "Maximo reportado pelo firmware", value: bytes(memory.maximum_supported_bytes) },
@@ -1041,15 +1042,16 @@
                     { label: "Speed bruto do Windows (unidade nao normalizada)", value: known(module.speed_reported_value == null ? module.speed_mhz : module.speed_reported_value) },
                     { label: "Clock configurado reportado (nao medido)", value: known(module.configured_clock_mhz == null ? module.configured_speed_mhz : module.configured_clock_mhz) + " MHz" }
                 ]) + '</div>';
-            }).join("") : '') + '</article>' +
-            '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("battery") + 'Bateria</h2></header>' + factList([
+            }).join("") : '') + '</article>',
+            battery: '<article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>' + icon("battery") + 'Bateria</h2></header>' + factList([
                 { label: "Presenca", value: battery.present == null ? "Desconhecida" : battery.present ? "Presente" : "Nao presente" },
                 { label: "Fabricante / modelo", value: known(battery.manufacturer) + " / " + known(battery.model) },
                 { label: "Part Number / serial", value: known(battery.part_number) + " / " + known(battery.serial_number), mono: true },
                 { label: "Capacidade original / carga completa", value: known(battery.design_capacity_mwh) + " / " + known(battery.full_charge_capacity_mwh) + " mWh" },
                 { label: "Saude / ciclos", value: known(battery.health_percent) + " % / " + known(battery.cycle_count) },
                 { label: "Ultima coleta / tentativa", value: formatDate(battery.collected_at) + " / " + state("battery") }
-            ]) + '</article>';
+            ]) + '</article>'
+        };
     }
 
     function renderInventory(detail) {
@@ -1057,7 +1059,9 @@
             return '<section class="panel endpoint-dense-card">' + emptyState("Inventario ainda nao coletado", "O agente ja comunicou heartbeat, mas a coleta completa de sistema/hardware/rede ainda nao chegou.", "cpu") + "</section>";
         }
         const inv = detail.inventory || {};
+        const evidence = renderHardwareEvidence(inv);
         return '<div class="endpoint-inventory-grid">' +
+            '<div class="endpoint-inventory-column">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("monitor") + 'Sistema operacional</h2></header>' + factList([
                 { label: "Sistema", value: detail.os },
                 { label: "Versao", value: inv.osVersion, mono: true },
@@ -1072,7 +1076,8 @@
                 { label: "Locale", value: inv.locale },
                 { label: "Uptime Windows no último heartbeat", value: inv.uptime },
                 { label: "Heartbeat do uptime", value: formatDate(inv.uptimeObservedAt) }
-            ]) + '</article>' +
+            ]) + '</article>' + evidence.battery + evidence.memory + '</div>' +
+            '<div class="endpoint-inventory-column">' +
             '<article class="panel endpoint-dense-card"><header><h2>' + icon("cpu") + 'Hardware</h2></header>' + factList([
                 { label: "Fabricante", value: inv.manufacturer },
                 { label: "Modelo", value: inv.model },
@@ -1088,9 +1093,9 @@
                 { label: "Placa-mae", value: inv.motherboard },
                 { label: "TPM", value: inv.tpmPresent == null ? "-" : inv.tpmPresent ? (inv.tpmEnabled ? "Presente/ativo" : "Presente/inativo") : "Ausente" },
                 { label: "Bateria", value: inv.batteryPresent == null ? "Desconhecida" : inv.batteryPresent ? ("Presente · " + (inv.batteryStatus || "-")) : "Nao presente" }
-            ]) + '</article>' +
-            renderHardwareEvidence(inv) +
-            '<article class="panel endpoint-dense-card endpoint-span-2"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
+            ]) + '</article>' + evidence.identification + '</div></div>' +
+            '<div class="endpoint-inventory-secondary-grid">' +
+            '<article class="panel endpoint-dense-card endpoint-inventory-network-card"><header><h2>' + icon("network") + 'Rede e coleta</h2></header>' + factList([
                 { label: "IP principal", value: inv.primaryIp || detail.ip, mono: true },
                 { label: "MAC principal", value: inv.primaryMac, mono: true },
                 { label: "Gateway", value: inv.defaultGateway, mono: true },
@@ -1107,8 +1112,8 @@
                     { label: "DNS configurado na interface", value: (adapter.dns_servers || adapter.dns || []).join(", ") || "Desconhecido", mono: true },
                     { label: "Estado / velocidade do enlace", value: (adapter.status || "Desconhecido") + " / " + (adapter.link_speed > 0 ? (adapter.link_speed / 1000000) + " Mbps" : "Desconhecida") }
                 ]) + '</div></article>';
-            }).join("") + '</div>' : '') + '</article></div>' +
-            '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section>";
+            }).join("") + '</div>' : '') + '</article>' +
+            '<section class="panel endpoint-dense-card endpoint-disk-panel"><header><h2>' + icon("hard-drive") + 'Discos</h2></header>' + renderDiskList(detail.disks, false) + "</section></div>";
     }
 
     function softwareCounters(items) {
