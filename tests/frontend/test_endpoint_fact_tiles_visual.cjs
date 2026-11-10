@@ -56,7 +56,7 @@ async function main() {
         assert.notEqual(computed[0].background, 'rgba(0, 0, 0, 0)', 'tiles have a distinct inner surface');
         assert.equal(computed[0].minHeight, '54px', 'tiles use one shared minimum height');
         assert.equal(computed[0].padding, '8px 9px', 'tile padding is reduced evenly on all four sides');
-        assert.equal(await page.locator('.endpoint-hardware-evidence .endpoint-fact-list').evaluate(element => getComputedStyle(element).padding), '8px', 'fact list outer inset is reduced evenly on all four sides');
+        assert.equal(await page.locator('.endpoint-hardware-evidence .endpoint-fact-list').evaluate(element => getComputedStyle(element).padding), '0px', 'fact list has no outer inset');
         assert.equal(await page.locator('.endpoint-hardware-evidence dt').first().evaluate(element => getComputedStyle(element).fontSize), '12.5px', 'fact labels are slightly larger');
         assert.equal(await page.locator('.endpoint-hardware-evidence dd').first().evaluate(element => getComputedStyle(element).fontSize), '14px', 'fact values are slightly larger');
         assert.equal(await page.locator('.card-supporting-copy').evaluate(element => getComputedStyle(element).fontSize), '13px', 'supporting card copy is slightly larger');
