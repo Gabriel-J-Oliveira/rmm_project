@@ -5,6 +5,14 @@
     </header>
     <form hidden>{% csrf_token %}</form>
     <div class="terminal-status" role="status" aria-live="polite"><strong data-terminal-state>Aguardando autorização</strong><span data-terminal-identity>Identidade ainda não confirmada</span></div>
-    <div class="terminal-screen" data-terminal-screen aria-label="Terminal PowerShell" hidden></div>
+    <div class="terminal-stage" data-terminal-stage>
+        <div class="terminal-screen" data-terminal-screen aria-label="Terminal PowerShell" aria-describedby="terminal-clipboard-help" hidden></div>
+        <div class="terminal-context-menu" data-terminal-context-menu role="menu" aria-label="Ações do terminal" aria-hidden="true" hidden>
+            <button type="button" role="menuitem" tabindex="-1" data-terminal-copy disabled>Copiar</button>
+            <button type="button" role="menuitem" tabindex="-1" data-terminal-paste disabled>Colar</button>
+            <button type="button" role="menuitem" tabindex="-1" data-terminal-paste-execute disabled>Colar e executar</button>
+        </div>
+    </div>
+    <p class="terminal-clipboard-help" id="terminal-clipboard-help">Ctrl+Shift+C copia a seleção; Ctrl+Shift+V cola sem executar. Ctrl+C interrompe o processo remoto.</p>
     <p class="terminal-notice" data-terminal-notice>A abertura depende da aprovação do usuário local. O conteúdo fica apenas nesta sessão e é descartado ao encerrar.</p>
 </article>
