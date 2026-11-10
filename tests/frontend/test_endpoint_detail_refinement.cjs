@@ -10,7 +10,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261110-1"), "detail refinement stylesheet uses the latest cache key");
+assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261110-2"), "detail refinement stylesheet uses the latest cache key");
 assert(template.includes("js/endpoint_detail.js' %}?v=20261109-1"), "endpoint detail script uses a fresh cache key");
 assert(!base.includes("endpoint_detail_refinement.css"), "refinement stylesheet must not be global");
 assert(!template.includes("block icon_script"), "endpoint template must inherit the Lucide loader when terminal is enabled");
@@ -36,7 +36,11 @@ assert(!inventoryRender.includes('Última sincronização do inventário"') || !
 assert(css.split(/\r?\n/).filter(line => line.trim().startsWith(".") || line.trim().startsWith("*")).length === 0,
   "refinement selectors are scoped beneath page-endpoint-detail");
 assert(css.includes(".endpoint-detail-shell .panel:hover"), "non-interactive endpoint cards have no decorative hover");
-assert(css.includes("text-transform: none !important") && css.includes("font-weight: 600 !important"),
+assert(css.includes(".endpoint-fact-list > div {"), "fact tiles have one page-scoped visual rule");
+assert(css.includes("--endpoint-detail-tile-surface") && css.includes("--endpoint-detail-tile-border"), "fact tile surfaces use page-scoped tokens");
+const factTileRule = css.slice(css.indexOf(".endpoint-detail-shell .endpoint-fact-list > div,"), css.indexOf(".endpoint-detail-shell .endpoint-fact-list > div:hover,"));
+assert(factTileRule && !factTileRule.includes("!important"), "the canonical fact tile rule does not rely on important overrides");
+assert(css.includes("text-transform: none;") && css.includes("font-weight: 600;"),
   "fact labels use normal capitalization and subordinate weight");
 assert(css.includes(".endpoint-event-row:hover"), "interactive event rows retain their hover affordance");
 assert(css.includes("::-webkit-scrollbar-thumb:hover"), "scrollbar hover is retained only on the scrollbar");

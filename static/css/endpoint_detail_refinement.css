@@ -2,7 +2,12 @@
 body.page-endpoint-detail {
     --endpoint-detail-surface: #141827;
     --endpoint-detail-inner-surface: rgba(14, 18, 30, .34);
+    --endpoint-detail-tile-surface: #101522;
     --endpoint-detail-border: rgba(143, 160, 184, .17);
+    --endpoint-detail-tile-border: rgba(143, 160, 184, .12);
+    --endpoint-detail-tile-radius: 8px;
+    --endpoint-detail-tile-min-height: 54px;
+    --endpoint-detail-tile-padding: 10px 11px;
     --endpoint-detail-primary: #e7edf5;
     --endpoint-detail-heading: #c2cede;
     --endpoint-detail-label: #8d9fb5;
@@ -44,37 +49,66 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-action-group h3 {
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list {
-    gap: 2px 18px;
+    gap: 8px;
+    padding: 12px;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div,
-body.page-endpoint-detail .endpoint-detail-shell .rmm-info-tile {
-    min-width: 0 !important;
-    min-height: 0 !important;
-    padding: 9px 3px !important;
-    border: 0 !important;
-    border-bottom: 1px solid var(--endpoint-detail-border) !important;
-    border-radius: 0 !important;
-    background: transparent !important;
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list > div {
+    display: flex;
+    min-width: 0;
+    min-height: var(--endpoint-detail-tile-min-height);
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: var(--endpoint-detail-tile-padding);
+    border: 1px solid var(--endpoint-detail-tile-border);
+    border-radius: var(--endpoint-detail-tile-radius);
+    background: var(--endpoint-detail-tile-surface);
+    transition: none;
+    box-shadow: none;
 }
 
-body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div:last-child {
-    border-bottom-color: transparent !important;
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div:hover,
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list > div:hover {
+    border-color: var(--endpoint-detail-tile-border);
+    background: var(--endpoint-detail-tile-surface);
+    box-shadow: none;
+    transform: none;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list dt,
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list dt,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dt {
-    color: var(--endpoint-detail-label) !important;
-    font-size: 12px !important;
-    font-weight: 600 !important;
-    line-height: 1.2 !important;
-    text-transform: none !important;
-    letter-spacing: 0 !important;
+    margin: 0;
+    color: var(--endpoint-detail-label);
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list dd,
+body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list dd,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dd {
-    color: var(--endpoint-detail-primary) !important;
+    min-width: 0;
+    margin: 0;
+    color: var(--endpoint-detail-primary);
+    font-size: 13.5px;
+    font-weight: 650;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-overflow: clip;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list .endpoint-fact-wide {
+    grid-column: 1 / -1;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-hardware-evidence .endpoint-fact-list dd {
+    overflow: visible;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell p,
