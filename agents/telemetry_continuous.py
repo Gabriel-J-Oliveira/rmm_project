@@ -16,7 +16,8 @@ CORE_METRICS = {'cpu.usage_percent': 'cpu_percent', 'memory.used_percent': 'memo
                 'memory.committed_percent': 'memory_committed_percent', 'agent.working_set_bytes': 'agent_working_set_bytes',
                 'memory.total_bytes': 'memory_total_bytes', 'memory.available_bytes': 'memory_available_bytes',
                 'memory.committed_bytes': 'memory_committed_bytes', 'memory.commit_limit_bytes': 'memory_commit_limit_bytes',
-                'agent.collection_duration_ms': 'collection_duration_ms'}
+                'agent.collection_duration_ms': 'collection_duration_ms',
+                'agent.telemetry_errors_count': 'telemetry_errors_count'}
 
 
 def number(value, minimum=0):
@@ -115,6 +116,109 @@ def merge_metrics(groups):
 
 def mean(metric):
     return metric['weighted_sum'] / metric['weight'] if metric and metric['weight'] else None
+
+
+def _metric_statistics(metric):
+    if not metric:
+        return {'valid_samples': 0, 'min': None, 'max': None, 'avg': None,
+                'p50': None, 'p95': None, 'p99': None}
+
+    def percentile(fraction):
+        distribution = metric.get('distribution') or {}
+        if not distribution:
+            return None
+        target = metric['weight'] * fraction
+        accumulated = 0
+        for bucket, weight in sorted(distribution.items(), key=lambda item: int(item[0])):
+            accumulated += weight
+            if accumulated >= target:
+                return max(metric['min'], min(metric['max'], int(bucket) + .5))
+        return metric['max']
+
+    return {'valid_samples': metric['count'], 'min': metric['min'], 'max': metric['max'],
+            'avg': mean(metric), 'p50': percentile(.5), 'p95': percentile(.95),
+            'p99': percentile(.99)}
+
+
+def project_continuous_metrics(metrics, quality_rows=()):
+    """Project v2's normalized metric keys without changing units or legacy fields.
+
+    Device identifiers are opaque hashes. Their labels and layer/confidence are
+    attached only when present in the collector's quality metadata; in
+    particular, a Windows PhysicalDisk counter instance is not asserted to be a
+    physical drive because the collector reports that association as unverified.
+    """
+    disk_metadata, interface_metadata = {}, {}
+    statuses = {'cpu': {}, 'memory': {}, 'disk': {}, 'network': {}}
+    for quality in quality_rows:
+        if not isinstance(quality, dict):
+            continue
+        for source, target in (('disk_instances', disk_metadata), ('interfaces', interface_metadata)):
+            values = quality.get(source)
+            if isinstance(values, dict):
+                target.update({str(key): value for key, value in values.items() if isinstance(value, dict)})
+        reported_counts = quality.get('group_status_counts')
+        for group in statuses:
+            counts = reported_counts.get(group) if isinstance(reported_counts, dict) else None
+            if isinstance(counts, dict):
+                for value, count in counts.items():
+                    if isinstance(value, str) and type(count) is int and count > 0:
+                        statuses[group][value] = statuses[group].get(value, 0) + count
+                continue
+            value = quality.get(group)
+            if isinstance(value, str):
+                statuses[group][value] = statuses[group].get(value, 0) + 1
+
+    result = {'cpu': {}, 'memory': {}, 'disk': {'instances': {}},
+              'network': {'interfaces': {}}, 'metric_validity': {}}
+    units = {
+        'usage_percent': 'percent', 'used_percent': 'percent', 'available_percent': 'percent',
+        'committed_percent': 'percent', 'total_bytes': 'bytes', 'available_bytes': 'bytes',
+        'used_bytes': 'bytes', 'committed_bytes': 'bytes', 'commit_limit_bytes': 'bytes',
+        'page_reads_per_sec': 'operations_per_second', 'active_percent': 'percent',
+        'queue_length': 'operations', 'read_bytes_per_sec': 'bytes_per_second',
+        'write_bytes_per_sec': 'bytes_per_second', 'read_ops_per_sec': 'operations_per_second',
+        'write_ops_per_sec': 'operations_per_second', 'read_latency_ms': 'milliseconds',
+        'write_latency_ms': 'milliseconds', 'received_bytes_per_sec': 'bytes_per_second',
+        'sent_bytes_per_sec': 'bytes_per_second', 'rx_utilization_percent': 'percent',
+        'tx_utilization_percent': 'percent', 'working_set_bytes': 'bytes',
+        'collection_duration_ms': 'milliseconds', 'uptime_seconds': 'seconds',
+    }
+    for key, metric in metrics.items():
+        if not isinstance(metric, dict):
+            continue
+        if key.startswith('cpu.'):
+            result['cpu'][key[4:]] = _metric_statistics(metric) | {'unit': units.get(key[4:], 'unknown')}
+            result['metric_validity'][key] = metric['count']
+        elif key.startswith('memory.'):
+            result['memory'][key[7:]] = _metric_statistics(metric) | {'unit': units.get(key[7:], 'unknown')}
+            result['metric_validity'][key] = metric['count']
+        elif key.startswith('disk.') or key.startswith('network.'):
+            group, remainder = key.split('.', 1)
+            identity, _, name = remainder.partition('.')
+            if not name:
+                continue
+            container = result['disk']['instances'] if group == 'disk' else result['network']['interfaces']
+            metadata = disk_metadata if group == 'disk' else interface_metadata
+            item = container.setdefault(identity, {
+                'identity': identity,
+                'metadata': metadata.get(identity),
+                'metrics': {},
+            })
+            item['metadata'] = metadata.get(identity, item.get('metadata'))
+            aggregation = ('rate_from_counter_delta' if name.endswith('_per_sec') else
+                           'operation_weighted' if name.endswith('_latency_ms') else
+                           'time_weighted_gauge')
+            item['metrics'][name] = _metric_statistics(metric) | {
+                'unit': units.get(name, 'unknown'), 'aggregation': aggregation,
+            }
+            result['metric_validity'][key] = metric['count']
+    result['quality'] = {
+        group: {'status_counts': counts, 'status': next(iter(counts)) if len(counts) == 1 else
+                'mixed' if counts else 'unknown'}
+        for group, counts in statuses.items()
+    }
+    return result
 
 
 def policy():
@@ -217,6 +321,13 @@ def persist_windows(endpoint, windows):
                 accepted.append(str(window['window_id']))
                 continue
             fields = {column: mean(window['metrics'].get(name)) for name, column in CORE_METRICS.items()}
+            error_metric = window['metrics'].get('agent.telemetry_errors_count')
+            if error_metric:
+                # The per-read error counter is additive; preserve total errors
+                # in the row field used by existing SQL consumers.
+                fields['telemetry_errors_count'] = round(error_metric['sum'])
+            else:
+                fields['telemetry_errors_count'] = 0
             fields['collection_duration_ms'] = round(fields['collection_duration_ms'] or 0)
             for name, value in fields.items():
                 if name.endswith('_bytes') and value is not None: fields[name] = round(value)
@@ -258,34 +369,37 @@ def continuous_summary(endpoint, start, end, rows):
     merged = merge_metrics(row.metric_summaries.get('metrics', {}) for row in rows)
     expected = math.ceil((min(end, timezone.now()) - start).total_seconds() / 60)
     received = sum(row.resolution_seconds // 60 for row in rows)
+    projected = project_continuous_metrics(merged, (row.metric_summaries.get('quality', {}) for row in rows))
     def stats(name):
-        metric = merged.get(name)
-        if not metric:
-            return {'valid_samples': 0, 'min': None, 'max': None, 'avg': None, 'p50': None, 'p95': None, 'p99': None}
-        def percentile(fraction):
-            distribution = metric['distribution']
-            if not distribution:
-                return None
-            accumulated = 0
-            for bucket, weight in sorted(distribution.items(), key=lambda item: int(item[0])):
-                accumulated += weight
-                if accumulated >= metric['weight'] * fraction:
-                    return max(metric['min'], min(metric['max'], int(bucket) + .5))
-        return {'valid_samples': metric['count'], 'min': metric['min'], 'max': metric['max'], 'avg': mean(metric),
-                'p50': percentile(.5), 'p95': percentile(.95), 'p99': percentile(.99)}
+        return _metric_statistics(merged.get(name))
     validity = {}
     for metric, column in CORE_METRICS.items():
         # Existing diagnostics consume equivalent complete minute windows, not raw reads.
         validity[column] = {'valid_samples': min(received, merged.get(metric, {}).get('count', 0) // 6)}
-    for column in ('network_received_bytes', 'network_sent_bytes', 'telemetry_errors_count'):
+    for column in ('network_received_bytes', 'network_sent_bytes'):
         validity[column] = {'valid_samples': 0}
+    error_metric = merged.get('agent.telemetry_errors_count')
+    validity['telemetry_errors_count'] = {
+        'valid_samples': min(received, error_metric['count'] // 6) if error_metric else 0,
+    }
+    error_sample_count = (error_metric['count'] if error_metric and error_metric['min'] > 0
+                          else 0 if error_metric and error_metric['max'] == 0 else None)
+    error_total = round(error_metric['sum']) if error_metric else None
     return {'schema_version': 1, 'data_kind': 'consolidated_windows', 'percentile_method': 'duration_histogram_1pct',
         'endpoint_id': str(endpoint.pk), 'window': {'start': start.isoformat(), 'end': end.isoformat(), 'duration_seconds': (end-start).total_seconds()},
-        'samples': {'received': received}, 'cpu': {'usage_percent': stats('cpu.usage_percent')},
-        'memory': {'used_percent': stats('memory.used_percent'), 'committed_percent': stats('memory.committed_percent')},
-        'network': {'received_bytes': {'valid_samples': 0, 'observed_total_bytes': None}, 'sent_bytes': {'valid_samples': 0, 'observed_total_bytes': None}},
+        'samples': {'received': received},
+        'cpu': {'usage_percent': projected['cpu'].get('usage_percent', stats('cpu.usage_percent'))},
+        'memory': {'used_percent': projected['memory'].get('used_percent', stats('memory.used_percent')),
+                   'committed_percent': projected['memory'].get('committed_percent', stats('memory.committed_percent'))},
+        # Keep legacy cumulative-byte fields unavailable for v2: v2 stores
+        # per-interface rates, which are exposed additively below, not silently
+        # converted into incompatible totals.
+        'network': {'received_bytes': {'valid_samples': 0, 'observed_total_bytes': None}, 'sent_bytes': {'valid_samples': 0, 'observed_total_bytes': None},
+                    'interfaces': projected['network']['interfaces']},
+        'disk': projected['disk'],
         'agent': {'collection_duration_ms': stats('agent.collection_duration_ms'), 'working_set_bytes': stats('agent.working_set_bytes'),
-                  'telemetry_errors': {'samples_with_errors': 0, 'total_errors': 0}},
+                  'telemetry_errors': {'samples_with_errors': error_sample_count, 'total_errors': error_total,
+                                       'samples_with_errors_known': error_sample_count is not None}},
         'quality': {'expected_samples': expected, 'received_samples': received, 'coverage_percent': received/expected*100 if expected else None,
                     'over_expected_samples': max(0, received-expected), 'first_sample_at': rows[0].collected_at.isoformat() if rows else None,
                     'last_sample_at': rows[-1].window_end_at.isoformat() if rows else None, 'metric_validity': validity,
@@ -293,7 +407,9 @@ def continuous_summary(endpoint, start, end, rows):
                     'gaps_over_threshold_count': sum((b.collected_at-a.window_end_at).total_seconds() > 10 for a,b in zip(rows, rows[1:])),
                     'ingestion_lag_seconds': {'avg': sum((row.created_at-row.window_end_at).total_seconds() for row in rows)/len(rows) if rows else None},
                     'negative_lag_samples': sum(row.created_at < row.window_end_at for row in rows),
-                    'valid_native_reads': sum(row.metric_summaries.get('received_samples', 0) for row in rows)},
+                    'valid_native_reads': sum(row.metric_summaries.get('received_samples', 0) for row in rows),
+                    'metric_status': projected['quality'],
+                    'metric_validity': {**validity, **{name: {'valid_native_reads': count} for name, count in projected['metric_validity'].items()}}},
         'workload': workload([row for row in rows if row.resolution_seconds == 60]),
         'metric_summaries': merged}
 
@@ -337,6 +453,11 @@ def compact_history(*, apply=False, now=None, limit=500):
                     'expected_samples': target_resolution // 10, 'received_samples': sum(item['received_samples'] for item in incoming),
                     'metrics': merge_metrics(item['metrics'] for item in incoming), 'quality': {'kind': 'historical_rollup'}, 'source_hashes': hashes}
                 fields = {column: mean(merged['metrics'].get(name)) for name, column in CORE_METRICS.items()}
+                error_metric = merged['metrics'].get('agent.telemetry_errors_count')
+                if error_metric:
+                    fields['telemetry_errors_count'] = round(error_metric['sum'])
+                else:
+                    fields['telemetry_errors_count'] = 0
                 fields['collection_duration_ms'] = round(fields['collection_duration_ms'] or 0)
                 if fields['agent_working_set_bytes'] is not None:
                     fields['agent_working_set_bytes'] = round(fields['agent_working_set_bytes'])

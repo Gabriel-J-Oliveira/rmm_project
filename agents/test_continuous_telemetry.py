@@ -99,7 +99,79 @@ class ContinuousTelemetryTests(TestCase):
         self.assertEqual(data['quality']['expected_samples'], 2)
         self.assertEqual(data['quality']['received_samples'], 2)
         self.assertEqual(data['cpu']['usage_percent']['max'], 95)
+        self.assertEqual(data['cpu']['usage_percent']['unit'], 'percent')
         self.assertEqual(data['percentile_method'], 'duration_histogram_1pct')
+
+    def test_v2_summary_projects_disk_and_interface_metrics_without_changing_legacy_units(self):
+        data = window(self.at)
+        data['metrics'].update({
+            'disk.disk-a.active_percent': metric(0),
+            'disk.disk-a.queue_length': metric(0, percent=False),
+            'disk.disk-a.read_bytes_per_sec': metric(0, percent=False),
+            'disk.disk-a.read_latency_ms': metric(0, percent=False),
+            'network.nic-a.received_bytes_per_sec': metric(0, percent=False),
+            'network.nic-a.sent_bytes_per_sec': metric(128, percent=False),
+            'network.nic-a.rx_utilization_percent': metric(0),
+        })
+        data['quality'] = {
+            'disk': 'available',
+            'disk_instances': {'disk-a': {'instance': '0 C:', 'layer': 'windows_disk_instance',
+                                          'association_confidence': 'unverified'}},
+            'network': 'available',
+            'interfaces': {'nic-a': {'name': 'Ethernet 1', 'nominal_speed_bps': 1_000_000_000}},
+        }
+        persist_windows(self.machine, [data])
+        from .telemetry_analytics import build_endpoint_telemetry_summary
+        summary = build_endpoint_telemetry_summary(self.machine, self.at, self.at + timedelta(minutes=1))
+
+        disk = summary['disk']['instances']['disk-a']
+        self.assertEqual(disk['metadata']['association_confidence'], 'unverified')
+        self.assertEqual(disk['metrics']['read_bytes_per_sec']['unit'], 'bytes_per_second')
+        self.assertEqual(disk['metrics']['read_bytes_per_sec']['aggregation'], 'rate_from_counter_delta')
+        self.assertEqual(disk['metrics']['queue_length']['avg'], 0)
+        interface = summary['network']['interfaces']['nic-a']
+        self.assertEqual(interface['metadata']['name'], 'Ethernet 1')
+        self.assertEqual(interface['metrics']['received_bytes_per_sec']['unit'], 'bytes_per_second')
+        self.assertEqual(interface['metrics']['received_bytes_per_sec']['avg'], 0)
+        self.assertEqual(interface['metrics']['sent_bytes_per_sec']['avg'], 128)
+        # Legacy byte totals remain explicitly unavailable: rates are not totals.
+        self.assertEqual(summary['network']['received_bytes'],
+                         {'valid_samples': 0, 'observed_total_bytes': None})
+        self.assertEqual(summary['quality']['metric_validity']['network.nic-a.received_bytes_per_sec']['valid_native_reads'], 6)
+
+    def test_v2_summary_preserves_errors_and_marks_unprovable_error_sample_count_unknown(self):
+        data = window(self.at)
+        data['metrics']['agent.telemetry_errors_count'] = {
+            'count': 6, 'sum': 1, 'min': 0, 'max': 1, 'weight': 60,
+            'weighted_sum': 10, 'distribution': {},
+        }
+        persist_windows(self.machine, [data])
+        row = EndpointPerformanceSample.objects.get(schema_version=2)
+        self.assertEqual(row.telemetry_errors_count, 1)
+        from .telemetry_analytics import build_endpoint_telemetry_summary
+        from .telemetry_diagnostics import build_telemetry_evidence
+        summary = build_endpoint_telemetry_summary(self.machine, self.at, self.at + timedelta(minutes=1))
+        errors = summary['agent']['telemetry_errors']
+        self.assertEqual(errors['total_errors'], 1)
+        self.assertIsNone(errors['samples_with_errors'])
+        self.assertFalse(errors['samples_with_errors_known'])
+        evidence = build_telemetry_evidence(summary)['evidence']['overall']
+        self.assertIn('telemetry_errors_present', evidence['reasons'])
+        self.assertIn('telemetry_error_count_partial', evidence['reasons'])
+
+    def test_v2_error_total_survives_compaction(self):
+        bucket_start = self.at.replace(minute=(self.at.minute // 5) * 5)
+        first, second = window(bucket_start), window(bucket_start + timedelta(minutes=1))
+        for item, total in ((first, 2), (second, 3)):
+            item['metrics']['agent.telemetry_errors_count'] = {
+                'count': 6, 'sum': total, 'min': 0, 'max': total, 'weight': 60,
+                'weighted_sum': total * 10, 'distribution': {},
+            }
+        persist_windows(self.machine, [first, second])
+        compact_history(apply=True, now=bucket_start + timedelta(days=8))
+        row = EndpointPerformanceSample.objects.get(schema_version=2)
+        self.assertEqual(row.telemetry_errors_count, 5)
+        self.assertEqual(row.metric_summaries['metrics']['agent.telemetry_errors_count']['sum'], 5)
 
     def test_retention_rollup_ack_replay_and_no_legacy_deletion(self):
         data = [window(self.at + timedelta(minutes=index)) for index in range(3)]
