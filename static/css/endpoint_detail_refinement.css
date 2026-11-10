@@ -5,7 +5,7 @@ body.page-endpoint-detail {
     --endpoint-detail-border: rgba(143, 160, 184, .17);
     --endpoint-detail-primary: #e7edf5;
     --endpoint-detail-heading: #c2cede;
-    --endpoint-detail-label: #9eafc4;
+    --endpoint-detail-label: #8d9fb5;
     --endpoint-detail-secondary: #aab8ca;
     --endpoint-detail-scroll-thumb: #53647c;
     --endpoint-detail-scroll-track: #101522;
@@ -65,7 +65,11 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div:last-
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list dt,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dt {
     color: var(--endpoint-detail-label) !important;
-    font-weight: 700 !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list dd,
