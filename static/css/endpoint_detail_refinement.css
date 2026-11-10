@@ -7,7 +7,7 @@ body.page-endpoint-detail {
     --endpoint-detail-tile-border: rgba(143, 160, 184, .12);
     --endpoint-detail-tile-radius: 8px;
     --endpoint-detail-tile-min-height: 54px;
-    --endpoint-detail-tile-padding: 10px 11px;
+    --endpoint-detail-tile-padding: 8px 9px;
     --endpoint-detail-primary: #e7edf5;
     --endpoint-detail-heading: #c2cede;
     --endpoint-detail-label: #8d9fb5;
@@ -30,10 +30,17 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card {
 
 body.page-endpoint-detail .endpoint-detail-shell .panel:hover,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card:hover {
-    border-color: var(--endpoint-detail-border);
-    background: var(--endpoint-detail-surface);
-    box-shadow: none;
-    transform: none;
+    border-color: var(--endpoint-detail-border) !important;
+    background: var(--endpoint-detail-surface) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell [data-endpoint-tab-panel="inventory"] .panel:hover {
+    border-color: var(--endpoint-detail-border) !important;
+    background: var(--endpoint-detail-surface) !important;
+    box-shadow: none !important;
+    transform: none !important;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-dense-card > header,
@@ -50,7 +57,7 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-action-group h3 {
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list {
     gap: 8px;
-    padding: 12px;
+    padding: 8px;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div,
@@ -82,7 +89,7 @@ body.page-endpoint-detail .endpoint-mini-drawer .endpoint-fact-list dt,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dt {
     margin: 0;
     color: var(--endpoint-detail-label);
-    font-size: 11.5px;
+    font-size: 12.5px;
     font-weight: 600;
     line-height: 1.2;
     text-transform: none;
@@ -95,7 +102,7 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-header-facts dd {
     min-width: 0;
     margin: 0;
     color: var(--endpoint-detail-primary);
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 650;
     line-height: 1.3;
     overflow-wrap: anywhere;
@@ -117,6 +124,8 @@ body.page-endpoint-detail .endpoint-detail-shell .muted-inline,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row p,
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row small {
     color: var(--endpoint-detail-secondary);
+    font-size: 13px;
+    line-height: 1.4;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-agent-card .endpoint-agent-facts .endpoint-fact-list > .endpoint-agent-last-update,
@@ -167,14 +176,48 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-terminal-disclosure:h
     box-shadow: none;
 }
 
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-alert-item:hover {
+    border-color: var(--border) !important;
+    background: rgba(6, 7, 13, .22) !important;
+    transform: none !important;
+    transition: none !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-job-item:hover {
+    border-color: var(--border) !important;
+    background: var(--sidebar) !important;
+    transform: none !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-jobs-card .endpoint-job-item.is-active:hover {
+    border-color: rgba(99, 231, 177, .42) !important;
+    background: linear-gradient(135deg, rgba(99, 231, 177, .08), rgba(141, 104, 255, .1)) !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-actions-tab .endpoint-job-item.is-active:hover {
+    border-color: var(--border-active) !important;
+    background: var(--sidebar) !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-actions-danger:hover {
+    border-color: var(--critical) !important;
+}
+
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row {
     border-color: var(--endpoint-detail-border);
     background: var(--endpoint-detail-inner-surface);
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-event-row:hover {
-    border-color: rgba(167, 139, 250, .32);
-    background: rgba(124, 58, 237, .08);
+    border-color: var(--endpoint-detail-border) !important;
+    background: var(--endpoint-detail-inner-surface) !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-health-body .health-component span,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-health-body .health-component strong {
+    font-size: 14px !important;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell,
