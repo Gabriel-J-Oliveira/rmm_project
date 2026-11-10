@@ -385,6 +385,11 @@ def continuous_summary(endpoint, start, end, rows):
     error_sample_count = (error_metric['count'] if error_metric and error_metric['min'] > 0
                           else 0 if error_metric and error_metric['max'] == 0 else None)
     error_total = round(error_metric['sum']) if error_metric else None
+    metric_validity = {
+        **validity,
+        **{name: {'valid_native_reads': count}
+           for name, count in projected['metric_validity'].items()},
+    }
     return {'schema_version': 1, 'data_kind': 'consolidated_windows', 'percentile_method': 'duration_histogram_1pct',
         'endpoint_id': str(endpoint.pk), 'window': {'start': start.isoformat(), 'end': end.isoformat(), 'duration_seconds': (end-start).total_seconds()},
         'samples': {'received': received},
@@ -402,14 +407,14 @@ def continuous_summary(endpoint, start, end, rows):
                                        'samples_with_errors_known': error_sample_count is not None}},
         'quality': {'expected_samples': expected, 'received_samples': received, 'coverage_percent': received/expected*100 if expected else None,
                     'over_expected_samples': max(0, received-expected), 'first_sample_at': rows[0].collected_at.isoformat() if rows else None,
-                    'last_sample_at': rows[-1].window_end_at.isoformat() if rows else None, 'metric_validity': validity,
+                    'last_sample_at': rows[-1].window_end_at.isoformat() if rows else None,
                     'gap_threshold_seconds': 10, 'largest_internal_gap_seconds': max(((b.collected_at-a.window_end_at).total_seconds() for a,b in zip(rows, rows[1:])), default=None),
                     'gaps_over_threshold_count': sum((b.collected_at-a.window_end_at).total_seconds() > 10 for a,b in zip(rows, rows[1:])),
                     'ingestion_lag_seconds': {'avg': sum((row.created_at-row.window_end_at).total_seconds() for row in rows)/len(rows) if rows else None},
                     'negative_lag_samples': sum(row.created_at < row.window_end_at for row in rows),
                     'valid_native_reads': sum(row.metric_summaries.get('received_samples', 0) for row in rows),
                     'metric_status': projected['quality'],
-                    'metric_validity': {**validity, **{name: {'valid_native_reads': count} for name, count in projected['metric_validity'].items()}}},
+                    'metric_validity': metric_validity},
         'workload': workload([row for row in rows if row.resolution_seconds == 60]),
         'metric_summaries': merged}
 

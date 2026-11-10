@@ -23,6 +23,10 @@ Auditoria do caminho de telemetria contínua v2 e consumidores Django. Não fora
 
 `continuous_summary` agora usa uma projeção comum `project_continuous_metrics` para CPU, memória, instâncias de disco e interfaces. A projeção preserva estatísticas ponderadas e histogramas quando existentes, informa unidade, leituras nativas válidas, estado observado e metadados de associação. Para rede, rates por interface são novos campos aditivos; valores legados de bytes totais continuam indisponíveis no v2. Disco não é presumido como físico. O total de erros de leitura agora é somado/projetado, inclusive no campo compatível da amostra; número de leituras afetadas é desconhecido quando o agregado não prova esse número. Sem mudança no formato de entrada, autenticação, idempotência, ACK, regras de alertas ou migration.
 
+### Limite de compatibilidade: contador de erros ausente
+
+`EndpointPerformanceSample.telemetry_errors_count` é um `PositiveSmallIntegerField` não anulável, com default `0`. O contrato histórico de leitura também publica esse campo como inteiro. Sem migration não é possível armazenar ausência no campo; converter a resposta para `null` alteraria o contrato. Por isso, quando um payload v2 omite a métrica, a coluna plana mantém `0` apenas como projeção compatível, enquanto `metric_summaries` preserva a ausência e o resumo contínuo informa `total_errors: null` e `samples_with_errors_known: false`. Para dados v2, o JSON da métrica e o resumo contínuo são a fonte de verdade sobre presença; consumidores que leem somente o escalar legado não conseguem distinguir ausência de zero. Corrigir também esse escalar requer uma migration para nullable ou uma extensão explícita do contrato e fica pendente de aprovação separada.
+
 ## RC47-03 — contrato proposto para última análise persistida
 
 Esta seção propõe contrato; **não implementa scheduler, model ou migration**.
