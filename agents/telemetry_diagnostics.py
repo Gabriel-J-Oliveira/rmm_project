@@ -78,8 +78,13 @@ def build_telemetry_evidence(summary):
     errors = agent.get('telemetry_errors')
     if not isinstance(errors, dict):
         raise ValueError('agent.telemetry_errors is required')
-    error_samples = _nonnegative_int(errors.get('samples_with_errors'), 'agent.telemetry_errors.samples_with_errors')
-    total_errors = _nonnegative_int(errors.get('total_errors'), 'agent.telemetry_errors.total_errors')
+    error_samples_value = errors.get('samples_with_errors')
+    error_samples_known = error_samples_value is not None
+    error_samples = (_nonnegative_int(error_samples_value, 'agent.telemetry_errors.samples_with_errors')
+                     if error_samples_known else None)
+    total_errors_value = errors.get('total_errors')
+    total_errors = (_nonnegative_int(total_errors_value, 'agent.telemetry_errors.total_errors')
+                    if total_errors_value is not None else None)
 
     shared_reasons = []
     if expected == 0:
@@ -102,6 +107,8 @@ def build_telemetry_evidence(summary):
         shared_reasons.append('negative_ingestion_lag_present')
     if error_samples or total_errors:
         shared_reasons.append('telemetry_errors_present')
+    if not error_samples_known or total_errors is None:
+        shared_reasons.append('telemetry_error_count_partial')
 
     metrics = {}
     for name in DIAGNOSTIC_METRICS:
@@ -156,6 +163,7 @@ def build_telemetry_evidence(summary):
                 'gaps_over_threshold_count': gaps,
                 'negative_lag_samples': negative_lags,
                 'telemetry_error_samples': error_samples,
+                'telemetry_error_samples_known': error_samples_known,
                 'telemetry_errors_total': total_errors,
             },
         },
