@@ -52,7 +52,7 @@ public static class RotatingJsonlLog
         string directory = Path.GetDirectoryName(path)!;
         RejectReparseAncestors(directory);
         Directory.CreateDirectory(directory);
-        RejectReparse(path);
+        RejectReparse(path, observer is null ? null : () => observer("before_reparse_attributes"));
         RejectReparse(path + ".lock");
 
         // A zero-byte sidecar stays in place: deleting it creates competing lock inodes.
@@ -126,9 +126,18 @@ public static class RotatingJsonlLog
             RejectReparse(current.FullName);
     }
 
-    private static void RejectReparse(string path)
+    private static void RejectReparse(string path, Action? beforeAttributeRead = null)
     {
-        if ((File.Exists(path) || Directory.Exists(path)) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        // Read attributes directly instead of splitting the check across Exists
+        // and GetAttributes. The active log may be renamed during rotation; a
+        // path missing at lookup time is normal, but access failures must surface.
+        beforeAttributeRead?.Invoke();
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { return; }
+        catch (DirectoryNotFoundException) { return; }
+
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
             throw new IOException("Log path must not traverse a reparse point.");
     }
 }

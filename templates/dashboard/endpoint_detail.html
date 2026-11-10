@@ -3,6 +3,7 @@
 
 {% block title %}Night Owl | {{ endpoint.hostname }}{% endblock %}
 {% block body_class %}page-endpoint-detail{% endblock %}
+{% block icon_script %}<script src="{% static 'vendor/lucide/1.71.0/lucide.min.js' %}" defer></script>{% endblock %}
 {% block styles %}
 <link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-channel-update-2">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
@@ -10,7 +11,7 @@
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
 <link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
 {% endif %}
-<link rel="stylesheet" href="{% static 'css/endpoint_detail_refinement.css' %}?v=20261110-1">
+<link rel="stylesheet" href="{% static 'css/endpoint_detail_refinement.css' %}?v=20261110-3">
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -451,7 +452,7 @@
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-2"></script>
 <script src="{% static 'js/job_display.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=20261109-1"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-channel-update-2"></script>
 <script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=continuous-graphs-2"></script>
 {% endblock %}
