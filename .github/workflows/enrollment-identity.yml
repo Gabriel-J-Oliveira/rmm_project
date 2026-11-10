@@ -68,6 +68,8 @@ jobs:
           node --check static/js/endpoint_detail.js
           node tests/frontend/test_endpoint_detail_update_modal.js
           node tests/frontend/test_endpoint_update_channel.cjs
+          node --check static/js/endpoint_terminal.js
+          node tests/frontend/test_endpoint_terminal_clipboard.cjs
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
