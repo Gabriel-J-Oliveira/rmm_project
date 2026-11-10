@@ -13,8 +13,10 @@ function assert(condition, message) {
 assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261110-2"), "detail refinement stylesheet uses the latest cache key");
 assert(template.includes("js/endpoint_detail.js' %}?v=rc47-channel-update-2"), "endpoint detail script uses a fresh cache key");
 assert(!base.includes("endpoint_detail_refinement.css"), "refinement stylesheet must not be global");
-assert(!template.includes("block icon_script"), "endpoint template must inherit the Lucide loader when terminal is enabled");
-assert(base.includes("unpkg.com/lucide@latest/dist/umd/lucide.min.js"), "base page provides Lucide to the endpoint detail");
+assert(template.includes("block icon_script"), "endpoint detail overrides the global icon loader");
+assert(template.includes("vendor/lucide/1.71.0/lucide.min.js"), "endpoint detail uses the pinned local Lucide build");
+assert(!template.includes("unpkg.com/lucide"), "endpoint detail does not load executable icon code remotely");
+assert(base.includes("block icon_script"), "base page keeps the global icon loader as an overridable extension point");
 
 for (const action of ["update_agent", "repair_agent"]) {
   const button = template.slice(template.indexOf(`data-endpoint-action="${action}"`));
