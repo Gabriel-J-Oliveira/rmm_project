@@ -57,7 +57,7 @@ body.page-endpoint-detail .endpoint-detail-shell .endpoint-action-group h3 {
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list {
     gap: 8px;
-    padding: 8px;
+    padding: 0;
 }
 
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-fact-list > div,

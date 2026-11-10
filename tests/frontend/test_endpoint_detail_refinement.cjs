@@ -5,6 +5,7 @@ const template = fs.readFileSync(path.join(root, "templates/dashboard/endpoint_d
 const base = fs.readFileSync(path.join(root, "templates/base.html"), "utf8");
 const js = fs.readFileSync(path.join(root, "static/js/endpoint_detail.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "static/css/endpoint_detail_refinement.css"), "utf8");
+const dashboardCss = fs.readFileSync(path.join(root, "static/css/nightowl.css"), "utf8");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -42,7 +43,10 @@ assert(css.includes('[data-endpoint-tab-panel="inventory"] .panel:hover') && css
   "inventory cards override the later important hover rule");
 assert(css.includes(".endpoint-fact-list > div {"), "fact tiles have one page-scoped visual rule");
 assert(css.includes("--endpoint-detail-tile-surface") && css.includes("--endpoint-detail-tile-border"), "fact tile surfaces use page-scoped tokens");
-assert(css.includes("--endpoint-detail-tile-padding: 8px 9px;") && css.includes("padding: 8px;"), "fact lists and tiles use the tightened four-sided spacing");
+assert(css.includes("--endpoint-detail-tile-padding: 8px 9px;") && /gap:\s*8px;\s*padding:\s*0;/.test(css), "fact tiles keep their spacing while the list container has no outer padding");
+assert(!dashboardCss.includes("body.page-pulse .pulse-health-card:hover"), "dashboard summary cards have no decorative hover state");
+assert(/body\.page-pulse \.pulse-health-card\.is-active\s*\{[^}]*border-color:[^}]*background:/s.test(dashboardCss), "active dashboard filter remains visually identified without hover");
+assert(!/body\.page-pulse \.pulse-health-card\.is-active\s*\{[^}]*transform:/s.test(dashboardCss), "dashboard summary cards do not lift when active");
 const factTileRule = css.slice(css.indexOf(".endpoint-detail-shell .endpoint-fact-list > div,"), css.indexOf(".endpoint-detail-shell .endpoint-fact-list > div:hover,"));
 assert(factTileRule && !factTileRule.includes("!important"), "the canonical fact tile rule does not rely on important overrides");
 assert(css.includes("text-transform: none;") && css.includes("font-weight: 600;"),
