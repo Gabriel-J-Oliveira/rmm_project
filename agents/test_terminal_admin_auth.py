@@ -36,6 +36,11 @@ class AdminAuthControlTests(TestCase):
         response = self.client.get(url)
         self.assertContains(response, 'data-terminal-open')
         self.assertNotContains(response, 'data-terminal-open disabled')
+        self.assertContains(response, 'data-auth-modal')
+        self.assertContains(response, 'name="account"')
+        self.assertContains(response, 'name="password"')
+        self.assertNotContains(response, 'data-drawer')
+        self.assertNotContains(response, 'data-accounts')
         machine.status = 'offline'
         machine.save(update_fields=['status'])
         self.assertContains(self.client.get(url), 'data-terminal-open disabled')
