@@ -10,7 +10,7 @@ from django.utils import timezone
 from .models import (AgentMachine, EndpointPerformanceSample, PersistedTelemetryAnalysis,
                      TelemetryAnalysisIncorporation)
 from .telemetry_continuous import compact_history, persist_windows
-from .telemetry_persisted_analysis import analyze_endpoint
+from .telemetry_persisted_analysis import MAX_CANDIDATE_SCAN, analyze_endpoint
 
 
 def metric(value, *, count=6, weight=60, percent=True):
@@ -152,6 +152,64 @@ class PersistedTelemetryAnalysisTests(TestCase):
         self.assertEqual(state.latest_analysis, old_detail)
         self.assertEqual(state.historical_statistics, old_history)
         self.assertEqual(state.analysis_count, 1)
+
+    def test_newest_invalid_window_is_skipped_for_older_valid_window(self):
+        valid = window(self.now - timedelta(minutes=6), cpu=35)
+        invalid = window(self.now - timedelta(minutes=5), cpu=90, received=4)
+        self.add_window(valid)
+        self.add_window(invalid)
+
+        result = analyze_endpoint(self.machine.pk, apply=True, now=self.now + timedelta(minutes=3))
+
+        self.assertEqual(result['state'], 'succeeded')
+        self.assertEqual(result['selection']['rejection_reasons'], {'coverage_below_policy': 1})
+        state = PersistedTelemetryAnalysis.objects.get(endpoint=self.machine)
+        self.assertEqual(state.latest_analysis['sample_id'], valid['window_id'])
+        self.assertEqual(state.latest_analysis['cpu']['usage_percent']['avg'], 35)
+        self.assertEqual(state.latest_analysis['candidate_selection']['records_examined'], 2)
+        self.assertEqual(state.latest_analysis['candidate_selection']['rejected_candidates'], 1)
+        self.assertEqual(state.latest_analysis['candidate_selection']['rejection_reasons'],
+                         {'coverage_below_policy': 1})
+        self.assertEqual(TelemetryAnalysisIncorporation.objects.get().sample_id,
+                         uuid.UUID(valid['window_id']))
+
+    def test_candidate_selection_stops_at_configured_scan_limit(self):
+        rows = []
+        for index in range(MAX_CANDIDATE_SCAN + 1):
+            start = self.now - timedelta(minutes=MAX_CANDIDATE_SCAN + 2 - index)
+            data = window(start, cpu=25, received=4)
+            rows.append(EndpointPerformanceSample(
+                endpoint=self.machine, sample_id=uuid.UUID(data['window_id']),
+                schema_version=2, resolution_seconds=60,
+                collected_at=start, window_end_at=start + timedelta(minutes=1),
+                metric_summaries=data, cpu_percent=25, memory_used_percent=60,
+                collection_duration_ms=0))
+        EndpointPerformanceSample.objects.bulk_create(rows)
+
+        result = analyze_endpoint(self.machine.pk, apply=True, now=self.now + timedelta(minutes=2))
+
+        self.assertEqual(result['state'], 'rejected')
+        self.assertEqual(result['reason'], 'candidate_scan_limit_reached')
+        self.assertEqual(result['selection']['records_examined'], MAX_CANDIDATE_SCAN)
+        self.assertTrue(result['selection']['limit_reached'])
+        state = PersistedTelemetryAnalysis.objects.get(endpoint=self.machine)
+        self.assertEqual(state.last_attempt_reason, 'candidate_scan_limit_reached')
+        self.assertIsNone(state.latest_analysis_id)
+        self.assertEqual(state.analysis_count, 0)
+
+    def test_historical_window_does_not_inherit_current_agent_version(self):
+        data = window(self.now - timedelta(minutes=5))
+        row = self.add_window(data)
+        self.assertNotIn('agent_version', row.metric_summaries)
+        self.machine.agent_version = '2.0.0-later'
+        self.machine.save(update_fields=['agent_version'])
+
+        result = analyze_endpoint(self.machine.pk, apply=True, now=self.now + timedelta(minutes=2))
+
+        self.assertEqual(result['state'], 'succeeded')
+        state = PersistedTelemetryAnalysis.objects.get(endpoint=self.machine)
+        self.assertIsNone(state.latest_analysis['agent_version'])
+        self.assertEqual(state.agent_version, '')
 
     def test_offline_endpoint_and_missing_identity_are_not_analyzed(self):
         row = window(self.now - timedelta(minutes=5))

@@ -22,6 +22,7 @@ ANALYSIS_SCHEMA_VERSION = 1
 QUALITY_POLICY_VERSION = 'rc47-03a-v1'
 MIN_RECEIVED_SAMPLES = 5
 ONLINE_FRESHNESS = timedelta(minutes=15)
+MAX_CANDIDATE_SCAN = 100
 
 
 def _utc(value):
@@ -123,7 +124,7 @@ def _quality_state(payload):
     return 'unknown' if unresolved else 'complete'
 
 
-def _detail(endpoint, row, payload, sample_id, start, end, coverage, key, analysis_id):
+def _detail(endpoint, row, payload, sample_id, start, end, coverage, key, analysis_id, selection):
     metrics = payload['metrics']
     projected = project_continuous_metrics(metrics, [payload['quality']])
     error_metric = metrics.get('agent.telemetry_errors_count')
@@ -167,7 +168,10 @@ def _detail(endpoint, row, payload, sample_id, start, end, coverage, key, analys
         'analysis_schema_version': ANALYSIS_SCHEMA_VERSION,
         'resolution_seconds': row.resolution_seconds,
         'sample_id': str(sample_id),
-        'agent_version': endpoint.agent_version or None,
+        # EndpointPerformanceSample has no trustworthy agent-version snapshot.
+        # The current endpoint version may be newer than this historical window.
+        'agent_version': None,
+        'candidate_selection': selection,
         'window': {'start': start_utc.isoformat(), 'end': end_utc.isoformat(), 'duration_seconds': 60},
         'cpu': projected['cpu'],
         'memory': projected['memory'],
@@ -316,12 +320,36 @@ def _candidate(endpoint, now, state, *, lock=False):
         endpoint_id=endpoint.pk, schema_version=2, resolution_seconds=60,
         collected_at__gte=now - timedelta(days=retention), window_end_at__lte=now,
     )
+    incorporated_sample_ids = TelemetryAnalysisIncorporation.objects.filter(
+        endpoint_id=endpoint.pk).values('sample_id')
+    rows = rows.exclude(sample_id__in=incorporated_sample_ids)
     if state is not None and state.window_end_at:
         rows = rows.filter(window_end_at__gt=state.window_end_at)
     rows = rows.order_by('-window_end_at', '-collected_at', '-pk')
     if lock:
         rows = rows.select_for_update()
-    return rows.first()
+
+    # Probe one row beyond the bound so the result can distinguish an exhausted
+    # search from an intentionally truncated search without an unbounded COUNT.
+    batch = list(rows[:MAX_CANDIDATE_SCAN + 1])
+    scan = {
+        'records_examined': 0,
+        'rejected_candidates': 0,
+        'rejection_reasons': {},
+        'limit': MAX_CANDIDATE_SCAN,
+        'limit_reached': len(batch) > MAX_CANDIDATE_SCAN,
+    }
+    for row in batch[:MAX_CANDIDATE_SCAN]:
+        scan['records_examined'] += 1
+        try:
+            _window_payload(row)
+        except ValueError as error:
+            reason = str(error)
+            scan['rejected_candidates'] += 1
+            scan['rejection_reasons'][reason] = scan['rejection_reasons'].get(reason, 0) + 1
+            continue
+        return row, scan
+    return None, scan
 
 
 def analyze_endpoint(endpoint_id, *, apply=False, now=None):
@@ -361,8 +389,15 @@ def analyze_endpoint(endpoint_id, *, apply=False, now=None):
         if not endpoint.last_seen_at or endpoint.last_seen_at < now - ONLINE_FRESHNESS:
             _attempt(state, now, PersistedTelemetryAnalysis.STATUS_ENDPOINT_OFFLINE, 'endpoint_offline')
             return _result(endpoint, state, 'endpoint_offline', 'endpoint_offline')
-        row = _candidate(endpoint, now, state, lock=True)
+        row, selection = _candidate(endpoint, now, state, lock=True)
         if row is None:
+            if selection['records_examined']:
+                reason = ('candidate_scan_limit_reached' if selection['limit_reached']
+                          else next(iter(selection['rejection_reasons']), 'no_valid_candidate'))
+                _attempt(state, now, PersistedTelemetryAnalysis.STATUS_REJECTED, reason)
+                result = _result(endpoint, state, 'rejected', reason)
+                result['selection'] = selection
+                return result
             if state.latest_analysis_id:
                 _attempt(state, now, PersistedTelemetryAnalysis.STATUS_ALREADY_INCORPORATED,
                          'no_new_window_since_latest_success')
@@ -386,7 +421,8 @@ def analyze_endpoint(endpoint_id, *, apply=False, now=None):
             return _result(endpoint, state, 'stale_window', 'window_not_newer_than_latest', row=row)
 
         analysis_id = _analysis_id(endpoint, key)
-        detail = _detail(endpoint, row, payload, sample_id, start, end, coverage, key, analysis_id)
+        detail = _detail(endpoint, row, payload, sample_id, start, end, coverage,
+                         key, analysis_id, selection)
         try:
             history = _merge_history(state.historical_statistics, payload, start, end, coverage)
         except ValueError as error:
@@ -409,7 +445,8 @@ def analyze_endpoint(endpoint_id, *, apply=False, now=None):
         state.source = SOURCE_NAME
         state.schema_version = 2
         state.resolution_seconds = 60
-        state.agent_version = endpoint.agent_version or ''
+        # The sampled window does not carry a verifiable agent-version snapshot.
+        state.agent_version = ''
         state.window_start_at = start
         state.window_end_at = end
         state.latest_analysis = detail
@@ -418,7 +455,9 @@ def analyze_endpoint(endpoint_id, *, apply=False, now=None):
         state.first_analysis_at = start if state.first_analysis_at is None else min(state.first_analysis_at, start)
         state.last_analysis_at = end if state.last_analysis_at is None else max(state.last_analysis_at, end)
         state.save()
-        return _result(endpoint, state, 'succeeded', '', row=row)
+        result = _result(endpoint, state, 'succeeded', '', row=row)
+        result['selection'] = selection
+        return result
 
 
 def _preview(endpoint, state, now):
@@ -430,8 +469,13 @@ def _preview(endpoint, state, now):
         return {'endpoint_id': str(endpoint.pk), 'state': 'rejected', 'reason': 'endpoint_inactive'}
     if not endpoint.last_seen_at or endpoint.last_seen_at < now - ONLINE_FRESHNESS:
         return {'endpoint_id': str(endpoint.pk), 'state': 'endpoint_offline', 'reason': 'endpoint_offline'}
-    row = _candidate(endpoint, now, state)
+    row, selection = _candidate(endpoint, now, state)
     if row is None:
+        if selection['records_examined']:
+            reason = ('candidate_scan_limit_reached' if selection['limit_reached']
+                      else next(iter(selection['rejection_reasons']), 'no_valid_candidate'))
+            return {'endpoint_id': str(endpoint.pk), 'state': 'rejected', 'reason': reason,
+                    'selection': selection}
         if state and state.latest_analysis_id:
             return {'endpoint_id': str(endpoint.pk), 'state': 'already_incorporated',
                     'reason': 'no_new_window_since_latest_success',
@@ -448,7 +492,8 @@ def _preview(endpoint, state, now):
                 'sample_id': str(sample_id)}
     return {'endpoint_id': str(endpoint.pk), 'state': 'eligible', 'reason': '',
             'sample_id': str(sample_id), 'window_start_at': start.isoformat(), 'window_end_at': end.isoformat(),
-            'coverage_percent': coverage * 100, 'source': SOURCE_NAME, 'resolution_seconds': 60}
+            'coverage_percent': coverage * 100, 'source': SOURCE_NAME, 'resolution_seconds': 60,
+            'selection': selection}
 
 
 def _result(endpoint, state, status, reason, row=None):
