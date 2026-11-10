@@ -10,7 +10,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261110-2"), "detail refinement stylesheet uses the latest cache key");
+assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261110-3"), "detail refinement stylesheet uses the latest cache key");
 assert(template.includes("js/endpoint_detail.js' %}?v=rc47-channel-update-2"), "endpoint detail script uses a fresh cache key");
 assert(!base.includes("endpoint_detail_refinement.css"), "refinement stylesheet must not be global");
 assert(template.includes("block icon_script"), "endpoint detail overrides the global icon loader");
@@ -38,13 +38,25 @@ assert(!inventoryRender.includes('Última sincronização do inventário"') || !
 assert(css.split(/\r?\n/).filter(line => line.trim().startsWith(".") || line.trim().startsWith("*")).length === 0,
   "refinement selectors are scoped beneath page-endpoint-detail");
 assert(css.includes(".endpoint-detail-shell .panel:hover"), "non-interactive endpoint cards have no decorative hover");
+assert(css.includes('[data-endpoint-tab-panel="inventory"] .panel:hover') && css.includes("background: var(--endpoint-detail-surface) !important;"),
+  "inventory cards override the later important hover rule");
 assert(css.includes(".endpoint-fact-list > div {"), "fact tiles have one page-scoped visual rule");
 assert(css.includes("--endpoint-detail-tile-surface") && css.includes("--endpoint-detail-tile-border"), "fact tile surfaces use page-scoped tokens");
+assert(css.includes("--endpoint-detail-tile-padding: 8px 9px;") && css.includes("padding: 8px;"), "fact lists and tiles use the tightened four-sided spacing");
 const factTileRule = css.slice(css.indexOf(".endpoint-detail-shell .endpoint-fact-list > div,"), css.indexOf(".endpoint-detail-shell .endpoint-fact-list > div:hover,"));
 assert(factTileRule && !factTileRule.includes("!important"), "the canonical fact tile rule does not rely on important overrides");
 assert(css.includes("text-transform: none;") && css.includes("font-weight: 600;"),
   "fact labels use normal capitalization and subordinate weight");
-assert(css.includes(".endpoint-event-row:hover"), "interactive event rows retain their hover affordance");
+assert(css.includes(".endpoint-event-row:hover") && css.includes("background: var(--endpoint-detail-inner-surface) !important;"),
+  "event cards keep their neutral surface on hover");
+assert(css.includes(".endpoint-alert-item:hover") && css.includes("background: rgba(6, 7, 13, .22) !important;"),
+  "alert cards keep their original surface on hover");
+assert(css.includes(".endpoint-job-item:hover") && css.includes("background: var(--sidebar) !important;"),
+  "job cards keep their normal surface on hover");
+assert(css.includes(".endpoint-actions-danger:hover") && css.includes("border-color: var(--critical) !important;"),
+  "critical action card keeps its fixed risk border without a hover change");
+assert(css.includes("font-size: 12.5px;") && css.includes("font-size: 14px;") && css.includes("font-size: 13px;"),
+  "only internal labels, values, and supporting text receive the modest type increase");
 assert(css.includes("::-webkit-scrollbar-thumb:hover"), "scrollbar hover is retained only on the scrollbar");
 assert(css.includes("scrollbar-width: thin"), "Firefox scrollbar styling is present");
 assert(!css.includes("height: 280px") && !css.includes("height: 320px"), "refinement does not impose fixed card heights");
