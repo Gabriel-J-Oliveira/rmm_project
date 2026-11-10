@@ -102,6 +102,26 @@ internal static class RetentionClosureTests
             foreach (string line in File.ReadAllLines(file)) { using JsonDocument parsed = JsonDocument.Parse(line); }
         }
 
+        // Deterministically reproduce rotation just before the attribute read
+        // in RejectReparse. The old Exists/GetAttributes split leaked a
+        // FileNotFoundException from this exact interleaving.
+        string reparseRace = Path.Combine(dir, "reparse-race.jsonl");
+        File.WriteAllText(reparseRace, "{\"event_type\":\"before_rotation\"}\n");
+        bool rotatedBetweenChecks = false;
+        RotatingJsonlLog.AppendObservedForTest(reparseRace, "{\"event_type\":\"after_rotation\"}", small, phase =>
+        {
+            if (phase == "before_reparse_attributes" && !rotatedBetweenChecks)
+            {
+                File.Move(reparseRace, reparseRace + ".1");
+                rotatedBetweenChecks = true;
+            }
+        });
+        Require(rotatedBetweenChecks, "Reparse race fixture did not rotate the active log between checks.");
+        Require(File.ReadAllText(reparseRace + ".1").Contains("before_rotation"), "Concurrent rotation lost the prior record.");
+        using (JsonDocument parsed = JsonDocument.Parse(File.ReadAllText(reparseRace)))
+            Require(parsed.RootElement.GetProperty("event_type").GetString() == "after_rotation",
+                "Append did not continue after the active log was rotated.");
+
         string concurrent = Path.Combine(dir, "concurrent.jsonl");
         Parallel.For(0, 4, i => WriteChild(concurrent, "thread-" + i));
         List<Process> children = new();
