@@ -34,7 +34,7 @@ async function main() {
         ];
         const factMarkup = facts.map(([label, value], index) => `<div class="rmm-info-tile"><dt>${label}</dt><dd${index === 2 ? ' class="mono"' : ''}>${value}</dd></div>`).join('');
         const extraFacts = count => Array.from({ length: count }, (_, index) => `<div class="rmm-info-tile${count === 7 && index === 5 ? ' endpoint-fact-wide' : ''}"><dt>Campo ${index + 1}</dt><dd>${index === count - 1 ? 'Valor longo '.repeat(8) : 'Valor conhecido'}</dd></div>`).join('');
-        await page.setContent(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>${stylesheet}</style><body class="page-endpoint-detail"><main class="endpoint-detail-shell"><nav class="endpoint-tabs"><button>Visão geral</button><button>Inventário</button><button>Monitoramento</button></nav><section class="endpoint-tab-panel"><article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>Bateria</h2></header><dl class="endpoint-fact-list rmm-info-grid">${factMarkup}</dl></article><article class="panel endpoint-dense-card"><header><h2>Five</h2></header><dl class="endpoint-fact-list rmm-info-grid five-facts">${extraFacts(5)}</dl></article><article class="panel endpoint-dense-card"><header><h2>Seven</h2></header><dl class="endpoint-fact-list rmm-info-grid seven-facts">${extraFacts(7)}</dl></article><button class="endpoint-quick-action-button">Coletar inventário</button></section></main></body>`);
+        await page.setContent(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>${stylesheet}</style><body class="page-endpoint-detail"><main class="endpoint-detail-shell"><nav class="endpoint-tabs"><button>Visão geral</button><button>Inventário</button><button>Monitoramento</button></nav><section class="endpoint-tab-panel" data-endpoint-tab-panel="inventory"><article class="panel endpoint-dense-card endpoint-hardware-evidence"><header><h2>Bateria</h2></header><p class="card-supporting-copy">Informações do hardware reportadas pelo agente.</p><dl class="endpoint-fact-list rmm-info-grid">${factMarkup}</dl></article><article class="panel endpoint-dense-card"><header><h2>Five</h2></header><dl class="endpoint-fact-list rmm-info-grid five-facts">${extraFacts(5)}</dl></article><article class="panel endpoint-dense-card"><header><h2>Seven</h2></header><dl class="endpoint-fact-list rmm-info-grid seven-facts">${extraFacts(7)}</dl></article><article class="endpoint-alert-item">Alerta de demonstração</article><article class="endpoint-event-row">Evento de demonstração</article><article class="endpoint-job-item">Job de demonstração</article><section class="endpoint-action-category">Categoria de ação</section><section class="endpoint-actions-danger">Ação crítica</section><aside class="panel endpoint-jobs-panel">Painel de jobs</aside><button class="endpoint-quick-action-button">Coletar inventário</button></section></main></body>`);
 
         const tiles = page.locator('.endpoint-hardware-evidence .endpoint-fact-list > div');
         assert.equal(await tiles.count(), 6, 'battery card renders six tiles');
@@ -55,6 +55,11 @@ async function main() {
         assert(computed.every(style => JSON.stringify(style) === JSON.stringify(computed[0])), `all six battery tiles share computed surface and spacing: ${JSON.stringify(computed)}`);
         assert.notEqual(computed[0].background, 'rgba(0, 0, 0, 0)', 'tiles have a distinct inner surface');
         assert.equal(computed[0].minHeight, '54px', 'tiles use one shared minimum height');
+        assert.equal(computed[0].padding, '8px 9px', 'tile padding is reduced evenly on all four sides');
+        assert.equal(await page.locator('.endpoint-hardware-evidence .endpoint-fact-list').evaluate(element => getComputedStyle(element).padding), '8px', 'fact list outer inset is reduced evenly on all four sides');
+        assert.equal(await page.locator('.endpoint-hardware-evidence dt').first().evaluate(element => getComputedStyle(element).fontSize), '12.5px', 'fact labels are slightly larger');
+        assert.equal(await page.locator('.endpoint-hardware-evidence dd').first().evaluate(element => getComputedStyle(element).fontSize), '14px', 'fact values are slightly larger');
+        assert.equal(await page.locator('.card-supporting-copy').evaluate(element => getComputedStyle(element).fontSize), '13px', 'supporting card copy is slightly larger');
         const otherFactStyles = await page.locator('.five-facts > div, .seven-facts > div').evaluateAll(elements => elements.map(element => {
             const style = getComputedStyle(element);
             return { background: style.backgroundColor, border: style.border, radius: style.borderRadius, padding: style.padding, minHeight: style.minHeight };
@@ -87,6 +92,25 @@ async function main() {
             const style = getComputedStyle(element);
             return { background: style.backgroundColor, border: style.borderColor, shadow: style.boxShadow, transform: style.transform };
         }), cardBefore, 'main card is unchanged while hovering a fact');
+
+        await card.hover();
+        assert.deepEqual(await card.evaluate(element => {
+            const style = getComputedStyle(element);
+            return { background: style.backgroundColor, border: style.borderColor, shadow: style.boxShadow, transform: style.transform };
+        }), cardBefore, 'inventory card background, border, shadow, and transform stay unchanged on hover');
+
+        for (const selector of ['.endpoint-alert-item', '.endpoint-event-row', '.endpoint-job-item', '.endpoint-action-category', '.endpoint-actions-danger', '.endpoint-jobs-panel']) {
+            const row = page.locator(selector);
+            const before = await row.evaluate(element => {
+                const style = getComputedStyle(element);
+                return { background: style.backgroundColor, border: style.borderColor, transform: style.transform, shadow: style.boxShadow };
+            });
+            await row.hover();
+            assert.deepEqual(await row.evaluate(element => {
+                const style = getComputedStyle(element);
+                return { background: style.backgroundColor, border: style.borderColor, transform: style.transform, shadow: style.boxShadow };
+            }), before, `${selector} has no decorative hover`);
+        }
 
         const action = page.locator('.endpoint-quick-action-button');
         const actionBefore = await action.evaluate(element => getComputedStyle(element).backgroundColor);
