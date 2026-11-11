@@ -18,11 +18,11 @@ from django.test.utils import CaptureQueriesContext
 from . import test_rollout_planning as fixtures
 from .fleet_policy import PolicyContractError
 from .lifecycle_jobs import active_lifecycle_job, agent_job_parameters, lock_lifecycle_endpoint
-from .models import AgentJob, AgentMachine, AgentRolloutTarget, AuditEvent
+from .models import AgentJob, AgentMachine, AgentRelease, AgentRolloutTarget, AuditEvent
 from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .rollout_dispatch import dispatch_rollout_campaign
 from .rollout_planning import build_rollout_dispatch_plan
-from .services import AgentUpdateDecision, build_agent_rollout_preview, build_update_agent_job_payload
+from .services import AgentUpdateDecision, build_agent_rollout_preview, build_update_agent_job_payload, change_agent_release_rollout
 
 
 @override_settings(NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED=True, NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED=True)
@@ -223,6 +223,31 @@ class RolloutDispatchTests(TestCase):
         self.assertEqual(job.status, 'sent')
         self.assertIn('rollout_metadata', job.payload)
 
+    def test_pull_rejects_campaign_job_after_release_pause(self):
+        c = self.create()
+        self.dispatch(c)
+        target = c.targets.get()
+        job = target.agent_job
+        self.machine.set_agent_token('synthetic-campaign-pull-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+        change_agent_release_rollout(
+            self.release, self.actor, 100, paused=True, reason='Pause before agent pull',
+        )
+
+        with patch('agents.views.timezone.now', return_value=self.now):
+            response = Client(HTTP_AUTHORIZATION='Bearer synthetic-campaign-pull-token').get('/api/agent/jobs/pull/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['jobs'], [])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(job.error_code, 'UPDATE_DISPATCH_REVALIDATION_FAILED')
+        target.refresh_from_db()
+        self.assertEqual((target.state, target.completed_at is not None), ('cancelled', True))
+        audit = AuditEvent.objects.get(event_type='agent.update_dispatch_blocked')
+        self.assertEqual(audit.metadata['reason_code'], 'release_paused')
+        self.assertEqual(audit.metadata['target_id'], str(target.pk))
+
 
 @unittest.skipUnless(connection.vendor == 'postgresql', 'Requires PostgreSQL row locks')
 @override_settings(NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED=True, NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED=True)
@@ -335,6 +360,57 @@ class PostgreSQLDispatchTests(TransactionTestCase):
                     self.assertEqual(first.result(timeout=20)['created_count'], 1)
                     self.assertEqual(second.result(timeout=20), 409)
             self.assertEqual(AgentJob.objects.count(), 0 if manual_first else 1)
+
+    def test_pull_skips_locked_release_then_rejects_after_pause_commit(self):
+        from .services import change_agent_release_rollout
+        c = self.create()
+        self.dispatch(c)
+        job = c.targets.get().agent_job
+        self.machine.set_agent_token('synthetic-pause-race-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+        paused, allow_commit, pull_started = threading.Event(), threading.Event(), threading.Event()
+
+        def pause_in_transaction():
+            connections.close_all()
+            try:
+                with transaction.atomic():
+                    release = AgentRelease.objects.select_for_update().get(pk=self.release.pk)
+                    change_agent_release_rollout(release, self.actor, 100, paused=True,
+                                                 reason='Concurrent pause before pull')
+                    paused.set()
+                    if not allow_commit.wait(timeout=10):
+                        raise TimeoutError('pause transaction release gate timed out')
+            finally:
+                connections.close_all()
+
+        def pull():
+            connections.close_all()
+            try:
+                paused.wait(timeout=10)
+                pull_started.set()
+                with patch('agents.views.timezone.now', return_value=self.now):
+                    response = Client(HTTP_AUTHORIZATION='Bearer synthetic-pause-race-token').get('/api/agent/jobs/pull/')
+                return response.status_code, response.json()['jobs']
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pause_future = pool.submit(pause_in_transaction)
+            self.assertTrue(paused.wait(timeout=10))
+            pull_future = pool.submit(pull)
+            self.assertTrue(pull_started.wait(timeout=10))
+            self.assertEqual(pull_future.result(timeout=20), (200, []))
+            allow_commit.set()
+            pause_future.result(timeout=20)
+
+        with patch('agents.views.timezone.now', return_value=self.now):
+            response = Client(HTTP_AUTHORIZATION='Bearer synthetic-pause-race-token').get('/api/agent/jobs/pull/')
+        self.assertEqual((response.status_code, response.json()['jobs']), (200, []))
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(job.error_code, 'UPDATE_DISPATCH_REVALIDATION_FAILED')
+        self.assertEqual(AuditEvent.objects.get(event_type='agent.update_dispatch_blocked').metadata['reason_code'], 'release_paused')
 
     def test_migration_reverse_before_and_after_dispatch(self):
         latest_targets = MigrationExecutor(connection).loader.graph.leaf_nodes()

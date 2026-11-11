@@ -4737,6 +4737,17 @@ def endpoint_update_policy_update(request, pk):
         channel = posted.get('update_channel', '').strip()
         if channel not in {choice[0] for choice in AgentMachine.UPDATE_CHANNEL_CHOICES}:
             return JsonResponse({'error': 'invalid_channel', 'detail': 'Canal invalido.'}, status=400)
+        if channel != channel_before and endpoint.jobs.filter(
+                job_type=AgentJob.TYPE_UPDATE_AGENT,
+                status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+        ).exists():
+            return JsonResponse(
+                {
+                    'error': 'update_job_already_pending',
+                    'detail': 'O canal nao pode ser alterado enquanto uma atualizacao do agente estiver pendente ou em execucao.',
+                },
+                status=409,
+            )
         endpoint.update_channel = channel
         changed_fields.add('update_channel')
 
