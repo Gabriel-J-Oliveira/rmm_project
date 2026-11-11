@@ -55,7 +55,7 @@ let phase = 'initialization';
         assert(confirmation.includes(policyName));
         assert(confirmation.includes(endpointName));
         assert(confirmation.includes(endpointId));
-        assert(confirmation.includes('somente a este computador'));
+        assert(confirmation.includes('apenas a este computador'));
         await page.waitForFunction(() => {
             const cardNode = document.querySelector('[data-endpoint-policy-id]');
             return cardNode && /Em fila|Enfileirado/.test(cardNode.textContent);

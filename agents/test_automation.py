@@ -564,6 +564,11 @@ class EndpointAssignedPolicyApiTests(AutomationFixture, TestCase):
         self.assertEqual(response.json()['policies'][0]['run_block_reason'], 'permission_required')
         self.assertEqual(self.post_run(definition).status_code, 403)
 
+    def test_endpoint_detail_issues_csrf_cookie_for_scripted_post_actions(self):
+        response = self.client.get(reverse('endpoint-detail', kwargs={'pk': self.endpoint.pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('csrftoken', response.cookies)
+
     def test_paused_and_unassigned_policies_cannot_enqueue(self):
         for state in ('paused', 'cancelled'):
             with self.subTest(state=state):
