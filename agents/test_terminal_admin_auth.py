@@ -14,7 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from . import terminal_sessions as sessions, terminal_transport as transport
-from .models import AuditEvent, InventorySnapshot, TerminalAccessGrant, TerminalSession
+from .models import AgentMachine, AuditEvent, InventorySnapshot, TerminalAccessGrant, TerminalSession
 from .terminal_test_harness import LoopbackASGI, WSClient
 from .test_terminal_transport import fixture
 
@@ -81,11 +81,13 @@ class AdminAuthControlTests(TestCase):
         operator.user_permissions.remove(Permission.objects.get(
             content_type__app_label='agents', content_type__model='terminalsession',
             codename='open_terminalsession'))
+        operator = get_user_model().objects.get(pk=operator.pk)
         with self.assertRaises(PermissionError):
             sessions.create_session(operator, machine.pk, 'admin_auth')
         operator.user_permissions.add(Permission.objects.get(
             content_type__app_label='agents', content_type__model='terminalsession',
             codename='open_terminalsession'))
+        operator = get_user_model().objects.get(pk=operator.pk)
         info = sessions.create_session(operator, machine.pk, 'admin_auth')
         sessions.close_session(info['session_id'], 'synthetic_test_closed')
 
@@ -168,8 +170,7 @@ class AdminAuthControlTests(TestCase):
 
         machine.machine_id = str(uuid.uuid4())
         machine.save(update_fields=['machine_id'])
-        duplicate, _ = AgentMachine.create_with_token(hostname='SYNTHETIC-admin-auth-duplicate',
-            machine_id=machine.machine_id)
+        AgentMachine.create_with_token(hostname='SYNTHETIC-admin-auth-duplicate', machine_id=machine.machine_id)
         with self.assertRaises(PermissionError):
             sessions.create_session(operator, machine.pk, 'admin_auth')
         self.assertFalse(TerminalSession.objects.exists())
