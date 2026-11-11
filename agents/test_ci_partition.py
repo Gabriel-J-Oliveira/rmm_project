@@ -37,6 +37,9 @@ class WindowsE2EPartitionTests(SimpleTestCase):
         self.assertIn("agents.test_automation.AutomationBrowserTests.test_real_ui_and_persisted_automations", content)
         self.assertIn("$env:NIGHTOWL_TEST_BROWSER_E2E = '1'", content)
         self.assertIn("NIGHTOWL_TEST_CHROME", content)
+        workflow = script.parents[1] / '.github' / 'workflows' / 'enrollment-identity.yml'
+        workflow_content = workflow.read_text(encoding='utf-8')
+        self.assertIn('npm install --no-save --no-package-lock --ignore-scripts playwright@1.63.0', workflow_content)
 
     def test_isolated_browser_gate_fails_for_skipped_or_missing_tests(self):
         runner = WindowsBrowserE2ERunner(verbosity=0)
