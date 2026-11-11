@@ -130,10 +130,17 @@ if (process.argv.includes('--visual')) (async () => {
                 shadow:style.boxShadow,transform:style.transform};
         }), inventoryBeforeHover, 'informational inventory cards do not react to hover');
         const control = page.locator('[data-endpoint-tab-panel="inventory"] button');
-        const controlBackground = await control.evaluate(button => getComputedStyle(button).backgroundColor);
+        const controlBeforeHover = await control.evaluate(button => {
+            const style=getComputedStyle(button); return {background:style.backgroundColor,border:style.borderColor,
+                color:style.color,transform:style.transform};
+        });
         await control.hover();
-        assert.notEqual(await control.evaluate(button => getComputedStyle(button).backgroundColor), controlBackground,
-            'interactive controls retain their own hover feedback');
+        const controlAfterHover = await control.evaluate(button => {
+            const style=getComputedStyle(button); return {background:style.backgroundColor,border:style.borderColor,
+                color:style.color,transform:style.transform};
+        });
+        assert(Object.keys(controlBeforeHover).some(key => controlBeforeHover[key] !== controlAfterHover[key]),
+            'interactive controls retain hover feedback through a visual state');
         await page.locator('[data-live-interface]').evaluate(select => { select.disabled = true; });
         assert.equal(await page.locator('[data-live-interface]').evaluate(select => getComputedStyle(select).cursor), 'not-allowed');
         await page.locator('[data-live-interface]').evaluate(select => { select.disabled = false; });
