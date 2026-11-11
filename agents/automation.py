@@ -20,6 +20,9 @@ ALLOWED = ('force_inventory', 'collect_disks', 'collect_security', 'collect_soft
 ACTIVE = ('queued', 'sent', 'running')
 QUARANTINE = frozenset({'CS-CVEL-0029', 'CS-CVEL-0059', 'CS-CVEL-0133', 'CS-CVEL-0262'})
 UTC = dt_timezone.utc
+# Telemetry analyses are heavier than enqueueing job occurrences. Keep a separate
+# hard cap so enabling both scheduler modes never doubles analysis work to `limit`.
+TELEMETRY_ANALYSIS_MAX_PER_ROUND = 5
 
 
 def authorize(user, permission='view_automationdefinition'):
@@ -399,7 +402,8 @@ def scheduler_round(now=None, limit=20, analysis_dry_run=False):
         return {'processed': 0, 'failed': 0, 'telemetry_analysis': analysis}
     if not jobs_enabled:
         from .telemetry_persisted_analysis import scheduled_analysis_round
-        analysis = scheduled_analysis_round(now=now, limit=limit)
+        analysis = scheduled_analysis_round(
+            now=now, limit=min(limit, TELEMETRY_ANALYSIS_MAX_PER_ROUND))
         return {'processed': analysis['processed'], 'failed': analysis['failed'],
                 'telemetry_analysis': analysis}
     health,_=AutomationSchedulerHealth.objects.get_or_create(key='jobs')
@@ -470,7 +474,8 @@ def scheduler_round(now=None, limit=20, analysis_dry_run=False):
     if analysis_enabled or analysis_dry_run:
         from .telemetry_persisted_analysis import scheduled_analysis_round
         analysis = scheduled_analysis_round(
-            now=now, limit=limit, dry_run=True if analysis_dry_run else None)
+            now=now, limit=min(limit, TELEMETRY_ANALYSIS_MAX_PER_ROUND),
+            dry_run=True if analysis_dry_run else None)
         result['telemetry_analysis'] = analysis
         if not analysis_dry_run:
             result['processed'] += analysis['processed']

@@ -77,6 +77,20 @@ class AutomationTests(AutomationFixture,TestCase):
         self.assertEqual(definition.state,'finished')
         self.assertIsNotNone(AutomationSchedulerHealth.objects.get().last_success_at)
 
+    @override_settings(NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED=True,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN=False)
+    def test_combined_round_preserves_job_limit_and_caps_analysis_work(self):
+        definition=self.define()
+        with mock.patch('agents.telemetry_persisted_analysis.scheduled_analysis_round',
+                        return_value={'processed':3,'failed':0}) as analysis_round:
+            result=scheduler_round(now=definition.starts_at,limit=20)
+
+        self.assertEqual(AgentJob.objects.count(),1)
+        analysis_round.assert_called_once_with(
+            now=definition.starts_at,limit=5,dry_run=None)
+        self.assertEqual(result['processed'],4)
+        self.assertEqual(result['failed'],0)
+
     def test_daily_weekly_monthly_interval_and_month_missing_day(self):
         start=datetime(2026,1,31,12,tzinfo=UTC)
         definition=AutomationDefinition(starts_at=start,timezone_name='America/Sao_Paulo',schedule={'kind':'monthly','monthday':31})

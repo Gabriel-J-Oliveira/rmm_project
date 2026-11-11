@@ -37,6 +37,34 @@ Sequência segura: migration 0048 em laboratório; `manage.py check`/dry-run; va
 
 ## Validação desta branch
 
-Registrada após implementação: 91 testes de telemetria, persistência, scheduler, automações e módulo PostgreSQL passaram em SQLite (4 testes foram ignorados por exigirem backend/ambiente diferente). O teste novo de dois workers usa `TransactionTestCase` e `SELECT FOR UPDATE SKIP LOCKED` quando disponível. O ambiente local não tem `psql`/`pg_isready` nem serviço PostgreSQL configurado, então a concorrência real PostgreSQL fica para o check CI com serviço PostgreSQL. `manage.py check`, `makemigrations --check --dry-run` e `git diff --check` passaram localmente.
+Registrada após implementação: 91 testes focados passaram em SQLite (4 testes foram ignorados por exigirem backend/ambiente diferente). O check PostgreSQL do CI também executou o teste transacional de dois workers e passou; o ambiente local não tinha serviço PostgreSQL. `manage.py check`, `makemigrations --check --dry-run` e `git diff --check` passaram localmente.
 
-Pendências: escolher política de primeira captura; validar concorrência em PostgreSQL CI; confirmar a causa da ausência histórica de disco/rede no registro real; homologar dry-run e execução controlada em ambiente isolado. Nenhuma flag foi ativada em produção.
+## Revisão final de integração — 11/11/2026
+
+### Flags e limite combinado
+
+`NIGHTOWL_JOB_AUTOMATIONS_ENABLED` e `NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED` são independentes. Só a flag de jobs mantém exatamente o fluxo anterior. Só a flag de análise executa o scheduler de telemetria sem percorrer automações. Com ambas desligadas, a rodada normal falha fechada com `scheduler_disabled`. `--analysis-dry-run` é exceção intencional: sempre faz apenas preview de telemetria, mesmo com ambas desligadas, e não processa jobs nem grava agenda, análise ou health.
+
+Quando ambas estão ligadas, o limite de jobs continua sendo o `--limit` existente (1–100). Para evitar dobrar inadvertidamente o custo da rodada, o trabalho de análise tem teto independente de **5 endpoints por invocação**, ou o menor `--limit` solicitado. Portanto, no caso máximo padrão de `--limit 20`, uma rodada pode processar até 20 definições de jobs mais 5 análises; a telemetria não consome os 20 slots de jobs. A expiração legada de jobs continua com seu limite existente de até 100 registros por rodada. Os testes de automação legados permanecem como regressão.
+
+### Invocação recorrente, saúde e parada
+
+O repositório contém apenas o management command `process_job_automations`; não há cron, unit/timer systemd, Celery beat ou outro invocador recorrente versionado. A frequência e o mecanismo atualmente configurados no servidor não podem ser determinados por inspeção desta branch e precisam ser verificados no host pelo responsável do deploy. O código da análise só grava estado quando as duas condições operacionais de apply estão presentes: scheduler habilitado e `NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN=false`. Por padrão, a flag está desligada e dry-run está ligado.
+
+O comando termina com erro se a rodada reportar falha, podendo ser usado como sinal por um supervisor externo. Não existe circuit breaker global: retries são limitados por endpoint e por ciclo, enquanto a saúde registra início, último sucesso e contagens da última rodada. Ela não armazena falhas consecutivas nem desativa a flag; tampouco há uma tela de saúde específica para `telemetry_analysis`. Assim, execução recorrente em produção deve continuar desabilitada até haver monitoramento externo definido e uma decisão aprovada para interrupção automática após falhas sistêmicas. Não se criou timer nem mecanismo paralelo nesta PR.
+
+### Primeira captura e estimativa de carga
+
+`staggered_24h` distribui deterministicamente a primeira data de cada UUID em 86.400 segundos. Para uma frota elegível de 100, 200 ou 500 endpoints, a média matemática durante essa primeira janela é respectivamente 100, 200 ou 500 análises/dia; isso não é uma previsão de throughput, pois depende da frequência do invocador. O limite de cinco por rodada requer pelo menos 20, 40 ou 100 invocações para processar essas quantidades, distribuídas ao longo das 24 horas. Em regime, um ciclo a cada 15 dias equivale em média a cerca de 6,7, 13,3 ou 33,3 análises/dia para essas frotas. A cadência real e o tamanho de frota elegível devem ser confirmados antes de qualquer ativação. `unconfigured` continua sendo o padrão; `staggered_24h` é preferência de produto ainda não ativada.
+
+### Identidade ambígua e liberação futura
+
+A agenda permanece por UUID de `AgentMachine` e guarda snapshot de `machine_id`. A implementação não consulta hostname para escolher entre registros, fundir, excluir ou desbloquear registros. Identidade duplicada/missing ou alterada põe a agenda em `review_required`; uma agenda já marcada não é reativada por um ciclo normal. Para uma liberação futura, o operador deve primeiro reconciliar a identidade por evidências independentes (machine_id, histórico de enrollment/heartbeat e autorização), registrar a decisão e o endpoint UUID escolhido; só depois uma ferramenta administrativa auditada poderá limpar a marca e atualizar o snapshot sob lock. Esse fluxo não existe nesta PR e nenhum bypass manual foi adicionado.
+
+### Migration 0048 e sincronização com RC47-07C
+
+A 0048 desta branch depende da 0047 e cria `PersistedTelemetryAnalysisSchedule`. Na consulta de 11/11/2026, não havia branch remota ou PR visível para RC47-07C, portanto sua migration e sua numeração ainda não puderam ser comparadas. Não renumerar a 0048 antes de conhecer a migration concreta.
+
+Sequência recomendada se a RC47-07C integrar primeiro: atualizar refs; mesclar a nova `main` em `codex/rc47-03-incremento-b`; inspecionar o grafo e os nomes de arquivos de migrations; se a 07C tiver ocupado `0048`, renomear **somente a migration desta PR, ainda não aplicada operacionalmente**, para o próximo número livre (provavelmente 0049), ajustar sua dependência para a migration 07C e revisar `showmigrations`/`makemigrations --check`. Em seguida, executar testes de migração desde 0047 e desde a nova migration anterior, incluindo rollback apenas em banco descartável. Nunca reescrever migrations já aplicadas em produção. A sincronização final e o CI serão executados após a 07C chegar à `main`; esta PR permanece sem merge/deploy.
+
+Pendências: primeira captura aguarda decisão formal; frequência e invocador recorrente precisam ser confirmados no servidor; falta um mecanismo aprovado para circuit breaker/alarme de falhas sistêmicas; permanece pendente a inspeção dos metadados da análise de produção para explicar disco/rede ausentes. Nenhuma flag foi ativada em produção.

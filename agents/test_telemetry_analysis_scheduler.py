@@ -60,10 +60,48 @@ class PersistedTelemetryAnalysisSchedulerTests(TestCase):
         self.assertEqual(schedule.last_attempt_state, 'succeeded')
         self.assertEqual(len(schedule.attempt_history), 1)
         self.assertEqual(PersistedTelemetryAnalysis.objects.get(endpoint=self.machine).analysis_count, 1)
-
         replay = scheduled_analysis_round(now=self.now + timedelta(days=1), limit=10)
         self.assertEqual(replay['processed'], 0)
         self.assertEqual(PersistedTelemetryAnalysis.objects.get(endpoint=self.machine).analysis_count, 1)
+
+    @override_settings(**{**SCHEDULER_SETTINGS, 'NIGHTOWL_JOB_AUTOMATIONS_ENABLED': False})
+    def test_analysis_only_flag_runs_backend_analysis_without_job_automation(self):
+        result = scheduler_round(now=self.now, limit=20)
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['telemetry_analysis']['processed'], 1)
+        self.assertEqual(AgentJob.objects.count(), 0)
+        self.assertEqual(PersistedTelemetryAnalysis.objects.get(endpoint=self.machine).analysis_count, 1)
+
+    @override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=True,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN=False)
+    def test_jobs_only_flag_does_not_invoke_telemetry_scheduler(self):
+        with patch('agents.telemetry_persisted_analysis.scheduled_analysis_round') as analysis_round:
+            result = scheduler_round(now=self.now, limit=20)
+        self.assertNotIn('telemetry_analysis', result)
+        analysis_round.assert_not_called()
+        self.assertFalse(PersistedTelemetryAnalysisSchedule.objects.exists())
+
+    @override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN=False)
+    def test_both_scheduler_flags_off_rejects_normal_round(self):
+        with self.assertRaisesMessage(ValueError, 'scheduler_disabled'):
+            scheduler_round(now=self.now, limit=20)
+
+    @override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_FIRST_CAPTURE_POLICY='immediate')
+    def test_explicit_analysis_dry_run_is_read_only_even_when_both_flags_are_off(self):
+        result = scheduler_round(now=self.now, limit=20, analysis_dry_run=True)
+        self.assertEqual(result['telemetry_analysis']['mode'], 'dry_run')
+        self.assertEqual(result['processed'], 0)
+        self.assertEqual(result['failed'], 0)
+        self.assertFalse(AgentJob.objects.exists())
+        self.assertFalse(PersistedTelemetryAnalysisSchedule.objects.exists())
+        self.assertFalse(PersistedTelemetryAnalysis.objects.exists())
+        self.assertFalse(AutomationSchedulerHealth.objects.exists())
 
     @override_settings(**SCHEDULER_SETTINGS)
     def test_round_limit_bounds_initialization_plus_due_analysis(self):
