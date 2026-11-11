@@ -9,7 +9,8 @@ from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
 from .models import (AgentMachine, EndpointPerformanceSample, PersistedTelemetryAnalysis,
-                     PersistedTelemetryAnalysisSchedule, TelemetryAnalysisIncorporation)
+                     AutomationSchedulerHealth, PersistedTelemetryAnalysisSchedule,
+                     TelemetryAnalysisIncorporation)
 from .telemetry_persisted_analysis import analyze_endpoint, scheduled_analysis_round
 
 
@@ -110,3 +111,6 @@ class PersistedTelemetryAnalysisPostgreSQLTests(TransactionTestCase):
         schedule = PersistedTelemetryAnalysisSchedule.objects.get(endpoint=machine)
         self.assertEqual(schedule.next_run_at, now + timedelta(days=15))
         self.assertEqual(len(schedule.attempt_history), 1)
+        health = AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertEqual(health.consecutive_systemic_failures, 0)
+        self.assertEqual(health.last_attempt_status, 'completed')

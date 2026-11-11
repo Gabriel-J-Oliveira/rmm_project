@@ -1,13 +1,16 @@
 import uuid
+import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from django.db import OperationalError
-from django.test import TestCase, override_settings
+from django.contrib.auth import get_user_model
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
+from django.urls import reverse
 
 from .models import (AgentJob, AgentMachine, AutomationSchedulerHealth, EndpointPerformanceSample,
-                     PersistedTelemetryAnalysis, PersistedTelemetryAnalysisSchedule)
+                     AuditEvent, PersistedTelemetryAnalysis, PersistedTelemetryAnalysisSchedule)
 from .automation import scheduler_round
 from .telemetry_continuous import persist_windows
 from .telemetry_persisted_analysis import scheduled_analysis_round
@@ -60,6 +63,12 @@ class PersistedTelemetryAnalysisSchedulerTests(TestCase):
         self.assertEqual(schedule.last_attempt_state, 'succeeded')
         self.assertEqual(len(schedule.attempt_history), 1)
         self.assertEqual(PersistedTelemetryAnalysis.objects.get(endpoint=self.machine).analysis_count, 1)
+        health = AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertEqual(health.last_attempt_status, 'completed')
+        self.assertEqual(health.processed_endpoints, 1)
+        self.assertEqual(health.blocked_endpoints, 0)
+        self.assertIsNotNone(health.last_duration_ms)
+        self.assertIsNotNone(health.last_success_at)
         replay = scheduled_analysis_round(now=self.now + timedelta(days=1), limit=10)
         self.assertEqual(replay['processed'], 0)
         self.assertEqual(PersistedTelemetryAnalysis.objects.get(endpoint=self.machine).analysis_count, 1)
@@ -282,3 +291,105 @@ class PersistedTelemetryAnalysisSchedulerTests(TestCase):
         self.assertEqual(detail['quality']['metric_status']['network']['status'], 'error')
         self.assertEqual(detail['quality']['source_quality']['group_status_counts']['disk'],
                          {'unavailable': 6})
+
+    @override_settings(**{**SCHEDULER_SETTINGS, 'NIGHTOWL_TELEMETRY_RETENTION_DAYS': {60: 6}})
+    def test_three_consecutive_systemic_configuration_failures_suspend_fail_closed(self):
+        first = scheduled_analysis_round(now=self.now, limit=10)
+        second = scheduled_analysis_round(now=self.now + timedelta(minutes=1), limit=10)
+        third = scheduled_analysis_round(now=self.now + timedelta(minutes=2), limit=10)
+        self.assertEqual([first['mode'], second['mode'], third['mode']], ['failed'] * 3)
+        self.assertFalse(first['suspended'])
+        self.assertFalse(second['suspended'])
+        self.assertTrue(third['suspended'])
+        health = AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertEqual(health.consecutive_systemic_failures, 3)
+        self.assertEqual(health.last_failure_class, 'configuration')
+        self.assertEqual(health.suspension_reason, 'analysis_scheduler_requires_seven_day_detail_retention')
+        self.assertEqual(AuditEvent.objects.filter(
+            event_type='telemetry_analysis_scheduler.suspended').count(), 1)
+
+    @override_settings(**SCHEDULER_SETTINGS)
+    def test_suspension_does_not_clear_without_audited_authorized_recovery(self):
+        health = AutomationSchedulerHealth.objects.create(
+            key='telemetry_analysis', suspended_at=self.now,
+            suspension_reason='database_operation_failed', consecutive_systemic_failures=3)
+        suspended = scheduled_analysis_round(now=self.now + timedelta(minutes=1), limit=10)
+        self.assertEqual(suspended['mode'], 'suspended')
+        health.refresh_from_db()
+        self.assertEqual(health.suspended_at, self.now)
+
+        from django.contrib.auth import get_user_model
+        from .telemetry_persisted_analysis import recover_telemetry_analysis_scheduler
+        operator = get_user_model().objects.create_superuser('scheduler-recovery', password='synthetic-only')
+        resumed = recover_telemetry_analysis_scheduler(operator, 'Banco recuperado e validado em teste.')
+        self.assertIsNone(resumed.suspended_at)
+        self.assertEqual(resumed.consecutive_systemic_failures, 0)
+        self.assertEqual(resumed.recovered_by, 'scheduler-recovery')
+        self.assertEqual(AuditEvent.objects.get(
+            event_type='telemetry_analysis_scheduler.recovered').actor_name, 'scheduler-recovery')
+
+    def test_health_api_requires_technical_permission_and_audits_recovery(self):
+        AutomationSchedulerHealth.objects.create(
+            key='telemetry_analysis', suspended_at=self.now,
+            suspension_reason='database_operation_failed', consecutive_systemic_failures=3)
+        client = Client()
+        operator = get_user_model().objects.create_superuser('health-api-operator', password='synthetic-only')
+        self.assertTrue(client.login(username='health-api-operator', password='synthetic-only'))
+        health_url = reverse('telemetry-analysis-scheduler-health')
+        self.assertEqual(client.get(health_url).status_code, 200)
+        response = client.post(health_url, data=json.dumps({
+            'action': 'resume', 'reason': 'Database recovery verified in isolated test.'}),
+            content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['health']['suspended'])
+        self.assertTrue(AuditEvent.objects.filter(
+            event_type='telemetry_analysis_scheduler.recovered', actor_name=operator.username).exists())
+
+        client.logout()
+        unprivileged = get_user_model().objects.create_user('unprivileged-health', password='synthetic-only')
+        self.assertTrue(client.login(username=unprivileged.username, password='synthetic-only'))
+        denied = client.get(health_url)
+        self.assertEqual(denied.status_code, 302, denied.get('Location'))
+        with self.assertRaises(PermissionError):
+            from .telemetry_persisted_analysis import recover_telemetry_analysis_scheduler
+            recover_telemetry_analysis_scheduler(unprivileged, 'Attempted unauthorized recovery.')
+
+    @override_settings(**{**SCHEDULER_SETTINGS,
+                          'NIGHTOWL_TELEMETRY_RETENTION_DAYS': {60: 6},
+                          'NIGHTOWL_JOB_AUTOMATIONS_ENABLED': True})
+    def test_telemetry_systemic_failure_does_not_suspend_independent_jobs_scheduler(self):
+        result = scheduler_round(now=self.now, limit=10)
+        self.assertEqual(result['telemetry_analysis']['mode'], 'failed')
+        self.assertEqual(result['telemetry_analysis']['health']['last_failure_class'], 'configuration')
+        jobs_health = AutomationSchedulerHealth.objects.get(key='jobs')
+        self.assertEqual(jobs_health.failed, 0)
+        telemetry_health = AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertIsNone(telemetry_health.suspended_at)
+
+    @override_settings(**SCHEDULER_SETTINGS)
+    def test_quality_blocks_are_observable_but_do_not_count_as_systemic_failures(self):
+        EndpointPerformanceSample.objects.filter(endpoint=self.machine).delete()
+        weak = window(self.now - timedelta(minutes=5), received=4)
+        persist_windows(self.machine, [weak])
+        result = scheduled_analysis_round(now=self.now, limit=10)
+        self.assertEqual(result['blocked'], 1)
+        health = AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertEqual(health.last_failure_class, 'endpoint_quality')
+        self.assertEqual(health.consecutive_systemic_failures, 0)
+        self.assertEqual(health.blocked_endpoints, 1)
+        self.assertIsNone(health.suspended_at)
+
+    @override_settings(**SCHEDULER_SETTINGS)
+    def test_repeated_interrupted_rounds_suspend_instead_of_resuming_silently(self):
+        AutomationSchedulerHealth.objects.create(
+            key='telemetry_analysis', last_started_at=self.now - timedelta(minutes=5),
+            last_attempt_status='running', consecutive_systemic_failures=2)
+        result = scheduled_analysis_round(now=self.now, limit=10)
+        self.assertEqual(result['mode'], 'suspended')
+        self.assertEqual(result['reason'], 'previous_round_interrupted')
+        self.assertFalse(PersistedTelemetryAnalysisSchedule.objects.exists())
+        self.assertFalse(PersistedTelemetryAnalysis.objects.exists())
+        health = AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertIsNotNone(health.suspended_at)
+        self.assertEqual(health.consecutive_systemic_failures, 3)
+        self.assertEqual(health.last_failure_class, 'scheduler')
