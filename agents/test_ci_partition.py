@@ -2,6 +2,7 @@
 from django.test import SimpleTestCase
 from django.test.runner import DiscoverRunner
 from types import SimpleNamespace
+from pathlib import Path
 
 from agents.ci_runner import WindowsE2ERunner, WindowsBrowserE2ERunner
 
@@ -30,6 +31,13 @@ def flatten(suite):
 
 
 class WindowsE2EPartitionTests(SimpleTestCase):
+    def test_isolated_browser_script_runs_execution_policy_browser_e2e(self):
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'Invoke-WindowsE2E.ps1'
+        content = script.read_text(encoding='utf-8')
+        self.assertIn("agents.test_automation.AutomationBrowserTests.test_real_ui_and_persisted_automations", content)
+        self.assertIn("$env:NIGHTOWL_TEST_BROWSER_E2E = '1'", content)
+        self.assertIn("NIGHTOWL_TEST_CHROME", content)
+
     def test_isolated_browser_gate_fails_for_skipped_or_missing_tests(self):
         runner = WindowsBrowserE2ERunner(verbosity=0)
         result = SimpleNamespace(failures=[], errors=[], unexpectedSuccesses=[], skipped=[], testsRun=1)
