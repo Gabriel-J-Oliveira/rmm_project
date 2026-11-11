@@ -64,7 +64,14 @@ let phase = 'initialization';
         phase = 'mobile_layout';
         await page.setViewportSize({width: 390, height: 844});
         await page.waitForTimeout(150);
-        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Endpoint policy section overflows mobile viewport');
+        assert(await page.evaluate(() => {
+            const section = document.querySelector('.endpoint-assigned-policies');
+            const list = section && section.querySelector('.endpoint-policy-list');
+            if (!section || !list) return false;
+            const bounds = section.getBoundingClientRect();
+            return bounds.left >= -1 && bounds.right <= innerWidth + 1 &&
+                section.scrollWidth <= section.clientWidth + 1 && list.scrollWidth <= list.clientWidth + 1;
+        }), 'Assigned policy section or its cards overflow the mobile viewport');
         console.log('PASS endpoint policy UI: UUID assignment, persisted empty/history states, endpoint-specific confirmation and run, XSS text rendering, desktop/mobile layout.');
         await context.close();
     } finally {
