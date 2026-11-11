@@ -197,6 +197,30 @@ class PersistedTelemetryAnalysisTests(TestCase):
         self.assertIsNone(state.latest_analysis_id)
         self.assertEqual(state.analysis_count, 0)
 
+    def test_valid_candidate_at_scan_boundary_is_not_reported_as_limit_failure(self):
+        rows = []
+        # The newest 99 candidates are invalid; the 100th is valid and an
+        # additional older row exists beyond the selection bound.
+        for index in range(MAX_CANDIDATE_SCAN + 1):
+            start = self.now - timedelta(minutes=MAX_CANDIDATE_SCAN + 2 - index)
+            data = window(start, cpu=35 if index == 1 else 25,
+                          received=6 if index == 1 else 4)
+            rows.append(EndpointPerformanceSample(
+                endpoint=self.machine, sample_id=uuid.UUID(data['window_id']),
+                schema_version=2, resolution_seconds=60,
+                collected_at=start, window_end_at=start + timedelta(minutes=1),
+                metric_summaries=data, cpu_percent=25, memory_used_percent=60,
+                collection_duration_ms=0))
+        EndpointPerformanceSample.objects.bulk_create(rows)
+
+        result = analyze_endpoint(self.machine.pk, apply=True, now=self.now + timedelta(minutes=2))
+
+        self.assertEqual(result['state'], 'succeeded')
+        self.assertFalse(result['selection']['limit_reached'])
+        self.assertEqual(result['selection']['records_examined'], MAX_CANDIDATE_SCAN)
+        self.assertEqual(result['selection']['rejected_candidates'], MAX_CANDIDATE_SCAN - 1)
+        self.assertEqual(PersistedTelemetryAnalysis.objects.get().latest_analysis['cpu']['usage_percent']['avg'], 35)
+
     def test_historical_window_does_not_inherit_current_agent_version(self):
         data = window(self.now - timedelta(minutes=5))
         row = self.add_window(data)
