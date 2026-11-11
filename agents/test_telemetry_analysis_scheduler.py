@@ -244,4 +244,3 @@ class PersistedTelemetryAnalysisSchedulerTests(TestCase):
         self.assertEqual(detail['quality']['metric_status']['network']['status'], 'error')
         self.assertEqual(detail['quality']['source_quality']['group_status_counts']['disk'],
                          {'unavailable': 6})
-
