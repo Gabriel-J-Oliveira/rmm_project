@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Night Owl | Tarefas{% endblock %}
+{% block title %}Night Owl | {% if active_nav == 'execution_policies' %}Políticas de Execução{% else %}Tarefas{% endif %}{% endblock %}
 {% block body_class %}page-jobs{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
-    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Tarefas</strong>
+    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>{% if active_nav == 'execution_policies' %}Políticas de Execução{% else %}Tarefas{% endif %}</strong>
 </nav>
 {% endblock %}
 
@@ -16,8 +16,8 @@
         <div class="alerts-command-title">
             <span class="command-icon page-header-icon"><i data-lucide="list-checks"></i></span>
             <div>
-                <h1 class="page-title">Tarefas</h1>
-                <p class="page-subtitle">Execu&ccedil;&otilde;es remotas e rotinas operacionais enviadas aos endpoints.</p>
+                <h1 class="page-title">{% if active_nav == 'execution_policies' %}Políticas de Execução{% else %}Tarefas{% endif %}</h1>
+                <p class="page-subtitle">{% if active_nav == 'execution_policies' %}Definições autorizadas, recorrências e resultados reais das execuções nos endpoints.{% else %}Execu&ccedil;&otilde;es remotas e rotinas operacionais enviadas aos endpoints.{% endif %}</p>
             </div>
         </div>
         <div class="alerts-header-actions page-actions">

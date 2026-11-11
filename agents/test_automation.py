@@ -215,6 +215,26 @@ class AutomationTests(AutomationFixture,TestCase):
         self.client.force_login(self.user)
         data=self.client.get(reverse('job-automations')).json()
         self.assertTrue(any(row['status']=='failed' and row['reason']=='SYNTHETIC_FAILURE' for row in data['occurrences']))
+        summary=next(row for row in data['definitions'] if row['id']==str(definition.pk))
+        self.assertEqual(summary['latest_occurrence_status'],'skipped')
+        self.assertEqual(summary['latest_occurrence_reason'],'overlap_blocked')
+        self.assertEqual(summary['latest_occurrence_endpoint'],self.endpoint.hostname)
+        self.assertIsNotNone(summary['latest_occurrence_at'])
+
+    def test_definition_summary_uses_real_occurrence_and_has_no_fake_result_without_history(self):
+        definition=self.define()
+        self.client.force_login(self.user)
+        before=self.client.get(reverse('job-automations')).json()['definitions'][0]
+        self.assertIsNone(before['latest_occurrence_at'])
+        self.assertIsNone(before['latest_occurrence_status'])
+        self.assertIsNone(before['latest_occurrence_reason'])
+        self.assertIsNone(before['latest_occurrence_endpoint'])
+
+        scheduler_round(now=definition.starts_at)
+        after=self.client.get(reverse('job-automations')).json()['definitions'][0]
+        self.assertEqual(after['latest_occurrence_status'],'queued')
+        self.assertEqual(after['latest_occurrence_endpoint'],self.endpoint.hostname)
+        self.assertEqual(AgentJob.objects.count(),1)
 
     def test_multiple_targets_identity_change_isolated(self):
         other,_=AgentMachine.create_with_token(hostname='SYNTHETIC-SECOND',machine_id=str(uuid.uuid4()),agent_version='synthetic-v2')

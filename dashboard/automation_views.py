@@ -4,6 +4,7 @@ from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.http import JsonResponse
 from django.utils import timezone
+from django.db.models import Case, CharField, F, OuterRef, Subquery, When
 from django.views.decorators.http import require_http_methods
 from agents.automation import (ALLOWED, authorize, save_definition, control_definition,
                                cancel_occurrence, QUARANTINE)
@@ -20,7 +21,11 @@ def definition_row(item):
         'starts_at':item.starts_at.isoformat(),'ends_at':item.ends_at.isoformat() if item.ends_at else None,
         'validity_seconds':item.validity_seconds,'offline_policy':item.offline_policy,
         'next_due_at':item.next_due_at.isoformat() if item.next_due_at else None,
-        'retry_count':item.retry_count,'last_error':item.last_error}
+        'retry_count':item.retry_count,'last_error':item.last_error,
+        'latest_occurrence_at':getattr(item,'latest_occurrence_at',None).isoformat() if getattr(item,'latest_occurrence_at',None) else None,
+        'latest_occurrence_status':getattr(item,'latest_occurrence_status',None),
+        'latest_occurrence_reason':getattr(item,'latest_occurrence_reason',None),
+        'latest_occurrence_endpoint':getattr(item,'latest_occurrence_endpoint',None)}
 
 
 @login_required
@@ -30,7 +35,18 @@ def automations(request, definition_id=None):
         authorize(request.user)
         if request.method=='GET':
             authorize(request.user,'view_agentjob')
-            definitions=AutomationDefinition.objects.order_by('-created_at')[:200]
+            latest=AutomationOccurrence.objects.filter(definition_id=OuterRef('pk')).order_by('-scheduled_for','-created_at')
+            definitions=AutomationDefinition.objects.annotate(
+                latest_occurrence_at=Subquery(latest.values('scheduled_for')[:1]),
+                latest_occurrence_status=Subquery(latest.annotate(display_status=Case(
+                    When(job__isnull=False,then=F('job__status')),
+                    default=F('status'),output_field=CharField())).values('display_status')[:1]),
+                latest_occurrence_reason=Subquery(latest.annotate(display_reason=Case(
+                    When(job__isnull=True,then=F('reason')),
+                    When(job__error_code='',then=F('reason')),
+                    default=F('job__error_code'),output_field=CharField())).values('display_reason')[:1]),
+                latest_occurrence_endpoint=Subquery(latest.values('endpoint__hostname')[:1]),
+            ).order_by('-created_at')[:200]
             occurrences=AutomationOccurrence.objects.select_related('job','endpoint').order_by('-scheduled_for')
             if definition_id:
                 occurrences=occurrences.filter(definition_id=definition_id)
