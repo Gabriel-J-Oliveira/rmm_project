@@ -12,6 +12,8 @@
         queued:'Em fila',sent:'Entregue',running:'Em execucao',completed:'Concluida',failed:'Falhou',skipped:'Ignorada',
         expired:'Expirada',blocked:'Bloqueada',interrupted:'Interrompida',timed_out:'Tempo esgotado',
         once:'Unica',daily:'Diaria',weekly:'Semanal',monthly:'Mensal',interval:'Intervalo'};
+    const jobTypes = {force_inventory:'Inventario completo',collect_disks:'Coleta de discos',collect_security:'Coleta de seguranca',
+        collect_software:'Inventario de software',collect_logs:'Coleta de logs',ping:'Ping do endpoint',windows_update_scan:'Consulta Windows Update'};
     const errors = {forbidden:'Sem permissao para esta operacao.',revision_conflict:'A automacao mudou. Atualize antes de editar.',
         scheduler_disabled:'Scheduler desabilitado.',invalid_schedule_range:'Revise o inicio e o termino.',
         jobs_v2_capability_unconfirmed:'Agente sem capacidade v2 comprovada.',endpoint_identity_changed:'Identidade do endpoint mudou.',
@@ -67,8 +69,22 @@
             data.definitions.forEach(item=>{
                 const option=el('option',item.name);option.value=item.id;history.append(option);
                 const row=el('tr');
-                [item.name+' / r'+item.revision,(labels[item.state]||item.state)+(item.last_error?' / '+item.last_error+' / tentativa '+item.retry_count:''),item.job_type+' / '+item.targets.length,
-                    (labels[item.schedule.kind]||item.schedule.kind)+' / '+item.timezone,date(item.next_due_at,item.timezone)].forEach(text=>row.append(el('td',text)));
+                const purpose=el('td');purpose.append(el('strong',item.name+' / r'+item.revision),el('small','Finalidade: '+(jobTypes[item.job_type]||item.job_type)));
+                const state=el('td');state.append(el('span',(labels[item.state]||item.state)+(item.last_error?' / '+(errors[item.last_error]||item.last_error):'')));
+                if(item.last_error)state.append(el('small','Tentativas: '+item.retry_count));
+                const scope=el('td');scope.append(el('strong',jobTypes[item.job_type]||item.job_type));
+                const endpointNames=(item.targets||[]).map(target=>target.hostname||target.id);
+                scope.append(el('small',endpointNames.length ? endpointNames.join(', ') : 'Sem endpoints atribuídos'));
+                const schedule=el('td');schedule.append(el('span',(labels[item.schedule.kind]||item.schedule.kind)+' / '+item.timezone));
+                if(item.schedule.kind==='immediate')schedule.append(el('small','Execução única, confirmada ao salvar'));
+                const next=el('td',date(item.next_due_at,item.timezone));
+                const last=el('td');
+                if(item.latest_occurrence_at){
+                    last.append(el('span',date(item.latest_occurrence_at,item.timezone)+' / '+(labels[item.latest_occurrence_status]||item.latest_occurrence_status||'Resultado não informado')));
+                    if(item.latest_occurrence_endpoint)last.append(el('small',item.latest_occurrence_endpoint));
+                    if(item.latest_occurrence_reason)last.append(el('small','Motivo: '+(errors[item.latest_occurrence_reason]||item.latest_occurrence_reason)));
+                }else last.textContent='Sem execução registrada';
+                [purpose,state,scope,schedule,next,last].forEach(cell=>row.append(cell));
                 const actions=el('td');actions.className='automation-row-actions';
                 const send=action=>request(root.dataset.url+item.id+'/',{action,revision:item.revision,request_id:crypto.randomUUID()});
                 if(['active','paused'].includes(item.state)) {
@@ -91,7 +107,7 @@
                 if(['queued','enqueued'].includes(item.status))actions.append(button('Cancelar antes do despacho','ban',()=>request('/jobs/occurrences/'+item.id+'/cancel/',{})));
                 row.append(actions);body.append(row);
             });
-            if(!tbody.children.length){const row=el('tr'),cell=el('td','Nenhum agendamento.');cell.colSpan=6;row.append(cell);tbody.append(row);}
+            if(!tbody.children.length){const row=el('tr'),cell=el('td','Nenhuma política de execução cadastrada.');cell.colSpan=7;row.append(cell);tbody.append(row);}
             if(!body.children.length){const row=el('tr'),cell=el('td','Nenhuma ocorrencia.');cell.colSpan=7;row.append(cell);body.append(row);}
             if(window.lucide)window.lucide.createIcons();
         }catch(error){say(error.message);}finally{refreshing=false;}

@@ -51,6 +51,7 @@ try {
     $env:TMP = $env:TEMP
     New-Item -ItemType Directory -Path $env:APPDATA, $env:LOCALAPPDATA, $env:TEMP -Force | Out-Null
     if ($BrowserOnly) {
+        $env:NIGHTOWL_TEST_BROWSER_E2E = '1'
         $arguments = @('manage.py', 'test', 'agents.test_terminal_browser.TerminalBrowserSmokeTests.test_real_browser_real_pty_simulated_local_consent_click',
             '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
     } else {
@@ -62,6 +63,19 @@ try {
     Get-Content $out
     Get-Content $err
     $e2eExitCode = $process.ExitCode
+    if ($BrowserOnly -and $e2eExitCode -eq 0) {
+        # Exercise the central execution-policy UI in its own isolated Django
+        # test database and synthetic endpoint records, using the same pinned
+        # Chrome and standard Windows test identity as the terminal smoke.
+        $automationArguments = @('manage.py', 'test',
+            'agents.test_automation.AutomationBrowserTests.test_real_ui_and_persisted_automations',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $automationProcess = Start-Process -FilePath $python -ArgumentList $automationArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($automationProcess.ExitCode -ne 0) { throw "Execution policies browser E2E failed with exit code $($automationProcess.ExitCode)" }
+    }
 
     # The independent probe runs AFTER the full E2E, even on failure: it cannot
     # warm Chrome before the smoke or turn an E2E failure into success.

@@ -50,6 +50,7 @@
                     <a class="nav-item {% if active_nav == 'alerts' %}active{% endif %}" href="{% url 'alerts-list' %}" title="Alertas"><i data-lucide="alert-triangle"></i><span class="nav-label">Alertas</span></a>
                     <a class="nav-item {% if active_nav == 'events' %}active{% endif %}" href="{% url 'events-list' %}" title="Eventos"><i data-lucide="history"></i><span class="nav-label">Eventos</span></a>
                     <a class="nav-item {% if active_nav == 'jobs' %}active{% endif %}" href="{% url 'jobs-list' %}" title="Tarefas"><i data-lucide="list-checks"></i><span class="nav-label">Tarefas</span></a>
+                    <a class="nav-item {% if active_nav == 'execution_policies' %}active{% endif %}" href="{% url 'jobs-list' %}?tab=automations" title="Pol&iacute;ticas de Execu&ccedil;&atilde;o"><i data-lucide="calendar-cog"></i><span class="nav-label">Pol&iacute;ticas de Execu&ccedil;&atilde;o</span></a>
                     <a class="nav-item {% if active_nav == 'maintenance' %}active{% endif %}" href="{% url 'maintenance-list' %}" title="Manuten&ccedil;&atilde;o"><i data-lucide="wrench"></i><span class="nav-label">Manuten&ccedil;&atilde;o</span></a>
                     <a class="nav-item {% if active_nav == 'tickets' %}active{% endif %}" href="{% url 'tickets:central' %}" title="Chamados"><i data-lucide="inbox"></i><span class="nav-label">Chamados</span></a>
                 </div>

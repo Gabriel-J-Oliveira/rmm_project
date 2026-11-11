@@ -6,7 +6,10 @@ let phase='initialization';
 (async()=>{
     const server=process.env.NIGHTOWL_E2E_SERVER;
     assert(/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(server));
-    const browser=await chromium.launch({headless:true,channel:'chrome'});
+    const chromePath=process.env.NIGHTOWL_TEST_CHROME;
+    assert(chromePath && path.isAbsolute(chromePath) && fs.existsSync(chromePath),
+        'NIGHTOWL_TEST_CHROME must point to the verified browser executable');
+    const browser=await chromium.launch({headless:true,executablePath:chromePath});
     try {
         const context=await browser.newContext({viewport:{width:1920,height:1080}});
         await context.addCookies([{name:'sessionid',value:process.env.NIGHTOWL_E2E_SESSION,url:server}]);
@@ -24,6 +27,9 @@ let phase='initialization';
         });
         await page.goto(server+'/jobs/?tab=automations');
         const panel=page.locator('[data-automations-root]'),form=panel.locator('form');
+        assert.equal(await page.locator('h1.page-title').innerText(),'Políticas de Execução');
+        assert.equal(await page.locator('.nav-item[href="/jobs/?tab=automations"]').evaluate(n=>n.classList.contains('active')),true);
+        assert.equal(await panel.locator('table').first().locator('thead th').count(),7);
         phase='targets';
         await page.waitForFunction(()=>document.querySelectorAll('[name="targets"] option').length>=2);
         const ids=await form.locator('[name="targets"] option').evaluateAll(nodes=>nodes.slice(0,2).map(n=>n.value));
@@ -38,6 +44,7 @@ let phase='initialization';
         await form.locator('button[type="submit"]').click();
         const row=panel.locator('[data-automation-definitions] tr').filter({hasText:name});
         await row.waitFor();
+        assert((await row.innerText()).includes('Sem execução registrada'),'New future policy must not display a fabricated execution result');
         assert.equal(await panel.locator('img').count(),0,'Untrusted names must remain text');
         await row.getByRole('button',{name:'Pausar',exact:true}).click();
         await page.waitForFunction(()=>document.querySelector('[data-automation-definitions]').textContent.includes('Pausada'));
