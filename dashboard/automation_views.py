@@ -9,6 +9,8 @@ from agents.automation import (ALLOWED, authorize, save_definition, control_defi
                                cancel_occurrence, QUARANTINE)
 from agents.models import (AgentMachine, AutomationDefinition, AutomationOccurrence,
                            AutomationSchedulerHealth)
+from agents.telemetry_persisted_analysis import (
+    _health_snapshot, recover_telemetry_analysis_scheduler)
 
 
 def definition_row(item):
@@ -99,3 +101,40 @@ def targets(request):
     response=JsonResponse({'endpoints':rows,'limit':500})
     response['Cache-Control']='no-store'
     return response
+
+
+@login_required
+@require_http_methods(['GET', 'POST'])
+def telemetry_analysis_scheduler_health(request):
+    """Read scheduler health or perform an explicitly audited manual recovery."""
+    try:
+        if request.method == 'GET':
+            authorize(request.user, 'view_agentjob')
+            health = AutomationSchedulerHealth.objects.filter(key='telemetry_analysis').first()
+            data = _health_snapshot(health) if health else {
+                'last_attempt_at': None, 'last_success_at': None, 'last_duration_ms': None,
+                'last_attempt_status': 'not_run', 'consecutive_systemic_failures': 0,
+                'processed_endpoints': 0, 'blocked_endpoints': 0,
+                'review_required_endpoints': 0, 'last_failure_class': '',
+                'last_failure_code': '', 'suspended': False, 'suspended_at': None,
+                'suspension_reason': '', 'recovered_at': None, 'recovered_by': '',
+                'recovery_reason': '',
+            }
+            response = JsonResponse({'health': data})
+            response['Cache-Control'] = 'no-store'
+            return response
+
+        if len(request.body) > 4096:
+            return JsonResponse({'error': 'request_too_large'}, status=400)
+        data = json.loads(request.body)
+        if not isinstance(data, dict) or set(data) != {'action', 'reason'} or data.get('action') != 'resume':
+            return JsonResponse({'error': 'invalid_request'}, status=400)
+        health = recover_telemetry_analysis_scheduler(request.user, data.get('reason'))
+        response = JsonResponse({'health': _health_snapshot(health)})
+        response['Cache-Control'] = 'no-store'
+        return response
+    except PermissionError:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    except ValueError as error:
+        code = str(error) if str(error).replace('_', '').isalnum() else 'invalid_request'
+        return JsonResponse({'error': code}, status=409 if code == 'scheduler_not_suspended' else 400)
