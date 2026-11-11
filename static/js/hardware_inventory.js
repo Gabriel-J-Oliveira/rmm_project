@@ -7,7 +7,11 @@
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const num = value => Number.isFinite(value) ? new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(value) : '—';
   const bytes = value => Number.isFinite(value) && value >= 0 ? `${num(value / 1073741824)} GB` : '—';
-  const date = value => value ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : 'Sem evidência';
+  const date = value => {
+    if (!value) return 'Sem evidência';
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 'Sem evidência' : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(parsed);
+  };
   const icon = () => window.lucide?.createIcons?.();
   const known = (value, suffix = '') => value == null || value === '' ? 'Não informado' : `${esc(value)}${suffix}`;
   const rows = () => state.rows.filter(row => {
@@ -109,10 +113,22 @@
     icon();
   }
   async function loadDetail(id) {
+    state.selectedId = id;
+    state.selected = state.rows.find(row => row.id === id) || null;
+    $('[data-drawer-title]').textContent = 'Carregando detalhes';
+    $('[data-drawer-meta]').textContent = '';
+    $('[data-drawer-content]').innerHTML = '<p class="hardware-empty" role="status">Consultando inventário do endpoint…</p>';
+    $('[data-backdrop]').hidden = false; $('[data-drawer]').hidden = false; document.body.classList.add('hardware-drawer-open');
     const url = root.dataset.detailTemplate.replace('00000000-0000-4000-8000-000000000000', encodeURIComponent(id));
     const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
     if (!response.ok) throw new Error('detail');
     const data = await response.json(); state.selected = data.endpoint; renderDetail(data.endpoint);
+  }
+  function renderDetailError() {
+    $('[data-drawer-title]').textContent = state.selected?.hostname || 'Detalhes indisponíveis';
+    $('[data-drawer-meta]').textContent = 'Não foi possível consultar o inventário deste endpoint.';
+    $('[data-drawer-content]').innerHTML = '<div class="hardware-error" role="alert">Falha ao carregar os detalhes. Verifique a conexão e tente novamente. <button type="button" data-detail-retry>Tentar novamente</button></div>';
+    $('[data-backdrop]').hidden = false; $('[data-drawer]').hidden = false; document.body.classList.add('hardware-drawer-open');
   }
   async function load() {
     $('[data-error]').hidden = true;
@@ -124,12 +140,13 @@
       renderKpis(); renderFilterOptions(); renderCharts(); renderTable(); icon();
     } catch (_) { $('[data-error]').hidden = false; $('[data-updated]').textContent = 'Dados indisponíveis'; }
   }
-  function close() { $('[data-drawer]').hidden = true; $('[data-backdrop]').hidden = true; document.body.classList.remove('hardware-drawer-open'); state.selected = null; }
+  function close() { $('[data-drawer]').hidden = true; $('[data-backdrop]').hidden = true; document.body.classList.remove('hardware-drawer-open'); state.selected = null; state.selectedId = null; }
   root.addEventListener('click', event => {
     if (event.target.closest('[data-refresh]')) { load(); return; }
     if (event.target.closest('[data-close]') || event.target.matches('[data-backdrop]')) { close(); return; }
     const page = event.target.closest('[data-page]'); if (page && !page.disabled) { state.page = Number(page.dataset.page); renderTable(); return; }
-    const row = event.target.closest('tr[data-open]'); if (row && !event.target.closest('a')) loadDetail(row.dataset.open).catch(() => {});
+    if (event.target.closest('[data-detail-retry]')) { loadDetail(state.selectedId).catch(renderDetailError); return; }
+    const row = event.target.closest('tr[data-open]'); if (row && !event.target.closest('a')) loadDetail(row.dataset.open).catch(renderDetailError);
   });
   root.addEventListener('change', event => {
     if (event.target.matches('[data-size]')) state.pageSize = Number(event.target.value);
