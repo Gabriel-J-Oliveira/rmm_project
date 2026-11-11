@@ -1,0 +1,43 @@
+name: RC47-05 Monitoring UI
+
+on:
+  pull_request:
+    paths:
+      - 'static/css/endpoint_detail_refinement.css'
+      - 'static/js/endpoint_live.js'
+      - 'static/js/endpoint_monitoring.js'
+      - 'templates/dashboard/endpoint_detail.html'
+      - 'tests/frontend/test_endpoint_live.cjs'
+      - 'tests/frontend/test_endpoint_detail_refinement.cjs'
+      - 'tests/frontend/chrome_for_testing.json'
+      - 'scripts/Install-TestChrome.ps1'
+      - '.github/workflows/rc47-05-monitoring-ui.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  monitoring-ui:
+    name: Monitoring UI tests and visual browser check
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Playwright runner
+        run: npm install --no-save --no-package-lock playwright@1.62.1
+      - name: Install pinned Chrome for Testing
+        shell: pwsh
+        run: ./scripts/Install-TestChrome.ps1
+      - name: Run monitoring contracts and browser visual checks
+        run: |
+          node --check static/js/endpoint_live.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_live.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_live.cjs --visual
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_detail_refinement.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

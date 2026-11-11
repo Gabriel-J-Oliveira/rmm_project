@@ -11,7 +11,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261110-3"), "detail refinement stylesheet uses the latest cache key");
+assert(template.includes("css/endpoint_detail_refinement.css' %}?v=20261111-rc47-05-1"), "detail refinement stylesheet uses the latest cache key");
 assert(template.includes("js/endpoint_detail.js' %}?v=rc47-channel-update-2"), "endpoint detail script uses a fresh cache key");
 assert(!base.includes("endpoint_detail_refinement.css"), "refinement stylesheet must not be global");
 assert(template.includes("block icon_script"), "endpoint detail overrides the global icon loader");
@@ -39,6 +39,10 @@ assert(!inventoryRender.includes('Última sincronização do inventário"') || !
 assert(css.split(/\r?\n/).filter(line => line.trim().startsWith(".") || line.trim().startsWith("*")).length === 0,
   "refinement selectors are scoped beneath page-endpoint-detail");
 assert(css.includes(".endpoint-detail-shell .panel:hover"), "non-interactive endpoint cards have no decorative hover");
+assert(css.includes(".endpoint-monitoring .panel:hover") && css.includes("[data-endpoint-tab-panel=\"inventory\"] > .panel:hover"),
+  "monitoring and inventory panels explicitly keep a stable hover surface");
+assert(css.includes(".endpoint-live-selectors select:focus-visible") && css.includes(".endpoint-live-selectors select:disabled"),
+  "live selectors define keyboard focus and disabled states");
 assert(css.includes('[data-endpoint-tab-panel="inventory"] .panel:hover') && css.includes("background: var(--endpoint-detail-surface) !important;"),
   "inventory cards override the later important hover rule");
 assert(css.includes(".endpoint-fact-list > div {"), "fact tiles have one page-scoped visual rule");
