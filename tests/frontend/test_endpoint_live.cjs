@@ -36,7 +36,12 @@ console.log('PASS live chart units, escaped labels, missing data gaps, numeric-o
 
 if (process.argv.includes('--visual')) (async () => {
     const {chromium} = require('playwright');
-    const browser = await chromium.launch({headless:true, channel:'chrome'});
+    const browser = await chromium.launch({
+        headless:true,
+        ...(process.env.NIGHTOWL_TEST_CHROME
+            ? {executablePath:process.env.NIGHTOWL_TEST_CHROME}
+            : {channel:'chrome'})
+    });
     try {
         const page = await browser.newPage();
         let active = false, expired = false;
