@@ -1,28 +1,37 @@
-<section data-admin-auth data-url="{% url 'terminal-session-request' endpoint.pk %}" data-user="{{ request.user.pk }}" data-endpoint="{{ endpoint.pk }}">
-  <div class="terminal-drawer-shade" data-drawer-shade hidden></div>
-  <aside class="terminal-account-drawer" data-drawer hidden aria-label="Contas do terminal">
-    <header><div><h2>Terminal remoto</h2><p>{{ endpoint.hostname }} · {{ endpoint.get_status_display }}</p></div><button type="button" data-drawer-close aria-label="Fechar">×</button></header>
-    <p>Contas usadas neste navegador</p><div data-accounts></div>
-    <button type="button" data-new-account>Usar outra conta</button>
-  </aside>
+<section data-admin-auth data-url="{% url 'terminal-session-request' endpoint.pk %}" data-endpoint="{{ endpoint.hostname|default:'Endpoint'|escape }}">
   <div class="install-credential-overlay" data-auth-modal hidden>
     <section class="install-credential-modal" role="dialog" aria-modal="true" aria-labelledby="terminal-auth-title">
       <h2 id="terminal-auth-title">Autenticação administrativa</h2>
-      <p class="install-muted">Confirme a conta Windows para conectar ao endpoint.</p>
+      <p class="install-muted">Informe as credenciais Windows para esta sessão.</p>
       <form autocomplete="off">{% csrf_token %}
-        <label>Usuário administrativo <input name="account" maxlength="256" required autocomplete="off" placeholder="DOMÍNIO\usuário"></label>
-        <input name="domain" type="hidden">
-        <label>Senha <input name="password" type="password" maxlength="512" required autocomplete="new-password"></label>
-        <p class="install-muted">A senha é usada somente nesta sessão.</p>
-        <p role="status" data-status>Aguardando solicitação</p>
+        <label>Usuário Windows <input name="account" maxlength="256" required autocomplete="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" placeholder="DOMÍNIO\usuário"></label>
+        <input name="domain" type="hidden" autocomplete="off">
+        <label>Senha <input name="password" type="password" maxlength="512" required autocomplete="new-password" data-1p-ignore data-lpignore="true"></label>
+        <p class="install-muted">As credenciais são solicitadas novamente em cada sessão e não são salvas pelo NightOwl.</p>
+        <p role="status" data-auth-status>Aguardando solicitação</p>
         <footer><button type="button" data-cancel>Cancelar</button><button class="install-button install-primary" type="submit">Conectar</button></footer>
       </form>
     </section>
   </div>
   <div class="terminal-dialog-shade" data-terminal-modal hidden>
-    <section class="terminal-dialog" data-terminal-dialog role="dialog" aria-modal="true" aria-label="Terminal PowerShell">
-      <header><div><strong>Terminal · {{ endpoint.hostname }}</strong><p data-identity>Identidade não ativa</p></div><div><button type="button" data-maximize aria-label="Maximizar">□</button><button type="button" data-terminal-close aria-label="Encerrar terminal">×</button></div></header>
-      <div data-screen class="terminal-admin-screen" aria-label="Terminal PowerShell" hidden></div>
+    <section class="terminal-dialog terminal-admin-dialog" data-terminal-dialog role="dialog" aria-modal="true" aria-labelledby="terminal-admin-title">
+      <header>
+        <div class="terminal-admin-heading">
+          <strong id="terminal-admin-title">{{ endpoint.hostname|default:'Endpoint'|escape }}</strong>
+          <p><span class="terminal-connection-indicator" data-connection-indicator data-state="pending"></span><span data-terminal-status aria-live="polite">Solicitando conexão</span></p>
+          <small data-identity>Identidade Windows ainda não confirmada</small>
+        </div>
+        <button type="button" data-terminal-close aria-label="Encerrar terminal">×</button>
+      </header>
+      <div class="terminal-admin-stage" data-terminal-stage>
+        <div data-screen class="terminal-admin-screen" aria-label="Terminal PowerShell" hidden></div>
+        <p class="terminal-admin-notice" data-terminal-notice aria-live="polite"></p>
+        <div class="terminal-admin-context-menu" data-terminal-context-menu role="menu" aria-label="Ações do terminal" hidden aria-hidden="true">
+          <button type="button" data-terminal-copy role="menuitem" disabled>Copiar</button>
+          <button type="button" data-terminal-paste role="menuitem" disabled>Colar</button>
+          <button type="button" data-terminal-paste-execute role="menuitem" disabled>Colar e executar</button>
+        </div>
+      </div>
     </section>
   </div>
 </section>
