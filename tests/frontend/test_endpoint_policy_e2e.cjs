@@ -37,6 +37,8 @@ let phase = 'initialization';
         phase = 'endpoint_page';
         await page.goto(server + '/endpoints/' + encodeURIComponent(endpointId) + '/');
         assert.equal(await page.locator('[data-endpoint-detail]').getAttribute('data-endpoint-id'), endpointId);
+        assert(await page.evaluate(() => document.cookie.split(';').some(cookie => cookie.trim().startsWith('csrftoken='))),
+            'Endpoint page must provide the CSRF cookie for its authorized POST actions');
         await page.getByRole('button', {name: /Ações e Jobs/}).click();
         const card = page.locator('[data-endpoint-policy-id="' + policyId + '"]');
         await card.waitFor();
