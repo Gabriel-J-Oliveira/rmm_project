@@ -35,6 +35,9 @@ class WindowsE2EPartitionTests(SimpleTestCase):
         script = Path(__file__).resolve().parents[1] / 'scripts' / 'Invoke-WindowsE2E.ps1'
         content = script.read_text(encoding='utf-8')
         self.assertIn("agents.test_automation.AutomationBrowserTests.test_real_ui_and_persisted_automations", content)
+        self.assertIn("agents.test_automation.AutomationBrowserTests.test_endpoint_policy_run_is_scoped_and_confirmed_in_real_ui", content)
+        browser_test = script.parents[1] / 'agents' / 'test_automation.py'
+        self.assertIn("tests/frontend/test_endpoint_policy_e2e.cjs", browser_test.read_text(encoding='utf-8'))
         self.assertIn("$env:NIGHTOWL_TEST_BROWSER_E2E = '1'", content)
         self.assertIn("NIGHTOWL_TEST_CHROME", content)
         workflow = script.parents[1] / '.github' / 'workflows' / 'enrollment-identity.yml'

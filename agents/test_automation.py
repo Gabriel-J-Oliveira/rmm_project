@@ -483,6 +483,134 @@ class AutomationTests(AutomationFixture,TestCase):
         self.assertFalse(AgentJob.objects.exists())
 
 
+@override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=False)
+class EndpointAssignedPolicyApiTests(AutomationFixture, TestCase):
+    def setUp(self):
+        self.prepare()
+        self.other, _ = AgentMachine.create_with_token(hostname='SYNTHETIC-OTHER', domain='isolated.invalid',
+            machine_id=str(uuid.uuid4()), agent_version='synthetic-v2', last_seen_at=self.now)
+        InventorySnapshot.objects.create(machine=self.other, collected_at=self.now, raw_payload={
+            'snapshot_source': 'heartbeat', 'machine_id': self.other.machine_id,
+            'agent_version': self.other.agent_version, 'agent': {'capabilities': ['jobs_protocol_v2']}})
+        self.client.force_login(self.user)
+
+    def run_url(self, definition, endpoint=None):
+        return reverse('api-endpoint-automation-policy-run', kwargs={
+            'endpoint_id': (endpoint or self.endpoint).pk, 'definition_id': definition.pk})
+
+    def list_url(self, endpoint=None):
+        return reverse('api-endpoint-automation-policies', kwargs={'endpoint_id': (endpoint or self.endpoint).pk})
+
+    def post_run(self, definition, request_id=None, endpoint=None):
+        return self.client.post(self.run_url(definition, endpoint), data=json.dumps({
+            'revision': definition.revision, 'request_id': request_id or str(uuid.uuid4())}),
+            content_type='application/json')
+
+    def test_list_matches_assignments_and_history_by_endpoint_uuid_only(self):
+        shared = self.define(endpoint_ids=[str(self.endpoint.pk), str(self.other.pk)])
+        only_self = self.define()
+        only_other = self.define(endpoint_ids=[str(self.other.pk)])
+        targeted = self.post_run(shared, str(uuid.uuid4()))
+        self.assertEqual(targeted.status_code, 202, targeted.content)
+        result = self.client.get(self.list_url()).json()
+        self.assertEqual({row['id'] for row in result['policies']}, {str(shared.pk), str(only_self.pk)})
+        self.assertEqual(result['endpoint']['id'], str(self.endpoint.pk))
+        self.assertFalse(result['scheduler_enabled'])
+        self_row = next(row for row in result['policies'] if row['id'] == str(shared.pk))
+        self.assertEqual(self_row['history'][0]['status'], 'queued')
+        self.assertEqual(self_row['history'][0]['job_id'], str(AgentJob.objects.get().pk))
+        other_result = self.client.get(self.list_url(self.other)).json()
+        self.assertEqual({row['id'] for row in other_result['policies']}, {str(shared.pk), str(only_other.pk)})
+        self.assertEqual(other_result['policies'][0]['history'], [])
+
+    def test_manual_execution_targets_only_this_endpoint_and_replay_is_idempotent(self):
+        definition = self.define(endpoint_ids=[str(self.endpoint.pk), str(self.other.pk)])
+        request_id = str(uuid.uuid4())
+        first = self.post_run(definition, request_id)
+        replay = self.post_run(definition, request_id)
+        self.assertEqual(first.status_code, 202, first.content)
+        self.assertEqual(replay.status_code, 202, replay.content)
+        self.assertEqual(first.json()['occurrence']['id'], replay.json()['occurrence']['id'])
+        self.assertEqual(AgentJob.objects.count(), 1)
+        self.assertEqual(AgentJob.objects.get().endpoint_id, self.endpoint.pk)
+        self.assertEqual(AutomationOccurrence.objects.count(), 1)
+        self.assertEqual(AutomationOccurrence.objects.get().endpoint_id, self.endpoint.pk)
+        events = list(AuditEvent.objects.filter(event_type='automation.run_now_endpoint').order_by('pk'))
+        self.assertEqual(len(events), 2, 'Both original request and idempotent replay remain auditable')
+        for event in events:
+            self.assertEqual(event.metadata['endpoint_id'], str(self.endpoint.pk))
+            self.assertEqual(event.metadata['scope'], 'single_endpoint')
+
+    def test_scheduler_flag_is_separate_from_authorized_manual_execution(self):
+        definition = self.define()
+        result = self.client.get(self.list_url()).json()
+        row = result['policies'][0]
+        self.assertFalse(result['scheduler_enabled'])
+        self.assertTrue(row['can_run_now'])
+        self.assertEqual(row['history'], [])
+        response = self.post_run(definition)
+        self.assertEqual(response.status_code, 202, response.content)
+        self.assertEqual(AgentJob.objects.count(), 1)
+
+    def test_user_without_execute_permission_can_view_but_cannot_run(self):
+        definition = self.define()
+        limited = get_user_model().objects.create_user('endpoint-policy-view', is_staff=True)
+        for code in ('view_automationdefinition', 'view_agentmachine', 'view_agentjob'):
+            limited.user_permissions.add(Permission.objects.get(content_type__app_label='agents', codename=code))
+        self.client.force_login(limited)
+        response = self.client.get(self.list_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['policies'][0]['can_run_now'])
+        self.assertEqual(response.json()['policies'][0]['run_block_reason'], 'permission_required')
+        self.assertEqual(self.post_run(definition).status_code, 403)
+
+    def test_paused_and_unassigned_policies_cannot_enqueue(self):
+        for state in ('paused', 'cancelled'):
+            with self.subTest(state=state):
+                inactive = self.define()
+                inactive.state = state
+                inactive.save(update_fields=['state'])
+                row = next(row for row in self.client.get(self.list_url()).json()['policies'] if row['id'] == str(inactive.pk))
+                self.assertFalse(row['can_run_now'])
+                self.assertEqual(self.post_run(inactive).status_code, 409)
+        assigned_elsewhere = self.define(endpoint_ids=[str(self.other.pk)])
+        self.assertEqual(self.post_run(assigned_elsewhere).status_code, 409)
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_ambiguous_identity_is_blocked_and_no_job_is_created(self):
+        definition = self.define()
+        duplicate, _ = AgentMachine.create_with_token(hostname=self.endpoint.hostname,
+            domain=self.endpoint.domain, machine_id=str(uuid.uuid4()), agent_version='synthetic-v2')
+        snapshot = InventorySnapshot.objects.get(machine=self.endpoint)
+        snapshot.raw_payload['machine_id'] = duplicate.machine_id
+        snapshot.save(update_fields=['raw_payload'])
+        self.assertFalse(self.client.get(self.list_url()).json()['policies'][0]['can_run_now'])
+        response = self.post_run(definition)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['occurrence']['status'], 'blocked')
+        self.assertEqual(response.json()['occurrence']['reason'], 'endpoint_identity_unavailable')
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_offline_skip_policy_records_skip_without_remote_job(self):
+        self.endpoint.last_seen_at = self.now - timedelta(days=1)
+        self.endpoint.save(update_fields=['last_seen_at'])
+        definition = self.define(offline_policy='skip')
+        self.assertFalse(self.client.get(self.list_url()).json()['policies'][0]['can_run_now'])
+        response = self.post_run(definition)
+        self.assertEqual(response.json()['occurrence']['status'], 'skipped')
+        self.assertEqual(response.json()['occurrence']['reason'], 'endpoint_offline')
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_targeted_run_requires_csrf_and_exact_request_contract(self):
+        definition = self.define()
+        from django.test import Client
+        browser = Client(enforce_csrf_checks=True)
+        browser.force_login(self.user)
+        payload = json.dumps({'revision': definition.revision, 'request_id': str(uuid.uuid4())})
+        self.assertEqual(browser.post(self.run_url(definition), payload, content_type='application/json').status_code, 403)
+        self.assertEqual(self.client.post(self.run_url(definition), data='{}', content_type='application/json').status_code, 400)
+
+
 @override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=True)
 class AutomationPostgresTests(AutomationFixture,TransactionTestCase):
     def setUp(self):
@@ -501,6 +629,31 @@ class AutomationPostgresTests(AutomationFixture,TransactionTestCase):
             list(pool.map(lambda _:run(),range(2)))
         self.assertEqual(AutomationOccurrence.objects.count(),1)
         self.assertEqual(AgentJob.objects.count(),1)
+
+    @skipUnlessDBFeature('has_select_for_update')
+    def test_concurrent_targeted_replay_creates_one_job_and_never_other_target(self):
+        other, _ = AgentMachine.create_with_token(hostname='SYNTHETIC-SECOND', domain='isolated.invalid',
+            machine_id=str(uuid.uuid4()), agent_version='synthetic-v2', last_seen_at=self.now)
+        InventorySnapshot.objects.create(machine=other, collected_at=self.now, raw_payload={
+            'snapshot_source': 'heartbeat', 'machine_id': other.machine_id,
+            'agent_version': other.agent_version, 'agent': {'capabilities': ['jobs_protocol_v2']}})
+        definition = self.define(endpoint_ids=[str(self.endpoint.pk), str(other.pk)])
+        request_id = str(uuid.uuid4())
+
+        def run_targeted():
+            close_old_connections()
+            try:
+                actor = get_user_model().objects.get(pk=self.user.pk)
+                control_definition(actor, definition.pk, 'run_now_endpoint', definition.revision,
+                    request_id=request_id, endpoint_id=self.endpoint.pk)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda _: run_targeted(), range(2)))
+        self.assertEqual(AutomationOccurrence.objects.count(), 1)
+        self.assertEqual(AgentJob.objects.count(), 1)
+        self.assertEqual(AgentJob.objects.get().endpoint_id, self.endpoint.pk)
 
 
 @override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=True)
@@ -521,4 +674,30 @@ class AutomationBrowserTests(AutomationFixture,LiveServerTestCase):
         self.assertEqual(AgentJob.objects.count(),2)
         self.assertEqual(AutomationDefinition.objects.count(),2)
         self.assertEqual(AutomationOccurrence.objects.filter(status='cancelled').count(),2)
+        print(result.stdout.strip())
+
+    @skipUnless(os.environ.get('NIGHTOWL_TEST_BROWSER_E2E')=='1','Explicit isolated browser gate required')
+    def test_endpoint_policy_run_is_scoped_and_confirmed_in_real_ui(self):
+        self.prepare()
+        other, _ = AgentMachine.create_with_token(hostname='SYNTHETIC-NOT-SELECTED', domain='isolated.invalid',
+            machine_id=str(uuid.uuid4()), agent_version='synthetic-v2', last_seen_at=self.now)
+        InventorySnapshot.objects.create(machine=other, collected_at=self.now, raw_payload={
+            'snapshot_source': 'heartbeat', 'machine_id': other.machine_id,
+            'agent_version': other.agent_version, 'agent': {'capabilities': ['jobs_protocol_v2']}})
+        name = '<img src=x onerror=alert(1)> Endpoint-only policy'
+        definition = self.define(name=name, endpoint_ids=[str(self.endpoint.pk), str(other.pk)])
+        self.client.force_login(self.user)
+        result = subprocess.run(['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_endpoint_policy_e2e.cjs')],
+            env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
+                 'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
+                 'NIGHTOWL_E2E_ENDPOINT': str(self.endpoint.pk),
+                 'NIGHTOWL_E2E_ENDPOINT_NAME': self.endpoint.hostname,
+                 'NIGHTOWL_E2E_POLICY': str(definition.pk),
+                 'NIGHTOWL_E2E_POLICY_NAME': name}, capture_output=True, text=True, timeout=110)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(AgentJob.objects.count(), 1)
+        self.assertEqual(AgentJob.objects.get().endpoint_id, self.endpoint.pk)
+        self.assertEqual(AutomationOccurrence.objects.count(), 1)
+        self.assertEqual(AutomationOccurrence.objects.get().endpoint_id, self.endpoint.pk)
+        self.assertFalse(AutomationOccurrence.objects.filter(endpoint=other).exists())
         print(result.stdout.strip())

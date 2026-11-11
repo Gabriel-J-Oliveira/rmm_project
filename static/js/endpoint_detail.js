@@ -30,6 +30,9 @@
     let reloadTimer = null;
     let lastPollingAt = 0;
     let pollingUntil = 0;
+    let endpointPoliciesLoaded = false;
+    let endpointPoliciesLoading = false;
+    let endpointPoliciesRequest = 0;
 
     const labels = {
         online: "Online",
@@ -1219,6 +1222,129 @@
             '<div class="endpoint-action-grid" data-action-grid="' + escapeHtml(options.grid || 'default') + '">' + buttons.join("") + '</div></section>';
     }
 
+    const endpointPolicyStatusLabels = {
+        active: "Ativa", paused: "Pausada", cancelled: "Cancelada", finished: "Finalizada",
+        pending: "Pendente", enqueued: "Enfileirado", queued: "Em fila", sent: "Entregue ao agente",
+        running: "Executando", completed: "Concluída", failed: "Falhou", expired: "Expirada",
+        skipped: "Ignorada", blocked: "Bloqueada", cancelled_job: "Cancelada"
+    };
+    const endpointPolicyReasonLabels = {
+        permission_required: "Seu usuário não tem permissão para executar esta política.",
+        policy_not_active: "A política precisa estar ativa.",
+        endpoint_identity_unavailable: "A identidade deste endpoint exige revisão.",
+        endpoint_identity_changed: "A identidade do endpoint mudou desde a atribuição.",
+        jobs_v2_capability_unconfirmed: "O agente não confirmou a capacidade de jobs v2.",
+        endpoint_offline: "O endpoint está offline e a política não permite aguardar a reconexão.",
+        overlap_blocked: "Já existe um job ativo neste endpoint.",
+        endpoint_not_assigned: "Esta política não está atribuída a este endpoint."
+    };
+
+    function renderEndpointPolicyHistory(history) {
+        if (!history || !history.length) return '<p class="endpoint-policy-history-empty">Histórico ainda não disponível para este endpoint.</p>';
+        return '<ul class="endpoint-policy-history">' + history.map(function (row) {
+            const status = endpointPolicyStatusLabels[row.status] || row.status || "Desconhecido";
+            const reason = row.reason ? '<small>' + escapeHtml(row.reason) + '</small>' : '';
+            return '<li><span class="agent-version-pill">' + escapeHtml(status) + '</span><time datetime="' + escapeHtml(row.scheduled_for || row.created_at || '') + '">' + escapeHtml(formatDate(row.scheduled_for || row.created_at)) + '</time>' + reason + '</li>';
+        }).join('') + '</ul>';
+    }
+
+    function renderEndpointPolicies(payload) {
+        const host = root.querySelector('[data-endpoint-automation-policies]');
+        const schedulerNote = root.querySelector('[data-endpoint-policy-scheduler]');
+        if (!host) return;
+        if (schedulerNote) schedulerNote.hidden = !!payload.scheduler_enabled;
+        if (!Array.isArray(payload.policies) || payload.policies.length === 0) {
+            host.innerHTML = '<div class="endpoint-empty-state"><strong>Nenhuma política atribuída</strong><p>Este endpoint não aparece como alvo nas políticas cadastradas.</p></div>';
+            return;
+        }
+        const endpoint = payload.endpoint || {};
+        host.innerHTML = '<div class="endpoint-policy-list">' + payload.policies.map(function (policy) {
+            const state = endpointPolicyStatusLabels[policy.state] || policy.state || "Desconhecido";
+            const latest = policy.history && policy.history.length ? policy.history[0] : null;
+            const blockedReason = policy.run_block_reason ? (endpointPolicyReasonLabels[policy.run_block_reason] || "Execução indisponível: " + policy.run_block_reason) : '';
+            const latestBlock = policy.last_error ? '<p class="endpoint-policy-reason"><strong>Último erro da política:</strong> ' + escapeHtml(policy.last_error) + '</p>' : '';
+            const runButton = '<button type="button" class="endpoint-quick-action-button" data-endpoint-policy-run="' + escapeHtml(policy.id) + '" data-policy-revision="' + escapeHtml(policy.revision) + '"' + (policy.can_run_now ? '' : ' disabled') + '>Executar agora neste endpoint</button>';
+            return '<article class="endpoint-policy-card" data-endpoint-policy-id="' + escapeHtml(policy.id) + '">' +
+                '<header><div><h3>' + escapeHtml(policy.name) + '</h3><span class="agent-version-pill">' + escapeHtml(policy.job_type) + '</span> <span class="agent-version-pill">' + escapeHtml(state) + '</span></div><a href="/jobs/automations/' + encodeURIComponent(policy.id) + '/">Abrir política</a></header>' +
+                '<dl class="endpoint-policy-facts"><div><dt>Próxima execução</dt><dd>' + escapeHtml(policy.next_due_at ? formatDate(policy.next_due_at) : "Sem próxima execução") + '</dd></div><div><dt>Último resultado neste endpoint</dt><dd>' + escapeHtml(latest ? (endpointPolicyStatusLabels[latest.status] || latest.status || "Desconhecido") : "Sem histórico") + '</dd></div>' +
+                (latest && latest.reason ? '<div><dt>Motivo do último resultado</dt><dd>' + escapeHtml(latest.reason) + '</dd></div>' : '') + '</dl>' +
+                renderEndpointPolicyHistory(policy.history) + latestBlock +
+                (blockedReason ? '<p class="endpoint-policy-reason" role="note">' + escapeHtml(blockedReason) + '</p>' : '') +
+                '<footer>' + runButton + '<small>Destino confirmado: ' + escapeHtml(endpoint.hostname || root.dataset.endpoint || 'endpoint') + ' · ' + escapeHtml(endpoint.id || root.dataset.endpointId || '') + '</small></footer></article>';
+        }).join('') + '</div>';
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    }
+
+    function loadEndpointAutomationPolicies(force) {
+        const id = root.dataset.endpointId || '';
+        const host = root.querySelector('[data-endpoint-automation-policies]');
+        if (!id || !host || endpointPoliciesLoading || (endpointPoliciesLoaded && !force)) return Promise.resolve();
+        endpointPoliciesLoading = true;
+        const request = ++endpointPoliciesRequest;
+        return fetch('/api/endpoints/' + encodeURIComponent(id) + '/automation-policies/', {
+            method: 'GET', credentials: 'same-origin', cache: 'no-store',
+            headers: {'Accept': 'application/json', 'Cache-Control': 'no-cache'}
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok) {
+                    const error = new Error(body.error || 'policy_list_failed');
+                    error.status = response.status;
+                    throw error;
+                }
+                return body;
+            });
+        }).then(function (payload) {
+            if (request !== endpointPoliciesRequest) return;
+            endpointPoliciesLoaded = true;
+            renderEndpointPolicies(payload);
+        }).catch(function (error) {
+            if (request !== endpointPoliciesRequest) return;
+            endpointPoliciesLoaded = false;
+            const message = error.status === 403 ? 'Você não tem permissão para consultar políticas atribuídas.' : error.status === 404 ? 'Endpoint não encontrado.' : 'Não foi possível carregar as políticas deste endpoint.';
+            host.innerHTML = '<div class="endpoint-empty-state"><strong>' + escapeHtml(message) + '</strong><p>Os dados não foram presumidos nem substituídos por exemplos.</p></div>';
+        }).finally(function () {
+            if (request === endpointPoliciesRequest) endpointPoliciesLoading = false;
+        });
+    }
+
+    function runEndpointPolicy(policyId, button) {
+        const policy = (root.querySelector('[data-endpoint-policy-id="' + CSS.escape(policyId) + '"] h3') || {}).textContent || 'Política selecionada';
+        const hostname = endpointDetail && endpointDetail.hostname || root.dataset.endpoint || 'endpoint';
+        const endpointId = root.dataset.endpointId || '';
+        const revision = Number(button.dataset.policyRevision);
+        if (!endpointId || !Number.isInteger(revision) || !window.crypto || !window.crypto.randomUUID) {
+            showToast('Não foi possível iniciar a execução autorizada desta política.');
+            return;
+        }
+        if (!window.confirm('Executar a política "' + policy + '" somente no endpoint "' + hostname + '" (' + endpointId + ')? Esta ação criará uma ocorrência direcionada apenas a este computador.')) return;
+        button.disabled = true;
+        fetch('/api/endpoints/' + encodeURIComponent(endpointId) + '/automation-policies/' + encodeURIComponent(policyId) + '/run/', {
+            method: 'POST', credentials: 'same-origin', headers: {
+                'Content-Type': 'application/json', 'Accept': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            }, body: JSON.stringify({revision: revision, request_id: window.crypto.randomUUID()})
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                if (!response.ok) throw new Error(body.error || 'policy_run_failed');
+                return body;
+            });
+        }).then(function (body) {
+            const occurrence = body.occurrence || {};
+            showToast('Ocorrência ' + (endpointPolicyStatusLabels[occurrence.status] || occurrence.status || 'registrada') + ' somente para ' + hostname + '.');
+            endpointPoliciesLoaded = false;
+            return loadEndpointAutomationPolicies(true);
+        }).then(function () {
+            schedulePolling();
+            return reloadEndpoint(false);
+        }).catch(function (error) {
+            showToast('Não foi possível executar a política neste endpoint: ' + (error.message || 'falha'));
+            endpointPoliciesLoaded = false;
+            loadEndpointAutomationPolicies(true);
+        }).finally(function () {
+            button.disabled = false;
+        });
+    }
+
     function renderTasks(detail) {
         const lifecycleButtons = agentLifecycleActionButtons(detail);
         const purgeButtons = purgeActionButtons(detail);
@@ -1379,6 +1505,7 @@
         if (window.lucide && typeof window.lucide.createIcons === "function") {
             window.lucide.createIcons();
         }
+        if (activeTab === 'tasks') loadEndpointAutomationPolicies(true);
     }
 
     function fetchRealEndpointPayload() {
@@ -1465,6 +1592,7 @@
             }
             lastPollingAt = now;
             reloadEndpoint(false).then(function (detail) {
+                if (activeTab === 'tasks') loadEndpointAutomationPolicies(true);
                 const running = !!(detail && detail.activeJob) || (detail && (detail.jobs || []).some(function (job) {
                     return ["queued", "pending", "sent", "dispatched", "waiting_agent", "running"].indexOf(job.status) >= 0;
                 }));
@@ -2841,6 +2969,13 @@
         const tab = event.target.closest("[data-endpoint-tab]");
         if (tab) {
             activateTab(tab.dataset.endpointTab);
+            return;
+        }
+
+        const policyRun = event.target.closest('[data-endpoint-policy-run]');
+        if (policyRun) {
+            event.preventDefault();
+            runEndpointPolicy(policyRun.dataset.endpointPolicyRun || '', policyRun);
             return;
         }
 

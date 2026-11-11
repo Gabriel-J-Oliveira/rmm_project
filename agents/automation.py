@@ -256,9 +256,15 @@ def known_v2(endpoint):
             ('jobs_protocol_v2' in capabilities or 'job_protocol_v2' in capabilities))
 
 
-def materialize(definition, due, now, invocation_key='scheduled', operator=None):
+def materialize(definition, due, now, invocation_key='scheduled', operator=None, target_ids=None):
     expires=due+timedelta(seconds=definition.validity_seconds)
-    for target in sorted(definition.targets,key=lambda t:t['id']):
+    targets=definition.targets
+    if target_ids is not None:
+        requested={str(value) for value in target_ids}
+        targets=[target for target in targets if target.get('id') in requested]
+        if len(targets)!=len(requested):
+            raise ValueError('endpoint_not_assigned')
+    for target in sorted(targets,key=lambda t:t['id']):
         endpoint=AgentMachine.objects.select_for_update().get(pk=target['id'])
         identity = uuid.uuid5(definition.pk,invocation_key+str(endpoint.pk)) if invocation_key!='scheduled' else uuid.uuid5(definition.pk,f'{definition.revision}:{due.isoformat()}:{endpoint.pk}')
         occurrence,created=AutomationOccurrence.objects.get_or_create(pk=identity,
@@ -307,14 +313,14 @@ def materialize(definition, due, now, invocation_key='scheduled', operator=None)
 
 
 @transaction.atomic
-def control_definition(user, definition_id, action, revision, now=None, request_id=None):
+def control_definition(user, definition_id, action, revision, now=None, request_id=None, endpoint_id=None):
     database_budget()
     now=now or timezone.now()
-    authorize(user,'execute_automation' if action=='run_now' else 'control_automation')
+    authorize(user,'execute_automation' if action in ('run_now','run_now_endpoint') else 'control_automation')
     definition=AutomationDefinition.objects.select_for_update().get(pk=definition_id)
     if type(revision) is not int or revision != definition.revision:
         raise ValueError('revision_conflict')
-    if action=='run_now':
+    if action in ('run_now','run_now_endpoint'):
         if definition.state!='active':
             raise ValueError('definition_not_active')
         authorize(user,'add_agentjob')
@@ -322,6 +328,20 @@ def control_definition(user, definition_id, action, revision, now=None, request_
             key=str(uuid.UUID(request_id))
         except (ValueError, TypeError, AttributeError):
             raise ValueError('request_id_required') from None
+        if action=='run_now_endpoint':
+            try:
+                endpoint_key=str(uuid.UUID(str(endpoint_id)))
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError('invalid_endpoint') from None
+            assigned=[target for target in definition.targets if target.get('id')==endpoint_key]
+            if len(assigned)!=1:
+                raise ValueError('endpoint_not_assigned')
+            # The snapshot is checked again inside materialize before a job is
+            # created. Restricting the target set here prevents an endpoint UI
+            # action from materializing work for the rest of a fleet policy.
+            materialize(definition,now,now,invocation_key=key,operator=user,target_ids={endpoint_key})
+            audit(definition,'run_now_endpoint',user,endpoint_id=endpoint_key,request_id=key,scope='single_endpoint')
+            return definition
         materialize(definition,now,now,invocation_key=key,operator=user)
     elif action=='cancel_next' and definition.state in ('active','paused') and definition.next_due_at:
         due=definition.next_due_at

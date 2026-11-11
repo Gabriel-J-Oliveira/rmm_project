@@ -257,3 +257,92 @@ body.page-endpoint-detail .endpoint-detail-shell *::-webkit-scrollbar-thumb:hove
         font-size: 10px;
     }
 }
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-assigned-policies {
+    margin-block: 16px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-scheduler-note {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--endpoint-detail-warning-bg, #fff7e6);
+    color: var(--endpoint-detail-warning-text, #805b10);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    gap: 12px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-card {
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--endpoint-detail-border, #e4e7ec);
+    border-radius: 12px;
+    background: var(--endpoint-detail-surface, #fff);
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-card > header,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-card > footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-card h3 {
+    margin: 0 0 8px;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-card footer small {
+    flex-basis: 100%;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+    gap: 8px 12px;
+    margin: 14px 0;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-facts dt {
+    color: var(--endpoint-detail-muted, #667085);
+    font-size: .82rem;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-facts dd {
+    margin: 2px 0 0;
+    overflow-wrap: anywhere;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-history {
+    display: grid;
+    gap: 6px;
+    margin: 10px 0;
+    padding: 0;
+    list-style: none;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-history li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-reason,
+body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-history-empty {
+    color: var(--endpoint-detail-muted, #667085);
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    body.page-endpoint-detail .endpoint-detail-shell .endpoint-policy-card > footer .endpoint-quick-action-button {
+        width: 100%;
+    }
+}

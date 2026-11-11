@@ -1,5 +1,6 @@
 """Authenticated, CSRF-protected UI API. No endpoint-supplied commands."""
 import json
+import uuid
 from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.http import JsonResponse
@@ -7,9 +8,10 @@ from django.utils import timezone
 from django.db.models import Case, CharField, F, OuterRef, Subquery, When
 from django.views.decorators.http import require_http_methods
 from agents.automation import (ALLOWED, authorize, save_definition, control_definition,
-                               cancel_occurrence, QUARANTINE)
+                               cancel_occurrence, QUARANTINE, ACTIVE, endpoint_identity,
+                               known_v2, online, validate_payload)
 from agents.models import (AgentMachine, AutomationDefinition, AutomationOccurrence,
-                           AutomationSchedulerHealth)
+                           AutomationSchedulerHealth, AuditEvent)
 from agents.telemetry_persisted_analysis import (
     _health_snapshot, recover_telemetry_analysis_scheduler)
 
@@ -87,6 +89,138 @@ def automations(request, definition_id=None):
     except (ValueError,TypeError) as error:
         code=str(error) if type(error) is ValueError and str(error).replace('_','').isalnum() else 'invalid_request'
         return JsonResponse({'error':code},status=409 if code=='revision_conflict' else 400)
+
+
+def _endpoint_policy_reason(user, definition, endpoint, target):
+    """Return safe action eligibility for one assigned identity snapshot."""
+    try:
+        authorize(user, 'execute_automation')
+        authorize(user, 'add_agentjob')
+    except PermissionError:
+        return 'permission_required'
+    if definition.state != 'active':
+        return 'policy_not_active'
+    try:
+        endpoint_identity(endpoint, target)
+    except ValueError as error:
+        return str(error)
+    if not known_v2(endpoint):
+        return 'jobs_v2_capability_unconfirmed'
+    try:
+        validate_payload(definition.job_type, definition.payload)
+    except ValueError as error:
+        return str(error)
+    now = timezone.now()
+    if not online(endpoint, now) and definition.offline_policy != 'wait':
+        return 'endpoint_offline'
+    if endpoint.jobs.filter(status__in=ACTIVE).exists():
+        return 'overlap_blocked'
+    return ''
+
+
+def _endpoint_occurrence_row(occurrence):
+    job = occurrence.job
+    return {
+        'id': str(occurrence.pk),
+        'scheduled_for': occurrence.scheduled_for.isoformat(),
+        'created_at': occurrence.created_at.isoformat(),
+        'expires_at': occurrence.expires_at.isoformat(),
+        'status': job.status if job else occurrence.status,
+        'reason': (job.error_code or occurrence.reason) if job else occurrence.reason,
+        'started_at': job.started_at.isoformat() if job and job.started_at else None,
+        'finished_at': job.finished_at.isoformat() if job and job.finished_at else None,
+        'job_id': str(job.pk) if job else None,
+    }
+
+
+@login_required
+@require_http_methods(['GET'])
+def endpoint_policies(request, endpoint_id):
+    """Expose only policies whose stored target UUID is this endpoint UUID."""
+    try:
+        authorize(request.user)
+        authorize(request.user, 'view_agentmachine')
+        authorize(request.user, 'view_agentjob')
+    except PermissionError:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    try:
+        endpoint = AgentMachine.objects.get(pk=endpoint_id)
+    except AgentMachine.DoesNotExist:
+        return JsonResponse({'error': 'not_found'}, status=404)
+
+    definitions = []
+    # Match the persisted assignment snapshot by UUID, never by hostname.
+    for definition in AutomationDefinition.objects.order_by('-updated_at').iterator(chunk_size=200):
+        snapshots = definition.targets if isinstance(definition.targets, list) else []
+        matches = [target for target in snapshots if isinstance(target, dict) and target.get('id') == str(endpoint.pk)]
+        if len(matches) != 1:
+            continue
+        target = matches[0]
+        reason = _endpoint_policy_reason(request.user, definition, endpoint, target)
+        rows = AutomationOccurrence.objects.filter(definition=definition, endpoint=endpoint).select_related('job').order_by('-scheduled_for', '-created_at')[:10]
+        definitions.append({
+            'id': str(definition.pk),
+            'revision': definition.revision,
+            'name': definition.name,
+            'job_type': definition.job_type,
+            'state': definition.state,
+            'schedule': definition.schedule,
+            'timezone': definition.timezone_name,
+            'next_due_at': definition.next_due_at.isoformat() if definition.next_due_at else None,
+            'last_error': definition.last_error or '',
+            'target_identity_valid': not reason.startswith('endpoint_identity_'),
+            'can_run_now': not reason,
+            'run_block_reason': reason,
+            'history': [_endpoint_occurrence_row(row) for row in rows],
+        })
+    response = JsonResponse({
+        'endpoint': {'id': str(endpoint.pk), 'machine_id': endpoint.machine_id, 'hostname': endpoint.hostname},
+        'policies': definitions,
+        'scheduler_enabled': bool(getattr(settings, 'NIGHTOWL_JOB_AUTOMATIONS_ENABLED', False)),
+    })
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@login_required
+@require_http_methods(['POST'])
+def endpoint_policy_run(request, endpoint_id, definition_id):
+    """Explicitly materialize a single assigned endpoint, never the fleet."""
+    if len(request.body) > 4096:
+        return JsonResponse({'error': 'request_too_large'}, status=400)
+    try:
+        authorize(request.user)
+        authorize(request.user, 'view_agentmachine')
+        authorize(request.user, 'view_agentjob')
+        data = json.loads(request.body)
+        if not isinstance(data, dict) or set(data) != {'revision', 'request_id'}:
+            raise ValueError('invalid_request')
+        endpoint = AgentMachine.objects.get(pk=endpoint_id)
+        definition = control_definition(
+            request.user, definition_id, 'run_now_endpoint', data.get('revision'),
+            request_id=data.get('request_id'), endpoint_id=endpoint.pk)
+        invocation_key = str(uuid.UUID(data['request_id']))
+        occurrence_id = uuid.uuid5(definition.pk, invocation_key + str(endpoint.pk))
+        occurrence = AutomationOccurrence.objects.select_related('job').get(
+            pk=occurrence_id, definition=definition, endpoint=endpoint)
+        response = JsonResponse({
+            'endpoint': {'id': str(endpoint.pk), 'machine_id': endpoint.machine_id, 'hostname': endpoint.hostname},
+            'policy': {'id': str(definition.pk), 'revision': definition.revision, 'name': definition.name,
+                       'job_type': definition.job_type},
+            'occurrence': _endpoint_occurrence_row(occurrence),
+            'scheduler_enabled': bool(getattr(settings, 'NIGHTOWL_JOB_AUTOMATIONS_ENABLED', False)),
+        }, status=200 if not occurrence.job_id else 202)
+        response['Cache-Control'] = 'no-store'
+        return response
+    except PermissionError:
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    except (AgentMachine.DoesNotExist, AutomationDefinition.DoesNotExist, AutomationOccurrence.DoesNotExist):
+        return JsonResponse({'error': 'not_found'}, status=404)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        code = str(error) if type(error) is ValueError and str(error).replace('_', '').isalnum() else 'invalid_request'
+        return JsonResponse({'error': code}, status=409 if code in (
+            'revision_conflict', 'definition_not_active', 'endpoint_not_assigned',
+            'endpoint_identity_unavailable', 'endpoint_identity_changed') else 400)
 
 
 @login_required
