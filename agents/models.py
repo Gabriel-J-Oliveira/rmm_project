@@ -15,6 +15,7 @@ class TerminalAccessGrant(models.Model):
     endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
     enabled = models.BooleanField(default=True)
     allow_conpty = models.BooleanField(default=False)
+    allow_admin_auth = models.BooleanField(default=False)
     expires_at = models.DateTimeField()
 
     class Meta:
@@ -48,7 +49,10 @@ class TerminalSession(models.Model):
     agent_ticket_used = models.BooleanField(default=False)
 
     class Meta:
-        permissions = [('open_terminalsession', 'Open synthetic remote terminal transport')]
+        permissions = [
+            ('open_terminalsession', 'Open synthetic remote terminal transport'),
+            ('open_admin_terminalsession', 'Open administrative remote terminal session'),
+        ]
         constraints = [
             models.UniqueConstraint(fields=['endpoint'], condition=models.Q(status__in=('awaiting_consent', 'authorized', 'connecting', 'ready')), name='terminal_active_endpoint'),
             models.UniqueConstraint(fields=['operator'], condition=models.Q(status__in=('awaiting_consent', 'authorized', 'connecting', 'ready')), name='terminal_active_operator'),

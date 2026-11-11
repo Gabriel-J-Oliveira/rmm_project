@@ -7,6 +7,8 @@ from pathlib import Path
 from datetime import timedelta
 
 from asgiref.sync import sync_to_async
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -18,7 +20,10 @@ from .test_terminal_transport import fixture
 
 
 def enable_admin(machine, operator):
-    TerminalAccessGrant.objects.filter(endpoint=machine, operator=operator).update(allow_conpty=True)
+    TerminalAccessGrant.objects.filter(endpoint=machine, operator=operator).update(allow_admin_auth=True)
+    operator.user_permissions.add(Permission.objects.get(
+        content_type__app_label='agents', content_type__model='terminalsession',
+        codename='open_admin_terminalsession'))
     snapshot = InventorySnapshot.objects.get(machine=machine)
     snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_admin_auth:1')
     snapshot.save(update_fields=['raw_payload'])
@@ -26,6 +31,149 @@ def enable_admin(machine, operator):
 
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True, NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True)
 class AdminAuthControlTests(TestCase):
+    def test_conpty_grant_does_not_authorize_admin_auth_or_dashboard_gate(self):
+        machine, _, operator = fixture('admin-auth-separated-grants')
+        grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
+        grant.allow_conpty = True
+        grant.save(update_fields=['allow_conpty'])
+        snapshot = InventorySnapshot.objects.get(machine=machine)
+        snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_admin_auth:1')
+        snapshot.save(update_fields=['raw_payload'])
+
+        self.client.force_login(operator)
+        response = self.client.get(reverse('endpoint-detail', args=[machine.pk]))
+        self.assertFalse(response.context['terminal_admin_auth_available'])
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+
+        grant.allow_admin_auth = True
+        grant.save(update_fields=['allow_admin_auth'])
+        operator.user_permissions.add(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='open_admin_terminalsession'))
+        response = self.client.get(reverse('endpoint-detail', args=[machine.pk]))
+        self.assertTrue(response.context['terminal_admin_auth_available'])
+        sessions.close_session(
+            sessions.create_session(operator, machine.pk, 'admin_auth')['session_id'],
+            'synthetic_test_closed')
+
+    def test_admin_permission_is_explicit_and_scope_bound(self):
+        machine, _, operator = fixture('admin-auth-permission-required')
+        grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
+        grant.allow_admin_auth = True
+        grant.save(update_fields=['allow_admin_auth'])
+        snapshot = InventorySnapshot.objects.get(machine=machine)
+        snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_admin_auth:1')
+        snapshot.save(update_fields=['raw_payload'])
+
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+
+        admin = get_user_model().objects.create_superuser('admin-no-explicit-permission', password='synthetic-only')
+        TerminalAccessGrant.objects.create(operator=admin, endpoint=machine, allow_admin_auth=True,
+            expires_at=timezone.now() + timedelta(hours=1))
+        with self.assertRaises(PermissionError):
+            sessions.create_session(admin, machine.pk, 'admin_auth')
+
+        operator.user_permissions.add(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='open_admin_terminalsession'))
+        operator.user_permissions.remove(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='open_terminalsession'))
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+        operator.user_permissions.add(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='open_terminalsession'))
+        info = sessions.create_session(operator, machine.pk, 'admin_auth')
+        sessions.close_session(info['session_id'], 'synthetic_test_closed')
+
+        other_machine, _, other_operator = fixture('admin-auth-wrong-scope')
+        other_grant = TerminalAccessGrant.objects.get(endpoint=other_machine, operator=other_operator)
+        other_grant.allow_admin_auth = True
+        other_grant.save(update_fields=['allow_admin_auth'])
+        other_operator.user_permissions.add(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='open_admin_terminalsession'))
+        other_snapshot = InventorySnapshot.objects.get(machine=other_machine)
+        other_snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_admin_auth:1')
+        other_snapshot.save(update_fields=['raw_payload'])
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, other_machine.pk, 'admin_auth')
+
+        wrong_operator = get_user_model().objects.create_user('wrong-admin-operator', is_staff=True,
+            password='synthetic-only')
+        with self.assertRaises(PermissionError):
+            sessions.create_session(wrong_operator, machine.pk, 'admin_auth')
+
+    def test_admin_mode_rejects_missing_capability_and_preserves_conpty(self):
+        machine, _, operator = fixture('admin-auth-capability-required')
+        enable_admin(machine, operator)
+        snapshot = InventorySnapshot.objects.get(machine=machine)
+        snapshot.raw_payload['agent']['capabilities'].remove('remote_terminal_admin_auth:1')
+        snapshot.save(update_fields=['raw_payload'])
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+
+        grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
+        grant.allow_conpty = True
+        grant.save(update_fields=['allow_conpty'])
+        snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_conpty:1')
+        snapshot.save(update_fields=['raw_payload'])
+        with override_settings(NIGHTOWL_TERMINAL_CONPTY_ENABLED=True):
+            self.assertIsNone(sessions.validate_mode(operator, machine, 'conpty'))
+
+    def test_admin_requires_own_grant_capability_flag_and_valid_identity(self):
+        machine, _, operator = fixture('admin-auth-revalidation')
+        enable_admin(machine, operator)
+        info = sessions.create_session(operator, machine.pk, 'admin_auth')
+        grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
+
+        grant.allow_admin_auth = False
+        grant.save(update_fields=['allow_admin_auth'])
+        with self.assertRaises(PermissionError):
+            sessions.check_live(info['session_id'])
+        grant.allow_admin_auth = True
+        grant.enabled = False
+        grant.save(update_fields=['allow_admin_auth', 'enabled'])
+        with self.assertRaises(PermissionError):
+            sessions.check_live(info['session_id'])
+        grant.enabled = True
+        grant.expires_at = timezone.now() - timedelta(seconds=1)
+        grant.save(update_fields=['enabled', 'expires_at'])
+        with self.assertRaises(PermissionError):
+            sessions.check_live(info['session_id'])
+
+        grant.expires_at = timezone.now() + timedelta(hours=1)
+        grant.save(update_fields=['expires_at'])
+        machine.machine_id = str(uuid.uuid4())
+        machine.save(update_fields=['machine_id'])
+        with self.assertRaises(PermissionError):
+            sessions.check_live(info['session_id'])
+
+    def test_admin_grant_does_not_authorize_conpty_without_conpty_grant(self):
+        machine, _, operator = fixture('admin-grant-not-conpty')
+        enable_admin(machine, operator)
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'conpty')
+
+    def test_admin_auth_rejects_missing_or_ambiguous_endpoint_identity(self):
+        machine, _, operator = fixture('admin-auth-identity-required')
+        enable_admin(machine, operator)
+        machine.machine_id = ''
+        machine.save(update_fields=['machine_id'])
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+
+        machine.machine_id = str(uuid.uuid4())
+        machine.save(update_fields=['machine_id'])
+        duplicate, _ = AgentMachine.create_with_token(hostname='SYNTHETIC-admin-auth-duplicate',
+            machine_id=machine.machine_id)
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+        self.assertFalse(TerminalSession.objects.exists())
+
     def test_endpoint_button_respects_status_and_transport_capability(self):
         machine, _, operator = fixture('admin-auth-button')
         enable_admin(machine, operator)

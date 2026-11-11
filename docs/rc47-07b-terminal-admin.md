@@ -1,8 +1,16 @@
 # RC47-07B — Terminal administrativo
 
-## Escopo desta PR
+## Estado de autorização (RC47-07C)
 
-Esta etapa altera somente a experiência web de `admin_auth`. A feature continua desligada por padrão; não altera flags, grants, agente, backend, WSS ou política de consentimento do ConPTY. O modo assistido RC47-07A permanece separado.
+O modo administrativo continua desligado por padrão e agora possui autorização independente do ConPTY assistido:
+
+- `TerminalAccessGrant.allow_conpty` autoriza somente o modo `conpty`.
+- `TerminalAccessGrant.allow_admin_auth` autoriza somente `admin_auth` e tem default `False`.
+- Além da permissão geral `agents.open_terminalsession`, `admin_auth` exige a permissão Django explícita `agents.open_admin_terminalsession`, a flag do servidor, o grant ativo/não expirado para o operador e endpoint exatos, endpoint com identidade única e capability recente `remote_terminal_admin_auth:1`.
+- A permissão administrativa deve estar atribuída diretamente ao operador ou a um grupo. Superuser/staff não a recebem implicitamente para esse gate. A migration aditiva não atribui permissões a usuários ou grupos.
+- O mesmo gate é reavaliado na criação e durante a sessão/WSS; revogar/desabilitar/expirar o grant ou perder identidade/capability bloqueia a próxima validação. A permissão de ConPTY não é substituta nem fallback.
+
+Esta alteração não habilita flags, grants, agente, backend de execução ou política de consentimento do ConPTY. Não altera o agente Windows. O modo assistido RC47-07A permanece separado.
 
 ## Fluxo auditado
 
