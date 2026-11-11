@@ -14,6 +14,7 @@ class ManualPrefixMigrationTests(TransactionTestCase):
         old_target = [('agents', '0045_alter_terminalsession_mode')]
         new_target = [('agents', '0046_deployment_batch')]
         executor = MigrationExecutor(connection)
+        latest_targets = executor.loader.graph.leaf_nodes()
         try:
             executor.migrate(old_target)
             old = executor.loader.project_state(old_target).apps
@@ -43,4 +44,4 @@ class ManualPrefixMigrationTests(TransactionTestCase):
             self.assertEqual(audit.metadata, {'prefix': raw[:10], 'other': 'preserve'})
             self.assertEqual(audit.title, 'preserve')
         finally:
-            MigrationExecutor(connection).migrate(new_target)
+            MigrationExecutor(connection).migrate(latest_targets)

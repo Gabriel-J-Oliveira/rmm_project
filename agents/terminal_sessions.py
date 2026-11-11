@@ -7,6 +7,7 @@ from datetime import timedelta
 from ipaddress import ip_address
 
 from django.conf import settings
+from django.contrib.auth.models import Permission
 from django.db import connection, transaction, IntegrityError, OperationalError
 from django.db.models import Q
 from django.utils import timezone
@@ -80,6 +81,25 @@ def authorize(operator, endpoint):
         raise PermissionError('endpoint_unavailable')
 
 
+def has_explicit_admin_permission(operator):
+    """Admin terminal permission must be assigned directly or through a group.
+
+    Django's has_perm() grants every permission to superusers implicitly. This
+    capability intentionally requires an auditable assignment even for them.
+    """
+    if not operator.is_active:
+        return False
+    permission = Permission.objects.filter(
+        content_type__app_label='agents',
+        content_type__model='terminalsession',
+        codename='open_admin_terminalsession',
+    ).first()
+    if permission is None:
+        return False
+    return (operator.user_permissions.filter(pk=permission.pk).exists() or
+            operator.groups.filter(permissions__pk=permission.pk).exists())
+
+
 def validate_session(session):
     if not enabled() or session.status not in TerminalSession.ACTIVE:
         raise PermissionError('session_closed')
@@ -111,9 +131,11 @@ def connection_info(session, role, ticket):
 def validate_mode(operator, endpoint, mode):
     if mode not in ('synthetic', 'conpty', 'admin_auth'):
         raise ValueError('terminal_mode_invalid')
-    if mode == 'admin_auth' and (not getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False) or
+    if mode == 'admin_auth' and (
+            not getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False) or
+            not has_explicit_admin_permission(operator) or
             not TerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
-                allow_conpty=True, expires_at__gt=timezone.now()).exists() or
+                allow_admin_auth=True, expires_at__gt=timezone.now()).exists() or
             not internal_capability(endpoint, 'remote_terminal_admin_auth:1')):
         raise PermissionError('terminal_execution_not_authorized')
     if mode == 'conpty' and (not getattr(settings, 'NIGHTOWL_TERMINAL_CONPTY_ENABLED', False) or
