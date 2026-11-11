@@ -80,7 +80,7 @@ class CapacityDashboardTests(TestCase):
         self.login()
         response = self.client.get(reverse('capacity-page'))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Capacidade &amp; Planejamento')
+        self.assertContains(response, 'Inventário de Hardware')
         self.assertContains(response, reverse('alerts-list'))
         self.assertContains(response, 'data-detail-template')
 
