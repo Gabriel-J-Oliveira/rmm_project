@@ -2057,8 +2057,9 @@ def events_list(request):
 
 @login_required
 def jobs_list(request):
+    execution_policies = request.GET.get('tab') == 'automations'
     context = {
-        'active_nav': 'jobs',
+        'active_nav': 'execution_policies' if execution_policies else 'jobs',
         'using_mock_rmm_data': False,
     }
     return render(request, 'dashboard/jobs.html', context)

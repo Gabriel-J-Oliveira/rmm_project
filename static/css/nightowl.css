@@ -11535,6 +11535,9 @@ body.page-noc .noc-card-actionable.has-mock-status::before {
 .automation-weekdays label { flex-direction: row; align-items: center; }
 .automation-targets, .automation-actions { grid-column: 1 / -1; }
 .automation-row-actions { white-space: nowrap; }
+.automation-form > label small,
+[data-automation-definitions] td small { display: block; margin-top: 4px; color: var(--text-muted, #9a9bad); font-size: 11px; line-height: 1.4; white-space: normal; }
+.automation-form > label small { font-weight: 400; }
 .automation-row-actions button { margin: 3px; }
 .automation-icon-button { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, #10121d); color: var(--text-primary); cursor: pointer; }
 .automation-icon-button:hover { border-color: var(--soft-purple); }
