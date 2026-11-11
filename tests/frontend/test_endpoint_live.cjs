@@ -47,6 +47,7 @@ if (process.argv.includes('--visual')) (async () => {
         let active = false, expired = false;
         const css = [
             'static/css/nightowl.css',
+            'static/css/endpoint_actions_jobs.css',
             'static/css/endpoint_detail_refinement.css'
         ].map(file => fs.readFileSync(path.join(__dirname, '../../', file), 'utf8')).join('\n');
         const monitoring = renderMonitoring({compatible:true,last_metrics:{},last_sample_at:'2026-11-11T12:00:00Z'});
