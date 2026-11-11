@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('agents', '0047_persistedtelemetryanalysis_and_more'),
+        ('agents', '0048_separate_admin_terminal_grant'),
     ]
 
     operations = [

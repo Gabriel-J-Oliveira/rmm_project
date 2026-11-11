@@ -2,7 +2,7 @@
 
 ## Estado
 
-Implementação preparada na branch `codex/rc47-03-incremento-b`, iniciada em `6090228aed49c08ded2ecd8d4ca24658df9eb3b0`. Não habilita execução recorrente, não grava análise em produção e não altera o agente. A migration `0048_persisted_telemetry_schedule` complementa os modelos da 0047; ela não foi aplicada a nenhum banco operacional nesta etapa.
+Implementação preparada na branch `codex/rc47-03-incremento-b`, iniciada em `6090228aed49c08ded2ecd8d4ca24658df9eb3b0`. Não habilita execução recorrente, não grava análise em produção e não altera o agente. Após a integração da RC47-07C, a migration `0049_persisted_telemetry_schedule` complementa a 0047 e sucede `0048_separate_admin_terminal_grant`; ela não foi aplicada a nenhum banco operacional nesta etapa.
 
 ## Execução e scheduler
 
@@ -33,11 +33,11 @@ A seleção limita a busca a 100 janelas e continua reportando `limit_reached` q
 
 Com até 200 endpoints, o limite padrão de 20 limita a rodada a no máximo 20 inicializações/análises; o volume-alvo após a fase inicial é aproximadamente 13 análises por dia se toda a frota ficar elegível. Cada análise lê no máximo 101 linhas de origem para selecionar até uma candidata; o probe excedente apenas identifica truncamento. PostgreSQL aplica lock timeout de 5 s e statement timeout de 15–20 s. O teste com dois workers reais é necessário no gate PostgreSQL.
 
-Sequência segura: migration 0048 em laboratório; `manage.py check`/dry-run; validar a marca de identidades ambíguas; escolher formalmente a política de primeira captura; habilitar flag somente em ambiente isolado; avaliar histórico, retries e saúde; manter ambas as flags de produção desligadas até autorização separada. A migration cria uma tabela de estado; rollback de código não deve ser tratado como autorização para apagar essa tabela ou qualquer análise já gravada.
+Sequência segura: migration 0049 em laboratório; `manage.py check`/dry-run; validar a marca de identidades ambíguas; escolher formalmente a política de primeira captura; habilitar flag somente em ambiente isolado; avaliar histórico, retries e saúde; manter ambas as flags de produção desligadas até autorização separada. A migration cria uma tabela de estado; rollback de código não deve ser tratado como autorização para apagar essa tabela ou qualquer análise já gravada.
 
 ## Validação desta branch
 
-Registrada após implementação: 91 testes focados passaram em SQLite (4 testes foram ignorados por exigirem backend/ambiente diferente). O check PostgreSQL do CI também executou o teste transacional de dois workers e passou; o ambiente local não tinha serviço PostgreSQL. `manage.py check`, `makemigrations --check --dry-run` e `git diff --check` passaram localmente.
+Na implementação inicial, 91 testes focados passaram em SQLite (4 testes foram ignorados por exigirem backend/ambiente diferente); o CI também passou no teste PostgreSQL transacional de dois workers. Após a integração da RC47-07C e a renumeração da migration, 90 testes focados integrados passaram em SQLite (4 backend/ambiente-gated ignorados), incluindo automações, análise, autorização administrativa e teste de migration. `manage.py check`, `makemigrations --check --dry-run` e `git diff --check` passaram. O CI do HEAD integrado executa novamente os cinco gates, inclusive PostgreSQL.
 
 ## Revisão final de integração — 11/11/2026
 
@@ -61,10 +61,10 @@ O comando termina com erro se a rodada reportar falha, podendo ser usado como si
 
 A agenda permanece por UUID de `AgentMachine` e guarda snapshot de `machine_id`. A implementação não consulta hostname para escolher entre registros, fundir, excluir ou desbloquear registros. Identidade duplicada/missing ou alterada põe a agenda em `review_required`; uma agenda já marcada não é reativada por um ciclo normal. Para uma liberação futura, o operador deve primeiro reconciliar a identidade por evidências independentes (machine_id, histórico de enrollment/heartbeat e autorização), registrar a decisão e o endpoint UUID escolhido; só depois uma ferramenta administrativa auditada poderá limpar a marca e atualizar o snapshot sob lock. Esse fluxo não existe nesta PR e nenhum bypass manual foi adicionado.
 
-### Migration 0048 e sincronização com RC47-07C
+### Migration 0047 → 0048 → 0049
 
-A 0048 desta branch depende da 0047 e cria `PersistedTelemetryAnalysisSchedule`. Na consulta de 11/11/2026, não havia branch remota ou PR visível para RC47-07C, portanto sua migration e sua numeração ainda não puderam ser comparadas. Não renumerar a 0048 antes de conhecer a migration concreta.
+A nova `main` `48f263403507f858c2a730d3ceb9b093ed526d52` integrou a RC47-07C e sua migration `0048_separate_admin_terminal_grant`, que adiciona `allow_admin_auth=False` e a permissão `open_admin_terminalsession`. O merge foi limpo, sem conflitos textuais; as alterações de modelo, autorização administrativa e testes da 07C foram preservadas.
 
-Sequência recomendada se a RC47-07C integrar primeiro: atualizar refs; mesclar a nova `main` em `codex/rc47-03-incremento-b`; inspecionar o grafo e os nomes de arquivos de migrations; se a 07C tiver ocupado `0048`, renomear **somente a migration desta PR, ainda não aplicada operacionalmente**, para o próximo número livre (provavelmente 0049), ajustar sua dependência para a migration 07C e revisar `showmigrations`/`makemigrations --check`. Em seguida, executar testes de migração desde 0047 e desde a nova migration anterior, incluindo rollback apenas em banco descartável. Nunca reescrever migrations já aplicadas em produção. A sincronização final e o CI serão executados após a 07C chegar à `main`; esta PR permanece sem merge/deploy.
+A migration da telemetria foi renomeada de `0048_persisted_telemetry_schedule.py` para `0049_persisted_telemetry_schedule.py`, com dependência direta em `0048_separate_admin_terminal_grant`. O grafo é linear desde `0047_persistedtelemetryanalysis_and_more`. `makemigrations --check` não detecta divergência de modelos, e a execução do test runner cria banco isolado e aplica o grafo completo. A tentativa de executar `migrate agents 0047` e `migrate agents 0049` em um arquivo SQLite temporário foi bloqueada pela política do ambiente; não houve nova tentativa nem alteração de banco operacional. O plano de migrations foi inspecionado e mostra 0047, 0048 e 0049 nessa ordem. Nenhuma migration já integrada foi editada.
 
 Pendências: primeira captura aguarda decisão formal; frequência e invocador recorrente precisam ser confirmados no servidor; falta um mecanismo aprovado para circuit breaker/alarme de falhas sistêmicas; permanece pendente a inspeção dos metadados da análise de produção para explicar disco/rede ausentes. Nenhuma flag foi ativada em produção.
