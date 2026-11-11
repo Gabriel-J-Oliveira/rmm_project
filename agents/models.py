@@ -1130,6 +1130,70 @@ class EndpointPerformanceSample(models.Model):
         indexes = [models.Index(fields=['endpoint', '-collected_at'], name='endpoint_perf_time_idx')]
 
 
+class PersistedTelemetryAnalysis(models.Model):
+    """Latest accepted continuous-v2 analysis and mergeable history per endpoint."""
+    STATUS_NEVER = 'never'
+    STATUS_SUCCEEDED = 'succeeded'
+    STATUS_NO_ELIGIBLE_DATA = 'no_eligible_data'
+    STATUS_ENDPOINT_OFFLINE = 'endpoint_offline'
+    STATUS_REJECTED = 'rejected'
+    STATUS_ALREADY_INCORPORATED = 'already_incorporated'
+    STATUS_STALE_WINDOW = 'stale_window'
+    STATUS_CHOICES = [
+        (STATUS_NEVER, 'Never attempted'),
+        (STATUS_SUCCEEDED, 'Succeeded'),
+        (STATUS_NO_ELIGIBLE_DATA, 'No eligible data'),
+        (STATUS_ENDPOINT_OFFLINE, 'Endpoint offline'),
+        (STATUS_REJECTED, 'Rejected'),
+        (STATUS_ALREADY_INCORPORATED, 'Already incorporated'),
+        (STATUS_STALE_WINDOW, 'Stale window'),
+    ]
+
+    endpoint = models.OneToOneField(AgentMachine, on_delete=models.CASCADE,
+                                    related_name='persisted_telemetry_analysis')
+    machine_id_snapshot = models.CharField(max_length=255, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_attempt_state = models.CharField(max_length=32, choices=STATUS_CHOICES, default=STATUS_NEVER)
+    last_attempt_reason = models.CharField(max_length=80, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    latest_analysis_id = models.UUIDField(null=True, blank=True, unique=True)
+    latest_idempotency_key = models.CharField(max_length=64, blank=True)
+    source = models.CharField(max_length=32, blank=True)
+    schema_version = models.PositiveSmallIntegerField(null=True, blank=True)
+    resolution_seconds = models.PositiveIntegerField(null=True, blank=True)
+    agent_version = models.CharField(max_length=50, blank=True)
+    window_start_at = models.DateTimeField(null=True, blank=True)
+    window_end_at = models.DateTimeField(null=True, blank=True)
+    latest_analysis = models.JSONField(default=dict)
+    historical_statistics = models.JSONField(default=dict)
+    analysis_count = models.PositiveIntegerField(default=0)
+    first_analysis_at = models.DateTimeField(null=True, blank=True)
+    last_analysis_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['last_attempt_state', 'last_attempt_at'],
+                                name='telemetry_analysis_status_idx')]
+
+
+class TelemetryAnalysisIncorporation(models.Model):
+    """Small durable idempotency receipt; detailed data stays in the latest row/rollup."""
+    endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE,
+                                 related_name='telemetry_analysis_incorporations')
+    analysis_id = models.UUIDField(unique=True)
+    idempotency_key = models.CharField(max_length=64)
+    sample_id = models.UUIDField()
+    window_start_at = models.DateTimeField()
+    window_end_at = models.DateTimeField()
+    incorporated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['endpoint', 'idempotency_key'],
+                                                name='uniq_telemetry_analysis_key')]
+        indexes = [models.Index(fields=['endpoint', '-incorporated_at'],
+                                name='telemetry_analysis_receipt_idx')]
+
+
 class TelemetryLiveSession(models.Model):
     endpoint = models.OneToOneField(AgentMachine, on_delete=models.CASCADE, related_name='live_telemetry_session')
     session_id = models.UUIDField(default=uuid.uuid4)
