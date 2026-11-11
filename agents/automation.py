@@ -20,6 +20,9 @@ ALLOWED = ('force_inventory', 'collect_disks', 'collect_security', 'collect_soft
 ACTIVE = ('queued', 'sent', 'running')
 QUARANTINE = frozenset({'CS-CVEL-0029', 'CS-CVEL-0059', 'CS-CVEL-0133', 'CS-CVEL-0262'})
 UTC = dt_timezone.utc
+# Telemetry analyses are heavier than enqueueing job occurrences. Keep a separate
+# hard cap so enabling both scheduler modes never doubles analysis work to `limit`.
+TELEMETRY_ANALYSIS_MAX_PER_ROUND = 5
 
 
 def authorize(user, permission='view_automationdefinition'):
@@ -385,12 +388,24 @@ def cancel_occurrence(user, occurrence_id):
     return True
 
 
-def scheduler_round(now=None, limit=20):
-    if not getattr(settings,'NIGHTOWL_JOB_AUTOMATIONS_ENABLED',False):
+def scheduler_round(now=None, limit=20, analysis_dry_run=False):
+    jobs_enabled = getattr(settings,'NIGHTOWL_JOB_AUTOMATIONS_ENABLED',False)
+    analysis_enabled = getattr(settings,'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED',False)
+    if not jobs_enabled and not analysis_enabled and not analysis_dry_run:
         raise ValueError('scheduler_disabled')
     now=now or timezone.now()
     if type(limit) is not int or not 1<=limit<=100:
         raise ValueError('invalid_batch_limit')
+    if analysis_dry_run:
+        from .telemetry_persisted_analysis import scheduled_analysis_round
+        analysis = scheduled_analysis_round(now=now, limit=limit, dry_run=True)
+        return {'processed': 0, 'failed': 0, 'telemetry_analysis': analysis}
+    if not jobs_enabled:
+        from .telemetry_persisted_analysis import scheduled_analysis_round
+        analysis = scheduled_analysis_round(
+            now=now, limit=min(limit, TELEMETRY_ANALYSIS_MAX_PER_ROUND))
+        return {'processed': analysis['processed'], 'failed': analysis['failed'],
+                'telemetry_analysis': analysis}
     health,_=AutomationSchedulerHealth.objects.get_or_create(key='jobs')
     health.last_started_at=now
     health.save(update_fields=['last_started_at'])
@@ -455,7 +470,17 @@ def scheduler_round(now=None, limit=20):
     if not failed:
         changes['last_success_at']=now
     AutomationSchedulerHealth.objects.filter(key='jobs').update(**changes)
-    return {'processed':processed,'failed':failed}
+    result={'processed':processed,'failed':failed}
+    if analysis_enabled or analysis_dry_run:
+        from .telemetry_persisted_analysis import scheduled_analysis_round
+        analysis = scheduled_analysis_round(
+            now=now, limit=min(limit, TELEMETRY_ANALYSIS_MAX_PER_ROUND),
+            dry_run=True if analysis_dry_run else None)
+        result['telemetry_analysis'] = analysis
+        if not analysis_dry_run:
+            result['processed'] += analysis['processed']
+            result['failed'] += analysis['failed']
+    return result
 
 
 def validate_scheduled_dispatch(job):

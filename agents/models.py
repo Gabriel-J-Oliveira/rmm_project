@@ -1198,6 +1198,29 @@ class TelemetryAnalysisIncorporation(models.Model):
                                 name='telemetry_analysis_receipt_idx')]
 
 
+class PersistedTelemetryAnalysisSchedule(models.Model):
+    """Per-endpoint internal schedule state; it never creates an AgentJob."""
+    endpoint = models.OneToOneField(AgentMachine, on_delete=models.CASCADE,
+                                    related_name='persisted_telemetry_analysis_schedule')
+    machine_id_snapshot = models.CharField(max_length=255)
+    first_scheduled_at = models.DateTimeField(null=True, blank=True)
+    scheduled_for = models.DateTimeField(null=True, blank=True)
+    next_run_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    last_attempt_state = models.CharField(max_length=32, blank=True)
+    last_attempt_reason = models.CharField(max_length=80, blank=True)
+    attempt_history = models.JSONField(default=list)
+    review_required = models.BooleanField(default=False, db_index=True)
+    review_reason = models.CharField(max_length=80, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['review_required', 'next_run_at'],
+                                name='telemetry_sched_due_idx')]
+
+
 class TelemetryLiveSession(models.Model):
     endpoint = models.OneToOneField(AgentMachine, on_delete=models.CASCADE, related_name='live_telemetry_session')
     session_id = models.UUIDField(default=uuid.uuid4)

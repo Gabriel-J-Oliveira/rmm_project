@@ -9,12 +9,15 @@ import uuid
 from datetime import timedelta, timezone as datetime_timezone
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import connection, transaction, OperationalError
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from .models import (AgentMachine, EndpointPerformanceSample,
-                     PersistedTelemetryAnalysis, TelemetryAnalysisIncorporation)
+                     PersistedTelemetryAnalysis, PersistedTelemetryAnalysisSchedule,
+                     TelemetryAnalysisIncorporation)
+from .identity import lock_identity_registry, machine_id_matches, machine_name_matches
 from .telemetry_continuous import _metric_statistics, project_continuous_metrics, validate_metric
 
 SOURCE_NAME = 'continuous_v2'
@@ -23,6 +26,11 @@ QUALITY_POLICY_VERSION = 'rc47-03a-v1'
 MIN_RECEIVED_SAMPLES = 5
 ONLINE_FRESHNESS = timedelta(minutes=15)
 MAX_CANDIDATE_SCAN = 100
+SCHEDULE_INTERVAL = timedelta(days=15)
+SOURCE_RETENTION = timedelta(days=7)
+RETRY_DELAYS = (timedelta(minutes=15), timedelta(hours=1), timedelta(hours=4),
+                timedelta(hours=12), timedelta(days=1))
+ATTEMPT_HISTORY_LIMIT = 16
 
 
 def _utc(value):
@@ -348,6 +356,8 @@ def _candidate(endpoint, now, state, *, lock=False):
             scan['rejected_candidates'] += 1
             scan['rejection_reasons'][reason] = scan['rejection_reasons'].get(reason, 0) + 1
             continue
+        # Rows beyond this valid candidate cannot make the selected row invalid.
+        scan['limit_reached'] = False
         return row, scan
     return None, scan
 
@@ -503,3 +513,257 @@ def _result(endpoint, state, status, reason, row=None):
     if row is not None:
         result['sample_id'] = str(row.sample_id)
     return result
+
+
+def _review_reason(endpoint):
+    if not endpoint.machine_id:
+        return 'identity_missing'
+    if len(list(machine_id_matches(endpoint.machine_id).values_list('pk', flat=True)[:2])) != 1:
+        return 'machine_identity_ambiguous'
+    if len(list(machine_name_matches(endpoint.hostname, endpoint.domain).values_list('pk', flat=True)[:2])) != 1:
+        return 'endpoint_name_ambiguous'
+    return ''
+
+
+def _initial_due(endpoint, now, policy):
+    if policy == 'immediate':
+        return now
+    if policy == 'staggered_24h':
+        seconds = int.from_bytes(hashlib.sha256(endpoint.pk.bytes).digest()[:4], 'big') % 86400
+        return now + timedelta(seconds=seconds)
+    raise ValueError('first_capture_policy_unconfigured')
+
+
+def _append_attempt(schedule, now, state, reason, analysis_id=None):
+    item = {'at': now.isoformat(), 'state': state, 'reason': reason[:80]}
+    if analysis_id:
+        item['analysis_id'] = str(analysis_id)
+    history = schedule.attempt_history if isinstance(schedule.attempt_history, list) else []
+    schedule.attempt_history = (history + [item])[-ATTEMPT_HISTORY_LIMIT:]
+    schedule.last_attempt_at = now
+    schedule.last_attempt_state = state[:32]
+    schedule.last_attempt_reason = reason[:80]
+
+
+def _next_period(scheduled_for, now):
+    next_run = scheduled_for + SCHEDULE_INTERVAL
+    while next_run <= now:
+        next_run += SCHEDULE_INTERVAL
+    return next_run
+
+
+def _retry_or_advance(schedule, now, state, reason, analysis_id=None):
+    _append_attempt(schedule, now, state, reason, analysis_id)
+    schedule.retry_count += 1
+    if schedule.retry_count > len(RETRY_DELAYS) or (
+            schedule.scheduled_for and now >= schedule.scheduled_for + SOURCE_RETENTION):
+        if schedule.scheduled_for:
+            schedule.next_run_at = _next_period(schedule.scheduled_for, now)
+        schedule.scheduled_for = None
+        schedule.retry_at = None
+        schedule.retry_count = 0
+        schedule.last_attempt_state = 'retry_exhausted'
+        if schedule.attempt_history:
+            schedule.attempt_history[-1]['state'] = 'retry_exhausted'
+    else:
+        schedule.retry_at = now + RETRY_DELAYS[schedule.retry_count - 1]
+    schedule.save()
+
+
+def _complete_schedule(schedule, now, state, reason, analysis_id=None):
+    scheduled_for = schedule.scheduled_for or now
+    _append_attempt(schedule, now, state, reason, analysis_id)
+    schedule.next_run_at = _next_period(scheduled_for, now)
+    schedule.scheduled_for = None
+    schedule.retry_at = None
+    schedule.retry_count = 0
+    schedule.save()
+
+
+def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
+    """Run bounded backend-only analysis work from the existing job scheduler invocation."""
+    now = now or timezone.now()
+    if not timezone.is_aware(now):
+        raise ValueError('now_must_be_aware')
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError('invalid_batch_limit')
+    enabled = getattr(settings, 'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED', False)
+    if dry_run is None:
+        dry_run = getattr(settings, 'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN', True)
+    if not enabled and not dry_run:
+        raise ValueError('telemetry_analysis_scheduler_disabled')
+    policy = getattr(settings, 'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_FIRST_CAPTURE_POLICY', 'unconfigured')
+    if policy not in {'unconfigured', 'immediate', 'staggered_24h'}:
+        raise ValueError('invalid_first_capture_policy')
+    if not dry_run and policy == 'unconfigured':
+        return {'mode': 'blocked', 'reason': 'first_capture_policy_unconfigured',
+                'processed': 0, 'failed': 0, 'review_required': 0}
+
+    if not dry_run:
+        from .models import AutomationSchedulerHealth
+        health, _ = AutomationSchedulerHealth.objects.get_or_create(key='telemetry_analysis')
+        health.last_started_at = now
+        health.save(update_fields=['last_started_at'])
+
+    retention_days = getattr(settings, 'NIGHTOWL_TELEMETRY_RETENTION_DAYS', {}).get(60)
+    if type(retention_days) is not int or retention_days != 7:
+        raise ValueError('analysis_scheduler_requires_seven_day_detail_retention')
+
+    initialization_limit = limit if dry_run else max(1, limit // 2)
+    source_endpoint_ids = list(EndpointPerformanceSample.objects.filter(
+        schema_version=2, resolution_seconds=60,
+        collected_at__gte=now - SOURCE_RETENTION,
+        window_end_at__lte=now,
+        endpoint__is_active=True,
+    ).exclude(endpoint__agent_lifecycle_status__in=('uninstalled', 'purged'))
+        .exclude(endpoint_id__in=PersistedTelemetryAnalysisSchedule.objects.values('endpoint_id'))
+        .order_by('endpoint_id').values_list('endpoint_id', flat=True).distinct()[:initialization_limit])
+    counts = {'mode': 'dry_run' if dry_run else 'apply', 'processed': 0, 'failed': 0,
+              'review_required': 0, 'initialized': 0, 'due': 0, 'results': []}
+
+    # Persisted 60-second source windows are the only enrollment trigger. Dry-run
+    # previews are read-only and do not create schedule rows.
+    for endpoint_id in source_endpoint_ids:
+        endpoint = AgentMachine.objects.filter(pk=endpoint_id).first()
+        if endpoint is None:
+            continue
+        schedule = PersistedTelemetryAnalysisSchedule.objects.filter(endpoint_id=endpoint_id).first()
+        if schedule:
+            continue
+        review = _review_reason(endpoint)
+        if dry_run:
+            due = _initial_due(endpoint, now, policy) if policy != 'unconfigured' else None
+            counts['results'].append({'endpoint_id': str(endpoint.pk),
+                                      'state': 'review_required' if review else 'schedule_preview',
+                                      'reason': review or ('first_capture_policy_unconfigured' if due is None else ''),
+                                      'next_run_at': due.isoformat() if due else None})
+            counts['review_required'] += bool(review)
+            if not review and due is not None and due <= now:
+                preview = analyze_endpoint(endpoint.pk, apply=False, now=now)
+                counts['due'] += 1
+                counts['results'].append({'endpoint_id': str(endpoint.pk),
+                                          'state': preview.get('state'),
+                                          'reason': preview.get('reason', '')})
+            continue
+        with transaction.atomic():
+            if connection.vendor == 'postgresql':
+                with connection.cursor() as cursor:
+                    cursor.execute("SET LOCAL lock_timeout = '5s'")
+                    cursor.execute("SET LOCAL statement_timeout = '15s'")
+            # Use the same advisory lock as enrollment and identity changes so
+            # a concurrent identity insertion cannot pass between uniqueness
+            # validation and schedule initialization.
+            lock_identity_registry()
+            locked = AgentMachine.objects.select_for_update().filter(pk=endpoint_id).first()
+            if locked is None or PersistedTelemetryAnalysisSchedule.objects.filter(endpoint_id=endpoint_id).exists():
+                continue
+            review = _review_reason(locked)
+            schedule = PersistedTelemetryAnalysisSchedule.objects.create(
+                endpoint=locked, machine_id_snapshot=locked.machine_id,
+                first_scheduled_at=now, next_run_at=None if review else _initial_due(locked, now, policy),
+                review_required=bool(review), review_reason=review)
+            counts['initialized'] += 1
+            counts['review_required'] += bool(review)
+            counts['results'].append({'endpoint_id': str(locked.pk),
+                                      'state': 'review_required' if review else 'scheduled',
+                                      'reason': review,
+                                      'next_run_at': schedule.next_run_at.isoformat() if schedule.next_run_at else None})
+
+    if dry_run:
+        due = PersistedTelemetryAnalysisSchedule.objects.filter(
+            review_required=False, next_run_at__lte=now,
+        ).filter(Q(retry_at__isnull=True) | Q(retry_at__lte=now)).order_by('next_run_at', 'endpoint_id')[:limit]
+        for schedule in due:
+            result = analyze_endpoint(schedule.endpoint_id, apply=False, now=now)
+            counts['due'] += 1
+            counts['results'].append({'endpoint_id': str(schedule.endpoint_id),
+                                      'state': result.get('state'), 'reason': result.get('reason', '')})
+        counts['results'] = counts['results'][:limit * 2]
+        return counts
+
+    remaining = max(0, limit - counts['initialized'])
+    due_ids = list(PersistedTelemetryAnalysisSchedule.objects.filter(
+        review_required=False, next_run_at__lte=now,
+    ).filter(Q(retry_at__isnull=True) | Q(retry_at__lte=now)).order_by('next_run_at', 'endpoint_id')
+        .values_list('endpoint_id', flat=True)[:remaining])
+    counts['due'] = len(due_ids)
+    for endpoint_id in due_ids:
+        try:
+            with transaction.atomic():
+                if connection.vendor == 'postgresql':
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL lock_timeout = '5s'")
+                        cursor.execute("SET LOCAL statement_timeout = '20s'")
+                # Lock ordering matches identity writers: registry, then rows.
+                lock_identity_registry()
+                query = PersistedTelemetryAnalysisSchedule.objects.filter(
+                    endpoint_id=endpoint_id, review_required=False, next_run_at__lte=now)
+                query = query.filter(Q(retry_at__isnull=True) | Q(retry_at__lte=now))
+                if connection.features.has_select_for_update_skip_locked:
+                    schedule = query.select_for_update(skip_locked=True).first()
+                else:
+                    schedule = query.select_for_update().first()
+                if schedule is None:
+                    continue
+                endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint_id)
+                if not endpoint.is_active or endpoint.has_terminal_lifecycle:
+                    schedule.review_required = True
+                    schedule.review_reason = 'endpoint_inactive'
+                    _append_attempt(schedule, now, 'review_required', schedule.review_reason)
+                    schedule.save()
+                    counts['review_required'] += 1
+                    continue
+                if (not schedule.machine_id_snapshot or
+                        schedule.machine_id_snapshot != endpoint.machine_id):
+                    schedule.review_required = True
+                    schedule.review_reason = 'machine_identity_changed'
+                    _append_attempt(schedule, now, 'review_required', schedule.review_reason)
+                    schedule.save()
+                    counts['review_required'] += 1
+                    continue
+                review = _review_reason(endpoint)
+                if review:
+                    schedule.review_required = True
+                    schedule.review_reason = review
+                    _append_attempt(schedule, now, 'review_required', review)
+                    schedule.save()
+                    counts['review_required'] += 1
+                    continue
+                if schedule.scheduled_for is None:
+                    schedule.scheduled_for = schedule.next_run_at
+                    schedule.retry_count = 0
+                if now >= schedule.scheduled_for + SOURCE_RETENTION:
+                    _retry_or_advance(schedule, now, 'source_window_expired',
+                                      'seven_day_source_retention_elapsed')
+                    counts['failed'] += 1
+                    continue
+                result = analyze_endpoint(endpoint_id, apply=True, now=now)
+                status = result.get('state', 'unknown')
+                if status in {'succeeded', 'already_incorporated'}:
+                    _complete_schedule(schedule, now, status, result.get('reason', ''),
+                                       result.get('analysis_id'))
+                    counts['processed'] += 1
+                else:
+                    _retry_or_advance(schedule, now, status, result.get('reason', ''))
+                    counts['failed'] += 1
+                counts['results'].append({'endpoint_id': str(endpoint_id), 'state': status,
+                                          'reason': result.get('reason', '')})
+        except OperationalError:
+            # A separately committed bounded retry records only a category, never DB text.
+            with transaction.atomic():
+                schedule = PersistedTelemetryAnalysisSchedule.objects.select_for_update().filter(
+                    endpoint_id=endpoint_id, review_required=False).first()
+                if schedule:
+                    if schedule.scheduled_for is None:
+                        schedule.scheduled_for = schedule.next_run_at
+                    _retry_or_advance(schedule, now, 'retry', 'database_transient_failure')
+            counts['failed'] += 1
+            counts['results'].append({'endpoint_id': str(endpoint_id), 'state': 'retry',
+                                      'reason': 'database_transient_failure'})
+    if not dry_run:
+        from .models import AutomationSchedulerHealth
+        health_update = {'processed': counts['processed'], 'failed': counts['failed']}
+        if not counts['failed']:
+            health_update['last_success_at'] = now
+        AutomationSchedulerHealth.objects.filter(key='telemetry_analysis').update(**health_update)
+    return counts

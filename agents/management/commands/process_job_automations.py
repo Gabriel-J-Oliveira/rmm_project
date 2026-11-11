@@ -8,10 +8,12 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--limit',type=int,default=20)
+        parser.add_argument('--analysis-dry-run', action='store_true',
+                            help='Preview due persisted telemetry analysis work without writes.')
 
     def handle(self,*args,**options):
         try:
-            result=scheduler_round(limit=options['limit'])
+            result=scheduler_round(limit=options['limit'], analysis_dry_run=options['analysis_dry_run'])
         except ValueError as error:
             raise CommandError(str(error)) from None
         self.stdout.write(json.dumps(result,sort_keys=True))
