@@ -64,14 +64,23 @@ let phase = 'initialization';
         phase = 'mobile_layout';
         await page.setViewportSize({width: 390, height: 844});
         await page.waitForTimeout(150);
-        assert(await page.evaluate(() => {
+        const mobileLayout = await page.evaluate(() => {
             const section = document.querySelector('.endpoint-assigned-policies');
             const list = section && section.querySelector('.endpoint-policy-list');
-            if (!section || !list) return false;
-            const bounds = section.getBoundingClientRect();
-            return bounds.left >= -1 && bounds.right <= innerWidth + 1 &&
-                section.scrollWidth <= section.clientWidth + 1 && list.scrollWidth <= list.clientWidth + 1;
-        }), 'Assigned policy section or its cards overflow the mobile viewport');
+            if (!section || !list) return {present: false, viewportWidth: innerWidth};
+            const rect = element => {
+                const bounds = element.getBoundingClientRect();
+                return {left: bounds.left, right: bounds.right, width: bounds.width,
+                    clientWidth: element.clientWidth, scrollWidth: element.scrollWidth};
+            };
+            return {present: true, viewportWidth: innerWidth, documentWidth: document.documentElement.scrollWidth,
+                section: rect(section), list: rect(list), cards: Array.from(list.children).map(rect)};
+        });
+        assert(mobileLayout.present && mobileLayout.section.left >= -1 &&
+            mobileLayout.section.right <= mobileLayout.viewportWidth + 1 &&
+            mobileLayout.section.scrollWidth <= mobileLayout.section.clientWidth + 1 &&
+            mobileLayout.list.scrollWidth <= mobileLayout.list.clientWidth + 1,
+        'Assigned policy section or its cards overflow the mobile viewport: ' + JSON.stringify(mobileLayout));
         console.log('PASS endpoint policy UI: UUID assignment, persisted empty/history states, endpoint-specific confirmation and run, XSS text rendering, desktop/mobile layout.');
         await context.close();
     } finally {
