@@ -5,11 +5,12 @@ persisted, authenticated EndpointPerformanceSample row.
 """
 import hashlib
 import json
+import time
 import uuid
 from datetime import timedelta, timezone as datetime_timezone
 
 from django.conf import settings
-from django.db import connection, transaction, OperationalError
+from django.db import connection, transaction, DatabaseError, OperationalError
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -580,7 +581,7 @@ def _complete_schedule(schedule, now, state, reason, analysis_id=None):
     schedule.save()
 
 
-def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
+def _scheduled_analysis_round_impl(*, now=None, limit=20, dry_run=None):
     """Run bounded backend-only analysis work from the existing job scheduler invocation."""
     now = now or timezone.now()
     if not timezone.is_aware(now):
@@ -599,12 +600,6 @@ def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
         return {'mode': 'blocked', 'reason': 'first_capture_policy_unconfigured',
                 'processed': 0, 'failed': 0, 'review_required': 0}
 
-    if not dry_run:
-        from .models import AutomationSchedulerHealth
-        health, _ = AutomationSchedulerHealth.objects.get_or_create(key='telemetry_analysis')
-        health.last_started_at = now
-        health.save(update_fields=['last_started_at'])
-
     retention_days = getattr(settings, 'NIGHTOWL_TELEMETRY_RETENTION_DAYS', {}).get(60)
     if type(retention_days) is not int or retention_days != 7:
         raise ValueError('analysis_scheduler_requires_seven_day_detail_retention')
@@ -619,7 +614,8 @@ def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
         .exclude(endpoint_id__in=PersistedTelemetryAnalysisSchedule.objects.values('endpoint_id'))
         .order_by('endpoint_id').values_list('endpoint_id', flat=True).distinct()[:initialization_limit])
     counts = {'mode': 'dry_run' if dry_run else 'apply', 'processed': 0, 'failed': 0,
-              'review_required': 0, 'initialized': 0, 'due': 0, 'results': []}
+              'blocked': 0, 'review_required': 0, 'initialized': 0, 'due': 0,
+              'systemic_failure_count': 0, 'results': []}
 
     # Persisted 60-second source windows are the only enrollment trigger. Dry-run
     # previews are read-only and do not create schedule rows.
@@ -736,6 +732,7 @@ def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
                     _retry_or_advance(schedule, now, 'source_window_expired',
                                       'seven_day_source_retention_elapsed')
                     counts['failed'] += 1
+                    counts['blocked'] += 1
                     continue
                 result = analyze_endpoint(endpoint_id, apply=True, now=now)
                 status = result.get('state', 'unknown')
@@ -746,6 +743,7 @@ def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
                 else:
                     _retry_or_advance(schedule, now, status, result.get('reason', ''))
                     counts['failed'] += 1
+                    counts['blocked'] += 1
                 counts['results'].append({'endpoint_id': str(endpoint_id), 'state': status,
                                           'reason': result.get('reason', '')})
         except OperationalError:
@@ -758,12 +756,242 @@ def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
                         schedule.scheduled_for = schedule.next_run_at
                     _retry_or_advance(schedule, now, 'retry', 'database_transient_failure')
             counts['failed'] += 1
+            counts['systemic_failure_count'] += 1
             counts['results'].append({'endpoint_id': str(endpoint_id), 'state': 'retry',
                                       'reason': 'database_transient_failure'})
-    if not dry_run:
-        from .models import AutomationSchedulerHealth
-        health_update = {'processed': counts['processed'], 'failed': counts['failed']}
-        if not counts['failed']:
-            health_update['last_success_at'] = now
-        AutomationSchedulerHealth.objects.filter(key='telemetry_analysis').update(**health_update)
+    counts['review_required'] = PersistedTelemetryAnalysisSchedule.objects.filter(
+        review_required=True).count()
     return counts
+
+
+TELEMETRY_SCHEDULER_LOCK_ID = 1_948_735_021
+TELEMETRY_SCHEDULER_FAILURE_LIMIT = 3
+
+
+def _try_telemetry_scheduler_lock():
+    if connection.vendor != 'postgresql':
+        return True
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_try_advisory_lock(%s)', [TELEMETRY_SCHEDULER_LOCK_ID])
+        return bool(cursor.fetchone()[0])
+
+
+def _release_telemetry_scheduler_lock():
+    if connection.vendor != 'postgresql':
+        return
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_advisory_unlock(%s)', [TELEMETRY_SCHEDULER_LOCK_ID])
+    except Exception:
+        # Closing the owning DB session releases a session-level advisory lock.
+        connection.close()
+        raise
+
+
+def _suspend_health(health, now, code):
+    from .models import AuditEvent
+    health.suspended_at = now
+    health.suspension_reason = code[:80]
+    health.last_attempt_status = 'suspended'
+    health.save()
+    AuditEvent.objects.create(
+        event_type='telemetry_analysis_scheduler.suspended',
+        severity=AuditEvent.SEVERITY_CRITICAL,
+        actor_type=AuditEvent.ACTOR_SCHEDULER,
+        actor_name='process_job_automations',
+        title='Agendamento de análise de telemetria suspenso',
+        description='Suspensão automática após falhas sistêmicas consecutivas.',
+        metadata={'failure_class': health.last_failure_class, 'failure_code': code[:80],
+                  'consecutive_failures': health.consecutive_systemic_failures})
+
+
+def _health_snapshot(health):
+    return {
+        'last_attempt_at': health.last_started_at.isoformat() if health.last_started_at else None,
+        'last_success_at': health.last_success_at.isoformat() if health.last_success_at else None,
+        'last_duration_ms': health.last_duration_ms,
+        'last_attempt_status': health.last_attempt_status or 'unknown',
+        'consecutive_systemic_failures': health.consecutive_systemic_failures,
+        'processed_endpoints': health.processed_endpoints,
+        'blocked_endpoints': health.blocked_endpoints,
+        'review_required_endpoints': health.review_required_endpoints,
+        'last_failure_class': health.last_failure_class,
+        'last_failure_code': health.last_failure_code,
+        'suspended': bool(health.suspended_at),
+        'suspended_at': health.suspended_at.isoformat() if health.suspended_at else None,
+        'suspension_reason': health.suspension_reason,
+        'recovered_at': health.recovered_at.isoformat() if health.recovered_at else None,
+        'recovered_by': health.recovered_by,
+        'recovery_reason': health.recovery_reason,
+    }
+
+
+def _record_scheduler_failure(now, started_ns, failure_class, code, *, failed_count=1):
+    from .models import AutomationSchedulerHealth
+    duration_ms = max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
+    with transaction.atomic():
+        health, _ = AutomationSchedulerHealth.objects.select_for_update().get_or_create(
+            key='telemetry_analysis')
+        if health.suspended_at:
+            return health
+        health.failed = max(1, failed_count)
+        health.last_duration_ms = duration_ms
+        health.last_attempt_status = 'failed'
+        health.last_failure_class = failure_class
+        health.last_failure_code = code[:80]
+        health.consecutive_systemic_failures += 1
+        if health.consecutive_systemic_failures >= TELEMETRY_SCHEDULER_FAILURE_LIMIT:
+            _suspend_health(health, now, code)
+        else:
+            health.save()
+    return health
+
+
+def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
+    """Run bounded analysis with isolated health tracking and fail-closed suspension."""
+    now = now or timezone.now()
+    if not timezone.is_aware(now):
+        raise ValueError('now_must_be_aware')
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError('invalid_batch_limit')
+    if dry_run is None:
+        dry_run = getattr(settings, 'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN', True)
+    if dry_run:
+        return _scheduled_analysis_round_impl(now=now, limit=limit, dry_run=True)
+    if not getattr(settings, 'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED', False):
+        raise ValueError('telemetry_analysis_scheduler_disabled')
+
+    acquired = False
+    started_ns = time.monotonic_ns()
+    from .models import AutomationSchedulerHealth
+    try:
+        acquired = _try_telemetry_scheduler_lock()
+        if not acquired:
+            return {'mode': 'already_running', 'processed': 0, 'failed': 0, 'blocked': 0,
+                    'review_required': 0}
+        with transaction.atomic():
+            health, _ = AutomationSchedulerHealth.objects.select_for_update().get_or_create(
+                key='telemetry_analysis')
+            if health.suspended_at:
+                return {'mode': 'suspended', 'reason': health.suspension_reason, 'processed': 0,
+                        'failed': 0, 'blocked': 0, 'review_required': 0,
+                        'health': _health_snapshot(health)}
+            if health.last_attempt_status == 'running':
+                health.consecutive_systemic_failures += 1
+                health.last_failure_class = 'scheduler'
+                health.last_failure_code = 'previous_round_interrupted'
+                health.failed += 1
+                if health.consecutive_systemic_failures >= TELEMETRY_SCHEDULER_FAILURE_LIMIT:
+                    _suspend_health(health, now, 'previous_round_interrupted')
+                    return {'mode': 'suspended', 'reason': 'previous_round_interrupted',
+                            'processed': 0, 'failed': 0, 'blocked': 0, 'review_required': 0,
+                            'health': _health_snapshot(health)}
+            health.last_started_at = now
+            health.last_attempt_status = 'running'
+            health.save(update_fields=['last_started_at', 'last_attempt_status',
+                                       'consecutive_systemic_failures', 'last_failure_class',
+                                       'last_failure_code', 'failed'])
+
+        try:
+            result = _scheduled_analysis_round_impl(now=now, limit=limit, dry_run=False)
+        except ValueError as error:
+            code = str(error)
+            if code == 'telemetry_analysis_scheduler_disabled':
+                raise
+            failure_class = 'configuration' if code in {
+                'invalid_first_capture_policy', 'first_capture_policy_unconfigured',
+                'analysis_scheduler_requires_seven_day_detail_retention'} else 'scheduler'
+            health = _record_scheduler_failure(now, started_ns, failure_class, code or 'scheduler_value_error')
+            return {'mode': 'failed', 'reason': code or 'scheduler_value_error', 'processed': 0,
+                    'failed': 1, 'blocked': 0, 'review_required': 0,
+                    'suspended': bool(health.suspended_at), 'health': _health_snapshot(health)}
+        except DatabaseError:
+            health = _record_scheduler_failure(now, started_ns, 'database', 'database_operation_failed')
+            return {'mode': 'failed', 'reason': 'database_operation_failed', 'processed': 0,
+                    'failed': 1, 'blocked': 0, 'review_required': 0,
+                    'suspended': bool(health.suspended_at), 'health': _health_snapshot(health)}
+        except Exception:
+            health = _record_scheduler_failure(now, started_ns, 'scheduler', 'unexpected_scheduler_failure')
+            return {'mode': 'failed', 'reason': 'unexpected_scheduler_failure', 'processed': 0,
+                    'failed': 1, 'blocked': 0, 'review_required': 0,
+                    'suspended': bool(health.suspended_at), 'health': _health_snapshot(health)}
+
+        duration_ms = max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
+        systemic_count = result.pop('systemic_failure_count', 0)
+        if systemic_count:
+            # One scheduler round contributes one strike regardless of the number
+            # of affected endpoints; endpoint retries remain independently bounded.
+            health = _record_scheduler_failure(
+                now, started_ns, 'database', 'database_transient_failure',
+                failed_count=result.get('failed', 1))
+        else:
+            with transaction.atomic():
+                health = AutomationSchedulerHealth.objects.select_for_update().get(key='telemetry_analysis')
+                if not health.suspended_at:
+                    health.processed = result.get('processed', 0)
+                    health.failed = result.get('failed', 0)
+                    health.processed_endpoints = result.get('processed', 0)
+                    health.blocked_endpoints = result.get('blocked', 0)
+                    health.review_required_endpoints = result.get('review_required', 0)
+                    health.last_duration_ms = duration_ms
+                    health.last_attempt_status = ('blocked' if result.get('mode') == 'blocked' else
+                                                   'completed_with_blocks' if (result.get('blocked') or
+                                                                               result.get('review_required')) else
+                                                   'completed')
+                    if result.get('mode') == 'blocked':
+                        health.last_failure_class = 'configuration'
+                        health.last_failure_code = result.get('reason', 'scheduler_blocked')[:80]
+                    elif result.get('blocked'):
+                        health.last_failure_class = 'endpoint_quality'
+                        health.last_failure_code = 'endpoint_quality_or_availability'
+                    elif result.get('review_required'):
+                        health.last_failure_class = 'identity_review'
+                        health.last_failure_code = 'endpoint_identity_requires_review'
+                    else:
+                        health.last_failure_class = ''
+                        health.last_failure_code = ''
+                    health.consecutive_systemic_failures = 0
+                    if (result.get('mode') != 'blocked' and not result.get('failed') and
+                            not result.get('blocked') and not result.get('review_required')):
+                        health.last_success_at = now
+                    health.save()
+        result['health'] = _health_snapshot(health)
+        result['suspended'] = bool(health.suspended_at)
+        return result
+    finally:
+        if acquired:
+            _release_telemetry_scheduler_lock()
+
+
+def recover_telemetry_analysis_scheduler(user, reason):
+    """Explicit, permission-checked recovery; never resumes automatically."""
+    from .automation import authorize
+    from .models import AuditEvent, AutomationSchedulerHealth
+    authorize(user, 'control_automation')
+    reason = str(reason or '').strip()
+    if not 5 <= len(reason) <= 500:
+        raise ValueError('recovery_reason_required')
+    with transaction.atomic():
+        health, _ = AutomationSchedulerHealth.objects.select_for_update().get_or_create(
+            key='telemetry_analysis')
+        if not health.suspended_at:
+            raise ValueError('scheduler_not_suspended')
+        previous_code = health.suspension_reason
+        health.suspended_at = None
+        health.suspension_reason = ''
+        health.consecutive_systemic_failures = 0
+        health.last_attempt_status = 'recovered'
+        health.recovered_at = timezone.now()
+        health.recovered_by = user.get_username()[:150]
+        health.recovery_reason = reason
+        health.save()
+        AuditEvent.objects.create(
+            event_type='telemetry_analysis_scheduler.recovered',
+            severity=AuditEvent.SEVERITY_WARNING,
+            actor_type=AuditEvent.ACTOR_USER,
+            actor_name=user.get_username()[:150],
+            title='Agendamento de análise de telemetria reativado',
+            description=reason,
+            metadata={'previous_suspension_reason': previous_code,
+                      'health_key': 'telemetry_analysis'})
+    return health

@@ -91,6 +91,23 @@ class AutomationTests(AutomationFixture,TestCase):
         self.assertEqual(result['processed'],4)
         self.assertEqual(result['failed'],0)
 
+    @override_settings(NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED=True,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_DRY_RUN=False,
+                       NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_FIRST_CAPTURE_POLICY='immediate',
+                       NIGHTOWL_TELEMETRY_RETENTION_DAYS={60:6})
+    def test_systemic_telemetry_failure_does_not_block_due_job_automation(self):
+        definition=self.define()
+        result=scheduler_round(now=definition.starts_at,limit=20)
+        self.assertEqual(AgentJob.objects.count(),1)
+        self.assertEqual(result['telemetry_analysis']['mode'],'failed')
+        self.assertEqual(result['telemetry_analysis']['reason'],
+                         'analysis_scheduler_requires_seven_day_detail_retention')
+        health=AutomationSchedulerHealth.objects.get(key='jobs')
+        self.assertEqual(health.processed,1)
+        telemetry_health=AutomationSchedulerHealth.objects.get(key='telemetry_analysis')
+        self.assertEqual(telemetry_health.last_failure_class,'configuration')
+        self.assertIsNone(telemetry_health.suspended_at)
+
     def test_daily_weekly_monthly_interval_and_month_missing_day(self):
         start=datetime(2026,1,31,12,tzinfo=UTC)
         definition=AutomationDefinition(starts_at=start,timezone_name='America/Sao_Paulo',schedule={'kind':'monthly','monthday':31})

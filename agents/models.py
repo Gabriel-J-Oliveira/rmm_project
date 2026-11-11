@@ -1854,6 +1854,19 @@ class AutomationSchedulerHealth(models.Model):
     last_success_at = models.DateTimeField(null=True)
     processed = models.PositiveIntegerField(default=0)
     failed = models.PositiveIntegerField(default=0)
+    last_attempt_status = models.CharField(max_length=24, blank=True)
+    last_duration_ms = models.PositiveBigIntegerField(null=True, blank=True)
+    consecutive_systemic_failures = models.PositiveSmallIntegerField(default=0)
+    processed_endpoints = models.PositiveIntegerField(default=0)
+    blocked_endpoints = models.PositiveIntegerField(default=0)
+    review_required_endpoints = models.PositiveIntegerField(default=0)
+    last_failure_class = models.CharField(max_length=32, blank=True)
+    last_failure_code = models.CharField(max_length=80, blank=True)
+    suspended_at = models.DateTimeField(null=True, blank=True)
+    suspension_reason = models.CharField(max_length=80, blank=True)
+    recovered_at = models.DateTimeField(null=True, blank=True)
+    recovered_by = models.CharField(max_length=150, blank=True)
+    recovery_reason = models.CharField(max_length=500, blank=True)
 
 
 class AgentUninstallRequest(models.Model):
