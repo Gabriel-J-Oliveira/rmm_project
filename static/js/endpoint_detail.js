@@ -1228,6 +1228,10 @@
         running: "Executando", completed: "Concluída", failed: "Falhou", expired: "Expirada",
         skipped: "Ignorada", blocked: "Bloqueada", cancelled_job: "Cancelada"
     };
+    const endpointPolicyScheduleLabels = {
+        once: 'Execução única', daily: 'Recorrente · diária', weekly: 'Recorrente · semanal',
+        monthly: 'Recorrente · mensal', interval: 'Recorrente · intervalo'
+    };
     const endpointPolicyReasonLabels = {
         permission_required: "Seu usuário não tem permissão para executar esta política.",
         policy_not_active: "A política precisa estar ativa.",
@@ -1260,13 +1264,15 @@
         const endpoint = payload.endpoint || {};
         host.innerHTML = '<div class="endpoint-policy-list">' + payload.policies.map(function (policy) {
             const state = endpointPolicyStatusLabels[policy.state] || policy.state || "Desconhecido";
+            const scheduleKind = policy.schedule && policy.schedule.kind;
+            const scheduleLabel = endpointPolicyScheduleLabels[scheduleKind] || "Agendamento não informado";
             const latest = policy.history && policy.history.length ? policy.history[0] : null;
             const blockedReason = policy.run_block_reason ? (endpointPolicyReasonLabels[policy.run_block_reason] || "Execução indisponível: " + policy.run_block_reason) : '';
             const latestBlock = policy.last_error ? '<p class="endpoint-policy-reason"><strong>Último erro da política:</strong> ' + escapeHtml(policy.last_error) + '</p>' : '';
             const runButton = '<button type="button" class="endpoint-quick-action-button" data-endpoint-policy-run="' + escapeHtml(policy.id) + '" data-policy-revision="' + escapeHtml(policy.revision) + '"' + (policy.can_run_now ? '' : ' disabled') + '>Executar agora neste endpoint</button>';
             return '<article class="endpoint-policy-card" data-endpoint-policy-id="' + escapeHtml(policy.id) + '">' +
                 '<header><div><h3>' + escapeHtml(policy.name) + '</h3><span class="agent-version-pill">' + escapeHtml(policy.job_type) + '</span> <span class="agent-version-pill">' + escapeHtml(state) + '</span></div><a href="/jobs/automations/' + encodeURIComponent(policy.id) + '/">Abrir política</a></header>' +
-                '<dl class="endpoint-policy-facts"><div><dt>Próxima execução</dt><dd>' + escapeHtml(policy.next_due_at ? formatDate(policy.next_due_at) : "Sem próxima execução") + '</dd></div><div><dt>Último resultado neste endpoint</dt><dd>' + escapeHtml(latest ? (endpointPolicyStatusLabels[latest.status] || latest.status || "Desconhecido") : "Sem histórico") + '</dd></div>' +
+                '<dl class="endpoint-policy-facts"><div><dt>Execução</dt><dd>' + escapeHtml(scheduleLabel) + '</dd></div><div><dt>Próxima execução</dt><dd>' + escapeHtml(policy.next_due_at ? formatDate(policy.next_due_at) : "Sem próxima execução") + '</dd></div><div><dt>Último resultado neste endpoint</dt><dd>' + escapeHtml(latest ? (endpointPolicyStatusLabels[latest.status] || latest.status || "Desconhecido") : "Sem histórico") + '</dd></div>' +
                 (latest && latest.reason ? '<div><dt>Motivo do último resultado</dt><dd>' + escapeHtml(latest.reason) + '</dd></div>' : '') + '</dl>' +
                 renderEndpointPolicyHistory(policy.history) + latestBlock +
                 (blockedReason ? '<p class="endpoint-policy-reason" role="note">' + escapeHtml(blockedReason) + '</p>' : '') +

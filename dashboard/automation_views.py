@@ -98,12 +98,12 @@ def _endpoint_policy_reason(user, definition, endpoint, target):
         authorize(user, 'add_agentjob')
     except PermissionError:
         return 'permission_required'
-    if definition.state != 'active':
-        return 'policy_not_active'
     try:
         endpoint_identity(endpoint, target)
     except ValueError as error:
         return str(error)
+    if definition.state != 'active':
+        return 'policy_not_active'
     if not known_v2(endpoint):
         return 'jobs_v2_capability_unconfirmed'
     try:
@@ -168,7 +168,6 @@ def endpoint_policies(request, endpoint_id):
             'timezone': definition.timezone_name,
             'next_due_at': definition.next_due_at.isoformat() if definition.next_due_at else None,
             'last_error': definition.last_error or '',
-            'target_identity_valid': not reason.startswith('endpoint_identity_'),
             'can_run_now': not reason,
             'run_block_reason': reason,
             'history': [_endpoint_occurrence_row(row) for row in rows],
