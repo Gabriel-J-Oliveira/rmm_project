@@ -588,3 +588,177 @@ def capacity_series(request, pk):
          'memory_distribution': item['metric_summaries'].get('metrics', {}).get('memory.used_percent', {}).get('distribution')}
         for item in reversed(list(samples))
     ]})
+
+
+def _hardware_inventory_row(endpoint, snapshot, alerts, now):
+    raw = snapshot.raw_payload if snapshot and isinstance(snapshot.raw_payload, dict) else {}
+    collections = raw.get('collections') if isinstance(raw.get('collections'), dict) else {}
+    hardware_raw = collections.get('hardware') if isinstance(collections.get('hardware'), dict) else {}
+    hardware = _hardware(snapshot)
+    memory = hardware_raw.get('memory') if isinstance(hardware_raw.get('memory'), dict) else {}
+    battery_raw = hardware_raw.get('battery') if isinstance(hardware_raw.get('battery'), dict) else {}
+    battery = {key: battery_raw.get(key) for key in (
+        'present', 'status', 'collection_status', 'health_percent', 'manufacturer', 'model',
+        'cycle_count', 'part_number',
+    ) if key in battery_raw}
+    motherboard_raw = hardware_raw.get('motherboard') or hardware_raw.get('baseboard')
+    motherboard = ({key: motherboard_raw.get(key) for key in ('manufacturer', 'product', 'model', 'version')
+                    if key in motherboard_raw} if isinstance(motherboard_raw, dict) else motherboard_raw)
+    bios_raw = hardware_raw.get('bios')
+    bios = ({key: bios_raw.get(key) for key in ('manufacturer', 'version', 'release_date') if key in bios_raw}
+            if isinstance(bios_raw, dict) else bios_raw)
+    memory_modules = memory.get('modules') if isinstance(memory.get('modules'), list) else []
+    memory_modules = [{key: module.get(key) for key in (
+        'manufacturer', 'part_number', 'capacity_bytes', 'size_bytes', 'speed_mhz', 'configured_speed_mhz',
+    ) if key in module} for module in memory_modules[:32] if isinstance(module, dict)]
+    volumes = snapshot.disks if snapshot and isinstance(snapshot.disks, list) else []
+    volumes = [{key: item.get(key) for key in (
+        'name', 'label', 'size_bytes', 'free_bytes', 'filesystem', 'file_system', 'drive_type',
+    ) if key in item} for item in volumes[:64] if isinstance(item, dict)]
+    disks = hardware_raw.get('physical_disks') if isinstance(hardware_raw.get('physical_disks'), list) else []
+    disk_facts = []
+    for item in disks[:32]:
+        if not isinstance(item, dict):
+            continue
+        confident = item.get('association_confidence') in ('high', 'confirmed')
+        disk_facts.append({
+            'model': item.get('model'), 'size_bytes': item.get('size_bytes'),
+            'media_type': item.get('media_type'), 'bus_type': item.get('bus_type'),
+            'health_status': item.get('health_status'), 'operational_status': item.get('operational_status'),
+            'drive_letters': item.get('drive_letters') if confident and isinstance(item.get('drive_letters'), list) else [],
+            'association_confidence': item.get('association_confidence'),
+        })
+    observed_at = None
+    if snapshot:
+        candidate = _inventory_provenance(snapshot).get('collected_at')
+        try:
+            observed_at = parse_datetime(candidate) if isinstance(candidate, str) else None
+        except (ValueError, TypeError):
+            observed_at = None
+        if observed_at is None or timezone.is_naive(observed_at):
+            observed_at = snapshot.collected_at
+    return {
+        'id': str(endpoint.pk), 'hostname': endpoint.hostname, 'fqdn': endpoint.fqdn or None,
+        'status': endpoint.status, 'last_seen': endpoint.last_seen_at.isoformat() if endpoint.last_seen_at else None,
+        'first_seen': endpoint.first_seen_at.isoformat() if endpoint.first_seen_at else None,
+        'last_ip': endpoint.last_ip, 'last_logged_user': endpoint.last_logged_user or None,
+        'agent_version': endpoint.agent_version or None,
+        'os_name': (snapshot.os_name if snapshot else None) or endpoint.os_name or None,
+        'os_version': (snapshot.os_version if snapshot else None) or endpoint.os_version or None,
+        'os_build': (snapshot.windows_build if snapshot else None) or endpoint.windows_build or None,
+        'manufacturer': (snapshot.manufacturer if snapshot else None) or None,
+        'model': (snapshot.model if snapshot else None) or None,
+        'motherboard': motherboard,
+        'bios': bios,
+        'cpu': hardware.get('cpu') if hardware else None,
+        'memory': {
+            'total_bytes': (hardware or {}).get('memory', {}).get('total_bytes'),
+            'slots_total': (hardware or {}).get('memory', {}).get('slots_total'),
+            'slots_used': (hardware or {}).get('memory', {}).get('slots_used'),
+            'slots_free': (hardware or {}).get('memory', {}).get('slots_free'),
+            'modules': memory_modules,
+        },
+        'battery': battery,
+        'physical_disks': disk_facts,
+        'volumes': volumes,
+        **_disk_usage(snapshot),
+        'uptime_seconds': snapshot.uptime_seconds if snapshot else None,
+        'inventory_at': observed_at.isoformat() if observed_at else None,
+        'inventory_received_at': snapshot.received_at.isoformat() if snapshot else None,
+        'inventory_provenance': _inventory_provenance(snapshot),
+        'inventory_source': (raw.get('latest_collection_type') or raw.get('snapshot_source') or 'snapshot') if snapshot else None,
+        'inventory_warnings': (hardware or {}).get('inventory_warnings', []),
+        'inventory_stale': observed_at is not None and observed_at < now - timedelta(days=7),
+        'alerts': alerts.get('types', []), 'alerts_total': alerts.get('total', 0),
+        'alerts_critical': alerts.get('critical', 0), 'alerts_warning': alerts.get('warning', 0),
+        'endpoint_url': reverse('endpoint-detail', args=[endpoint.pk]),
+        'alerts_url': reverse('alerts-list') + '?' + urlencode({'q': endpoint.hostname}),
+    }
+
+
+def _hardware_inventory_overview(now):
+    endpoints = list(AgentMachine.objects.only(
+        'id', 'hostname', 'fqdn', 'status', 'last_seen_at', 'first_seen_at', 'last_ip',
+        'last_logged_user', 'agent_version', 'os_name', 'os_version', 'windows_build',
+        'manufacturer', 'model',
+    ).order_by('hostname', 'pk'))
+    if not endpoints:
+        return []
+    snapshots = _inventory_map([endpoint.pk for endpoint in endpoints])
+    alert_map = {}
+    grouped_alerts = EndpointAlert.objects.filter(
+        endpoint_id__in=[endpoint.pk for endpoint in endpoints], status__in=ACTIVE_ALERT_STATUSES,
+    ).values('endpoint_id', 'alert_type', 'title', 'severity').annotate(count=Count('pk'))
+    for item in grouped_alerts:
+        target = alert_map.setdefault(item['endpoint_id'], {'total': 0, 'critical': 0, 'warning': 0, 'types': []})
+        target['total'] += item['count']
+        target['critical'] += item['count'] if item['severity'] == EndpointAlert.SEVERITY_CRITICAL else 0
+        target['warning'] += item['count'] if item['severity'] == EndpointAlert.SEVERITY_WARNING else 0
+        target['types'].append({key: item[key] for key in ('alert_type', 'title', 'severity')} | {'count': item['count']})
+    return [_hardware_inventory_row(endpoint, snapshots.get(endpoint.pk), alert_map.get(endpoint.pk, {}), now)
+            for endpoint in endpoints]
+
+
+@login_required
+@permission_required(CAPACITY_PERMISSIONS, raise_exception=True)
+@require_GET
+def hardware_inventory_page(request):
+    return render(request, 'dashboard/capacity.html', {'active_nav': 'hardware-inventory'})
+
+
+@login_required
+@permission_required(CAPACITY_PERMISSIONS, raise_exception=True)
+@require_GET
+def hardware_inventory_overview(request):
+    now = timezone.now()
+    rows = _hardware_inventory_overview(now)
+    known_inventory = sum(bool(row['inventory_at']) for row in rows)
+    return JsonResponse({
+        'generated_at': now.isoformat(), 'counts': {
+            'endpoints': len(rows), 'online': sum(row['status'] == AgentMachine.STATUS_ONLINE for row in rows),
+            'offline': sum(row['status'] == AgentMachine.STATUS_OFFLINE for row in rows),
+            'inventory_known': known_inventory, 'inventory_missing': len(rows) - known_inventory,
+            'critical_alerts': sum(row['alerts_critical'] > 0 for row in rows),
+        }, 'endpoints': rows,
+    })
+
+
+@login_required
+@permission_required(CAPACITY_PERMISSIONS, raise_exception=True)
+@require_GET
+def hardware_inventory_detail(request, pk):
+    endpoint = AgentMachine.objects.only(
+        'id', 'hostname', 'fqdn', 'status', 'last_seen_at', 'first_seen_at', 'last_ip',
+        'last_logged_user', 'agent_version', 'os_name', 'os_version', 'windows_build', 'manufacturer', 'model',
+    ).filter(pk=pk).first()
+    if endpoint is None:
+        raise Http404
+    now = timezone.now()
+    snapshot = _inventory_map([endpoint.pk]).get(endpoint.pk)
+    grouped = EndpointAlert.objects.filter(endpoint=endpoint).filter(
+        Q(status__in=ACTIVE_ALERT_STATUSES) |
+        Q(status=EndpointAlert.STATUS_RESOLVED, resolved_at__gte=now - timedelta(days=7)),
+    )
+    counts = grouped.aggregate(
+        critical=Count('pk', filter=Q(status__in=ACTIVE_ALERT_STATUSES, severity=EndpointAlert.SEVERITY_CRITICAL)),
+        warning=Count('pk', filter=Q(status__in=ACTIVE_ALERT_STATUSES, severity=EndpointAlert.SEVERITY_WARNING)),
+        open=Count('pk', filter=Q(status=EndpointAlert.STATUS_OPEN)),
+        resolved=Count('pk', filter=Q(status=EndpointAlert.STATUS_RESOLVED)),
+    )
+    alerts = list(grouped.order_by('-last_seen_at').values(
+        'alert_type', 'title', 'severity', 'status', 'last_seen_at',
+    )[:30])
+    active_alerts = EndpointAlert.objects.filter(endpoint=endpoint, status__in=ACTIVE_ALERT_STATUSES)
+    active_types = list(active_alerts.values('alert_type', 'title', 'severity').annotate(count=Count('pk')))
+    active_counts = active_alerts.aggregate(
+        total=Count('pk'),
+        critical=Count('pk', filter=Q(severity=EndpointAlert.SEVERITY_CRITICAL)),
+        warning=Count('pk', filter=Q(severity=EndpointAlert.SEVERITY_WARNING)),
+    )
+    row = _hardware_inventory_row(endpoint, snapshot, {
+        'types': active_types, 'total': active_counts['total'],
+        'critical': active_counts['critical'], 'warning': active_counts['warning'],
+    }, now)
+    return JsonResponse({
+        'endpoint': row, 'alerts': alerts, 'alert_counts': counts,
+    })
