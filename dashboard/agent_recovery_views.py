@@ -64,7 +64,36 @@ def recovery_status(request, pk):
     needs_repair = bool(job and (result.get('reason') == 'repair_required' or details.get('reason') == 'repair_required'))
     recommendation = ('AGENT_REPAIR' if machine.status == AgentMachine.STATUS_ONLINE else 'RECOVER_COMMUNICATION_OR_INTERVENTION') if needs_repair else 'NONE'
     from dashboard.models import RemoteInstallJob
-    latest = RemoteInstallJob.objects.filter(endpoint=machine, diagnostics__operation='offline_recovery').order_by('-created_at').first()
+    operation_query = RemoteInstallJob.objects.filter(
+        endpoint=machine,
+        diagnostics__operation__in=('offline_recovery', 'winrm_connectivity'),
+    ).select_related('requested_by').order_by('-created_at', '-pk')
+    history_rows = list(operation_query[:10])
+    history = []
+    for row in history_rows:
+        diagnostics = row.diagnostics if isinstance(row.diagnostics, dict) else {}
+        operation_name = diagnostics.get('operation')
+        result_data = diagnostics.get('result') if isinstance(diagnostics.get('result'), dict) else {}
+        safe_code = row.error_code or result_data.get('error') or ''
+        if not isinstance(safe_code, str):
+            safe_code = ''
+        history.append({
+            'id': str(row.pk),
+            'operation': operation_name,
+            'status': row.status if re.fullmatch(r'[A-Z_]{1,32}', row.status or '') else 'UNKNOWN',
+            'stage': row.stage if re.fullmatch(r'[A-Z_]{1,32}', row.stage or '') else 'UNKNOWN',
+            'error_code': safe_code if re.fullmatch(r'[A-Z0-9_]{0,64}', safe_code) else '',
+            'tcp': result_data.get('tcp') if result_data.get('tcp') in ('reachable', 'unavailable', 'not_checked') else None,
+            'wsman': result_data.get('wsman') if result_data.get('wsman') in ('reachable', 'unavailable', 'not_verified', 'not_checked') else None,
+            'authentication': result_data.get('authentication') if result_data.get('authentication') in ('validated', 'not_verified', 'not_checked') else None,
+            'started_at': row.started_at.isoformat() if row.started_at else None,
+            'finished_at': row.finished_at.isoformat() if row.finished_at else None,
+            'created_at': row.created_at.isoformat(),
+            'requested_by': str(row.requested_by.get_username())[:150],
+        })
+    latest = RemoteInstallJob.objects.filter(
+        endpoint=machine, diagnostics__operation='offline_recovery'
+    ).order_by('-created_at').first()
     can_recover = bool(request.is_secure() and machine.is_active and not machine.has_terminal_lifecycle and
         machine.status == AgentMachine.STATUS_OFFLINE and machine.machine_id and machine.agent_token_hash and
         machine.agent_version and machine.fqdn and machine.last_seen_at and
@@ -80,7 +109,7 @@ def recovery_status(request, pk):
             'finished_at': latest.finished_at.isoformat() if latest.finished_at else None,
             'created_at': latest.created_at.isoformat()}
     response = JsonResponse({'status':'REPAIR_REQUIRED' if needs_repair else 'NO_REPAIR_REPORTED',
-        'recommendation':recommendation, 'latest_recovery': operation, 'can_recover': can_recover,
+        'recommendation':recommendation, 'latest_recovery': operation, 'history': history, 'can_recover': can_recover,
         'agent_status': machine.status})
     response['Cache-Control'] = 'no-store'
     return response

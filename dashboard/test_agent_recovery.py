@@ -126,14 +126,49 @@ class OfflineRecoveryTests(TestCase):
             status='FAILED', stage='WAITING_HEARTBEAT', error_code='HEARTBEAT_TIMEOUT',
             started_at=timezone.now(), finished_at=timezone.now(),
             diagnostics={'operation': 'offline_recovery', 'password': 'never-return-this'})
+        RemoteInstallJob.objects.create(target_hostname=self.machine.hostname,
+            target_fqdn=self.machine.fqdn, requested_by=self.actor, endpoint=self.machine,
+            status='COMPLETED', stage='COMPLETED', started_at=timezone.now(), finished_at=timezone.now(),
+            diagnostics={'operation': 'winrm_connectivity', 'result': {
+                'tcp': 'reachable', 'wsman': 'not_verified', 'authentication': 'not_checked',
+                'error': 'HTTP_AUTH_CHALLENGE', 'checked_at': timezone.now().isoformat(),
+            }})
         client = Client(); client.force_login(self.actor)
         response = client.get(reverse('agent-recovery-status', args=[self.machine.pk]), secure=True)
         self.assertEqual(response.json()['latest_recovery']['id'], str(job.pk))
         self.assertEqual(response.json()['latest_recovery']['error_code'], 'HEARTBEAT_TIMEOUT')
+        history = response.json()['history']
+        connectivity = next(entry for entry in history if entry['operation'] == 'winrm_connectivity')
+        self.assertIn('offline_recovery', [entry['operation'] for entry in history])
+        self.assertEqual(connectivity['tcp'], 'reachable')
+        self.assertEqual(connectivity['wsman'], 'not_verified')
+        self.assertEqual(connectivity['authentication'], 'not_checked')
+        self.assertEqual(connectivity['requested_by'], self.actor.get_username())
+        self.assertEqual(response['Cache-Control'], 'no-store')
         self.assertNotContains(response, 'never-return-this')
         other = get_user_model().objects.create_user('status-nonstaff')
         client.force_login(other)
         self.assertIn(client.get(reverse('agent-recovery-status', args=[self.machine.pk]), secure=True).status_code, (302, 403))
+
+    def test_status_history_is_endpoint_scoped_and_bounded(self):
+        for index in range(12):
+            RemoteInstallJob.objects.create(target_hostname=self.machine.hostname,
+                target_fqdn=self.machine.fqdn, requested_by=self.actor, endpoint=self.machine,
+                status='COMPLETED', stage='COMPLETED',
+                diagnostics={'operation': 'winrm_connectivity', 'result': {'tcp': 'reachable'}})
+        RemoteInstallJob.objects.create(target_hostname=self.machine.hostname,
+            target_fqdn=self.machine.fqdn, requested_by=self.actor,
+            diagnostics={'operation': 'unrelated_operation'})
+        other, _ = AgentMachine.create_with_token(hostname='OTHER', machine_id='other-id')
+        RemoteInstallJob.objects.create(target_hostname=other.hostname, target_fqdn='other.example.local',
+            requested_by=self.actor, endpoint=other,
+            diagnostics={'operation': 'winrm_connectivity', 'result': {'tcp': 'unavailable'}})
+        client = Client(); client.force_login(self.actor)
+        response = client.get(reverse('agent-recovery-status', args=[self.machine.pk]), secure=True)
+        history = response.json()['history']
+        self.assertEqual(len(history), 10)
+        self.assertTrue(all(item['operation'] == 'winrm_connectivity' for item in history))
+        self.assertTrue(all(item['tcp'] == 'reachable' for item in history))
 
     def test_authorized_http_recovery_does_not_persist_password(self):
         self.mocks['_remote_script_candidates'].return_value = (10, '10.0.0.10', [])

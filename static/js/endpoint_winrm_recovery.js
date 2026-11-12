@@ -8,6 +8,7 @@
     const compactAgent = root.querySelector('[data-winrm-compact-agent]');
     const compactLastTest = root.querySelector('[data-winrm-compact-last-test]');
     const summary = root.querySelector('[data-winrm-recovery-summary]');
+    const historyList = root.querySelector('[data-winrm-history]');
     const reason = root.querySelector('[data-winrm-recovery-reason]');
     const openButton = root.querySelector('[data-winrm-recovery-open]');
     const followButton = root.querySelector('[data-winrm-recovery-follow]');
@@ -38,6 +39,39 @@
         if (job.status === 'OUTCOME_UNKNOWN' || job.error_code === 'HEARTBEAT_TIMEOUT') return 'Resultado sem confirmação';
         if (job.status === 'FAILED' || job.status === 'INTERRUPTED') return 'Falhou';
         return 'Em andamento';
+    }
+
+    function historyStatus(item) {
+        if (item.operation === 'winrm_connectivity') {
+            const tcp = item.tcp === 'reachable' ? 'alcançável' : item.tcp === 'unavailable' ? 'indisponível' : 'não verificado';
+            const wsman = item.wsman === 'reachable' ? 'alcançável' : item.wsman === 'unavailable' ? 'indisponível' : item.wsman === 'not_verified' ? 'desafiou autenticação' : 'não verificado';
+            const auth = item.authentication === 'validated' ? 'validada' : 'não verificada';
+            return `TCP ${tcp}; WS-Man ${wsman}; autenticação ${auth}${item.error_code ? `; código ${item.error_code}` : ''}`;
+        }
+        if (item.status === 'COMPLETED') return 'Recuperado; heartbeat novo confirmado';
+        if (item.status === 'OUTCOME_UNKNOWN' || item.error_code === 'HEARTBEAT_TIMEOUT') return 'Sem confirmação';
+        if (item.status === 'FAILED' || item.status === 'INTERRUPTED') return `Falhou${item.error_code ? `: ${item.error_code}` : ''}`;
+        return 'Em andamento';
+    }
+
+    function renderHistory(items) {
+        if (!historyList) return;
+        historyList.replaceChildren();
+        if (items === null) {
+            historyList.append(make('li', 'Histórico indisponível no momento.'));
+            return;
+        }
+        if (!Array.isArray(items) || items.length === 0) {
+            historyList.append(make('li', 'Nenhuma operação WinRM registrada para este endpoint.'));
+            return;
+        }
+        items.forEach(item => {
+            const operation = item.operation === 'winrm_connectivity' ? 'Verificação de conectividade' : 'Recuperação do agente';
+            const timestamp = item.created_at ? new Date(item.created_at).toLocaleString() : 'horário não informado';
+            const actor = item.requested_by ? ` · operador ${item.requested_by}` : '';
+            const stage = item.stage && item.stage !== 'UNKNOWN' ? ` · etapa ${item.stage}` : '';
+            historyList.append(make('li', `${timestamp} · ${operation}: ${historyStatus(item)}${stage}${actor}`));
+        });
     }
 
     function disabledReason() {
@@ -133,6 +167,7 @@
         if (!response.ok) throw new Error('status_unavailable');
         const data = await response.json();
         latest = data.latest_recovery;
+        renderHistory(Array.isArray(data.history) ? data.history : null);
         allowed = data.can_recover === true;
         statusReceived = true;
         if (data.agent_status) context.dataset.agentStatus = ({online: 'Online', offline: 'Offline', unknown: 'Não verificado'})[data.agent_status] || data.agent_status;
@@ -229,6 +264,7 @@
         checkingWinrm = false;
         if (event.detail) remote = event.detail;
         updateSummary();
+        refresh().catch(() => renderHistory(null));
     });
     updateSummary();
     refresh().catch(() => { statusReceived = false; updateSummary(); });
