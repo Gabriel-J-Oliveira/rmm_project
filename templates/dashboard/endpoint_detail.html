@@ -393,7 +393,7 @@
                 <div class="endpoint-action-groups" data-endpoint-actions-core></div>
                 <div data-endpoint-actions-maintenance></div>
                 <section class="panel endpoint-dense-card endpoint-assigned-policies" aria-labelledby="endpoint-assigned-policies-title">
-                    <header><h2 id="endpoint-assigned-policies-title"><i data-lucide="list-checks"></i>Pol&iacute;ticas de Execu&ccedil;&atilde;o atribu&iacute;das</h2><a href="{% url 'job-automations' %}">Gerenciar pol&iacute;ticas</a></header>
+                    <header><h2 id="endpoint-assigned-policies-title"><i data-lucide="list-checks"></i>Pol&iacute;ticas de Execu&ccedil;&atilde;o atribu&iacute;das</h2><a href="{% url 'jobs-list' %}?tab=automations">Gerenciar pol&iacute;ticas</a></header>
                     <p class="endpoint-policy-scheduler-note" data-endpoint-policy-scheduler hidden>O scheduler recorrente est&aacute; desabilitado. A execu&ccedil;&atilde;o manual autorizada &eacute; independente.</p>
                     <div data-endpoint-automation-policies aria-live="polite"><div class="endpoint-empty-state"><strong>Pol&iacute;ticas ainda n&atilde;o consultadas</strong><p>Abra a aba para carregar as atribui&ccedil;&otilde;es deste endpoint.</p></div></div>
                 </section>
@@ -457,7 +457,7 @@
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-2"></script>
 <script src="{% static 'js/job_display.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-1"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2"></script>
 <script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=continuous-graphs-2"></script>
 {% endblock %}

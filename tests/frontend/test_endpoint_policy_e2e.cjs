@@ -46,6 +46,21 @@ let phase = 'initialization';
         assert.equal(await card.locator('img').count(), 0, 'Policy names must be rendered as text');
         assert((await card.innerText()).includes('Sem histórico'));
         assert((await card.innerText()).includes(endpointName));
+        assert.equal(await page.getByRole('link', {name: 'Gerenciar políticas'}).getAttribute('href'), '/jobs/?tab=automations');
+        const openPolicy = card.getByRole('link', {name: 'Abrir política'});
+        assert.equal(await openPolicy.getAttribute('href'), '/jobs/?tab=automations');
+        await openPolicy.click();
+        await page.waitForURL(url => url.pathname === '/jobs/' && url.searchParams.get('tab') === 'automations');
+        await page.waitForFunction(() => {
+            const root = document.querySelector('[data-automations-root]');
+            return root && !root.hidden && document.querySelector('[data-task-tab="automations"].is-active');
+        });
+        assert.equal(await page.locator('[data-automations-root]').count(), 1, 'Policy link must open the HTML management page, not the JSON API');
+
+        phase = 'endpoint_page_return';
+        await page.goto(server + '/endpoints/' + encodeURIComponent(endpointId) + '/');
+        await page.getByRole('button', {name: /Ações e Jobs/}).click();
+        await card.waitFor();
         const runButton = card.getByRole('button', {name: 'Executar agora neste endpoint'});
         assert.equal(await runButton.isEnabled(), true);
 

@@ -48,7 +48,7 @@ assert(source.includes('Salve o canal selecionado para consultar as releases dis
 assert(source.includes("!updateChannelIsPending()") && source.includes("!selectionIsValid"), "update button must require a synchronized channel and valid selected release");
 assert(source.includes('if (release.revoked || release.status === "revoked")'), "revoked releases must remain visibly blocked in the selector details");
 assert(source.includes('release.source_channel || release.channel'), "release details must distinguish the signed artifact channel");
-assert(template.includes("endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-1"), "endpoint detail JavaScript cache version must be bumped");
+assert(template.includes("endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2"), "endpoint detail JavaScript cache version must be bumped");
 assert(template.includes("endpoint_actions_jobs.css' %}?v=rc47-channel-update-2"), "endpoint detail stylesheet cache version must be bumped");
 
 console.log("endpoint_detail update modal static checks passed");
