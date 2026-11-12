@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.core.exceptions import ValidationError
 from django.core.cache import cache
 from django.http import HttpResponse
 from django.db import models, transaction
@@ -29,6 +30,8 @@ from .models import (
     AgentEnrollmentLog,
     AgentEnrollmentToken,
     AgentReleaseTrustBundle,
+    AgentRelease,
+    AgentReleaseSigningKey,
     AgentJob,
     AgentJobResultReceipt,
     AgentJobResultReceiptProgression,
@@ -43,9 +46,11 @@ from .models import (
     hash_agent_token,
     hash_manual_validation_token,
 )
+from .rollout_models import AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave
 from config.authz import can_uninstall_agent
 from .serializers import AgentEnrollmentSerializer, HeartbeatSerializer
 from .services import (
+    agent_release_artifact_channel,
     build_update_agent_job_payload,
     build_fqdn,
     evaluate_agent_update_policy,
@@ -74,6 +79,112 @@ RESULT_FINAL_STATUSES = {
     AgentJob.STATUS_ROLLED_BACK,
     AgentJob.STATUS_ROLLBACK_FAILED,
 }
+
+
+def _update_agent_dispatch_block_reason(job, endpoint, release, campaigns, waves, targets, now):
+    """Fail closed unless the persisted update job still matches current policy."""
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    source = payload.get('source')
+    if job.endpoint_id != endpoint.pk:
+        return 'endpoint_identity_mismatch'
+    if source not in {'manual_panel', 'update_policy', 'rollout_campaign'}:
+        return 'update_source_invalid'
+
+    release_id = payload.get('release_id')
+    try:
+        parsed_release_id = uuid.UUID(str(release_id))
+    except (ValueError, TypeError, AttributeError):
+        return 'release_identity_missing'
+    if release is None or parsed_release_id != release.pk:
+        return 'release_identity_mismatch'
+    if job.agent_release_id and job.agent_release_id != release.pk:
+        return 'release_identity_mismatch'
+
+    try:
+        artifact_channel = agent_release_artifact_channel(release)
+    except ValidationError:
+        return 'release_contract_invalid'
+    expected_contract = {
+        'target_version': release.version,
+        'channel': artifact_channel,
+        'source_channel': artifact_channel,
+        'policy_channel': release.channel,
+        'package_url': release.package_url,
+        'checksum_url': release.checksum_url,
+        'sha256': release.sha256,
+        'size': release.size,
+        'minimum_updater_version': release.minimum_updater_version,
+        'manifest_url': release.manifest_url,
+        'manifest_sha256': release.manifest_sha256,
+        'signature_url': release.signature_url,
+        'signature_sha256': release.signature_sha256,
+        'signature_key_id': release.signature_key_id,
+        'signature_valid': release.signature_valid,
+        'legacy_unsigned': release.legacy_unsigned,
+        'mandatory': release.mandatory,
+    }
+    required_contract = {'target_version', 'channel', 'source_channel', 'policy_channel', 'package_url', 'sha256',
+                         'size', 'signature_valid', 'legacy_unsigned', 'mandatory', 'force'}
+    if not required_contract.issubset(payload) or any(payload.get(key) != value for key, value in expected_contract.items()):
+        return 'release_contract_mismatch'
+    if type(payload.get('force')) is not bool:
+        return 'update_override_invalid'
+
+    automatic_rollout = source == 'rollout_campaign'
+    manual = source == 'manual_panel'
+    if source == 'update_policy' and payload.get('force'):
+        return 'update_override_invalid'
+    if automatic_rollout:
+        metadata = payload.get('rollout_metadata')
+        if not isinstance(metadata, dict):
+            return 'campaign_binding_missing'
+        try:
+            campaign_id = uuid.UUID(str(metadata.get('campaign_id')))
+            wave_id = uuid.UUID(str(metadata.get('wave_id')))
+            target_id = uuid.UUID(str(metadata.get('target_id')))
+        except (ValueError, TypeError, AttributeError):
+            return 'campaign_binding_invalid'
+        campaign = campaigns.get(campaign_id)
+        wave = waves.get(wave_id)
+        target = targets.get(target_id)
+        if not campaign or not wave or not target:
+            return 'campaign_binding_missing'
+        if (campaign.state != 'running' or campaign.release_id != release.pk
+                or wave.campaign_id != campaign.pk or wave.state != 'running'
+                or campaign.current_wave_id != wave.pk
+                or target.campaign_id != campaign.pk or target.wave_id != wave.pk
+                or target.endpoint_id != endpoint.pk or target.agent_job_id != job.pk
+                or target.state != 'queued' or not target.eligibility_at_selection
+                or job.correlation_id != str(target.pk)):
+            return 'campaign_binding_mismatch'
+        expected_metadata = {
+            'campaign_id': str(campaign.pk), 'wave_id': str(wave.pk), 'wave_sequence': wave.sequence,
+            'target_id': str(target.pk), 'cohort_hash': campaign.cohort_hash,
+            'cohort_schema': campaign.cohort_schema,
+        }
+        if any(metadata.get(key) != value for key, value in expected_metadata.items()):
+            return 'campaign_contract_mismatch'
+        if payload.get('force'):
+            return 'campaign_override_invalid'
+    elif payload.get('rollout_metadata') is not None:
+        return 'campaign_binding_unexpected'
+
+    try:
+        decision = evaluate_agent_update_eligibility(
+            endpoint,
+            now=now,
+            manual=manual,
+            for_agent=True,
+            explicit_release=release,
+            allow_downgrade=manual and payload.get('force') is True,
+            automatic_rollout=automatic_rollout,
+            campaign_selection=False,
+            freshness_seconds=campaign.freshness_seconds if automatic_rollout else 900,
+            exclude_job_id=job.pk,
+        )
+    except (ValidationError, ValueError, TypeError):
+        return 'update_policy_invalid'
+    return '' if decision.eligible else decision.reason_code
 
 def _sanitize_agent_payload(payload):
     sanitized = sanitize_job_value(payload)
@@ -1260,6 +1371,11 @@ class AgentJobsPullView(APIView):
         machine = authenticate_agent_token(request)
         now = timezone.now()
         protocol_v2 = request.headers.get('X-NightOwl-Job-Protocol') == '2'
+        # The result endpoint locks job then endpoint. Skip a busy endpoint here
+        # so a concurrent result cannot form the inverse lock cycle.
+        machine = AgentMachine.objects.select_for_update(skip_locked=True).filter(pk=machine.pk).first()
+        if machine is None:
+            return Response({'jobs': []}, status=status.HTTP_200_OK)
         expired = machine.jobs.filter(
             status=AgentJob.STATUS_QUEUED,
             expires_at__isnull=False,
@@ -1312,9 +1428,124 @@ class AgentJobsPullView(APIView):
             candidates = delivery_candidates(machine, now)
         else:
             candidates = machine.jobs.filter(status=AgentJob.STATUS_QUEUED)
-        jobs = list(candidates.select_for_update().order_by('queued_at')[:5])
+
+        # Snapshot candidate references without locking, then acquire related
+        # rollout/release rows before job rows. Every later lock is skip-locked:
+        # campaign dispatch, release mutation, and result ingestion use some
+        # inverse paths, so a contested update is retried on the next poll.
+        candidate_rows = list(candidates.order_by('queued_at').values(
+            'pk', 'job_type', 'status', 'agent_release_id', 'payload')[:5])
+        rollout_refs = {}
+        for row in candidate_rows:
+            if row['job_type'] != AgentJob.TYPE_UPDATE_AGENT or row['status'] != AgentJob.STATUS_QUEUED:
+                continue
+            payload = row.get('payload') if isinstance(row.get('payload'), dict) else {}
+            metadata = payload.get('rollout_metadata') if isinstance(payload.get('rollout_metadata'), dict) else None
+            if metadata is not None:
+                rollout_refs[row['pk']] = metadata
+
+        def _uuid_value(value):
+            try:
+                return uuid.UUID(str(value))
+            except (ValueError, TypeError, AttributeError):
+                return None
+
+        campaign_ids = {value for ref in rollout_refs.values() if (value := _uuid_value(ref.get('campaign_id')))}
+        wave_ids = {value for ref in rollout_refs.values() if (value := _uuid_value(ref.get('wave_id')))}
+        target_ids = {value for ref in rollout_refs.values() if (value := _uuid_value(ref.get('target_id')))}
+        locked_campaigns = {
+            item.pk: item for item in AgentRolloutCampaign.objects.select_for_update(skip_locked=True)
+            .filter(pk__in=campaign_ids).order_by('pk')
+        }
+        locked_waves = {
+            item.pk: item for item in AgentRolloutWave.objects.select_for_update(skip_locked=True)
+            .filter(pk__in=wave_ids).order_by('pk')
+        }
+        locked_targets = {
+            item.pk: item for item in AgentRolloutTarget.objects.select_for_update(skip_locked=True)
+            .filter(pk__in=target_ids).order_by('pk')
+        }
+
+        release_ids = set()
+        for row in candidate_rows:
+            if row['job_type'] != AgentJob.TYPE_UPDATE_AGENT or row['status'] != AgentJob.STATUS_QUEUED:
+                continue
+            payload = row.get('payload') if isinstance(row.get('payload'), dict) else {}
+            release_id = row.get('agent_release_id') or payload.get('release_id')
+            parsed = _uuid_value(release_id)
+            if parsed:
+                release_ids.add(parsed)
+        locked_releases = {
+            item.pk: item for item in AgentRelease.objects.select_for_update(skip_locked=True)
+            .filter(pk__in=release_ids).order_by('pk')
+        }
+        key_ids = {item.signature_key_id for item in locked_releases.values() if item.signature_key_id}
+        locked_keys = {
+            item.key_id: item for item in AgentReleaseSigningKey.objects.select_for_update(skip_locked=True)
+            .filter(key_id__in=key_ids).order_by('key_id')
+        }
+        jobs = list(candidates.filter(pk__in=[row['pk'] for row in candidate_rows])
+                    .select_for_update(skip_locked=True).order_by('queued_at'))
         response_jobs = []
         for job in jobs:
+            if job.job_type == AgentJob.TYPE_UPDATE_AGENT and job.status == AgentJob.STATUS_QUEUED:
+                payload = job.payload if isinstance(job.payload, dict) else {}
+                metadata = rollout_refs.get(job.pk)
+                if metadata is not None:
+                    campaign_id = _uuid_value(metadata.get('campaign_id'))
+                    wave_id = _uuid_value(metadata.get('wave_id'))
+                    target_id = _uuid_value(metadata.get('target_id'))
+                    missing_locked_campaign_row = bool(
+                        (campaign_id and campaign_id not in locked_campaigns and AgentRolloutCampaign.objects.filter(pk=campaign_id).exists())
+                        or (wave_id and wave_id not in locked_waves and AgentRolloutWave.objects.filter(pk=wave_id).exists())
+                        or (target_id and target_id not in locked_targets and AgentRolloutTarget.objects.filter(pk=target_id).exists())
+                    )
+                    if missing_locked_campaign_row:
+                        continue
+                release_id = _uuid_value(job.agent_release_id or payload.get('release_id'))
+                if release_id and release_id not in locked_releases and AgentRelease.objects.filter(pk=release_id).exists():
+                    continue
+                release = locked_releases.get(release_id)
+                if release and release.signature_key_id and release.signature_key_id not in locked_keys:
+                    if AgentReleaseSigningKey.objects.filter(key_id=release.signature_key_id).exists():
+                        continue
+                reason_code = _update_agent_dispatch_block_reason(
+                    job, machine, release, locked_campaigns, locked_waves, locked_targets, now,
+                )
+                if reason_code:
+                    job.status = AgentJob.STATUS_CANCELLED
+                    job.finished_at = now
+                    job.error_code = 'UPDATE_DISPATCH_REVALIDATION_FAILED'
+                    job.error_message = 'A elegibilidade da release mudou ou o contrato do job e invalido.'
+                    job.save(update_fields=['status', 'finished_at', 'error_code', 'error_message', 'updated_at'])
+                    audit_metadata = {
+                        'job_id': str(job.pk),
+                        'release_id': str(release.pk) if release else '',
+                        'source': payload.get('source', ''),
+                        'reason_code': reason_code,
+                        'protocol': 'v2' if protocol_v2 else 'v1',
+                    }
+                    metadata = rollout_refs.get(job.pk)
+                    target_id = _uuid_value(metadata.get('target_id')) if metadata else None
+                    target = locked_targets.get(target_id) if target_id else None
+                    if target and target.agent_job_id == job.pk and target.state in {'queued', 'running'}:
+                        target.state = 'cancelled'
+                        target.completed_at = now
+                        target.save(update_fields=['state', 'completed_at', 'updated_at'])
+                        audit_metadata.update({
+                            'campaign_id': str(target.campaign_id), 'target_id': str(target.pk),
+                        })
+                    create_audit_event(
+                        event_type='agent.update_dispatch_blocked',
+                        title='Update bloqueado no despacho',
+                        description='A revalidacao da release ou da politica do endpoint impediu o despacho.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_SYSTEM,
+                        actor_name='Sistema',
+                        endpoint=machine,
+                        metadata=audit_metadata,
+                    )
+                    continue
             if job.job_type == 'operational_action':
                 from .operational_actions import validate_dispatch
                 try:

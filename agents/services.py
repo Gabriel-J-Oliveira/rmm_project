@@ -652,6 +652,7 @@ def ensure_release_signature_policy(release, *, now=None, key_context=None):
 
 @transaction.atomic
 def publish_agent_release(release, actor, reason='', *, rollout_percentage=None, rollout_paused=True):
+    release = AgentRelease.objects.select_for_update().get(pk=release.pk)
     reason = (reason or '').strip()
     if not reason:
         raise ValidationError('Publicacao exige motivo.')
@@ -694,6 +695,7 @@ def promote_agent_release(
     allow_direct_stable=False,
     allow_prerelease_stable=False,
 ):
+    release = AgentRelease.objects.select_for_update().get(pk=release.pk)
     target_channel = (target_channel or '').strip()
     approval_reason = (approval_reason or '').strip()
     if target_channel not in {choice[0] for choice in AgentRelease.CHANNEL_CHOICES}:
@@ -751,6 +753,7 @@ def promote_agent_release(
 
 @transaction.atomic
 def revoke_agent_release(release, actor, reason, replacement_release=None):
+    release = AgentRelease.objects.select_for_update().get(pk=release.pk)
     reason = (reason or '').strip()
     if not reason:
         raise ValidationError('Revogacao exige motivo.')
@@ -792,6 +795,7 @@ def revoke_agent_release(release, actor, reason, replacement_release=None):
 
 @transaction.atomic
 def supersede_agent_release(release, replacement_release, actor, reason=''):
+    release = AgentRelease.objects.select_for_update().get(pk=release.pk)
     reason = (reason or '').strip()
     if not reason:
         raise ValidationError('Supersedencia exige motivo.')
@@ -830,6 +834,7 @@ def supersede_agent_release(release, replacement_release, actor, reason=''):
 
 @transaction.atomic
 def change_agent_release_rollout(release, actor, rollout_percentage, paused=None, reason=''):
+    release = AgentRelease.objects.select_for_update().get(pk=release.pk)
     reason = (reason or '').strip()
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         raise ValidationError('Release revogada nao pode ter rollout alterado.')
@@ -916,7 +921,7 @@ def _updater_version(endpoint):
 def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_agent=False,
                                       explicit_release=None, allow_downgrade=False,
                                       automatic_rollout=False, campaign_selection=False,
-                                      freshness_seconds=900, context=None):
+                                      freshness_seconds=900, context=None, exclude_job_id=None):
     """Read-only decision. The rollout contract is stricter than legacy delivery."""
     if automatic_rollout and (manual or allow_downgrade or freshness_seconds <= 0):
         raise ValueError('Automatic rollout cannot use manual overrides')
@@ -967,7 +972,17 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
         slugs = context['slugs'][endpoint.pk] if context is not None else set(endpoint.rollout_groups.values_list('slug', flat=True))
         if slugs & {'critical', 'servers'}:
             return decision(False, 'protected_endpoint_group')
-        active_jobs = context['jobs'][endpoint.pk] if context is not None else list(endpoint.jobs.filter(job_type='update_agent', status__in=['queued', 'sent', 'running']))
+        if context is not None:
+            active_jobs = context['jobs'][endpoint.pk]
+            if exclude_job_id:
+                active_jobs = [job for job in active_jobs if str(job.pk) != str(exclude_job_id)]
+        else:
+            active_job_query = endpoint.jobs.filter(
+                job_type='update_agent', status__in=['queued', 'sent', 'running'],
+            )
+            if exclude_job_id:
+                active_job_query = active_job_query.exclude(pk=exclude_job_id)
+            active_jobs = list(active_job_query)
         if active_jobs:
             if any((job.expires_at and job.expires_at <= now) or job.created_at < now - timedelta(seconds=900) for job in active_jobs):
                 return decision(False, 'update_job_stale')
@@ -994,15 +1009,16 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
 
     if release.revoked or release.status == AgentRelease.STATUS_REVOKED:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_REVOKED, release)
+    if release.status == AgentRelease.STATUS_SUPERSEDED:
+        return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     if campaign_selection and release.status not in {
             AgentRelease.STATUS_PUBLISHED, AgentRelease.STATUS_PAUSED}:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     manual_explicit_release = manual and explicit_release is not None
-    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and not (
-            manual_explicit_release or campaign_selection):
+    if (release.rollout_paused or release.status == AgentRelease.STATUS_PAUSED) and (
+            manual_explicit_release or not campaign_selection):
         return decision(False, UPDATE_POLICY_REASON_RELEASE_PAUSED, release)
-    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not campaign_selection and not (
-            manual_explicit_release and release.status in {AgentRelease.STATUS_PAUSED, AgentRelease.STATUS_SUPERSEDED}):
+    if release.status not in AGENT_RELEASE_AVAILABLE_STATUSES and not campaign_selection:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
     if not release.package_url or not release.sha256:
         return decision(False, UPDATE_POLICY_REASON_RELEASE_NOT_AVAILABLE, release)
@@ -1045,6 +1061,8 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
 
     bucket = deterministic_rollout_bucket(endpoint, release)
     rollout_percentage = 100 if release.mandatory and not automatic_rollout else min(100, max(0, release.rollout_percentage or 0))
+    # The percentage gates automatic selection, not an operator's explicit
+    # release choice. Pause/revocation/signature/channel checks remain separate.
     if not manual and not campaign_selection and bucket >= rollout_percentage:
         return decision(False, UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED, release, bucket)
 
