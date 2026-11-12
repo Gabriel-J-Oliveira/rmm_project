@@ -3,7 +3,11 @@
 **Estado:** plano de publicação para revisão; não autoriza execução. Nenhum acesso, alteração ou teste foi feito no servidor.
 
 **Baseline indicada para produção:** `6090228aed49c08ded2ecd8d4ca24658df9eb3b0`
+
 **Main RC47 auditada:** `b8b417f520290db7d0b86af71feb86fccd9bf12b`
+
+**SHA de deploy congelado:** `b8b417f520290db7d0b86af71feb86fccd9bf12b` — merges posteriores de documentação não alteram este alvo.
+
 **Plano relacionado:** [`rc47-predeploy-homologation.md`](rc47-predeploy-homologation.md)
 
 ## Conclusão executiva
@@ -59,7 +63,7 @@ Outros arquivos do diff: `scripts/Invoke-WindowsE2E.ps1`; workflows `.github/wor
 
 ## 2. Serviços, ASGI, Nginx e flags
 
-O snapshot operacional fornecido indica `nightowl.service`, `nightowl-terminal.service` e Nginx ativos; backend e terminal compartilham `/opt/nightowl`; HTTP atual usa Gunicorn/WSGI com três workers; o terminal é um serviço separado. O relay em `agents/terminal_transport.py` mantém sessões em memória por processo. `config/asgi.py` entrega WebSocket ao relay; a garantia exigida é um único processo ASGI para esse relay. Não usar múltiplos workers ASGI nem tratar Gunicorn/WSGI como substituto de ASGI.
+O snapshot operacional fornecido indica `nightowl.service`, `nightowl-terminal.service` e Nginx ativos, com ambos os serviços associados a `/opt/nightowl`; o terminal foi identificado como serviço separado. A quantidade real de workers HTTP e a topologia WSS ainda **não estão comprovadas**: confirmar `ExecStart`, árvore de processos/cgroup, bind/socket e upstream nas units efetivas e configuração Nginx. Não tratar o valor visto no shell ou informação de inventário como prova da topologia carregada. O relay em `agents/terminal_transport.py` mantém sessões em memória por processo. `config/asgi.py` entrega WebSocket ao relay; a garantia exigida é um único processo ASGI para esse relay. Não usar múltiplos workers ASGI nem tratar Gunicorn/WSGI como substituto de ASGI.
 
 Substituir arquivos em disco não atualiza o código carregado nos workers. Se apenas `nightowl.service` for reiniciado, o terminal pode continuar com código antigo; se apenas o terminal for reiniciado, pode continuar falando com endpoints/contratos do backend anterior. Planejar uma janela coordenada: drenar sessões existentes, parar primeiro o terminal ASGI, parar o backend HTTP, atualizar todos os arquivos para o mesmo commit, validar migrations autorizadas e estáticos, então iniciar HTTP e o processo ASGI único com a configuração já aprovada. Reabrir tráfego somente após checks locais e WSS passarem. Confirmar no unit real o comando, usuário, diretório, ambiente, bind e número de workers; não inferir pela flag no Django shell.
 
@@ -87,11 +91,15 @@ O `nightowl-maintenance.timer` é informado como ativo a cada cinco minutos, exe
 
 ## 3. `collectstatic`, WhiteNoise e permissões
 
-`config/settings.py` define `STATIC_ROOT = BASE_DIR / 'staticfiles'` e `CompressedStaticFilesStorage` por default. O servidor usa `.gz`/`.br`; a presença de sidecars e sucesso de escrita reportados precisam ser repetidos no staging com a mesma versão instalada do WhiteNoise, backend de storage e ACLs. `collectstatic --dry-run` não prova escrita, recompressão nem substituição.
+`config/settings.py` define `STATIC_ROOT = BASE_DIR / 'staticfiles'` e `CompressedStaticFilesStorage` por default. O servidor tem sidecars `.gz`/`.br` existentes segundo o snapshot; a compressão efetiva e a escrita precisam ser repetidas em staging com a mesma versão do WhiteNoise, backend de storage e ACLs. `collectstatic --dry-run` não prova escrita, recompressão nem substituição.
 
 O snapshot informa `staticfiles` pertencente a `nightowl`, sidecars existentes verificados e `staticfiles/vendor`/`vendor/xterm` pertencentes a root, modo 755, sem escrita para `nightowl`. As fontes `static/vendor/xterm` existem no repositório, mas não foram alteradas no diff. Ainda assim, o pós-processamento do storage pode revisitar os arquivos coletados. Não fazer `chown -R`, `chmod -R`, `--clear` ou correção preventiva.
 
-Antes do deploy, usar uma cópia isolada do `STATIC_ROOT` real, preservando owners/modos/ACLs e espaço de disco, e executar `collectstatic` efetivo como `nightowl` com a configuração/versões exatas. Capturar lista de arquivos gravados, sobrescritos e removidos, erros de permissão, hashes, tamanho dos assets e sidecars; verificar que a fonte e os arquivos existentes permanecem restauráveis. Validar os arquivos servidos por Nginx e referências de cache busting. Se falhar, determinar primeiro se WhiteNoise tenta alterar `vendor/xterm`; então corrigir somente o diretório/arquivos exatos que o teste provar necessários, após aprovação. Alternativa é produzir o conjunto final em staging gravável e promover de forma controlada, mas só se compatível com o caminho servido e rollback.
+**Preparação:** produzir o conjunto completo de estáticos em diretório de staging isolado a partir do SHA congelado, sem tocar no `STATIC_ROOT` ativo. Replicar owners/modos/ACLs e espaço relevantes; executar `collectstatic` efetivo como `nightowl` com a configuração e versões exatas. Registrar inventário, hashes, arquivos criados/alterados/removidos e sidecars; testar leitura e escrita do caminho, incluindo a árvore `vendor/xterm`.
+
+**Promoção sem mistura:** manter os estáticos da versão ativa disponíveis para rollback e promover o conjunto como uma unidade. Preferir troca atômica de diretório/symlink somente se o `STATIC_ROOT`, Nginx/WhiteNoise e unidades efetivas suportarem esse desenho e ele tiver sido testado. Caso contrário, fazer a cópia/substituição completa com HTTP e ASGI parados, confirmar hashes contra o inventário de staging e só então reiniciar. Não servir templates/JS/CSS de versões diferentes durante a transição; não copiar apenas arquivos selecionados por cima de um conjunto antigo. O mecanismo exato depende dos caminhos das units e de como o checkout preservará o `certs/` não rastreado; essa compatibilidade precisa ser demonstrada sem ler ou mover o conteúdo de `certs/`.
+
+**Validação após promoção:** testar por HTTP o hash/versão dos assets apontados pelos templates, respostas 200, MIME, compressão/sidecars e cache busting; carregar páginas relevantes e verificar console/rede; comparar o inventário publicado com o staging. Se qualquer asset estiver ausente, misturado, sem permissão ou divergente, manter tráfego fechado e reverter o diretório completo ao conjunto anterior. Se o teste de staging provar que WhiteNoise tenta alterar `vendor/xterm`, propor somente correção pontual para os arquivos/diretório exatos e aguardar aprovação. Não fazer `chown -R`, `chmod -R` ou `collectstatic --clear` preventivos.
 
 Na última coleta havia 3,1 GB livres na raiz e 139 GB no volume PostgreSQL/backups. Isso não substitui medição imediatamente anterior. Os 1,13 MB de fontes estáticas RC47 não representam o pico de espaço: medir cópia integral/staging, compressão, logs e backup; abortar se o espaço não cobrir o pior caso previsto com reserva acordada.
 
@@ -113,11 +121,11 @@ Na última coleta havia 3,1 GB livres na raiz e 139 GB no volume PostgreSQL/back
 
 ### Checkpoint 2 — validar artefato e dados
 
-- Preparar código imutável do SHA aprovado fora do checkout operacional atual; não sobrescrever nem limpar `/opt/nightowl/certs`. Usar o mecanismo de publicação aprovado pelo Codex 1, mantendo venv/dependências se os manifests e instalação comparada forem iguais.
+- Preparar código imutável do SHA de deploy congelado fora do checkout operacional atual. A publicação do código e dos assets pertence a este plano: preparar staging, validar inventário e promoção por unidade conforme o checkpoint de estáticos; não depender do procedimento de migrations. Preservar `/opt/nightowl/certs` e não ler, mover, limpar ou sobrescrever seu conteúdo.
 - Executar verificações locais do SHA: `python manage.py check`, `python manage.py makemigrations --check --dry-run`, testes CI aprovados e `migrate --plan` usando configuração isolada/produção clonada, sem gravar no banco real.
 - Confirmar disponibilidade e compatibilidade de Django 6/DRF/Gunicorn/Uvicorn/WhiteNoise já instalados. Não há dependências declaradas novas, mas confirmar versões realmente carregadas.
 - Revisar jobs `update_agent` atuais imediatamente antes da janela. Se existir `queued`, validar contrato de release individual e identidade; `sent/running` deve ser tratado como estado em curso/incerto. Não fazer replay ou cancelamento em massa.
-- Executar o teste efetivo de `collectstatic` no staging com usuário, storage e ACLs reais replicados; comparar arquivos/sidecars e verificar leitura HTTP. Falha de permissão ou saída diferente é NO-GO.
+- Executar `collectstatic` efetivo no staging com usuário, storage e ACLs reais replicados; comparar arquivos/sidecars, testar o método de promoção integral e rollback de assets, e verificar leitura HTTP. Falha de permissão, mistura de versões ou saída divergente é NO-GO.
 
 ### Checkpoint 3 — janela e corte coordenado
 
@@ -126,9 +134,9 @@ Na última coleta havia 3,1 GB livres na raiz e 139 GB no volume PostgreSQL/back
 3. Drenar sessões de terminal assistido de modo comunicado. Não iniciar `admin_auth` nem novas sessões durante o corte.
 4. Coordenar o timer de manutenção de 5 min com o responsável. Garantir que não execute tarefas concorrentes à mudança de código/schema/assets; não mudar o timer sem autorização.
 5. Parar `nightowl-terminal.service` para encerrar o HUB process-local graciosamente; confirmar sessões encerradas. Parar `nightowl.service`/Gunicorn para evitar workers antigos servindo durante a troca. Nginx pode permanecer atendendo uma resposta de manutenção/indisponibilidade planejada; não alterar a configuração.
-6. Ativar o checkout/código imutável RC47 e assets staged no caminho aprovado, preservando `certs/`, venv, mídia, logs e static files fora do escopo. Confirmar hashes de arquivos implantados.
+6. Promover o código imutável e o conjunto integral de assets do SHA congelado pelo método testado em staging. Fazer a troca somente com HTTP e ASGI parados; preservar `certs/`, venv, mídia, logs e o conjunto de estáticos anterior para rollback. Confirmar manifestos/hashes do código e dos assets antes de iniciar serviços.
 7. Somente após decisão explícita do responsável de banco: aplicar exatamente as migrations aprovadas, na ordem retornada pelo plano conferido. Não usar `migrate` genérico sem revisar o plano. Guardar saída e duração.
-8. Iniciar `nightowl.service` (HTTP/WSGI) e confirmar health/autenticação/DB; depois iniciar `nightowl-terminal.service` como exatamente um processo ASGI, com o mesmo SHA e ambiente aprovado. Não iniciar com múltiplos workers.
+8. Iniciar `nightowl.service` (HTTP/WSGI) e confirmar health/autenticação/DB; depois iniciar `nightowl-terminal.service` como exatamente um processo ASGI, com o mesmo SHA e ambiente aprovado. Não iniciar com múltiplos workers; confirmar a contagem HTTP efetiva conforme unit antes de reabrir tráfego.
 9. Reabrir tráfego após todos os smoke checks. Manter timer, flags e rollout iguais ao snapshot aprovado.
 
 Se o procedimento real usar uma ordem/cutover diferente, documentar e testar em staging antes; não improvisar atualização in-place durante a janela.
@@ -155,8 +163,8 @@ Se o procedimento real usar uma ordem/cutover diferente, documentar e testar em 
 | Risco | Nível | Evidência / incerteza | Controle antes do GO |
 |---|---|---|---|
 | Migrations 0048–0050 e rollback | Alto | Três migrations aditivas na cadeia; estado aplicado efetivo não veio nesta tarefa. | `showmigrations`, `migrate --plan`, restore testado e aprovação Codex 1; sem reverse automático. |
-| Workers em código misto | Alto | Gunicorn WSGI e terminal ASGI são unidades separadas; relay possui estado process-local. | Corte coordenado e mesmo SHA em ambos; um processo ASGI. |
-| Nginx/WSS real | Alto | Nginx está ativo segundo snapshot; configuração e handshake não foram coletados. | Sanitizar/validar proxy e executar WSS autenticado em homologação. |
+| Workers em código misto | Alto | Units HTTP e terminal foram informadas como separadas; número de workers HTTP e topologia/processos reais ainda não foram verificados nas units. Relay é process-local. | Confirmar `ExecStart`, contagem/cgroup, bind e mesmo SHA; corte coordenado; exatamente um processo ASGI. |
+| Nginx/WSS real | Alto | Nginx está ativo segundo snapshot; upstream, topologia WSS e handshake não foram coletados. | Validar units e proxy efetivos, sem expor configuração sensível, e executar WSS autenticado em homologação. |
 | `collectstatic`/WhiteNoise | Alto | Storage comprimido; árvore `vendor/xterm` sem escrita por nightowl. Não provado que post-process falhe. | `collectstatic` efetivo em staging com ACLs equivalentes; sem chown/chmod preventivo. |
 | Jobs update antigos | Médio-alto | Revalidação no pull pode cancelar contrato legado inválido; zero jobs no snapshot não garante zero agora. | Recontar e inspecionar payload sem segredos imediatamente antes. |
 | Configuração por processo | Alto | Valores conhecidos são de shell e podem divergir do processo systemd. | Verificar allowlist de flags em HTTP e ASGI; preservar valores, não ativar flags. |
@@ -179,7 +187,7 @@ Se o procedimento real usar uma ordem/cutover diferente, documentar e testar em 
 
 1. SHA real do backend e schema aplicados no host, diff final e artefato alvo confirmados.
 2. Restore recente de PostgreSQL demonstrado; ordem e autorização de 0048–0050 aprovadas pelo responsável.
-3. Units reais (processo/usuário/diretório/ambiente/bind/workers) e configuração Nginx/WSS validadas sem exposição de segredos.
+3. Units reais confirmam quantidade de workers HTTP, usuário/diretório/ambiente/bind, exatamente um processo ASGI e topologia WSS/Nginx, sem exposição de segredos.
 4. Estado de flags confirmado diretamente nos dois processos; sem mudança em flags nesta publicação.
 5. Fila de update recontada/revisada; timer root e janela de cinco minutos coordenados.
 6. `collectstatic` efetivo passou em staging com armazenamento comprimido, ACLs e sidecars equivalentes; vendor/xterm não requer correção preventiva.
