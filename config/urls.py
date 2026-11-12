@@ -81,6 +81,8 @@ urlpatterns = [
     path('jobs/', dashboard_views.jobs_list, name='jobs-list'),
     path('jobs/data/', dashboard_views.jobs_data, name='jobs-data'),
     path('jobs/automations/', automation_views.automations, name='job-automations'),
+    path('api/endpoints/<uuid:endpoint_id>/automation-policies/', automation_views.endpoint_policies, name='api-endpoint-automation-policies'),
+    path('api/endpoints/<uuid:endpoint_id>/automation-policies/<uuid:definition_id>/run/', automation_views.endpoint_policy_run, name='api-endpoint-automation-policy-run'),
     path('jobs/automations/telemetry-health/', automation_views.telemetry_analysis_scheduler_health,
          name='telemetry-analysis-scheduler-health'),
     path('jobs/automations/targets/', automation_views.targets, name='job-automation-targets'),

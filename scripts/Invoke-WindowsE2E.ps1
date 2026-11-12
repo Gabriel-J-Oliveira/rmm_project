@@ -75,6 +75,17 @@ try {
         Get-Content $out
         Get-Content $err
         if ($automationProcess.ExitCode -ne 0) { throw "Execution policies browser E2E failed with exit code $($automationProcess.ExitCode)" }
+
+        # Endpoint policy actions run in a separate synthetic database and must
+        # prove the browser submits a single-endpoint invocation, not a fleet run.
+        $endpointPolicyArguments = @('manage.py', 'test',
+            'agents.test_automation.AutomationBrowserTests.test_endpoint_policy_run_is_scoped_and_confirmed_in_real_ui',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $endpointPolicyProcess = Start-Process -FilePath $python -ArgumentList $endpointPolicyArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($endpointPolicyProcess.ExitCode -ne 0) { throw "Endpoint policy browser E2E failed with exit code $($endpointPolicyProcess.ExitCode)" }
     }
 
     # The independent probe runs AFTER the full E2E, even on failure: it cannot

@@ -23,6 +23,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST, require_GET
 
 from agents.models import (
@@ -3744,6 +3745,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     }
 
 
+@ensure_csrf_cookie
 def endpoint_detail(request, pk):
     endpoint = resolve_agent_endpoint(pk)
     if endpoint is None:
