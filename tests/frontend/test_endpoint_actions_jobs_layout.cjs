@@ -19,10 +19,11 @@ assert(actions.includes('data-winrm-recovery-open'));
 assert(actions.includes('data-winrm-compact-agent'));
 assert(actions.includes('data-winrm-compact-last-test'));
 assert.match(actions,/<details class="endpoint-winrm-details">[\s\S]*?<summary>Detalhes t&eacute;cnicos<\/summary>/,'technical WinRM information is collapsed by default');
-for (const hook of ['data-winrm-remote-result','data-winrm-recovery-summary','data-winrm-recovery-follow','endpoint-winrm-local-details']) {
+for (const hook of ['data-winrm-remote-result','data-winrm-recovery-summary','data-winrm-recovery-follow','data-winrm-history','endpoint-winrm-local-details']) {
     assert(actions.includes(hook), 'technical WinRM hook is preserved: ' + hook);
 }
 assert.match(css,/\.endpoint-winrm-feedback button\s*\{[^}]*justify-self:\s*start;[^}]*width:\s*max-content;/,'WinRM follow-up button keeps its natural width and left alignment');
+assert.match(css,/\.endpoint-winrm-history ol\s*\{[^}]*max-height:\s*180px;[^}]*overflow-y:\s*auto;/,'WinRM operation history is bounded and scrollable');
 assert.match(css,/\.endpoint-winrm-local-details\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/,'local WinRM heading can occupy its own row');
 assert.match(css,/\.endpoint-winrm-local-heading\s*>\s*small\s*\{[^}]*max-width:\s*none;/,'local WinRM explanation is not compressed beside the title');
 assert(!html.includes('Voltar para endpoints'));

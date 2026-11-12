@@ -5,7 +5,7 @@
 {% block body_class %}page-endpoint-detail{% endblock %}
 {% block icon_script %}<script src="{% static 'vendor/lucide/1.71.0/lucide.min.js' %}" defer></script>{% endblock %}
 {% block styles %}
-<link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-channel-update-2">
+<link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-channel-update-3">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
 {% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
@@ -363,6 +363,10 @@
                             <p data-winrm-recovery-summary role="status" aria-live="polite">Agente: {{ endpoint.get_status_display }}. &Uacute;ltima tentativa de recupera&ccedil;&atilde;o: n&atilde;o consultada.</p>
                             <button type="button" data-winrm-recovery-follow disabled>Acompanhar recupera&ccedil;&atilde;o</button>
                         </div>
+                        <section class="endpoint-winrm-history" aria-labelledby="endpoint-winrm-history-title">
+                            <h3 id="endpoint-winrm-history-title">Hist&oacute;rico recente de opera&ccedil;&otilde;es</h3>
+                            <ol data-winrm-history role="status" aria-live="polite"><li>Carregando registros persistidos...</li></ol>
+                        </section>
                         <section class="endpoint-winrm-local-details" aria-labelledby="endpoint-winrm-local-title">
                             <div class="endpoint-winrm-local-heading"><h3 id="endpoint-winrm-local-title">Estado local reportado pelo agente</h3><small>Dados locais v&ecirc;m do invent&aacute;rio. Autentica&ccedil;&atilde;o vem do &uacute;ltimo registro de recupera&ccedil;&atilde;o do backend; n&atilde;o &eacute; um teste atual.</small></div>
                             <div>

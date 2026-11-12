@@ -1,0 +1,48 @@
+name: RC47-09 WinRM UI
+
+on:
+  pull_request:
+    paths:
+      - 'static/css/endpoint_actions_jobs.css'
+      - 'static/js/endpoint_winrm_check.js'
+      - 'static/js/endpoint_winrm_recovery.js'
+      - 'templates/dashboard/endpoint_detail.html'
+      - 'tests/frontend/test_endpoint_actions_jobs_layout.cjs'
+      - 'tests/frontend/test_endpoint_actions_jobs_visual.cjs'
+      - 'tests/frontend/test_endpoint_detail_update_modal.js'
+      - 'tests/frontend/test_endpoint_winrm_recovery.cjs'
+      - '.github/workflows/rc47-09-winrm-ui.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  winrm-ui:
+    name: WinRM actions and jobs visual browser tests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Playwright runner
+        run: npm install --no-save --no-package-lock --ignore-scripts playwright@1.63.0
+      - name: Install pinned Chrome for Testing
+        shell: pwsh
+        run: ./scripts/Install-TestChrome.ps1
+      - name: Run WinRM contracts and desktop/mobile browser checks
+        shell: pwsh
+        run: |
+          node --check static/js/endpoint_winrm_check.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check static/js/endpoint_winrm_recovery.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_winrm_recovery.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_detail_update_modal.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_actions_jobs_layout.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/frontend/test_endpoint_actions_jobs_visual.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

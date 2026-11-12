@@ -21,7 +21,7 @@ async function main() {
         const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
         const categories = ['Diagnósticos', 'Operações', 'Manutenção do agente', 'Scripts aprovados', 'Ações críticas'];
         const markup = categories.map((title, i) => `<section class="endpoint-action-category${i === 4 ? ' endpoint-actions-danger' : ''}"><h3 class="endpoint-category-heading">${title}</h3><div class="endpoint-action-grid"><button class="endpoint-quick-action-button">Ação de exemplo</button><button class="endpoint-quick-action-button">Outra ação</button></div></section>`).join('');
-        await page.setContent(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>${css}</style><body class="page-endpoint-detail"><main style="padding:24px"><header class="endpoint-ops-header"><div class="endpoint-ops-title"><div class="endpoint-title-line"><h1>CS-CVEL-0281</h1><span class="status-badge">Online</span></div><div class="endpoint-critical-strip">Windows · control.local · 192.168.1.10</div></div><div class="endpoint-ops-actions"><button class="copy-btn">Hostname</button></div></header><section class="endpoint-actions-tab" style="margin-top:16px"><div class="endpoint-actions-jobs-layout"><div class="endpoint-actions-column"><section class="panel endpoint-quick-actions-card"><div class="endpoint-quick-actions-intro"><h2>Ações rápidas</h2><p>Acesso, conectividade e recuperação.</p></div><div class="endpoint-quick-action-list"><button class="endpoint-quick-action-button">Acessar terminal</button><button class="endpoint-quick-action-button">Testar WinRM</button><button class="endpoint-quick-action-button">Reativar agente</button></div></section><section class="panel"><div class="endpoint-winrm-feedback"><p>TCP e WS-Man verificados.</p><p>Última recuperação não consultada.</p><button>Acompanhar recuperação</button></div><section class="endpoint-winrm-local-details"><div class="endpoint-winrm-local-heading"><h3>Estado local reportado pelo agente</h3><small>Dados locais vêm do inventário; não representam um teste atual.</small></div><div><p>Serviço: Running</p><p>Listener: HTTPS 5986</p></div></section></section>${markup}</div><aside class="panel endpoint-jobs-panel"><header class="endpoint-jobs-header"><h2>Últimos jobs</h2><button aria-label="Atualizar">↻</button></header><div class="endpoint-jobs-scroll"><div class="endpoint-jobs-content"></div></div></aside></div></section></main></body>`);
+        await page.setContent(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>${css}</style><body class="page-endpoint-detail"><main style="padding:24px"><header class="endpoint-ops-header"><div class="endpoint-ops-title"><div class="endpoint-title-line"><h1>CS-CVEL-0281</h1><span class="status-badge">Online</span></div><div class="endpoint-critical-strip">Windows · control.local · 192.168.1.10</div></div><div class="endpoint-ops-actions"><button class="copy-btn">Hostname</button></div></header><section class="endpoint-actions-tab" style="margin-top:16px"><div class="endpoint-actions-jobs-layout"><div class="endpoint-actions-column"><section class="panel endpoint-quick-actions-card"><div class="endpoint-quick-actions-intro"><h2>Ações rápidas</h2><p>Acesso, conectividade e recuperação.</p></div><div class="endpoint-quick-action-list"><button class="endpoint-quick-action-button">Acessar terminal</button><button class="endpoint-quick-action-button">Testar WinRM</button><button class="endpoint-quick-action-button">Reativar agente</button></div></section><section class="panel"><div class="endpoint-winrm-feedback"><p>TCP e WS-Man verificados.</p><p>Última recuperação não consultada.</p><button>Acompanhar recuperação</button></div><section class="endpoint-winrm-history"><h3>Histórico recente de operações</h3><ol>${Array.from({length:10},(_,i)=>`<li>12/11/2026 10:00 · Verificação de conectividade: TCP alcançável; WS-Man desafiou autenticação; autenticação não verificada · operador ${'operador-laboratorio '.repeat(3)}${i}</li>`).join('')}</ol></section><section class="endpoint-winrm-local-details"><div class="endpoint-winrm-local-heading"><h3>Estado local reportado pelo agente</h3><small>Dados locais vêm do inventário; não representam um teste atual.</small></div><div><p>Serviço: Running</p><p>Listener: HTTPS 5986</p></div></section></section>${markup}</div><aside class="panel endpoint-jobs-panel"><header class="endpoint-jobs-header"><h2>Últimos jobs</h2><button aria-label="Atualizar">↻</button></header><div class="endpoint-jobs-scroll"><div class="endpoint-jobs-content"></div></div></aside></div></section></main></body>`);
         const setJobs = count => page.locator('.endpoint-jobs-content').evaluate((node, n) => {
             node.innerHTML = n ? Array.from({ length: n }, (_, i) => `<article class="endpoint-job-item"><div class="endpoint-job-card-content"><div class="endpoint-job-card-heading"><span>Concluído</span><span>Coleta de inventário</span></div><div class="endpoint-job-card-meta"><time>09/11/2026 10:00</time><span>2s</span><span class="endpoint-job-result">${i % 2 ? 'Resumo curto.' : 'Resultado de leitura longo para validar a quebra de texto sem sobrepor os controles laterais. '.repeat(3)}</span></div></div><div class="endpoint-job-actions"><button class="endpoint-job-action-button">Detalhes</button><button class="endpoint-job-action-button">Copiar</button></div></article>`).join('') : '<p class="endpoint-empty-state">Nenhum job registrado neste endpoint</p>';
         }, count);
@@ -50,9 +50,12 @@ async function main() {
             const localTitle = document.querySelector('.endpoint-winrm-local-heading h3').getBoundingClientRect();
             const localDescription = document.querySelector('.endpoint-winrm-local-heading small').getBoundingClientRect();
             const localInfo = document.querySelector('.endpoint-winrm-local-details > div:last-child').getBoundingClientRect();
+            const winrmHistory = document.querySelector('.endpoint-winrm-history ol');
+            const winrmHistoryRect = winrmHistory.getBoundingClientRect();
             return { actionsBottom: actions.bottom, jobsBottom: jobs.bottom, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight,
                 actionsWidth: actions.width, jobsWidth: jobs.width, jobTextFits, cols: getComputedStyle(document.querySelector('.endpoint-actions-jobs-layout')).gridTemplateColumns,
-                winrmButton, feedback, localTitle, localDescription, localInfo };
+                winrmButton, feedback, localTitle, localDescription, localInfo, winrmHistoryRect,
+                winrmHistoryScrolls: winrmHistory.scrollHeight > winrmHistory.clientHeight };
         });
         assert(Math.abs(desktop.actionsBottom - desktop.jobsBottom) <= 1, 'desktop jobs panel shares the actions column bottom');
         assert(desktop.scrollHeight > desktop.clientHeight, 'long history scrolls inside its list');
@@ -62,6 +65,8 @@ async function main() {
         assert(desktop.winrmButton.left <= desktop.feedback.left + 1, 'WinRM follow-up button is left aligned');
         assert(desktop.localDescription.top >= desktop.localTitle.bottom - 1, `local WinRM explanation follows its title (${JSON.stringify({title:desktop.localTitle,description:desktop.localDescription})})`);
         assert(desktop.localInfo.top >= desktop.localDescription.bottom - 1, `local WinRM facts follow the heading (${JSON.stringify({description:desktop.localDescription,info:desktop.localInfo})})`);
+        assert(desktop.winrmHistoryScrolls, 'long WinRM operation history has its own bounded scroll area');
+        assert(desktop.winrmHistoryRect.left >= 0 && desktop.winrmHistoryRect.right <= 1600, 'WinRM history fits desktop width');
         const quickButton = page.locator('.endpoint-quick-action-button').first();
         const quickCard = page.locator('.endpoint-quick-actions-card');
         const cardBefore = await quickCard.evaluate(e => ({ border: getComputedStyle(e).borderColor, background: getComputedStyle(e).backgroundColor, shadow: getComputedStyle(e).boxShadow, transform: getComputedStyle(e).transform }));
@@ -95,11 +100,13 @@ async function main() {
             const scroll = document.querySelector('.endpoint-jobs-scroll');
             const cards = [...document.querySelectorAll('.endpoint-job-item')];
             const actionOverflow = cards.some(card => [...card.querySelectorAll('.endpoint-job-actions')].some(buttons => buttons.getBoundingClientRect().right > card.getBoundingClientRect().right + 1));
-            return { actionsBottom: actions.bottom, jobsTop: jobs.top, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight, actionOverflow };
+            const history = document.querySelector('.endpoint-winrm-history ol').getBoundingClientRect();
+            return { actionsBottom: actions.bottom, jobsTop: jobs.top, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight, actionOverflow, history };
         });
         assert(mobile.jobsTop >= mobile.actionsBottom, 'narrow layout stacks the jobs panel below actions');
         assert(mobile.scrollHeight > mobile.clientHeight, 'narrow layout retains internal history scrolling');
         assert.equal(mobile.actionOverflow, false, 'job actions stay within each card at notebook width');
+        assert(mobile.history.left >= 0 && mobile.history.right <= 900, 'WinRM history fits narrow layout');
         await page.screenshot({ path: path.join(output, 'narrow-many-jobs.png'), fullPage: true });
 
         await page.setViewportSize({ width: 390, height: 844 });
@@ -107,10 +114,12 @@ async function main() {
         const phone = await page.evaluate(() => ({
             documentWidth: document.documentElement.scrollWidth,
             viewportWidth: window.innerWidth,
-            actionOverflow: [...document.querySelectorAll('.endpoint-job-item')].some(card => [...card.querySelectorAll('.endpoint-job-actions')].some(actions => actions.getBoundingClientRect().right > card.getBoundingClientRect().right + 1))
+            actionOverflow: [...document.querySelectorAll('.endpoint-job-item')].some(card => [...card.querySelectorAll('.endpoint-job-actions')].some(actions => actions.getBoundingClientRect().right > card.getBoundingClientRect().right + 1)),
+            history: document.querySelector('.endpoint-winrm-history ol').getBoundingClientRect()
         }));
         assert(phone.documentWidth <= phone.viewportWidth, 'phone layout has no horizontal page overflow');
         assert.equal(phone.actionOverflow, false, 'job actions stay within each card at phone width');
+        assert(phone.history.left >= 0 && phone.history.right <= phone.viewportWidth, 'WinRM history fits phone width');
         await page.screenshot({ path: path.join(output, 'phone-many-jobs.png'), fullPage: true });
         console.log(`endpoint actions/jobs visual: empty, one and long history; desktop and narrow layouts OK; screenshots=${output}`);
     } finally {
