@@ -58,45 +58,56 @@ Nao alterar estas configuracoes durante a restauracao ou teste de migrations. O 
 
 Os comandos abaixo sao um roteiro futuro. Executar somente em laboratorio explicitamente aprovado, apos validar os caminhos e nomes. Valores entre `<...>` sao placeholders; nao usar contra producao.
 
-### 1. Preflight do backup
+### 1. Preflight somente leitura no servidor de origem
 
-No host que contem o backup, em shell restrito:
+Executar no host de origem do backup, somente em leitura. Estes comandos nao criam arquivos e nao conectam ao PostgreSQL de producao:
 
 ```bash
 cd /opt/nightowl/backups/rc47-consolidated-20261111T133156Z-pr31-33
 sha256sum -c SHA256SUMS
 pg_restore --version
-pg_restore --list postgresql-nightowl.dump > /secure/lab/restore-list.txt
+pg_restore --list postgresql-nightowl.dump > /dev/null
 ```
 
-Precondicoes: operador autorizou acesso somente leitura ao backup; `SHA256SUMS` cobre o dump; o destino `/secure/lab` e armazenamento protegido, fora de Git e nao compartilhado. O ultimo comando escreve somente o inventario do arquivo, nao restaura dados. Interromper se checksum falhar, versao do cliente for anterior/incompativel com o dump ou a lista apresentar erro.
+Precondicoes: operador autorizou acesso somente leitura ao backup e confirmou que `SHA256SUMS` cobre o dump. A listagem e descartada em `/dev/null`; nenhum caminho de laboratorio e presumido/criado na origem. Interromper se checksum falhar, versao do cliente for anterior/incompativel com o dump ou a lista apresentar erro. Para evitar qualquer escrita no host de origem, nao redirecionar a listagem para um arquivo nesse host.
 
-Idealmente transferir o dump por canal aprovado diretamente para storage isolado, verificar o SHA256 novamente no destino e preservar uma copia original somente leitura. Nao transferir via chat ou repositorio.
+Transferir o dump por canal aprovado diretamente para storage protegido do laboratorio; verificar SHA256 novamente no destino e preservar uma copia original somente leitura. Nao transferir via chat, worktree ou repositorio.
 
-### 2. Preparar PostgreSQL isolado
+### 2. Preparar PostgreSQL no laboratorio isolado
 
-Como administrador do laboratorio, configurar PostgreSQL para escutar somente loopback/rede isolada. Confirmar firewall sem rota para producao e ausencia de processos NightOwl ativos. Criar banco de destino novo; nao sobrescrever outro banco:
+Os comandos desta secao sao exclusivamente no host PostgreSQL do laboratorio, nunca no servidor de origem ou producao. Configurar o cluster de laboratorio para escutar apenas em loopback/rede isolada; neste exemplo, TCP `127.0.0.1:55432`. Confirmar `pg_hba.conf` com regra restrita para esse host/porta e role de laboratorio, coerente com `sslmode` escolhido. Preferir SCRAM e TLS quando houver conexao por rede; nao enfraquecer HBA para fazer o teste passar. Confirmar firewall sem rota para producao e ausencia de processos NightOwl ativos. Criar banco novo com nome exclusivo; todos os comandos abaixo fixam host, porta, role e banco de laboratorio:
 
 ```bash
-sudo -u postgres createuser --login --pwprompt nightowl_lab_migrator
-sudo -u postgres createdb --owner=nightowl_lab_migrator nightowl_restore
+sudo -u postgres createuser --login --pwprompt -p 55432 nightowl_lab_migrator
+sudo -u postgres createdb -p 55432 --owner=nightowl_lab_migrator nightowl_restore
 ```
 
-Guardar a senha apenas no gestor de segredos do laboratorio e fornecer ao Django por mecanismo local protegido; nao a colocar em argumentos, shell history ou arquivo versionado. Se o dump requerer extensoes/roles adicionais, parar e revisar a lista com o responsavel; nao criar superuser, nao importar roles ou credenciais de producao. Restaurar sem owner/ACL faz os objetos pertencerem ao role de conexao local, evitando dependencias dos principals originais. Use o role de migracao explicitamente:
+Antes da restauracao, criar no host de laboratorio um arquivo PGPASSFILE protegido por permissao `0600` (fora de Git), com entradas restritas a `127.0.0.1:55432:nightowl_restore:nightowl_lab_migrator` e, depois, `127.0.0.1:55432:nightowl_migration_test:nightowl_lab_migrator`; ou usar outro mecanismo seguro aprovado. A autenticacao deve corresponder a regra de `pg_hba.conf` que cobre exatamente conexao TCP loopback, role e banco; nunca passar senha em argumentos nem habilitar `trust`. Guardar senha apenas no gestor de segredos do laboratorio e nao a registrar no shell history. Se o dump requerer extensoes/roles adicionais, parar e revisar a lista com o responsavel; nao criar superuser, nao importar roles ou credenciais de producao. Restaurar sem owner/ACL faz os objetos pertencerem ao role local da conexao:
 
 ```bash
-pg_restore --username=nightowl_lab_migrator --exit-on-error --verbose --no-owner --no-privileges \
-  --dbname=nightowl_restore /secure/lab/postgresql-nightowl.dump \
+PGPASSFILE=/secure/lab/pgpass pg_restore \
+  --host=127.0.0.1 --port=55432 --username=nightowl_lab_migrator \
+  --dbname=nightowl_restore --exit-on-error --verbose --no-owner --no-privileges \
+  /secure/lab/postgresql-nightowl.dump \
   2> /secure/lab/pg-restore.log
 ```
 
-O log pode conter nomes de objetos e erros; manter restrito, revisar/redigir antes de compartilhar. Interromper no primeiro erro. Nao repetir sobre base parcialmente restaurada: preservar log e criar novo banco descartavel apos diagnostico/aprovacao.
+`127.0.0.1:55432/nightowl_restore` e explicitamente o cluster/banco descartavel do laboratorio; nao substituir esses valores por host, porta, role ou database de producao. O log pode conter nomes de objetos e erros; manter restrito, revisar/redigir antes de compartilhar. Interromper no primeiro erro. Nao repetir sobre base parcialmente restaurada: preservar log e criar novo banco descartavel apos diagnostico/aprovacao.
 
 ### 3. Validar restauracao
 
-Conectar com usuario local autorizado e registrar sem conteudo de linhas:
+No laboratorio, conectar explicitamente ao banco restaurado, com PGPASSFILE/HBA ja validados; nunca executar estas consultas no banco de producao como parte deste roteiro:
+
+```bash
+PGPASSFILE=/secure/lab/pgpass psql \
+  --host=127.0.0.1 --port=55432 --username=nightowl_lab_migrator \
+  --dbname=nightowl_restore --set=ON_ERROR_STOP=1
+```
+
+No prompt `psql` dessa conexao de laboratorio, registrar sem conteudo de linhas:
 
 ```sql
+SELECT current_database(), current_user, inet_server_addr(), inet_server_port();
 SELECT version();
 SELECT current_database(), pg_size_pretty(pg_database_size(current_database()));
 SELECT extname, extversion FROM pg_extension ORDER BY extname;
@@ -115,9 +126,21 @@ GO para continuar somente se o restore terminou sem erro, as extensoes necessari
 
 ### 4. Clonar e aplicar migrations
 
-Manter `nightowl_restore` como baseline imutavel. Criar uma copia independente para o ensaio, por exemplo `nightowl_migration_test`, usando `createdb --template=nightowl_restore` enquanto nao ha conexoes na origem. Se nao for possivel clonar com consistencia, criar novo restore do mesmo dump. Nao aplicar downgrade na baseline.
+Manter `nightowl_restore` como baseline imutavel. Criar uma copia independente para o ensaio, por exemplo `nightowl_migration_test`, no cluster loopback `127.0.0.1:55432`, enquanto nao ha conexoes na origem do template. Somente o administrador local do cluster isolado deve criar a copia; definir o owner como `nightowl_lab_migrator`. Se nao for possivel clonar com consistencia, restaurar novamente o mesmo dump em um novo banco descartavel. Nao aplicar downgrade na baseline.
 
-No checkout limpo da main RC47 `b8b417f520290db7d0b86af71feb86fccd9bf12b`, em ambiente Python isolado e com settings apontando explicitamente para `nightowl_migration_test`:
+```bash
+sudo -u postgres createdb -p 55432 --template=nightowl_restore \
+  --owner=nightowl_lab_migrator nightowl_migration_test
+```
+
+No checkout limpo da main RC47 `b8b417f520290db7d0b86af71feb86fccd9bf12b`, em ambiente Python isolado. Em cada shell destinado aos comandos Django, fixar explicitamente `DATABASE_URL` e `PGPASSFILE` para o banco descartavel do laboratorio (sem senha na URL). Exemplo:
+
+```bash
+export DATABASE_URL='postgres://nightowl_lab_migrator@127.0.0.1:55432/nightowl_migration_test?sslmode=prefer'
+export PGPASSFILE=/secure/lab/pgpass
+```
+
+Confirmar a URL efetiva, host, porta e nome do banco antes de qualquer comando de escrita; se nao corresponderem exatamente ao alvo isolado, interromper. Nunca copiar uma URL de producao para este roteiro. Entao executar:
 
 ```bash
 git rev-parse HEAD
@@ -131,6 +154,8 @@ Aplicar apenas no banco descartavel. Limites sao exemplo operacional conservador
 
 ```bash
 PGOPTIONS='-c lock_timeout=5s -c statement_timeout=120s' \
+  DATABASE_URL='postgres://nightowl_lab_migrator@127.0.0.1:55432/nightowl_migration_test?sslmode=prefer' \
+  PGPASSFILE=/secure/lab/pgpass \
   python manage.py migrate agents 0050_telemetry_scheduler_health --noinput
 ```
 
@@ -150,13 +175,15 @@ Verificar a tabela `agents_persistedtelemetryanalysisschedule`, indices, colunas
 Em clones descartaveis separados, validar pelo menos:
 
 1. Codigo RC47 com schema 0050.
-2. Codigo antigo da baseline implantada informado pelo operador contra schema 0050: leitura e INSERT/UPDATE dos modelos afetados, em particular `TerminalAccessGrant` sem enviar `allow_admin_auth`. Isso determina se rollback apenas de codigo e seguro.
+2. Codigo antigo da baseline implantada informado pelo operador contra schema 0050: executar leitura e INSERT/UPDATE com dados sinteticos nos modelos compartilhados afetados, especialmente `TerminalAccessGrant` e `AutomationSchedulerHealth`, sem enviar os novos campos (`allow_admin_auth` e os campos de health). Confirmar que o ORM/codigo antigo funciona com as colunas NOT NULL e defaults realmente existentes. Tambem testar operacoes antigas em `AgentMachine` com a tabela OneToOne adicional presente. `PersistedTelemetryAnalysisSchedule` nao existe no codigo antigo; confirmar que o codigo antigo nao precisa acessa-la e que a tabela pode permanecer sem uso. Isso determina se rollback apenas de codigo e seguro.
 3. Upgrade desde 0047, downgrade `0050 -> 0047`, e verificacao explicita de dados perdidos no clone. A reversao de 0049 descarta todos os schedules, de 0050 descarta valores dos campos novos e de 0048 descarta `allow_admin_auth`.
 
 Comando de downgrade exclusivamente no clone descartavel, apos snapshot adicional e autorizacao do responsavel pelo laboratorio:
 
 ```bash
-python manage.py migrate agents 0047_persistedtelemetryanalysis_and_more --noinput
+DATABASE_URL='postgres://nightowl_lab_migrator@127.0.0.1:55432/nightowl_migration_test?sslmode=prefer' \
+PGPASSFILE=/secure/lab/pgpass \
+  python manage.py migrate agents 0047_persistedtelemetryanalysis_and_more --noinput
 ```
 
 Nao usar este comando em producao. O rollback operacional preferencial pode ser restaurar backup consistente em ambiente aprovado; downgrade de schema nao substitui recuperacao de dados. Se ja houve escrita sob schema novo, voltar codigo sem reverter schema so e aceitavel depois que o teste de compatibilidade confirmar que o codigo antigo tolera as colunas/tabelas novas. Se nao, e necessario plano de manutencao e restauracao, considerando que restaurar o backup anterior perde todas as escritas posteriores ao ponto de backup.
