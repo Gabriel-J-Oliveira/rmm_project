@@ -4873,7 +4873,7 @@ class AgentReleaseGovernanceTests(TestCase):
             revoked_at=timezone.now(),
             revocation_reason='rotacao comprometida',
         )
-        release = self.release()
+        release = self.release(rollout_paused=False)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
@@ -4881,7 +4881,7 @@ class AgentReleaseGovernanceTests(TestCase):
         self.assertEqual(decision.reason_code, 'key_revoked')
 
     def test_unknown_signing_key_blocks_policy(self):
-        release = self.release(signature_key_id='nightowl-unknown-key')
+        release = self.release(signature_key_id='nightowl-unknown-key', rollout_paused=False)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
