@@ -3859,7 +3859,7 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(second.status_code, 409)
         self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 1)
 
-    def test_manual_update_blocks_development_release_outside_rollout(self):
+    def test_manual_update_allows_explicit_development_release_outside_rollout(self):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
         self.machine.update_policy = AgentMachine.UPDATE_POLICY_MANUAL
         self.machine.auto_update_enabled = False
@@ -3870,17 +3870,15 @@ class AgentReleasePolicyTests(TestCase):
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
-        self.assertFalse(decision.eligible)
-        self.assertEqual(decision.reason_code, 'rollout_not_selected')
+        self.assertTrue(decision.eligible, decision.reason_code)
         self.assertEqual(decision.release, release)
 
-    def test_manual_update_blocks_explicit_release_outside_rollout(self):
+    def test_manual_update_allows_explicit_release_outside_rollout(self):
         release = self.release(rollout=0)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
-        self.assertFalse(decision.eligible)
-        self.assertEqual(decision.reason_code, 'rollout_not_selected')
+        self.assertTrue(decision.eligible, decision.reason_code)
         self.assertEqual(decision.release, release)
 
     def test_automatic_rollout_zero_blocks_release(self):
@@ -3938,7 +3936,7 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(response.json()['reason_code'], 'release_paused')
         self.assertFalse(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).exists())
 
-    def test_manual_panel_update_rejects_explicit_release_outside_rollout(self):
+    def test_manual_panel_update_allows_explicit_release_outside_rollout(self):
         user = get_user_model().objects.create_user(username='tech-zero-rollout', is_staff=True)
         portal = Client()
         portal.force_login(user)
@@ -3949,9 +3947,10 @@ class AgentReleasePolicyTests(TestCase):
             {'action': 'update_agent', 'release_id': str(release.id)},
         )
 
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()['reason_code'], 'rollout_not_selected')
-        self.assertFalse(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).exists())
+        self.assertEqual(response.status_code, 201)
+        job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
+        self.assertEqual(job.status, AgentJob.STATUS_QUEUED)
+        self.assertEqual(job.agent_release_id, release.pk)
 
     def test_manual_panel_update_blocks_paused_endpoint(self):
         user_model = get_user_model()

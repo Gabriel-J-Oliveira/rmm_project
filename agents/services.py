@@ -1061,7 +1061,9 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
 
     bucket = deterministic_rollout_bucket(endpoint, release)
     rollout_percentage = 100 if release.mandatory and not automatic_rollout else min(100, max(0, release.rollout_percentage or 0))
-    if (not manual or explicit_release is not None) and not campaign_selection and bucket >= rollout_percentage:
+    # The percentage gates automatic selection, not an operator's explicit
+    # release choice. Pause/revocation/signature/channel checks remain separate.
+    if not manual and not campaign_selection and bucket >= rollout_percentage:
         return decision(False, UPDATE_POLICY_REASON_ROLLOUT_NOT_SELECTED, release, bucket)
 
     policy = endpoint.update_policy or AgentMachine.UPDATE_POLICY_MANUAL

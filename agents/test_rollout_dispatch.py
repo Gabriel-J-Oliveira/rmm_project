@@ -22,7 +22,7 @@ from .models import AgentJob, AgentMachine, AgentRelease, AgentRolloutTarget, Au
 from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .rollout_dispatch import dispatch_rollout_campaign
 from .rollout_planning import build_rollout_dispatch_plan
-from .services import AgentUpdateDecision, build_agent_rollout_preview, build_update_agent_job_payload, change_agent_release_rollout
+from .services import AgentUpdateDecision, build_agent_rollout_preview, build_update_agent_job_payload, change_agent_release_rollout, evaluate_agent_update_eligibility
 
 
 @override_settings(NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED=True, NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED=True)
@@ -247,6 +247,33 @@ class RolloutDispatchTests(TestCase):
         audit = AuditEvent.objects.get(event_type='agent.update_dispatch_blocked')
         self.assertEqual(audit.metadata['reason_code'], 'release_paused')
         self.assertEqual(audit.metadata['target_id'], str(target.pk))
+
+    def test_explicit_manual_release_with_zero_rollout_is_delivered(self):
+        release = self.release
+        release.rollout_percentage = 0
+        release.save(update_fields=['rollout_percentage'])
+        decision = evaluate_agent_update_eligibility(
+            self.machine, manual=True, explicit_release=release,
+        )
+        self.assertTrue(decision.eligible, decision.reason_code)
+        job = AgentJob.objects.create(
+            endpoint=self.machine, agent_release=release, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_QUEUED,
+            payload=build_update_agent_job_payload(
+                self.machine, decision, source='manual_panel', manual_explicit=True,
+            ),
+        )
+        self.machine.set_agent_token('synthetic-manual-zero-rollout-token')
+        self.machine.save(update_fields=['agent_token_hash'])
+
+        response = Client(HTTP_AUTHORIZATION='Bearer synthetic-manual-zero-rollout-token').get(
+            '/api/agent/jobs/pull/',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.json()['jobs']], [str(job.pk)])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_SENT)
 
 
 @unittest.skipUnless(connection.vendor == 'postgresql', 'Requires PostgreSQL row locks')
