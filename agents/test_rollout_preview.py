@@ -367,6 +367,9 @@ class AgentRolloutPreviewTests(TestCase):
         self.assertEqual(audit.channel_after, AgentMachine.UPDATE_CHANNEL_DEVELOPMENT)
         self.assertEqual(audit.reason, 'Explicit manual update channel selection')
         self.assertEqual(audit.metadata['changed_fields'], ['update_channel'])
+        record_heartbeat(self.machine, {'hostname': self.machine.hostname}, {})
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.update_channel, AgentMachine.UPDATE_CHANNEL_DEVELOPMENT)
 
         response = self.client.post(url, {
             'update_channel': AgentMachine.UPDATE_CHANNEL_STABLE,
@@ -424,11 +427,39 @@ class AgentRolloutPreviewTests(TestCase):
         self.assertEqual(selected['channel'], AgentRelease.CHANNEL_DEVELOPMENT)
         self.assertEqual(selected['source_channel'], AgentRelease.CHANNEL_STABLE)
         self.assertEqual(selected['status'], AgentRelease.STATUS_PAUSED)
-        self.assertTrue(selected['eligible'])
-        self.assertEqual(selected['reason_code'], 'eligible')
+        self.assertFalse(selected['eligible'])
+        self.assertEqual(selected['reason_code'], 'release_paused')
         self.assertEqual(selected['rollout_percentage'], 0)
         self.assertTrue(selected['rollout_paused'])
         self.assertFalse(AgentJob.objects.exists())
+
+    def test_channel_cannot_change_while_update_job_is_active(self):
+        user = get_user_model().objects.create_user(username='channel-busy-operator', is_staff=True, is_superuser=True)
+        self.client.force_login(user)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_STABLE
+        self.machine.save(update_fields=['update_channel'])
+        old_channel = self.machine.update_channel
+        AgentJob.objects.create(
+            endpoint=self.machine,
+            job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_RUNNING,
+            payload={'release_id': str(self.release.pk), 'channel': self.release.channel},
+        )
+
+        response = self.client.post(reverse('api-endpoint-update-policy', kwargs={'pk': str(self.machine.pk)}), {
+            'update_channel': AgentMachine.UPDATE_CHANNEL_DEVELOPMENT,
+            'reason': 'Channel switch while updater is active',
+        })
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['error'], 'update_job_already_pending')
+        self.machine.refresh_from_db()
+        self.assertEqual(self.machine.update_channel, old_channel)
+        self.assertFalse(AgentReleaseAudit.objects.filter(
+            endpoint=self.machine,
+            action=AgentReleaseAudit.ACTION_ENDPOINT_POLICY_CHANGED,
+        ).exists())
+        self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 1)
 
     def test_channel_policy_api_rejects_unauthorized_and_invalid_channel(self):
         url = reverse('api-endpoint-update-policy', kwargs={'pk': str(self.machine.pk)})

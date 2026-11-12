@@ -3504,6 +3504,151 @@ class AgentReleasePolicyTests(TestCase):
         defaults.update(kwargs)
         return AgentReleaseTrustBundle.objects.create(bundle_version=bundle_version, **defaults)
 
+    def queue_update_job(self, release, *, source='manual_panel'):
+        manual = source == 'manual_panel'
+        decision = evaluate_agent_update_policy(
+            self.machine, manual=manual, explicit_release=release, record_evaluation=False,
+        )
+        self.assertTrue(decision.eligible, decision.reason_code)
+        payload = build_update_agent_job_payload(
+            self.machine, decision, source=source, manual_explicit=manual,
+        )
+        return AgentJob.objects.create(
+            endpoint=self.machine, agent_release=release, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            status=AgentJob.STATUS_QUEUED, payload=payload,
+        )
+
+    def test_pull_revalidates_paused_revoked_and_superseded_releases(self):
+        cases = (
+            ('paused', {'status': AgentRelease.STATUS_PAUSED, 'rollout_paused': True}),
+            ('revoked', {'status': AgentRelease.STATUS_REVOKED, 'revoked': True, 'rollout_paused': True}),
+            ('superseded', {'status': AgentRelease.STATUS_SUPERSEDED, 'rollout_paused': True}),
+        )
+        for suffix, values in cases:
+            with self.subTest(state=suffix):
+                release = self.release(version=f'0.1.0.7-{suffix}')
+                job = self.queue_update_job(release)
+                AgentRelease.objects.filter(pk=release.pk).update(**values)
+
+                response = self.client.get(reverse('agent-jobs-pull'))
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()['jobs'], [])
+                job.refresh_from_db()
+                self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+                self.assertEqual(job.error_code, 'UPDATE_DISPATCH_REVALIDATION_FAILED')
+                audit = AuditEvent.objects.get(event_type='agent.update_dispatch_blocked', metadata__job_id=str(job.pk))
+                self.assertEqual(audit.metadata['reason_code'], {
+                    'paused': 'release_paused', 'revoked': 'release_revoked',
+                    'superseded': 'release_not_available',
+                }[suffix])
+
+    def test_pull_revalidates_endpoint_channel_and_signed_contract(self):
+        release = self.release(version='0.1.0.7-channel', channel=AgentRelease.CHANNEL_DEVELOPMENT)
+        self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
+        self.machine.save(update_fields=['update_channel'])
+        job = self.queue_update_job(release)
+        AgentMachine.objects.filter(pk=self.machine.pk).update(update_channel=AgentMachine.UPDATE_CHANNEL_STABLE)
+
+        response = self.client.get(reverse('agent-jobs-pull'))
+
+        self.assertEqual(response.json()['jobs'], [])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(AuditEvent.objects.get(event_type='agent.update_dispatch_blocked').metadata['reason_code'], 'channel_no_release')
+
+        AgentMachine.objects.filter(pk=self.machine.pk).update(update_channel=AgentMachine.UPDATE_CHANNEL_STABLE)
+        self.machine.refresh_from_db()
+        release = self.release(version='0.1.0.7-contract')
+        job = self.queue_update_job(release)
+        job.payload['sha256'] = 'f' * 64
+        job.save(update_fields=['payload'])
+        response = self.client.get(reverse('agent-jobs-pull'))
+        self.assertEqual(response.json()['jobs'], [])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(AuditEvent.objects.filter(event_type='agent.update_dispatch_blocked').count(), 2)
+
+    def test_pull_revalidates_signature_and_does_not_block_other_jobs(self):
+        release = self.release(version='0.1.0.7-key')
+        update_job = self.queue_update_job(release)
+        other_job = AgentJob.objects.create(
+            endpoint=self.machine, job_type=AgentJob.TYPE_PING, payload={'count': 1},
+        )
+        AgentReleaseSigningKey.objects.filter(key_id=release.signature_key_id).update(
+            status=AgentReleaseSigningKey.STATUS_REVOKED, revoked_at=timezone.now(),
+        )
+
+        response = self.client.get(reverse('agent-jobs-pull'))
+
+        self.assertEqual([item['id'] for item in response.json()['jobs']], [str(other_job.pk)])
+        update_job.refresh_from_db()
+        other_job.refresh_from_db()
+        self.assertEqual(update_job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(AuditEvent.objects.get(event_type='agent.update_dispatch_blocked').metadata['reason_code'], 'key_revoked')
+        self.assertEqual(other_job.status, AgentJob.STATUS_SENT)
+
+    def test_valid_manual_update_keeps_v1_and_v2_delivery_contracts(self):
+        for protocol_v2 in (False, True):
+            with self.subTest(protocol_v2=protocol_v2):
+                release = self.release(version=f'0.1.0.7-valid-{int(protocol_v2)}')
+                job = self.queue_update_job(release)
+                response = self.client.get(
+                    reverse('agent-jobs-pull'),
+                    **({'HTTP_X_NIGHTOWL_JOB_PROTOCOL': '2'} if protocol_v2 else {}),
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual([item['id'] for item in response.json()['jobs']], [str(job.pk)])
+                job.refresh_from_db()
+                self.assertEqual(job.status, AgentJob.STATUS_SENT)
+                self.assertEqual(response.json()['jobs'][0]['payload']['release_id'], str(release.pk))
+
+    def test_legacy_automatic_policy_job_is_revalidated_and_delivered(self):
+        self.machine.update_policy = AgentMachine.UPDATE_POLICY_AUTOMATIC
+        self.machine.auto_update_enabled = True
+        self.machine.save(update_fields=['update_policy', 'auto_update_enabled'])
+        release = self.release(version='0.1.0.7-policy')
+        decision = evaluate_agent_update_policy(
+            self.machine, manual=False, explicit_release=release, record_evaluation=False,
+        )
+        self.assertTrue(decision.eligible, decision.reason_code)
+        job = AgentJob.objects.create(
+            endpoint=self.machine, agent_release=release, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            payload=build_update_agent_job_payload(
+                self.machine, decision, source='update_policy', manual_explicit=False,
+            ),
+        )
+
+        response = self.client.get(reverse('agent-jobs-pull'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.json()['jobs']], [str(job.pk)])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_SENT)
+
+    def test_explicit_manual_downgrade_override_is_preserved_at_dispatch(self):
+        self.machine.agent_version = '0.1.0.8'
+        self.machine.updater_version = '0.1.0.8'
+        self.machine.save(update_fields=['agent_version', 'updater_version'])
+        release = self.release(version='0.1.0.7-downgrade')
+        decision = evaluate_agent_update_policy(
+            self.machine, manual=True, explicit_release=release, allow_downgrade=True,
+            record_evaluation=False,
+        )
+        self.assertTrue(decision.eligible, decision.reason_code)
+        job = AgentJob.objects.create(
+            endpoint=self.machine, agent_release=release, job_type=AgentJob.TYPE_UPDATE_AGENT,
+            payload=build_update_agent_job_payload(
+                self.machine, decision, force=True, source='manual_panel', manual_explicit=True,
+            ),
+        )
+
+        response = self.client.get(reverse('agent-jobs-pull'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.json()['jobs']], [str(job.pk)])
+        self.assertTrue(response.json()['jobs'][0]['payload']['force'])
+
     def test_stable_endpoint_never_receives_development_release(self):
         self.release(version='0.1.0.9', channel=AgentRelease.CHANNEL_DEVELOPMENT)
 
@@ -3651,9 +3796,9 @@ class AgentReleasePolicyTests(TestCase):
         release = self.release(
             version='0.1.1.0-rc28',
             channel=AgentRelease.CHANNEL_DEVELOPMENT,
-            rollout=0,
-            rollout_paused=True,
-            status=AgentRelease.STATUS_PAUSED,
+            rollout=100,
+            rollout_paused=False,
+            status=AgentRelease.STATUS_PUBLISHED,
             minimum_updater_version='0.1.0.7',
         )
 
@@ -3714,7 +3859,7 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(second.status_code, 409)
         self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 1)
 
-    def test_manual_update_allows_development_release_with_rollout_zero(self):
+    def test_manual_update_allows_explicit_development_release_outside_rollout(self):
         self.machine.update_channel = AgentMachine.UPDATE_CHANNEL_DEVELOPMENT
         self.machine.update_policy = AgentMachine.UPDATE_POLICY_MANUAL
         self.machine.auto_update_enabled = False
@@ -3723,9 +3868,17 @@ class AgentReleasePolicyTests(TestCase):
         self.machine.save(update_fields=['update_channel', 'update_policy', 'auto_update_enabled', 'update_paused', 'agent_version'])
         release = self.release(version='0.1.1.0-rc1', channel=AgentRelease.CHANNEL_DEVELOPMENT, rollout=0, minimum_updater_version='0.1.0.7')
 
-        decision = evaluate_agent_update_policy(self.machine, manual=True)
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
-        self.assertTrue(decision.eligible)
+        self.assertTrue(decision.eligible, decision.reason_code)
+        self.assertEqual(decision.release, release)
+
+    def test_manual_update_allows_explicit_release_outside_rollout(self):
+        release = self.release(rollout=0)
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertTrue(decision.eligible, decision.reason_code)
         self.assertEqual(decision.release, release)
 
     def test_automatic_rollout_zero_blocks_release(self):
@@ -3743,14 +3896,22 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(response.json()['reason_code'], 'rollout_not_selected')
         self.assertEqual(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).count(), 0)
 
-    def test_manual_update_allows_explicit_paused_release(self):
+    def test_manual_update_blocks_explicit_paused_release(self):
         release = self.release(rollout=0, rollout_paused=True, status=AgentRelease.STATUS_PAUSED)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
-        self.assertTrue(decision.eligible)
-        self.assertEqual(decision.reason_code, 'eligible')
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'release_paused')
         self.assertEqual(decision.release, release)
+
+    def test_manual_update_blocks_explicit_superseded_release(self):
+        release = self.release(rollout=100, status=AgentRelease.STATUS_SUPERSEDED)
+
+        decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
+
+        self.assertFalse(decision.eligible)
+        self.assertEqual(decision.reason_code, 'release_not_available')
 
     def test_manual_update_blocks_explicit_revoked_release(self):
         release = self.release(rollout=0, revoked=True)
@@ -3759,6 +3920,37 @@ class AgentReleasePolicyTests(TestCase):
 
         self.assertFalse(decision.eligible)
         self.assertEqual(decision.reason_code, 'release_revoked')
+
+    def test_manual_panel_update_rejects_paused_explicit_release(self):
+        user = get_user_model().objects.create_user(username='tech-paused-release', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        release = self.release(rollout=100, rollout_paused=True, status=AgentRelease.STATUS_PAUSED)
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id)},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['reason_code'], 'release_paused')
+        self.assertFalse(AgentJob.objects.filter(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT).exists())
+
+    def test_manual_panel_update_allows_explicit_release_outside_rollout(self):
+        user = get_user_model().objects.create_user(username='tech-zero-rollout', is_staff=True)
+        portal = Client()
+        portal.force_login(user)
+        release = self.release(rollout=0)
+
+        response = portal.post(
+            reverse('api-endpoint-job-create', kwargs={'pk': str(self.machine.id)}),
+            {'action': 'update_agent', 'release_id': str(release.id)},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        job = AgentJob.objects.get(endpoint=self.machine, job_type=AgentJob.TYPE_UPDATE_AGENT)
+        self.assertEqual(job.status, AgentJob.STATUS_QUEUED)
+        self.assertEqual(job.agent_release_id, release.pk)
 
     def test_manual_panel_update_blocks_paused_endpoint(self):
         user_model = get_user_model()
@@ -3817,9 +4009,9 @@ class AgentReleasePolicyTests(TestCase):
         release = self.release(
             version='0.1.1.0-rc7',
             channel=AgentRelease.CHANNEL_DEVELOPMENT,
-            rollout=0,
-            rollout_paused=True,
-            status=AgentRelease.STATUS_PAUSED,
+            rollout=100,
+            rollout_paused=False,
+            status=AgentRelease.STATUS_PUBLISHED,
             minimum_updater_version='0.1.0.7',
             manifest_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc7/release-manifest.json',
             manifest_sha256='b' * 64,
@@ -3869,9 +4061,9 @@ class AgentReleasePolicyTests(TestCase):
         release = self.release(
             version='0.1.1.0-rc6',
             channel=AgentRelease.CHANNEL_DEVELOPMENT,
-            rollout=0,
-            rollout_paused=True,
-            status=AgentRelease.STATUS_PAUSED,
+            rollout=100,
+            rollout_paused=False,
+            status=AgentRelease.STATUS_PUBLISHED,
             minimum_updater_version='0.1.0.7',
             manifest_url='https://nightowl.controlsul.com.br/downloads/nightowl-agent/releases/0.1.1.0-rc6/release-manifest.json',
             manifest_sha256='b' * 64,
@@ -4143,7 +4335,8 @@ class AgentReleasePolicyTests(TestCase):
         self.assertEqual(len(options), 1)
         self.assertEqual(options[0]['id'], str(release.id))
         self.assertEqual(options[0]['version'], '0.1.1.0-rc3')
-        self.assertTrue(options[0]['eligible'])
+        self.assertFalse(options[0]['eligible'])
+        self.assertEqual(options[0]['reason_code'], 'release_paused')
         self.assertEqual(options[0]['status'], AgentRelease.STATUS_PAUSED)
         self.assertTrue(options[0]['rollout_paused'])
         self.assertIn('released_at', options[0])
@@ -4680,7 +4873,7 @@ class AgentReleaseGovernanceTests(TestCase):
             revoked_at=timezone.now(),
             revocation_reason='rotacao comprometida',
         )
-        release = self.release()
+        release = self.release(rollout_paused=False)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
@@ -4688,7 +4881,7 @@ class AgentReleaseGovernanceTests(TestCase):
         self.assertEqual(decision.reason_code, 'key_revoked')
 
     def test_unknown_signing_key_blocks_policy(self):
-        release = self.release(signature_key_id='nightowl-unknown-key')
+        release = self.release(signature_key_id='nightowl-unknown-key', rollout_paused=False)
 
         decision = evaluate_agent_update_policy(self.machine, manual=True, explicit_release=release)
 
