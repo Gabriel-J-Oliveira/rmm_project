@@ -11,7 +11,7 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-assert(template.includes("css/endpoint_detail_refinement.css' %}?v=rc47-05-04b-1"), "detail refinement stylesheet uses the combined RC47-05/04B cache key");
+assert(template.includes("css/endpoint_detail_refinement.css' %}?v=rc47-05-04b-2"), "detail refinement stylesheet uses the combined RC47-05/04B cache key");
 assert(template.includes("js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2"), "endpoint detail script uses a fresh cache key");
 assert(!base.includes("endpoint_detail_refinement.css"), "refinement stylesheet must not be global");
 assert(template.includes("block icon_script"), "endpoint detail overrides the global icon loader");

@@ -319,6 +319,14 @@ body.page-endpoint-detail .endpoint-detail-shell *::-webkit-scrollbar-thumb:hove
     }
 }
 
+@media (max-width: 980px) {
+    /* The base .app-shell.has-sidebar selector is more specific than the
+       generic tablet rule, so collapse this page's shell explicitly. */
+    body.page-endpoint-detail .app-shell.has-sidebar {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 body.page-endpoint-detail .endpoint-detail-shell .endpoint-assigned-policies {
     margin-block: 16px;
 }
