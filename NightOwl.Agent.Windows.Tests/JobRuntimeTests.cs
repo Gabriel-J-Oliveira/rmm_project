@@ -20,9 +20,39 @@ internal static class JobRuntimeTests
         await Software();
         await Recovery();
         await OwnedChild();
+        ServicePages();
         string services=JsonSerializer.Serialize(WindowsServicesCollector.Collect(new[]{"EventLog"},1,false));
         Check(services.Contains("schema_version") && services.Contains("read_only"),"Service read contract missing.");
         Console.WriteLine("PASS jobs runtime: independent dispatch, durable inbox/outcomes, duplicate/ACK retry, ownership, bounded contracts, software trust/flag/synthetic verification, owned child cancellation, local read-only services.");
+    }
+
+    private static void ServicePages()
+    {
+        WindowsServiceInfo[] rows = Enumerable.Range(0, 21)
+            .Select(i => new WindowsServiceInfo($"svc-{i:D3}", $"Service {i}", "Running", "Automatic"))
+            .ToArray();
+        DateTimeOffset capturedAt = DateTimeOffset.Parse("2026-11-15T12:00:00+00:00");
+        WindowsServicePage first = WindowsServicesCollector.BuildPage(rows, "0123456789abcdef0123456789abcdef", capturedAt, 0, 20);
+        WindowsServicePage last = WindowsServicesCollector.BuildPage(rows, "0123456789abcdef0123456789abcdef", capturedAt, 20, 20);
+        Check(first.SchemaVersion == 2 && first.ReadOnly && first.Services.Count == 20 && first.HasMore &&
+              first.NextAfterName == "svc-019", "First service page is not bounded or resumable.");
+        Check(last.Services.Count == 1 && !last.HasMore && last.NextAfterName is null &&
+              last.CollectedAt == capturedAt, "Final service page does not close the stable snapshot.");
+        string json = JsonSerializer.Serialize(first, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Check(json.Contains("display_name") && json.Contains("startup_type") &&
+              !json.Contains("account") && !json.Contains("executable") && !json.Contains("command_line"),
+              "Paged service result exposed configuration or command-line data.");
+        WindowsServiceInfo[] worstCaseRows = Enumerable.Range(0, 20)
+            .Select(i => new WindowsServiceInfo(new string('界', 256), new string('界', 256), "Running", "Automatic"))
+            .ToArray();
+        string worstCase = JsonSerializer.Serialize(WindowsServicesCollector.BuildPage(worstCaseRows,
+            "0123456789abcdef0123456789abcdef", capturedAt, 0, 20), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Check(Encoding.UTF8.GetByteCount(worstCase) <= JobExecutionPolicy.MaxOutputBytes,
+            "A maximum-length Unicode service page exceeded the durable job response budget.");
+        bool expired = false;
+        try { _ = WindowsServicesCollector.CollectPaged("missing", "0123456789abcdef0123456789abcdef", 20); }
+        catch (InvalidOperationException ex) when (ex.Message == "SERVICE_SNAPSHOT_EXPIRED") { expired = true; }
+        Check(expired, "Unknown service snapshot cursor was not rejected.");
     }
     private static AgentConfig Config(string root) => new() {MachineId=Guid.NewGuid().ToString("D"),AgentToken="synthetic-only",
         ServerBaseUrl="https://isolated.invalid",JobsPullUrl="https://isolated.invalid/pull",JobsResultUrl="https://isolated.invalid/result",

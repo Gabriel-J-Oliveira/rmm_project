@@ -1577,10 +1577,11 @@ class AgentJobsPullView(APIView):
                 continue
             if job.job_type in ('collect_services','install_software'):
                 from django.conf import settings
-                from .internal_jobs import validate_internal_payload, internal_capability
+                from .internal_jobs import validate_internal_payload, internal_capability, required_internal_capability
                 flag = 'NIGHTOWL_SERVICE_COLLECTION_ENABLED' if job.job_type=='collect_services' else 'NIGHTOWL_SOFTWARE_INSTALL_ENABLED'
                 try:
-                    if not getattr(settings,flag,False) or not internal_capability(machine,job.job_type):
+                    if (not getattr(settings,flag,False) or
+                            not internal_capability(machine,required_internal_capability(job.job_type,job.payload))):
                         raise ValueError('internal_job_disabled')
                     validate_internal_payload(job.job_type,job.payload)
                 except ValueError:

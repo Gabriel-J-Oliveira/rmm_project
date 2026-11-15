@@ -86,6 +86,25 @@ try {
         Get-Content $out
         Get-Content $err
         if ($endpointPolicyProcess.ExitCode -ne 0) { throw "Endpoint policy browser E2E failed with exit code $($endpointPolicyProcess.ExitCode)" }
+
+        # The service manager browser test uses only synthetic endpoint data and
+        # intercepts its read-only job API; it never creates a backend job.
+        $artifactWork = Join-Path $work 'service-manager-artifacts'
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = $artifactWork
+        $serviceManagerArguments = @('manage.py', 'test',
+            'agents.test_service_manager.ServiceManagerBrowserTests.test_real_endpoint_service_manager_ui',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $serviceManagerProcess = Start-Process -FilePath $python -ArgumentList $serviceManagerArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        $artifactUpload = Join-Path $env:RUNNER_TEMP 'nightowl-service-manager'
+        New-Item -ItemType Directory -Path $artifactUpload -Force | Out-Null
+        if (Test-Path -LiteralPath $artifactWork) {
+            Copy-Item -Path (Join-Path $artifactWork '*.png') -Destination $artifactUpload -Force -ErrorAction Continue
+        }
+        Remove-Item Env:NIGHTOWL_E2E_ARTIFACT_DIR -ErrorAction SilentlyContinue
+        if ($serviceManagerProcess.ExitCode -ne 0) { throw "Service manager browser E2E failed with exit code $($serviceManagerProcess.ExitCode)" }
     }
 
     # The independent probe runs AFTER the full E2E, even on failure: it cannot
