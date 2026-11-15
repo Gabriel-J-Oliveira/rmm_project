@@ -29,6 +29,7 @@ assert(chart(points, ['network.nic.received_bytes_per_sec'], null).includes('KiB
 assert(chart([{collected_at:new Date().toISOString(),metrics:{'network.nic.received_bytes_per_sec':1048576}}], ['network.nic.received_bytes_per_sec'], null).includes('MiB/s'));
 assert(chart(points, ['disk.os.read_latency_ms'], null).includes('ms'));
 assert(chart([{collected_at:new Date().toISOString(),metrics:{}}], ['cpu.usage_percent'], 100).includes('Sem medição'));
+assert(chart([{collected_at:new Date().toISOString(),metrics:{}}], ['cpu.usage_percent'], 100, ['CPU'], 'CPU sem medição válida nesta sessão.').includes('CPU sem medição válida'));
 const missing = points.map(p => ({...p, metrics:{...p.metrics}}));
 delete missing[5].metrics['cpu.usage_percent'];
 assert(chart(missing, ['cpu.usage_percent'],100).split(' M').length >= 3, 'Missing evidence must break the chart line');
@@ -44,7 +45,7 @@ if (process.argv.includes('--visual')) (async () => {
     });
     try {
         const page = await browser.newPage();
-        let active = false, expired = false;
+        let active = false, expired = false, sampleReady = false, currentPoints = points;
         const css = [
             'static/css/nightowl.css',
             'static/css/endpoint_actions_jobs.css',
@@ -59,16 +60,32 @@ if (process.argv.includes('--visual')) (async () => {
                     active = body.action !== 'stop';
                     return route.fulfill({contentType:'application/json', body:JSON.stringify({state:active?'active':'expired', session_id:'synthetic-live', expires_at:new Date(Date.now()+45000).toISOString()})});
                 }
-                return route.fulfill({contentType:'application/json', body:JSON.stringify({state:expired?'expired':'active', session_id:'synthetic-live', points, last_sample_at:points.at(-1).collected_at, stale:false})});
+                const responsePoints = sampleReady ? currentPoints : [];
+                return route.fulfill({contentType:'application/json', body:JSON.stringify({state:expired?'expired':'active', session_id:'synthetic-live', points:responsePoints, last_sample_at:responsePoints.at(-1)?.collected_at || null, stale:false})});
             }
-            return route.fulfill({contentType:'text/html', body:'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+css+'</style><body class="page-endpoint-detail"><main class="endpoint-detail-shell" style="padding:16px"><h1>Fixture sintetica: monitoramento ao vivo</h1><section data-endpoint-detail data-live-allowed="yes" data-endpoint-id="synthetic"><section class="endpoint-tab-panel" data-endpoint-tab-panel="monitoring">'+monitoring+'</section><section class="endpoint-tab-panel" data-endpoint-tab-panel="inventory"><article class="panel endpoint-dense-card">Card informativo sintético</article><button class="copy-btn">Controle interativo</button></section></section></main></body>'});
+            return route.fulfill({contentType:'text/html', body:'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+css+'</style><body class="page-endpoint-detail"><main class="endpoint-detail-shell" style="padding:16px"><h1>Fixture sintetica: monitoramento ao vivo</h1><section data-endpoint-detail data-live-allowed="yes" data-endpoint-id="synthetic"><section class="endpoint-tab-panel" data-endpoint-tab-panel="monitoring">'+monitoring+'</section><section class="endpoint-actions-tab"><div class="endpoint-action-groups" data-endpoint-actions-core><section class="endpoint-action-category">Operações</section></div><div data-endpoint-actions-maintenance><section class="endpoint-action-category">Manutenção</section></div></section><section class="endpoint-tab-panel" data-endpoint-tab-panel="inventory"><article class="panel endpoint-dense-card">Card informativo sintético</article><button class="copy-btn">Controle interativo</button></section></section></main></body>'});
         });
         await page.goto('http://isolated.invalid/');
         await page.addScriptTag({path:path.join(__dirname,'../../static/js/endpoint_live.js')});
+        const corePadding = await page.locator('[data-endpoint-actions-core]').evaluate(el => getComputedStyle(el).padding);
+        assert.equal(corePadding, '0px', 'only the actions tab core wrapper drops external padding');
+        const actionAlignment = await page.evaluate(() => {
+            const core = document.querySelector('[data-endpoint-actions-core] .endpoint-action-category').getBoundingClientRect();
+            const maintenance = document.querySelector('[data-endpoint-actions-maintenance] .endpoint-action-category').getBoundingClientRect();
+            return Math.abs(core.left - maintenance.left) < 1 && Math.abs(core.right - maintenance.right) < 1;
+        });
+        assert.equal(actionAlignment, true, 'operations and agent maintenance categories align');
+        await page.emulateMedia({colorScheme:'light'});
+        assert.equal(await page.locator('[data-endpoint-actions-core]').evaluate(el => getComputedStyle(el).padding), '0px');
+        await page.emulateMedia({colorScheme:'dark'});
         await page.getByRole('button', {name:'Iniciar'}).click();
         await page.locator('[data-live-body]:not([hidden])').waitFor();
+        assert.equal(await page.locator('[data-live-grid]').isHidden(), true, 'charts stay hidden until the first real sample');
+        assert.equal(await page.locator('[data-live-selectors]').isHidden(), true, 'empty selectors are not presented as usable controls');
+        await page.getByText('Aguardando a primeira amostra real do agente.').waitFor();
+        sampleReady = true;
         try {
-            await page.waitForFunction(() => document.querySelectorAll('.endpoint-live svg path').length >= 6, null, {timeout:5000});
+            await page.waitForFunction(() => document.querySelectorAll('.endpoint-live svg path').length >= 6, null, {timeout:7000});
         } catch (error) {
             const diagnostic = await page.evaluate(() => ({
                 status:document.querySelector('[data-live-state]')?.textContent,
@@ -82,6 +99,8 @@ if (process.argv.includes('--visual')) (async () => {
         assert.equal(await page.locator('.endpoint-live img').count(), 0);
         assert.equal(await page.locator('[data-live-interface] option').count(), 2);
         assert.equal(await page.locator('[data-live-disk] option').count(), 2);
+        assert.equal(await page.locator('[data-live-interface]').inputValue(), 'nic', 'first interface follows collector metadata order');
+        assert.equal(await page.locator('[data-live-disk]').inputValue(), 'os', 'first disk follows collector metadata order');
         const selectStyles = await page.locator('[data-live-interface]').evaluate(select => {
             const style = getComputedStyle(select);
             return {width:style.width,minHeight:style.minHeight,borderColor:style.borderTopColor,
@@ -106,9 +125,27 @@ if (process.argv.includes('--visual')) (async () => {
         await page.emulateMedia({colorScheme:'dark'});
         await page.locator('[data-live-interface]').selectOption('eth1');
         await page.locator('[data-live-disk]').selectOption('data');
-        await page.waitForTimeout(80);
+        await page.evaluate(() => { window.savedInterfaceOption = document.querySelector('[data-live-interface]').selectedOptions[0]; });
+        await page.waitForTimeout(5200);
         assert.equal(await page.locator('[data-live-interface]').inputValue(), 'eth1');
         assert.equal(await page.locator('[data-live-disk]').inputValue(), 'data');
+        assert.equal(await page.evaluate(() => window.savedInterfaceOption === document.querySelector('[data-live-interface]').selectedOptions[0]), true,
+            'polling with unchanged options does not replace select options');
+        currentPoints = points.map((point, index) => index === points.length - 1 ? ({...point,
+            quality:{...point.quality, interfaces:{nic:point.quality.interfaces.nic}, disk_instances:{os:point.quality.disk_instances.os}}
+        }) : point);
+        await page.waitForTimeout(5200);
+        assert.equal(await page.locator('[data-live-interface]').inputValue(), 'nic', 'disappeared interface falls back to the first valid option');
+        assert.equal(await page.locator('[data-live-disk]').inputValue(), 'os', 'disappeared disk falls back to the first valid option');
+        assert.match(await page.locator('[data-live-state]').textContent(), /seleção alterada/);
+        currentPoints = currentPoints.map(point => ({...point,
+            metrics:Object.fromEntries(Object.entries(point.metrics).filter(([name]) => !name.startsWith('disk.'))),
+            quality:{...point.quality, disk_instances:{}}
+        }));
+        await page.waitForTimeout(5200);
+        assert.equal(await page.locator('[data-live-selector-wrapper="disk"]').isHidden(), true, 'missing disk metrics do not leave an empty select');
+        assert.match(await page.locator('[data-live-selector-state]').textContent(), /Disco sem métrica válida/);
+        assert.match(await page.locator('[data-live-storage]').textContent(), /Disco sem medição válida/);
         const monitoringCard = page.locator('.endpoint-monitoring-summary');
         const cardBeforeHover = await monitoringCard.evaluate(card => {
             const style=getComputedStyle(card); return {background:style.backgroundColor,border:style.borderColor,
@@ -147,12 +184,19 @@ if (process.argv.includes('--visual')) (async () => {
         for (const [width,height] of [[1920,1080],[1366,900],[1024,768],[390,844]]) {
             await page.setViewportSize({width,height});
             assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth+1));
+            assert.equal(await page.locator('[data-endpoint-actions-core]').evaluate(el => getComputedStyle(el).padding), '0px');
+            assert.equal(await page.evaluate(() => {
+                const core = document.querySelector('[data-endpoint-actions-core] .endpoint-action-category').getBoundingClientRect();
+                const maintenance = document.querySelector('[data-endpoint-actions-maintenance] .endpoint-action-category').getBoundingClientRect();
+                return Math.abs(core.left - maintenance.left) < 1 && Math.abs(core.right - maintenance.right) < 1;
+            }), true, `action categories remain aligned at ${width}px`);
             assert(await page.locator('.endpoint-live-selectors').evaluate(el => el.getBoundingClientRect().width > 0));
             await page.screenshot({path:path.join(process.env.TEMP,`nightowl-live-${width}.png`), fullPage:true});
         }
         await page.getByRole('button',{name:'Encerrar',exact:true}).click();
         await page.getByText(/Análise encerrada/).waitFor();
-        assert(await page.locator('.endpoint-live svg path').count() >= 6);
+        assert(await page.locator('.endpoint-live svg path').count() > 0, 'available metrics remain visible after ending the session');
+        assert.match(await page.locator('[data-live-storage]').textContent(), /Disco sem medição válida/);
         await page.getByRole('button',{name:'Limpar',exact:true}).click();
         await page.locator('[data-live-body]').waitFor({state:'hidden'});
         expired = true;
