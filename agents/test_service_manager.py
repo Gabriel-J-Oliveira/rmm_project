@@ -91,12 +91,18 @@ class ServiceManagerApiTests(TestCase):
         self.assertEqual(validate_internal_payload('collect_services', payload), payload)
         invalid = [
             {**payload, 'page_size': 100}, {**payload, 'command': 'whoami'},
-            {**payload, 'endpoint_machine_id': 'other-machine'}, {**payload, 'rows_collected': 20},
+            {**payload, 'rows_collected': 20},
             {**payload, 'after_name': 'EventLog'}, {**payload, 'schema_version': True},
         ]
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_internal_payload('collect_services', value)
+        # Machine identity is contextual: validate the binding where the endpoint
+        # is known, rather than in the shape-only payload validator.
+        with self.assertRaisesMessage(ValueError, 'identity_unavailable'):
+            create_internal_job(self.operator, self.machine.pk, 'collect_services',
+                {**payload, 'endpoint_machine_id': 'other-machine'})
+        self.assertFalse(AgentJob.objects.exists())
         last_page = {**payload, 'after_name': 'Service779', 'expected_snapshot_id': '0123456789abcdef0123456789abcdef',
             'page_index': 40, 'rows_collected': 780, 'expected_total_services': 800,
             'expected_collected_at': timezone.now().isoformat()}
