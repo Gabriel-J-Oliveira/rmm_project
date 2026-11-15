@@ -178,7 +178,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: service-manager-browser-screenshots
-          path: .windows-e2e/service-manager-artifacts/*.png
+          path: ${{ runner.temp }}/nightowl-service-manager/*.png
           if-no-files-found: warn
 
   windows-bootstrap:

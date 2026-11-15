@@ -99,9 +99,12 @@ try {
         Get-Content $out
         Get-Content $err
         $artifactUpload = Join-Path $env:RUNNER_TEMP 'nightowl-service-manager'
+        $serviceManagerImages = Join-Path $artifactWork 'nightowl-service-manager'
         New-Item -ItemType Directory -Path $artifactUpload -Force | Out-Null
-        if (Test-Path -LiteralPath $artifactWork) {
-            Copy-Item -Path (Join-Path $artifactWork '*.png') -Destination $artifactUpload -Force -ErrorAction Continue
+        if ($serviceManagerProcess.ExitCode -eq 0) {
+            $images = @(Get-ChildItem -LiteralPath $serviceManagerImages -Filter '*.png' -File -ErrorAction Stop)
+            if ($images.Count -ne 2) { throw 'Service manager browser E2E did not produce both expected screenshots' }
+            Copy-Item -LiteralPath $images.FullName -Destination $artifactUpload -Force
         }
         Remove-Item Env:NIGHTOWL_E2E_ARTIFACT_DIR -ErrorAction SilentlyContinue
         if ($serviceManagerProcess.ExitCode -ne 0) { throw "Service manager browser E2E failed with exit code $($serviceManagerProcess.ExitCode)" }
