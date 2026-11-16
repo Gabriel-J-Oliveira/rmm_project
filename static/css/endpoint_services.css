@@ -1,0 +1,125 @@
+body.page-endpoint-detail .endpoint-services-dialog {
+    width: min(1120px, calc(100vw - 28px));
+    max-width: none;
+    max-height: min(92vh, 900px);
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--card);
+    color: var(--text-primary);
+    box-shadow: 0 24px 90px rgba(0, 0, 0, .38);
+}
+
+body.page-endpoint-detail .endpoint-services-dialog::backdrop { background: rgba(4, 7, 14, .72); backdrop-filter: blur(3px); }
+body.page-endpoint-detail .endpoint-services-dialog[open] { display: flex; flex-direction: column; }
+
+body.page-endpoint-detail .endpoint-services-header,
+body.page-endpoint-detail .endpoint-services-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+body.page-endpoint-detail .endpoint-services-header h2 { margin: 3px 0; font-size: 20px; }
+body.page-endpoint-detail .endpoint-services-header p,
+body.page-endpoint-detail .endpoint-services-kicker,
+body.page-endpoint-detail .endpoint-services-footer span,
+body.page-endpoint-detail .endpoint-services-phase-note { color: var(--text-secondary); font-size: 12px; }
+body.page-endpoint-detail .endpoint-services-header p { margin: 0; }
+body.page-endpoint-detail .endpoint-services-kicker { color: var(--soft-purple); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+
+body.page-endpoint-detail .endpoint-services-icon-button,
+body.page-endpoint-detail .endpoint-services-button {
+    min-height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 8px 13px;
+    background: var(--sidebar);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 750;
+    cursor: pointer;
+}
+body.page-endpoint-detail .endpoint-services-icon-button { width: 38px; padding: 0; font-size: 23px; }
+body.page-endpoint-detail .endpoint-services-button:not(:disabled) { border-color: var(--border-active); background: var(--purple-glow); }
+body.page-endpoint-detail .endpoint-services-button:disabled { opacity: .58; cursor: not-allowed; }
+
+body.page-endpoint-detail .endpoint-services-status { margin: 0; padding: 11px 20px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: 13px; }
+body.page-endpoint-detail .endpoint-services-status[data-state="success"] { color: var(--online); }
+body.page-endpoint-detail .endpoint-services-status[data-state="error"],
+body.page-endpoint-detail .endpoint-services-status[data-state="blocked"] { color: var(--offline); }
+body.page-endpoint-detail .endpoint-services-status[data-state="pending"] { color: var(--soft-purple); }
+
+body.page-endpoint-detail .endpoint-services-toolbar {
+    display: grid;
+    grid-template-columns: minmax(200px, 1.7fr) repeat(3, minmax(125px, 1fr));
+    gap: 10px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+}
+body.page-endpoint-detail .endpoint-services-toolbar[hidden] { display: none; }
+body.page-endpoint-detail .endpoint-services-toolbar label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; font-weight: 750; }
+body.page-endpoint-detail .endpoint-services-toolbar input,
+body.page-endpoint-detail .endpoint-services-toolbar select {
+    min-width: 0;
+    min-height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 9px;
+    background: var(--sidebar);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+}
+
+body.page-endpoint-detail .endpoint-services-content { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(230px, .8fr); min-height: 260px; flex: 1; overflow: hidden; }
+body.page-endpoint-detail .endpoint-services-list-wrap { min-width: 0; overflow: hidden; }
+body.page-endpoint-detail .endpoint-services-table-scroll { max-height: 52vh; min-height: 180px; overflow: auto; }
+body.page-endpoint-detail .endpoint-services-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+body.page-endpoint-detail .endpoint-services-table th { position: sticky; top: 0; z-index: 1; padding: 10px; background: var(--sidebar); color: var(--text-secondary); text-align: left; }
+body.page-endpoint-detail .endpoint-services-table td { padding: 8px 10px; border-top: 1px solid var(--border); color: var(--text-primary); vertical-align: top; }
+body.page-endpoint-detail .endpoint-services-table th:first-child,
+body.page-endpoint-detail .endpoint-services-table td:first-child { width: 25%; }
+body.page-endpoint-detail .endpoint-services-table th:nth-child(3),
+body.page-endpoint-detail .endpoint-services-table th:nth-child(4) { white-space: nowrap; }
+body.page-endpoint-detail .endpoint-services-row-select { border: 0; padding: 0; background: transparent; color: var(--soft-purple); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+body.page-endpoint-detail .endpoint-services-row-select[aria-pressed="true"] { color: var(--text-primary); font-weight: 800; }
+body.page-endpoint-detail .endpoint-services-state { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px; white-space: nowrap; }
+body.page-endpoint-detail .endpoint-services-state--running { color: var(--online); }
+body.page-endpoint-detail .endpoint-services-state--pending { color: var(--soft-purple); }
+body.page-endpoint-detail .endpoint-services-state--unknown { color: var(--text-secondary); }
+body.page-endpoint-detail .endpoint-services-properties { min-width: 0; padding: 16px; overflow: auto; border-left: 1px solid var(--border); background: var(--sidebar); }
+body.page-endpoint-detail .endpoint-services-properties h3 { margin: 0 0 12px; font-size: 14px; }
+body.page-endpoint-detail .endpoint-services-properties p { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+body.page-endpoint-detail .endpoint-services-properties dl { display: grid; gap: 11px; margin: 0; }
+body.page-endpoint-detail .endpoint-services-properties dl div { min-width: 0; }
+body.page-endpoint-detail .endpoint-services-properties dt { color: var(--text-secondary); font-size: 11px; }
+body.page-endpoint-detail .endpoint-services-properties dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; }
+body.page-endpoint-detail .endpoint-services-empty { padding: 24px; color: var(--text-secondary); text-align: center; }
+body.page-endpoint-detail .endpoint-services-footer { border-top: 1px solid var(--border); border-bottom: 0; flex-wrap: wrap; }
+body.page-endpoint-detail .endpoint-services-footer div { display: flex; gap: 8px; }
+body.page-endpoint-detail .endpoint-services-footer [data-stale="true"] { color: #e6b95d; }
+body.page-endpoint-detail .endpoint-services-phase-note { margin: 0; padding: 0 20px 12px; }
+
+@media (max-width: 760px) {
+    body.page-endpoint-detail .endpoint-services-dialog { width: calc(100vw - 16px); max-height: 95vh; border-radius: 12px; }
+    body.page-endpoint-detail .endpoint-services-header,
+    body.page-endpoint-detail .endpoint-services-footer { padding: 12px; }
+    body.page-endpoint-detail .endpoint-services-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 10px 12px; }
+    body.page-endpoint-detail .endpoint-services-toolbar label:first-child { grid-column: 1 / -1; }
+    body.page-endpoint-detail .endpoint-services-content { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+    body.page-endpoint-detail .endpoint-services-table-scroll { max-height: 42vh; }
+    body.page-endpoint-detail .endpoint-services-properties { border-top: 1px solid var(--border); border-left: 0; }
+    body.page-endpoint-detail .endpoint-services-table th,
+    body.page-endpoint-detail .endpoint-services-table td { padding: 7px 6px; font-size: 10px; }
+    body.page-endpoint-detail .endpoint-services-table th:first-child,
+    body.page-endpoint-detail .endpoint-services-table td:first-child { width: auto; }
+    body.page-endpoint-detail .endpoint-services-state { white-space: normal; }
+    body.page-endpoint-detail .endpoint-services-footer { align-items: stretch; flex-direction: column; }
+    body.page-endpoint-detail .endpoint-services-footer div { justify-content: flex-end; }
+}

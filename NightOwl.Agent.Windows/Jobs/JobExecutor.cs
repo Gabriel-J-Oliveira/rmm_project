@@ -120,9 +120,15 @@ public sealed class JobExecutor
                 "windows_update_scan" => await RunCollectionAsync("patches", _collector.GetPatchStatus, jobToken),
                 "collect_logs" => CollectLogs(config, job),
                 "ping" => await RunPingAsync(config, job, jobToken),
-                "collect_services" => await RunCollectionAsync("services", () => WindowsServicesCollector.Collect(
-                    job.Payload.TryGetValue("names",out object? names) ? JsonSerializer.Deserialize<string[]>(JsonSerializer.Serialize(names))! : Array.Empty<string>(),
-                    GetPayloadInt(job,"limit",50),GetPayloadBool(job,"include_details",false)), jobToken),
+                "collect_services" => await RunCollectionAsync("services", () =>
+                    GetPayloadInt(job, "schema_version", 1) == 2
+                        ? WindowsServicesCollector.CollectPaged(
+                            GetPayloadString(job, "after_name", ""),
+                            GetPayloadString(job, "expected_snapshot_id", ""),
+                            GetPayloadInt(job, "page_size", 0))
+                        : WindowsServicesCollector.Collect(
+                            job.Payload.TryGetValue("names",out object? names) ? JsonSerializer.Deserialize<string[]>(JsonSerializer.Serialize(names))! : Array.Empty<string>(),
+                            GetPayloadInt(job,"limit",50),GetPayloadBool(job,"include_details",false)), jobToken),
                 "install_software" => await new SoftwareInstallation().InstallAsync(config,GetPayloadString(job,"package_id",""),jobToken),
                 _ => throw new NotSupportedException("unsupported_job_type")
             });

@@ -20,6 +20,7 @@ from .job_control import AgentJobSignalView, AgentJobStartedView
 from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView, TerminalOperatorStatusView, TerminalOperatorConnectView, TerminalAgentConsentView
 from .operational_actions import OperationalActionView
 from .script_library import ApprovedScriptCatalogView
+from .service_manager import ServiceManagerAvailabilityView, ServiceManagerJobView
 
 urlpatterns = [
     path('terminal/status/<uuid:session_id>/', TerminalOperatorStatusView.as_view(), name='terminal-session-status'),
@@ -29,6 +30,9 @@ urlpatterns = [
     path('terminal/cancel/<uuid:session_id>/', TerminalCancelView.as_view(), name='terminal-session-cancel'),
     path('terminal/poll/', TerminalAgentPollView.as_view(), name='terminal-agent-poll'),
     path('approved-scripts/', ApprovedScriptCatalogView.as_view(), name='approved-script-catalog'),
+    path('service-manager/<uuid:endpoint_id>/availability/', ServiceManagerAvailabilityView.as_view(), name='service-manager-availability'),
+    path('service-manager/<uuid:endpoint_id>/', ServiceManagerJobView.as_view(), name='service-manager-create'),
+    path('service-manager/<uuid:endpoint_id>/jobs/<uuid:job_id>/', ServiceManagerJobView.as_view(), name='service-manager-job'),
     path('operational-actions/<uuid:endpoint_id>/', OperationalActionView.as_view(), name='operational-action-create'),
     path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),
     path('jobs/<uuid:job_id>/started/', AgentJobStartedView.as_view(), name='agent-jobs-started'),

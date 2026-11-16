@@ -94,6 +94,9 @@ public sealed class JobExecutionPolicy
 
         try
         {
+            if (job.Type == "collect_services" && StrictInt(job.Payload, "schema_version", 1) == 2 &&
+                !string.Equals(GetString(job.Payload, "endpoint_machine_id", ""), config.MachineId, StringComparison.Ordinal))
+                throw new InvalidOperationException("Service job identity does not match this agent.");
             if (job.Type == "operational_action") OperationalActions.Validate(config, job);
             ValidateParameters(job);
         }
@@ -169,6 +172,28 @@ public sealed class JobExecutionPolicy
                 // Full envelope and local permissions were checked by OperationalActions.Validate.
                 break;
             case "collect_services":
+                if (StrictInt(p, "schema_version", 1) == 2)
+                {
+                    EnsureAllowedFields(p, "schema_version", "page_size", "after_name", "expected_snapshot_id",
+                        "page_index", "rows_collected", "expected_total_services", "expected_collected_at", "endpoint_machine_id");
+                    int pageIndex = StrictInt(p, "page_index", 0);
+                    int rowsCollected = StrictInt(p, "rows_collected", -1);
+                    int expectedTotal = StrictInt(p, "expected_total_services", -1);
+                    if (StrictInt(p, "page_size", 0) != 20 || pageIndex is < 1 or > 40 ||
+                        rowsCollected is < 0 or >= 800 || rowsCollected != (pageIndex - 1) * 20 ||
+                        expectedTotal is < 0 or > 800 ||
+                        (pageIndex == 1 && (expectedTotal != 0 || GetString(p, "expected_collected_at", "") != "")) ||
+                        (pageIndex > 1 && (expectedTotal < 1 || GetString(p, "expected_collected_at", "").Length == 0)))
+                        throw new InvalidOperationException("Invalid service page bounds.");
+                    string afterName = GetString(p, "after_name", "");
+                    string snapshotId = GetString(p, "expected_snapshot_id", "");
+                    string collectedAt = GetString(p, "expected_collected_at", "");
+                    string machineId = GetString(p, "endpoint_machine_id", "");
+                    if (afterName.Length > 256 || (snapshotId.Length > 0 && !Guid.TryParseExact(snapshotId, "N", out _)) || collectedAt.Length > 40 ||
+                        machineId.Length is < 1 or > 255 || string.IsNullOrEmpty(afterName) != string.IsNullOrEmpty(snapshotId))
+                        throw new InvalidOperationException("Invalid service page cursor.");
+                    break;
+                }
                 EnsureAllowedFields(p, "names", "limit", "include_details");
                 if (StrictInt(p,"limit",50) is < 1 or > 100) throw new InvalidOperationException("Invalid service limit.");
                 if (p.TryGetValue("names",out object? rawNames))
