@@ -1579,6 +1579,25 @@ class AgentJobsPullView(APIView):
                 from django.conf import settings
                 from .internal_jobs import validate_internal_payload, internal_capability, required_internal_capability
                 flag = 'NIGHTOWL_SERVICE_COLLECTION_ENABLED' if job.job_type=='collect_services' else 'NIGHTOWL_SOFTWARE_INSTALL_ENABLED'
+                if job.job_type == 'collect_services':
+                    from .service_collection_policy import service_collection_endpoint_allowed
+                    allowed, _ = service_collection_endpoint_allowed(
+                        machine.pk, getattr(settings, 'NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS', ()))
+                    identity_unique = bool(machine.machine_id) and AgentMachine.objects.filter(
+                        machine_id__iexact=machine.machine_id).count() == 1
+                    if (not getattr(settings, flag, False) or not allowed or not identity_unique
+                            or machine.has_terminal_lifecycle):
+                        job.status = AgentJob.STATUS_CANCELLED
+                        job.error_code = 'SERVICE_COLLECTION_AUTHORIZATION_REVOKED'
+                        job.finished_at = now
+                        job.save(update_fields=['status', 'error_code', 'finished_at', 'updated_at'])
+                        create_audit_event(event_type='job.cancelled', title='Consulta de serviços cancelada',
+                            description='A autorização da consulta de serviços foi revogada antes do despacho.',
+                            severity=AuditEvent.SEVERITY_WARNING, actor_type=AuditEvent.ACTOR_SYSTEM,
+                            actor_name='Sistema', endpoint=machine,
+                            metadata={'job_id': str(job.pk), 'job_type': job.job_type,
+                                      'reason_code': 'service_collection_authorization_revoked'})
+                        continue
                 try:
                     if (not getattr(settings,flag,False) or
                             not internal_capability(machine,required_internal_capability(job.job_type,job.payload))):

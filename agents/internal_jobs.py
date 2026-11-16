@@ -7,6 +7,7 @@ from django.utils import timezone
 from config.authz import is_nightowl_technical_user
 from .models import AgentMachine, AgentJob, InventorySnapshot, AuditEvent
 from .services import create_audit_event
+from .service_collection_policy import service_collection_endpoint_allowed
 
 
 def validate_internal_payload(kind, value):
@@ -141,6 +142,11 @@ def create_internal_job(operator, endpoint_id, kind, payload, *, request_id=''):
     if not getattr(settings,flag,False):
         raise ValueError('internal_job_disabled')
     endpoint=AgentMachine.objects.select_for_update().get(pk=endpoint_id)
+    if kind == 'collect_services':
+        allowed, reason_code = service_collection_endpoint_allowed(
+            endpoint.pk, getattr(settings, 'NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS', ()))
+        if not allowed:
+            raise ValueError('service_collection_' + reason_code)
     if (endpoint.has_terminal_lifecycle or not endpoint.machine_id or
         AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count()!=1):
         raise ValueError('identity_unavailable')
