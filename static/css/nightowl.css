@@ -34031,6 +34031,7 @@ body.page-endpoint-detail .endpoint-monitoring-top-grid > .endpoint-telemetry-co
 .endpoint-telemetry-config input[type="number"]:read-only { opacity: .7; }
 .endpoint-telemetry-config button { justify-self: start; }
 .endpoint-live { margin: 0; }
+.endpoint-live [hidden] { display: none !important; }
 .endpoint-actions-card .endpoint-action-availability { min-width: 0; }
 .endpoint-actions-card .endpoint-action-availability small { display: block; margin-top: 4px; color: var(--text-muted); overflow-wrap: anywhere; }
 .endpoint-live > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
