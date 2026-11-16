@@ -261,8 +261,9 @@ class TerminalConptyGrantServiceTests(TransactionTestCase):
                 self.assertFalse(create_future.done())
                 allow_revoke_commit.set()
                 revoke_future.result(timeout=5)
-                with self.assertRaises(PermissionDenied):
+                with self.assertRaises(PermissionError) as rejected:
                     create_future.result(timeout=5)
+                self.assertEqual(str(rejected.exception), 'terminal_forbidden')
         self.assertFalse(TerminalSession.objects.filter(endpoint=self.endpoint,
             status__in=TerminalSession.ACTIVE).exists())
 
