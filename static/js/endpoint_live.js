@@ -10,10 +10,10 @@
             session_expired: 'Sessão expirada. Inicie uma nova sessão.'
         })[code] || 'Não foi possível comunicar com o monitoramento. Verifique sua conexão e tente novamente.';
     }
-    function chart(points, names, maximum, labels) {
+    function chart(points, names, maximum, labels, emptyMessage) {
         const valid = points.slice(-90).filter(p => p && p.metrics && Number.isFinite(Date.parse(p.collected_at)));
         const numbers = valid.flatMap(p => names.map(name => p.metrics[name])).filter(Number.isFinite);
-        if (!numbers.length) return '<p class="muted">Sem medição disponível</p>';
+        if (!numbers.length) return '<p class="muted">' + escape(emptyMessage || 'Sem medição válida recebida para esta métrica nesta sessão.') + '</p>';
         const network = names.some(name => name.startsWith('network.'));
         const peak = Math.max(...numbers), scale = network && peak >= 1048576 ? 1048576 : network && peak >= 1024 ? 1024 : 1;
         const unit = network ? (scale === 1048576 ? 'MiB/s' : scale === 1024 ? 'KiB/s' : 'B/s') : maximum === 100 ? '%' : 'ms';
@@ -52,7 +52,7 @@
     if (!id) return;
     const panel = document.createElement('section');
     panel.className = 'endpoint-live panel endpoint-dense-card';
-    panel.innerHTML = '<header><h2>Monitoramento ao vivo</h2><div class="live-actions"><button type="button" class="copy-btn" data-live-toggle>Iniciar</button><button type="button" class="copy-btn" data-live-clear hidden>Limpar</button></div></header><p data-live-state>Sessao inativa</p><div data-live-body hidden><div class="endpoint-live-selectors"><label>Interface de rede<select data-live-interface></select></label><label>Disco apresentado pelo Windows<select data-live-disk></select></label></div><div class="endpoint-live-grid"><div><h3>CPU (%)</h3><div data-live-cpu></div></div><div><h3>RAM utilizada / disponivel (%)</h3><div data-live-memory></div></div><div><h3>RX / TX (bytes/s)</h3><div data-live-network></div></div><div><h3>Latencia de leitura / escrita (ms)</h3><div data-live-storage></div></div></div><dl data-live-facts class="endpoint-fact-list"></dl></div>';
+    panel.innerHTML = '<header><h2>Monitoramento ao vivo</h2><div class="live-actions"><button type="button" class="copy-btn" data-live-toggle>Iniciar</button><button type="button" class="copy-btn" data-live-clear hidden>Limpar</button></div></header><p data-live-state>Sessao inativa</p><div data-live-body hidden><p class="muted" data-live-waiting hidden>Aguardando a primeira amostra real do agente.</p><div class="endpoint-live-selectors" data-live-selectors hidden><label data-live-selector-wrapper="interface">Interface de rede<select data-live-interface></select></label><label data-live-selector-wrapper="disk">Disco apresentado pelo Windows<select data-live-disk></select></label></div><p class="muted" data-live-selector-state hidden></p><div class="endpoint-live-grid" data-live-grid hidden><div><h3>CPU (%)</h3><div data-live-cpu></div></div><div><h3>RAM utilizada / disponivel (%)</h3><div data-live-memory></div></div><div><h3>RX / TX (bytes/s)</h3><div data-live-network></div></div><div><h3>Latencia de leitura / escrita (ms)</h3><div data-live-storage></div></div></div><dl data-live-facts class="endpoint-fact-list"></dl></div>';
     function mount() {
         const placement = root.querySelector('[data-endpoint-tab-panel="monitoring"] [data-live-placement]');
         if (!placement) return false;
@@ -65,6 +65,8 @@
     }
     if (scope.lucide) scope.lucide.createIcons();
     let session = null, points = [], timer = null, polling = false, lastRenewal = 0, state = 'idle', epoch = 0, busy = false;
+    let selectionNotice = '';
+    const lastSelections = {interface:'', disk:''};
     const button = panel.querySelector('[data-live-toggle]');
     const status = panel.querySelector('[data-live-state]');
     const clear = panel.querySelector('[data-live-clear]');
@@ -85,34 +87,104 @@
         }
         return result;
     }
-    function selector(name, prefix, suffix) {
+    function selector(name, suffixes) {
         const select = panel.querySelector('[data-live-' + name + ']');
-        const value = select.value;
-        const keys = [...new Set(points.flatMap(p => Object.keys(p.metrics)).filter(key => key.startsWith(prefix)).map(key => key.split('.')[1]))];
-        select.replaceChildren();
-        const metadata = points.length ? points[points.length - 1].quality || {} : {};
-        const names = metadata[name === 'interface' ? 'interfaces' : 'disk_instances'] || {};
-        keys.forEach(key => {
-            const option = document.createElement('option');
-            option.value = key;
-            option.textContent = (names[key] && (names[key].name || names[key].instance)) || key;
-            select.appendChild(option);
-        });
-        if (keys.includes(value)) select.value = value;
-        return prefix + select.value + '.' + suffix;
+        const wrapper = panel.querySelector('[data-live-selector-wrapper="' + name + '"]');
+        const prefix = name === 'interface' ? 'network.' : 'disk.';
+        const latest = points[points.length - 1] || {};
+        const metadata = latest.quality || {};
+        const metadataKey = name === 'interface' ? 'interfaces' : 'disk_instances';
+        const names = metadata[metadataKey] && typeof metadata[metadataKey] === 'object' ? metadata[metadataKey] : {};
+        const metricIds = new Set();
+        points.forEach(point => Object.keys(point.metrics || {}).forEach(metric => {
+            if (!metric.startsWith(prefix)) return;
+            const separator = metric.indexOf('.', prefix.length);
+            if (separator < 0 || !suffixes.some(suffix => metric.slice(separator + 1) === suffix)) return;
+            if (Number.isFinite(point.metrics[metric])) metricIds.add(metric.slice(prefix.length, separator));
+        }));
+        // Use current metadata order (the collector's enumeration order) so devices
+        // absent from the latest sample are removed even if history still has data.
+        const hasCurrentMetadata = Object.prototype.hasOwnProperty.call(metadata, metadataKey) &&
+            metadata[metadataKey] && typeof metadata[metadataKey] === 'object';
+        const currentMetricIds = Object.keys(latest.metrics || {}).filter(metric => {
+            if (!metric.startsWith(prefix)) return false;
+            const separator = metric.indexOf('.', prefix.length);
+            return separator >= 0 && suffixes.some(suffix => metric.slice(separator + 1) === suffix) &&
+                Number.isFinite(latest.metrics[metric]);
+        }).map(metric => metric.slice(prefix.length, metric.indexOf('.', prefix.length)));
+        const orderedIds = hasCurrentMetadata ? Object.keys(names) : [...new Set(currentMetricIds)].sort();
+        const keys = orderedIds.filter(key => metricIds.has(key));
+        const options = keys.map(key => ({key, label:(names[key] && (names[key].name || names[key].instance)) || key}));
+        const signature = JSON.stringify(options);
+        let notice = '';
+        if (select.dataset.optionsSignature !== signature) {
+            const previous = select.value || lastSelections[name];
+            select.replaceChildren();
+            options.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item.key;
+                option.textContent = item.label;
+                select.appendChild(option);
+            });
+            if (keys.includes(previous)) select.value = previous;
+            else if (keys.length) {
+                select.value = keys[0];
+                if (previous) notice = (name === 'interface' ? 'Interface' : 'Disco') +
+                    ' selecionado indisponível; seleção alterada para ' + options[0].label + '.';
+            } else if (previous) {
+                notice = (name === 'interface' ? 'Interface' : 'Disco') +
+                    ' selecionado indisponível; não há alternativa válida nesta sessão.';
+            }
+            select.dataset.optionsSignature = signature;
+        }
+        wrapper.hidden = !keys.length;
+        select.disabled = !keys.length || state !== 'active';
+        if (keys.includes(select.value)) lastSelections[name] = select.value;
+        return {metric:keys.includes(select.value) ? prefix + select.value + '.' : '', available:keys.length > 0, notice};
     }
     function draw() {
-        panel.querySelector('[data-live-body]').hidden = state === 'idle';
+        const body = panel.querySelector('[data-live-body]');
+        const waiting = panel.querySelector('[data-live-waiting]');
+        const selectors = panel.querySelector('[data-live-selectors]');
+        const selectorState = panel.querySelector('[data-live-selector-state]');
+        const grid = panel.querySelector('[data-live-grid]');
+        body.hidden = state === 'idle';
         clear.hidden = state === 'idle';
         button.hidden = state === 'frozen';
         button.textContent = state === 'active' ? 'Encerrar' : 'Iniciar';
         if (state === 'idle') return;
-        const rx = selector('interface', 'network.', 'received_bytes_per_sec');
-        const read = selector('disk', 'disk.', 'read_latency_ms');
-        panel.querySelector('[data-live-cpu]').innerHTML = chart(points, ['cpu.usage_percent'], 100, ['CPU (%)']);
-        panel.querySelector('[data-live-memory]').innerHTML = chart(points, ['memory.used_percent', 'memory.available_percent'], 100, ['Utilizada (%)', 'Disponivel (%)']);
-        panel.querySelector('[data-live-network]').innerHTML = chart(points, [rx, rx.replace('received_bytes_per_sec','sent_bytes_per_sec')], null, ['RX', 'TX']);
-        panel.querySelector('[data-live-storage]').innerHTML = chart(points, [read, read.replace('read_latency_ms','write_latency_ms')], null, ['Leitura (ms)', 'Escrita (ms)']);
+        if (!points.length) {
+            waiting.textContent = state === 'frozen' ? 'Nenhuma amostra real foi recebida antes do encerramento.' : 'Aguardando a primeira amostra real do agente.';
+            waiting.hidden = false;
+            selectors.hidden = true;
+            selectorState.hidden = true;
+            grid.hidden = true;
+            return;
+        }
+        const network = selector('interface', ['received_bytes_per_sec', 'sent_bytes_per_sec']);
+        const disk = selector('disk', ['read_latency_ms', 'write_latency_ms']);
+        const selectionChanges = [network.notice, disk.notice].filter(Boolean);
+        if (selectionChanges.length) selectionNotice = selectionChanges.join(' ');
+        selectors.hidden = !network.available && !disk.available;
+        const missingSelectors = [];
+        if (!network.available) missingSelectors.push('Interface de rede sem métrica válida nesta sessão.');
+        if (!disk.available) missingSelectors.push('Disco sem métrica válida nesta sessão.');
+        selectorState.textContent = missingSelectors.join(' ');
+        selectorState.hidden = !missingSelectors.length;
+        const hasMetrics = points.some(point => Object.entries(point.metrics || {}).some(([key, value]) =>
+            Number.isFinite(value) && /^(cpu\.|memory\.|network\.|disk\.)/.test(key)));
+        waiting.textContent = hasMetrics ? '' : state === 'frozen' ?
+            'Amostras recebidas, mas nenhuma métrica válida foi disponibilizada nesta sessão.' :
+            'Amostras recebidas; aguardando métricas válidas do agente.';
+        waiting.hidden = hasMetrics;
+        grid.hidden = !hasMetrics;
+        if (!hasMetrics) return;
+        const rx = network.metric;
+        const read = disk.metric;
+        panel.querySelector('[data-live-cpu]').innerHTML = chart(points, ['cpu.usage_percent'], 100, ['CPU (%)'], 'CPU sem medição válida nesta sessão.');
+        panel.querySelector('[data-live-memory]').innerHTML = chart(points, ['memory.used_percent', 'memory.available_percent'], 100, ['Utilizada (%)', 'Disponivel (%)'], 'RAM sem medição válida nesta sessão.');
+        panel.querySelector('[data-live-network]').innerHTML = chart(points, rx ? [rx + 'received_bytes_per_sec', rx + 'sent_bytes_per_sec'] : [], null, ['RX', 'TX'], 'Rede sem medição válida nesta sessão.');
+        panel.querySelector('[data-live-storage]').innerHTML = chart(points, read ? [read + 'read_latency_ms', read + 'write_latency_ms'] : [], null, ['Leitura (ms)', 'Escrita (ms)'], 'Disco sem medição válida nesta sessão.');
         const last = points[points.length - 1];
         const facts = panel.querySelector('[data-live-facts]');
         facts.replaceChildren();
@@ -136,7 +208,7 @@
         draw();
     }
     function reset() {
-        ++epoch; clearTimeout(timer); timer = null; session = null; points = []; state = 'idle';
+        ++epoch; clearTimeout(timer); timer = null; session = null; points = []; state = 'idle'; selectionNotice = '';
         status.textContent = 'Sessão inativa'; draw();
     }
     async function poll() {
@@ -155,9 +227,14 @@
             if (generation !== epoch || state !== 'active') return;
             if (!response.ok) throw new Error(data.error || 'live_unavailable');
             if (data.state !== 'active' || data.session_id !== current.session_id) { freeze('Sessão expirada'); return; }
-            points = data.points || [];
-            status.textContent = (!data.last_sample_at ? 'Aguardando dados do agente' : data.stale ? 'Sem dados recentes' : 'Recebendo amostras') + (data.last_sample_at ? ' · Última amostra: ' + new Date(data.last_sample_at).toLocaleString('pt-BR') : '');
+            points = Array.isArray(data.points) ? data.points : [];
             draw();
+            const hasMetrics = points.some(point => Object.entries(point.metrics || {}).some(([key, value]) =>
+                Number.isFinite(value) && /^(cpu\.|memory\.|network\.|disk\.)/.test(key)));
+            const baseStatus = !data.last_sample_at ? 'Aguardando dados do agente' :
+                data.stale ? 'Sem dados recentes' : hasMetrics ? 'Recebendo amostras' : 'Amostras recebidas; aguardando métricas válidas';
+            status.textContent = baseStatus + (data.last_sample_at ? ' · Última amostra: ' + new Date(data.last_sample_at).toLocaleString('pt-BR') : '') +
+                (selectionNotice ? ' · ' + selectionNotice : '');
         } catch (error) {
             if (generation === epoch && state === 'active') {
                 if (error.message === 'session_expired') freeze('Sessão expirada');
@@ -191,6 +268,7 @@
         busy = true; button.disabled = true;
         try {
             session = await request('start'); ++epoch; state = 'active'; points = [];
+            selectionNotice = '';
             lastRenewal = Date.now(); status.textContent = 'Aguardando dados do agente'; draw();
         } catch (error) { status.textContent = errorMessage(error.message); }
         finally { busy = false; button.disabled = false; }
@@ -204,6 +282,11 @@
         if (tooltip) tooltip.textContent = point.dataset.liveTip;
     }
     ['mouseover', 'focusin', 'click'].forEach(name => panel.addEventListener(name, showPoint));
-    panel.querySelectorAll('select').forEach(select => select.addEventListener('change', draw));
+    panel.querySelectorAll('select').forEach(select => select.addEventListener('change', () => {
+        const name = select.dataset.liveInterface !== undefined ? 'interface' : 'disk';
+        lastSelections[name] = select.value;
+        selectionNotice = '';
+        draw();
+    }));
     scope.addEventListener('pagehide', () => { if (session) { request('stop', true).catch(() => {}); clearTimeout(timer); } });
 })(typeof window !== 'undefined' ? window : globalThis);

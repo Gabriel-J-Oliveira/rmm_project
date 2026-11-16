@@ -358,6 +358,11 @@ body.page-endpoint-detail .endpoint-action-groups {
     min-width: 0;
 }
 
+/* The task tab's core group sits beside standalone maintenance categories. */
+body.page-endpoint-detail .endpoint-actions-tab [data-endpoint-actions-core].endpoint-action-groups {
+    padding: 0;
+}
+
 body.page-endpoint-detail .endpoint-action-category {
     box-sizing: border-box;
     width: 100%;
