@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
+from agents.service_collection_policy import parse_endpoint_uuid_allowlist
 
 from pathlib import Path
 
@@ -395,6 +397,12 @@ NIGHTOWL_TELEMETRY_RETENTION_DAYS = {
 NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED = env.bool('NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', default=False)
 # Internal Windows service enumeration remains explicitly opt-in on the backend.
 NIGHTOWL_SERVICE_COLLECTION_ENABLED = env.bool('NIGHTOWL_SERVICE_COLLECTION_ENABLED', default=False)
+try:
+    NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS = parse_endpoint_uuid_allowlist(
+        env.list('NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS', default=[]))
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        'NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS must contain only valid UUIDs.') from exc
 # Optional fail-closed pilot restriction; existing installations retain their policy.
 NIGHTOWL_OPERATIONAL_ACTION_SCOPED_ONLY = env.bool('NIGHTOWL_OPERATIONAL_ACTION_SCOPED_ONLY', default=False)
 NIGHTOWL_OPERATIONAL_ACTION_SCOPES = env.json('NIGHTOWL_OPERATIONAL_ACTION_SCOPES', default={})

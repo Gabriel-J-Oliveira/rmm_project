@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from config.authz import is_nightowl_technical_user
 from .internal_jobs import create_internal_job, internal_capability, validate_internal_completion
 from .models import AgentJob, AgentMachine
+from .service_collection_policy import service_collection_endpoint_allowed
 
 PAGE_SIZE = 20
 MAX_PAGES = 40
@@ -38,6 +39,12 @@ def _operator_allowed(user):
 def _availability(endpoint):
     if not getattr(settings, 'NIGHTOWL_SERVICE_COLLECTION_ENABLED', False):
         return False, 'collection_disabled', 'A consulta de serviços está desativada no backend.'
+    allowed, reason_code = service_collection_endpoint_allowed(
+        endpoint.pk, getattr(settings, 'NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS', ()))
+    if not allowed:
+        if reason_code == 'allowlist_invalid':
+            return False, reason_code, 'A autorização para consulta de serviços está inválida.'
+        return False, reason_code, 'Este endpoint não está autorizado para consulta de serviços.'
     if not endpoint.is_active:
         return False, 'endpoint_inactive', 'O endpoint não está ativo para novas solicitações.'
     if endpoint.status != AgentMachine.STATUS_ONLINE:
@@ -183,8 +190,11 @@ class ServiceManagerJobView(APIView):
         except AgentMachine.DoesNotExist:
             return _no_store(Response({'error': 'endpoint_not_found'}, status=404))
         except ValueError as exc:
-            status_code = 409 if str(exc) in {'identity_unavailable', 'capability_unconfirmed', 'job_conflict', 'internal_job_disabled'} else 400
-            return _no_store(Response({'error': str(exc)}, status=status_code))
+            code = str(exc)
+            if code in {'service_collection_endpoint_not_allowed', 'service_collection_allowlist_invalid'}:
+                return _no_store(Response({'error': code}, status=409))
+            status_code = 409 if code in {'identity_unavailable', 'capability_unconfirmed', 'job_conflict', 'internal_job_disabled'} else 400
+            return _no_store(Response({'error': code}, status=status_code))
         return _no_store(Response({'job_id': str(job.pk), 'status': job.status,
                                    'request_id': request_id}, status=202))
 

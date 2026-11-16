@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from .internal_jobs import create_internal_job, validate_internal_completion, validate_internal_payload
 from .models import AgentJob, AgentMachine, AuditEvent, InventorySnapshot
+from .service_collection_policy import parse_endpoint_uuid_allowlist
 
 
 def service_page(*, names=('EventLog', 'Spooler'), total=2, has_more=False, snapshot='0123456789abcdef0123456789abcdef', collected_at=None):
@@ -31,6 +32,10 @@ class ServiceManagerApiTests(TestCase):
     def setUp(self):
         self.machine, self.token = AgentMachine.create_with_token(hostname='SYNTHETIC-SERVICES', machine_id=str(uuid.uuid4()),
             agent_version='synthetic-v2', last_seen_at=timezone.now(), status=AgentMachine.STATUS_ONLINE)
+        self.allowlist_override = override_settings(
+            NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS=[str(self.machine.pk)])
+        self.allowlist_override.enable()
+        self.addCleanup(self.allowlist_override.disable)
         self.operator = get_user_model().objects.create_superuser('synthetic-service-operator', password='synthetic-only')
         self.client.force_login(self.operator)
         self.capability = 'collect_services_paged:2'
@@ -83,6 +88,62 @@ class ServiceManagerApiTests(TestCase):
         self.assertEqual(self.client.get(self.availability_url).status_code, 403)
         self.assertEqual(self.begin().status_code, 403)
         self.assertFalse(AgentJob.objects.exists())
+
+    def test_allowlist_empty_invalid_and_other_uuid_fail_closed(self):
+        from .service_collection_policy import service_collection_endpoint_allowed
+
+        for configured, expected_reason in (([], 'endpoint_not_allowed'),
+                                             (['not-a-uuid'], 'allowlist_invalid'),
+                                             ([str(uuid.uuid4())], 'endpoint_not_allowed')):
+            with self.subTest(configured=configured), override_settings(
+                    NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS=configured):
+                available = self.client.get(self.availability_url).json()
+                self.assertFalse(available['available'])
+                self.assertEqual(available['reason_code'], expected_reason)
+                self.assertEqual(self.begin().status_code, 409)
+                self.assertFalse(AgentJob.objects.exists())
+                allowed, _ = service_collection_endpoint_allowed(self.machine.pk, configured)
+                self.assertFalse(allowed)
+
+        with self.assertRaises(ValueError):
+            parse_endpoint_uuid_allowlist(['not-a-uuid'])
+
+    def test_allowlist_matches_exact_endpoint_uuid_not_hostname(self):
+        peer, _ = AgentMachine.create_with_token(hostname=self.machine.hostname,
+            machine_id=str(uuid.uuid4()), agent_version='synthetic-v2',
+            last_seen_at=timezone.now(), status=AgentMachine.STATUS_ONLINE)
+        InventorySnapshot.objects.create(machine=peer, hostname=peer.hostname, collected_at=timezone.now(),
+            raw_payload={'snapshot_source': 'heartbeat', 'machine_id': peer.machine_id,
+                'agent_version': peer.agent_version, 'agent': {'capabilities': [self.capability]}})
+        peer_url = reverse('service-manager-availability', args=[peer.pk])
+        self.assertEqual(self.client.get(peer_url).json()['reason_code'], 'endpoint_not_allowed')
+        self.assertEqual(self.client.post(reverse('service-manager-create', args=[peer.pk]),
+            json.dumps({'request_id': str(uuid.uuid4()), 'cursor': None}),
+            content_type='application/json').status_code, 409)
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_allowlist_revocation_cancels_queued_service_job_before_agent_pull(self):
+        response = self.begin()
+        self.assertEqual(response.status_code, 202)
+        job = AgentJob.objects.get(pk=response.json()['job_id'])
+        agent = Client(HTTP_AUTHORIZATION='Bearer ' + self.token)
+        with override_settings(NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS=[]):
+            pulled = agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+        self.assertEqual(pulled.status_code, 200)
+        self.assertEqual(pulled.json()['jobs'], [])
+        job.refresh_from_db()
+        self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(job.error_code, 'SERVICE_COLLECTION_AUTHORIZATION_REVOKED')
+        audit = AuditEvent.objects.filter(event_type='job.cancelled', endpoint=self.machine).latest('created_at')
+        self.assertEqual(audit.metadata['reason_code'], 'service_collection_authorization_revoked')
+
+    def test_allowlist_configuration_parser_canonicalizes_uuid_without_partial_matches(self):
+        endpoint_id = uuid.uuid4()
+        self.assertEqual(parse_endpoint_uuid_allowlist([str(endpoint_id).upper()]),
+                         frozenset({str(endpoint_id)}))
+        self.assertEqual(parse_endpoint_uuid_allowlist([]), frozenset())
+        with self.assertRaises(ValueError):
+            parse_endpoint_uuid_allowlist([str(endpoint_id)[:20]])
 
     def test_versioned_payload_is_bounded_and_rejects_arbitrary_fields(self):
         payload = {'schema_version': 2, 'page_size': 20, 'after_name': '', 'expected_snapshot_id': '',

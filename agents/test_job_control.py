@@ -100,23 +100,28 @@ class JobControlTests(TestCase):
         admin=get_user_model().objects.create_superuser('synthetic-admin',password='synthetic-only')
         with self.assertRaises(ValueError): create_internal_job(admin,self.machine.pk,'install_software',{'package_id':'synthetic'})
 
-    @override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True)
     def test_internal_capability_conflict_and_completion_gates(self):
         admin=get_user_model().objects.create_superuser('synthetic-admin',password='synthetic-only')
         AgentJob.objects.filter(pk=self.job.pk).update(status='completed')
+        with override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True,
+                               NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS=[]):
+            with self.assertRaisesMessage(ValueError, 'service_collection_endpoint_not_allowed'):
+                create_internal_job(admin,self.machine.pk,'collect_services',{'names':['EventLog'],'limit':1})
         with self.assertRaises(ValueError): create_internal_job(admin,self.machine.pk,'collect_services',{})
         InventorySnapshot.objects.create(machine=self.machine,hostname=self.machine.hostname,collected_at=timezone.now(),
             raw_payload={'snapshot_source':'heartbeat','machine_id':self.machine.machine_id,'agent_version':self.machine.agent_version,
                          'agent':{'capabilities':['collect_services']}})
-        job=create_internal_job(admin,self.machine.pk,'collect_services',{'names':['EventLog'],'limit':1})
-        with self.assertRaises(ValueError): create_internal_job(admin,self.machine.pk,'collect_services',{})
-        self.pull()
-        bad={'job_id':str(job.pk),'status':'completed','result':{'machine_id':self.machine.machine_id,'output':{'services':[]}}}
-        url=reverse('agent-jobs-result')
-        self.assertEqual(self.agent.post(url,bad,content_type='application/json',HTTP_IDEMPOTENCY_KEY='synthetic-internal').status_code,400)
-        self.assertFalse(AgentJobResultReceipt.objects.filter(result_id='synthetic-internal').exists())
-        bad['result']['output']={'schema_version':1,'read_only':True,'services':[{'name':'EventLog','status':'Running'}]}
-        self.assertEqual(self.agent.post(url,bad,content_type='application/json',HTTP_IDEMPOTENCY_KEY='synthetic-internal').status_code,200)
+        with override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True,
+                               NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS=[str(self.machine.pk)]):
+            job=create_internal_job(admin,self.machine.pk,'collect_services',{'names':['EventLog'],'limit':1})
+            with self.assertRaises(ValueError): create_internal_job(admin,self.machine.pk,'collect_services',{})
+            self.pull()
+            bad={'job_id':str(job.pk),'status':'completed','result':{'machine_id':self.machine.machine_id,'output':{'services':[]}}}
+            url=reverse('agent-jobs-result')
+            self.assertEqual(self.agent.post(url,bad,content_type='application/json',HTTP_IDEMPOTENCY_KEY='synthetic-internal').status_code,400)
+            self.assertFalse(AgentJobResultReceipt.objects.filter(result_id='synthetic-internal').exists())
+            bad['result']['output']={'schema_version':1,'read_only':True,'services':[{'name':'EventLog','status':'Running'}]}
+            self.assertEqual(self.agent.post(url,bad,content_type='application/json',HTTP_IDEMPOTENCY_KEY='synthetic-internal').status_code,200)
 
     def test_late_final_result_receives_ack_without_overwriting_history(self):
         AgentJob.objects.filter(pk=self.job.pk).update(status='timed_out')
