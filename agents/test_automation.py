@@ -470,9 +470,10 @@ class AutomationTests(AutomationFixture,TestCase):
         snapshot=InventorySnapshot.objects.get(machine=self.endpoint)
         snapshot.raw_payload['agent']['capabilities']=['jobs_protocol_v2','job_protocol_v2','unknown_privileged_operation']
         snapshot.save(update_fields=['raw_payload'])
-        for kind,payload in [('collect_services',{}),('install_software',{'package_id':'synthetic-package'})]:
-            with self.assertRaisesMessage(ValueError,'capability_unconfirmed'):
-                create_internal_job(self.user,self.endpoint.pk,kind,payload)
+        with override_settings(NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS=[str(self.endpoint.pk)]):
+            for kind,payload in [('collect_services',{}),('install_software',{'package_id':'synthetic-package'})]:
+                with self.assertRaisesMessage(ValueError,'capability_unconfirmed'):
+                    create_internal_job(self.user,self.endpoint.pk,kind,payload)
         self.assertFalse(AgentJob.objects.exists())
 
     @override_settings(NIGHTOWL_JOB_AUTOMATIONS_ENABLED=False)
