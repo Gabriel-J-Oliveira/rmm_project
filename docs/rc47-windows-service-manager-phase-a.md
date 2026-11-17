@@ -1,5 +1,7 @@
 # RC47 — Gerenciador de Serviços Windows, Fase A
 
+> **Estado operacional em 17/11/2026:** Fase A #46 e restrição #48 estão integradas à main `866afe400df532190088d3c5aa678e960f355c2b`, mas não publicadas. Capabilidade `collect_services_paged:2` requer nova release Windows assinada. Flag e allowlist devem permanecer bloqueadas. [Handoff atual](rc47-handoff-operacional-20261117.md).
+
 ## Escopo
 
 A Fase A transforma **Consultar serviço** em uma consulta somente leitura de serviços do endpoint, dentro da página existente. O fluxo continua usando `AgentJob`/`collect_services`; não foi criado executor ou fila paralela. A listagem contém apenas nome interno, nome de exibição, estado e tipo de inicialização. Conta, executável, caminho de comando e argumentos não fazem parte do contrato paginado.
