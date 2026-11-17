@@ -99,6 +99,34 @@ def _resolve_pilot(*, endpoint_id, machine_id, operator_username, lock=False,
     return endpoint, operator
 
 
+def _resolve_pilot_for_revocation(*, endpoint_id, operator_username, lock=False):
+    """Resolve only the immutable pilot UUID and beneficiary for safe revocation."""
+    try:
+        requested_endpoint = uuid.UUID(str(endpoint_id))
+    except (TypeError, ValueError, AttributeError):
+        raise ValidationError('UUID completo do endpoint inválido.') from None
+    if requested_endpoint != PILOT_ENDPOINT_ID:
+        raise PermissionDenied('A revogação aceita somente o UUID fixo do piloto.')
+    if str(operator_username).strip().casefold() != PILOT_OPERATOR_USERNAME:
+        raise PermissionDenied('A revogação aceita somente o beneficiário fixo do piloto.')
+
+    endpoints = AgentMachine.objects
+    if lock:
+        endpoints = endpoints.select_for_update()
+    endpoint = endpoints.filter(pk=PILOT_ENDPOINT_ID).first()
+    if endpoint is None:
+        raise ValidationError('Endpoint piloto não encontrado; grant não pode ser localizado.')
+
+    User = get_user_model()
+    users = User.objects
+    if lock:
+        users = users.select_for_update()
+    matches = list(users.filter(username__iexact=PILOT_OPERATOR_USERNAME)[:2])
+    if len(matches) != 1:
+        raise ValidationError('Beneficiário do piloto ausente ou não único; grant não pode ser localizado.')
+    return endpoint, matches[0]
+
+
 def inspect_conpty_grant(*, endpoint_id, machine_id, operator_username):
     endpoint, operator = _resolve_pilot(endpoint_id=endpoint_id, machine_id=machine_id,
         operator_username=operator_username, require_operator_authorization=False,
@@ -128,7 +156,39 @@ def inspect_conpty_grant(*, endpoint_id, machine_id, operator_username):
     }
 
 
+def inspect_conpty_grant_for_revocation(*, endpoint_id, machine_id, operator_username):
+    """Preview a revoke by fixed UUID/beneficiary even if eligibility has changed."""
+    if str(machine_id).strip().casefold() != PILOT_MACHINE_ID:
+        raise PermissionDenied('Informe o machine_id esperado do piloto para confirmar o alvo fixo.')
+    endpoint, operator = _resolve_pilot_for_revocation(
+        endpoint_id=endpoint_id, operator_username=operator_username)
+    grant = TerminalAccessGrant.objects.filter(endpoint=endpoint, operator=operator).first()
+    now = timezone.now()
+    observed_machine_id = str(endpoint.machine_id or '')
+    return {
+        'endpoint_id': str(endpoint.pk),
+        'machine_id': observed_machine_id,
+        'expected_machine_id': PILOT_MACHINE_ID,
+        'machine_id_diverged': observed_machine_id.casefold() != PILOT_MACHINE_ID,
+        'endpoint_active': endpoint.is_active,
+        'endpoint_has_terminal_lifecycle': endpoint.has_terminal_lifecycle,
+        'operator': operator.get_username(),
+        'operator_active': operator.is_active,
+        'operator_has_permission': operator.has_perm('agents.open_terminalsession'),
+        'grant_exists': grant is not None,
+        'grant_enabled': bool(grant and grant.enabled),
+        'allow_conpty': bool(grant and grant.allow_conpty),
+        'allow_admin_auth': bool(grant and grant.allow_admin_auth),
+        'expires_at': grant.expires_at.isoformat() if grant else None,
+        'grant_current': bool(grant and grant.enabled and grant.allow_conpty and grant.expires_at > now),
+        'active_conpty_sessions': TerminalSession.objects.filter(
+            endpoint=endpoint, operator=operator, mode='conpty', status__in=TerminalSession.ACTIVE
+        ).count(),
+    }
+
+
 def _audit_grant_change(*, action, actor, endpoint, operator, grant, previous, reason, approval_ref):
+    observed_machine_id = str(endpoint.machine_id or '')
     AuditEvent.objects.create(
         event_type=f'terminal.grant_{action}',
         severity=AuditEvent.SEVERITY_SECURITY if action == 'revoked' else AuditEvent.SEVERITY_SUCCESS,
@@ -141,7 +201,13 @@ def _audit_grant_change(*, action, actor, endpoint, operator, grant, previous, r
             'operator': operator.get_username(),
             'operator_id': str(operator.pk),
             'endpoint_uuid': str(endpoint.pk),
-            'machine_id': endpoint.machine_id,
+            'machine_id': observed_machine_id,
+            'expected_machine_id': PILOT_MACHINE_ID,
+            'machine_id_diverged': observed_machine_id.casefold() != PILOT_MACHINE_ID,
+            'endpoint_active': endpoint.is_active,
+            'endpoint_has_terminal_lifecycle': endpoint.has_terminal_lifecycle,
+            'operator_active': operator.is_active,
+            'operator_has_permission': operator.has_perm('agents.open_terminalsession'),
             'grant_id': str(grant.pk),
             'expires_at': grant.expires_at.isoformat(),
             'allow_conpty': grant.allow_conpty,
@@ -174,8 +240,17 @@ def change_conpty_grant(*, action, endpoint_id, machine_id, operator_username,
         with connection.cursor() as cursor:
             cursor.execute("SET LOCAL lock_timeout = '3s'")
 
-    endpoint, operator = _resolve_pilot(endpoint_id=endpoint_id, machine_id=machine_id,
-                                        operator_username=operator_username, lock=True)
+    if action == 'revoke':
+        # Revocation must remain possible when current eligibility has been withdrawn.
+        # The CLI still requires the expected machine ID as an explicit confirmation;
+        # the current database value is recorded as observed identity in the audit.
+        if str(machine_id).strip().casefold() != PILOT_MACHINE_ID:
+            raise PermissionDenied('Informe o machine_id esperado do piloto para confirmar o alvo fixo.')
+        endpoint, operator = _resolve_pilot_for_revocation(
+            endpoint_id=endpoint_id, operator_username=operator_username, lock=True)
+    else:
+        endpoint, operator = _resolve_pilot(endpoint_id=endpoint_id, machine_id=machine_id,
+            operator_username=operator_username, lock=True)
     grant = (TerminalAccessGrant.objects.select_for_update()
              .filter(endpoint=endpoint, operator=operator).first())
     if grant and grant.allow_admin_auth:

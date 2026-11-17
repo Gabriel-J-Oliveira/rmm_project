@@ -26,6 +26,7 @@ from .models import AgentMachine, AuditEvent, InventorySnapshot, TerminalAccessG
 from .terminal_grants import (
     GrantExecutionIdentity, PILOT_ENDPOINT_ID, PILOT_MACHINE_ID,
     PILOT_OPERATOR_USERNAME, change_conpty_grant, inspect_conpty_grant,
+    inspect_conpty_grant_for_revocation,
     verify_execution_identity,
 )
 from .terminal_sessions import create_session
@@ -195,6 +196,64 @@ class TerminalConptyGrantServiceTests(TransactionTestCase):
         self.assertFalse(state['authorization_ready'])
         with self.assertRaises(PermissionDenied):
             self.change()
+
+    def test_revocation_works_when_beneficiary_is_inactive_but_grant_does_not(self):
+        self.operator.is_active = False
+        self.operator.save(update_fields=['is_active'])
+        self.assertFalse(inspect_conpty_grant_for_revocation(**self.kwargs)['operator_active'])
+        with self.assertRaises(PermissionDenied):
+            self.change('grant')
+        outcome = self.change('revoke')
+        self.assertEqual(outcome['action'], 'revoked')
+        self.assertFalse(TerminalAccessGrant.objects.get().enabled)
+        event = AuditEvent.objects.get(event_type='terminal.grant_revoked')
+        self.assertFalse(event.metadata['operator_active'])
+
+    def test_revocation_works_after_beneficiary_permission_is_removed(self):
+        self.operator.user_permissions.clear()
+        self.operator._perm_cache = None
+        self.assertFalse(inspect_conpty_grant_for_revocation(**self.kwargs)['operator_has_permission'])
+        with self.assertRaises(PermissionDenied):
+            self.change('grant')
+        self.change('revoke')
+        event = AuditEvent.objects.get(event_type='terminal.grant_revoked')
+        self.assertFalse(event.metadata['operator_has_permission'])
+        self.assertFalse(TerminalAccessGrant.objects.get().allow_admin_auth)
+
+    def test_revocation_works_for_inactive_endpoint_but_grant_does_not(self):
+        self.endpoint.is_active = False
+        self.endpoint.save(update_fields=['is_active'])
+        self.assertFalse(inspect_conpty_grant_for_revocation(**self.kwargs)['endpoint_active'])
+        with self.assertRaises(PermissionDenied):
+            self.change('grant')
+        self.change('revoke')
+        event = AuditEvent.objects.get(event_type='terminal.grant_revoked')
+        self.assertFalse(event.metadata['endpoint_active'])
+
+    def test_revocation_by_fixed_uuid_audits_changed_machine_id_but_grant_is_blocked(self):
+        self.endpoint.machine_id = 'replacement-machine-id'
+        self.endpoint.save(update_fields=['machine_id'])
+        preview = inspect_conpty_grant_for_revocation(**self.kwargs)
+        self.assertTrue(preview['machine_id_diverged'])
+        self.assertEqual(preview['machine_id'], 'replacement-machine-id')
+        with self.assertRaises(PermissionDenied):
+            self.change('grant')
+        self.change('revoke')
+        event = AuditEvent.objects.get(event_type='terminal.grant_revoked')
+        self.assertTrue(event.metadata['machine_id_diverged'])
+        self.assertEqual(event.metadata['machine_id'], 'replacement-machine-id')
+        self.assertEqual(event.metadata['expected_machine_id'], PILOT_MACHINE_ID)
+        self.assertFalse(TerminalAccessGrant.objects.get().allow_admin_auth)
+
+    def test_revocation_with_missing_grant_never_creates_one_even_if_identity_drifted(self):
+        TerminalAccessGrant.objects.all().delete()
+        self.endpoint.machine_id = 'replacement-machine-id'
+        self.endpoint.is_active = False
+        self.endpoint.save(update_fields=['machine_id', 'is_active'])
+        with self.assertRaises(ValidationError):
+            self.change('revoke')
+        self.assertFalse(TerminalAccessGrant.objects.exists())
+        self.assertFalse(AuditEvent.objects.filter(event_type='terminal.grant_revoked').exists())
 
     def test_reason_and_approval_are_required_and_secret_like_values_rejected(self):
         for reason, approval in [('', 'CHG-1'), ('password=hunter2', 'CHG-1'), ('reason', '')]:

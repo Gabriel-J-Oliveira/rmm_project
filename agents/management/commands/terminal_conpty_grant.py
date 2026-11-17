@@ -8,7 +8,8 @@ from django.db import DatabaseError
 
 from agents.terminal_grants import (
     MAX_GRANT_MINUTES, PILOT_ENDPOINT_ID, PILOT_MACHINE_ID, PILOT_OPERATOR_USERNAME,
-    change_conpty_grant, inspect_conpty_grant, verify_execution_identity,
+    change_conpty_grant, inspect_conpty_grant, inspect_conpty_grant_for_revocation,
+    verify_execution_identity,
     validate_grant_context,
 )
 
@@ -49,7 +50,9 @@ class Command(BaseCommand):
                 if action == 'revoke' and options['ttl_minutes'] is not None:
                     raise ValidationError('--ttl-minutes não se aplica à revogação.')
                 if not options['apply']:
-                    current = inspect_conpty_grant(endpoint_id=options['endpoint_id'],
+                    inspect = (inspect_conpty_grant_for_revocation if action == 'revoke'
+                               else inspect_conpty_grant)
+                    current = inspect(endpoint_id=options['endpoint_id'],
                         machine_id=options['machine_id'], operator_username=options['operator'])
                     if current['allow_admin_auth']:
                         raise PermissionDenied('O grant contém allow_admin_auth=true; revisão manual obrigatória.')
