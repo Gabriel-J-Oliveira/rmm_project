@@ -258,3 +258,17 @@ A ordem é provisória; pode ser reorganizada conforme dependências. Não inici
 ---
 
 **Regra de governança:** este arquivo preserva o contexto e serve de referência para a RC47. Uma etapa só é autorizada quando o responsável solicitar explicitamente sua implementação, revisão e eventual deploy.
+
+
+## Pendência pós-estabilização — desinstalação definitiva e remoção/ocultação de endpoint duplicado (17/11/2026)
+
+**Origem:** relato do responsável em 17/11/2026, durante o saneamento dos jobs históricos de `CS-CVEL-0254`. O agente de uma instalação anterior foi desinstalado e reinstalado, mas a interface passou a exibir dois registros com o mesmo hostname. Trata-se de **duas identidades distintas**, que não podem ser mescladas nem excluídas apenas pelo nome:
+
+- Registro antigo, offline: UUID `da5d2b2f-3750-4af5-bd43-6635255fc7b5`, `machine_id=CS-CVEL-0254`.
+- Registro mais recente, online: UUID `760f9d60-54b1-47b4-81b3-6a350a2db2b4`, `machine_id=70bceb8a-ea43-43d9-acd3-7c16025e4cb8`.
+
+**Demanda futura:** definir procedimento de desinstalação definitiva do agente Windows, encerramento de sua identidade de enrollment, tratamento do registro histórico no backend e remoção/ocultação controlada do endpoint antigo no frontend, sem afetar um novo agente registrado no mesmo equipamento. Diferenciar claramente *desinstalar agente no Windows*, *revogar/desativar credenciais/identidade* e *arquivar/ocultar/excluir registro no NightOwl*.
+
+**Critérios de análise antes de implementar:** preservar auditoria, inventários e histórico de jobs conforme política de retenção; avaliar referências/FKs e impacto de exclusão física; preferir inicialmente arquivamento/soft-delete reversível com filtro de visualização e trilha de auditoria; impedir seleção por hostname, operações em lote acidentais, reutilização de UUID ou exclusão do registro online; exigir confirmação explícita do UUID, autorização técnica e testes de restauração/reversão. Não assumir que desinstalação no endpoint remove automaticamente o cadastro no servidor.
+
+**Prioridade e gate:** backlog **após** a estabilização RC47, o checkpoint/deploy Linux e a homologação prioritária de Terminal ConPTY e Gerenciador de Serviços. **Não implementar, remover registros, reemitir uninstall ou alterar produção neste ciclo.** O cancelamento do uninstall antigo relatado pelo operador deve ser confirmado pelo evento auditado `agent.uninstall.cancelled` antes de fechar o saneamento; o relato do painel, isoladamente, não é evidência final.
