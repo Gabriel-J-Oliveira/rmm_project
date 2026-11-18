@@ -152,6 +152,51 @@ O ConPTY/WSS **já funciona** em uma VM real com conta interativa não elevada, 
 
 **Aceite em VM real:** rolagem de histórico sob saída prolongada, seleção/cópia fiel, botão direito→Colar sem execução implícita, comando colado→execução somente por Enter ou ação explícita, Ctrl+C interrompendo processo, Unicode, resize, sessão desconectada, expiração e revogação; confirmar que nenhum conteúdo do terminal ou clipboard é persistido. Testar negados/sem permissão de clipboard, navegadores suportados, session cleanup, e comportamento em endpoints não autorizados. Não confundir aprovação de testes JS isolados com homologação ponta a ponta.
 
+### RC47-07D — Decisão de produto: autenticação e workspace do Terminal administrativo (18/11/2026)
+
+**Fonte e estado:** requisitos definidos pelo responsável em 18/11/2026, após a homologação funcional do Terminal ConPTY assistido com consentimento pelo Tray na VM piloto. **Este é o desenho de produto desejado para o modo `admin_auth`; não é declaração de que já esteja implementado, homologado ou autorizado a ser habilitado em produção.** O fluxo assistido `conpty` existente continua separado e com consentimento local; não convertê-lo em acesso administrativo nem contornar seus controles. Esta decisão complementa e esclarece a pendência de UX da seção RC47-07 acima.
+
+#### Jornada de abertura e autenticação
+
+1. No detalhe do endpoint, o técnico clica no botão **Abrir Terminal**, já previsto na interface.
+2. Abrir um **modal de credenciais reutilizando exatamente o padrão visual e de interação do popup atual de instalação remota do NightOwl pelo frontend**, sem duplicar estilos/fluxos desnecessariamente. Exigir usuário e senha em **cada nova conexão**, inclusive reconexões; nada de usuário/senha lembrados, preenchimento pela aplicação ou login automático.
+3. **Domínio padrão `CONTROL`:** para um identificador simples (por exemplo, `gabriel.oliveira`), interpretar como `CONTROL\gabriel.oliveira`, sem exigir que o operador digite `CONTROL\` repetidamente. Preservar entradas explícitas já qualificadas, como `DOMINIO\usuario`, UPN `usuario@dominio` e usuário local `MAQUINA\usuario`/`.\usuario`; não aplicar prefixo duas vezes. Exibir claramente qual contexto de autenticação será usado.
+4. Validar as credenciais no **Windows do endpoint específico**, respeitando domínio, direitos de logon, grupos, políticas locais e de domínio e o token realmente emitido pelo Windows. Não autenticar apenas contra o banco de usuários do NightOwl; a autenticação do operador web e a da conta Windows são distintas.
+5. Com autenticação e autorização confirmadas, substituir a etapa de login pelo **terminal xterm renderizado em popup**, sem navegar para outra página e sem relegá-lo ao card fixo no rodapé. Mostrar estados de autenticando, iniciando, conectado, falha, expiração e desconexão; permitir Encerrar, foco, redimensionamento e limpeza segura.
+
+#### Aparência do popup do terminal
+
+- **Borda externa verde**, acompanhando o verde do header da página de Endpoint, com **brilho leve e discreto**.
+- **Moldura interna roxa**, usando o roxo oficial do tema NightOwl; console interno escuro, texto da saída/comandos em **branco**, monoespaçado, legível e com bom contraste.
+- Cabeçalho do popup, com valores reais de identidade provenientes de fontes verificadas, apresentado neste formato conceitual:
+
+  **CS-CVEL-0281**  
+  **Sessão administrativa**  
+  **Usuário registrado do computador: Chico da Silva**  
+  **Usuário logado no terminal: Gabriel Oliveira**
+
+- O nome do endpoint deve vir da **identidade UUID/machine_id validada** e seu hostname apenas como rótulo; não selecionar endpoint pelo hostname. O `usuário registrado do computador` precisa de definição/fonte de inventário confiável (responsável atribuído versus sessão interativa atual); mostrar **Não identificado** quando indisponível, sem inventar nomes. O `usuário logado no terminal` deve refletir a **conta Windows realmente autenticada e o token do processo remoto**, não presumir que seja o usuário Django; usar nome de exibição do AD quando disponível, com identificador inequívoco acessível.
+- Layout adaptável com área útil grande; manter as funções RC47-07 já implementadas (scrollback limitado, copiar, colar sem executar, colar e executar com confirmação, Ctrl+C, Unicode, FitAddon, botão Encerrar e descarte integral do buffer ao finalizar).
+
+#### Consentimento, privilégios e segurança
+
+- **Modo administrativo sem consentimento via Tray:** para `admin_auth`, o responsável não quer popup local de aprovação nem interação obrigatória do usuário da estação. O acesso deve ocorrer por um canal de administração corporativa autorizado; isso **não** significa ocultar auditoria, falsificar identidade, neutralizar avisos obrigatórios por política ou habilitar acesso irrestrito. A ausência de consentimento local **não** se aplica ao modo `conpty` assistido.
+- O usuário Windows autenticado é quem determina os direitos do processo: **se Windows/AD concederem privilégio administrativo efetivo, o terminal poderá atuar com esse privilégio; caso contrário, o NightOwl não pode elevá-lo artificialmente**. Não acrescentar mecanismos próprios de elevação/rebaixamento ou regras ad hoc de privilégio por configuração do NightOwl. Respeitar UAC e políticas Windows, e diferenciar falha de logon de falta de autorização administrativa.
+- Manter os **gates independentes do NightOwl** para quem pode abrir o recurso (operador técnico, permissão explícita `agents.open_admin_terminalsession`, grant específico por operador + UUID de endpoint, flag e capability do modo administrativo, prazo/revogação e trilha de auditoria). Esses gates controlam **acesso à ferramenta**, não os privilégios concedidos pelo Windows. Não reutilizar grant ConPTY assistido como autorização administrativa nem ativar `admin_auth` globalmente para facilitar testes.
+- **Não armazenar senha:** exigir credenciais novamente a cada sessão. Não persistir segredo em banco, logs, URLs, eventos, browser storage, histórico ou telemetria. Limpar campos e descartar referências transitórias no fim; transportar por TLS/WSS com limites de sessão. O servidor Django participa do caminho transitório das credenciais na implementação atual: avaliar a fronteira de confiança; não alegar criptografia ponta a ponta nem apagamento perfeito de strings gerenciadas.
+- Acesso sem prompt local exige política corporativa aplicável, escopo de administração legítimo e auditoria de **quem acessou qual endpoint, quando, com que identidade e por quanto tempo**, sem registrar senha, comandos ou saída por padrão. Evitar exposição da conta logada e de outros dados pessoais além do estritamente necessário à operação.
+
+#### Implementação, homologação e divisão de trabalho
+
+- **Codex 1 — responsável proposto:** mapear e reutilizar o fluxo `admin_auth` já existente (`docs/rc47-07b-terminal-admin.md`, templates, JS, backend, agente) e o modal de credenciais de instalação remota. Produzir análise de lacunas e plano de mudanças frontend/backend/agente **sem pressupor que bastam alterações no backend/frontend**. Implementação em branch/PR próprios, com testes e revisão, após autorização de desenvolvimento; não publicar nem ativar produção automaticamente.
+- **Codex 2:** continuar frente independente da RC47 (por exemplo, preparação/homologação da release Windows e Gerenciador de Serviços), evitando editar os mesmos arquivos do Terminal ou conflitar com a branch do Codex 1.
+- Critérios de aceite: domínio padrão e contas explícitas; credenciais renovadas em toda sessão; senha nunca persistida; autorização separada por endpoint/operador; identidade Windows real e privilégios conforme AD/máquina; sem Tray para modo `admin_auth`; header fiel e responsivo; clipboard/scroll/atalhos; falha de logon e falta de privilégio com mensagens distintas; expiração/revogação efetivas; nenhuma regressão no ConPTY assistido. Testar em VM autorizada antes de habilitar a feature em produção.
+- **Ponto a validar em desenho técnico:** qual comportamento esperado ao autenticar uma conta Windows válida sem privilégios administrativos — negar `admin_auth` ou permitir sessão comum, sem elevação. Não alterar o contrato atual que exige token administrativo/elevado antes de uma decisão explícita e testes de segurança.
+
+**Gate:** esta seção é requisito de produto/documentação. Não constitui GO para modificar segurança, conceder grants, habilitar flags, usar credenciais reais, publicar release, alterar produção ou retirar avisos de conformidade.
+
+---
+
 ### RC47-08 — Mudança controlada de canal no modal de atualização
 
 **Necessidade de produto:** selecionar máquinas adicionais para homologar RC47 sem editar GPO, instalador do NightOwl, share de deploy ou reinstalar agentes. O `AgentMachine` já possui `update_channel`, `update_policy`, pausa, pin e grupos; `endpoint_update_policy_update` permite alterar a política e registra `AgentReleaseAudit`. Contudo, `static/js/endpoint_detail.js` restringe `getManualUpdateReleases()` ao canal atual e o modal apenas o informa: não oferece troca.
