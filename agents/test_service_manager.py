@@ -256,7 +256,8 @@ class ServiceManagerApiTests(TestCase):
         self.assertNotIn('stop_service', response.content.decode())
 
 
-@override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True, NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True)
+@override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True, NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True,
+    NIGHTOWL_ADMIN_ACTIONS_ENABLED=True, NIGHTOWL_SERVICE_CONTROL_ENABLED=True)
 class ServiceManagerBrowserTests(LiveServerTestCase):
     @skipUnless(os.environ.get('NIGHTOWL_TEST_BROWSER_E2E') == '1', 'Explicit isolated browser gate required')
     def test_real_endpoint_service_manager_ui(self):
@@ -269,11 +270,14 @@ class ServiceManagerBrowserTests(LiveServerTestCase):
                 'agent': {'capabilities': ['operational_action:query_service:1', 'collect_services_paged:2']}})
         user = get_user_model().objects.create_superuser('synthetic-service-ui', password='synthetic-only')
         self.client.force_login(user)
-        result = subprocess.run(['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_endpoint_service_manager_e2e.cjs')],
-            env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
-                 'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
-                 'NIGHTOWL_E2E_ENDPOINT': str(endpoint.pk),
-                 'NIGHTOWL_E2E_ENDPOINT_NAME': endpoint.hostname}, capture_output=True, text=True, timeout=120)
+        scopes = {str(endpoint.pk): {'operator_ids': [str(user.pk)], 'start_service': ['AcmeAgent'], 'stop_service': ['Spooler'],
+            'restart_service': ['Spooler']}}
+        with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=scopes):
+            result = subprocess.run(['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_endpoint_service_manager_e2e.cjs')],
+                env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
+                     'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
+                     'NIGHTOWL_E2E_ENDPOINT': str(endpoint.pk),
+                     'NIGHTOWL_E2E_ENDPOINT_NAME': endpoint.hostname}, capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(AgentJob.objects.exists(), 'Browser UI fixture must not create remote jobs.')
+        self.assertFalse(AgentJob.objects.exists(), 'Browser UI fixture must not create real remote jobs.')
         print(result.stdout.strip())

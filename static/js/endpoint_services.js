@@ -19,6 +19,12 @@
     const stateFilter = dialog.querySelector("[data-service-state-filter]");
     const startupFilter = dialog.querySelector("[data-service-startup-filter]");
     const sortSelect = dialog.querySelector("[data-service-sort]");
+    const actionConfirm = dialog.querySelector("[data-service-action-confirm]");
+    const actionDescription = dialog.querySelector("[data-service-action-description]");
+    const actionSubmit = dialog.querySelector("[data-service-action-submit]");
+    const actionStatus = dialog.querySelector("[data-service-action-status]");
+    const actionCheck = dialog.querySelector("[data-service-action-check]");
+    const endpointLabel = dialog.querySelector("[data-service-endpoint-label]");
     const state = {
         available: false,
         reason: "Verificando autorização, identidade e capacidade do agente.",
@@ -35,7 +41,28 @@
         scanDeadline: 0,
         selectedName: "",
         pollPromise: null,
+        serviceActions: {},
+        pendingAction: null,
+        pendingActionRequestId: "",
+        actionJobId: "",
+        actionPollPromise: null,
         staleTimer: null
+    };
+
+    const serviceActionLabels = {start_service: "Iniciar", stop_service: "Parar", restart_service: "Reiniciar"};
+    const serviceActionErrors = {
+        service_control_disabled: "O controle de serviços está desativado no backend.",
+        administrative_actions_disabled: "Ações administrativas estão desativadas no backend.",
+        admin_resource_not_authorized: "Este serviço ou ação não está autorizado para o endpoint.",
+        action_forbidden: "Seu usuário não tem permissão para esta ação.",
+        action_capability_unconfirmed: "A capacidade do agente não foi confirmada recentemente.",
+        service_endpoint_ineligible: "O endpoint deixou de estar elegível.",
+        job_conflict: "Outro job está ativo neste endpoint.",
+        SERVICE_RESULT_UNCONFIRMED: "O backend não confirmou o resultado da operação.",
+        JOB_TIMEOUT: "A operação excedeu o tempo limite.",
+        JOB_EXECUTION_FAILED: "O agente informou falha ao executar a operação.",
+        ACTION_AUTHORIZATION_REVOKED: "A autorização foi revogada antes do despacho.",
+        SERVICE_ACTION_FAILED: "A operação falhou sem confirmação do estado final."
     };
 
     function csrfToken() {
@@ -149,6 +176,36 @@
         properties.appendChild(list);
     }
 
+    function operationReason(action, item) {
+        const availability = state.serviceActions[action] || {};
+        if (availability.enabled !== true) return availability.reason || "Ação não autorizada para este operador ou endpoint.";
+        if (!(availability.services || []).some(name => String(name).toLocaleLowerCase() === item.name.toLocaleLowerCase())) {
+            return "Este serviço não está autorizado para esta ação.";
+        }
+        if (state.actionJobId) return "Aguarde a conclusão do job atual.";
+        if (item.status === "unknown" || ["StartPending", "StopPending", "ContinuePending", "PausePending"].includes(item.status)) {
+            return "O estado atual não permite uma operação segura.";
+        }
+        if (action === "start_service" && item.status !== "Stopped") return "O serviço não está parado.";
+        if (action === "stop_service" && item.status !== "Running") return "O serviço não está em execução.";
+        if (action === "restart_service" && item.status !== "Running") return "Reinício disponível somente para serviço em execução.";
+        return "";
+    }
+
+    function actionButton(action, item) {
+        const reason = operationReason(action, item);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "endpoint-services-action-button";
+        button.dataset.serviceControl = action;
+        button.dataset.serviceName = item.name;
+        button.textContent = serviceActionLabels[action];
+        button.disabled = Boolean(reason);
+        button.title = reason || (serviceActionLabels[action] + " serviço " + item.name);
+        button.setAttribute("aria-label", serviceActionLabels[action] + " " + item.name + (reason ? ": " + reason : ""));
+        return button;
+    }
+
     function renderRows() {
         rowsBody.replaceChildren();
         const filtered = visibleRows();
@@ -166,6 +223,16 @@
             addText(stateCell, "span", "endpoint-services-state endpoint-services-state--" + stateGroup(item.status), stateLabel(item.status));
             row.appendChild(stateCell);
             addText(row, "td", "", startupLabel(item.startup_type));
+            const actionCell = document.createElement("td");
+            const actions = document.createElement("div");
+            actions.className = "endpoint-services-row-actions";
+            for (const action of ["start_service", "stop_service", "restart_service"]) actions.appendChild(actionButton(action, item));
+            const authorized = ["start_service", "stop_service", "restart_service"].some(action =>
+                (state.serviceActions[action] && state.serviceActions[action].enabled === true) &&
+                (state.serviceActions[action].services || []).some(name => String(name).toLocaleLowerCase() === item.name.toLocaleLowerCase()));
+            if (!authorized) addText(actions, "small", "endpoint-services-action-blocked", "Sem autorização para este serviço.");
+            actionCell.appendChild(actions);
+            row.appendChild(actionCell);
             rowsBody.appendChild(row);
         }
         empty.hidden = filtered.length > 0 || !state.complete || (state.rows || []).length === 0;
@@ -218,9 +285,11 @@
             const data = await requestJson(availabilityUrl);
             state.available = data.available === true;
             state.reason = data.reason || reasonText[data.reason_code] || "Consulta de serviços indisponível.";
+            state.serviceActions = data.service_actions && typeof data.service_actions === "object" ? data.service_actions : {};
         } catch (error) {
             state.available = false;
             state.reason = explain(error);
+            state.serviceActions = {};
         }
         updateQueryButton();
         if (!state.available) setStatus(state.reason, "blocked");
@@ -286,6 +355,7 @@
                     state.complete = true;
                     state.nextCursor = null;
                     state.selectedName = "";
+                    await loadAvailability();
                     setStatus("Coleta concluída: " + state.rows.length + " serviços confirmados em " + state.pageIndex + " página(s).", "success");
                     updateFreshness();
                     renderRows();
@@ -328,6 +398,7 @@
         if (!state.available) return;
         dialog.returnFocus = trigger;
         dialog.showModal();
+        loadAvailability().then(renderRows);
         if (state.complete) {
             updateFreshness(); renderRows();
             setStatus("Exibindo a última coleta confirmada. Use Atualizar dados para consultar novamente.", "success");
@@ -337,6 +408,116 @@
         } else {
             refresh();
         }
+        if (state.actionJobId) pollServiceAction();
+    }
+
+    function uuid() {
+        if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+        return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16);
+        });
+    }
+
+    function prepareServiceAction(action, serviceName) {
+        const item = (state.rows || []).find(row => row.name === serviceName);
+        if (!item || operationReason(action, item)) return;
+        state.pendingAction = {action, serviceName};
+        state.pendingActionRequestId = uuid();
+        actionDescription.textContent = serviceActionLabels[action] + " o serviço “" + serviceName + "” no endpoint “" +
+            (endpointLabel.textContent || root.dataset.endpointId) + "”? Esta operação será enviada ao agente Windows.";
+        actionConfirm.hidden = false;
+        actionSubmit.disabled = false;
+        actionStatus.hidden = true;
+        actionCheck.hidden = true;
+        actionSubmit.focus();
+    }
+
+    function showActionStatus(message, kind) {
+        actionStatus.textContent = message;
+        actionStatus.dataset.state = kind || "info";
+        actionStatus.hidden = false;
+    }
+
+    async function submitServiceAction() {
+        if (!state.pendingAction || actionSubmit.disabled) return;
+        const action = state.pendingAction;
+        actionSubmit.disabled = true;
+        showActionStatus("Validando autorização e solicitando o job…", "pending");
+        try {
+            const response = await requestJson(baseUrl + "actions/", {
+                method: "POST", headers: {"Content-Type": "application/json", "X-CSRFToken": csrfToken()},
+                body: JSON.stringify({request_id: state.pendingActionRequestId, action_id: action.action,
+                    service_name: action.serviceName})
+            });
+            state.pendingActionRequestId = "";
+            state.pendingAction = null;
+            state.actionJobId = response.job_id;
+            actionConfirm.hidden = true;
+            actionCheck.hidden = false;
+            actionCheck.disabled = false;
+            setStatus("Solicitação aceita; aguardando execução e confirmação real do agente.", "pending");
+            showActionStatus("Job " + response.status + ". A operação ainda não está confirmada.", "pending");
+            renderRows();
+            pollServiceAction();
+        } catch (error) {
+            const code = error.message || "";
+            const message = serviceActionErrors[code] || (code === "request_id_conflict"
+                ? "O identificador da solicitação já foi usado com outro conteúdo. Atualize os dados e tente novamente."
+                : "A solicitação foi recusada pelo backend: " + (serviceActionErrors[code] || "requisitos ou autorização não atendidos."));
+            showActionStatus(message, "error");
+            actionSubmit.disabled = false;
+            await loadAvailability();
+            renderRows();
+        }
+    }
+
+    async function pollServiceAction() {
+        if (state.actionPollPromise || !state.actionJobId || !dialog.open) return state.actionPollPromise;
+        state.actionPollPromise = (async function () {
+            const deadline = Date.now() + 45000;
+            while (state.actionJobId && dialog.open && Date.now() < deadline) {
+                let data;
+                try { data = await requestJson(baseUrl + "actions/" + encodeURIComponent(state.actionJobId) + "/"); }
+                catch (error) {
+                    showActionStatus("Não foi possível consultar o job. O estado permanece não confirmado; use Consultar resultado.", "error");
+                    actionCheck.hidden = false;
+                    return;
+                }
+                if (data.status === "completed") {
+                    state.actionJobId = "";
+                    actionCheck.hidden = true;
+                    if (data.result_confirmed === true && data.result && typeof data.result.state === "string") {
+                        showActionStatus("Concluído e confirmado pelo agente: " + data.service_name + " está " + stateLabel(data.result.state) +
+                            (data.result.changed ? "." : " (já estava nesse estado)."), "success");
+                        setStatus("Operação confirmada. Consultando novamente a lista de serviços…", "success");
+                        await refresh();
+                    } else {
+                        showActionStatus(serviceActionErrors[data.error_code] || serviceActionErrors.SERVICE_RESULT_UNCONFIRMED, "error");
+                    }
+                    renderRows();
+                    return;
+                }
+                if (["failed", "expired", "cancelled", "timed_out", "unsupported", "invalid_parameters", "interrupted"].includes(data.status)) {
+                    state.actionJobId = "";
+                    actionCheck.hidden = true;
+                    const code = data.error_code || data.status;
+                    showActionStatus(serviceActionErrors[code] || (data.status === "timed_out"
+                        ? "A operação excedeu o tempo limite; o estado final não foi confirmado."
+                        : "A operação falhou ou foi bloqueada. Nenhum sucesso foi presumido."), "error");
+                    await loadAvailability();
+                    renderRows();
+                    return;
+                }
+                showActionStatus("Job " + (data.status === "queued" ? "na fila" : data.status === "sent" ? "entregue ao agente" :
+                    data.status === "running" ? "em execução" : "aguardando confirmação") + ".", "pending");
+                await wait(1200);
+            }
+            if (state.actionJobId && dialog.open) {
+                showActionStatus("Sem confirmação após o período de acompanhamento. O job pode continuar ativo; consulte novamente antes de solicitar outra operação.", "pending");
+                actionCheck.hidden = false;
+            }
+        })().finally(() => { state.actionPollPromise = null; });
+        return state.actionPollPromise;
     }
 
     function closeManager() { dialog.close(); }
@@ -351,6 +532,11 @@
     }, true);
 
     dialog.addEventListener("click", function (event) {
+        const control = event.target.closest("[data-service-control]");
+        if (control) { event.preventDefault(); prepareServiceAction(control.dataset.serviceControl, control.dataset.serviceName); return; }
+        if (event.target.closest("[data-service-action-cancel]")) { state.pendingAction = null; state.pendingActionRequestId = ""; actionConfirm.hidden = true; actionStatus.hidden = true; return; }
+        if (event.target.closest("[data-service-action-submit]")) { submitServiceAction(); return; }
+        if (event.target.closest("[data-service-action-check]")) { pollServiceAction(); return; }
         if (event.target.closest("[data-service-close]")) closeManager();
         const select = event.target.closest("[data-service-name]");
         if (select) { state.selectedName = select.dataset.serviceName; renderRows(); }

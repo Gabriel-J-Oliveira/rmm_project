@@ -80,9 +80,30 @@ def validate_dispatch(job, operator, creating=False):
     scope = scopes.get(str(job.endpoint.pk), {})
     allowed = scope.get(action) if isinstance(scope, dict) else None
     if action in SERVICES:
+        endpoint = job.endpoint
+        if not getattr(settings, 'NIGHTOWL_SERVICE_CONTROL_ENABLED', False):
+            raise ValueError('service_control_disabled')
+        if not endpoint.is_active or endpoint.has_terminal_lifecycle:
+            raise ValueError('endpoint_inactive')
+        if endpoint.status != endpoint.STATUS_ONLINE:
+            raise ValueError('service_endpoint_ineligible')
+        if (not endpoint.machine_id
+                or endpoint.__class__.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
+            raise ValueError('identity_unavailable')
+        if endpoint.jobs.filter(status__in=('queued', 'sent', 'running')).exclude(pk=job.pk).exists():
+            raise ValueError('job_conflict')
+        operator_ids = scope.get('operator_ids') if isinstance(scope, dict) else None
+        if (not isinstance(operator_ids, list) or not operator_ids
+                or any(not isinstance(value, str) or not value.isascii() or not value.isdecimal()
+                       for value in operator_ids)
+                or str(operator.pk) not in operator_ids):
+            raise PermissionError('service_operator_not_authorized')
         name = job.payload['parameters']['service_name']
         if not isinstance(allowed, list) or not any(isinstance(v, str) and v.casefold() == name.casefold() for v in allowed):
             raise ValueError('admin_resource_not_authorized')
+        from .internal_jobs import internal_capability
+        if not internal_capability(endpoint, f'operational_action:{action}:1'):
+            raise ValueError('action_capability_unconfirmed')
     elif allowed is not True:
         raise ValueError('admin_resource_not_authorized')
     expected = binding(job, operator)

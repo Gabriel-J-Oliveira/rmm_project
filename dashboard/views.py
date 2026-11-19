@@ -3351,7 +3351,7 @@ def operational_action_availability(endpoint, user):
     if not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False):
         for entry in result.values(): entry['reason'] = 'Ações operacionais desativadas no backend.'
         return result
-    if endpoint.status != AgentMachine.STATUS_ONLINE:
+    if not endpoint.is_active or endpoint.status != AgentMachine.STATUS_ONLINE or endpoint.has_terminal_lifecycle:
         for entry in result.values(): entry['reason'] = 'Agente não está online.'
         return result
     if not endpoint.machine_id or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1:
@@ -3370,6 +3370,9 @@ def operational_action_availability(endpoint, user):
             if name in admin.PERMISSIONS:
                 if not getattr(settings, 'NIGHTOWL_ADMIN_ACTIONS_ENABLED', False):
                     result[name]['reason'] = 'Ações administrativas desativadas no backend.'
+                    continue
+                if name in admin.SERVICES and not getattr(settings, 'NIGHTOWL_SERVICE_CONTROL_ENABLED', False):
+                    result[name]['reason'] = 'Controle de serviços desativado no backend.'
                     continue
                 if name == 'gpupdate':
                     if scope.get(name) is not True:
