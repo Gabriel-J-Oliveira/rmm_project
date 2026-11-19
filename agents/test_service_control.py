@@ -23,6 +23,7 @@ class ServiceControlApiTests(TestCase):
         self.agent = Client(HTTP_AUTHORIZATION='Bearer ' + self.token)
         self.request_id = str(uuid.uuid4())
         self.scope = {str(self.machine.pk): {
+            'operator_ids': [str(self.operator.pk)],
             'start_service': ['AcmePilotService'], 'stop_service': ['AcmePilotService'],
             'restart_service': ['AcmePilotService'],
         }}
@@ -54,7 +55,7 @@ class ServiceControlApiTests(TestCase):
             self.assertEqual(response.status_code, 409)
             self.assertEqual(response.json()['error'], 'service_control_disabled')
         with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES={}):
-            self.assertEqual(self.post(request_id=str(uuid.uuid4())).status_code, 409)
+            self.assertEqual(self.post(request_id=str(uuid.uuid4())).status_code, 403)
         self.assertEqual(self.post(service='NotAuthorizedService', request_id=str(uuid.uuid4())).status_code, 409)
 
         user = get_user_model().objects.create_user('service-view-only', is_staff=True)
@@ -64,6 +65,40 @@ class ServiceControlApiTests(TestCase):
         response = self.post(request_id=str(uuid.uuid4()))
         self.assertEqual(response.status_code, 403)
         self.assertFalse(AgentJob.objects.exists())
+
+    def test_service_control_scope_selects_operator_independently_of_optional_job_scope(self):
+        allowed_operator = get_user_model().objects.create_user('synthetic-service-allowed', is_staff=True)
+        peer = get_user_model().objects.create_user('synthetic-service-peer', is_staff=True)
+        operator_permissions = Permission.objects.filter(content_type__app_label='agents',
+            codename__in=['add_agentjob', 'view_agentmachine', 'view_agentjob', 'start_windows_service'])
+        allowed_operator.user_permissions.add(*operator_permissions)
+        peer.user_permissions.add(*operator_permissions)
+        self.scope[str(self.machine.pk)]['operator_ids'] = [str(allowed_operator.pk)]
+        for user in (allowed_operator, peer):
+            self.assertTrue(user.has_perm('agents.add_agentjob'))
+            self.assertTrue(user.has_perm('agents.start_windows_service'))
+
+        self.client.force_login(peer)
+        with override_settings(NIGHTOWL_OPERATIONAL_ACTION_SCOPED_ONLY=False):
+            denied = self.post(request_id=str(uuid.uuid4()))
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.json()['error'], 'action_forbidden')
+        self.assertFalse(AgentJob.objects.exists())
+
+        self.client.force_login(allowed_operator)
+        with override_settings(NIGHTOWL_OPERATIONAL_ACTION_SCOPED_ONLY=False):
+            allowed = self.post(request_id=str(uuid.uuid4()))
+        self.assertEqual(allowed.status_code, 202)
+        self.assertEqual(AgentJob.objects.get().created_by, allowed_operator.get_username())
+
+        AgentJob.objects.all().delete()
+        for operator_ids in (None, [], ['*'], [allowed_operator.pk]):
+            invalid_scope = {str(self.machine.pk): {**self.scope[str(self.machine.pk)],
+                'operator_ids': operator_ids}}
+            with self.subTest(operator_ids=operator_ids), override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=invalid_scope):
+                denied = self.post(request_id=str(uuid.uuid4()))
+                self.assertEqual(denied.status_code, 403)
+                self.assertFalse(AgentJob.objects.exists())
 
     def test_protected_services_and_invalid_requests_are_rejected_without_jobs(self):
         for service in ('EventLog', 'WinRM', 'NightOwlAgentDotNet', '*', 'Spooler;whoami'):
@@ -106,7 +141,8 @@ class ServiceControlApiTests(TestCase):
 
     def test_revoked_scope_cancels_pending_job_and_is_rechecked_at_agent_start(self):
         pending = self.post().json()['job_id']
-        with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES={}):
+        revoked = {str(self.machine.pk): {**self.scope[str(self.machine.pk)], 'operator_ids': []}}
+        with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=revoked):
             self.assertEqual(self.pull().json()['jobs'], [])
         job = AgentJob.objects.get(pk=pending)
         self.assertEqual(job.status, AgentJob.STATUS_CANCELLED)
@@ -115,7 +151,8 @@ class ServiceControlApiTests(TestCase):
 
         pending = self.post(request_id=str(uuid.uuid4())).json()['job_id']
         self.assertEqual(len(self.pull().json()['jobs']), 1)
-        with override_settings(NIGHTOWL_SERVICE_CONTROL_ENABLED=False):
+        transferred = {str(self.machine.pk): {**self.scope[str(self.machine.pk)], 'operator_ids': ['999999']}}
+        with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=transferred):
             response = self.agent.post(reverse('agent-jobs-started', args=[pending]),
                 {'machine_id': self.machine.machine_id}, content_type='application/json')
         self.assertEqual(response.status_code, 409)

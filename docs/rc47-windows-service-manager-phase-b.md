@@ -24,11 +24,17 @@ Uma operação só pode ser criada quando todos os gates aplicáveis forem váli
 - endpoint está ativo e online, possui `machine_id` único e não está em ciclo
   de vida terminal;
 - heartbeat recente confirma `operational_action:<ação>:1` e a identidade;
-- `NIGHTOWL_ADMIN_ACTION_SCOPES` contém o UUID exato do endpoint e permite o
-  nome interno do serviço para aquela ação;
+- `NIGHTOWL_ADMIN_ACTION_SCOPES` contém o UUID exato do endpoint, o ID do
+  operador autorizado em `operator_ids`, e permite o nome interno do serviço
+  para aquela ação;
 - o agente instalado anuncia e aplica seu próprio `administrativeActionsEnabled`
   e `allowedServiceOperations` locais;
 - não existe outro job queued/sent/running no endpoint.
+
+O escopo de start/stop/restart sempre exige `operator_ids` válido e não vazio,
+mesmo quando `NIGHTOWL_OPERATIONAL_ACTION_SCOPED_ONLY=False`. O operador precisa
+estar explicitamente listado no escopo do UUID. Isso não altera a política
+opcional de escopo dos demais jobs nem o contrato de `gpupdate`.
 
 Os defaults permanecem fechados: `NIGHTOWL_SERVICE_CONTROL_ENABLED=False`,
 `NIGHTOWL_ADMIN_ACTIONS_ENABLED=False`, scopes vazios e ações operacionais
@@ -41,7 +47,7 @@ Exemplo estrutural para futura aprovação — não copiar para produção sem r
 NIGHTOWL_SERVICE_CONTROL_ENABLED=True
 NIGHTOWL_ADMIN_ACTIONS_ENABLED=True
 NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True
-NIGHTOWL_ADMIN_ACTION_SCOPES={"<endpoint-uuid>":{"start_service":["AcmePilotService"],"stop_service":["AcmePilotService"],"restart_service":["AcmePilotService"]}}
+NIGHTOWL_ADMIN_ACTION_SCOPES={"<endpoint-uuid>":{"operator_ids":["<django-user-id>"],"start_service":["AcmePilotService"],"stop_service":["AcmePilotService"],"restart_service":["AcmePilotService"]}}
 ```
 
 O serviço só deve ser incluído nas listas das ações que o técnico está

@@ -28,7 +28,7 @@ class AdministrativeActionTests(TestCase):
         self.client.force_login(self.operator)
         self.agent = Client(HTTP_AUTHORIZATION='Bearer ' + token)
         self.url = reverse('operational-action-create', args=[self.machine.pk])
-        self.scope = {str(self.machine.pk): {**{action: ['AcmePilotService'] for action in
+        self.scope = {str(self.machine.pk): {'operator_ids': [str(self.operator.pk)], **{action: ['AcmePilotService'] for action in
             ('start_service', 'stop_service', 'restart_service')}, 'gpupdate': True}}
         self.settings_override = override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=self.scope)
         self.settings_override.enable()
@@ -50,6 +50,7 @@ class AdministrativeActionTests(TestCase):
         self.client.force_login(user)
         self.assertEqual(self.create().status_code, 403)
         user.user_permissions.add(Permission.objects.get(content_type__app_label='agents', codename='start_windows_service'))
+        self.scope[str(self.machine.pk)]['operator_ids'].append(str(user.pk))
         self.assertEqual(self.create().status_code, 201)
         self.assertEqual(self.create(payload('stop_service')).status_code, 403)
         self.assertEqual(self.create(payload('gpupdate')).status_code, 403)
@@ -67,7 +68,7 @@ class AdministrativeActionTests(TestCase):
                           {'NIGHTOWL_ADMIN_ACTION_SCOPES': []},
                           {'NIGHTOWL_ADMIN_ACTION_SCOPES': {str(self.machine.pk): {'start_service': ['*']}}}):
             with override_settings(**overrides):
-                self.assertEqual(self.create().status_code, 400)
+                self.assertIn(self.create().status_code, (400, 403))
         with override_settings(NIGHTOWL_SERVICE_CONTROL_ENABLED=False):
             self.assertEqual(self.create(payload('gpupdate')).status_code, 201)
         AgentJob.objects.all().delete()
@@ -180,6 +181,7 @@ class AdministrativeActionTests(TestCase):
         user = get_user_model().objects.create_user('specific-operator', is_staff=True)
         permissions = Permission.objects.filter(content_type__app_label='agents', codename__in=['add_agentjob', 'start_windows_service'])
         user.user_permissions.add(*permissions)
+        self.scope[str(self.machine.pk)]['operator_ids'].append(str(user.pk))
         job = create_action_job(user, self.machine.pk, payload())
         self.pull()
         user.user_permissions.clear()

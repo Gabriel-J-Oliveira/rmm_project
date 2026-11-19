@@ -92,6 +92,12 @@ def validate_dispatch(job, operator, creating=False):
             raise ValueError('identity_unavailable')
         if endpoint.jobs.filter(status__in=('queued', 'sent', 'running')).exclude(pk=job.pk).exists():
             raise ValueError('job_conflict')
+        operator_ids = scope.get('operator_ids') if isinstance(scope, dict) else None
+        if (not isinstance(operator_ids, list) or not operator_ids
+                or any(not isinstance(value, str) or not value.isascii() or not value.isdecimal()
+                       for value in operator_ids)
+                or str(operator.pk) not in operator_ids):
+            raise PermissionError('service_operator_not_authorized')
         name = job.payload['parameters']['service_name']
         if not isinstance(allowed, list) or not any(isinstance(v, str) and v.casefold() == name.casefold() for v in allowed):
             raise ValueError('admin_resource_not_authorized')

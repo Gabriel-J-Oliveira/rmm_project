@@ -66,6 +66,7 @@ def _service_action_reason(code):
         'administrative_actions_disabled': 'Ações administrativas estão desativadas no backend.',
         'operational_actions_disabled': 'Ações operacionais estão desativadas no backend.',
         'admin_resource_not_authorized': 'Este serviço ou ação não está autorizado para o endpoint.',
+        'service_operator_not_authorized': 'Seu usuário não está incluído no escopo deste endpoint.',
         'action_forbidden': 'Seu usuário não tem permissão para esta ação.',
         'action_scope_forbidden': 'A ação não está autorizada para este operador e endpoint.',
         'action_capability_unconfirmed': 'A capacidade necessária do agente não foi confirmada em heartbeat recente.',

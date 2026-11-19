@@ -270,7 +270,7 @@ class ServiceManagerBrowserTests(LiveServerTestCase):
                 'agent': {'capabilities': ['operational_action:query_service:1', 'collect_services_paged:2']}})
         user = get_user_model().objects.create_superuser('synthetic-service-ui', password='synthetic-only')
         self.client.force_login(user)
-        scopes = {str(endpoint.pk): {'start_service': ['AcmeAgent'], 'stop_service': ['Spooler'],
+        scopes = {str(endpoint.pk): {'operator_ids': [str(user.pk)], 'start_service': ['AcmeAgent'], 'stop_service': ['Spooler'],
             'restart_service': ['Spooler']}}
         with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=scopes):
             result = subprocess.run(['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_endpoint_service_manager_e2e.cjs')],
