@@ -35,6 +35,7 @@ let phase = 'initialization';
         await page.goto(server + '/endpoints/' + encodeURIComponent(endpointId) + '/');
         const terminal = page.locator('[data-admin-auth]');
         assert.equal(await terminal.getAttribute('data-endpoint-uuid'), endpointId);
+        await page.locator('[data-endpoint-tab="tasks"]').click();
         await page.locator('[data-terminal-open]').click();
         const credentials = page.locator('[data-auth-modal]');
         await credentials.waitFor({state: 'visible'});
