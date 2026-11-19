@@ -11,6 +11,8 @@ $work = [IO.Path]::GetFullPath((Join-Path $workspace '.windows-e2e'))
 if ([IO.Path]::GetDirectoryName($work) -ine $workspace) { throw 'Invalid test workspace path' }
 $created = $false
 $profileRoot = $null
+$env:NIGHTOWL_TEST_BROWSER_E2E = '1'
+$env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'terminal-admin-artifacts'
 try {
     $account = New-LocalUser -Name $user -Password $password -AccountNeverExpires
     $created = $true
@@ -75,6 +77,23 @@ try {
         Get-Content $out
         Get-Content $err
         if ($automationProcess.ExitCode -ne 0) { throw "Execution policies browser E2E failed with exit code $($automationProcess.ExitCode)" }
+
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'terminal-admin-artifacts'
+        $terminalAdminArguments = @('manage.py', 'test',
+            'agents.test_terminal_admin_auth.AdminAuthVisualBrowserTests.test_admin_terminal_responsive_visual',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $terminalAdminProcess = Start-Process -FilePath $python -ArgumentList $terminalAdminArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($terminalAdminProcess.ExitCode -ne 0) { throw "Terminal admin visual browser test failed with exit code $($terminalAdminProcess.ExitCode)" }
+        $terminalAdminImages = Join-Path $env:NIGHTOWL_E2E_ARTIFACT_DIR 'nightowl-terminal-admin'
+        $terminalAdminTarget = Join-Path $env:RUNNER_TEMP 'nightowl-terminal-admin'
+        New-Item -ItemType Directory -Path $terminalAdminTarget -Force | Out-Null
+        $images = @(Get-ChildItem -LiteralPath $terminalAdminImages -Filter '*.png' -File -ErrorAction Stop)
+        if ($images.Count -ne 4) { throw 'Terminal admin browser test did not produce all four viewport screenshots' }
+        Copy-Item -LiteralPath $images.FullName -Destination $terminalAdminTarget -Force
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'service-manager-artifacts'
 
         # Endpoint policy actions run in a separate synthetic database and must
         # prove the browser submits a single-endpoint invocation, not a fleet run.

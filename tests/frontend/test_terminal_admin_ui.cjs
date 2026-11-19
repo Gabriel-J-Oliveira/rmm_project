@@ -21,7 +21,7 @@ class Element {
 
 const events = [], panel = new Element(), nodes = {};
 for (const key of ['[data-auth-modal]','[data-terminal-modal]','[data-terminal-dialog]','[data-terminal-status]',
-    '[data-connection-indicator]','[data-identity]','[data-screen]','[data-terminal-stage]','[data-terminal-notice]',
+    '[data-connection-indicator]','[data-identity]','[data-auth-principal]','[data-screen]','[data-terminal-stage]','[data-terminal-notice]',
     '[data-terminal-context-menu]','[data-terminal-copy]','[data-terminal-paste]','[data-terminal-paste-execute]',
     '[data-cancel]','[data-terminal-close]','[data-auth-status]']) nodes[key] = new Element();
 nodes['[data-auth-modal]'].hidden = true;
@@ -97,6 +97,35 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     assert.equal(nodes['[data-auth-modal]'].hidden, false, 'credentials open directly');
     assert.equal(form.elements.account.value, '');
     assert.equal(form.elements.password.value, '');
+    assert.equal(nodes['[data-auth-principal]'].textContent, 'Identidade Windows: não informada');
+    const identities = [
+        ['gabriel.oliveira', 'gabriel.oliveira', 'CONTROL', 'CONTROL\\gabriel.oliveira'],
+        ['CONTROL\\usuario', 'usuario', 'CONTROL', 'CONTROL\\usuario'],
+        ['OUTRODOMINIO\\usuario', 'usuario', 'OUTRODOMINIO', 'OUTRODOMINIO\\usuario'],
+        ['usuario@dominio.example', 'usuario@dominio.example', '', 'usuario@dominio.example'],
+        ['.\\usuario', 'usuario', '.', '.\\usuario'],
+        ['MAQUINA\\usuario', 'usuario', 'MAQUINA', 'MAQUINA\\usuario']
+    ];
+    for (const [input, expectedAccount, expectedDomain, expectedDisplay] of identities) {
+        form.elements.account.value = input;
+        form.elements.account.listeners.input();
+        assert.equal(nodes['[data-auth-principal]'].textContent, `Será autenticado como: ${expectedDisplay}`);
+        if (input === 'gabriel.oliveira') continue;
+        form.elements.password.value = 'synthetic-secret';
+        await form.listeners.submit({preventDefault(){}});
+        ws.onopen();
+        ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
+        const identityMessage = JSON.parse(ws.sent.find(item => typeof item === 'string' && item.includes('windows_auth')));
+        assert.deepEqual({account: identityMessage.account, domain: identityMessage.domain}, {account: expectedAccount, domain: expectedDomain});
+        nodes['[data-terminal-close]'].click();
+        open.click();
+    }
+    const beforeInvalidFormat = calls.length;
+    form.elements.account.value = 'A\\B\\C'; form.elements.password.value = 'must-be-cleared';
+    await form.listeners.submit({preventDefault(){}});
+    assert.equal(nodes['[data-auth-status]'].textContent, 'Formato de usuário Windows inválido.');
+    assert.equal(form.elements.password.value, '', 'password is cleared when identity format is invalid');
+    assert.equal(calls.length, beforeInvalidFormat, 'invalid identity must not create a session request');
     form.elements.account.value = 'LAB\\Admin';
     form.elements.password.value = 'synthetic-secret';
     await form.listeners.submit({preventDefault(){}});
@@ -114,7 +143,7 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     ws.onmessage({data: JSON.stringify({type: 'ready', mode: 'admin_auth', execution: true,
         identity: {sid: 'S-1-5-21-1-2-3-1001', integrity: 12288, elevated: true, windows_session_id: 1}})});
     assert.equal(nodes['[data-terminal-status]'].textContent, 'Conectado');
-    assert.equal(nodes['[data-identity]'].textContent, 'S-1-5-21-1-2-3-1001 · sessão Windows 1 · administrador elevado confirmado');
+    assert.equal(nodes['[data-identity]'].textContent, 'Usuário logado no terminal: S-1-5-21-1-2-3-1001 · sessão Windows 1 · administrador elevado confirmado');
     assert.equal(terminalInstance.options.scrollback, 2000);
     assert.equal(nodes['[data-terminal-modal]'].hidden, false);
     assert(!JSON.stringify(events.map(event => event.detail)).includes('synthetic-secret'));
@@ -159,12 +188,22 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     await form.listeners.submit({preventDefault(){}}); ws.onopen();
     ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
     ws.onmessage({data: JSON.stringify({type: 'windows_auth_result', result: 'rejected'})});
-    assert.equal(nodes['[data-terminal-status]'].textContent, 'Falha de autenticação');
+    assert.equal(nodes['[data-terminal-status]'].textContent, 'Falha de autenticação Windows');
     assert.equal(form.elements.password.value, '');
     assert.equal(form.elements.account.value, '');
     assert.equal(storage.size, 1);
     assert(!JSON.stringify(calls).includes('bad-secret'));
     assert(!JSON.stringify(events.map(event => event.detail)).includes('bad-secret'));
+    nodes['[data-terminal-close]'].click();
+
+    open.click(); form.elements.account.value = 'valid-but-not-admin'; form.elements.password.value = 'not-admin-secret';
+    await form.listeners.submit({preventDefault(){}}); ws.onopen();
+    ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
+    ws.onmessage({data: JSON.stringify({type: 'windows_auth_result', result: 'rejected', reason: 'administrator_required'})});
+    assert.equal(nodes['[data-terminal-status]'].textContent, 'Autorização administrativa necessária');
+    assert.match(nodes['[data-terminal-notice]'].textContent, /não recebeu token administrativo elevado/);
+    assert.equal(form.elements.password.value, '');
+    assert(!JSON.stringify(calls).includes('not-admin-secret'));
     nodes['[data-terminal-close]'].click();
 
     open.click(); form.elements.account.value = 'LAB\\Admin'; form.elements.password.value = 'system-token-secret';
@@ -173,7 +212,7 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     ws.onmessage({data: JSON.stringify({type: 'ready', mode: 'admin_auth', execution: true,
         identity: {sid: 'S-1-5-18', integrity: 16384, elevated: true, windows_session_id: 0}})});
     assert.equal(nodes['[data-terminal-status]'].textContent, 'Falha na sessão', 'SYSTEM identity is rejected by the UI');
-    assert.equal(nodes['[data-identity]'].textContent, 'Identidade Windows não confirmada');
+    assert.equal(nodes['[data-identity]'].textContent, 'Usuário logado no terminal: identidade Windows não confirmada');
     assert.equal(form.elements.password.value, '');
     nodes['[data-terminal-close]'].click();
 

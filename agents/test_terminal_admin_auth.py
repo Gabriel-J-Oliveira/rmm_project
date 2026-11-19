@@ -2,6 +2,7 @@ import asyncio
 from django.test import tag
 import json
 import os
+import subprocess
 import uuid
 from pathlib import Path
 from datetime import timedelta
@@ -10,6 +11,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import Client, TestCase, TransactionTestCase, override_settings
+from django.test import LiveServerTestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -188,6 +190,9 @@ class AdminAuthControlTests(TestCase):
         self.assertContains(response, 'data-auth-modal')
         self.assertContains(response, 'name="account"')
         self.assertContains(response, 'name="password"')
+        self.assertContains(response, 'data-auth-principal')
+        self.assertContains(response, 'data-terminal-registered-user>Não identificado')
+        self.assertContains(response, 'data-endpoint-uuid=')
         self.assertNotContains(response, 'data-drawer')
         self.assertNotContains(response, 'data-accounts')
         machine.status = 'offline'
@@ -318,7 +323,7 @@ class AdminAuthIntegrationTests(TransactionTestCase):
                 await browser.until('transport_ready')
                 await browser.control({'type':'windows_auth','account':'nonexistent-' + uuid.uuid4().hex,'domain':'.','password':secret})
                 result = await browser.until('windows_auth_result')
-                self.assertEqual(result, {'type':'windows_auth_result','result':'rejected'})
+                self.assertEqual(result, {'type':'windows_auth_result','result':'rejected','reason':'credentials_rejected'})
                 await browser.control({'type':'windows_auth','account':'x','domain':'.','password':secret})
                 self.assertEqual((await browser.until('closed'))['code'], 'unsupported_control')
                 await browser.close()
@@ -329,3 +334,22 @@ class AdminAuthIntegrationTests(TransactionTestCase):
                 if process.returncode is None: process.kill(); await process.wait()
         rows = await sync_to_async(lambda: json.dumps(list(TerminalSession.objects.values()) + list(AuditEvent.objects.values()), default=str))()
         self.assertNotIn(secret, rows)
+
+
+@override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True,
+    NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True, NIGHTOWL_TERMINAL_TEST_LOOPBACK=True, ALLOWED_HOSTS=['testserver', '127.0.0.1', 'localhost'])
+class AdminAuthVisualBrowserTests(LiveServerTestCase):
+    def test_admin_terminal_responsive_visual(self):
+        if os.environ.get('NIGHTOWL_TEST_BROWSER_E2E') != '1':
+            self.skipTest('Explicit isolated browser gate required')
+        machine, _, operator = fixture('admin-auth-visual')
+        enable_admin(machine, operator)
+        self.client.force_login(operator)
+        completed = subprocess.run(
+            ['node', str(Path(__file__).resolve().parent.parent / 'tests/frontend/test_terminal_admin_visual.cjs')],
+            env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
+                 'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
+                 'NIGHTOWL_E2E_ENDPOINT': str(machine.pk)}, capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertFalse(TerminalSession.objects.exists(), 'Visual preview must not create a terminal session.')
+        print(completed.stdout.strip())

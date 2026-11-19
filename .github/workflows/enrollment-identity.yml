@@ -180,6 +180,13 @@ jobs:
           name: service-manager-browser-screenshots
           path: ${{ runner.temp }}/nightowl-service-manager/*.png
           if-no-files-found: warn
+      - name: Upload terminal admin desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-admin-browser-screenshots
+          path: ${{ runner.temp }}/nightowl-terminal-admin/*.png
+          if-no-files-found: warn
 
   windows-bootstrap:
     name: Windows deployment contract

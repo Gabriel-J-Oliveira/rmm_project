@@ -12,6 +12,7 @@
     const status = panel.querySelector('[data-terminal-status]');
     const indicator = panel.querySelector('[data-connection-indicator]');
     const identity = panel.querySelector('[data-identity]');
+    const authPrincipal = panel.querySelector('[data-auth-principal]');
     const screen = panel.querySelector('[data-screen]');
     const notice = panel.querySelector('[data-terminal-notice]');
     const stage = panel.querySelector('[data-terminal-stage]');
@@ -54,9 +55,32 @@
         domain.value = '';
         password.value = '';
         panel.querySelector('[data-auth-status]').textContent = 'Aguardando solicitação';
+        updateAuthPrincipal();
         authModal.hidden = false;
         account.focus();
     }
+    function parseWindowsAccount(value) {
+        const input = String(value || '').trim();
+        if (!input || input.length > 256 || input.includes('\0')) throw new Error('account');
+        if (input.includes('\\')) {
+            const parts = input.split('\\');
+            if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error('account');
+            return {account: parts[1], domain: parts[0], display: input};
+        }
+        if (input.includes('@')) {
+            const parts = input.split('@');
+            if (parts.length !== 2 || !parts[0] || !parts[1] || /[\\/\s]/.test(input)) throw new Error('account');
+            return {account: input, domain: '', display: input};
+        }
+        if (/[\\/@\s]/.test(input)) throw new Error('account');
+        return {account: input, domain: 'CONTROL', display: `CONTROL\\${input}`};
+    }
+    function updateAuthPrincipal() {
+        if (!authPrincipal) return;
+        try { authPrincipal.textContent = `Será autenticado como: ${parseWindowsAccount(account.value).display}`; }
+        catch (_) { authPrincipal.textContent = account.value.trim() ? 'Formato de identidade Windows inválido.' : 'Identidade Windows: não informada'; }
+    }
+    account.addEventListener('input', updateAuthPrincipal);
     document.querySelector('[data-terminal-open]')?.addEventListener('click', () => {
         if (terminalModal.hidden) openCredentials();
     });
@@ -108,7 +132,7 @@
         closeMenu();
         copyButton.disabled = pasteButton.disabled = executeButton.disabled = true;
         pending = totalInput = 0;
-        identity.textContent = 'Identidade Windows não confirmada';
+        identity.textContent = 'Usuário logado no terminal: identidade Windows não confirmada';
         if (keepDialog) {
             setState(label, 'error');
             terminalModal.hidden = false;
@@ -227,12 +251,12 @@
     }
     function createTerminal(user, gen) {
         if (!identityIsValid(user)) throw new Error('identity');
-        identity.textContent = `${user.sid} · sessão Windows ${user.windows_session_id} · administrador elevado confirmado`;
+        identity.textContent = `Usuário logado no terminal: ${user.sid} · sessão Windows ${user.windows_session_id} · administrador elevado confirmado`;
         setState('Iniciando terminal', 'starting');
         stageStartedAt = performance.now();
         terminal = new Terminal({cols: 80, rows: 24, scrollback: 2000, fontSize: 14, fontFamily: 'Consolas, monospace',
             allowProposedApi: true, allowTransparency: false, disableStdin: false,
-            linkHandler: {activate: () => {}}, theme: {background: '#0b1020', foreground: '#e2e8f0'}});
+            linkHandler: {activate: () => {}}, theme: {background: '#070a12', foreground: '#ffffff'}});
         terminal.parser.registerOscHandler(52, () => true);
         fit = new FitAddon.FitAddon(); terminal.loadAddon(fit);
         screen.hidden = false; terminal.open(screen); terminal.onData(sendInput);
@@ -249,13 +273,11 @@
         event.preventDefault();
         if (!form.reportValidity()) return;
         if (location.protocol !== 'https:' && location.hostname !== '127.0.0.1') { finish('Conexão segura necessária', true, false); return; }
-        let rawAccount = account.value.trim();
-        const parts = rawAccount.split('\\');
-        let accountName = parts[parts.length - 1];
-        if (parts.length > 2 || !accountName) { finish('Formato de usuário inválido', true, false); return; }
-        credentialDraft = {account: accountName, domain: parts.length === 2 ? parts[0] : '', password: password.value};
-        rawAccount = accountName = '';
-        parts.fill('');
+        let parsedAccount;
+        try { parsedAccount = parseWindowsAccount(account.value); }
+        catch (_) { panel.querySelector('[data-auth-status]').textContent = 'Formato de usuário Windows inválido.'; password.value = ''; return; }
+        credentialDraft = {account: parsedAccount.account, domain: parsedAccount.domain, password: password.value};
+        parsedAccount = null;
         clearFields();
         const gen = ++generation;
         sessionStartedAt = performance.now();
@@ -315,14 +337,20 @@
                         authStartedAt = performance.now();
                         metric('transport_ready_to_credentials_sent', transportReadyAt);
                     } else if (value.type === 'windows_auth_result') {
-                        if (value.result !== 'rejected') throw new Error('auth_result');
-                        finish('Falha de autenticação', true);
+                        if (value.result !== 'rejected' || value.reason !== undefined && !['credentials_rejected', 'administrator_required'].includes(value.reason)) throw new Error('auth_result');
+                        const message = value.reason === 'administrator_required' ?
+                            'Credenciais válidas, mas a conta não recebeu token administrativo elevado. Verifique grupos e políticas do Windows; o NightOwl não eleva a conta.' :
+                            'Não foi possível autenticar essa identidade Windows. Confira usuário, domínio, senha e política de logon.';
+                        finish(value.reason === 'administrator_required' ? 'Autorização administrativa necessária' : 'Falha de autenticação Windows', true);
+                        feedback(message);
                     } else if (value.type === 'ready' && value.mode === 'admin_auth' && value.execution === true) {
                         metric('credentials_sent_to_agent_ready', authStartedAt);
                         createTerminal(value.identity, gen);
                     } else if (value.type === 'error' || value.type === 'closed') {
                         const expired = ['session_expired_or_revoked', 'join_timeout', 'keepalive_timeout', 'control_timeout'].includes(value.code);
-                        finish(value.type === 'error' ? 'Falha na sessão' : expired ? 'Sessão expirada ou revogada' : 'Desconectado', true, false);
+                        const label = value.code === 'admin_terminal_start_failed' ? 'Falha ao iniciar terminal Windows' :
+                            value.type === 'error' ? 'Falha na sessão' : expired ? 'Sessão expirada ou revogada' : 'Desconectado';
+                        finish(label, true, false);
                     }
                 } catch (_) { finish('Falha na sessão', true); }
             };

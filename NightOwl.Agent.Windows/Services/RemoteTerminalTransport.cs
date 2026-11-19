@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using NightOwl.Agent.Windows.Models;
+using Microsoft.Win32.SafeHandles;
 
 namespace NightOwl.Agent.Windows.Services;
 
@@ -196,22 +197,29 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                     string domain = message.GetProperty("domain").GetString() ?? "";
                     char[] password = ReadPassword(buffer.AsSpan(0, size));
                     Array.Clear(buffer);
+                    SafeAccessTokenHandle token;
                     try
                     {
-                        var token = TerminalAdministrativeAuthentication.Authenticate(account, domain, password);
-                        var authorization = new TerminalAuthorization(Guid.Parse(session.GetProperty("session_id").GetString()!), config.MachineId,
-                            session.GetProperty("operator_id").GetString()!, expires);
-                        terminal = await ConPtyTerminal.StartAdministrativeAsync(token, authorization, 80, 24, lifetime.Token);
+                        token = TerminalAdministrativeAuthentication.Authenticate(account, domain, password);
                     }
-                    catch (Exception)
+                    catch (InvalidOperationException ex) when (TerminalAdministrativeAuthentication.RejectionReason(ex.Message) is not null)
                     {
-                        await SendControl(socket, new { type = "windows_auth_result", result = "rejected" }, lifetime.Token, sendGate);
+                        string reason = TerminalAdministrativeAuthentication.RejectionReason(ex.Message)!;
+                        await SendControl(socket, new { type = "windows_auth_result", result = "rejected", reason }, lifetime.Token, sendGate);
+                        break;
                     }
                     finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(password.AsSpan())); Array.Clear(buffer); }
-                    if (terminal is not null)
-                        await SendControl(socket, new { type = "process_ready", mode = "admin_auth", execution = true, non_system = true,
-                            identity = new { sid = terminal.Identity.Sid, windows_session_id = terminal.Identity.SessionId,
-                                integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated } }, lifetime.Token, sendGate);
+                    var adminAuthorization = new TerminalAuthorization(Guid.Parse(session.GetProperty("session_id").GetString()!), config.MachineId,
+                        session.GetProperty("operator_id").GetString()!, expires);
+                    try { terminal = await ConPtyTerminal.StartAdministrativeAsync(token, adminAuthorization, 80, 24, lifetime.Token); }
+                    catch (Exception)
+                    {
+                        await SendControl(socket, new { type = "error", code = "admin_terminal_start_failed" }, lifetime.Token, sendGate);
+                        return;
+                    }
+                    await SendControl(socket, new { type = "process_ready", mode = "admin_auth", execution = true, non_system = true,
+                        identity = new { sid = terminal.Identity.Sid, windows_session_id = terminal.Identity.SessionId,
+                            integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated } }, lifetime.Token, sendGate);
                     break;
                 case "ready":
                     if (ready || message.GetProperty("mode").GetString() != (administrativeAuthentication ? "admin_auth" : real ? "conpty" : "synthetic") ||
