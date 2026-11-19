@@ -344,7 +344,12 @@ class AdminAuthVisualBrowserTests(LiveServerTestCase):
             self.skipTest('Explicit isolated browser gate required')
         machine, _, operator = fixture('admin-auth-visual')
         enable_admin(machine, operator)
+        machine.status = AgentMachine.STATUS_ONLINE
+        machine.save(update_fields=['status'])
         self.client.force_login(operator)
+        endpoint_page = self.client.get(reverse('endpoint-detail', args=[machine.pk]))
+        self.assertContains(endpoint_page, 'data-terminal-open')
+        self.assertNotContains(endpoint_page, 'data-terminal-open disabled')
         completed = subprocess.run(
             ['node', str(Path(__file__).resolve().parent.parent / 'tests/frontend/test_terminal_admin_visual.cjs')],
             env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,

@@ -11,7 +11,6 @@ $work = [IO.Path]::GetFullPath((Join-Path $workspace '.windows-e2e'))
 if ([IO.Path]::GetDirectoryName($work) -ine $workspace) { throw 'Invalid test workspace path' }
 $created = $false
 $profileRoot = $null
-$env:NIGHTOWL_TEST_BROWSER_E2E = '1'
 $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'terminal-admin-artifacts'
 try {
     $account = New-LocalUser -Name $user -Password $password -AccountNeverExpires
