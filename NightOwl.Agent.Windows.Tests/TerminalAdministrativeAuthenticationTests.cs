@@ -1,5 +1,6 @@
 using NightOwl.Agent.Shared;
 using NightOwl.Agent.Windows.Services;
+using System.Security.Principal;
 
 internal static class TerminalAdministrativeAuthenticationTests
 {
@@ -32,6 +33,10 @@ internal static class TerminalAdministrativeAuthenticationTests
         try { using var token = TerminalAdministrativeAuthentication.Authenticate("nightowl-nonexistent-" + Guid.NewGuid().ToString("N"), ".", secret); throw new Exception("Invalid credentials accepted"); }
         catch (InvalidOperationException) { }
         if (secret.Any(c => c != '\0')) throw new Exception("Password buffer not cleared");
+        using var current = WindowsIdentity.GetCurrent();
+        string tokenAccount = TerminalIdentity.TokenAccountName(current.AccessToken, current.User?.Value ?? "");
+        if (string.IsNullOrWhiteSpace(tokenAccount) || tokenAccount != current.Name)
+            throw new Exception("Authenticated account name was not derived from the Windows token");
         Console.WriteLine("PASS administrative authentication: token policy, domain/UPN normalization, nonexistent account and password buffer cleanup.");
     }
 }

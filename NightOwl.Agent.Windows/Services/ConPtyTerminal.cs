@@ -25,6 +25,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private TerminalIdentity? _identity;
     private TerminalTokenFacts? _processIdentity;
+    private string _processAccountName = string.Empty;
     private FileStream? _input, _read;
     private nint _console, _job, _process, _thread;
     private Task _reader = Task.CompletedTask, _exit = Task.CompletedTask, _processWait = Task.CompletedTask, _consentMonitor = Task.CompletedTask;
@@ -39,6 +40,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
     private double _cpuMs;
     public uint ProcessId { get; private set; }
     public TerminalTokenFacts Identity => _processIdentity ?? throw new InvalidOperationException("terminal_child_identity_unconfirmed");
+    public string AccountName => _processAccountName;
     public ChannelReader<byte[]> Output => _output.Reader;
     public Task Completion => _exit;
     public ConPtyObservation Observe()
@@ -296,6 +298,7 @@ public sealed class ConPtyTerminal : IAsyncDisposable
                 var facts = TerminalIdentity.Inspect(childToken);
                 ValidateChildIdentity(_identity.Facts, facts, _identity.IsAdministrative);
                 _processIdentity = facts;
+                _processAccountName = TerminalIdentity.TokenAccountName(childToken, facts.Sid);
             }
             if (ResumeThread(_thread) == uint.MaxValue) throw new InvalidOperationException("terminal_process_start_failed");
             _startMs = watch.Elapsed.TotalMilliseconds;

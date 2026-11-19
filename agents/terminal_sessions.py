@@ -209,6 +209,18 @@ def validate_identity(value):
     return value
 
 
+def _admin_identity_display(identity):
+    account_name = identity.get('account_name', '')
+    display_name = ''
+    try:
+        from access_inventory.models import ADUser
+        display_name = (ADUser.objects.filter(sid=identity['sid'], enabled=True)
+            .values_list('display_name', flat=True).first() or '')
+    except (ImportError, LookupError):
+        pass
+    return {**identity, 'account_name': account_name, 'display_name': display_name}
+
+
 @transaction.atomic
 def accept_consent(endpoint, session_id, decision, identity=None):
     session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id, endpoint=endpoint)
@@ -261,11 +273,14 @@ def mark_ready(session_id, identity=None):
     session = TerminalSession.objects.select_for_update(of=('self',)).select_related('operator', 'endpoint').get(pk=session_id)
     validate_session(session)
     if session.mode == 'admin_auth':
-        if (not isinstance(identity, dict) or set(identity) != {'sid', 'windows_session_id', 'integrity', 'elevated'} or
+        base_identity_fields = {'sid', 'windows_session_id', 'integrity', 'elevated'}
+        if (not isinstance(identity, dict) or set(identity) not in (base_identity_fields, base_identity_fields | {'account_name'}) or
             not isinstance(identity.get('sid'), str) or not re.fullmatch(r'S-1-(?:\d+-){1,14}\d+', identity['sid']) or len(identity['sid']) > 184 or
             identity['sid'] in ('S-1-5-18', 'S-1-5-19', 'S-1-5-20') or identity.get('elevated') is not True or
             type(identity.get('windows_session_id')) is not int or not 0 <= identity['windows_session_id'] < 2**31 or
-            type(identity.get('integrity')) is not int or not 12288 <= identity['integrity'] < 2**31):
+            type(identity.get('integrity')) is not int or not 12288 <= identity['integrity'] < 2**31 or
+            ('account_name' in identity and (not isinstance(identity['account_name'], str) or len(identity['account_name']) > 512 or
+                any(ord(character) < 32 for character in identity['account_name'])))):
             raise PermissionError('terminal_identity_invalid')
         session.identity_sid = identity['sid']
         session.windows_session_id = identity['windows_session_id']
@@ -279,7 +294,7 @@ def mark_ready(session_id, identity=None):
         session.status = 'ready'
         session.save(update_fields=['status'])
         audit(session, 'ready')
-    return identity if session.mode == 'admin_auth' else operator_state(session)['identity']
+    return _admin_identity_display(identity) if session.mode == 'admin_auth' else operator_state(session)['identity']
 
 
 class PrivateTerminalView(APIView):

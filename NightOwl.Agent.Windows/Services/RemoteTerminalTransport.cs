@@ -219,7 +219,8 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                     }
                     await SendControl(socket, new { type = "process_ready", mode = "admin_auth", execution = true, non_system = true,
                         identity = new { sid = terminal.Identity.Sid, windows_session_id = terminal.Identity.SessionId,
-                            integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated } }, lifetime.Token, sendGate);
+                            integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated,
+                            account_name = terminal.AccountName } }, lifetime.Token, sendGate);
                     break;
                 case "ready":
                     if (ready || message.GetProperty("mode").GetString() != (administrativeAuthentication ? "admin_auth" : real ? "conpty" : "synthetic") ||

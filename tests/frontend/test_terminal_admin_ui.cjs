@@ -21,7 +21,7 @@ class Element {
 
 const events = [], panel = new Element(), nodes = {};
 for (const key of ['[data-auth-modal]','[data-terminal-modal]','[data-terminal-dialog]','[data-terminal-status]',
-    '[data-connection-indicator]','[data-identity]','[data-auth-principal]','[data-screen]','[data-terminal-stage]','[data-terminal-notice]',
+    '[data-connection-indicator]','[data-identity]','[data-identity-technical]','[data-auth-principal]','[data-screen]','[data-terminal-stage]','[data-terminal-notice]',
     '[data-terminal-context-menu]','[data-terminal-copy]','[data-terminal-paste]','[data-terminal-paste-execute]',
     '[data-cancel]','[data-terminal-close]','[data-auth-status]']) nodes[key] = new Element();
 nodes['[data-auth-modal]'].hidden = true;
@@ -141,9 +141,12 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
         {account: 'Admin', domain: 'LAB', password: 'synthetic-secret'});
     assert.equal(storage.size, 1, 'credentials are not written to browser storage');
     ws.onmessage({data: JSON.stringify({type: 'ready', mode: 'admin_auth', execution: true,
-        identity: {sid: 'S-1-5-21-1-2-3-1001', integrity: 12288, elevated: true, windows_session_id: 1}})});
+        identity: {sid: 'S-1-5-21-1-2-3-1001', integrity: 12288, elevated: true, windows_session_id: 1,
+            display_name: 'Gabriel Oliveira', account_name: 'CONTROL\\admin'}})});
     assert.equal(nodes['[data-terminal-status]'].textContent, 'Conectado');
-    assert.equal(nodes['[data-identity]'].textContent, 'Usuário logado no terminal: S-1-5-21-1-2-3-1001 · sessão Windows 1 · administrador elevado confirmado');
+    assert.equal(nodes['[data-identity]'].textContent, 'Usuário logado no terminal: Gabriel Oliveira');
+    assert.equal(nodes['[data-identity-technical]'].textContent, 'SID: S-1-5-21-1-2-3-1001 · Sessão Windows: 1 · Administrador elevado confirmado');
+    assert.equal(nodes['[data-identity-technical]'].hidden, false);
     assert.equal(terminalInstance.options.scrollback, 2000);
     assert.equal(nodes['[data-terminal-modal]'].hidden, false);
     assert(!JSON.stringify(events.map(event => event.detail)).includes('synthetic-secret'));
@@ -183,6 +186,23 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     assert.equal(nodes['[data-terminal-modal]'].hidden, true);
     assert(calls.some(([url]) => url.includes('/cancel/')));
 
+    for (const [accountName, displayName, expected] of [
+        ['CONTROL\\admin', '', 'Usuário logado no terminal: CONTROL\\admin'],
+        ['', '', 'Usuário logado no terminal: nome não identificado']
+    ]) {
+        open.click();
+        form.elements.account.value = 'SomeFormAccount'; form.elements.password.value = 'synthetic-secret';
+        await form.listeners.submit({preventDefault(){}}); ws.onopen();
+        ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
+        ws.onmessage({data: JSON.stringify({type: 'ready', mode: 'admin_auth', execution: true,
+            identity: {sid: 'S-1-5-21-1-2-3-1002', integrity: 12288, elevated: true, windows_session_id: 2,
+                account_name: accountName, display_name: displayName}})});
+        assert.equal(nodes['[data-identity]'].textContent, expected);
+        assert.equal(nodes['[data-identity-technical]'].textContent,
+            'SID: S-1-5-21-1-2-3-1002 · Sessão Windows: 2 · Administrador elevado confirmado');
+        nodes['[data-terminal-close]'].click();
+    }
+
     open.click();
     form.elements.account.value = 'Rejected'; form.elements.password.value = 'bad-secret';
     await form.listeners.submit({preventDefault(){}}); ws.onopen();
@@ -213,6 +233,7 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
         identity: {sid: 'S-1-5-18', integrity: 16384, elevated: true, windows_session_id: 0}})});
     assert.equal(nodes['[data-terminal-status]'].textContent, 'Falha na sessão', 'SYSTEM identity is rejected by the UI');
     assert.equal(nodes['[data-identity]'].textContent, 'Usuário logado no terminal: identidade Windows não confirmada');
+    assert.equal(nodes['[data-identity-technical]'].hidden, true);
     assert.equal(form.elements.password.value, '');
     nodes['[data-terminal-close]'].click();
 

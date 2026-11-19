@@ -12,6 +12,7 @@
     const status = panel.querySelector('[data-terminal-status]');
     const indicator = panel.querySelector('[data-connection-indicator]');
     const identity = panel.querySelector('[data-identity]');
+    const identityTechnical = panel.querySelector('[data-identity-technical]');
     const authPrincipal = panel.querySelector('[data-auth-principal]');
     const screen = panel.querySelector('[data-screen]');
     const notice = panel.querySelector('[data-terminal-notice]');
@@ -133,6 +134,8 @@
         copyButton.disabled = pasteButton.disabled = executeButton.disabled = true;
         pending = totalInput = 0;
         identity.textContent = 'Usuário logado no terminal: identidade Windows não confirmada';
+        identityTechnical.textContent = '';
+        identityTechnical.hidden = true;
         if (keepDialog) {
             setState(label, 'error');
             terminalModal.hidden = false;
@@ -251,7 +254,11 @@
     }
     function createTerminal(user, gen) {
         if (!identityIsValid(user)) throw new Error('identity');
-        identity.textContent = `Usuário logado no terminal: ${user.sid} · sessão Windows ${user.windows_session_id} · administrador elevado confirmado`;
+        const name = typeof user.display_name === 'string' && user.display_name.trim() ? user.display_name.trim() :
+            typeof user.account_name === 'string' && user.account_name.trim() ? user.account_name.trim() : 'nome não identificado';
+        identity.textContent = `Usuário logado no terminal: ${name}`;
+        identityTechnical.textContent = `SID: ${user.sid} · Sessão Windows: ${user.windows_session_id} · Administrador elevado confirmado`;
+        identityTechnical.hidden = false;
         setState('Iniciando terminal', 'starting');
         stageStartedAt = performance.now();
         terminal = new Terminal({cols: 80, rows: 24, scrollback: 2000, fontSize: 14, fontFamily: 'Consolas, monospace',
@@ -285,6 +292,8 @@
         authModal.hidden = true;
         terminalModal.hidden = false;
         identity.textContent = 'Identidade Windows ainda não confirmada';
+        identityTechnical.textContent = '';
+        identityTechnical.hidden = true;
         setState('Solicitando conexão', 'pending');
         try {
             const response = await fetch(panel.dataset.url, {method: 'POST', credentials: 'same-origin', cache: 'no-store',

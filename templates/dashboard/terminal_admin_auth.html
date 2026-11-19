@@ -21,7 +21,10 @@
           <div class="terminal-admin-title-block"><strong id="terminal-admin-title">{{ endpoint.hostname|default:'Endpoint'|escape }}</strong><span>Sessão administrativa</span></div>
           <p class="terminal-admin-status"><span class="terminal-connection-indicator" data-connection-indicator data-state="pending"></span><span data-terminal-status aria-live="polite">Solicitando conexão</span></p>
           <small class="terminal-admin-registered">Usuário registrado do computador: <b data-terminal-registered-user>Não identificado</b></small>
-          <small class="terminal-admin-identity" data-identity>Usuário logado no terminal: aguardando autenticação Windows</small>
+          <div class="terminal-admin-identity">
+            <small data-identity>Usuário logado no terminal: aguardando autenticação Windows</small>
+            <small class="terminal-admin-identity-tech" data-identity-technical hidden></small>
+          </div>
         </div>
         <button type="button" data-terminal-close aria-label="Encerrar terminal">×</button>
       </header>
