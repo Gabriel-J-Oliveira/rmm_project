@@ -6,7 +6,7 @@
 {% block icon_script %}<script src="{% static 'vendor/lucide/1.71.0/lucide.min.js' %}" defer></script>{% endblock %}
 {% block styles %}
 <link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-hotfix-47-1">
-<link rel="stylesheet" href="{% static 'css/endpoint_services.css' %}?v=services-phase-a-1">
+<link rel="stylesheet" href="{% static 'css/endpoint_services.css' %}?v=services-phase-b-1">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
 {% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
@@ -440,7 +440,7 @@
 </aside>
 <dialog class="endpoint-services-dialog" data-service-manager-dialog aria-labelledby="endpoint-services-title" aria-describedby="endpoint-services-status">
     <header class="endpoint-services-header">
-        <div><span class="endpoint-services-kicker">Consulta somente leitura</span><h2 id="endpoint-services-title">Serviços Windows</h2><p data-service-endpoint-label>{{ endpoint.hostname|default:'Endpoint' }}</p></div>
+        <div><span class="endpoint-services-kicker">Consulta e controle autorizado</span><h2 id="endpoint-services-title">Serviços Windows</h2><p data-service-endpoint-label>{{ endpoint.hostname|default:'Endpoint' }}</p></div>
         <button type="button" class="endpoint-services-icon-button" data-service-close aria-label="Fechar gerenciador">&times;</button>
     </header>
     <p class="endpoint-services-status" id="endpoint-services-status" data-service-status role="status" aria-live="polite">Verificando autorização, identidade e capacidade do agente.</p>
@@ -452,13 +452,20 @@
     </div>
     <div class="endpoint-services-content">
         <section class="endpoint-services-list-wrap" aria-label="Lista de serviços">
-            <div class="endpoint-services-table-scroll"><table class="endpoint-services-table"><thead><tr><th scope="col">Nome interno</th><th scope="col">Nome de exibição</th><th scope="col">Estado</th><th scope="col">Inicialização</th></tr></thead><tbody data-service-rows></tbody></table></div>
+            <div class="endpoint-services-table-scroll"><table class="endpoint-services-table"><thead><tr><th scope="col">Nome interno</th><th scope="col">Nome de exibição</th><th scope="col">Estado</th><th scope="col">Inicialização</th><th scope="col">Ações autorizadas</th></tr></thead><tbody data-service-rows></tbody></table></div>
             <p class="endpoint-services-empty" data-service-empty hidden>Nenhum serviço corresponde à pesquisa e aos filtros.</p>
         </section>
         <aside class="endpoint-services-properties" data-service-properties aria-label="Propriedades do serviço" aria-live="polite"><h3>Propriedades</h3><p>Selecione um serviço para ver seus dados coletados.</p></aside>
     </div>
+    <section class="endpoint-services-action-confirm" data-service-action-confirm hidden aria-labelledby="endpoint-service-action-title">
+        <h3 id="endpoint-service-action-title">Confirmar operação</h3>
+        <p data-service-action-description></p>
+        <div><button type="button" class="endpoint-services-button endpoint-services-button--secondary" data-service-action-cancel>Cancelar</button><button type="button" class="endpoint-services-button" data-service-action-submit>Confirmar ação</button></div>
+    </section>
+    <p class="endpoint-services-action-status" data-service-action-status role="status" aria-live="polite" hidden></p>
+    <button type="button" class="endpoint-services-button endpoint-services-action-check" data-service-action-check hidden>Consultar resultado</button>
     <footer class="endpoint-services-footer"><span data-service-collected-at>Coleta ainda não realizada.</span><div><button type="button" class="endpoint-services-button endpoint-services-button--secondary" data-service-refresh disabled>Atualizar dados</button><button type="button" class="endpoint-services-button" data-service-close>Fechar</button></div></footer>
-    <p class="endpoint-services-phase-note">Iniciar, parar, reiniciar e editar propriedades não estão disponíveis nesta fase.</p>
+    <p class="endpoint-services-phase-note">As operações administrativas dependem de autorização independente por endpoint, serviço, ação e operador. Alteração de inicialização e propriedades permanece indisponível.</p>
 </dialog>
 {% if endpoint_detail_payload %}
 {{ endpoint_detail_payload|json_script:"endpoint-detail-real-payload" }}
@@ -484,8 +491,8 @@
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-2"></script>
 <script src="{% static 'js/job_display.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2"></script>
-<script src="{% static 'js/endpoint_services.js' %}?v=services-phase-a-1"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2-service-controls-1"></script>
+<script src="{% static 'js/endpoint_services.js' %}?v=services-phase-b-1"></script>
 <script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=rc47-hotfix-47-1"></script>
 {% endblock %}

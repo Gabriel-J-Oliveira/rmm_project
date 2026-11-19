@@ -1,4 +1,5 @@
 """Read-only, bounded Windows service listing over the existing internal-job protocol."""
+import re
 import uuid
 from datetime import timedelta
 
@@ -15,6 +16,8 @@ from config.authz import is_nightowl_technical_user
 from .internal_jobs import create_internal_job, internal_capability, validate_internal_completion
 from .models import AgentJob, AgentMachine
 from .service_collection_policy import service_collection_endpoint_allowed
+from . import administrative_actions as admin
+from .operational_actions import create_action_job, validate_payload as validate_action_payload
 
 PAGE_SIZE = 20
 MAX_PAGES = 40
@@ -55,6 +58,57 @@ def _availability(endpoint):
     if not internal_capability(endpoint, PAGED_SERVICE_CAPABILITY):
         return False, 'capability_unconfirmed', 'O agente não anunciou a capacidade de consulta paginada. Pode ser necessária uma versão Windows mais recente.'
     return True, '', ''
+
+
+def _service_action_reason(code):
+    return {
+        'service_control_disabled': 'O controle de serviços está desativado no backend.',
+        'administrative_actions_disabled': 'Ações administrativas estão desativadas no backend.',
+        'operational_actions_disabled': 'Ações operacionais estão desativadas no backend.',
+        'admin_resource_not_authorized': 'Este serviço ou ação não está autorizado para o endpoint.',
+        'action_forbidden': 'Seu usuário não tem permissão para esta ação.',
+        'action_scope_forbidden': 'A ação não está autorizada para este operador e endpoint.',
+        'action_capability_unconfirmed': 'A capacidade necessária do agente não foi confirmada em heartbeat recente.',
+        'service_endpoint_ineligible': 'O endpoint precisa estar ativo, online e com identidade única confirmada.',
+        'endpoint_inactive': 'O endpoint está inativo ou em ciclo de vida terminal.',
+        'identity_unavailable': 'A identidade do endpoint não está confirmada como única.',
+        'job_conflict': 'Há outro job em andamento neste endpoint.',
+        'protected_service': 'Este serviço é protegido e não pode ser controlado pelo NightOwl.',
+    }.get(code, 'Ação indisponível por política ou requisito do agente.')
+
+
+def _service_control_availability(endpoint, user):
+    """Evaluate each allowlisted operation through the same dispatcher validator."""
+    actions = {}
+    scopes = getattr(settings, 'NIGHTOWL_ADMIN_ACTION_SCOPES', {})
+    endpoint_scope = scopes.get(str(endpoint.pk), {}) if isinstance(scopes, dict) else {}
+    endpoint_scope = endpoint_scope if isinstance(endpoint_scope, dict) else {}
+    for action in sorted(admin.SERVICES):
+        names = endpoint_scope.get(action)
+        entries = {'enabled': False, 'services': [], 'reason': ''}
+        if not isinstance(names, list):
+            entries['reason'] = _service_action_reason('admin_resource_not_authorized')
+            actions[action] = entries
+            continue
+        failures = []
+        for name in names:
+            try:
+                payload = validate_action_payload({'action_id': action, 'action_version': 1,
+                    'parameters': {'service_name': name}})
+                candidate = AgentJob(endpoint=endpoint, job_type='operational_action', payload=payload,
+                    created_by=user.get_username(), timeout_seconds=15,
+                    expires_at=timezone.now() + timedelta(minutes=15))
+                from .operational_actions import validate_dispatch
+                validate_dispatch(candidate, creating=True)
+                entries['services'].append(name)
+            except (PermissionError, ValueError) as exc:
+                failures.append(str(exc))
+        entries['enabled'] = bool(entries['services'])
+        if not entries['enabled']:
+            code = failures[0] if failures else 'admin_resource_not_authorized'
+            entries['reason'] = _service_action_reason(code)
+        actions[action] = entries
+    return actions
 
 
 def _no_store(response):
@@ -126,7 +180,8 @@ class ServiceManagerAvailabilityView(APIView):
         available, code, reason = _availability(endpoint)
         return _no_store(Response({'available': available, 'reason_code': code, 'reason': reason,
                                    'page_size': PAGE_SIZE if available else None,
-                                   'max_services': MAX_SERVICES if available else None}))
+                                   'max_services': MAX_SERVICES if available else None,
+                                   'service_actions': _service_control_availability(endpoint, request.user)}))
 
 
 class ServiceManagerJobView(APIView):
@@ -236,3 +291,85 @@ class ServiceManagerJobView(APIView):
                      'snapshot_id': output['snapshot_id'], 'total_services': output['total_services'],
                      'has_more': output['has_more'], 'cursor': next_cursor},
             'page_index': job.payload['page_index']}))
+
+
+class ServiceManagerActionView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _endpoint(self, request, endpoint_id):
+        if not _operator_allowed(request.user):
+            return None, _no_store(Response({'error': 'service_manager_forbidden'}, status=403))
+        endpoint = AgentMachine.objects.filter(pk=endpoint_id).first()
+        if endpoint is None:
+            return None, _no_store(Response({'error': 'endpoint_not_found'}, status=404))
+        return endpoint, None
+
+    def post(self, request, endpoint_id):
+        endpoint, denied = self._endpoint(request, endpoint_id)
+        if denied:
+            return denied
+        body = request.data
+        if not isinstance(body, dict) or set(body) != {'request_id', 'action_id', 'service_name'}:
+            return _no_store(Response({'error': 'invalid_request'}, status=400))
+        try:
+            request_id = str(uuid.UUID(body['request_id']))
+            if request_id != body['request_id']:
+                raise ValueError
+            payload = validate_action_payload({'action_id': body['action_id'], 'action_version': 1,
+                'parameters': {'service_name': body['service_name']}})
+            if payload['action_id'] not in admin.SERVICES:
+                raise ValueError('unsupported_service_action')
+            job = create_action_job(request.user, endpoint.pk, payload, request_id=request_id)
+        except PermissionError:
+            return _no_store(Response({'error': 'action_forbidden'}, status=403))
+        except AgentMachine.DoesNotExist:
+            return _no_store(Response({'error': 'endpoint_not_found'}, status=404))
+        except (ValueError, TypeError, AttributeError) as exc:
+            code = str(exc)
+            if code not in {'service_control_disabled', 'administrative_actions_disabled',
+                'operational_actions_disabled', 'admin_resource_not_authorized', 'action_forbidden',
+                'action_scope_forbidden', 'action_capability_unconfirmed', 'service_endpoint_ineligible',
+                'endpoint_inactive', 'identity_unavailable', 'job_conflict', 'protected_service', 'request_id_conflict', 'invalid_service_name',
+                'invalid_action_envelope', 'unknown_action', 'unsupported_action_version',
+                'invalid_action_parameters', 'protected_or_invalid_service', 'unsupported_service_action'}:
+                code = 'invalid_request'
+            status_code = 409 if code in {'service_control_disabled', 'administrative_actions_disabled',
+                'operational_actions_disabled', 'admin_resource_not_authorized', 'action_scope_forbidden',
+                'action_capability_unconfirmed', 'service_endpoint_ineligible', 'endpoint_inactive',
+                'identity_unavailable', 'job_conflict'} else 400
+            return _no_store(Response({'error': code}, status=status_code))
+        return _no_store(Response({'job_id': str(job.pk), 'status': job.status,
+            'request_id': request_id, 'action_id': payload['action_id'],
+            'service_name': payload['parameters']['service_name']}, status=202))
+
+    def get(self, request, endpoint_id, job_id):
+        endpoint, denied = self._endpoint(request, endpoint_id)
+        if denied:
+            return denied
+        job = AgentJob.objects.filter(pk=job_id, endpoint=endpoint,
+            job_type='operational_action', created_by=request.user.get_username()).first()
+        if not job or not isinstance(job.payload, dict) or job.payload.get('action_id') not in admin.SERVICES:
+            return _no_store(Response({'error': 'service_action_not_found'}, status=404))
+        payload = job.payload
+        service_name = payload.get('parameters', {}).get('service_name') if isinstance(payload.get('parameters'), dict) else None
+        response = {'job_id': str(job.pk), 'status': job.status, 'action_id': payload.get('action_id'),
+            'service_name': service_name, 'created_at': job.created_at.isoformat(),
+            'dispatched_at': job.dispatched_at.isoformat() if job.dispatched_at else None,
+            'started_at': job.started_at.isoformat() if job.started_at else None,
+            'finished_at': job.finished_at.isoformat() if job.finished_at else None,
+            'result_confirmed': False, 'result': None}
+        if job.status == AgentJob.STATUS_COMPLETED:
+            try:
+                from .operational_actions import validate_completion
+                validate_completion(job, job.result)
+                output = job.result['output']
+                response['result_confirmed'] = True
+                response['result'] = {'state': output['state'], 'changed': output['changed']}
+            except (ValueError, TypeError, KeyError):
+                response['status'] = AgentJob.STATUS_FAILED
+                response['error_code'] = 'SERVICE_RESULT_UNCONFIRMED'
+        elif job.status in FINAL_STATUSES:
+            code = str(job.error_code or '').upper()
+            response['error_code'] = code if re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', code, re.ASCII) else 'SERVICE_ACTION_FAILED'
+        return _no_store(Response(response))

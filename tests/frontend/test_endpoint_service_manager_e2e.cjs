@@ -21,17 +21,41 @@ let phase = 'initialization';
         await context.addCookies([{name: 'sessionid', value: process.env.NIGHTOWL_E2E_SESSION, url: server}]);
         const page = await context.newPage();
         const pageErrors = [];
-        const api = {dispatches: 0, statusReads: 0, writeCalls: 0, csrf: ''};
+        const api = {dispatches: 0, statusReads: 0, writeCalls: 0, actionDispatches: 0, actionStatusReads: 0, csrf: ''};
+        let serviceState = 'Stopped';
         page.on('pageerror', error => pageErrors.push(error.name));
         await page.route('**/api/agent/service-manager/**', async route => {
             const request = route.request();
             const url = new URL(request.url());
-            assert.equal(url.pathname, '/api/agent/service-manager/' + endpointId + '/' +
-                (url.pathname.endsWith('/availability/') ? 'availability/' :
-                    url.pathname.includes('/jobs/') ? url.pathname.split('/').slice(-3).join('/') : ''));
+            assert(url.pathname.startsWith('/api/agent/service-manager/' + endpointId + '/'));
             if (request.method() === 'GET' && url.pathname.endsWith('/availability/')) {
                 return route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({
-                    available: true, reason_code: '', reason: '', page_size: 20, max_services: 800
+                    available: true, reason_code: '', reason: '', page_size: 20, max_services: 800,
+                    service_actions: {
+                        start_service: {enabled: true, services: ['AcmeAgent'], reason: ''},
+                        stop_service: {enabled: true, services: ['Spooler'], reason: ''},
+                        restart_service: {enabled: true, services: ['Spooler'], reason: ''}
+                    }
+                })});
+            }
+            if (url.pathname.endsWith('/actions/') && request.method() === 'POST') {
+                api.actionDispatches++;
+                api.csrf = request.headers()['x-csrftoken'] || api.csrf;
+                const body = request.postDataJSON();
+                assert.deepEqual(Object.keys(body).sort(), ['action_id', 'request_id', 'service_name']);
+                assert.match(body.request_id, /^[0-9a-f-]{36}$/i);
+                assert.equal(body.action_id, 'start_service');
+                assert.equal(body.service_name, 'AcmeAgent');
+                return route.fulfill({status: 202, contentType: 'application/json', body: JSON.stringify({
+                    job_id: '9f49a67c-0cfc-4bd9-844b-001cbeab0001', status: 'queued', request_id: body.request_id
+                })});
+            }
+            if (url.pathname.includes('/actions/') && request.method() === 'GET') {
+                api.actionStatusReads++;
+                serviceState = 'Running';
+                return route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({
+                    job_id: '9f49a67c-0cfc-4bd9-844b-001cbeab0001', status: 'completed', action_id: 'start_service',
+                    service_name: 'AcmeAgent', result_confirmed: true, result: {state: 'Running', changed: true}
                 })});
             }
             if (request.method() === 'POST') {
@@ -51,7 +75,7 @@ let phase = 'initialization';
                     status: 'completed', job_id: 'b5e59c66-5bf6-4f61-9b6d-10fa361e847e', page_index: 1,
                     page: {services: [
                         {name: 'Spooler', display_name: 'Print Spooler', status: 'Running', startup_type: 'Automatic'},
-                        {name: 'AcmeAgent', display_name: '<img src=x onerror=alert(1)> Agent', status: 'Stopped', startup_type: 'Manual'},
+                        {name: 'AcmeAgent', display_name: '<img src=x onerror=alert(1)> Agent', status: serviceState, startup_type: 'Manual'},
                         {name: 'Mystery', display_name: 'Mystery Service', status: 'unknown', startup_type: 'unknown'}
                     ], collected_at: new Date().toISOString(), snapshot_id: '0123456789abcdef0123456789abcdef',
                     total_services: 3, has_more: false, cursor: null}
@@ -94,9 +118,24 @@ let phase = 'initialization';
         assert.equal(api.dispatches, 1);
         assert(api.statusReads >= 1);
         assert(api.csrf.length > 0, 'Read-only job dispatch must retain session CSRF protection');
-        assert.equal(api.writeCalls, 0, 'Phase A must not expose remote write operations');
         assert.equal(await dialog.locator('img').count(), 0, 'Service labels must be inserted as text, not HTML');
         assert((await dialog.innerText()).includes('<img src=x onerror=alert(1)> Agent'));
+
+        phase = 'service_control_confirmation';
+        const startService = dialog.locator('[data-service-control="start_service"][data-service-name="AcmeAgent"]');
+        assert.equal(await startService.isEnabled(), true);
+        assert.equal(await dialog.locator('[data-service-control="stop_service"][data-service-name="AcmeAgent"]').isEnabled(), false);
+        assert.equal(await dialog.locator('[data-service-control="restart_service"][data-service-name="AcmeAgent"]').isEnabled(), false);
+        await startService.click();
+        assert.equal(api.actionDispatches, 0, 'Opening the confirmation must not create a job.');
+        assert((await dialog.locator('[data-service-action-description]').innerText()).includes(endpointName));
+        assert((await dialog.locator('[data-service-action-description]').innerText()).includes('AcmeAgent'));
+        await dialog.locator('[data-service-action-submit]').click();
+        await dialog.locator('[data-service-action-status]').filter({hasText: 'Concluído e confirmado'}).waitFor();
+        assert.equal(api.actionDispatches, 1);
+        assert(api.actionStatusReads >= 1);
+        assert.equal(api.writeCalls, 0, 'Only the dedicated, mocked service action path may be used by this browser fixture.');
+        assert.equal(api.dispatches, 2, 'The service list must be queried again after a confirmed operation.');
 
         phase = 'search_filters_properties';
         await dialog.locator('[data-service-search]').fill('acme');
@@ -125,7 +164,7 @@ let phase = 'initialization';
         phase = 'manual_refresh';
         await dialog.locator('[data-service-refresh]').click();
         await page.waitForFunction(() => document.querySelector('[data-service-status]')?.textContent.includes('Coleta concluída'));
-        assert.equal(api.dispatches, 2);
+        assert.equal(api.dispatches, 3);
         assert.equal(api.writeCalls, 0);
 
         phase = 'mobile_layout';
@@ -157,7 +196,7 @@ let phase = 'initialization';
         assert(themeColors.token && themeColors.dialog === themeColors.token,
             'The service dialog must use NightOwl theme surface tokens: ' + JSON.stringify(themeColors));
         assert.deepEqual(pageErrors, [], 'The endpoint page must not produce JavaScript errors');
-        console.log('PASS service manager browser: real endpoint page, authorized read-only list, search, filters, sort, properties, manual refresh, XSS-safe text, desktop/mobile layout and theme tokens. Screenshots: ' + artifactDir);
+        console.log('PASS service manager browser: real endpoint page, mocked authorized service action with human confirmation, result polling and requery, search, filters, sort, properties, manual refresh, XSS-safe text, desktop/mobile layout and theme tokens. Screenshots: ' + artifactDir);
         await context.close();
     } finally {
         await browser.close();

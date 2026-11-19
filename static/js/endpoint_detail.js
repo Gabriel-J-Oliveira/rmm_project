@@ -1361,7 +1361,9 @@
             actionButton("force_inventory", "Forcar inventario", "refresh-ccw"),
             actionButton("collect_software", "Coletar software", "package-search")
         ];
-        const operationalButtons = Object.keys(operationalLabels).map(function (action) {
+        const operationalButtons = Object.keys(operationalLabels).filter(function (action) {
+                return !['start_service', 'stop_service', 'restart_service'].includes(action);
+            }).map(function (action) {
                 const available = asObject(asObject(detail.operationalActions)[action]);
                 const reason = available.reason || 'Ação indisponível para este operador ou endpoint';
                 return '<div class="endpoint-action-availability"><button type="button" class="endpoint-quick-action-button" data-endpoint-action="' + escapeHtml(action) + '"' + (available.enabled ? '' : ' disabled title="' + escapeHtml(reason) + '"') + '><i data-lucide="' + escapeHtml({flush_dns:'network',query_service:'search',gpupdate:'refresh-cw',start_service:'play',stop_service:'square',restart_service:'rotate-cw'}[action] || 'circle') + '"></i><span>' + escapeHtml(operationalLabels[action]) + '</span></button>' + (available.enabled ? '' : '<small>' + escapeHtml(reason) + '</small>') + '</div>';

@@ -87,12 +87,18 @@ body.page-endpoint-detail .endpoint-services-table th:first-child,
 body.page-endpoint-detail .endpoint-services-table td:first-child { width: 25%; }
 body.page-endpoint-detail .endpoint-services-table th:nth-child(3),
 body.page-endpoint-detail .endpoint-services-table th:nth-child(4) { white-space: nowrap; }
+body.page-endpoint-detail .endpoint-services-table th:last-child { min-width: 220px; }
 body.page-endpoint-detail .endpoint-services-row-select { border: 0; padding: 0; background: transparent; color: var(--soft-purple); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
 body.page-endpoint-detail .endpoint-services-row-select[aria-pressed="true"] { color: var(--text-primary); font-weight: 800; }
 body.page-endpoint-detail .endpoint-services-state { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 3px 7px; white-space: nowrap; }
 body.page-endpoint-detail .endpoint-services-state--running { color: var(--online); }
 body.page-endpoint-detail .endpoint-services-state--pending { color: var(--soft-purple); }
 body.page-endpoint-detail .endpoint-services-state--unknown { color: var(--text-secondary); }
+body.page-endpoint-detail .endpoint-services-row-actions { display: flex; flex-wrap: wrap; gap: 5px; min-width: 205px; }
+body.page-endpoint-detail .endpoint-services-action-button { border: 1px solid var(--border); border-radius: 7px; padding: 5px 7px; background: var(--card); color: var(--text-primary); font: inherit; font-size: 10px; cursor: pointer; }
+body.page-endpoint-detail .endpoint-services-action-button:not(:disabled):hover { border-color: var(--border-active); color: var(--soft-purple); }
+body.page-endpoint-detail .endpoint-services-action-button:disabled { opacity: .52; cursor: not-allowed; }
+body.page-endpoint-detail .endpoint-services-action-blocked { flex-basis: 100%; color: var(--text-secondary); font-size: 10px; }
 body.page-endpoint-detail .endpoint-services-properties { min-width: 0; padding: 16px; overflow: auto; border-left: 1px solid var(--border); background: var(--sidebar); }
 body.page-endpoint-detail .endpoint-services-properties h3 { margin: 0 0 12px; font-size: 14px; }
 body.page-endpoint-detail .endpoint-services-properties p { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
@@ -105,6 +111,19 @@ body.page-endpoint-detail .endpoint-services-footer { border-top: 1px solid var(
 body.page-endpoint-detail .endpoint-services-footer div { display: flex; gap: 8px; }
 body.page-endpoint-detail .endpoint-services-footer [data-stale="true"] { color: #e6b95d; }
 body.page-endpoint-detail .endpoint-services-phase-note { margin: 0; padding: 0 20px 12px; }
+body.page-endpoint-detail .endpoint-services-action-confirm { display: grid; gap: 8px; margin: 10px 20px; padding: 14px; border: 1px solid var(--border-active); border-radius: 10px; background: var(--sidebar); }
+body.page-endpoint-detail .endpoint-services-action-confirm[hidden] { display: none; }
+body.page-endpoint-detail .endpoint-services-action-confirm h3,
+body.page-endpoint-detail .endpoint-services-action-confirm p { margin: 0; }
+body.page-endpoint-detail .endpoint-services-action-confirm p,
+body.page-endpoint-detail .endpoint-services-action-status { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+body.page-endpoint-detail .endpoint-services-action-confirm > div { display: flex; justify-content: flex-end; gap: 8px; }
+body.page-endpoint-detail .endpoint-services-action-status { margin: 0 20px 10px; }
+body.page-endpoint-detail .endpoint-services-action-status[data-state="success"] { color: var(--online); }
+body.page-endpoint-detail .endpoint-services-action-status[data-state="error"] { color: var(--offline); }
+body.page-endpoint-detail .endpoint-services-action-status[data-state="pending"] { color: var(--soft-purple); }
+body.page-endpoint-detail .endpoint-services-action-check { margin: 0 20px 12px; }
+body.page-endpoint-detail .endpoint-services-action-check[hidden] { display: none; }
 
 @media (max-width: 760px) {
     body.page-endpoint-detail .endpoint-services-dialog { width: calc(100vw - 16px); max-height: 95vh; border-radius: 12px; }
@@ -120,6 +139,12 @@ body.page-endpoint-detail .endpoint-services-phase-note { margin: 0; padding: 0 
     body.page-endpoint-detail .endpoint-services-table th:first-child,
     body.page-endpoint-detail .endpoint-services-table td:first-child { width: auto; }
     body.page-endpoint-detail .endpoint-services-state { white-space: normal; }
+    body.page-endpoint-detail .endpoint-services-table th:last-child { min-width: 140px; }
+    body.page-endpoint-detail .endpoint-services-row-actions { min-width: 130px; }
+    body.page-endpoint-detail .endpoint-services-action-button { padding: 5px; font-size: 9px; }
+    body.page-endpoint-detail .endpoint-services-action-confirm,
+    body.page-endpoint-detail .endpoint-services-action-status,
+    body.page-endpoint-detail .endpoint-services-action-check { margin-left: 12px; margin-right: 12px; }
     body.page-endpoint-detail .endpoint-services-footer { align-items: stretch; flex-direction: column; }
     body.page-endpoint-detail .endpoint-services-footer div { justify-content: flex-end; }
 }
