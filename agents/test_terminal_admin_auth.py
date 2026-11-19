@@ -2,6 +2,7 @@ import asyncio
 from django.test import tag
 import json
 import os
+import subprocess
 import uuid
 from pathlib import Path
 from datetime import timedelta
@@ -10,8 +11,10 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import Client, TestCase, TransactionTestCase, override_settings
+from django.test import LiveServerTestCase
 from django.urls import reverse
 from django.utils import timezone
+from access_inventory.models import ADUser
 
 from . import terminal_sessions as sessions, terminal_transport as transport
 from .models import AgentMachine, AuditEvent, InventorySnapshot, TerminalAccessGrant, TerminalSession
@@ -179,7 +182,8 @@ class AdminAuthControlTests(TestCase):
         machine, _, operator = fixture('admin-auth-button')
         enable_admin(machine, operator)
         machine.status = 'online'
-        machine.save(update_fields=['status'])
+        machine.last_logged_user = r'CONTROL\last.user'
+        machine.save(update_fields=['status', 'last_logged_user'])
         self.client.force_login(operator)
         url = reverse('endpoint-detail', args=[machine.pk])
         response = self.client.get(url)
@@ -188,6 +192,9 @@ class AdminAuthControlTests(TestCase):
         self.assertContains(response, 'data-auth-modal')
         self.assertContains(response, 'name="account"')
         self.assertContains(response, 'name="password"')
+        self.assertContains(response, 'data-auth-principal')
+        self.assertContains(response, 'data-terminal-registered-user>Não identificado')
+        self.assertContains(response, 'data-endpoint-uuid=')
         self.assertNotContains(response, 'data-drawer')
         self.assertNotContains(response, 'data-accounts')
         machine.status = 'offline'
@@ -220,7 +227,49 @@ class AdminAuthControlTests(TestCase):
         identity = {'sid':'S-1-5-21-1-2-3-1001','windows_session_id':0,'integrity':12288,'elevated':True}
         for invalid in ({**identity, 'sid':'S-1-5-18'}, {**identity, 'elevated':False}, {**identity, 'integrity':8192}):
             with self.assertRaises(PermissionError): sessions.mark_ready(info['session_id'], invalid)
-        self.assertEqual(sessions.mark_ready(info['session_id'], identity), identity)
+        ready_identity = sessions.mark_ready(info['session_id'], identity)
+        self.assertEqual(ready_identity, {**identity, 'account_name': '', 'display_name': ''})
+
+    def test_ready_uses_sid_matched_ad_display_name_and_token_account(self):
+        machine, _, operator = fixture('admin-auth-display-name')
+        enable_admin(machine, operator)
+        info = sessions.create_session(operator, machine.pk, 'admin_auth')
+        sid = 'S-1-5-21-1-2-3-1001'
+        ADUser.objects.create(sid=sid, sam_account_name='admin', display_name='Windows Display Name',
+            distinguished_name='CN=Admin,OU=Users,DC=control,DC=local')
+
+        result = sessions.mark_ready(info['session_id'], {
+            'sid': sid, 'windows_session_id': 3, 'integrity': 12288, 'elevated': True,
+            'account_name': r'CONTROL\admin',
+        })
+
+        self.assertEqual(result['display_name'], 'Windows Display Name')
+        self.assertEqual(result['account_name'], r'CONTROL\admin')
+        self.assertEqual(result['sid'], sid)
+        self.assertEqual(result['windows_session_id'], 3)
+
+    def test_ready_falls_back_to_token_account_and_handles_missing_name(self):
+        for index, account_name in enumerate((r'CONTROL\admin', '')):
+            with self.subTest(account_name=account_name):
+                machine, _, operator = fixture(f'admin-auth-account-fallback-{index}')
+                enable_admin(machine, operator)
+                info = sessions.create_session(operator, machine.pk, 'admin_auth')
+                result = sessions.mark_ready(info['session_id'], {
+                    'sid': f'S-1-5-21-1-2-3-{1100 + index}', 'windows_session_id': 3,
+                    'integrity': 12288, 'elevated': True, 'account_name': account_name,
+                })
+                self.assertEqual(result['account_name'], account_name)
+                self.assertEqual(result['display_name'], '')
+
+    def test_ready_rejects_agent_supplied_display_name(self):
+        machine, _, operator = fixture('admin-auth-untrusted-display-name')
+        enable_admin(machine, operator)
+        info = sessions.create_session(operator, machine.pk, 'admin_auth')
+        with self.assertRaises(PermissionError):
+            sessions.mark_ready(info['session_id'], {
+                'sid': 'S-1-5-21-1-2-3-1001', 'windows_session_id': 3,
+                'integrity': 12288, 'elevated': True, 'display_name': 'Untrusted form value',
+            })
 
     def test_http_rejects_unauthorized_operator(self):
         machine, _, operator = fixture('admin-auth-owner')
@@ -282,7 +331,8 @@ class AdminAuthIntegrationTests(TransactionTestCase):
             await agent.until('windows_auth')
             identity = {'sid':'S-1-5-21-1-2-3-1001','windows_session_id':0,'integrity':12288,'elevated':True}
             await agent.control({'type':'process_ready','mode':'admin_auth','execution':True,'non_system':True,'identity':identity})
-            self.assertEqual((await browser.until('ready'))['identity'], identity)
+            ready_identity = (await browser.until('ready'))['identity']
+            self.assertEqual(ready_identity, {**identity, 'account_name': '', 'display_name': ''})
             await agent.until('ready')
             await browser.binary(0, 1, b'synthetic-input')
             self.assertEqual((await agent.read())[9:], b'synthetic-input')
@@ -318,7 +368,7 @@ class AdminAuthIntegrationTests(TransactionTestCase):
                 await browser.until('transport_ready')
                 await browser.control({'type':'windows_auth','account':'nonexistent-' + uuid.uuid4().hex,'domain':'.','password':secret})
                 result = await browser.until('windows_auth_result')
-                self.assertEqual(result, {'type':'windows_auth_result','result':'rejected'})
+                self.assertEqual(result, {'type':'windows_auth_result','result':'rejected','reason':'credentials_rejected'})
                 await browser.control({'type':'windows_auth','account':'x','domain':'.','password':secret})
                 self.assertEqual((await browser.until('closed'))['code'], 'unsupported_control')
                 await browser.close()
@@ -329,3 +379,27 @@ class AdminAuthIntegrationTests(TransactionTestCase):
                 if process.returncode is None: process.kill(); await process.wait()
         rows = await sync_to_async(lambda: json.dumps(list(TerminalSession.objects.values()) + list(AuditEvent.objects.values()), default=str))()
         self.assertNotIn(secret, rows)
+
+
+@override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True,
+    NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True, NIGHTOWL_TERMINAL_TEST_LOOPBACK=True, ALLOWED_HOSTS=['testserver', '127.0.0.1', 'localhost'])
+class AdminAuthVisualBrowserTests(LiveServerTestCase):
+    def test_admin_terminal_responsive_visual(self):
+        if os.environ.get('NIGHTOWL_TEST_BROWSER_E2E') != '1':
+            self.skipTest('Explicit isolated browser gate required')
+        machine, _, operator = fixture('admin-auth-visual')
+        enable_admin(machine, operator)
+        machine.status = AgentMachine.STATUS_ONLINE
+        machine.save(update_fields=['status'])
+        self.client.force_login(operator)
+        endpoint_page = self.client.get(reverse('endpoint-detail', args=[machine.pk]))
+        self.assertContains(endpoint_page, 'data-terminal-open')
+        self.assertNotContains(endpoint_page, 'data-terminal-open disabled')
+        completed = subprocess.run(
+            ['node', str(Path(__file__).resolve().parent.parent / 'tests/frontend/test_terminal_admin_visual.cjs')],
+            env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
+                 'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
+                 'NIGHTOWL_E2E_ENDPOINT': str(machine.pk)}, capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertFalse(TerminalSession.objects.exists(), 'Visual preview must not create a terminal session.')
+        print(completed.stdout.strip())

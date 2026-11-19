@@ -191,7 +191,10 @@ async def reader(peer, link, receive, session_id=None):
             other.enqueue(event=event)
             del event, text, message
         elif kind == 'windows_auth_result' and peer.role == 'agent' and link.mode == 'admin_auth' and link.auth_submitted and not link.auth_completed:
-            if set(event) != {'type', 'result'} or event['result'] not in ('accepted', 'rejected'):
+            if event.get('result') == 'rejected' and set(event) == {'type', 'result', 'reason'}:
+                if event['reason'] not in ('credentials_rejected', 'administrator_required'):
+                    raise ProtocolError('invalid_windows_auth_result')
+            elif set(event) != {'type', 'result'} or event['result'] not in ('accepted', 'rejected'):
                 raise ProtocolError('invalid_windows_auth_result')
             link.auth_completed = True
             other.enqueue(event=event)
@@ -206,7 +209,8 @@ async def reader(peer, link, receive, session_id=None):
             for member in link.peers.values():
                 member.enqueue(event={'type': 'ready', 'mode': link.mode, 'execution': True, 'identity': identity})
         elif kind == 'error' and peer.role == 'agent' and set(event) == {'type', 'code'} and event['code'] in (
-                'identity_or_consent_required', 'conpty_start_failed', 'terminal_output_limit', 'terminal_process_exited'):
+                'identity_or_consent_required', 'conpty_start_failed', 'terminal_output_limit', 'terminal_process_exited',
+                'admin_terminal_start_failed'):
             raise ProtocolError(event['code'])
         elif (kind, peer.role) in (('resize', 'operator'), ('resized', 'agent')) and link.ready.is_set():
             if (set(event) != {'type', 'cols', 'rows'} or
