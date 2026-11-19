@@ -54,6 +54,16 @@ public sealed class TerminalIdentity : IDisposable
     public static void ValidateFacts(TerminalTokenFacts f, AgentConfig c) => TerminalUserIdentity.ValidateFacts(f, Policy(c));
     public static TerminalTokenFacts CurrentFacts() => TerminalUserIdentity.CurrentFacts();
     public static TerminalTokenFacts Inspect(SafeAccessTokenHandle t) => TerminalUserIdentity.Inspect(t);
+    public static string TokenAccountName(SafeAccessTokenHandle token, string expectedSid)
+    {
+        return System.Security.Principal.WindowsIdentity.RunImpersonated(token, () =>
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            if (!string.Equals(identity.User?.Value, expectedSid, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+            try { return identity.Name ?? string.Empty; }
+            catch (System.Security.Principal.IdentityNotMappedException) { return string.Empty; }
+        });
+    }
     public static string ApproveCurrentUser(AgentConfig c, TerminalAuthorization a, bool confirmed) => TerminalUserIdentity.ApproveCurrentUser(Policy(c), a, confirmed);
     public bool ConsentStillValid() => _identity?.ConsentStillValid() ?? true;
     internal static bool OpenProcessToken(nint p, uint access, out SafeAccessTokenHandle token) => TerminalUserIdentity.OpenProcessToken(p, access, out token);
