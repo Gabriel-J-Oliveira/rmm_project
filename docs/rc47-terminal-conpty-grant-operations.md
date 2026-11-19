@@ -1,5 +1,7 @@
 # RC47 — Administração auditada do grant ConPTY
 
+> **Estado operacional em 17/11/2026:** PR #49 MERGED no SHA `866afe400df532190088d3c5aa678e960f355c2b`, mas **ainda não publicada** (produção `8467cd9541d5ce93e731a19f1789486abe898402`). Relay inativo/desabilitado, allowlist de executores vazia, nenhum grant novo. Este manual é para piloto futuro com autorização separada. [Handoff e deploy](rc47-handoff-operacional-20261117.md).
+
 ## Escopo e guardas
 
 `manage.py terminal_conpty_grant` administra somente o piloto fixado no código: endpoint UUID `c97045f2-35ff-48f1-afa5-095173fbb3dd`, machine ID `1eca4af2-4950-4a2d-9b9f-fa7010a62464` e beneficiário `gabriel.oliveira`. O comando não aceita hostname, IP, curingas ou lote. Toda chamada exige execução em Linux como root via `sudo`, com `SUDO_USER`/`SUDO_UID` coerentes e usuário invocador na configuração `NIGHTOWL_TERMINAL_GRANT_ADMIN_USERS`. Essa configuração é vazia por padrão.

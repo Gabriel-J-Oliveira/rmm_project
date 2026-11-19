@@ -1,5 +1,8 @@
 # RC47 — Prontidão para deploy do backend
 
+> **ATUALIZAÇÃO OPERACIONAL — 17/11/2026:** Este documento contém planejamento histórico. O estado verificado mais recente está em [rc47-handoff-operacional-20261117.md](rc47-handoff-operacional-20261117.md), e o prompt para um novo chat em [rc47-prompt-continuacao-20261117.md](rc47-prompt-continuacao-20261117.md). **Main:** `866afe400df532190088d3c5aa678e960f355c2b` (PRs #46, #48, #49 MERGED); **produção:** `8467cd9541d5ce93e731a19f1789486abe898402` (PR #47 publicada e homologada). O deploy #46/#48/#49 permanece **NO-GO**: janela operacional não confirmada, checkpoint novo pendente e três jobs expirados/inconclusivos do UUID antigo de CS-CVEL-0254 aguardando decisão humana. O diff atual de 27 arquivos não exige migrations/dependências; migrations 0048–0050 estão aplicadas em produção. Relay ConPTY inativo, admin_auth desligado, coleta de serviços desabilitada e allowlist vazia. **Não usar SHAs ou estados antigos abaixo como autorização para agir.**
+
+
 **Estado:** plano de publicação para revisão; não autoriza execução. Nenhum acesso, alteração ou teste foi feito no servidor.
 
 **Baseline indicada para produção:** `6090228aed49c08ded2ecd8d4ca24658df9eb3b0`
