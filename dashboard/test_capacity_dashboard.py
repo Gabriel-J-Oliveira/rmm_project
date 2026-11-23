@@ -514,3 +514,65 @@ class CapacityDashboardTests(TestCase):
         self.assertEqual(row['received_samples'], 1)
         self.assertEqual(row['cpu_p95'], 27)
         self.assertEqual(row['memory_p95'], 43)
+
+    def test_mixed_legacy_v2_overview_keeps_legacy_fallback_batched(self):
+        now = timezone.now()
+        endpoints = [self.endpoint] + [
+            self.make_endpoint(f'SYNTHETIC-MIXED-{index:02d}') for index in range(19)
+        ]
+        legacy_rows = []
+        for endpoint_index, endpoint in enumerate(endpoints):
+            for sample_index in range(144):
+                collected_at = now - timedelta(minutes=5 * (sample_index + 1))
+                legacy_rows.append(EndpointPerformanceSample(
+                    endpoint=endpoint,
+                    sample_id=uuid.uuid4(),
+                    schema_version=1,
+                    collected_at=collected_at,
+                    cpu_percent=20 + endpoint_index,
+                    memory_used_percent=40 + endpoint_index,
+                    memory_committed_percent=45 + endpoint_index,
+                    collection_duration_ms=20,
+                ))
+            old_v2_at = now - timedelta(days=2)
+            EndpointPerformanceSample.objects.create(
+                endpoint=endpoint, sample_id=uuid.uuid4(), schema_version=2,
+                resolution_seconds=60, collected_at=old_v2_at,
+                window_end_at=old_v2_at + timedelta(minutes=1),
+                metric_summaries={
+                    'window_id': str(uuid.uuid4()), 'start_at': old_v2_at.isoformat(),
+                    'end_at': (old_v2_at + timedelta(minutes=1)).isoformat(),
+                    'resolution_seconds': 60, 'expected_samples': 6, 'received_samples': 6,
+                    'metrics': {
+                        'cpu.usage_percent': {'count': 6, 'sum': 480, 'min': 80, 'max': 80,
+                                              'weight': 60, 'weighted_sum': 4800,
+                                              'distribution': {'80': 60}},
+                        'memory.used_percent': {'count': 6, 'sum': 360, 'min': 60, 'max': 60,
+                                                'weight': 60, 'weighted_sum': 3600,
+                                                'distribution': {'60': 60}},
+                    }, 'quality': {},
+                },
+                cpu_percent=80, memory_used_percent=60, collection_duration_ms=1,
+            )
+            incomplete_v2_at = now - timedelta(minutes=4)
+            EndpointPerformanceSample.objects.create(
+                endpoint=endpoint, sample_id=uuid.uuid4(), schema_version=2,
+                resolution_seconds=60, collected_at=incomplete_v2_at,
+                window_end_at=None, cpu_percent=99, memory_used_percent=99,
+                collection_duration_ms=1,
+            )
+        EndpointPerformanceSample.objects.bulk_create(legacy_rows, batch_size=500)
+
+        with CaptureQueriesContext(connection) as queries:
+            rows = _overview(now, 24)
+
+        self.assertEqual(len(rows), len(endpoints))
+        self.assertLessEqual(
+            len(queries), 7,
+            f"Mixed-source fleet overview issued {len(queries)} queries for {len(endpoints)} endpoints",
+        )
+        expected_cpu = {endpoint.hostname: index + 20 for index, endpoint in enumerate(endpoints)}
+        for row in rows:
+            self.assertEqual(row['received_samples'], 144)
+            self.assertEqual(row['cpu_p95'], expected_cpu[row['hostname']])
+            self.assertLess(row['context_coverage'], 1.0)

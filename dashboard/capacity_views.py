@@ -293,7 +293,7 @@ def _aggregate_window(start, end):
                        PARTITION BY endpoint_id ORDER BY collected_at, id
                    ) AS previous_at
             FROM agents_endpointperformancesample
-            WHERE collected_at >= %s AND collected_at < %s
+            WHERE schema_version = 1 AND collected_at >= %s AND collected_at < %s
         )
         SELECT endpoint_id, COUNT(*) AS received,
                COUNT(cpu_percent) AS cpu_valid,
@@ -356,17 +356,6 @@ def _compact_summary(endpoint, start, end, aggregate):
     }
 
 
-def _legacy_summary(endpoint, start, end):
-    """Summarize legacy rows only when a period has no complete v2 windows."""
-    rows = list(EndpointPerformanceSample.objects.filter(
-        endpoint=endpoint, schema_version=1,
-        collected_at__gte=start, collected_at__lt=end,
-    ).order_by('collected_at', 'id').values_list(
-        'collected_at', 'created_at', *SAMPLE_FIELDS,
-    ))
-    return build_endpoint_telemetry_summary(endpoint, start, end, sample_rows=rows)
-
-
 def _overview(now, hours):
     latest_processes_query = (EndpointPerformanceSample.objects
                               .filter(endpoint_id=OuterRef('pk'), collected_at__gte=now - timedelta(days=7), collected_at__lt=now)
@@ -400,7 +389,7 @@ def _overview(now, hours):
         })
     primary_start = now - timedelta(hours=hours)
     context_start = now - timedelta(days=7)
-    continuous = defaultdict(list)
+    continuous = {}
     if any(endpoint.obz_has_v2 for endpoint in endpoints):
         from agents.telemetry_continuous import continuous_summary
         by_id = {e.pk: e for e in endpoints}
@@ -416,11 +405,9 @@ def _overview(now, hours):
             primary_rows = [sample for sample in samples if sample.collected_at >= primary_start]
             context_rows = [sample for sample in samples if sample.collected_at >= context_start]
             primary = (continuous_summary(by_id[endpoint_id], primary_start, now, primary_rows)
-                       if primary_rows else
-                       _legacy_summary(by_id[endpoint_id], primary_start, now))
+                       if primary_rows else None)
             context = (continuous_summary(by_id[endpoint_id], context_start, now, context_rows)
-                       if context_rows else
-                       _legacy_summary(by_id[endpoint_id], context_start, now))
+                       if context_rows else None)
             continuous[endpoint_id] = (primary, context)
     if connection.vendor == 'postgresql':
         primary_aggregates = _aggregate_window(primary_start, now)
@@ -431,21 +418,39 @@ def _overview(now, hours):
         rows = (EndpointPerformanceSample.objects
                 .filter(endpoint_id__in=[e.pk for e in endpoints], collected_at__gte=context_start, collected_at__lt=now)
                 .order_by('endpoint_id', 'collected_at', 'id')
-                .values_list('endpoint_id', 'collected_at', 'created_at', *SAMPLE_FIELDS))
+                .values_list('endpoint_id', 'collected_at', 'created_at', *SAMPLE_FIELDS, 'schema_version'))
         for endpoint_id, *sample in rows.iterator(chunk_size=2000):
             grouped[endpoint_id].append(tuple(sample))
     result = []
     for endpoint in endpoints:
-        if continuous.get(endpoint.pk):
+        if endpoint.pk in continuous:
             primary, context = continuous[endpoint.pk]
+            if connection.vendor == 'postgresql':
+                if primary is None:
+                    primary = _compact_summary(endpoint, primary_start, now,
+                                               primary_aggregates.get(endpoint.pk))
+                if context is None:
+                    context = _compact_summary(endpoint, context_start, now,
+                                               context_aggregates.get(endpoint.pk))
+            else:
+                legacy_samples = [sample[:-1] for sample in grouped.get(endpoint.pk, []) if sample[-1] == 1]
+                if primary is None:
+                    primary_rows = [sample for sample in legacy_samples if sample[0] >= primary_start]
+                    primary = build_endpoint_telemetry_summary(
+                        endpoint, primary_start, now, sample_rows=primary_rows,
+                    )
+                if context is None:
+                    context = build_endpoint_telemetry_summary(
+                        endpoint, context_start, now, sample_rows=legacy_samples,
+                    )
         elif connection.vendor == 'postgresql':
             primary = _compact_summary(endpoint, primary_start, now, primary_aggregates.get(endpoint.pk))
             context = _compact_summary(endpoint, context_start, now, context_aggregates.get(endpoint.pk))
         else:
-            samples = grouped.get(endpoint.pk, [])
-            primary_rows = [sample for sample in samples if sample[0] >= primary_start]
+            legacy_samples = [sample[:-1] for sample in grouped.get(endpoint.pk, []) if sample[-1] == 1]
+            primary_rows = [sample for sample in legacy_samples if sample[0] >= primary_start]
             primary = build_endpoint_telemetry_summary(endpoint, primary_start, now, sample_rows=primary_rows)
-            context = build_endpoint_telemetry_summary(endpoint, context_start, now, sample_rows=samples)
+            context = build_endpoint_telemetry_summary(endpoint, context_start, now, sample_rows=legacy_samples)
         result.append(_row(endpoint, snapshots.get(endpoint.pk), primary, context,
                            alert_map.get(endpoint.pk, {}), _latest_processes(endpoint.obz_last_processes), now))
     return result
