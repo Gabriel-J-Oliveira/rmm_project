@@ -133,7 +133,7 @@ def build_telemetry_storage_report(*, all_endpoints=False, endpoint_id=None,
             storage_rows = group_rows.order_by('-collected_at', 'id').annotate(
                 sampled_storage_bytes=storage_expression,
             ).values_list('sampled_storage_bytes',)[:sample_limit]
-            postgres_payload_sizes = [int(value) for value in storage_rows if value is not None]
+            postgres_payload_sizes = [int(value) for (value,) in storage_rows if value is not None]
 
         for row in sampled:
             summaries = row['metric_summaries']
