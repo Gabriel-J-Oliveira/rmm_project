@@ -865,7 +865,20 @@ def scheduled_analysis_round(*, now=None, limit=20, dry_run=None):
     started_ns = time.monotonic_ns()
     from .models import AutomationSchedulerHealth
     try:
-        acquired = _try_telemetry_scheduler_lock()
+        try:
+            acquired = _try_telemetry_scheduler_lock()
+        except DatabaseError:
+            health = _record_scheduler_failure(
+                now, started_ns, 'database', 'scheduler_lock_acquisition_failed')
+            return {'mode': 'failed', 'reason': 'database_operation_failed', 'processed': 0,
+                    'failed': 1, 'blocked': 0, 'review_required': 0,
+                    'suspended': bool(health.suspended_at), 'health': _health_snapshot(health)}
+        except Exception:
+            health = _record_scheduler_failure(
+                now, started_ns, 'scheduler', 'scheduler_lock_acquisition_failed')
+            return {'mode': 'failed', 'reason': 'scheduler_lock_acquisition_failed', 'processed': 0,
+                    'failed': 1, 'blocked': 0, 'review_required': 0,
+                    'suspended': bool(health.suspended_at), 'health': _health_snapshot(health)}
         if not acquired:
             return {'mode': 'already_running', 'processed': 0, 'failed': 0, 'blocked': 0,
                     'review_required': 0}
