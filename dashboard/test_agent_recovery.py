@@ -19,6 +19,7 @@ class OfflineRecoveryTests(TestCase):
         self.machine.status = AgentMachine.STATUS_OFFLINE
         self.machine.last_seen_at = timezone.now() - timedelta(hours=1); self.machine.agent_version = '1.0'
         self.machine.save()
+        self.checkpoint = timezone.now()
         self.actor = get_user_model().objects.create_user('recovery-staff', is_staff=True)
         self.computer = {'hostname':'FIXTURE','fqdn':self.machine.fqdn,'distinguished_name':'CN=FIXTURE,DC=example,DC=local','sid':'S-1-5-21-1-2-3-1001'}
         self.preflight = {'checks':{'AUTHENTICATION':{'status':'PASS'}, 'NIGHTOWL_ABSENCE':{'status':'FAIL'}},
@@ -35,7 +36,19 @@ class OfflineRecoveryTests(TestCase):
         self.mocks['_transport_selection'].return_value = {'label':'HTTPS','port':5986}
 
     def call(self, restart=False):
-        return recover_offline_agent(self.machine, self.actor, 'fixture-admin', 'fixture-password', restart)
+        with mock.patch('dashboard.agent_recovery.timezone') as clock:
+            clock.now.return_value = self.checkpoint
+            return recover_offline_agent(self.machine, self.actor, 'fixture-admin', 'fixture-password', restart)
+
+    def record_fresh_heartbeat(self):
+        # Keep receipt strictly after the checkpoint even on coarse Windows clocks.
+        received_at = self.checkpoint + timedelta(microseconds=1)
+        InventorySnapshot.objects.create(
+            machine=self.machine, hostname=self.machine.hostname,
+            collected_at=received_at, received_at=received_at,
+            raw_payload={'snapshot_source': 'heartbeat', 'machine_id': self.machine.machine_id,
+                         'agent_version': self.machine.agent_version},
+        )
 
     def test_online_does_not_probe(self):
         self.machine.status = AgentMachine.STATUS_ONLINE
@@ -46,8 +59,7 @@ class OfflineRecoveryTests(TestCase):
         def run(*args, **kwargs):
             self.assertIn('Start-Service', args[3]); self.assertNotIn('fixture-password', args[3])
             self.assertNotIn('Set-Content', args[3]); self.assertNotIn('Remove-Item', args[3])
-            InventorySnapshot.objects.create(machine=self.machine, hostname=self.machine.hostname, collected_at=timezone.now(),
-                raw_payload={'snapshot_source':'heartbeat','machine_id':self.machine.machine_id,'agent_version':self.machine.agent_version})
+            self.record_fresh_heartbeat()
             return 0, '10.0.0.10', []
         self.mocks['_remote_script_candidates'].side_effect = run
         before = self.machine.agent_token_hash
@@ -65,8 +77,7 @@ class OfflineRecoveryTests(TestCase):
     def test_explicit_restart_waits_for_matching_new_heartbeat(self):
         def run(*args, **kwargs):
             self.assertIn('Restart-Service', args[3])
-            InventorySnapshot.objects.create(machine=self.machine, hostname=self.machine.hostname, collected_at=timezone.now(),
-                raw_payload={'snapshot_source':'heartbeat','machine_id':self.machine.machine_id,'agent_version':self.machine.agent_version})
+            self.record_fresh_heartbeat()
             return 0, '10.0.0.10', []
         self.mocks['_remote_script_candidates'].side_effect = run
         self.assertEqual(self.call(True)['status'], 'RECOVERED')

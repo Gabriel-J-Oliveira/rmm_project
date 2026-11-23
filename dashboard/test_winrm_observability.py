@@ -1,3 +1,4 @@
+from html import unescape
 from unittest import mock
 import json
 import shutil
@@ -93,7 +94,7 @@ class WinRmObservabilityTests(TestCase):
         self.assertContains(response, 'data-winrm-check')
         self.assertContains(response, 'data-winrm-recovery-open')
         self.assertContains(response, 'data-endpoint-jobs-scroll')
-        self.assertContains(response, 'Dados locais vêm do inventário.')
+        self.assertIn('Dados locais vêm do inventário.', unescape(response.content.decode(response.charset)))
         self.assertContains(response, 'Estado local reportado pelo agente')
         self.assertNotContains(response, '<details class="endpoint-winrm-local-details">')
         self.assertNotContains(response, 'Diagnóstico e recuperação WinRM')
