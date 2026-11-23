@@ -33,7 +33,7 @@ Os estados refletem a documentação e o histórico disponíveis na base indicad
 | RC47-09 — WinRM em Ações e Jobs | Implementado, mas não homologado em domínio | Diagnóstico, recuperação/histórico e UI integrados; testes reais de autenticação e recuperação em endpoint elegível ainda são necessários. | Checklist de domínio separado; manter TLS, allowlist e autorização. |
 | Gerenciador de Serviços — Fases A/B (escopo incorporado da RC47) | Implementado e testado, mas não homologado com release agente atual | Consulta paginada e operações restritas estão integradas. A consulta requer `collect_services_paged:2`; as operações exigem escopo operador+UUID+serviço+ação e gates fechados. O agente do piloto pode não anunciar a capability; não há atualização Windows autorizada. | Homologar somente após identidade do endpoint resolvida e release assinada compatível aprovada. Nunca inferir suporte pelo código do backend. |
 | Identidade duplicada de `CS-CVEL-0281` | Dependente de decisão/medição operacional | Handoff registra dois registros homônimos com machine IDs diferentes; não reconciliar automaticamente por hostname. | Impedir ações piloto até reconciliação comprovada pelo responsável; usar UUID e `machine_id`. |
-| Assinatura/publicação da próxima release Windows | Dependente de decisão/medição operacional | RC47 publicada não será alterada. A configuração/posse segura da chave de release e secrets do ambiente ainda precisam ser confirmadas pelo responsável de publicação. | Fora da frente de desenvolvimento. Nenhuma geração/publicação nesta branch. |
+| Assinatura/publicação da próxima release Windows | Dependente de decisão/medição operacional | O responsável confirmou que a chave original `nightowl-release-2026-02` foi localizada e validada; confirmou também DryRun RC48 aprovado na base `218526a85b1865ef90c4c05f04353233173b0edc`. Isso não valida um candidato posterior nem autoriza publicação. | RC47 permanece imutável. Congelar o código candidato e executar novo DryRun antes de qualquer publicação autorizada. |
 
 ## 3. Pendências por natureza
 
@@ -51,7 +51,7 @@ Os estados refletem a documentação e o histórico disponíveis na base indicad
 - Backup PostgreSQL, estado da migration 0047–0050, capacidade de restauração e plano de reversão do schema.
 - Obter série de CPU/RAM, tamanho e crescimento PostgreSQL, tráfego, I/O, profundidade/idade de filas e falhas de jobs sob carga representativa.
 - Conciliar a identidade do piloto pelo UUID e machine ID; sem exclusão ou fusão baseada somente em hostname.
-- Confirmar chave original, trust, aprovação do environment e processo oficial de assinatura com o responsável. Não recuperar, copiar ou provisionar secrets aqui.
+- Para a publicação futura, confirmar trust, aprovação do environment e processo oficial com o responsável; a chave original `nightowl-release-2026-02` foi localizada/validada e o DryRun RC48 passou na base `218526a85b1865ef90c4c05f04353233173b0edc`. Mudanças posteriores no código exigem congelamento de commit e novo DryRun. Não expor ou copiar material privado.
 - Homologar em VMs: terminal e consentimento, `Get-Date`, update/repair/rollback, WinRM em domínio, capabilities de serviços e fluxo de jobs.
 
 ### Decisões pendentes
@@ -77,7 +77,31 @@ Arquivos da primeira PR proposta:
 
 Não há migration, dependência nova, escrita, coleta paralela, mudança de retenção, alteração de flags ou consulta operacional executada. O comando não será executado em produção por esta tarefa. Ele mede o estado que lhe for fornecido quando chamado; não certifica custos de tráfego, CPU ou crescimento futuro.
 
-Validação deste incremento: **43 testes Django focados passaram em SQLite**, incluindo o relatório novo e regressões existentes de telemetria contínua/diagnóstico; `manage.py check`, `makemigrations --check --dry-run` e `git diff --check` passaram localmente. O workflow [45172812114](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/45172812114) passou nos cinco jobs, incluindo PostgreSQL (`pg_column_size`), contrato de deployment Windows, comparação isolada do navegador e E2Es Windows completos. O primeiro run encontrou uma conversão incorreta de tupla para inteiro no caminho de armazenamento PostgreSQL; a correção foi validada nesse run verde. Não houve execução de JavaScript ou .NET local porque este incremento só acrescenta relatório/command backend e seus testes Python.
+Validação deste incremento: **43 testes Django focados passaram em SQLite**, incluindo o relatório novo e regressões existentes de telemetria contínua/diagnóstico; `manage.py check`, `makemigrations --check --dry-run` e `git diff --check` passaram localmente. O run [45172812114](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/45172812114), no commit `9c8871c`, passou nos cinco jobs, incluindo PostgreSQL (`pg_column_size`) e E2Es Windows. No run [45174445584](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/45174445584), no HEAD atual `9c2d901` (o único delta em relação ao run verde é documental), SQLite, PostgreSQL, navegador isolado e contrato Windows passaram; o E2E Windows/terminal falhou na espera da página do endpoint. O primeiro run encontrou uma conversão incorreta de tupla para inteiro no caminho PostgreSQL, corrigida antes dos dois runs listados. Não houve execução de JavaScript ou .NET local porque este incremento só acrescenta relatório/command backend e seus testes Python.
+
+### Investigação comparativa do `browser_condition_timeout`
+
+O teste `test_real_browser_real_pty_simulated_local_consent_click` falhou no run `45174445584` na fase `endpoint_page`, aguardando até 30 segundos a condição `document.readyState==='complete' && [data-terminal-start]:not(:disabled)`. No run verde `45172812114`, o mesmo teste passou.
+
+Evidências comparadas:
+
+- Ambos os runs usaram Chrome for Testing `156.0.8078.80`; a inicialização CDP concluiu em `638 ms` no run verde e `534 ms` no run falho. `Browser.getVersion` foi executado pelo launcher antes do smoke.
+- No run falho, o processo do agente simulado ainda estava ativo e a consulta do estado sintético não encontrou `TerminalSession`; a falha ocorreu antes do clique/request que cria a sessão.
+- O launcher reportou processo Chrome encerrado, nenhum processo associado ao perfil restante e remoção do perfil temporário.
+- O gate isolado do navegador passou, mas isso não reproduz o caminho do endpoint Django/terminal.
+
+Esses fatos afastam falha de inicialização CDP naquele run, mas não distinguem redirect/autenticação, resposta HTTP incompleta/erro, script estático ausente ou erro de execução do JS do terminal. O harness atual não registra status final/redirect da navegação, presença de marcadores DOM sanitizados ou erros de console/rede por categoria. A causa de sincronização/readiness permanece **não confirmada**; não foi alterado código de terminal e não se considera o run verde anterior como explicação. Uma próxima validação limpa no mesmo código funcional é necessária; se a falha se reproduzir com evidência de defeito de terminal, corrigir em PR independente.
+
+### Revisão de custo e limite das consultas RC48-01A
+
+O relatório não executa escrita, mas sua amostragem limitada não limita o custo das agregações exatas:
+
+- `--sample-limit` (1–1000) limita linhas carregadas na aplicação para qualidade/faixas/tamanho JSON por combinação schema/resolução. As contagens, datas mínima/máxima e contagem além da retenção continuam sendo agregações/contagens sobre todas as linhas que correspondem à janela solicitada.
+- `--all-endpoints` filtra por `collected_at`; o índice existente `endpoint_perf_time_idx` começa por `endpoint_id`, por isso não garante busca eficiente por período global. A agregação global pode ler grande parte da tabela. A amostra global ordenada por `collected_at` também pode precisar de ordenação; `--sample-limit` não reduz essas leituras. O cálculo do tamanho físico global consulta `pg_total_relation_size` e é incluído apenas em PostgreSQL.
+- A janela máxima de 365 dias limita o intervalo temporal, não o número de linhas nem o tempo. Uma janela de 365 dias em frota grande não pode ser chamada de consulta de custo limitado sem plano e volume representativos.
+- `--endpoint UUID` restringe por endpoint e pode aproveitar o índice composto endpoint+data; `--all-endpoints` é explícito e não é o modo padrão. Nenhuma consulta foi feita contra produção.
+
+Proteções recomendadas antes de uma medição global em ambiente grande: executar primeiro em réplica/banco isolado ou janela aprovada; medir `EXPLAIN (ANALYZE, BUFFERS)` com volume representativo e timeout operacional; definir limite de duração explícito que falhe claramente; considerar índice global começando por `collected_at` somente se plano e carga demonstrarem necessidade. Não adicionar índice ou restringir a janela agora sem medição. Testes de desempenho devem verificar que a amostra materializada nunca excede o limite, que número de consultas depende do número de grupos schema/resolução e não do número de linhas, e que o plano de consulta do caminho global é revisado com fixture PostgreSQL representativa. Os testes atuais comprovam comportamento/correção e o caminho `pg_column_size`, não custo temporal na escala de produção.
 
 Execução futura, somente por operador autorizado e com banco/ambiente explicitamente selecionado:
 
