@@ -80,9 +80,10 @@ internal static class ContinuousTelemetryTests
             queue.Acknowledge(windows, new[] { Guid.NewGuid() });
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 2, "A lost/wrong ACK deleted a window.");
             queue.Acknowledge(windows, new[] { windows[0].WindowId });
+            TelemetryQueueStatistics afterAck = queue.ReadStatistics(DateTimeOffset.UtcNow);
+            Check(afterAck.PendingWindows == 1 && afterAck.OldestPendingAt == windows[1].StartAt,
+                "Queue statistics must reflect accepted ACKs and preserve the unacknowledged oldest window.");
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 1, "Partial ACK removed unsent data.");
-            Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 1,
-                "Queue statistics must reflect accepted ACKs and preserve unacknowledged windows.");
             File.WriteAllText(Path.Combine(directory, "broken.json"), "{");
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 1 && queue.CorruptWindows == 1, "Partial corruption blocked valid windows.");
             Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 1,
