@@ -69,7 +69,9 @@ internal static class ContinuousTelemetryTests
             DateTimeOffset at = TelemetryMinuteAggregator.Minute(DateTimeOffset.UtcNow).AddMinutes(-3);
             TelemetryWindow[] windows = Windows(at).ToArray();
             TelemetryWindowQueue queue = new(directory);
-            Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 0, "An empty queue must report a known zero depth.");
+            TelemetryQueueStatistics empty = queue.ReadStatistics(DateTimeOffset.UtcNow);
+            Check(empty.PendingWindows == 0 && empty.OldestPendingAgeSeconds == 0,
+                "An empty queue must report known zero depth and age.");
             foreach (TelemetryWindow window in windows) queue.Enqueue(window);
             TelemetryQueueStatistics pending = queue.ReadStatistics(DateTimeOffset.UtcNow);
             Check(pending.PendingWindows == 2 && pending.PendingBytes > 0 && pending.OldestPendingAgeSeconds > 60,
@@ -81,9 +83,12 @@ internal static class ContinuousTelemetryTests
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 2, "A lost/wrong ACK deleted a window.");
             queue.Acknowledge(windows, new[] { windows[0].WindowId });
             TelemetryQueueStatistics afterAck = queue.ReadStatistics(DateTimeOffset.UtcNow);
-            Check(afterAck.PendingWindows == 1 && afterAck.OldestPendingAt == windows[1].StartAt,
-                "Queue statistics must reflect accepted ACKs and preserve the unacknowledged oldest window.");
+            Check(afterAck.PendingWindows == 1 && afterAck.OldestPendingAt is null
+                && afterAck.OldestPendingAgeSeconds is null,
+                "Queue age must be unknown after acknowledging the cached oldest item until the normal rescan.");
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 1, "Partial ACK removed unsent data.");
+            Check(queue.ReadStatistics(DateTimeOffset.UtcNow).OldestPendingAt == windows[1].StartAt,
+                "The normal queue scan must refresh the oldest pending timestamp.");
             File.WriteAllText(Path.Combine(directory, "broken.json"), "{");
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 1 && queue.CorruptWindows == 1, "Partial corruption blocked valid windows.");
             Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 1,
@@ -126,6 +131,10 @@ internal static class ContinuousTelemetryTests
             && window.Metrics["agent.telemetry_queue_lost_windows"].Min == 2
             && window.Metrics["agent.telemetry_queue_corrupt_windows"].Min == 1,
             "Queue diagnostic metrics must be aggregated into the normal continuous window.");
+        NativeReading unknownAge = Reading(now);
+        ContinuousTelemetryPipeline.AddQueueStatistics(unknownAge, new(1, 1024, null, 0, 0));
+        Check(!unknownAge.Metrics.ContainsKey("agent.telemetry_queue_oldest_age_seconds"),
+            "An unavailable queue age must remain absent rather than become a false zero.");
     }
     private static void Network()
     {

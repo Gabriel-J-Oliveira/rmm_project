@@ -248,7 +248,8 @@ internal sealed class ContinuousTelemetryPipeline
     {
         reading.Metrics["agent.telemetry_queue_pending_windows"] = statistics.PendingWindows;
         reading.Metrics["agent.telemetry_queue_pending_bytes"] = statistics.PendingBytes;
-        reading.Metrics["agent.telemetry_queue_oldest_age_seconds"] = statistics.OldestPendingAgeSeconds;
+        if (statistics.OldestPendingAgeSeconds is double oldestAgeSeconds)
+            reading.Metrics["agent.telemetry_queue_oldest_age_seconds"] = oldestAgeSeconds;
         reading.Metrics["agent.telemetry_queue_lost_windows"] = statistics.LostWindows;
         reading.Metrics["agent.telemetry_queue_corrupt_windows"] = statistics.CorruptWindows;
     }

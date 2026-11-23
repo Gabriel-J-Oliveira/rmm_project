@@ -74,8 +74,9 @@ internal sealed class TelemetryWindowQueue
     internal TelemetryQueueStatistics ReadStatistics(DateTimeOffset now)
     {
         TelemetryQueueStatistics snapshot = Volatile.Read(ref _publishedStatistics);
-        return snapshot with { OldestPendingAgeSeconds = snapshot.OldestPendingAt is { } oldest
-            ? Math.Max(0, (now - oldest).TotalSeconds) : 0 };
+        double? age = snapshot.PendingWindows == 0 ? 0
+            : snapshot.OldestPendingAt is { } oldest ? Math.Max(0, (now - oldest).TotalSeconds) : null;
+        return snapshot with { OldestPendingAgeSeconds = age };
     }
     internal IReadOnlyList<TelemetryWindow> Snapshot(DateTimeOffset now)
     {
@@ -107,7 +108,7 @@ internal sealed class TelemetryWindowQueue
                     _pendingWindows = Math.Max(0, _pendingWindows - 1);
                     _pendingBytes = Math.Max(0, _pendingBytes - corruptBytes);
                     if (_oldestPendingAt is { } oldest && TryGetWindowTime(Path.GetFileName(path), out DateTimeOffset corruptAt) && corruptAt <= oldest)
-                        RecalculateOldestPendingAt();
+                        _oldestPendingAt = null;
                     PublishStatistics();
                     FileInfo[] corrupt = new DirectoryInfo(quarantine).GetFiles().OrderByDescending(file => file.LastWriteTimeUtc).ToArray();
                     long retainedBytes = 0;
@@ -135,19 +136,10 @@ internal sealed class TelemetryWindowQueue
                     _pendingWindows = Math.Max(0, _pendingWindows - 1);
                     _pendingBytes = Math.Max(0, _pendingBytes - bytes);
                     if (_oldestPendingAt is { } oldest && window.StartAt <= oldest)
-                        RecalculateOldestPendingAt();
+                        _oldestPendingAt = null;
                     PublishStatistics();
                 }
             }
-    }
-
-    private void RecalculateOldestPendingAt()
-    {
-        _oldestPendingAt = Directory.EnumerateFiles(_directory, "*.json")
-            .Select(path => Path.GetFileName(path))
-            .Order(StringComparer.Ordinal)
-            .Select(name => TryGetWindowTime(name, out DateTimeOffset at) ? at : (DateTimeOffset?)null)
-            .FirstOrDefault(at => at.HasValue);
     }
 
     private void PublishStatistics() => Volatile.Write(ref _publishedStatistics,
@@ -190,5 +182,5 @@ internal sealed class TelemetryWindowQueue
 internal sealed record TelemetryQueueStatistics(int PendingWindows, long PendingBytes,
     DateTimeOffset? OldestPendingAt, int LostWindows, int CorruptWindows)
 {
-    internal double OldestPendingAgeSeconds { get; init; }
+    internal double? OldestPendingAgeSeconds { get; init; }
 }
