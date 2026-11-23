@@ -2,7 +2,7 @@
 
 **Estado:** planejamento e primeiro incremento local de medição. Este documento não autoriza publicação, deploy, execução recorrente, alteração de flags, migrações operacionais ou atualização de endpoints.
 
-**Base de código consultada:** `main` em `218526a85b1865ef90c4c05f04353233173b0edc`.
+**Base de código consultada originalmente:** `main` em `218526a85b1865ef90c4c05f04353233173b0edc`. A base foi consolidada desde então; ver o estado de integração abaixo.
 **Referência histórica:** [plano de implantação RC47](deploy-RC47.md), preservado sem alterações. A RC47 publicada continua imutável; RC48 consolida as implementações da RC47 e trata somente suas pendências.
 
 ## 1. Como interpretar os estados
@@ -140,3 +140,14 @@ Usar um único modo de escopo por chamada. Revisar a saída agregada antes de an
 - [Handoff final RC46→RC47](rc46-final-closure-rc47-handoff.md)
 - Documentação de RC47-03A/B/C, telemetry continuous, política de modo e publicação do agente listada no plano original.
 - PRs RC47 citadas na matriz/histórico do repositório; os estados de CI e integração devem ser reconfirmados em cada HEAD futuro.
+
+## 8. Estado da consolidação RC48 (23/11/2026)
+
+| Incremento | Estado e referência | Evidência/limite |
+|---|---|---|
+| RC48-01A — relatório read-only de telemetria/armazenamento | Integrada na #54; merge `e939636e3c0cf22b39b4518661a19fc1cda1cee3` | Sem migration ou escrita. A agregação `--all-endpoints` pode ler grande parte da tabela; não foi executada em produção. |
+| RC48-01B — projeções e consumidores | Integrada na #55; merge `a4ce0c5e184a9a976197855c96ed180efb43d1f8` | Testes e gates aprovados. Fallback legacy reutiliza agregação por grupo sem misturar schema v1/v2. Medição sintética local não é benchmark de produção. |
+| RC48-02 — confiabilidade do scheduler de análise | PR #56 aberta, branch `codex/rc48-02-scheduler-reliability`, HEAD `02467a27116692a0d7319f36363ba0e48b9cb500`, base `a4ce0c5e184a9a976197855c96ed180efb43d1f8` | Run `45211422554`: SQLite, PostgreSQL, deployment, browser isolado e gates restantes passaram; Windows .NET/terminal falhou no probe isolado Chrome/CDP com `launch_failed`/categorias `access_denied`, `sandbox`, `other_error`. O smoke completo do terminal passou no mesmo job. Processo e perfil temporário foram limpos. Causa interna não confirmada; PR não integrar enquanto o check obrigatório estiver vermelho. |
+| RC48-03 — preparação do piloto continuous | Em desenvolvimento na branch `codex/rc48-03-continuous-pilot`, derivada da main `a4ce0c5e184a9a976197855c96ed180efb43d1f8` | Métricas já existentes e lacuna de profundidade/bytes/idade da fila v2 estão documentadas em `rc48-03-continuous-pilot.md`. A instrumentação aditiva proposta exige novo build/release Windows; nenhum modo foi ativado. |
+
+As intermitências Browser E2E/Chrome-CDP e Repair Runner permanecem ocorrências históricas sem causa confirmada; um run verde posterior não as encerra. A issue #19 de PowerShell `Get-Date` em ConPTY restrito também é independente e continua como pendência operacional/técnica. Nenhum deploy, migration operacional, ativação de flag, publicação de agente ou ação em endpoint ocorreu nesta consolidação.

@@ -12,7 +12,7 @@ internal static class ContinuousTelemetryTests
     private static void Check(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
     internal static async Task RunAsync()
     {
-        Aggregation(); QueueRecovery(); Network();
+        Aggregation(); QueueRecovery(); QueueStatistics(); Network();
         await SlowUploadDoesNotBlockSampler();
         await LateReadCannotOverlap();
         await LiveUsesSameSampler();
@@ -69,7 +69,11 @@ internal static class ContinuousTelemetryTests
             DateTimeOffset at = TelemetryMinuteAggregator.Minute(DateTimeOffset.UtcNow).AddMinutes(-3);
             TelemetryWindow[] windows = Windows(at).ToArray();
             TelemetryWindowQueue queue = new(directory);
+            Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 0, "An empty queue must report a known zero depth.");
             foreach (TelemetryWindow window in windows) queue.Enqueue(window);
+            TelemetryQueueStatistics pending = queue.ReadStatistics(DateTimeOffset.UtcNow);
+            Check(pending.PendingWindows == 2 && pending.PendingBytes > 0 && pending.OldestPendingAgeSeconds > 60,
+                "Queue depth, bytes, and age must describe persisted pending windows.");
             queue = new(directory);
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 2, "Closed windows did not survive restart.");
             queue.Enqueue(windows[0]);
@@ -77,8 +81,12 @@ internal static class ContinuousTelemetryTests
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 2, "A lost/wrong ACK deleted a window.");
             queue.Acknowledge(windows, new[] { windows[0].WindowId });
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 1, "Partial ACK removed unsent data.");
+            Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 1,
+                "Queue statistics must reflect accepted ACKs and preserve unacknowledged windows.");
             File.WriteAllText(Path.Combine(directory, "broken.json"), "{");
             Check(queue.Snapshot(DateTimeOffset.UtcNow).Count == 1 && queue.CorruptWindows == 1, "Partial corruption blocked valid windows.");
+            Check(queue.ReadStatistics(DateTimeOffset.UtcNow).PendingWindows == 1,
+                "Quarantined corrupt files must not be reported as pending deliverable windows.");
             TelemetryWindow damaged = Windows(at.AddMinutes(-5))[0];
             damaged.Metrics["cpu.usage_percent"].Count = 0;
             File.WriteAllText(Path.Combine(directory,$"{damaged.StartAt:yyyyMMddTHHmmssZ}-{damaged.WindowId:N}.json"),JsonSerializer.Serialize(damaged));
@@ -92,10 +100,31 @@ internal static class ContinuousTelemetryTests
             limited.Enqueue(Windows(at.AddMinutes(-3))[0]);
             _ = limited.Snapshot(DateTimeOffset.UtcNow);
             Check(limited.LostWindows > 0, "Storage cap must record explicit coverage loss.");
+            Check(limited.ReadStatistics(DateTimeOffset.UtcNow).LostWindows > 0,
+                "Queue loss counters must be included in the published diagnostics snapshot.");
             queue.Snapshot(DateTimeOffset.UtcNow.AddDays(10));
             Check(queue.Snapshot(DateTimeOffset.UtcNow.AddDays(10)).Count == 0, "Expired windows must not poison replay.");
+            Check(queue.ReadStatistics(DateTimeOffset.UtcNow.AddDays(10)).PendingWindows == 0,
+                "Expired windows must not remain in queue depth diagnostics.");
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+    private static void QueueStatistics()
+    {
+        DateTimeOffset now = DateTimeOffset.Parse("2026-10-29T12:00:00Z");
+        NativeReading reading = Reading(now);
+        TelemetryQueueStatistics stats = new(4, 8192, now.AddSeconds(-45), 2, 1);
+        TelemetryQueueStatistics measured = stats with { OldestPendingAgeSeconds = (now - stats.OldestPendingAt!.Value).TotalSeconds };
+        ContinuousTelemetryPipeline.AddQueueStatistics(reading, measured);
+        TelemetryMinuteAggregator aggregator = new("synthetic-queue-stats");
+        aggregator.Add(reading);
+        TelemetryWindow window = aggregator.Advance(now.AddMinutes(1))!;
+        Check(window.Metrics["agent.telemetry_queue_pending_windows"].Min == 4
+            && window.Metrics["agent.telemetry_queue_pending_bytes"].Min == 8192
+            && window.Metrics["agent.telemetry_queue_oldest_age_seconds"].Min == 45
+            && window.Metrics["agent.telemetry_queue_lost_windows"].Min == 2
+            && window.Metrics["agent.telemetry_queue_corrupt_windows"].Min == 1,
+            "Queue diagnostic metrics must be aggregated into the normal continuous window.");
     }
     private static void Network()
     {

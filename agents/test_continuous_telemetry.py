@@ -139,6 +139,27 @@ class ContinuousTelemetryTests(TestCase):
                          {'valid_samples': 0, 'observed_total_bytes': None})
         self.assertEqual(summary['quality']['metric_validity']['network.nic-a.received_bytes_per_sec']['valid_native_reads'], 6)
 
+    def test_agent_queue_diagnostics_are_accepted_as_additive_v2_metrics(self):
+        data = window(self.at)
+        data['metrics'].update({
+            'agent.telemetry_queue_pending_windows': metric(4, percent=False),
+            'agent.telemetry_queue_pending_bytes': metric(8192, percent=False),
+            'agent.telemetry_queue_oldest_age_seconds': metric(45, percent=False),
+            'agent.telemetry_queue_lost_windows': metric(2, percent=False),
+            'agent.telemetry_queue_corrupt_windows': metric(1, percent=False),
+        })
+        self.assertEqual(self.send([data]).status_code, 200)
+        from .telemetry_analytics import build_endpoint_telemetry_summary
+        summary = build_endpoint_telemetry_summary(
+            self.machine, self.at, self.at + timedelta(minutes=1)
+        )
+        metrics = summary['metric_summaries']
+        self.assertEqual(metrics['agent.telemetry_queue_pending_windows']['max'], 4)
+        self.assertEqual(metrics['agent.telemetry_queue_pending_bytes']['max'], 8192)
+        self.assertEqual(metrics['agent.telemetry_queue_oldest_age_seconds']['max'], 45)
+        self.assertEqual(metrics['agent.telemetry_queue_lost_windows']['max'], 2)
+        self.assertEqual(metrics['agent.telemetry_queue_corrupt_windows']['max'], 1)
+
     def test_v2_summary_preserves_errors_and_marks_unprovable_error_sample_count_unknown(self):
         data = window(self.at)
         data['metrics']['agent.telemetry_errors_count'] = {

@@ -10,6 +10,10 @@ internal sealed class TelemetryWindowQueue
     private readonly long _maxBytes;
     private readonly TimeSpan _maxAge;
     private readonly object _gate = new();
+    private int _pendingWindows;
+    private long _pendingBytes;
+    private DateTimeOffset? _oldestPendingAt;
+    private TelemetryQueueStatistics _publishedStatistics = new(0, 0, null, 0, 0);
     internal int LostWindows { get; private set; }
     internal int CorruptWindows { get; private set; }
     internal TelemetryWindowQueue(string directory, long maxBytes = 128L * 1024 * 1024, TimeSpan? maxAge = null)
@@ -28,7 +32,12 @@ internal sealed class TelemetryWindowQueue
             Validate(window);
             string path = FilePath(window);
             string json = JsonSerializer.Serialize(window);
-            if (new System.Text.UTF8Encoding(false).GetByteCount(json) > 200 * 1024) { LostWindows++; return; }
+            if (new System.Text.UTF8Encoding(false).GetByteCount(json) > 200 * 1024)
+            {
+                LostWindows++;
+                PublishStatistics();
+                return;
+            }
             if (File.Exists(path))
             {
                 if (File.ReadAllText(path) != json) throw new InvalidDataException("Conflicting telemetry window identity.");
@@ -43,6 +52,7 @@ internal sealed class TelemetryWindowQueue
         FileInfo[] files = new DirectoryInfo(_directory).GetFiles("*.json").OrderBy(file => file.Name, StringComparer.Ordinal).ToArray();
         long bytes = files.Sum(file => file.Length);
         int count = files.Length;
+        List<FileInfo> retained = new(files.Length);
         foreach (FileInfo file in files)
         {
             bool expired = file.Name.Length >= 16 && DateTimeOffset.TryParseExact(file.Name[..16], "yyyyMMdd'T'HHmmss'Z'", System.Globalization.CultureInfo.InvariantCulture,
@@ -51,7 +61,21 @@ internal sealed class TelemetryWindowQueue
             {
                 bytes -= file.Length; count--; file.Delete(); LostWindows++;
             }
+            else retained.Add(file);
         }
+        _pendingWindows = count;
+        _pendingBytes = bytes;
+        _oldestPendingAt = retained.Select(file => TryGetWindowTime(file.Name, out DateTimeOffset at)
+                ? at : (DateTimeOffset?)null)
+            .FirstOrDefault(at => at.HasValue);
+        PublishStatistics();
+    }
+
+    internal TelemetryQueueStatistics ReadStatistics(DateTimeOffset now)
+    {
+        TelemetryQueueStatistics snapshot = Volatile.Read(ref _publishedStatistics);
+        return snapshot with { OldestPendingAgeSeconds = snapshot.OldestPendingAt is { } oldest
+            ? Math.Max(0, (now - oldest).TotalSeconds) : 0 };
     }
     internal IReadOnlyList<TelemetryWindow> Snapshot(DateTimeOffset now)
     {
@@ -75,10 +99,16 @@ internal sealed class TelemetryWindowQueue
                 }
                 catch (Exception error) when (error is JsonException or InvalidDataException)
                 {
+                    long corruptBytes = File.Exists(path) ? new FileInfo(path).Length : 0;
                     string quarantine = Path.Combine(_directory, "quarantine");
                     Directory.CreateDirectory(quarantine);
                     File.Move(path, Path.Combine(quarantine, Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N")));
                     CorruptWindows++;
+                    _pendingWindows = Math.Max(0, _pendingWindows - 1);
+                    _pendingBytes = Math.Max(0, _pendingBytes - corruptBytes);
+                    if (_oldestPendingAt is { } oldest && TryGetWindowTime(Path.GetFileName(path), out DateTimeOffset corruptAt) && corruptAt <= oldest)
+                        RecalculateOldestPendingAt();
+                    PublishStatistics();
                     FileInfo[] corrupt = new DirectoryInfo(quarantine).GetFiles().OrderByDescending(file => file.LastWriteTimeUtc).ToArray();
                     long retainedBytes = 0;
                     for (int index = 0; index < corrupt.Length; index++)
@@ -96,7 +126,38 @@ internal sealed class TelemetryWindowQueue
         HashSet<Guid> ids = accepted.ToHashSet();
         lock (_gate)
             foreach (TelemetryWindow window in sent.Where(window => ids.Contains(window.WindowId)))
-                File.Delete(FilePath(window));
+            {
+                string path = FilePath(window);
+                if (File.Exists(path))
+                {
+                    long bytes = new FileInfo(path).Length;
+                    File.Delete(path);
+                    _pendingWindows = Math.Max(0, _pendingWindows - 1);
+                    _pendingBytes = Math.Max(0, _pendingBytes - bytes);
+                    if (_oldestPendingAt is { } oldest && window.StartAt <= oldest)
+                        RecalculateOldestPendingAt();
+                    PublishStatistics();
+                }
+            }
+    }
+
+    private void RecalculateOldestPendingAt()
+    {
+        _oldestPendingAt = Directory.EnumerateFiles(_directory, "*.json")
+            .Select(path => Path.GetFileName(path))
+            .Order(StringComparer.Ordinal)
+            .Select(name => TryGetWindowTime(name, out DateTimeOffset at) ? at : (DateTimeOffset?)null)
+            .FirstOrDefault(at => at.HasValue);
+    }
+
+    private void PublishStatistics() => Volatile.Write(ref _publishedStatistics,
+        new(_pendingWindows, _pendingBytes, _oldestPendingAt, LostWindows, CorruptWindows));
+
+    private static bool TryGetWindowTime(string fileName, out DateTimeOffset at)
+    {
+        at = default;
+        return fileName.Length >= 16 && DateTimeOffset.TryParseExact(fileName[..16], "yyyyMMdd'T'HHmmss'Z'",
+            System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out at);
     }
 
     private static void Validate(TelemetryWindow window)
@@ -124,4 +185,10 @@ internal sealed class TelemetryWindowQueue
                     throw new InvalidDataException("Invalid persisted percentage.");
         }
     }
+}
+
+internal sealed record TelemetryQueueStatistics(int PendingWindows, long PendingBytes,
+    DateTimeOffset? OldestPendingAt, int LostWindows, int CorruptWindows)
+{
+    internal double OldestPendingAgeSeconds { get; init; }
 }
