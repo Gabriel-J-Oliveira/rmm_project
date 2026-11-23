@@ -81,7 +81,23 @@ def monitoring_summary(endpoint):
     last_sample = EndpointPerformanceSample.objects.filter(endpoint=endpoint).order_by('-collected_at').values(
         'collected_at', 'created_at', 'cpu_percent', 'memory_used_percent',
         'disk_read_bytes_per_sec', 'disk_write_bytes_per_sec', 'network_received_bytes', 'network_sent_bytes',
+        'schema_version', 'resolution_seconds', 'metric_summaries',
     ).first()
+    last_continuous_metrics = None
+    if last_sample and last_sample['schema_version'] == 2:
+        from .telemetry_continuous import project_continuous_metrics
+        payload = last_sample['metric_summaries']
+        if isinstance(payload, dict) and isinstance(payload.get('metrics'), dict):
+            projected = project_continuous_metrics(
+                payload['metrics'], [payload.get('quality', {})],
+            )
+            last_continuous_metrics = {
+                'collected_at': last_sample['collected_at'].isoformat(),
+                'resolution_seconds': last_sample['resolution_seconds'],
+                'disk': projected['disk'],
+                'network': projected['network'],
+                'metric_validity': projected['metric_validity'],
+            }
     return {
         'compatible': compatible, 'minimum_version': MINIMUM_VERSION,
         'reported_mode': ((heartbeat.raw_payload.get('agent') or {}).get('telemetry_mode')
@@ -95,5 +111,6 @@ def monitoring_summary(endpoint):
         'last_sample_at': last_sample['collected_at'] if last_sample else None,
         'last_received_at': last_sample['created_at'] if last_sample else None,
         'last_metrics': {key: last_sample[key] for key in ('cpu_percent', 'memory_used_percent', 'disk_read_bytes_per_sec', 'disk_write_bytes_per_sec', 'network_received_bytes', 'network_sent_bytes')} if last_sample else None,
+        'last_continuous_metrics': last_continuous_metrics,
         'samples_after_application': bool(last_sample and confirmed_at and last_sample['collected_at'] >= confirmed_at),
     }
