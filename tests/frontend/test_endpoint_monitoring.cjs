@@ -27,6 +27,23 @@ test('summary distinguishes real zero values from missing measurements', () => {
     assert.match(html, /Nao informado/);
     assert.match(html, /2026-11-05T12:00:00Z/);
 });
+test('continuous rates are shown by device without converting them to legacy counters', () => {
+    const html = render({ last_metrics: { disk_read_bytes_per_sec: null, network_received_bytes: null },
+        last_continuous_metrics: {
+            disk: { instances: { one: { identity: 'one', metadata: { instance: '0 C:' }, metrics: {
+                read_bytes_per_sec: { avg: 128 }, write_bytes_per_sec: { avg: 0 }
+            } } } },
+            network: { interfaces: { nic: { identity: 'nic', metadata: { name: '<Ethernet>' }, metrics: {
+                received_bytes_per_sec: { avg: 256 }, sent_bytes_per_sec: { avg: 64 }
+            } } } }
+        } });
+    assert.match(html, /Disco v2: taxas por dispositivo/);
+    assert.match(html, /0 C: — média da janela: leitura: 128\.0 B\/s \/ escrita: 0\.0 B\/s/);
+    assert.match(html, /Rede v2: taxas por interface/);
+    assert.match(html, /&lt;Ethernet&gt;/);
+    assert.doesNotMatch(html, /<Ethernet>/);
+    assert.match(html, /recebido: 256\.0 B\/s \/ enviado: 64\.0 B\/s/);
+});
 test('reported legacy mode explains why live samples are unavailable', () => {
     const html = render({reported_mode: 'legacy', mode_reported_at: '2026-11-05T19:00:00Z'});
     assert.match(html, /modo legacy reportado não envia amostras/);
@@ -48,6 +65,10 @@ test('frontend submits only bounded telemetry fields over existing CSRF job path
     assert.match(source, /form\.reportValidity\(\)/);
     assert.match(source, /body\.set\("configuration", JSON\.stringify\(options\.configuration\)\)/);
     assert.match(source, /"X-CSRFToken": getCookie\("csrftoken"\)/);
+});
+test('continuous projection ships with a new static asset version', () => {
+    const template = fs.readFileSync(path.join(__dirname, '../../templates/dashboard/endpoint_detail.html'), 'utf8');
+    assert.match(template, /endpoint_monitoring\.js' %}\?v=telemetry-management-3/);
 });
 test('monitoring retains the existing live panel during refresh and keeps it inside its tab', () => {
     const detail = fs.readFileSync(path.join(__dirname, '../../static/js/endpoint_detail.js'), 'utf8');
