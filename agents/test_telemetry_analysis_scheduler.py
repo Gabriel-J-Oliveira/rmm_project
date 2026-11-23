@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from django.db import OperationalError
+from django.db import DatabaseError, OperationalError
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
@@ -305,6 +305,25 @@ class PersistedTelemetryAnalysisSchedulerTests(TestCase):
         self.assertEqual(health.consecutive_systemic_failures, 3)
         self.assertEqual(health.last_failure_class, 'configuration')
         self.assertEqual(health.suspension_reason, 'analysis_scheduler_requires_seven_day_detail_retention')
+        self.assertEqual(AuditEvent.objects.filter(
+            event_type='telemetry_analysis_scheduler.suspended').count(), 1)
+
+    @override_settings(**SCHEDULER_SETTINGS)
+    @patch('agents.telemetry_persisted_analysis._try_telemetry_scheduler_lock',
+           side_effect=[DatabaseError('synthetic lock failure') for _ in range(3)])
+    def test_database_error_acquiring_scheduler_lock_is_counted_as_systemic(self, _lock):
+        results = [scheduled_analysis_round(now=self.now + timedelta(minutes=i), limit=10)
+                   for i in range(3)]
+
+        self.assertEqual([item['mode'] for item in results], ['failed', 'failed', 'failed'])
+        self.assertEqual(results[-1]['reason'], 'database_operation_failed')
+        self.assertEqual(results[-1]['health']['last_failure_class'], 'database')
+        self.assertEqual(results[-1]['health']['last_failure_code'], 'scheduler_lock_acquisition_failed')
+        self.assertEqual(results[-1]['health']['consecutive_systemic_failures'], 3)
+        self.assertTrue(results[-1]['suspended'])
+        self.assertEqual(results[-1]['health']['suspension_reason'], 'scheduler_lock_acquisition_failed')
+        self.assertFalse(PersistedTelemetryAnalysisSchedule.objects.exists())
+        self.assertFalse(PersistedTelemetryAnalysis.objects.exists())
         self.assertEqual(AuditEvent.objects.filter(
             event_type='telemetry_analysis_scheduler.suspended').count(), 1)
 
