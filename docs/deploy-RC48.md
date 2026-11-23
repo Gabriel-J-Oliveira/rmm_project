@@ -2,7 +2,7 @@
 
 **Estado:** planejamento e primeiro incremento local de medição. Este documento não autoriza publicação, deploy, execução recorrente, alteração de flags, migrações operacionais ou atualização de endpoints.
 
-**Base de código consultada:** `main` em `218526a85b1865ef90c4c05f04353233173b0edc`.
+**Base de código consultada originalmente:** `main` em `218526a85b1865ef90c4c05f04353233173b0edc`. A base foi consolidada desde então; ver o estado de integração abaixo.
 **Referência histórica:** [plano de implantação RC47](deploy-RC47.md), preservado sem alterações. A RC47 publicada continua imutável; RC48 consolida as implementações da RC47 e trata somente suas pendências.
 
 ## 1. Como interpretar os estados
@@ -140,3 +140,42 @@ Usar um único modo de escopo por chamada. Revisar a saída agregada antes de an
 - [Handoff final RC46→RC47](rc46-final-closure-rc47-handoff.md)
 - Documentação de RC47-03A/B/C, telemetry continuous, política de modo e publicação do agente listada no plano original.
 - PRs RC47 citadas na matriz/histórico do repositório; os estados de CI e integração devem ser reconfirmados em cada HEAD futuro.
+
+## 8. Estado da consolidação RC48 (23/11/2026)
+
+| Incremento | Estado e referência | Evidência/limite |
+|---|---|---|
+| RC48-01A — relatório read-only de telemetria/armazenamento | Integrada na #54; merge `e939636e3c0cf22b39b4518661a19fc1cda1cee3` | Sem migration ou escrita. A agregação `--all-endpoints` pode ler grande parte da tabela; não foi executada em produção. |
+| RC48-01B — projeções e consumidores | Integrada na #55; merge `a4ce0c5e184a9a976197855c96ed180efb43d1f8` | Testes e gates aprovados. Fallback legacy reutiliza agregação por grupo sem misturar schema v1/v2. Medição sintética local não é benchmark de produção. |
+| RC48-02 — confiabilidade do scheduler de análise | PR #56 aberta, HEAD `02467a27116692a0d7319f36363ba0e48b9cb500` | Run `45211422554`, tentativa 2: cinco checks aprovados no mesmo SHA, incluindo 11 E2Es Windows e probe isolado Chrome/CDP. A tentativa 1 falhou no probe após o smoke funcional. Causa não confirmada. |
+| RC48-03 — preparação do piloto continuous | PR #57 aberta, branch `codex/rc48-03-continuous-pilot` | Run `45219241033`: cinco checks aprovados em `fd848710e540dae2f8837a6fe239263d86aa78a8`, antes da revisão documental. As métricas de fila são aditivas no v2 e exigem nova release Windows assinada. |
+| RC48-04 — fixtures WinRM | PR #58 aberta, HEAD `66a8fe5865c7f0d6f5acec91433456b7019a1f0f` | Run `45224500294`: cinco checks aprovados. Diff limitado a dois arquivos de testes WinRM. |
+
+As intermitências Browser E2E/Chrome-CDP e Repair Runner permanecem ocorrências históricas sem causa confirmada; um run verde posterior não as encerra. A issue #19 de PowerShell `Get-Date` em ConPTY restrito também é independente e continua como pendência operacional/técnica. Nenhum deploy, migration operacional, ativação de flag, publicação de agente ou ação em endpoint ocorreu nesta consolidação.
+
+## 9. Auditoria RC48-04 — regressões de integração
+
+| Área | Estado automatizado na base atual | Limite que permanece |
+|---|---|---|
+| Terminal assistido/ConPTY | O smoke funcional passou nas duas tentativas do run `45211422554`. O probe Chrome/CDP falhou na primeira e passou na segunda | A causa da falha do launcher permanece desconhecida. A issue #19 (cmdlet `Get-Date` sob token restrito) segue aberta. Distribuição ampla depende de homologação em Windows |
+| Terminal administrativo | Fluxo independente de autorização e telas/testes estão integrados; checks Windows recentes construíram e exercitaram os contratos | Sem homologação com conta administrativa autorizada real; manter grant/admin auth desabilitados até decisão e teste operacional. Sem elevação implícita |
+| Gerenciador de Serviços A/B | Consulta paginada e ações restritas estão integradas com autorização/identidade e testes | Exige agente com capability e release compatível; allowlist/flags não foram habilitadas. Nenhuma consulta/ação real foi executada nesta consolidação |
+| Jobs e Políticas | Gestão central, associação por identidade e execução manual direcionada ao UUID têm cobertura de contrato/regressão | Nenhum job foi enviado a endpoint; identidade ambígua impede piloto por hostname |
+| Updater/canal/rollback | Seleção explícita de canal/release, assinatura e contratos de rollback têm testes | Nenhuma atualização real foi feita; RC48 candidata precisa de novo ValidateOnly/DryRun e autorização de publicação |
+| WinRM | Diagnóstico, recuperação e histórico possuem integração e testes automatizados | Autenticação/recuperação real em endpoint elegível do domínio permanece pendente; não confundir TCP/WS-Man com autenticação |
+| Frontend e assets | Gates visuais desktop/mobile das áreas Monitoramento e WinRM passaram durante RC48-01B; contrato de versionamento está integrado | Homologação visual nos temas e navegadores do ambiente operacional não é substituída por screenshots do CI |
+| Legacy/v2/análise persistida | Testes focados RC48-01B passaram. Nos testes locais RC48-02 sob SQLite, os cenários específicos de PostgreSQL foram reservados ao CI. A tentativa 2 do run `45211422554` aprovou SQLite e PostgreSQL | O scheduler e sua primeira captura dependem de confirmação operacional do invocador, validação da qualidade dos dados e decisão de ativação |
+
+Na primeira tentativa do run `45211422554`, o smoke funcional de terminal, ConPTY e Repair Runner passou. O probe isolado falhou com `launch_failed`, encerrou o processo e removeu o perfil. Na segunda tentativa, o probe ficou pronto em 330 ms, com limpeza confirmada e sem alterações no SHA, no harness ou nos timeouts. Os avisos `access_denied`, `sandbox` e `other_error` também aparecem nas execuções verdes e não demonstram a causa da falha.
+
+## 10. Sequência para integração e congelamento
+
+1. Após autorização específica, integrar #56 por merge commit e confirmar o novo SHA da main e seus gates.
+2. Incorporar essa main à #57 por merge normal, conferir o diff e revalidar os cinco checks no novo HEAD. Após revisão e autorização própria, integrar a #57 e conferir os gates da nova base.
+3. Repetir o procedimento na #58 sobre a main consolidada e confirmar que o diff continua só nos fixtures WinRM.
+
+Pausar a sequência se houver falha de CI, mudanças fora do escopo, conflitos ou revisão pendente. As três PRs não introduzem migrations nem mudanças funcionais de frontend. O schema de produção deve ser conferido separadamente contra as migrations já existentes na base. O backend da #56 preserva o scheduler desabilitado, dry-run ligado e primeira captura `unconfigured` por padrão. A #57 acrescenta métricas no agente; o backend v2 existente as aceita.
+
+O congelamento exige o SHA consolidado com gates aprovados, histórico das intermitências de Chrome/CDP e Repair Runner e decisão explícita sobre o risco residual. Para o piloto, confirmar UUID e machine_id, o contrato v2 e ACK, a configuração realmente carregada e o registro das capabilities no heartbeat. Os anúncios de terminal ConPTY, terminal administrativo e gerenciamento de serviços dependem dos gates existentes do agente e das autorizações do backend. Homologar em VM os recursos habilitados no escopo aprovado.
+
+Após o congelamento e com autorização própria, confirmar versão livre no catálogo e revalidar a chave e o trust originais no ambiente oficial. Executar ValidateOnly com `validate_only=true`, `dry_run=false` e `skip_tests=false`. Após aprovação, executar DryRun com `validate_only=false`, `dry_run=true` e `skip_tests=false`, no mesmo SHA e no canal `development`. Guardar o SHA de origem, a versão, os testes, o manifesto, o SHA-256 do ZIP e do manifesto e a verificação da assinatura RSA-PSS. Seguir [o procedimento oficial de CI](nightowl_agent_release_ci.md). A publicação e a instalação exigem autorizações próprias.

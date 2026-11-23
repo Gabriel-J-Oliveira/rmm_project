@@ -23,6 +23,7 @@ internal sealed class ContinuousTelemetryPipeline
     private readonly ConcurrentQueue<NativeReading> _recent = new();
     private readonly object _runGate = new();
     private Task<NativeReading>? _activeRead;
+    private TelemetryWindowQueue? _activeWindowQueue;
     private bool _running;
     private Task? _writerTask;
     private string? _machine;
@@ -61,6 +62,7 @@ internal sealed class ContinuousTelemetryPipeline
                 TelemetryWindowQueue queue = _queue is null
                     ? new(directory, Math.Clamp(config.TelemetryWindowMaxBytes, 1024 * 1024, 512L * 1024 * 1024),
                         TimeSpan.FromHours(Math.Clamp(config.TelemetryWindowMaxAgeHours, 1, 192))) : _queue(directory);
+                Volatile.Write(ref _activeWindowQueue, queue);
                 ready?.Invoke();
                 Task upload = UploadAsync(config, queue, stop.Token);
                 try
@@ -76,7 +78,12 @@ internal sealed class ContinuousTelemetryPipeline
                         catch (Exception) { DroppedWindows++; await Log("telemetry.window.persist_failed", new { DroppedWindows }); }
                     }
                 }
-                finally { stop.Cancel(); await upload; }
+                finally
+                {
+                    stop.Cancel();
+                    try { await upload; }
+                    finally { Volatile.Write(ref _activeWindowQueue, null); }
+                }
             }, CancellationToken.None);
             _writerTask = writer;
             TelemetryMinuteAggregator aggregator = new(config.MachineId);
@@ -109,6 +116,8 @@ internal sealed class ContinuousTelemetryPipeline
                             reading.Metrics["agent.upload_failures_total"] = UploadFailures;
                             reading.Metrics["agent.live_failures_total"] = LiveFailures;
                             reading.Metrics["agent.control_failures_total"] = ControlFailures;
+                            if (Volatile.Read(ref _activeWindowQueue) is { } activeQueue)
+                                AddQueueStatistics(reading, activeQueue.ReadStatistics(now));
                             if (TelemetryMinuteAggregator.Minute(reading.CollectedAt) == TelemetryMinuteAggregator.Minute(now))
                             {
                                 aggregator.Add(reading);
@@ -233,5 +242,15 @@ internal sealed class ContinuousTelemetryPipeline
         using CancellationTokenSource budget = new(TimeSpan.FromSeconds(1));
         try { await _logger.LogAsync(name, "Continuous telemetry state.", data, budget.Token); }
         catch (Exception) { }
+    }
+
+    internal static void AddQueueStatistics(NativeReading reading, TelemetryQueueStatistics statistics)
+    {
+        reading.Metrics["agent.telemetry_queue_pending_windows"] = statistics.PendingWindows;
+        reading.Metrics["agent.telemetry_queue_pending_bytes"] = statistics.PendingBytes;
+        if (statistics.OldestPendingAgeSeconds is double oldestAgeSeconds)
+            reading.Metrics["agent.telemetry_queue_oldest_age_seconds"] = oldestAgeSeconds;
+        reading.Metrics["agent.telemetry_queue_lost_windows"] = statistics.LostWindows;
+        reading.Metrics["agent.telemetry_queue_corrupt_windows"] = statistics.CorruptWindows;
     }
 }
