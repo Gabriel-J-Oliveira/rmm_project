@@ -485,3 +485,32 @@ class CapacityDashboardTests(TestCase):
                 with CaptureQueriesContext(connection) as queries:
                     self.assertEqual(_inventory_map([self.endpoint.pk]), {})
                 self.assertEqual(len(queries), 1)
+
+    def test_capacity_uses_legacy_period_when_only_older_v2_windows_exist(self):
+        now = timezone.now()
+        legacy_at = now - timedelta(minutes=5)
+        self.sample(collected_at=legacy_at, cpu_percent=27, memory_used_percent=43)
+        old_v2_at = (now - timedelta(days=2)).replace(second=0, microsecond=0)
+        EndpointPerformanceSample.objects.create(
+            endpoint=self.endpoint, sample_id=uuid.uuid4(), schema_version=2,
+            resolution_seconds=60, collected_at=old_v2_at,
+            window_end_at=old_v2_at + timedelta(minutes=1),
+            metric_summaries={
+                'window_id': str(uuid.uuid4()), 'start_at': old_v2_at.isoformat(),
+                'end_at': (old_v2_at + timedelta(minutes=1)).isoformat(),
+                'resolution_seconds': 60, 'expected_samples': 6, 'received_samples': 6,
+                'metrics': {
+                    'cpu.usage_percent': {'count': 6, 'sum': 480, 'min': 80, 'max': 80,
+                                          'weight': 60, 'weighted_sum': 4800, 'distribution': {'80': 60}},
+                    'memory.used_percent': {'count': 6, 'sum': 360, 'min': 60, 'max': 60,
+                                            'weight': 60, 'weighted_sum': 3600, 'distribution': {'60': 60}},
+                }, 'quality': {},
+            },
+            cpu_percent=80, memory_used_percent=60, collection_duration_ms=1,
+        )
+
+        row = next(item for item in _overview(now, 24) if item['id'] == str(self.endpoint.pk))
+
+        self.assertEqual(row['received_samples'], 1)
+        self.assertEqual(row['cpu_p95'], 27)
+        self.assertEqual(row['memory_p95'], 43)

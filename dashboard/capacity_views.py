@@ -356,6 +356,17 @@ def _compact_summary(endpoint, start, end, aggregate):
     }
 
 
+def _legacy_summary(endpoint, start, end):
+    """Summarize legacy rows only when a period has no complete v2 windows."""
+    rows = list(EndpointPerformanceSample.objects.filter(
+        endpoint=endpoint, schema_version=1,
+        collected_at__gte=start, collected_at__lt=end,
+    ).order_by('collected_at', 'id').values_list(
+        'collected_at', 'created_at', *SAMPLE_FIELDS,
+    ))
+    return build_endpoint_telemetry_summary(endpoint, start, end, sample_rows=rows)
+
+
 def _overview(now, hours):
     latest_processes_query = (EndpointPerformanceSample.objects
                               .filter(endpoint_id=OuterRef('pk'), collected_at__gte=now - timedelta(days=7), collected_at__lt=now)
@@ -398,8 +409,19 @@ def _overview(now, hours):
                     'endpoint_id', 'collected_at', 'created_at', 'window_end_at', 'resolution_seconds', 'metric_summaries').order_by('endpoint_id', 'collected_at').iterator(chunk_size=200)
         for endpoint_id, group in groupby(stream, key=lambda sample: sample.endpoint_id):
             samples = list(group)
-            continuous[endpoint_id] = (continuous_summary(by_id[endpoint_id], primary_start, now, samples),
-                                       continuous_summary(by_id[endpoint_id], context_start, now, samples))
+            # An endpoint can have both telemetry generations in its history
+            # (for example, after changing its configured mode). Keep each
+            # period on one source: use v2 when that period has v2 windows;
+            # otherwise let the legacy summary consume only legacy rows.
+            primary_rows = [sample for sample in samples if sample.collected_at >= primary_start]
+            context_rows = [sample for sample in samples if sample.collected_at >= context_start]
+            primary = (continuous_summary(by_id[endpoint_id], primary_start, now, primary_rows)
+                       if primary_rows else
+                       _legacy_summary(by_id[endpoint_id], primary_start, now))
+            context = (continuous_summary(by_id[endpoint_id], context_start, now, context_rows)
+                       if context_rows else
+                       _legacy_summary(by_id[endpoint_id], context_start, now))
+            continuous[endpoint_id] = (primary, context)
     if connection.vendor == 'postgresql':
         primary_aggregates = _aggregate_window(primary_start, now)
         context_aggregates = _aggregate_window(context_start, now)
