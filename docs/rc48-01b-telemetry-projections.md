@@ -56,8 +56,28 @@ configuração existente; qualquer mudança depende de medição e decisão pró
   configuração e capacidade também passou.
 - JavaScript: 5 testes unitários focados do cartão e cache estático — aprovados.
 - Teste visual Playwright não executou nesta estação: o pacote `playwright` não
-  está instalado neste worktree. O comando completo reportou `MODULE_NOT_FOUND`;
-  não indica falha visual do código.
+  está instalado neste worktree. O comando local completo reportou
+  `MODULE_NOT_FOUND`; não indica falha visual do código. A cobertura real de
+  navegador foi executada e passou nos gates remotos abaixo.
 - `manage.py check`: passou durante a execução Django.
-- PostgreSQL, Windows/.NET e gates remotos: pendentes de CI desta branch.
+- CI no HEAD `eae969d837f6fab3966e06273139a2501a7dd9db`:
+  - Enrollment Identity, run `45183179599`: SQLite, PostgreSQL com concorrência,
+    contrato Windows e Windows .NET/terminal E2E — PASS.
+  - Monitoring UI, run `45183179483`: contratos e verificação visual com browser
+    real — PASS.
+  - WinRM UI, run `45183179584`: contratos e verificações desktop/mobile com
+    browser real — PASS.
 - Sem migrations geradas ou alterações no agente.
+
+## Sincronização após RC48-01A
+
+A PR #55 não depende funcionalmente da PR #54 e seus oito arquivos não se
+sobrepõem aos quatro arquivos da #54. A base atual de ambas é
+`218526a85b1865ef90c4c05f04353233173b0edc`. Após o merge autorizado da #54:
+
+1. Atualizar `origin/main` e confirmar o SHA resultante.
+2. Incorporar essa main à branch por merge normal, preservando o histórico; não
+   fazer rebase nem cherry-pick da #54.
+3. Confirmar que o diff funcional continua restrito a RC48-01B e que não há
+   duplicação dos arquivos de medição de armazenamento.
+4. Reexecutar os checks obrigatórios e gates visuais na nova base.
