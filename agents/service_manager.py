@@ -22,8 +22,12 @@ from .operational_actions import create_action_job, validate_payload as validate
 PAGE_SIZE = 20
 MAX_PAGES = 40
 MAX_SERVICES = PAGE_SIZE * MAX_PAGES
+PAGE_SIZE_V3 = 100
+MAX_PAGES_V3 = 800
+PAGE_RESULT_BYTES_V3 = 48 * 1024
 CURSOR_MAX_AGE_SECONDS = 600
 PAGED_SERVICE_CAPABILITY = 'collect_services_paged:2'
+PAGED_SERVICE_CAPABILITY_V3 = 'collect_services_paged:3'
 CURSOR_SALT = 'agents.windows-service-manager.cursor.v2'
 FINAL_STATUSES = {
     AgentJob.STATUS_COMPLETED, AgentJob.STATUS_FAILED, AgentJob.STATUS_EXPIRED,
@@ -55,9 +59,17 @@ def _availability(endpoint):
     if (endpoint.has_terminal_lifecycle or not endpoint.machine_id
             or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
         return False, 'identity_unavailable', 'A identidade do endpoint não está confirmada como única.'
-    if not internal_capability(endpoint, PAGED_SERVICE_CAPABILITY):
+    if not _service_page_version(endpoint):
         return False, 'capability_unconfirmed', 'O agente não anunciou a capacidade de consulta paginada. Pode ser necessária uma versão Windows mais recente.'
     return True, '', ''
+
+
+def _service_page_version(endpoint):
+    if internal_capability(endpoint, PAGED_SERVICE_CAPABILITY_V3):
+        return 3
+    if internal_capability(endpoint, PAGED_SERVICE_CAPABILITY):
+        return 2
+    return 0
 
 
 def _service_action_reason(code):
@@ -126,20 +138,34 @@ def _cursor_decode(value, endpoint, user):
         raise ValueError('cursor_expired') from None
     except signing.BadSignature:
         raise ValueError('invalid_cursor') from None
-    expected = {'endpoint_id', 'machine_id', 'operator_id', 'snapshot_id', 'next_after_name',
-                'page_index', 'total_services', 'rows_collected', 'collected_at'}
-    if (not isinstance(data, dict) or set(data) != expected
+    version = data.get('schema_version', 2) if isinstance(data, dict) else None
+    v2_fields = {'endpoint_id', 'machine_id', 'operator_id', 'snapshot_id', 'next_after_name',
+                 'page_index', 'total_services', 'rows_collected', 'collected_at'}
+    v3_fields = v2_fields | {'schema_version', 'page_size', 'max_page_bytes'}
+    expected = v3_fields if version == 3 else v2_fields
+    page_index_max = MAX_PAGES_V3 if version == 3 else MAX_PAGES
+    rows_valid = False
+    if (isinstance(data, dict) and type(data.get('page_index')) is int
+            and type(data.get('rows_collected')) is int and 1 <= data['rows_collected'] < MAX_SERVICES):
+        rows_valid = (data['page_index'] <= data['rows_collected'] <= data['page_index'] * PAGE_SIZE_V3
+                      if version == 3 else data['rows_collected'] == data['page_index'] * PAGE_SIZE)
+    if (version not in {2, 3} or not isinstance(data, dict) or set(data) != expected
             or data.get('endpoint_id') != str(endpoint.pk)
             or data.get('machine_id') != endpoint.machine_id
             or data.get('operator_id') != str(user.pk)
             or not isinstance(data.get('snapshot_id'), str) or len(data['snapshot_id']) != 32
             or not isinstance(data.get('next_after_name'), str) or not data['next_after_name']
-            or type(data.get('page_index')) is not int or not 1 <= data['page_index'] < MAX_PAGES
+            or type(data.get('page_index')) is not int or not 1 <= data['page_index'] < page_index_max
             or type(data.get('total_services')) is not int or not 0 <= data['total_services'] <= MAX_SERVICES
-            or type(data.get('rows_collected')) is not int or not 1 <= data['rows_collected'] < MAX_SERVICES
-            or data.get('rows_collected') != data.get('page_index') * PAGE_SIZE
+            or not isinstance(data.get('collected_at'), str)
+            or not rows_valid
             or data.get('rows_collected') >= data.get('total_services')
-            or not isinstance(data.get('collected_at'), str)):
+            or (version == 3 and (type(data.get('schema_version')) is not int
+                                  or type(data.get('page_size')) is not int or data['page_size'] != PAGE_SIZE_V3
+                                  or type(data.get('max_page_bytes')) is not int
+                                  or data['max_page_bytes'] != PAGE_RESULT_BYTES_V3))):
+        raise ValueError('invalid_cursor')
+    if version == 3 and data['rows_collected'] > data['page_index'] * PAGE_SIZE_V3:
         raise ValueError('invalid_cursor')
     return data
 
@@ -157,15 +183,23 @@ def _cursor_encode(endpoint, user, output, job):
         raise ValueError('service_snapshot_changed')
     if not output['has_more']:
         return None
-    if page_index >= MAX_PAGES or rows_collected >= MAX_SERVICES:
+    if rows_collected >= MAX_SERVICES:
         raise ValueError('service_limit_exceeded')
-    return signing.dumps({
+    max_pages = MAX_PAGES_V3 if job.payload.get('schema_version') == 3 else MAX_PAGES
+    if page_index >= max_pages:
+        raise ValueError('service_limit_exceeded')
+    data = {
         'endpoint_id': str(endpoint.pk), 'machine_id': endpoint.machine_id,
         'operator_id': str(user.pk), 'snapshot_id': output['snapshot_id'],
         'next_after_name': output['next_after_name'], 'page_index': page_index,
         'total_services': output['total_services'], 'rows_collected': rows_collected,
         'collected_at': output['collected_at'],
-    }, salt=CURSOR_SALT, compress=True)
+    }
+    if job.payload.get('schema_version') == 3:
+        if page_index >= MAX_PAGES_V3 or rows_collected >= MAX_SERVICES:
+            raise ValueError('service_limit_exceeded')
+        data.update({'schema_version': 3, 'page_size': PAGE_SIZE_V3, 'max_page_bytes': PAGE_RESULT_BYTES_V3})
+    return signing.dumps(data, salt=CURSOR_SALT, compress=True)
 
 
 class ServiceManagerAvailabilityView(APIView):
@@ -179,8 +213,11 @@ class ServiceManagerAvailabilityView(APIView):
         if endpoint is None:
             return _no_store(Response({'error': 'endpoint_not_found'}, status=404))
         available, code, reason = _availability(endpoint)
+        version = _service_page_version(endpoint) if available else 0
         return _no_store(Response({'available': available, 'reason_code': code, 'reason': reason,
-                                   'page_size': PAGE_SIZE if available else None,
+                                   'schema_version': version or None,
+                                   'page_size': (PAGE_SIZE_V3 if version == 3 else PAGE_SIZE) if available else None,
+                                   'max_page_bytes': PAGE_RESULT_BYTES_V3 if version == 3 else None,
                                    'max_services': MAX_SERVICES if available else None,
                                    'service_actions': _service_control_availability(endpoint, request.user)}))
 
@@ -214,14 +251,20 @@ class ServiceManagerJobView(APIView):
         except (ValueError, TypeError, AttributeError) as exc:
             return _no_store(Response({'error': str(exc) if str(exc) in {'cursor_expired', 'invalid_cursor'} else 'invalid_request'}, status=400))
 
+        page_version = cursor.get('schema_version', 2) if cursor else _service_page_version(endpoint)
+        if page_version not in {2, 3}:
+            return _no_store(Response({'error': 'capability_unconfirmed'}, status=409))
+        page_size = PAGE_SIZE_V3 if page_version == 3 else PAGE_SIZE
         page_index = cursor['page_index'] + 1 if cursor else 1
-        payload = {'schema_version': 2, 'page_size': PAGE_SIZE,
+        payload = {'schema_version': page_version, 'page_size': page_size,
             'after_name': cursor['next_after_name'] if cursor else '',
             'expected_snapshot_id': cursor['snapshot_id'] if cursor else '',
             'page_index': page_index, 'rows_collected': cursor['rows_collected'] if cursor else 0,
             'expected_total_services': cursor['total_services'] if cursor else 0,
             'expected_collected_at': cursor['collected_at'] if cursor else '',
             'endpoint_machine_id': endpoint.machine_id}
+        if page_version == 3:
+            payload['max_page_bytes'] = PAGE_RESULT_BYTES_V3
         try:
             with transaction.atomic():
                 locked_endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint.pk)
@@ -252,15 +295,18 @@ class ServiceManagerJobView(APIView):
             status_code = 409 if code in {'identity_unavailable', 'capability_unconfirmed', 'job_conflict', 'internal_job_disabled'} else 400
             return _no_store(Response({'error': code}, status=status_code))
         return _no_store(Response({'job_id': str(job.pk), 'status': job.status,
-                                   'request_id': request_id}, status=202))
+                                   'request_id': request_id, 'schema_version': page_version,
+                                   'page_size': page_size}, status=202))
 
     def get(self, request, endpoint_id, job_id):
         endpoint, denied = self._endpoint(endpoint_id, request, require_available=False)
         if denied:
             return denied
         job = AgentJob.objects.filter(pk=job_id, endpoint=endpoint, job_type='collect_services',
-            created_by=request.user.get_username(), payload__schema_version=2).first()
+            created_by=request.user.get_username()).first()
         if job is None:
+            return _no_store(Response({'error': 'service_job_not_found'}, status=404))
+        if not isinstance(job.payload, dict) or job.payload.get('schema_version') not in {2, 3}:
             return _no_store(Response({'error': 'service_job_not_found'}, status=404))
         if (job.payload.get('endpoint_machine_id') != endpoint.machine_id or not endpoint.machine_id
                 or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
@@ -290,8 +336,11 @@ class ServiceManagerJobView(APIView):
         return _no_store(Response({'status': job.status, 'job_id': str(job.pk),
             'page': {'services': output['services'], 'collected_at': output['collected_at'],
                      'snapshot_id': output['snapshot_id'], 'total_services': output['total_services'],
-                     'has_more': output['has_more'], 'cursor': next_cursor},
-            'page_index': job.payload['page_index']}))
+                     'has_more': output['has_more'], 'cursor': next_cursor,
+                     'schema_version': job.payload['schema_version'],
+                     'page_size': job.payload['page_size'],
+                     'rows_collected': job.payload['rows_collected'] + len(output['services'])},
+            'schema_version': job.payload['schema_version'], 'page_index': job.payload['page_index']}))
 
 
 class ServiceManagerActionView(APIView):

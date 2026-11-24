@@ -588,7 +588,7 @@ public sealed class Worker : BackgroundService
             .Where(type => type is "configure_telemetry" or "collect_services" || type == "install_software" && config.SoftwareInstallEnabled)
             .Concat(OperationalActions.Capabilities(config))
             .Concat(config.AllowedJobTypes.Contains("collect_services", StringComparer.Ordinal)
-                ? new[] { "collect_services_paged:2" } : Array.Empty<string>())
+                ? new[] { "collect_services_paged:2", "collect_services_paged:3" } : Array.Empty<string>())
             .Concat(config.RemoteTerminalTransportEnabled ? new[] { "remote_terminal_transport:1" } : Array.Empty<string>())
             .Concat(config.RemoteTerminalTransportEnabled && config.TerminalAdministrativeAuthenticationEnabled ? new[] { "remote_terminal_admin_auth:1" } : Array.Empty<string>())
             .Concat(config.RemoteTerminalTransportEnabled && config.TerminalConPtyEnabled && TerminalIdentity.ServiceGateOpen(config) && !string.IsNullOrEmpty(config.TerminalAuthorizedUserSid) &&
