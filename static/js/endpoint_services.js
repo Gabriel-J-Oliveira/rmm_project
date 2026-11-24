@@ -33,11 +33,19 @@
         collectedAt: "",
         total: 0,
         pageSize: 20,
+        schemaVersion: 2,
         complete: false,
+        refreshing: false,
         currentJobId: "",
         nextCursor: null,
         pendingRequestId: "",
         pendingRows: [],
+        scanSnapshotId: "",
+        scanCollectedAt: "",
+        scanTotal: 0,
+        scanPageIndex: 0,
+        scanVersion: 0,
+        scanPageSize: 0,
         snapshotId: "",
         pageIndex: 0,
         scanDeadline: 0,
@@ -308,6 +316,7 @@
             state.available = data.available === true;
             state.reason = data.reason || reasonText[data.reason_code] || "Consulta de serviços indisponível.";
             if (Number.isFinite(data.page_size) && data.page_size > 0) state.pageSize = data.page_size;
+            if (data.schema_version === 2 || data.schema_version === 3) state.schemaVersion = data.schema_version;
             state.serviceActions = data.service_actions && typeof data.service_actions === "object" ? data.service_actions : {};
         } catch (error) {
             state.available = false;
@@ -324,6 +333,14 @@
         });
         const body = {request_id: requestId, cursor: cursor || null};
         const response = await requestJson(baseUrl, {method: "POST", headers: {"Content-Type": "application/json", "X-CSRFToken": csrfToken()}, body: JSON.stringify(body)});
+        const version = response.schema_version || state.schemaVersion;
+        const pageSize = response.page_size || (version === 3 ? 100 : 20);
+        if (![2, 3].includes(version) || !Number.isInteger(pageSize) || pageSize !== (version === 3 ? 100 : 20)
+            || (state.scanVersion && (state.scanVersion !== version || state.scanPageSize !== pageSize))) {
+            throw new Error("invalid_page_contract");
+        }
+        state.scanVersion = version;
+        state.scanPageSize = pageSize;
         state.currentJobId = response.job_id;
         state.pendingRequestId = requestId;
         state.nextCursor = cursor || null;
@@ -343,62 +360,84 @@
             while (state.currentJobId && dialog.open && Date.now() < perJobDeadline) {
                 let data;
                 try { data = await requestJson(baseUrl + "jobs/" + encodeURIComponent(state.currentJobId) + "/"); }
-                catch (error) { state.currentJobId = ""; state.pendingRows = []; state.complete = false; setStatus(explain(error), "error"); return false; }
+                catch (error) { state.currentJobId = ""; state.pendingRows = []; state.refreshing = false; setStatus((state.complete ? "Lista anterior preservada. " : "") + explain(error), "error"); return false; }
                 if (data.status === "completed" && data.page) {
                     state.currentJobId = "";
                     const page = data.page;
-                    if (state.snapshotId && (state.snapshotId !== page.snapshot_id || state.total !== page.total_services || state.collectedAt !== page.collected_at)) {
-                        state.pendingRows = []; state.complete = false; setStatus("A identidade da página ou o snapshot mudou. Nenhum resultado parcial foi apresentado; atualize para reiniciar.", "error"); return false;
+                    if (state.scanSnapshotId && (state.scanSnapshotId !== page.snapshot_id || state.scanTotal !== page.total_services || state.scanCollectedAt !== page.collected_at)) {
+                        state.pendingRows = []; state.refreshing = false; setStatus("A identidade da página ou o snapshot mudou. Nenhum resultado parcial foi apresentado; a última lista completa foi preservada.", "error"); return false;
                     }
-                    if (!state.snapshotId) {
-                        state.snapshotId = page.snapshot_id;
-                        state.total = page.total_services;
-                        state.collectedAt = page.collected_at;
+                    if (!state.scanSnapshotId) {
+                        state.scanSnapshotId = page.snapshot_id;
+                        state.scanTotal = page.total_services;
+                        state.scanCollectedAt = page.collected_at;
                     }
-                    if (data.page_index !== state.pageIndex + 1 || !Array.isArray(page.services) || state.pendingRows.length + page.services.length > 800) {
-                        state.pendingRows = []; state.complete = false; setStatus("A paginação recebida não passou pela verificação de sequência e limite.", "error"); return false;
+                    if (data.page_index !== state.scanPageIndex + 1 || !Number.isInteger(page.total_services) || page.total_services < 0 || page.total_services > 800
+                        || !Array.isArray(page.services) || state.pendingRows.length + page.services.length > 800
+                        || (page.schema_version !== undefined && page.schema_version !== state.scanVersion)
+                        || (page.page_size !== undefined && page.page_size !== state.scanPageSize)
+                        || (page.rows_collected !== undefined && page.rows_collected !== state.pendingRows.length + page.services.length)
+                        || (state.scanVersion === 3 && (page.schema_version !== 3 || page.rows_collected !== state.pendingRows.length + page.services.length))) {
+                        state.pendingRows = []; state.refreshing = false; setStatus("A paginação recebida não passou pela verificação de sequência e limite.", "error"); return false;
                     }
-                    state.pageIndex = data.page_index;
+                    state.scanPageIndex = data.page_index;
                     state.pendingRows.push(...page.services);
+                    const elapsed = state.scanStartedAt ? Math.max(0, (Date.now() - state.scanStartedAt) / 1000) : 0;
                     if (page.cursor) {
                         state.nextCursor = page.cursor;
                         if (Date.now() >= state.scanDeadline) {
-                            state.pendingRows = []; state.complete = false; setStatus("A consulta excedeu o limite total de cinco minutos. Atualize para começar novamente.", "error"); return false;
+                            state.pendingRows = []; state.refreshing = false; setStatus("A consulta excedeu o limite total de cinco minutos. Atualize para começar novamente; a última lista completa foi preservada.", "error"); return false;
                         }
-                        const pageCount = Math.ceil(state.total / state.pageSize);
-                        setStatus("Coleta confirmada: página " + state.pageIndex + (pageCount ? " de " + pageCount : "") + "; continuando a leitura limitada.", "pending");
+                        setStatus("Atualização em andamento · " + state.pendingRows.length + "/" + state.scanTotal +
+                            " serviços confirmados · página " + state.scanPageIndex +
+                            (elapsed ? " · " + elapsed.toFixed(1) + " s" : ""), "pending");
                         try { await postPage(page.cursor); }
-                        catch (error) { state.pendingRows = []; state.complete = false; setStatus(explain(error), "error"); return false; }
+                        catch (error) { state.pendingRows = []; state.refreshing = false; setStatus((state.complete ? "Lista anterior preservada. " : "") + explain(error), "error"); return false; }
                         continue;
                     }
-                    if (state.pendingRows.length !== state.total) {
-                        state.pendingRows = []; state.complete = false; setStatus("A consulta terminou sem cobrir todos os serviços. Nenhuma lista parcial foi apresentada.", "error"); return false;
+                    if (state.pendingRows.length !== state.scanTotal) {
+                        state.pendingRows = []; state.refreshing = false; setStatus("A consulta terminou sem cobrir todos os serviços. Nenhuma lista parcial foi apresentada; a última lista completa foi preservada.", "error"); return false;
                     }
                     state.rows = state.pendingRows.slice();
                     state.pendingRows = [];
+                    state.snapshotId = state.scanSnapshotId;
+                    state.total = state.scanTotal;
+                    state.collectedAt = state.scanCollectedAt;
+                    state.pageIndex = state.scanPageIndex;
                     state.complete = true;
+                    state.refreshing = false;
+                    state.scanSnapshotId = "";
+                    state.scanCollectedAt = "";
+                    state.scanTotal = 0;
+                    state.scanPageIndex = 0;
+                    state.scanVersion = 0;
+                    state.scanPageSize = 0;
                     state.nextCursor = null;
                     await loadAvailability();
                     if (state.selectedName && !state.rows.some(item => item.name === state.selectedName)) state.selectedName = "";
-                    const elapsed = state.scanStartedAt ? Math.max(0, (Date.now() - state.scanStartedAt) / 1000) : 0;
+                    const elapsedTotal = state.scanStartedAt ? Math.max(0, (Date.now() - state.scanStartedAt) / 1000) : 0;
                     setStatus("Coleta concluída: " + state.rows.length + " serviços confirmados em " + state.pageIndex + " página(s)" +
-                        (elapsed ? " · " + elapsed.toFixed(1) + " s" : "") + ".", "success");
+                        (elapsedTotal ? " · " + elapsedTotal.toFixed(1) + " s" : "") + ".", "success");
                     state.scanStartedAt = 0;
+                    state.refreshing = false;
                     updateFreshness();
                     renderRows();
                     return true;
                 }
                 if (["failed", "expired", "cancelled", "timed_out", "unsupported", "invalid_parameters", "interrupted"].includes(data.status)) {
-                    state.currentJobId = ""; state.pendingRows = []; state.complete = false;
-                    setStatus(reasonText[data.error_code] || reasonText[data.status] || "A consulta não foi concluída. Nenhuma lista parcial foi apresentada.", "error");
+                    state.currentJobId = ""; state.pendingRows = []; state.refreshing = false;
+                    setStatus((state.complete ? "Lista anterior preservada. " : "") +
+                        (reasonText[data.error_code] || reasonText[data.status] || "A consulta não foi concluída. Nenhuma lista parcial foi apresentada."), "error");
                     return false;
                 }
-                const pageCount = state.total ? Math.ceil(state.total / state.pageSize) : 0;
-                setStatus("Job " + (data.status === "queued" ? "na fila" : data.status === "sent" ? "entregue ao agente" : data.status === "running" ? "em execução" : "aguardando estado confirmado") +
-                    (state.pageIndex ? " · Página " + (state.pageIndex + 1) + (pageCount ? " de " + pageCount : "") : ""), "pending");
+                const elapsed = state.scanStartedAt ? Math.max(0, (Date.now() - state.scanStartedAt) / 1000) : 0;
+                setStatus((state.complete ? "Lista anterior preservada · " : "") + "Atualização " +
+                    (data.status === "queued" ? "na fila" : data.status === "sent" ? "entregue ao agente" : data.status === "running" ? "em execução" : "aguardando confirmação") +
+                    (state.scanPageIndex ? " · " + state.pendingRows.length + "/" + state.scanTotal + " serviços confirmados · próxima página " + (state.scanPageIndex + 1) : "") +
+                    (elapsed ? " · " + elapsed.toFixed(1) + " s" : ""), "pending");
                 await wait(1500);
             }
-            if (state.currentJobId && dialog.open) setStatus("A solicitação continua pendente no backend. Reabra o gerenciador para retomar o acompanhamento; nenhum resultado parcial será exibido.", "pending");
+            if (state.currentJobId && dialog.open) setStatus("A solicitação continua pendente no backend. Reabra o gerenciador para retomar o acompanhamento; a última lista completa permanece disponível.", "pending");
             return false;
         })().finally(() => { state.pollPromise = null; });
         return state.pollPromise;
@@ -407,19 +446,26 @@
     async function refresh() {
         if (!state.available || refreshButton.disabled) return;
         refreshButton.disabled = true;
+        state.refreshing = true;
         if (!state.currentJobId) {
-            state.rows = null; state.complete = false; state.total = 0; state.collectedAt = "";
-            state.snapshotId = ""; state.pageIndex = 0; state.pendingRows = []; state.nextCursor = null;
+            state.scanSnapshotId = ""; state.scanCollectedAt = ""; state.scanTotal = 0; state.scanPageIndex = 0;
+            state.scanVersion = 0; state.scanPageSize = 0; state.pendingRows = []; state.nextCursor = null;
             state.scanDeadline = Date.now() + 5 * 60 * 1000;
             state.scanStartedAt = Date.now();
             renderRows();
-            setStatus("Solicitando leitura somente leitura ao agente.", "pending");
+            setStatus((state.complete ? "Lista anterior preservada · " : "") + "Solicitando leitura somente leitura ao agente.", "pending");
             try { await dispatchPage(null); }
-            catch (error) { state.currentJobId = ""; state.pendingRows = []; setStatus(explain(error), "error"); }
+            catch (error) {
+                state.currentJobId = ""; state.pendingRows = []; state.refreshing = false;
+                state.scanSnapshotId = ""; state.scanCollectedAt = ""; state.scanTotal = 0; state.scanPageIndex = 0;
+                state.scanVersion = 0; state.scanPageSize = 0; state.scanStartedAt = 0;
+                setStatus((state.complete ? "Lista anterior preservada. " : "") + explain(error), "error");
+            }
         } else {
             state.scanDeadline = Date.now() + 5 * 60 * 1000;
             await pollCurrentJob();
         }
+        state.refreshing = Boolean(state.currentJobId);
         refreshButton.disabled = !state.available;
     }
 
@@ -516,12 +562,17 @@
                     state.actionJobId = "";
                     actionCheck.hidden = true;
                     if (data.result_confirmed === true && data.result && typeof data.result.state === "string") {
+                        const confirmed = (state.rows || []).find(item => item.name === data.service_name);
+                        if (confirmed) confirmed.status = data.result.state;
                         showActionStatus("Concluído e confirmado pelo agente: " + data.service_name + " está " + stateLabel(data.result.state) +
                             (data.result.changed ? "." : " (já estava nesse estado)."), "success");
-                        setStatus("Operação confirmada. Consultando novamente a lista de serviços…", "success");
-                        await refresh();
+                        setStatus(confirmed
+                            ? "Operação confirmada pelo agente. Status atualizado na lista; use Atualizar dados para uma nova coleta completa."
+                            : "Operação confirmada, mas o serviço não está na lista atual. Use Atualizar dados para reconciliar o snapshot.",
+                            confirmed ? "success" : "pending");
                     } else {
-                        showActionStatus(serviceActionErrors[data.error_code] || serviceActionErrors.SERVICE_RESULT_UNCONFIRMED, "error");
+                        showActionStatus((serviceActionErrors[data.error_code] || serviceActionErrors.SERVICE_RESULT_UNCONFIRMED) +
+                            " O estado listado não foi alterado; use Atualizar dados para verificar.", "error");
                     }
                     renderRows();
                     return;

@@ -121,7 +121,17 @@ public sealed class JobExecutor
                 "collect_logs" => CollectLogs(config, job),
                 "ping" => await RunPingAsync(config, job, jobToken),
                 "collect_services" => await RunCollectionAsync("services", () =>
-                    GetPayloadInt(job, "schema_version", 1) == 2
+                    GetPayloadInt(job, "schema_version", 1) == 3
+                        ? WindowsServicesCollector.CollectPagedV3(
+                            GetPayloadString(job, "after_name", ""),
+                            GetPayloadString(job, "expected_snapshot_id", ""),
+                            GetPayloadInt(job, "page_size", 0),
+                            GetPayloadInt(job, "max_page_bytes", 0),
+                            GetPayloadInt(job, "page_index", 0),
+                            GetPayloadInt(job, "rows_collected", 0),
+                            GetPayloadInt(job, "expected_total_services", 0),
+                            GetPayloadString(job, "expected_collected_at", ""))
+                        : GetPayloadInt(job, "schema_version", 1) == 2
                         ? WindowsServicesCollector.CollectPaged(
                             GetPayloadString(job, "after_name", ""),
                             GetPayloadString(job, "expected_snapshot_id", ""),
