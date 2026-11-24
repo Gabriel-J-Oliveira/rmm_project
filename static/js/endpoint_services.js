@@ -13,6 +13,7 @@
     const rowsBody = dialog.querySelector("[data-service-rows]");
     const empty = dialog.querySelector("[data-service-empty]");
     const properties = dialog.querySelector("[data-service-properties]");
+    const propertiesContent = dialog.querySelector("[data-service-properties-content]");
     const toolbar = dialog.querySelector("[data-service-toolbar]");
     const collectedAt = dialog.querySelector("[data-service-collected-at]");
     const search = dialog.querySelector("[data-service-search]");
@@ -31,6 +32,7 @@
         rows: null,
         collectedAt: "",
         total: 0,
+        pageSize: 20,
         complete: false,
         currentJobId: "",
         nextCursor: null,
@@ -39,7 +41,9 @@
         snapshotId: "",
         pageIndex: 0,
         scanDeadline: 0,
+        scanStartedAt: 0,
         selectedName: "",
+        detailsOpen: false,
         pollPromise: null,
         serviceActions: {},
         pendingAction: null,
@@ -158,10 +162,10 @@
     }
 
     function renderProperties(item) {
-        properties.replaceChildren();
-        addText(properties, "h3", "", "Propriedades somente leitura");
+        propertiesContent.replaceChildren();
+        properties.hidden = !state.detailsOpen;
         if (!item) {
-            addText(properties, "p", "", "Selecione um serviço para ver os dados coletados.");
+            addText(propertiesContent, "p", "", "Selecione um serviço para ver os dados coletados.");
             return;
         }
         const list = document.createElement("dl");
@@ -173,7 +177,7 @@
             addText(wrap, "dd", "", pair[1]);
             list.appendChild(wrap);
         });
-        properties.appendChild(list);
+        propertiesContent.appendChild(list);
     }
 
     function operationReason(action, item) {
@@ -211,14 +215,29 @@
         const filtered = visibleRows();
         for (const item of filtered) {
             const row = document.createElement("tr");
-            const select = document.createElement("button");
-            select.type = "button";
-            select.className = "endpoint-services-row-select";
-            select.dataset.serviceName = item.name;
-            select.setAttribute("aria-pressed", item.name === state.selectedName ? "true" : "false");
-            select.textContent = item.name;
-            const first = document.createElement("td"); first.appendChild(select); row.appendChild(first);
-            addText(row, "td", "", item.display_name || "Não informado");
+            row.dataset.serviceRow = item.name;
+            row.dataset.serviceName = item.name;
+            row.classList.toggle("is-selected", item.name === state.selectedName);
+            const radioCell = document.createElement("td");
+            const radioLabel = document.createElement("label");
+            radioLabel.className = "endpoint-services-radio-label";
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "endpoint-services-" + endpointId;
+            radio.value = item.name;
+            radio.checked = item.name === state.selectedName;
+            radio.dataset.serviceSelection = "";
+            radio.dataset.serviceName = item.name;
+            radio.setAttribute("aria-label", "Selecionar serviço " + item.name);
+            radioLabel.appendChild(radio);
+            radioCell.appendChild(radioLabel);
+            row.appendChild(radioCell);
+            const nameCell = document.createElement("td");
+            addText(nameCell, "span", "endpoint-services-name", item.name).title = item.name;
+            row.appendChild(nameCell);
+            const displayCell = document.createElement("td");
+            addText(displayCell, "span", "endpoint-services-display-name", item.display_name || "Não informado").title = item.display_name || "Não informado";
+            row.appendChild(displayCell);
             const stateCell = document.createElement("td");
             addText(stateCell, "span", "endpoint-services-state endpoint-services-state--" + stateGroup(item.status), stateLabel(item.status));
             row.appendChild(stateCell);
@@ -243,7 +262,10 @@
             empty.textContent = "Nenhum serviço corresponde à pesquisa e aos filtros.";
         }
         toolbar.hidden = !state.complete;
-        renderProperties((state.rows || []).find(item => item.name === state.selectedName) || null);
+        const selected = (state.rows || []).find(item => item.name === state.selectedName) || null;
+        if (!selected) state.detailsOpen = false;
+        properties.closest(".endpoint-services-content").classList.toggle("details-closed", !state.detailsOpen);
+        renderProperties(selected);
     }
 
     function formatCollectedAt(value) {
@@ -285,6 +307,7 @@
             const data = await requestJson(availabilityUrl);
             state.available = data.available === true;
             state.reason = data.reason || reasonText[data.reason_code] || "Consulta de serviços indisponível.";
+            if (Number.isFinite(data.page_size) && data.page_size > 0) state.pageSize = data.page_size;
             state.serviceActions = data.service_actions && typeof data.service_actions === "object" ? data.service_actions : {};
         } catch (error) {
             state.available = false;
@@ -342,7 +365,8 @@
                         if (Date.now() >= state.scanDeadline) {
                             state.pendingRows = []; state.complete = false; setStatus("A consulta excedeu o limite total de cinco minutos. Atualize para começar novamente.", "error"); return false;
                         }
-                        setStatus("Coleta confirmada: página " + state.pageIndex + "; continuando a leitura limitada.", "pending");
+                        const pageCount = Math.ceil(state.total / state.pageSize);
+                        setStatus("Coleta confirmada: página " + state.pageIndex + (pageCount ? " de " + pageCount : "") + "; continuando a leitura limitada.", "pending");
                         try { await postPage(page.cursor); }
                         catch (error) { state.pendingRows = []; state.complete = false; setStatus(explain(error), "error"); return false; }
                         continue;
@@ -354,9 +378,12 @@
                     state.pendingRows = [];
                     state.complete = true;
                     state.nextCursor = null;
-                    state.selectedName = "";
                     await loadAvailability();
-                    setStatus("Coleta concluída: " + state.rows.length + " serviços confirmados em " + state.pageIndex + " página(s).", "success");
+                    if (state.selectedName && !state.rows.some(item => item.name === state.selectedName)) state.selectedName = "";
+                    const elapsed = state.scanStartedAt ? Math.max(0, (Date.now() - state.scanStartedAt) / 1000) : 0;
+                    setStatus("Coleta concluída: " + state.rows.length + " serviços confirmados em " + state.pageIndex + " página(s)" +
+                        (elapsed ? " · " + elapsed.toFixed(1) + " s" : "") + ".", "success");
+                    state.scanStartedAt = 0;
                     updateFreshness();
                     renderRows();
                     return true;
@@ -366,7 +393,9 @@
                     setStatus(reasonText[data.error_code] || reasonText[data.status] || "A consulta não foi concluída. Nenhuma lista parcial foi apresentada.", "error");
                     return false;
                 }
-                setStatus("Job " + (data.status === "queued" ? "na fila" : data.status === "sent" ? "entregue ao agente" : data.status === "running" ? "em execução" : "aguardando estado confirmado") + (state.pageIndex ? " · Página " + (state.pageIndex + 1) : ""), "pending");
+                const pageCount = state.total ? Math.ceil(state.total / state.pageSize) : 0;
+                setStatus("Job " + (data.status === "queued" ? "na fila" : data.status === "sent" ? "entregue ao agente" : data.status === "running" ? "em execução" : "aguardando estado confirmado") +
+                    (state.pageIndex ? " · Página " + (state.pageIndex + 1) + (pageCount ? " de " + pageCount : "") : ""), "pending");
                 await wait(1500);
             }
             if (state.currentJobId && dialog.open) setStatus("A solicitação continua pendente no backend. Reabra o gerenciador para retomar o acompanhamento; nenhum resultado parcial será exibido.", "pending");
@@ -382,7 +411,7 @@
             state.rows = null; state.complete = false; state.total = 0; state.collectedAt = "";
             state.snapshotId = ""; state.pageIndex = 0; state.pendingRows = []; state.nextCursor = null;
             state.scanDeadline = Date.now() + 5 * 60 * 1000;
-            state.selectedName = "";
+            state.scanStartedAt = Date.now();
             renderRows();
             setStatus("Solicitando leitura somente leitura ao agente.", "pending");
             try { await dispatchPage(null); }
@@ -534,13 +563,43 @@
     dialog.addEventListener("click", function (event) {
         const control = event.target.closest("[data-service-control]");
         if (control) { event.preventDefault(); prepareServiceAction(control.dataset.serviceControl, control.dataset.serviceName); return; }
+        if (event.target.closest("[data-service-properties-close]")) {
+            state.detailsOpen = false;
+            renderRows();
+            const selected = rowsBody.querySelector('[data-service-selection]:checked');
+            if (selected) selected.focus();
+            return;
+        }
         if (event.target.closest("[data-service-action-cancel]")) { state.pendingAction = null; state.pendingActionRequestId = ""; actionConfirm.hidden = true; actionStatus.hidden = true; return; }
         if (event.target.closest("[data-service-action-submit]")) { submitServiceAction(); return; }
         if (event.target.closest("[data-service-action-check]")) { pollServiceAction(); return; }
         if (event.target.closest("[data-service-close]")) closeManager();
-        const select = event.target.closest("[data-service-name]");
-        if (select) { state.selectedName = select.dataset.serviceName; renderRows(); }
+        const radio = event.target.closest("[data-service-selection]");
+        const row = event.target.closest("[data-service-row]");
+        if (radio) {
+            if (state.selectedName !== radio.value || !state.detailsOpen) {
+                state.selectedName = radio.value;
+                state.detailsOpen = true;
+                renderRows();
+                rowsBody.querySelector("[data-service-selection]:checked")?.focus();
+            }
+            return;
+        }
+        if (row) {
+            state.selectedName = row.dataset.serviceName;
+            state.detailsOpen = true;
+            renderRows();
+            rowsBody.querySelector("[data-service-selection]:checked")?.focus();
+        }
         if (event.target === dialog) closeManager();
+    });
+    rowsBody.addEventListener("change", function (event) {
+        const radio = event.target.closest("[data-service-selection]");
+        if (!radio) return;
+        state.selectedName = radio.value;
+        state.detailsOpen = true;
+        renderRows();
+        rowsBody.querySelector("[data-service-selection]:checked")?.focus();
     });
     dialog.addEventListener("close", function () {
         const trigger = dialog.returnFocus;

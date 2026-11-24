@@ -148,17 +148,34 @@ let phase = 'initialization';
         assert.equal(await dialog.locator('[data-service-rows] tr').count(), 1);
         await dialog.locator('[data-service-startup-filter]').selectOption('all');
         await dialog.locator('[data-service-sort]').selectOption('name-desc');
-        const names = await dialog.locator('[data-service-rows] .endpoint-services-row-select').allTextContents();
+        const names = await dialog.locator('[data-service-selection]').evaluateAll(nodes => nodes.map(node => node.value));
         assert.deepEqual(names, ['Spooler', 'Mystery', 'AcmeAgent'].sort((a, b) => b.localeCompare(a)));
-        await dialog.locator('.endpoint-services-row-select[data-service-name="AcmeAgent"]').click();
-        assert((await dialog.locator('[data-service-properties]').innerText()).includes('Nome interno'));
+        const acmeRow = dialog.locator('[data-service-row="AcmeAgent"]');
+        await acmeRow.locator('.endpoint-services-name').click();
+        assert.equal(await acmeRow.locator('[data-service-selection]').isChecked(), true);
+        assert.equal(await dialog.locator('[data-service-properties]').isVisible(), true);
+        assert((await dialog.locator('[data-service-properties]').innerText()).includes('Detalhes do serviço'));
         assert((await dialog.locator('[data-service-properties]').innerText()).includes('AcmeAgent'));
         assert((await dialog.locator('[data-service-collected-at]').innerText()).includes('Dados recentes'));
+        await dialog.locator('[data-service-properties-close]').click();
+        assert.equal(await dialog.isVisible(), true, 'Closing service details must not close the manager dialog');
+        assert.equal(await dialog.locator('[data-service-properties]').isHidden(), true);
+        await dialog.locator('[data-service-row="Spooler"] .endpoint-services-name').click();
+        assert.equal(await dialog.locator('[data-service-selection]:checked').inputValue(), 'Spooler');
+        assert.equal(await dialog.locator('[data-service-properties]').isVisible(), true);
+        await dialog.locator('[data-service-selection]:checked').focus();
+        await dialog.locator('[data-service-selection]:checked').press('ArrowDown');
+        assert.equal(await dialog.locator('[data-service-selection]:checked').inputValue(), 'Mystery');
+        assert.equal(await dialog.locator('[data-service-selection]:checked').count(), 1);
+        assert((await dialog.locator('[data-service-properties]').innerText()).includes('Mystery'));
 
         phase = 'desktop_screenshot';
         const artifacts = process.env.NIGHTOWL_E2E_ARTIFACT_DIR || os.tmpdir();
         const artifactDir = path.join(artifacts, 'nightowl-service-manager');
         fs.mkdirSync(artifactDir, {recursive: true});
+        const desktopBounds = await dialog.boundingBox();
+        assert(desktopBounds.width >= 1200 && desktopBounds.height >= 800,
+            'Desktop service manager should use the available viewport: ' + JSON.stringify(desktopBounds));
         await page.screenshot({path: path.join(artifactDir, 'service-manager-desktop.png'), fullPage: true});
 
         phase = 'manual_refresh';
@@ -166,6 +183,7 @@ let phase = 'initialization';
         await page.waitForFunction(() => document.querySelector('[data-service-status]')?.textContent.includes('Coleta concluída'));
         assert.equal(api.dispatches, 3);
         assert.equal(api.writeCalls, 0);
+        assert.match(await dialog.locator('[data-service-status]').innerText(), /1 página\(s\).*\d+\.\d s/);
 
         phase = 'mobile_layout';
         await page.setViewportSize({width: 390, height: 844});
@@ -179,11 +197,19 @@ let phase = 'initialization';
         assert(mobile.open && mobile.left >= -1 && mobile.right <= mobile.viewport + 1 &&
             mobile.scrollWidth <= mobile.contentWidth + 1,
             'Service manager overflows the mobile viewport: ' + JSON.stringify(mobile));
+        const mobileTable = await page.evaluate(() => {
+            const scroller = document.querySelector('.endpoint-services-table-scroll');
+            const table = document.querySelector('.endpoint-services-table');
+            return {scrollerWidth: scroller.clientWidth, scrollerScrollWidth: scroller.scrollWidth,
+                tableWidth: table.getBoundingClientRect().width};
+        });
+        assert(mobileTable.scrollerScrollWidth > mobileTable.scrollerWidth && mobileTable.tableWidth >= 760,
+            'Mobile service columns should scroll inside the table panel: ' + JSON.stringify(mobileTable));
         await page.screenshot({path: path.join(artifactDir, 'service-manager-mobile.png'), fullPage: true});
 
         phase = 'theme_tokens';
         const themeColors = await page.evaluate(() => ({
-            dialog: getComputedStyle(document.querySelector('[data-service-manager-dialog]')).backgroundColor,
+            dialog: getComputedStyle(document.querySelector('.endpoint-services-frame')).backgroundColor,
             token: (() => {
                 const probe = document.createElement('div');
                 probe.style.backgroundColor = 'var(--card)';
@@ -196,7 +222,7 @@ let phase = 'initialization';
         assert(themeColors.token && themeColors.dialog === themeColors.token,
             'The service dialog must use NightOwl theme surface tokens: ' + JSON.stringify(themeColors));
         assert.deepEqual(pageErrors, [], 'The endpoint page must not produce JavaScript errors');
-        console.log('PASS service manager browser: real endpoint page, mocked authorized service action with human confirmation, result polling and requery, search, filters, sort, properties, manual refresh, XSS-safe text, desktop/mobile layout and theme tokens. Screenshots: ' + artifactDir);
+        console.log('PASS service manager browser: real endpoint page, mocked authorized service action with human confirmation, result polling and requery, search, filters, sort, accessible single selection, independent details close, timed progress, XSS-safe text, desktop/mobile layout and theme tokens. Screenshots: ' + artifactDir);
         await context.close();
     } finally {
         await browser.close();
