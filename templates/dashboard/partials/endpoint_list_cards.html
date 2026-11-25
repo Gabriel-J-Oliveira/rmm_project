@@ -3,7 +3,7 @@
     <header><span class="status-badge status-{{ row.endpoint.status }}">{{ row.endpoint.get_status_display|default:"Unknown" }}</span><span class="endpoint-health-pill {{ row.health.class }}">{% if row.health.score != None %}{{ row.health.score }}{% else %}--{% endif %}</span></header>
     <h3 class="mono">{{ row.hostname|default:"Endpoint" }}</h3>
     <p>{{ row.logged_user|default:"Sem usuario" }} &middot; {{ row.sector|default:"Sem setor" }}</p>
-    <div class="endpoint-card-tags"><span>{{ row.endpoint_type_label }}</span><span>{{ row.os_name|default:"Sistema desconhecido" }}</span><span>{{ row.primary_ip|default:"Sem IP" }}</span></div>
+    <div class="endpoint-card-tags"><span>{{ row.endpoint_type_label }}</span><span>{{ row.os_name|default:"Sistema desconhecido" }}</span><span>{{ row.primary_ip|default:"Sem IP" }}</span>{% if row.asset_code %}<span class="endpoint-row-asset-code">Patrim&ocirc;nio {{ row.asset_code }}</span>{% endif %}</div>
     <footer><span class="endpoint-attention-pill attention-{{ row.attention.level }}">{{ row.attention.label }}</span><a href="{% url 'endpoint-detail' row.endpoint.id %}">Abrir</a></footer>
 </article>
 {% empty %}<div class="empty-state endpoint-empty">Nenhum endpoint para exibir em cards.</div>{% endfor %}

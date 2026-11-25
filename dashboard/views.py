@@ -41,6 +41,7 @@ from agents.models import (
     AgentReleaseAudit,
     AgentReleaseGroup,
     AgentReleaseTrustBundle,
+    AssetAgentLink,
     AlertEvent,
     AuditEvent,
     EndpointAlert,
@@ -1163,6 +1164,7 @@ def row_matches_query(row, query):
         row.get('endpoint_type_label', ''),
         str(row['primary_ip']),
         row['os_name'],
+        row.get('asset_code', ''),
     ]).lower()
     return query.lower() in haystack
 
@@ -2385,6 +2387,13 @@ def endpoint_list(request):
         endpoints, snapshots = load_endpoint_list_data()
         filters = endpoint_filters_from_request(request)
         recommended_version = latest_agent_version()
+        asset_codes = {}
+        if request.user.is_authenticated and request.user.has_perm('agents.view_physicalasset'):
+            active_asset_links = AssetAgentLink.objects.filter(
+                endpoint_id__in=[endpoint.pk for endpoint in endpoints], ended_at__isnull=True,
+            ).select_related('asset').order_by('linked_at', 'pk')
+            for link in active_asset_links:
+                asset_codes.setdefault(link.endpoint_id, link.asset.asset_code)
         rows = []
         option_rows = []
         for endpoint in endpoints:
@@ -2400,9 +2409,11 @@ def endpoint_list(request):
                     or (filters['os'] and os_name != filters['os'])
                     or (filters['domain'] and domain != filters['domain'])):
                 continue
-            rows.append(build_endpoint_row(
+            row = build_endpoint_row(
                 endpoint, snapshot=snapshot, recommended_version=recommended_version,
-            ))
+            )
+            row['asset_code'] = asset_codes.get(endpoint.pk, '')
+            rows.append(row)
         filtered_rows = filter_endpoint_rows(rows, filters)
         mock_data = False
 
@@ -3819,6 +3830,24 @@ def endpoint_detail(request, pk):
     context['winrm_observability_available'] = bool(
         request.is_secure() and request.user.is_authenticated and request.user.is_active
         and (request.user.is_staff or request.user.is_superuser) and endpoint.is_active
+    )
+    context['can_view_physical_assets'] = bool(
+        request.user.is_authenticated and request.user.is_active
+        and request.user.has_perm('agents.view_agentmachine')
+        and request.user.has_perm('agents.view_physicalasset')
+    )
+    context['can_add_physical_assets'] = bool(
+        context['can_view_physical_assets']
+        and request.user.has_perm('agents.add_physicalasset')
+        and request.user.has_perm('agents.add_assetagentlink')
+    )
+    context['can_link_physical_assets'] = bool(
+        context['can_view_physical_assets']
+        and request.user.has_perm('agents.change_physicalasset')
+        and request.user.has_perm('agents.add_assetagentlink')
+    )
+    context['can_add_asset_records'] = bool(
+        context['can_view_physical_assets'] and request.user.has_perm('agents.add_assetrecord')
     )
     if context['winrm_observability_available']:
         from dashboard.models import RemoteInstallJob

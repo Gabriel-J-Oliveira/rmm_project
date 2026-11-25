@@ -1,0 +1,39 @@
+.endpoint-asset-records { display: grid; gap: 1rem; }
+.endpoint-asset-card { padding: clamp(1rem, 2vw, 1.5rem); }
+.endpoint-asset-card > header,
+.endpoint-asset-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.endpoint-asset-card h2, .endpoint-asset-card h3 { margin: 0; color: var(--endpoint-detail-heading, inherit); }
+.endpoint-asset-loading, .endpoint-asset-muted { color: var(--endpoint-detail-secondary, #667085); }
+.endpoint-asset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .75rem; margin: 1rem 0; }
+.endpoint-asset-fact { min-width: 0; padding: .8rem; border: 1px solid var(--endpoint-detail-border, rgba(120,130,150,.22)); border-radius: .75rem; background: var(--endpoint-detail-surface, rgba(120,130,150,.06)); }
+.endpoint-asset-fact dt { color: var(--endpoint-detail-secondary, #667085); font-size: .78rem; }
+.endpoint-asset-fact dd { margin: .25rem 0 0; overflow-wrap: anywhere; font-weight: 650; }
+.endpoint-asset-code { display: inline-flex; align-items: center; padding: .3rem .55rem; border: 1px solid var(--endpoint-detail-border, rgba(120,130,150,.25)); border-radius: 999px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .84rem; }
+.endpoint-asset-provisional { color: #8a5b00; background: rgba(245, 181, 45, .13); }
+.endpoint-asset-alert { margin: .75rem 0; padding: .8rem 1rem; border: 1px solid rgba(222, 151, 26, .4); border-radius: .65rem; background: rgba(245, 181, 45, .1); color: var(--endpoint-detail-heading, inherit); }
+.endpoint-asset-error { border-color: rgba(205, 55, 55, .4); background: rgba(205, 55, 55, .08); }
+.endpoint-asset-actions, .endpoint-asset-search-form { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; margin-top: .75rem; }
+.endpoint-asset-form { display: grid; gap: .8rem; margin-top: 1rem; }
+.endpoint-asset-form label { display: grid; gap: .35rem; min-width: 0; color: var(--endpoint-detail-secondary, #667085); }
+.endpoint-asset-form input, .endpoint-asset-form select, .endpoint-asset-form textarea { width: 100%; min-height: 2.65rem; padding: .6rem .7rem; border: 1px solid var(--endpoint-detail-border, rgba(120,130,150,.25)); border-radius: .55rem; color: inherit; background: var(--endpoint-detail-surface, Canvas); font: inherit; }
+.endpoint-asset-form textarea { min-height: 6rem; resize: vertical; }
+.endpoint-asset-form .endpoint-asset-checkbox { display: flex; grid-template-columns: auto 1fr; align-items: flex-start; gap: .55rem; }
+.endpoint-asset-form .endpoint-asset-checkbox input { width: 1rem; min-height: 1rem; margin-top: .2rem; }
+.endpoint-asset-button { min-height: 2.55rem; padding: .55rem .85rem; border: 1px solid var(--endpoint-detail-border, rgba(120,130,150,.28)); border-radius: .55rem; color: inherit; background: var(--endpoint-detail-surface, Canvas); cursor: pointer; font: inherit; }
+.endpoint-asset-button--primary { border-color: #20885d; color: #fff; background: #20885d; }
+.endpoint-asset-button:disabled { opacity: .55; cursor: not-allowed; }
+.endpoint-asset-search-results { display: grid; gap: .5rem; margin-top: .75rem; }
+.endpoint-asset-candidate { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; padding: .7rem; border: 1px solid var(--endpoint-detail-border, rgba(120,130,150,.22)); border-radius: .6rem; }
+.endpoint-asset-timeline { display: grid; gap: .65rem; margin: .75rem 0 0; padding: 0; list-style: none; }
+.endpoint-asset-timeline li { padding: .8rem; border-inline-start: 3px solid #32a36f; border-radius: .25rem; background: var(--endpoint-detail-surface, rgba(120,130,150,.06)); }
+.endpoint-asset-timeline time, .endpoint-asset-timeline small { display: block; color: var(--endpoint-detail-secondary, #667085); font-size: .8rem; }
+.endpoint-asset-timeline p { margin: .45rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.endpoint-asset-link-history { margin: .75rem 0 0; padding-inline-start: 1.25rem; }
+.endpoint-asset-inline-status { min-height: 1.25rem; color: var(--endpoint-detail-secondary, #667085); }
+.endpoint-row-asset-code { display: block; margin-top: .2rem; color: var(--endpoint-detail-secondary, #667085); font-size: .72rem; }
+@media (max-width: 640px) {
+  .endpoint-asset-card > header, .endpoint-asset-section-heading { flex-direction: column; }
+  .endpoint-asset-actions > *, .endpoint-asset-search-form > * { flex: 1 1 100%; }
+  .endpoint-asset-candidate { align-items: stretch; }
+  .endpoint-asset-candidate .endpoint-asset-button { width: 100%; }
+}

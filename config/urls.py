@@ -24,6 +24,7 @@ from dashboard import views as dashboard_views
 from dashboard import ad_install_views
 from dashboard import agent_recovery_views
 from dashboard import remote_install_batch_views
+from dashboard import asset_record_views
 from dashboard import capacity_views
 from dashboard import fleet_views
 from config import views as config_views
@@ -51,6 +52,8 @@ urlpatterns = [
     path('api/deployments/windows/batches/<uuid:pk>/revoke/', dashboard_views.deployment_batch_revoke, name='api-deployment-batch-revoke'),
     path('api/deployments/windows/<uuid:pk>/', dashboard_views.deployment_status, name='api-deployment-status'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
+    path('api/endpoints/<uuid:endpoint_id>/asset-records/', asset_record_views.endpoint_asset_records,
+         name='api-endpoint-asset-records'),
     path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
     path('api/endpoints/<str:pk>/uninstall/', dashboard_views.endpoint_uninstall_request, name='api-endpoint-uninstall'),
     path('api/endpoints/<str:pk>/uninstall/<uuid:request_id>/cancel/', dashboard_views.endpoint_uninstall_cancel, name='api-endpoint-uninstall-cancel'),
