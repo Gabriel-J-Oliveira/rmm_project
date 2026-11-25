@@ -2,6 +2,17 @@
 
 Decisão aprovada pelo responsável em 25/11/2026. Complementa RC49-01A e substitui, para esta fase, suas regras de cadastro exclusivamente manual e remoção fora do escopo. Implementação autorizada em branch própria pelo Codex 2; merge e deploy dependem de revisão. Codex 1 mantém terminal e serviços; coordenar qualquer alteração compartilhada do agente e instalador.
 
+## Conclusão do desenvolvimento — 25/11/2026
+
+As entregas de identidade patrimonial automática e remoção verificada do agente foram integradas à `main`:
+
+- PR #64 — identidade patrimonial SMBIOS, integrada pelo merge commit `d70870990f26f02054b6c4d5d56eec1de1911223`.
+- PR #65 — remoção verificada e auditoria durável, integrada pelo merge commit `3264af7e5401489d134b9006a10fcdf90b07e0f9`.
+
+A cadeia de migrations da RC49-01B é `0052_rc49_hardware_identity` → `0053_rc49_agent_removal_audit` → `0054_rc49_removal_receipt_digest`. Os testes SQLite e PostgreSQL, concorrência PostgreSQL, contrato Windows, E2Es Windows/.NET e gates visuais passaram nos HEADs integrados. A segunda tentativa Windows da #65 passou no mesmo SHA; a falha anterior da sonda Chrome/CDP permanece uma intermitência sem causa comprovada.
+
+O desenvolvimento está concluído. Continuam pendentes para homologação operacional: coleta SMBIOS em hardware físico representativo, troca de placa-mãe, remoção completa em VM descartável, estados offline/falha parcial e retomada, preservação de evidências e reinstalação com nova identidade operacional. A conclusão do CI não substitui esses ensaios. Não executar o processamento inicial da frota nem habilitar ações operacionais sem o procedimento de implantação aprovado.
+
 ## Identidade patrimonial
 
 - A aba Registros permanece dentro de Endpoints. Não criar menu Ativos nem novas telas de alertas, tarefas, atividades ou eventos. Revisão dessas telas fica para depois; NOC permanece no roadmap.

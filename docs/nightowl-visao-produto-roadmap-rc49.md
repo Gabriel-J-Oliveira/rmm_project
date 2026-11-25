@@ -105,7 +105,7 @@ Asset / Equipamento físico (identidade patrimonial estável)
 | Frente | Objetivo | Situação da decisão |
 | --- | --- | --- |
 | **RC49-01 Ativos e histórico** | Cadastro patrimonial, responsável, transferências, formatações, upgrades, reparos, manutenção e vínculo com agentes | **Primeira frente escolhida para iniciar com Codex 2** |
-| **RC49-02 NOC operacional** | Fila de atenção com criticidade, pressão sustentada CPU/RAM, disco, rede, ações verdadeiras e atualização incremental | Direção proposta |
+| **RC49-02 NOC operacional** | Fila de atenção com criticidade, pressão sustentada CPU/RAM, disco, rede, ações verdadeiras e atualização incremental | Escopo aprovado em [RC49-02](rc49-02-noc-operacional.md) |
 | **RC49-03 Central de software real** | Upload de pacote, aprovação, versão/hash, distribuição, install/update/uninstall e conferência | Direção proposta |
 | **RC49-04 Políticas inteligentes** | Windows Update, limpeza, métricas/condições, grupos AD/OU, agendas e reboot configurável por política | Conceito aprovado; opções finas abertas |
 | **RC49-05 Biblioteca de scripts** | Cadastro/upload versionado, aprovação, autorização, execução pontual/em grupo, logs e histórico | Direção proposta |
@@ -164,6 +164,12 @@ Asset / Equipamento físico (identidade patrimonial estável)
 - Não alterar dados reais da frota; testes usam fixtures.
 - Não exigir uma nova instalação do agente para usar a ficha patrimonial.
 - Evitar coleta e armazenamento de dados pessoais excessivos: apenas identificação de responsável necessária à gestão; respeitar permissões do NightOwl.
+
+## Conclusão do desenvolvimento da RC49-01B — 25/11/2026
+
+RC49-01B foi integrada à main pelas PRs #64 e #65. A implementação contempla identidade patrimonial por UUID SMBIOS com serial complementar, associação automática de hardware elegível, revisão de inconsistências e remoção do agente condicionada a receipt verificável, com auditoria durável e preservação patrimonial. A cadeia de migrations é 0052 → 0053 → 0054.
+
+SQLite, PostgreSQL, concorrência PostgreSQL, contrato de deployment Windows, E2Es Windows/.NET e gates visuais passaram. O teste real de limpeza e reinstalação ainda requer homologação em VM descartável com pacote assinado compatível. A falha histórica da sonda Chrome/CDP permanece sem causa comprovada.
 
 ### Critérios de aceite RC49-01A
 
