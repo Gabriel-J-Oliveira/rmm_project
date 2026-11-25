@@ -4619,6 +4619,38 @@ class AgentReleasePolicyTests(TestCase):
         self.assertFalse(selected['eligible'])
         self.assertTrue(selected['requires_force'])
         self.assertEqual(selected['reason_code'], 'downgrade_requires_force')
+        self.assertTrue(selected['eligible_with_downgrade'])
+        self.assertEqual(selected['downgrade_reason_code'], 'eligible')
+        self.assertFalse(self.machine.jobs.exists())
+
+    def test_endpoint_detail_reports_hard_blocks_that_force_does_not_remove(self):
+        user = get_user_model().objects.create_user(username='tech-downgrade-blocks', is_staff=True)
+        self.client.force_login(user)
+        self.machine.agent_version = '0.1.1.0-rc49'
+        self.machine.save(update_fields=['agent_version'])
+        blocked_releases = {
+            'release_paused': self.release('0.1.1.0-rc48', status=AgentRelease.STATUS_PAUSED),
+            'release_revoked': self.release('0.1.1.0-rc47', status=AgentRelease.STATUS_REVOKED, revoked=True),
+            'release_not_available': self.release('0.1.1.0-rc46', status=AgentRelease.STATUS_SUPERSEDED),
+            'minimum_updater_incompatible': self.release('0.1.1.0-rc45', minimum_updater_version='0.1.1.0-rc50'),
+            'group_not_allowed': self.release('0.1.1.0-rc44', minimum_updater_version='0.1.1.0-rc6'),
+        }
+        blocked_releases['group_not_allowed'].allowed_groups.add(
+            AgentReleaseGroup.objects.create(name='Other endpoints', slug='other-endpoints'),
+        )
+        wrong_channel = self.release('0.1.1.0-rc43', channel=AgentRelease.CHANNEL_DEVELOPMENT)
+        response = self.client.get(reverse('api-endpoint-detail', kwargs={'pk': str(self.machine.id)}))
+        self.assertEqual(response.status_code, 200)
+        options = {item['id']: item for item in response.json()['agent_update_releases']}
+        self.assertNotIn(str(wrong_channel.pk), options)
+        for reason, release in blocked_releases.items():
+            with self.subTest(reason=reason):
+                item = options[str(release.pk)]
+                self.assertTrue(item['requires_force'])
+                self.assertFalse(item['eligible'])
+                self.assertFalse(item['eligible_with_downgrade'])
+                self.assertEqual(item['downgrade_reason_code'], reason)
+        self.assertFalse(self.machine.jobs.exists())
 
     def test_endpoint_detail_reports_active_update_job(self):
         user_model = get_user_model()
