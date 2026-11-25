@@ -40,6 +40,28 @@ def enable_admin(machine, operator):
 
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True, NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True)
 class AdminAuthControlTests(TestCase):
+    @override_settings(NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY=False)
+    def test_persistent_grant_survives_session_close_without_pilot_fields(self):
+        machine, _, operator = fixture('persistent-admin-grant')
+        enable_admin(machine, operator)
+        AdminTerminalAccessGrant.objects.all().delete()
+        manager = get_user_model().objects.create_user('persistent-grant-manager', is_staff=True)
+        manager.user_permissions.add(Permission.objects.get(content_type__app_label='agents',
+            content_type__model='terminalsession', codename='manage_admin_terminal_grant'))
+        data = dict(actor=manager, endpoint_id=machine.pk, beneficiary=operator.username, reason='Test authorization')
+        grant = change_admin_terminal_grant(action='grant', **data)
+        self.assertIsNone(grant['expires_at'])
+        with override_settings(NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY=True):
+            with self.assertRaises(PermissionError):
+                sessions.create_session(operator, machine.pk, 'admin_auth')
+        for _ in range(2):
+            session = sessions.create_session(operator, machine.pk, 'admin_auth')
+            self.assertIsNotNone(TerminalSession.objects.get(pk=session['session_id']).expires_at)
+            sessions.close_session(session['session_id'], 'test_closed')
+        change_admin_terminal_grant(action='revoke', **data)
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+
     def test_admin_grant_lifecycle_is_audited_independent_and_closes_session(self):
         machine, _, operator = fixture('admin-grant-lifecycle')
         enable_admin(machine, operator)

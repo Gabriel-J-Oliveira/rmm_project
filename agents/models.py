@@ -29,7 +29,7 @@ class AdminTerminalAccessGrant(models.Model):
     endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
     machine_id = models.CharField(max_length=255)
     enabled = models.BooleanField(default=True)
-    expires_at = models.DateTimeField()
+    expires_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='admin_terminal_grants_created')
     reason = models.CharField(max_length=500)
     approval_ref = models.CharField(max_length=200)

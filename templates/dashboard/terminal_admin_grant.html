@@ -2,11 +2,15 @@
   <summary>Autorização do terminal administrativo</summary>
   <form action="{% url 'terminal-admin-grant' endpoint.pk %}" method="post">
     {% csrf_token %}
+    <label>Motivo <input name="reason" required maxlength="500"></label>
+    {% if terminal_admin_grant_machine_id %}
     <p>Operador: {{ terminal_admin_grant_operator }}</p>
     <label>Confirme o Machine ID <input name="machine_id" placeholder="{{ terminal_admin_grant_machine_id }}" required maxlength="255"></label>
-    <label>Motivo <input name="reason" required maxlength="500"></label>
     <label>Referência de aprovação <input name="approval_ref" required maxlength="200"></label>
     <label>Validade em minutos <input name="ttl_minutes" type="number" min="1" max="60" value="30"></label>
+    {% else %}
+    <label>Operador NightOwl <input name="beneficiary" required maxlength="150"></label>
+    {% endif %}
     <button name="action" value="grant" type="submit">Conceder autorização</button>
     <button name="action" value="revoke" type="submit">Revogar autorização</button>
     <p role="status"></p>

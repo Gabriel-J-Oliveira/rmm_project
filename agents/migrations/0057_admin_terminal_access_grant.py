@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('enabled', models.BooleanField(default=True)),
                 ('machine_id', models.CharField(max_length=255)),
-                ('expires_at', models.DateTimeField()),
+                ('expires_at', models.DateTimeField(blank=True, null=True)),
                 ('reason', models.CharField(max_length=500)),
                 ('approval_ref', models.CharField(max_length=200)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),

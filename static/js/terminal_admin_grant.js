@@ -7,10 +7,10 @@
         event.preventDefault();
         const action = event.submitter?.value;
         if (!['grant', 'revoke'].includes(action)) return;
-        const {machine_id, reason, approval_ref, ttl_minutes, csrfmiddlewaretoken} =
+        const {machine_id, reason, approval_ref, ttl_minutes, beneficiary, csrfmiddlewaretoken} =
             Object.fromEntries(new FormData(form));
-        const data = {action, machine_id, reason, approval_ref};
-        if (action === 'grant') data.ttl_minutes = Number(ttl_minutes);
+        const data = {action, machine_id, reason, approval_ref, beneficiary};
+        if (action === 'grant' && ttl_minutes !== undefined) data.ttl_minutes = Number(ttl_minutes);
         buttons.forEach(button => { button.disabled = true; });
         status.textContent = '';
         try {
@@ -26,7 +26,8 @@
             }
             const grant = await response.json();
             status.textContent = grant.enabled ?
-                'Autorização concedida até ' + new Date(grant.expires_at).toLocaleString() :
+                (grant.expires_at ? 'Autorização concedida até ' + new Date(grant.expires_at).toLocaleString() :
+                    'Autorização persistente concedida.') :
                 'Autorização revogada.';
             form.reset();
         } catch (_) {

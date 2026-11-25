@@ -133,11 +133,14 @@ def connection_info(session, role, ticket):
 def validate_mode(operator, endpoint, mode):
     if mode not in ('synthetic', 'conpty', 'admin_auth'):
         raise ValueError('terminal_mode_invalid')
+    expiry = Q(expires_at__gt=timezone.now())
+    if not settings.NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY:
+        expiry |= Q(expires_at__isnull=True)
     if mode == 'admin_auth' and (
             not getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False) or
             not has_explicit_admin_permission(operator) or
-            not AdminTerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
-                machine_id=endpoint.machine_id, expires_at__gt=timezone.now()).exists() or
+            not AdminTerminalAccessGrant.objects.filter(expiry, operator=operator, endpoint=endpoint, enabled=True,
+                machine_id=endpoint.machine_id).exists() or
             not internal_capability(endpoint, 'remote_terminal_admin_auth:1')):
         raise PermissionError('terminal_execution_not_authorized')
     if mode == 'conpty' and (not getattr(settings, 'NIGHTOWL_TERMINAL_CONPTY_ENABLED', False) or
@@ -355,12 +358,12 @@ class AdminTerminalGrantView(PrivateTerminalView):
             return Response({'error': 'forbidden'}, status=403)
         from .admin_terminal_grants import change_admin_terminal_grant
         try:
-            if not isinstance(request.data, dict) or set(request.data) - {'action', 'machine_id', 'reason', 'approval_ref', 'ttl_minutes'}:
+            if not isinstance(request.data, dict) or set(request.data) - {'action', 'machine_id', 'reason', 'approval_ref', 'ttl_minutes', 'beneficiary'}:
                 raise ValueError('invalid_request')
             result = change_admin_terminal_grant(actor=request.user, endpoint_id=endpoint_id,
                 machine_id=request.data.get('machine_id'), action=request.data.get('action'),
                 reason=request.data.get('reason'), approval_ref=request.data.get('approval_ref'),
-                ttl_minutes=request.data.get('ttl_minutes'))
+                ttl_minutes=request.data.get('ttl_minutes'), beneficiary=request.data.get('beneficiary'))
             return Response(result, status=200)
         except PermissionDenied:
             return Response({'error': 'forbidden'}, status=403)
