@@ -126,6 +126,17 @@ try {
         }
         Remove-Item Env:NIGHTOWL_E2E_ARTIFACT_DIR -ErrorAction SilentlyContinue
         if ($serviceManagerProcess.ExitCode -ne 0) { throw "Service manager browser E2E failed with exit code $($serviceManagerProcess.ExitCode)" }
+
+        # Asset records are exercised against a real Django live server and
+        # isolated synthetic database; no real endpoint or agent is contacted.
+        $assetRecordsArguments = @('manage.py', 'test',
+            'agents.test_asset_registry_browser.AssetRegistryBrowserTests.test_endpoint_records_create_and_manual_history_in_real_browser',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $assetRecordsProcess = Start-Process -FilePath $python -ArgumentList $assetRecordsArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($assetRecordsProcess.ExitCode -ne 0) { throw "Asset records browser E2E failed with exit code $($assetRecordsProcess.ExitCode)" }
     }
 
     # The independent probe runs AFTER the full E2E, even on failure: it cannot

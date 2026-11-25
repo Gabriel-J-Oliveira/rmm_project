@@ -1097,6 +1097,149 @@ class InventorySnapshot(models.Model):
         return f'{self.hostname} @ {self.received_at:%Y-%m-%d %H:%M:%S}'
 
 
+def generate_provisional_asset_code():
+    """Generate an opaque, temporary display code without a shared counter."""
+    return f'PROV-{uuid.uuid4().hex.upper()}'
+
+
+class PhysicalAsset(models.Model):
+    """Persistent physical equipment identity, separate from agent identity."""
+
+    STATUS_ACTIVE = 'active'
+    STATUS_RETIRED = 'retired'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Ativo'),
+        (STATUS_RETIRED, 'Baixado'),
+    ]
+    IDENTITY_PROVISIONAL = 'provisional'
+    IDENTITY_CONFIRMED = 'confirmed'
+    IDENTITY_REVIEW = 'review'
+    IDENTITY_CHOICES = [
+        (IDENTITY_PROVISIONAL, 'Provisória'),
+        (IDENTITY_CONFIRMED, 'Confirmada'),
+        (IDENTITY_REVIEW, 'Em revisão'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset_code = models.CharField(max_length=40, unique=True, default=generate_provisional_asset_code)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    identity_status = models.CharField(max_length=16, choices=IDENTITY_CHOICES, default=IDENTITY_PROVISIONAL)
+    serial_number = models.CharField(max_length=255, blank=True)
+    serial_normalized = models.CharField(max_length=255, null=True, blank=True)
+    manufacturer = models.CharField(max_length=255, blank=True)
+    model = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='physical_assets_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['asset_code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['serial_normalized'],
+                condition=models.Q(status='active', serial_normalized__isnull=False),
+                name='physical_asset_active_serial_unique',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        from .identity import meaningful_serial
+
+        self.asset_code = str(self.asset_code or '').strip().upper()
+        self.serial_number = str(self.serial_number or '').strip()
+        self.serial_normalized = meaningful_serial(self.serial_number) or None
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'serial_number' in update_fields:
+            kwargs['update_fields'] = {*update_fields, 'serial_normalized'}
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.asset_code
+
+
+class AssetAgentLink(models.Model):
+    """Time-bounded association; snapshots survive endpoint deletion/purge."""
+
+    ORIGIN_OPERATOR = 'operator'
+    ORIGIN_SERIAL_SUGGESTION = 'serial_suggestion'
+    ORIGIN_CHOICES = [
+        (ORIGIN_OPERATOR, 'Confirmação do operador'),
+        (ORIGIN_SERIAL_SUGGESTION, 'Sugestão por serial confirmada'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(PhysicalAsset, on_delete=models.PROTECT, related_name='agent_links')
+    endpoint = models.ForeignKey(
+        AgentMachine, null=True, blank=True, on_delete=models.SET_NULL, related_name='asset_links',
+    )
+    endpoint_uuid_snapshot = models.UUIDField(db_index=True)
+    machine_id_snapshot = models.CharField(max_length=255, blank=True)
+    hostname_snapshot = models.CharField(max_length=255, blank=True)
+    origin = models.CharField(max_length=24, choices=ORIGIN_CHOICES, default=ORIGIN_OPERATOR)
+    evidence = models.JSONField(default=dict, blank=True)
+    reason = models.TextField(blank=True)
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_agent_links_created',
+    )
+    linked_at = models.DateTimeField(default=timezone.now)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-linked_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['endpoint'], condition=models.Q(ended_at__isnull=True, endpoint__isnull=False),
+                name='asset_agent_one_active_endpoint',
+            ),
+            models.UniqueConstraint(
+                fields=['asset'], condition=models.Q(ended_at__isnull=True),
+                name='asset_agent_one_active_asset',
+            ),
+        ]
+        indexes = [models.Index(fields=['asset', 'ended_at', '-linked_at'])]
+
+
+class AssetRecord(models.Model):
+    TYPE_OBSERVATION = 'observation'
+    TYPE_ISSUE = 'issue'
+    TYPE_FORMATTED = 'formatted'
+    TYPE_MAINTENANCE = 'maintenance'
+    TYPE_UPGRADE = 'upgrade'
+    TYPE_TRANSFER = 'transfer'
+    TYPE_RESPONSIBILITY_CHANGE = 'responsibility_change'
+    TYPE_CHOICES = [
+        (TYPE_OBSERVATION, 'Observação'),
+        (TYPE_ISSUE, 'Problema'),
+        (TYPE_FORMATTED, 'Formatação'),
+        (TYPE_MAINTENANCE, 'Manutenção'),
+        (TYPE_UPGRADE, 'Upgrade'),
+        (TYPE_TRANSFER, 'Transferência'),
+        (TYPE_RESPONSIBILITY_CHANGE, 'Troca de responsável'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(PhysicalAsset, on_delete=models.PROTECT, related_name='records')
+    record_type = models.CharField(max_length=32, choices=TYPE_CHOICES, db_index=True)
+    description = models.TextField()
+    occurred_at = models.DateTimeField()
+    previous_responsible = models.CharField(max_length=255, blank=True)
+    new_responsible = models.CharField(max_length=255, blank=True)
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_records_authored',
+    )
+    author_label = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-occurred_at', '-created_at']
+        indexes = [models.Index(fields=['asset', '-occurred_at', '-created_at'])]
+
+
 class EndpointPerformanceSample(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE, related_name='performance_samples')

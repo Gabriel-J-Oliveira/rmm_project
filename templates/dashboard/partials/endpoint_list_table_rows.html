@@ -13,6 +13,7 @@
     <td>
         <a class="endpoint-name table-link mono" href="{% url 'endpoint-detail' row.endpoint.id %}">{{ row.hostname|default:"&mdash;" }}</a>
         <span class="endpoint-subtext">{{ row.domain|default:"sem dominio" }}</span>
+        {% if row.asset_code %}<span class="endpoint-row-asset-code">Patrim&ocirc;nio {{ row.asset_code }}</span>{% endif %}
     </td>
     <td><span class="endpoint-type-chip endpoint-type-{{ row.endpoint_type }}">{{ row.endpoint_type_label }}</span></td>
     <td><strong class="endpoint-main-value">{{ row.logged_user|default:"&mdash;" }}</strong><span class="endpoint-subtext">{{ row.sector|default:"Sem setor" }}</span></td>

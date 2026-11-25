@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
 {% endif %}
 <link rel="stylesheet" href="{% static 'css/endpoint_detail_refinement.css' %}?v=rc47-05-04b-2">
+{% if can_view_physical_assets %}<link rel="stylesheet" href="{% static 'css/endpoint_asset_records.css' %}?v=rc49-01a-1">{% endif %}
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -63,6 +64,7 @@
         <button type="button" data-endpoint-tab="security"><i data-lucide="shield"></i>Seguran&ccedil;a</button>
         <button type="button" data-endpoint-tab="patches"><i data-lucide="badge-check"></i>Patches</button>
         <button type="button" data-endpoint-tab="activity"><i data-lucide="history"></i>Atividade</button>
+        {% if can_view_physical_assets %}<button type="button" data-endpoint-tab="records"><i data-lucide="clipboard-list"></i>Registros</button>{% endif %}
         <button type="button" data-endpoint-tab="tasks"><i data-lucide="list-checks"></i>Ações e Jobs</button>
         <button type="button" data-endpoint-tab="diagnostics"><i data-lucide="stethoscope"></i>Diagn&oacute;stico</button>
     </nav>
@@ -324,6 +326,23 @@
         </section>
     </section>
 
+    {% if can_view_physical_assets %}
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="records" hidden>
+        <div class="endpoint-asset-records" data-asset-records
+             data-api-url="{% url 'api-endpoint-asset-records' endpoint.id %}"
+             data-endpoint-uuid="{{ endpoint.id }}"
+             data-machine-id="{{ endpoint.machine_id|default:''|escape }}"
+             data-create-allowed="{{ can_add_physical_assets|yesno:'yes,no' }}"
+             data-link-allowed="{{ can_link_physical_assets|yesno:'yes,no' }}"
+             data-record-allowed="{{ can_add_asset_records|yesno:'yes,no' }}"
+             data-csrf-token="{{ csrf_token }}">
+            <section class="panel endpoint-asset-card" data-asset-records-content aria-live="polite">
+                <p class="endpoint-asset-loading">Carregando registros patrimoniais…</p>
+            </section>
+        </div>
+    </section>
+    {% endif %}
+
     <section class="endpoint-tab-panel endpoint-actions-tab" data-endpoint-tab-panel="tasks" hidden>
         <div class="endpoint-actions-jobs-layout">
             <div class="endpoint-actions-column">
@@ -500,4 +519,5 @@
 <script src="{% static 'js/endpoint_services.js' %}?v=services-v3-r48-1"></script>
 <script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=rc47-hotfix-47-1"></script>
+{% if can_view_physical_assets %}<script src="{% static 'js/endpoint_asset_records.js' %}?v=rc49-01a-2"></script>{% endif %}
 {% endblock %}
