@@ -1,7 +1,10 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.db import close_old_connections, connections
+from django.test import Client, TestCase, TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.urls import reverse
 from django.utils import timezone
 
@@ -67,3 +70,54 @@ class HardwareIdentityTests(TestCase):
         self.assertEqual(first.json(), second.json())
         self.assertEqual(AgentJob.objects.get().job_type, AgentJob.TYPE_FORCE_INVENTORY)
         self.assertFalse(PhysicalAsset.objects.exists())
+
+    def test_validation_reports_evidence_from_the_authenticated_result(self):
+        endpoint, token = AgentMachine.create_with_token(
+            hostname='FORCE-INVENTORY', machine_id=str(uuid.uuid4()), status=AgentMachine.STATUS_ONLINE,
+        )
+        self.client.force_login(get_user_model().objects.create_superuser('validator'))
+        url = reverse('api-endpoint-asset-records', args=[endpoint.pk])
+        self.client.post(url, {'action': 'validate_link', 'machine_id': endpoint.machine_id},
+                         content_type='application/json')
+        job = endpoint.jobs.get()
+        job.status = AgentJob.STATUS_RUNNING
+        job.save(update_fields=['status'])
+        result = Client(HTTP_AUTHORIZATION=f'Bearer {token}').post('/api/agent/jobs/result/', {
+            'job_id': str(job.pk), 'status': 'completed', 'exit_code': 0,
+            'result': {'output': {'machine_id': endpoint.machine_id, 'hostname': endpoint.hostname,
+                                  'collected_at': timezone.now().isoformat(), 'hardware': {
+                'manufacturer': 'Vendor', 'model': 'Model', 'serial_number': 'SERIAL-123',
+                'oem_product': {'smbios_uuid': str(self.key), 'hypervisor_present': False},
+            }}},
+        }, content_type='application/json', HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+        self.assertEqual(result.status_code, 200, result.content)
+        payload = self.client.get(url).json()
+        self.assertEqual(payload['validation_job']['result'], 'linked')
+        self.assertEqual(payload['hardware_identity']['smbios_uuid'], str(self.key))
+
+
+@override_settings(NIGHTOWL_AUTOMATIC_ASSETS_ENABLED=True)
+class ConcurrentHardwareIdentityTests(TransactionTestCase):
+    @skipUnlessDBFeature('has_select_for_update')
+    def test_simultaneous_claims_cannot_create_two_assets_or_move_the_link(self):
+        endpoints = [AgentMachine.create_with_token(hostname=f'HOST-{i}', machine_id=str(uuid.uuid4()))[0]
+                     for i in range(2)]
+        snapshots = [InventorySnapshot.objects.create(machine=endpoint, hostname=endpoint.hostname,
+                                                      collected_at=timezone.now()) for endpoint in endpoints]
+        evidence = {'manufacturer': 'Vendor', 'model': 'Model', 'oem_product': {
+            'smbios_uuid': str(uuid.uuid4()), 'hypervisor_present': False,
+        }}
+        barrier = Barrier(2)
+
+        def claim(snapshot):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                return observe_hardware(snapshot.machine_id, snapshot, evidence).state
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            self.assertCountEqual(list(workers.map(claim, snapshots)), ['linked', 'uuid_duplicate'])
+        self.assertEqual(PhysicalAsset.objects.count(), 1)
+        self.assertEqual(PhysicalAsset.objects.get().agent_links.count(), 1)
