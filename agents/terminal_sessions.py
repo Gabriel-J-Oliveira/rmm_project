@@ -338,18 +338,25 @@ class AdminTerminalGrantView(PrivateTerminalView):
 
     def get(self, request, endpoint_id):
         from .terminal_grants import PILOT_ENDPOINT_ID, PILOT_OPERATOR_USERNAME
-        if (endpoint_id != PILOT_ENDPOINT_ID or not is_nightowl_technical_user(request.user) or
+        pilot_only = settings.NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY
+        if ((pilot_only and endpoint_id != PILOT_ENDPOINT_ID) or not is_nightowl_technical_user(request.user) or
                 not has_explicit_admin_permission(request.user, 'manage_admin_terminal_grant')):
             return Response({'error': 'forbidden'}, status=403)
         endpoint = AgentMachine.objects.filter(pk=endpoint_id).first()
         if not endpoint:
             return Response({'error': 'endpoint_not_found'}, status=404)
-        grant = AdminTerminalAccessGrant.objects.filter(endpoint=endpoint, operator__username__iexact=PILOT_OPERATOR_USERNAME).first()
+        beneficiary = PILOT_OPERATOR_USERNAME if pilot_only else request.query_params.get('beneficiary', '').strip()
+        if not beneficiary or len(beneficiary) > 150:
+            return Response({'error': 'invalid_beneficiary'}, status=400)
+        matching = list(AdminTerminalAccessGrant.objects.filter(endpoint=endpoint,
+            operator__username__iexact=beneficiary)[:2])
+        grant = matching[0] if len(matching) == 1 else None
         now = timezone.now()
         return Response({'endpoint_id': str(endpoint.pk), 'machine_id': endpoint.machine_id,
             'grant_enabled': bool(grant and grant.enabled),
-            'grant_current': bool(grant and grant.enabled and grant.expires_at > now),
-            'expires_at': grant.expires_at.isoformat() if grant else None,
+            'grant_current': bool(grant and grant.enabled and grant.machine_id == endpoint.machine_id
+                and (not pilot_only if grant.expires_at is None else grant.expires_at > now)),
+            'expires_at': grant.expires_at.isoformat() if grant and grant.expires_at is not None else None,
             'admin_auth_enabled': bool(getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False)),
             'capability_ready': internal_capability(endpoint, 'remote_terminal_admin_auth:1')})
 

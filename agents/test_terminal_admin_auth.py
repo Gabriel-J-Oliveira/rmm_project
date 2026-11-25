@@ -51,7 +51,12 @@ class AdminAuthControlTests(TestCase):
         data = dict(actor=manager, endpoint_id=machine.pk, beneficiary=operator.username, reason='Test authorization')
         grant = change_admin_terminal_grant(action='grant', **data)
         self.assertIsNone(grant['expires_at'])
+        self.client.force_login(manager)
+        url = reverse('terminal-admin-grant', args=[machine.pk])
+        self.assertTrue(self.client.get(url, {'beneficiary': operator.username}).json()['grant_current'])
         with override_settings(NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY=True):
+            with patch.multiple('agents.terminal_grants', PILOT_ENDPOINT_ID=machine.pk, PILOT_OPERATOR_USERNAME=operator.username):
+                self.assertFalse(self.client.get(url).json()['grant_current'])
             with self.assertRaises(PermissionError):
                 sessions.create_session(operator, machine.pk, 'admin_auth')
         for _ in range(2):
