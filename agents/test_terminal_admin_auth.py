@@ -17,7 +17,8 @@ from django.utils import timezone
 from access_inventory.models import ADUser
 
 from . import terminal_sessions as sessions, terminal_transport as transport
-from .models import AgentMachine, AuditEvent, InventorySnapshot, TerminalAccessGrant, TerminalSession
+from .models import (AgentMachine, AssetAgentLink, AssetRecord, AuditEvent, InventorySnapshot,
+                     PhysicalAsset, TerminalAccessGrant, TerminalSession)
 from .terminal_test_harness import LoopbackASGI, WSClient
 from .test_terminal_transport import fixture
 
@@ -190,8 +191,10 @@ class AdminAuthControlTests(TestCase):
         self.assertContains(response, 'data-terminal-open')
         self.assertNotContains(response, 'data-terminal-open disabled')
         self.assertContains(response, 'data-auth-modal')
-        self.assertContains(response, 'name="account"')
-        self.assertContains(response, 'name="password"')
+        self.assertContains(response, 'data-windows-account')
+        self.assertContains(response, 'data-windows-password')
+        self.assertNotContains(response, 'name="account"')
+        self.assertNotContains(response, 'name="password"')
         self.assertContains(response, 'data-auth-principal')
         self.assertContains(response, 'data-terminal-registered-user>Não identificado')
         self.assertContains(response, 'data-endpoint-uuid=')
@@ -208,6 +211,55 @@ class AdminAuthControlTests(TestCase):
         response = self.client.get(url)
         self.assertContains(response, 'data-terminal-open disabled')
         self.assertContains(response, 'Terminal indispon')
+
+    @override_settings(NIGHTOWL_TERMINAL_BROWSER_ENABLED=True, NIGHTOWL_TERMINAL_CONPTY_ENABLED=True)
+    def test_both_modes_render_without_sharing_consent_or_loading_xterm_twice(self):
+        machine, _, operator = fixture('admin-and-assisted')
+        enable_admin(machine, operator)
+        machine.status = 'online'
+        machine.save(update_fields=['status'])
+        TerminalAccessGrant.objects.filter(endpoint=machine, operator=operator).update(allow_conpty=True)
+        snapshot = InventorySnapshot.objects.get(machine=machine)
+        snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_conpty:1')
+        snapshot.save(update_fields=['raw_payload'])
+        self.client.force_login(operator)
+        response = self.client.get(reverse('endpoint-detail', args=[machine.pk]))
+        self.assertContains(response, 'data-admin-auth')
+        self.assertContains(response, 'data-terminal-conpty-panel')
+        self.assertContains(response, '/vendor/xterm/xterm.js', count=1)
+        admin = self.client.post(reverse('terminal-session-request', args=[machine.pk]),
+            {'type': 'request', 'protocol': 1, 'mode': 'admin_auth'}, content_type='application/json', secure=True)
+        self.assertEqual(admin.status_code, 201)
+        self.assertIsNone(TerminalSession.objects.get(pk=admin.json()['session_id']).consent_deadline)
+        sessions.close_session(admin.json()['session_id'], 'test_closed')
+        assisted = self.client.post(reverse('terminal-session-request', args=[machine.pk]),
+            {'type': 'request', 'protocol': 1, 'mode': 'conpty'}, content_type='application/json', secure=True)
+        self.assertEqual(assisted.status_code, 201)
+        self.assertEqual(assisted.json()['status'], 'awaiting_consent')
+        self.assertNotIn('credential', assisted.json())
+
+    def test_registered_responsible_requires_permission_confirmed_link_and_current_record(self):
+        machine, _, operator = fixture('admin-registered-user')
+        enable_admin(machine, operator)
+        asset = PhysicalAsset.objects.create(identity_status=PhysicalAsset.IDENTITY_CONFIRMED)
+        link = AssetAgentLink.objects.create(asset=asset, endpoint=machine, endpoint_uuid_snapshot=machine.pk,
+            machine_id_snapshot=machine.machine_id)
+        now = timezone.now()
+        for kind, when, name in (
+            (AssetRecord.TYPE_RESPONSIBILITY_CHANGE, now - timedelta(days=1), 'Responsavel cadastrado'),
+            (AssetRecord.TYPE_RESPONSIBILITY_CHANGE, now + timedelta(days=1), 'Mudanca futura'),
+            (AssetRecord.TYPE_OBSERVATION, now, 'Observacao nao atribui responsabilidade'),
+        ):
+            AssetRecord.objects.create(asset=asset, record_type=kind, occurred_at=when, new_responsible=name)
+        self.client.force_login(operator)
+        url = reverse('endpoint-detail', args=[machine.pk])
+        self.assertContains(self.client.get(url), 'data-terminal-registered-user>Não identificado')
+        operator.user_permissions.add(*Permission.objects.filter(content_type__app_label='agents',
+            codename__in=('view_agentmachine', 'view_physicalasset')))
+        self.assertContains(self.client.get(url), 'data-terminal-registered-user>Responsavel cadastrado')
+        link.machine_id_snapshot = str(uuid.uuid4())
+        link.save(update_fields=['machine_id_snapshot'])
+        self.assertContains(self.client.get(url), 'data-terminal-registered-user>Não identificado')
 
     def test_logout_closes_session_and_prevents_ticket_reuse(self):
         machine, _, operator = fixture('admin-auth-logout')
@@ -298,6 +350,14 @@ class AdminAuthControlTests(TestCase):
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True,
     NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True, NIGHTOWL_TERMINAL_TEST_LOOPBACK=True, ALLOWED_HOSTS=['testserver', '127.0.0.1'])
 class AdminAuthIntegrationTests(TransactionTestCase):
+    def test_auth_limits_count_windows_utf16_and_reject_invalid_surrogates(self):
+        event = {'type': 'windows_auth', 'account': 'a' * 256, 'domain': 'd' * 256, 'password': chr(0x1f680) * 256}
+        self.assertTrue(transport.valid_windows_auth(event))
+        self.assertLessEqual(len(json.dumps(event).encode()), transport.MAX_WINDOWS_AUTH_BYTES)
+        self.assertFalse(transport.valid_windows_auth({**event, 'password': event['password'] + 'a'}))
+        self.assertFalse(transport.valid_windows_auth({**event, 'password': chr(0xd800)}))
+        self.assertFalse(transport.valid_windows_auth({**event, 'password': 'a' + chr(0)}))
+
     async def test_logout_disconnects_both_peers(self):
         machine, token, operator = await sync_to_async(fixture)('admin-auth-logout-live')
         await sync_to_async(enable_admin)(machine, operator)
@@ -354,7 +414,7 @@ class AdminAuthIntegrationTests(TransactionTestCase):
         response = await sync_to_async(client.post)(reverse('terminal-agent-poll'), {'machine_id':machine.machine_id}, content_type='application/json', secure=True)
         agent_info = response.json()['session']
         transport.HUB = transport.TerminalHub()
-        secret = 'synthetic-only-' + uuid.uuid4().hex
+        secret = ('\u00e9\U0001f680' * 150) + uuid.uuid4().hex
         root = Path(__file__).resolve().parent.parent
         dll = root / 'NightOwl.Agent.Windows.Tests' / 'bin' / 'Release' / 'net8.0-windows' / 'NightOwl.Agent.Windows.Tests.dll'
         async with LoopbackASGI() as server:
@@ -366,10 +426,11 @@ class AdminAuthIntegrationTests(TransactionTestCase):
             try:
                 process.stdin.write(json.dumps(agent_info).encode()); await process.stdin.drain(); process.stdin.close(); process.stdin = None
                 await browser.until('transport_ready')
+                self.assertGreater(len(json.dumps({'password': secret})), 1024)
                 await browser.control({'type':'windows_auth','account':'nonexistent-' + uuid.uuid4().hex,'domain':'.','password':secret})
                 result = await browser.until('windows_auth_result')
                 self.assertEqual(result, {'type':'windows_auth_result','result':'rejected','reason':'credentials_rejected'})
-                await browser.control({'type':'windows_auth','account':'x','domain':'.','password':secret})
+                await browser.control({'type':'windows_auth','account':'x','domain':'.','password':'synthetic-replay'})
                 self.assertEqual((await browser.until('closed'))['code'], 'unsupported_control')
                 await browser.close()
                 output, error = await asyncio.wait_for(process.communicate(), 10)
@@ -379,6 +440,7 @@ class AdminAuthIntegrationTests(TransactionTestCase):
                 if process.returncode is None: process.kill(); await process.wait()
         rows = await sync_to_async(lambda: json.dumps(list(TerminalSession.objects.values()) + list(AuditEvent.objects.values()), default=str))()
         self.assertNotIn(secret, rows)
+        self.assertNotIn(json.dumps(secret)[1:-1], rows)
 
 
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True,
