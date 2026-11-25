@@ -1821,6 +1821,9 @@ def record_collection(machine, collection_type: str, payload: dict) -> Inventory
                     'snapshot_id': str(snapshot.id),
                 },
             )
+    if collection_type == 'full_inventory' or 'oem_product' in hardware:
+        from .asset_hardware import observe_hardware
+        observe_hardware(machine.pk, snapshot, hardware)
     return snapshot
 
 

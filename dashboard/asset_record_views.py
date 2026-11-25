@@ -1,8 +1,9 @@
 import json
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth.decorators import login_required
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
@@ -18,7 +19,48 @@ from agents.asset_registry import (
     link_asset_to_endpoint,
     link_endpoint_reference,
 )
-from agents.models import AgentMachine, AssetAgentLink, PhysicalAsset
+from agents.asset_hardware import board_change_candidate, confirm_board_change, live_claims
+from agents.asset_registry import _lock_endpoint
+from agents.identity import normalized_machine_id, machine_id_matches
+from agents.models import AgentJob, AgentMachine, AssetAgentLink, AssetHardwareObservation, AuditEvent, PhysicalAsset
+
+
+def _can_validate(user):
+    return (_has_perm(user, 'agents.change_physicalasset') and _has_perm(user, 'agents.add_agentjob'))
+
+
+def _validation_jobs(endpoint):
+    return endpoint.jobs.filter(job_type=AgentJob.TYPE_FORCE_INVENTORY, payload__asset_validation=True)
+
+
+@transaction.atomic
+def _request_validation(endpoint, machine_id, user):
+    endpoint = _lock_endpoint(endpoint.pk, machine_id)
+    if endpoint.has_terminal_lifecycle:
+        raise AssetRegistryError('endpoint_inactive')
+    if endpoint.status != AgentMachine.STATUS_ONLINE:
+        raise AssetRegistryError('asset_validation_offline')
+    try:
+        key = normalized_machine_id(endpoint.machine_id)
+    except ValueError:
+        key = ''
+    if not key or machine_id_matches(key).exclude(pk=endpoint.pk).exists():
+        raise AssetRegistryError('asset_validation_identity_conflict')
+    pending = ('queued', 'sent', 'running')
+    job = _validation_jobs(endpoint).filter(status__in=pending, expires_at__gt=timezone.now()).first()
+    if job:
+        return job
+    if endpoint.jobs.filter(status__in=pending).count() >= 50:
+        raise AssetRegistryError('endpoint_job_queue_full')
+    job = AgentJob.objects.create(
+        endpoint=endpoint, job_type=AgentJob.TYPE_FORCE_INVENTORY, created_by=user.get_username(),
+        payload={'asset_validation': True}, correlation_id=str(uuid.uuid4()), timeout_seconds=300,
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    AuditEvent.objects.create(event_type='asset.validation_requested', actor_type=AuditEvent.ACTOR_USER,
+                              actor_name=user.get_username(), endpoint=endpoint,
+                              title='Validação patrimonial solicitada', metadata={'job_id': str(job.pk)})
+    return job
 
 
 def _has_perm(user, permission):
@@ -64,7 +106,28 @@ def endpoint_asset_records(request, endpoint_id):
     if request.method == 'GET':
         asset_query = request.GET.get('asset_q', '').strip()[:100]
         payload = endpoint_asset_payload(endpoint)
+        observation = AssetHardwareObservation.objects.filter(endpoint=endpoint).first()
+        if observation:
+            state = observation.state
+            if observation.smbios_uuid and live_claims(observation.smbios_uuid, endpoint.pk).exists():
+                state = 'uuid_duplicate'
+            payload['hardware_identity'] = {'state': state, 'observed_at': observation.observed_at,
+                                            'smbios_uuid': str(observation.smbios_uuid or '')}
+            if (_has_perm(request.user, 'agents.change_physicalasset')
+                    and _has_perm(request.user, 'agents.add_assetagentlink')):
+                board = board_change_candidate(endpoint, observation)
+                if board:
+                    payload['board_change'] = {'snapshot_id': str(observation.snapshot_id),
+                                               'previous_smbios_uuid': str(board.asset.smbios_uuid)}
+        job = _validation_jobs(endpoint).order_by('-created_at').first()
+        if job:
+            job_state = job.status
+            if job_state in ('queued', 'sent', 'running') and job.expires_at <= timezone.now():
+                job_state = 'expired'
+            payload['validation_job'] = {'id': str(job.pk), 'state': job_state,
+                                         'result': (job.result or {}).get('asset_validation')}
         payload['permissions'] = {
+            'validate_link': _can_validate(request.user),
             'create_asset': _has_perm(request.user, 'agents.add_physicalasset')
                             and _has_perm(request.user, 'agents.add_assetagentlink'),
             'link_asset': _has_perm(request.user, 'agents.change_physicalasset')
@@ -91,6 +154,25 @@ def endpoint_asset_records(request, endpoint_id):
         return JsonResponse({'error': 'invalid_json'}, status=400)
     action = data.get('action')
     try:
+        if action == 'confirm_board_change':
+            if not (_has_perm(request.user, 'agents.change_physicalasset')
+                    and _has_perm(request.user, 'agents.add_assetagentlink')):
+                return _permission_denied()
+            if data.get('identity_confirmed') is not True or not isinstance(data.get('machine_id'), str):
+                return JsonResponse({'error': 'explicit_confirmation_required'}, status=400)
+            try:
+                snapshot_id = uuid.UUID(str(data.get('snapshot_id') or ''))
+            except ValueError:
+                return JsonResponse({'error': 'hardware_change_not_confirmable'}, status=409)
+            confirm_board_change(endpoint.pk, data['machine_id'], snapshot_id, request.user, reason=data.get('reason'))
+            return JsonResponse({'ok': True})
+        if action == 'validate_link':
+            if not _can_validate(request.user):
+                return _permission_denied()
+            if not isinstance(data.get('machine_id'), str):
+                return JsonResponse({'error': 'endpoint_identity_required'}, status=400)
+            job = _request_validation(endpoint, data['machine_id'], request.user)
+            return JsonResponse({'ok': True, 'job_id': str(job.pk), 'state': job.status}, status=202)
         if action == 'create_asset':
             if not (_can_view_endpoint(request.user) and _has_perm(request.user, 'agents.add_physicalasset')
                     and _has_perm(request.user, 'agents.add_assetagentlink')):

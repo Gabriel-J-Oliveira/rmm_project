@@ -32,6 +32,10 @@
         record_description_invalid: "A descrição é obrigatória e deve ter até 5.000 caracteres.",
         responsible_values_required: "Informe o responsável anterior e o novo responsável.",
         asset_identity_conflict: "A identidade patrimonial conflitou com um registro existente. Recarregue os dados e revise a associação.",
+        asset_validation_offline: "Endpoint offline. A validação precisa de uma nova coleta.",
+        asset_validation_identity_conflict: "A identidade do agente está ausente ou duplicada.",
+        hardware_change_not_confirmable: "A evidência não permite confirmar a troca. Colete e revise os dados novamente.",
+        endpoint_job_queue_full: "A fila do endpoint está cheia. Tente novamente após a conclusão dos jobs.",
         forbidden: "Você não tem permissão para esta operação.",
         invalid_json: "A solicitação não pôde ser validada. Tente novamente."
     };
@@ -210,22 +214,69 @@
 
     function render() {
         if (!state) return;
+        const hardware = state.hardware_identity || {};
+        const validation = state.validation_job || {};
+        const labels = {
+            uuid_missing: "UUID SMBIOS ausente", uuid_invalid: "UUID SMBIOS inválido",
+            uuid_duplicate: "UUID SMBIOS observado em outro endpoint ativo", serial_conflict: "Seriais divergentes",
+            physical_unconfirmed: "Equipamento físico não confirmado", linked: "Vínculo SMBIOS confirmado",
+            eligible: "Evidência SMBIOS válida, aguardando processamento automático",
+            agent_identity_conflict: "Identidade do agente em revisão",
+            asset_identity_conflict: "Evidência patrimonial divergente, requer revisão",
+            previous_agent_active: "Instalação anterior ainda ativa, requer revisão",
+            inventory_not_observed: "Coleta sem evidência patrimonial atualizada",
+            queued: "Coleta em fila", sent: "Coleta entregue ao agente", running: "Coleta em execução",
+            failed: "A coleta falhou", expired: "A coleta expirou", timed_out: "A coleta excedeu o prazo",
+            cancelled: "Coleta cancelada"
+        };
+        const validationText = validation.state === "completed"
+            ? (labels[validation.result] || "Coleta concluída sem validação confirmada")
+            : labels[validation.state];
         content.innerHTML = '<div class="endpoint-asset-inline-status" role="status" aria-live="polite">' + escapeHtml(state.notice || "") + '</div>' +
+            '<div class="endpoint-asset-section"><p>' + escapeHtml(labels[hardware.state] || "Evidência SMBIOS não informada") +
+            (hardware.smbios_uuid ? ' · <code>' + escapeHtml(hardware.smbios_uuid) + '</code>' : '') +
+            (hardware.observed_at ? ' · ' + escapeHtml(formatDate(hardware.observed_at)) : '') + '</p>' +
+            (validationText ? '<p role="status">' + escapeHtml(validationText) + '</p>' : '') +
+            ((state.permissions || {}).validate_link ? '<button type="button" class="endpoint-asset-button" data-asset-validate>Validar vínculo</button>' : '') +
+            (state.board_change ? '<form class="endpoint-asset-form" data-asset-board-form data-snapshot-id="' +
+                escapeHtml(state.board_change.snapshot_id) + '"><h3>Confirmar troca de placa</h3><p>UUID anterior: <code>' +
+                escapeHtml(state.board_change.previous_smbios_uuid) + '</code></p>' + confirmationFields(true) +
+                '<button type="submit" class="endpoint-asset-button">Confirmar troca de placa</button><p role="status" data-asset-form-status></p></form>' : '') + '</div>' +
             (state.state === "linked" ? renderLinked() :
              state.state === "identity_conflict" ? '<h2>Conflito de identidade</h2><p class="endpoint-asset-alert endpoint-asset-error">Há mais de um vínculo patrimonial ativo para este UUID. Nenhum histórico foi combinado.</p>' + warningsHtml() :
              state.state === "conflict" ? '<h2>Conflito de evidências patrimoniais</h2><p class="endpoint-asset-alert endpoint-asset-error">A associação automática está bloqueada. Revise os dados e resolva explicitamente qualquer divergência.</p>' + renderUnlinked() : renderUnlinked());
+        scheduleValidationPoll();
     }
 
-    async function load(assetQuery) {
+    function scheduleValidationPoll() {
+        if (["queued", "sent", "running"].includes((state.validation_job || {}).state)) {
+            window.clearTimeout(validationPoll);
+            validationPoll = window.setTimeout(function () {
+                if (!panel.closest("[data-endpoint-tab-panel]").hidden) load(state.asset_query, true);
+            }, 5000);
+        }
+    }
+
+    let validationPoll;
+
+    async function load(assetQuery, quiet) {
         if (loading) return;
         loading = true;
-        content.innerHTML = '<p class="endpoint-asset-loading" role="status">Consultando registros reais do endpoint…</p>';
+        if (!quiet) content.innerHTML = '<p class="endpoint-asset-loading" role="status">Consultando registros reais do endpoint…</p>';
         const url = panel.dataset.apiUrl + (assetQuery ? "?asset_q=" + encodeURIComponent(assetQuery) : "");
         try {
             state = await request(url, { headers: { Accept: "application/json", "Cache-Control": "no-cache" } });
             state.asset_query = assetQuery || "";
             loaded = true;
-            render();
+            if (!quiet || !content.querySelector("form :focus")) render();
+            else {
+                scheduleValidationPoll();
+                content.addEventListener("focusout", function () {
+                    window.setTimeout(function () {
+                        if (!content.querySelector("form :focus")) render();
+                    }, 0);
+                }, {once: true});
+            }
         } catch (error) {
             content.innerHTML = '<h2>Não foi possível carregar os registros</h2><p class="endpoint-asset-alert endpoint-asset-error" role="alert">' + escapeHtml(error.message) + '</p><button class="endpoint-asset-button" type="button" data-asset-refresh>Tentar novamente</button>';
         } finally {
@@ -269,7 +320,19 @@
 
     root.addEventListener("click", function (event) {
         const tab = event.target.closest('[data-endpoint-tab="records"]');
-        if (tab && !loaded) load("");
+        if (tab) load(loaded && state ? state.asset_query : "");
+        const validate = event.target.closest("[data-asset-validate]");
+        if (validate) {
+            validate.disabled = true;
+            request(panel.dataset.apiUrl, {
+                method: "POST", credentials: "same-origin",
+                headers: {"Content-Type": "application/json", "X-CSRFToken": csrfToken()},
+                body: JSON.stringify({action: "validate_link", machine_id: panel.dataset.machineId})
+            }).then(function () { return load(""); }).catch(function (error) {
+                state.notice = error.message;
+                render();
+            });
+        }
         if (event.target.closest("[data-asset-refresh]")) load("");
         const select = event.target.closest("[data-asset-select]");
         if (select && state) {
@@ -289,6 +352,15 @@
     });
 
     root.addEventListener("submit", function (event) {
+        const boardForm = event.target.closest("[data-asset-board-form]");
+        if (boardForm && state.board_change) {
+            event.preventDefault();
+            const form = new FormData(boardForm);
+            submitMutation(boardForm, {action: "confirm_board_change", snapshot_id: boardForm.dataset.snapshotId,
+                machine_id: panel.dataset.machineId, identity_confirmed: form.get("identity_confirmed") === "on",
+                reason: form.get("reason")});
+            return;
+        }
         const searchForm = event.target.closest("[data-asset-search-form]");
         if (searchForm) {
             event.preventDefault();
