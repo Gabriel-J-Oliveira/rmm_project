@@ -3888,7 +3888,10 @@ def endpoint_detail(request, pk):
             context['terminal_admin_auth_available'] = True
         except (ValueError, PermissionError):
             pass
-    if not context['terminal_admin_auth_available'] and terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
+    if context['terminal_admin_auth_available'] and context['can_view_physical_assets']:
+        from agents.asset_registry import registered_responsible
+        context['terminal_registered_user'] = registered_responsible(endpoint)
+    if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
         try:
             authorize_terminal(request.user, endpoint)
             validate_terminal_mode(request.user, endpoint, 'conpty')

@@ -1699,7 +1699,7 @@ function Install-OrUpdateTrayTask([string]$TrayExePath) {
     </Principal>
   </Principals>
   <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
@@ -1851,12 +1851,14 @@ function Test-TrayTaskXmlValid([string]$TaskXml, [string]$TrayExePath) {
         [xml]$xml = $TaskXml
         $logonTrigger = Select-Xml -Xml $xml -XPath "//*[local-name()='LogonTrigger']" -ErrorAction Stop
         $groupId = Select-Xml -Xml $xml -XPath "//*[local-name()='Principals']/*[local-name()='Principal']/*[local-name()='GroupId']" -ErrorAction Stop
+        $instances = Select-Xml -Xml $xml -XPath "//*[local-name()='Settings']/*[local-name()='MultipleInstancesPolicy']" -ErrorAction Stop
         $commands = Select-Xml -Xml $xml -XPath "//*[local-name()='Actions']/*[local-name()='Exec']/*[local-name()='Command']" -ErrorAction Stop
 
         $hasLogonTrigger = @($logonTrigger).Count -gt 0
         $hasInteractivePrincipal = @($groupId | Where-Object { Test-InteractiveUsersPrincipal ([string]$_.Node.InnerText) }).Count -gt 0
+        $hasParallelSessions = @($instances | Where-Object { [string]$_.Node.InnerText -eq "Parallel" }).Count -gt 0
         $hasTrayAction = @($commands | Where-Object { Test-SameWindowsPath ([string]$_.Node.InnerText) $TrayExePath }).Count -gt 0
-        return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasTrayAction)
+        return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasParallelSessions -and $hasTrayAction)
     }
     catch {
         return $false
@@ -1867,8 +1869,9 @@ function Test-TrayTaskCimValid($Task, [string]$TrayExePath) {
     if (-not $Task) { return $false }
     $hasLogonTrigger = @($Task.Triggers | Where-Object { $_.CimClass.CimClassName -match "LogonTrigger" -or $_.ToString() -match "LogonTrigger" }).Count -gt 0
     $hasInteractivePrincipal = @($Task.Principal | Where-Object { Test-InteractiveUsersPrincipal ([string]$_.GroupId) }).Count -gt 0
+    $hasParallelSessions = $Task.Settings.MultipleInstances -eq "Parallel"
     $hasTrayAction = @($Task.Actions | Where-Object { Test-SameWindowsPath ([string]$_.Execute) $TrayExePath }).Count -gt 0
-    return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasTrayAction)
+    return ($hasLogonTrigger -and $hasInteractivePrincipal -and $hasParallelSessions -and $hasTrayAction)
 }
 
 function Test-TrayTaskValid([string]$TaskName, [string]$TrayExePath) {
