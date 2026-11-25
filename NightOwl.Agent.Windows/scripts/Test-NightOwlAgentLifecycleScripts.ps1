@@ -35,6 +35,9 @@ function Test-LocalizedTrayTaskValidationRegression {
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
   </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>
+  </Settings>
   <Actions Context="InteractiveUsers">
     <Exec>
       <Command>C:\ProgramData\NightOwl\AgentDotNet\NightOwl.Agent.Tray.exe</Command>
@@ -46,11 +49,13 @@ function Test-LocalizedTrayTaskValidationRegression {
     [xml]$xml = $taskXml
     $logonTrigger = Select-Xml -Xml $xml -XPath "//*[local-name()='LogonTrigger']"
     $groupId = Select-Xml -Xml $xml -XPath "//*[local-name()='Principals']/*[local-name()='Principal']/*[local-name()='GroupId']"
+    $multiInstance = Select-Xml -Xml $xml -XPath "//*[local-name()='Settings']/*[local-name()='MultipleInstancesPolicy']"
     $command = Select-Xml -Xml $xml -XPath "//*[local-name()='Actions']/*[local-name()='Exec']/*[local-name()='Command']"
 
     Assert-True ($localizedCimGroupId -eq "INTERATIVO") "Regression setup should model localized CIM GroupId."
     Assert-True (@($logonTrigger).Count -gt 0) "Tray task XML should include LogonTrigger."
     Assert-True (@($groupId | Where-Object { [string]$_.Node.InnerText -eq "S-1-5-4" }).Count -gt 0) "Tray task XML should preserve Interactive Users SID."
+    Assert-True (@($multiInstance | Where-Object { [string]$_.Node.InnerText -eq "Parallel" }).Count -gt 0) "Tray task should allow a separate instance for each interactive logon session."
     Assert-True (@($command | Where-Object { [string]$_.Node.InnerText -eq $trayExePath }).Count -gt 0) "Tray task XML should point to Tray executable."
 }
 
@@ -67,6 +72,11 @@ Test-LocalizedTrayTaskValidationRegression
 
 $installText = Get-Content -Path $install -Raw
 $uninstallText = Get-Content -Path $uninstall -Raw
+Assert-True ($installText -match '<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>') "Installer must allow Tray instances for concurrent interactive sessions."
+Assert-True ($installText -match '\$Task\.Settings\.MultipleInstances\s+-eq\s+"Parallel"') "Tray task health validation must reject IgnoreNew for interactive sessions."
+$trayProgram = Join-Path (Split-Path (Split-Path $ScriptsPath -Parent) -Parent) 'NightOwl.Agent.Tray/Program.cs'
+$trayProgramText = Get-Content -Path $trayProgram -Raw
+Assert-True ($trayProgramText -match 'Local\\\\NightOwl\.Agent\.Tray\.User') "Tray single-instance mutex must be scoped per Windows session."
 
 foreach ($required in @(
     "[switch]`$Install",

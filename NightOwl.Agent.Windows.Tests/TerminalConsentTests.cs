@@ -36,6 +36,28 @@ internal static class TerminalConsentTests
             Check(!TerminalUserIdentity.SameLogon(facts, null));
             Check(!TerminalUserIdentity.SameLogon(facts, facts with { LogonId = facts.LogonId + 1 }));
             Check(!TerminalUserIdentity.SameLogon(facts, facts with { SessionId = facts.SessionId + 1 }));
+            foreach (var mismatch in new[]
+            {
+                facts with { Sid = facts.Sid + "-1002" },
+                facts with { SessionId = facts.SessionId + 1 }
+            })
+            {
+                try { TerminalUserIdentity.ValidateFacts(mismatch, policy); throw new Exception("Foreign Tray identity accepted"); }
+                catch (InvalidOperationException ex) when (ex.Message == "terminal_identity_not_authorized") { }
+            }
+            string requestPath = TerminalConsentRequest.PathFor(paths);
+            var persistedProposal = JsonSerializer.Deserialize<TerminalConsentRequest>(File.ReadAllBytes(requestPath))!;
+            foreach (var mismatchedPolicy in new[]
+            {
+                persistedProposal.Policy with { TerminalAuthorizedUserSid = persistedProposal.Policy.TerminalAuthorizedUserSid + "-1002" },
+                persistedProposal.Policy with { TerminalWindowsSessionId = facts.SessionId + 1 }
+            })
+            {
+                File.WriteAllBytes(requestPath, JsonSerializer.SerializeToUtf8Bytes(persistedProposal with { Policy = mismatchedPolicy }));
+                try { TerminalConsentRequest.ReadTrusted(paths); throw new Exception("Foreign Tray request accepted"); }
+                catch (InvalidOperationException ex) when (ex.Message == "terminal_identity_not_authorized") { }
+            }
+            proposal.Write(paths);
             Check(!policy.TerminalServiceConsentHomologated);
             var directory = new DirectoryInfo(paths.LogsDir);
             var trustedAcl = directory.GetAccessControl();
@@ -50,6 +72,25 @@ internal static class TerminalConsentTests
                 directory.SetAccessControl(restored);
             }
             Check(TerminalUserIdentity.ReadDecision(policy, auth).Decision == "pending");
+            var wrongSid = TerminalConsentDiagnostics.CompareIdentity(policy.TerminalAuthorizedUserSid,
+                policy.TerminalWindowsSessionId, policy.TerminalAuthorizedUserSid + "-1002", facts.SessionId);
+            Check(!wrongSid.SidMatches && wrongSid.SessionMatches);
+            var wrongSession = TerminalConsentDiagnostics.CompareIdentity(policy.TerminalAuthorizedUserSid,
+                policy.TerminalWindowsSessionId, facts.Sid, facts.SessionId + 1);
+            Check(wrongSession.SidMatches && !wrongSession.SessionMatches);
+            Guid diagnosticSession = Guid.NewGuid();
+            string safeDiagnostic = JsonSerializer.Serialize(TerminalConsentDiagnostics.SafeContext(diagnosticSession,
+                policy.TerminalWindowsSessionId, facts.SessionId, false, false, "rejected", "terminal_identity_not_authorized"));
+            Check(safeDiagnostic.Contains(diagnosticSession.ToString("D"), StringComparison.Ordinal));
+            Check(safeDiagnostic.Contains("\"sid_matches\":false", StringComparison.Ordinal));
+            Check(!safeDiagnostic.Contains(facts.Sid, StringComparison.OrdinalIgnoreCase) &&
+                !safeDiagnostic.Contains("token", StringComparison.OrdinalIgnoreCase) &&
+                !safeDiagnostic.Contains("password", StringComparison.OrdinalIgnoreCase) &&
+                !safeDiagnostic.Contains("terminal_output", StringComparison.OrdinalIgnoreCase));
+            string unsafeDiagnostic = JsonSerializer.Serialize(TerminalConsentDiagnostics.SafeContext(diagnosticSession,
+                policy.TerminalWindowsSessionId, facts.SessionId, false, false, "raw terminal text", "Bearer secret-value"));
+            Check(!unsafeDiagnostic.Contains("raw terminal text", StringComparison.Ordinal) &&
+                !unsafeDiagnostic.Contains("secret-value", StringComparison.Ordinal));
             TerminalUserIdentity.DenyCurrentUser(policy, auth);
             Check(TerminalUserIdentity.ReadDecision(policy, auth).Decision == "denied");
             TerminalUserIdentity.RevokeCurrentUser(policy, auth.SessionId);
@@ -69,7 +110,7 @@ internal static class TerminalConsentTests
             Check(!TerminalConsentRequest.ReadTrusted(paths).IsPending);
             (proposal with { ServerOrigin = "file://localhost/not-a-backend" }).Write(paths);
             try { TerminalConsentRequest.ReadTrusted(paths); throw new Exception("Non-HTTP origin accepted"); } catch (InvalidOperationException) { }
-            Console.WriteLine("PASS consent: same-user DPAPI/ACL origin, pending/deny/approve, bound receipt, revoke, tamper and expiry; no UI click automated.");
+            Console.WriteLine("PASS consent: same-user DPAPI/ACL origin, pending/deny/approve, bound receipt, revoke, tamper, expiry, SID/session diagnostics and sanitized metadata; no UI click automated.");
         }
         finally
         {
