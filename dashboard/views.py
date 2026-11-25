@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib import messages
 from django.contrib.auth import authenticate
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, permission_required
+from django.core.exceptions import PermissionDenied
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -23,6 +24,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST, require_GET
 
@@ -1825,42 +1827,18 @@ def alerts_list(request):
     return render(request, 'dashboard/alerts.html', context)
 
 
+@never_cache
+@login_required
+@permission_required(('agents.view_agentmachine', 'agents.view_endpointalert'), raise_exception=True)
+@require_GET
 def noc_view(request):
     now = timezone.now()
-    if request.GET.get('mock') == '1' or not AgentMachine.objects.exists():
-        endpoints = mock_rmm_endpoints()
-        alerts = mock_rmm_alerts(endpoints)
-        open_alerts = [alert for alert in alerts if alert.status == EndpointAlert.STATUS_OPEN]
-        online_count = sum(endpoint.status == AgentMachine.STATUS_ONLINE for endpoint in endpoints)
-        critical_count = sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in open_alerts)
-        health_score = max(0, min(100, round((online_count / max(len(endpoints), 1)) * 100) - (critical_count * 8)))
-        context = {
-            'active_nav': 'noc',
-            'last_updated_at': now,
-            'last_alert_evaluation': now - timedelta(minutes=3),
-            'total_endpoints': len(endpoints),
-            'noc_health_score': health_score,
-            'online_count': online_count,
-            'offline_count': sum(endpoint.status == AgentMachine.STATUS_OFFLINE for endpoint in endpoints),
-            'unknown_count': sum(endpoint.status == AgentMachine.STATUS_UNKNOWN for endpoint in endpoints),
-            'open_critical_count': critical_count,
-            'open_warning_count': sum(alert.severity == EndpointAlert.SEVERITY_WARNING for alert in open_alerts),
-            'open_security_count': sum(alert.severity == EndpointAlert.SEVERITY_SECURITY for alert in open_alerts),
-            'affected_endpoints_count': len({alert.endpoint.id for alert in open_alerts}),
-            'critical_alerts': [alert for alert in open_alerts if alert.severity == EndpointAlert.SEVERITY_CRITICAL][:8],
-            'offline_endpoints': [endpoint for endpoint in endpoints if endpoint.status == AgentMachine.STATUS_OFFLINE][:8],
-            'security_alerts': [alert for alert in open_alerts if alert.severity == EndpointAlert.SEVERITY_SECURITY][:8],
-            'disk_alerts': [alert for alert in open_alerts if alert.alert_type == 'disk_low'][:8],
-            'recent_activity': mock_rmm_events(endpoints, alerts)[:10],
-            'using_mock_rmm_data': True,
-        }
-        return render(request, 'dashboard/noc.html', context)
-
+    endpoints = AgentMachine.objects.filter(is_active=True)
     status_counts = {
         item['status']: item['count']
-        for item in AgentMachine.objects.values('status').annotate(count=Count('id'))
+        for item in endpoints.values('status').order_by().annotate(count=Count('id'))
     }
-    open_alerts = EndpointAlert.objects.filter(status=EndpointAlert.STATUS_OPEN).filter(
+    open_alerts = EndpointAlert.objects.filter(endpoint__in=endpoints, status__in=(EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED)).filter(
         Q(muted_until__isnull=True) | Q(muted_until__lte=now),
     )
     severity_order = Case(
@@ -1874,10 +1852,10 @@ def noc_view(request):
 
     disk_alerts = open_alerts.filter(alert_type='disk_low').select_related('endpoint').alias(
         severity_rank=severity_order,
-    ).order_by('severity_rank', '-last_seen_at')[:8]
-    offline_endpoints = AgentMachine.objects.filter(
+    ).order_by('severity_rank', '-last_seen_at', 'pk')[:8]
+    offline_endpoints = endpoints.filter(
         status=AgentMachine.STATUS_OFFLINE,
-    ).order_by('last_seen_at')[:8]
+    ).order_by('last_seen_at', 'pk')[:8]
     relevant_event_types = [
         'alert.created',
         'alert.expired',
@@ -1893,37 +1871,40 @@ def noc_view(request):
     recent_activity = AuditEvent.objects.filter(
         Q(event_type__in=relevant_event_types)
         | Q(event_type='software.installed', severity=AuditEvent.SEVERITY_SECURITY)
-    ).select_related('endpoint', 'alert').order_by('-created_at')[:10]
-    last_alert_evaluation = EndpointAlert.objects.order_by('-updated_at').values_list('updated_at', flat=True).first()
+    ).filter(endpoint__in=endpoints).select_related('endpoint', 'alert').order_by('-created_at', 'pk')[:10]
+    last_alert_evaluation = EndpointAlert.objects.filter(endpoint__in=endpoints).order_by('-updated_at').values_list('updated_at', flat=True).first()
 
-    total_endpoints = AgentMachine.objects.count()
+    total_endpoints = sum(status_counts.values())
     online_count = status_counts.get(AgentMachine.STATUS_ONLINE, 0)
     critical_count = open_alerts.filter(severity=EndpointAlert.SEVERITY_CRITICAL).count()
-    health_score = max(0, min(100, round((online_count / max(total_endpoints, 1)) * 100) - (critical_count * 8)))
 
     context = {
         'active_nav': 'noc',
         'last_updated_at': now,
         'last_alert_evaluation': last_alert_evaluation,
         'total_endpoints': total_endpoints,
-        'noc_health_score': health_score,
         'online_count': online_count,
         'offline_count': status_counts.get(AgentMachine.STATUS_OFFLINE, 0),
         'unknown_count': status_counts.get(AgentMachine.STATUS_UNKNOWN, 0),
         'open_critical_count': critical_count,
         'open_warning_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_WARNING).count(),
         'open_security_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_SECURITY).count(),
-        'affected_endpoints_count': open_alerts.values('endpoint_id').distinct().count(),
+        'affected_endpoints_count': open_alerts.order_by().values('endpoint_id').distinct().count(),
         'critical_alerts': open_alerts.filter(
             severity=EndpointAlert.SEVERITY_CRITICAL,
-        ).select_related('endpoint').order_by('-last_seen_at')[:8],
+        ).select_related('endpoint').order_by('-last_seen_at', 'pk')[:8],
         'offline_endpoints': offline_endpoints,
         'security_alerts': open_alerts.filter(
-            severity=EndpointAlert.SEVERITY_SECURITY,
-        ).select_related('endpoint').order_by('-last_seen_at')[:8],
+            Q(severity=EndpointAlert.SEVERITY_SECURITY) | Q(alert_type__startswith='security_'),
+        ).select_related('endpoint').order_by('-last_seen_at', 'pk')[:8],
         'disk_alerts': disk_alerts,
         'recent_activity': recent_activity,
     }
+    if request.GET.get('fragment') == '1':
+        from django.template.loader import render_to_string
+
+        return JsonResponse({'html': render_to_string('dashboard/partials/noc_content.html', context, request=request),
+                             'read_at': now.isoformat()})
     return render(request, 'dashboard/noc.html', context)
 
 
@@ -2270,9 +2251,18 @@ def email_outbox_pending(request, pk):
     return redirect('email-outbox-list')
 
 
+def _alert_for_action(request, pk):
+    alert = get_object_or_404(EndpointAlert, pk=pk)
+    if alert.source == 'alert_policy' and not request.user.has_perms(
+        ('agents.view_agentmachine', 'agents.view_endpointalert', 'agents.change_endpointalert')
+    ):
+        raise PermissionDenied
+    return alert
+
+
 @require_POST
 def alert_acknowledge(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+    alert = _alert_for_action(request, pk)
     if alert.status in (EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED):
         was_open = alert.status == EndpointAlert.STATUS_OPEN
         alert.status = EndpointAlert.STATUS_ACKNOWLEDGED
@@ -2290,7 +2280,7 @@ def alert_acknowledge(request, pk):
 
 @require_POST
 def alert_resolve(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+    alert = _alert_for_action(request, pk)
     if alert.status != EndpointAlert.STATUS_RESOLVED:
         alert.status = EndpointAlert.STATUS_RESOLVED
         alert.resolved_at = timezone.now()
@@ -2319,7 +2309,7 @@ def alert_resolve(request, pk):
 
 @require_POST
 def alert_mute(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+    alert = _alert_for_action(request, pk)
     duration = request.POST.get('duration', '').strip()
     reason = request.POST.get('reason', '').strip()
     label, delta = MUTE_DURATIONS.get(duration, (None, None))
@@ -2354,7 +2344,7 @@ def alert_mute(request, pk):
 
 @require_POST
 def alert_comment(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+    alert = _alert_for_action(request, pk)
     message = request.POST.get('message', '').strip()
     if not message:
         messages.warning(request, 'Informe uma observacao antes de salvar.')
