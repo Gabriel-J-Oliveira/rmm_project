@@ -6,7 +6,7 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('agents', '0054_rc49_removal_receipt_digest'),
+        ('agents', '0056_rc49_seed_alert_policies'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
@@ -16,6 +16,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('enabled', models.BooleanField(default=True)),
+                ('machine_id', models.CharField(max_length=255)),
                 ('expires_at', models.DateTimeField()),
                 ('reason', models.CharField(max_length=500)),
                 ('approval_ref', models.CharField(max_length=200)),

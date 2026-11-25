@@ -428,6 +428,7 @@
                 <div data-endpoint-actions-critical></div>
                 {% if terminal_available %}<details class="endpoint-terminal-disclosure" data-terminal-conpty-panel><summary>Terminal PowerShell assistido</summary>{% include 'dashboard/endpoint_terminal.html' %}</details>{% endif %}
                 {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}
+                {% if terminal_admin_grant_machine_id %}{% include 'dashboard/terminal_admin_grant.html' %}{% endif %}
             </div>
             <aside class="panel endpoint-dense-card endpoint-jobs-panel" aria-labelledby="endpoint-jobs-title">
                 <header class="endpoint-jobs-header"><h2 id="endpoint-jobs-title"><i data-lucide="history"></i>&Uacute;ltimos jobs</h2><button type="button" data-refresh-endpoint aria-label="Atualizar jobs"><i data-lucide="refresh-ccw"></i></button></header>
@@ -513,6 +514,7 @@
 {% if terminal_available %}
 <script src="{% static 'js/endpoint_terminal.js' %}"></script>
 {% endif %}
+{% if terminal_admin_grant_machine_id %}<script src="{% static 'js/terminal_admin_grant.js' %}"></script>{% endif %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
 <script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-3"></script>
 <script src="{% static 'js/job_display.js' %}"></script>

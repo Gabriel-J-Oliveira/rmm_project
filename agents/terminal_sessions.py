@@ -73,17 +73,17 @@ def record_rejection(session_id):
 
 def authorize(operator, endpoint, mode=None):
     if (not operator.is_active or not is_nightowl_technical_user(operator) or
+            not operator.has_perm('agents.open_terminalsession') or
             (mode == 'admin_auth' and not has_explicit_admin_permission(operator)) or
-            (mode != 'admin_auth' and (not operator.has_perm('agents.open_terminalsession') or
-             not TerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
-                expires_at__gt=timezone.now()).exists()))):
+            (mode != 'admin_auth' and not TerminalAccessGrant.objects.filter(operator=operator,
+                endpoint=endpoint, enabled=True, expires_at__gt=timezone.now()).exists())):
         raise PermissionError('terminal_forbidden')
     if (not endpoint.is_active or endpoint.has_terminal_lifecycle or not endpoint.machine_id or
             AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
         raise PermissionError('endpoint_unavailable')
 
 
-def has_explicit_admin_permission(operator):
+def has_explicit_admin_permission(operator, codename='open_admin_terminalsession'):
     """Admin terminal permission must be assigned directly or through a group.
 
     Django's has_perm() grants every permission to superusers implicitly. This
@@ -94,7 +94,7 @@ def has_explicit_admin_permission(operator):
     permission = Permission.objects.filter(
         content_type__app_label='agents',
         content_type__model='terminalsession',
-        codename='open_admin_terminalsession',
+        codename=codename,
     ).first()
     if permission is None:
         return False
@@ -137,7 +137,7 @@ def validate_mode(operator, endpoint, mode):
             not getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False) or
             not has_explicit_admin_permission(operator) or
             not AdminTerminalAccessGrant.objects.filter(operator=operator, endpoint=endpoint, enabled=True,
-                expires_at__gt=timezone.now()).exists() or
+                machine_id=endpoint.machine_id, expires_at__gt=timezone.now()).exists() or
             not internal_capability(endpoint, 'remote_terminal_admin_auth:1')):
         raise PermissionError('terminal_execution_not_authorized')
     if mode == 'conpty' and (not getattr(settings, 'NIGHTOWL_TERMINAL_CONPTY_ENABLED', False) or
@@ -330,13 +330,18 @@ class TerminalOperatorView(PrivateTerminalView):
 
 
 class AdminTerminalGrantView(PrivateTerminalView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, endpoint_id):
-        if not request.user.has_perm('agents.manage_admin_terminal_grant'):
+        from .terminal_grants import PILOT_ENDPOINT_ID, PILOT_OPERATOR_USERNAME
+        if (endpoint_id != PILOT_ENDPOINT_ID or not is_nightowl_technical_user(request.user) or
+                not has_explicit_admin_permission(request.user, 'manage_admin_terminal_grant')):
             return Response({'error': 'forbidden'}, status=403)
         endpoint = AgentMachine.objects.filter(pk=endpoint_id).first()
         if not endpoint:
             return Response({'error': 'endpoint_not_found'}, status=404)
-        grant = AdminTerminalAccessGrant.objects.filter(endpoint=endpoint, operator=request.user).first()
+        grant = AdminTerminalAccessGrant.objects.filter(endpoint=endpoint, operator__username__iexact=PILOT_OPERATOR_USERNAME).first()
         now = timezone.now()
         return Response({'endpoint_id': str(endpoint.pk), 'machine_id': endpoint.machine_id,
             'grant_enabled': bool(grant and grant.enabled),
@@ -346,7 +351,7 @@ class AdminTerminalGrantView(PrivateTerminalView):
             'capability_ready': internal_capability(endpoint, 'remote_terminal_admin_auth:1')})
 
     def post(self, request, endpoint_id):
-        if not request.user.has_perm('agents.manage_admin_terminal_grant'):
+        if not request.is_secure() and not loopback_allowed(request.META.get('REMOTE_ADDR', '')):
             return Response({'error': 'forbidden'}, status=403)
         from .admin_terminal_grants import change_admin_terminal_grant
         try:
@@ -361,6 +366,8 @@ class AdminTerminalGrantView(PrivateTerminalView):
             return Response({'error': 'forbidden'}, status=403)
         except (ValueError, ValidationError):
             return Response({'error': 'invalid_or_unavailable'}, status=400)
+        except OperationalError:
+            return Response({'error': 'grant_busy'}, status=409)
 
 
 class TerminalCancelView(TerminalOperatorView):
