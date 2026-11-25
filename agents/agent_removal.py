@@ -133,21 +133,31 @@ def finalize_verified_removal(endpoint, job, result_id, digest):
     audit.binary_removed = True
     audit.persistent_data_preserved = False
     audit.receipt_digest = digest
+    observed_user, observed_at, source = _last_observed_user(endpoint)
+    if observed_user and (observed_at or not audit.observed_user):
+        audit.observed_user = observed_user
+        audit.observed_user_at = observed_at
+        audit.observed_user_source = source
     audit.save(update_fields=['outcome', 'finished_at', 'result_id', 'binary_removed', 'persistent_data_preserved',
-                              'receipt_digest'])
+                              'receipt_digest', 'observed_user', 'observed_user_at', 'observed_user_source'])
     AutomationOccurrence.objects.filter(endpoint=endpoint).delete()
     AgentRolloutTarget.objects.filter(endpoint=endpoint).delete()
     endpoint.delete()
     return True
 
 
-def record_purge_request(endpoint, uninstall_request, job):
-    link = AssetAgentLink.objects.filter(endpoint=endpoint, ended_at__isnull=True).first()
-    user_observation = InventorySnapshot.objects.filter(machine=endpoint).exclude(
+def _last_observed_user(endpoint):
+    observation = InventorySnapshot.objects.filter(machine=endpoint).exclude(
         logged_user='',
     ).order_by('-received_at', '-pk').values('logged_user', 'collected_at').first()
-    observed_user = (user_observation or {}).get('logged_user') or endpoint.last_logged_user or None
-    observed_at = (user_observation or {}).get('collected_at')
+    if observation:
+        return observation['logged_user'], observation['collected_at'], 'inventory_snapshot'
+    return (endpoint.last_logged_user, None, 'agent_machine') if endpoint.last_logged_user else (None, None, '')
+
+
+def record_purge_request(endpoint, uninstall_request, job):
+    link = AssetAgentLink.objects.filter(endpoint=endpoint, ended_at__isnull=True).first()
+    observed_user, observed_at, source = _last_observed_user(endpoint)
     return AgentRemovalAudit.objects.create(
         request_id=uninstall_request.pk, job_id=job.pk, correlation_id=job.correlation_id,
         endpoint_id=endpoint.pk, machine_id=endpoint.machine_id, hostname=endpoint.hostname,
@@ -156,7 +166,7 @@ def record_purge_request(endpoint, uninstall_request, job):
         authorized_by=uninstall_request.authorized_by, requested_at=uninstall_request.requested_at,
         auth_identity_stamp=_auth_identity_stamp(endpoint) if job.payload.get('verified_removal') is True else '',
         observed_user=observed_user, observed_user_at=observed_at,
-        observed_user_source=('inventory_snapshot' if user_observation else 'agent_machine' if observed_user else ''),
+        observed_user_source=source,
     )
 
 

@@ -1,9 +1,11 @@
 from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError, transaction
-from django.test import Client, TestCase, override_settings
+from django.db import IntegrityError, close_old_connections, connections, transaction
+from django.test import Client, TestCase, TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.urls import reverse
 from django.utils import timezone
 
@@ -72,6 +74,21 @@ class VerifiedRemovalTests(TestCase):
         self.client.force_login(get_user_model().objects.create_user('other-operator', is_staff=True))
         self.assertEqual(self.client.post(self.request_url, self.confirmation).status_code, 403)
         self.assertFalse(AgentJob.objects.exists())
+
+    def test_old_agent_and_uninstall_only_operator_keep_the_existing_action(self):
+        from django.contrib.auth.models import Permission
+        operator = get_user_model().objects.create_user('uninstall-only', password='synthetic-password', is_staff=True)
+        operator.user_permissions.add(Permission.objects.get(codename='uninstall_agent'))
+        self.client.force_login(operator)
+        detail = self.client.get(f'/api/endpoints/{self.endpoint.pk}/')
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn('uninstall', detail.json()['agent_removal']['modes'])
+        self.assertNotIn('remove', detail.json()['agent_removal']['modes'])
+        response = self.client.post(self.request_url, {
+            'mode': 'uninstall', 'username': operator.username, 'password': 'synthetic-password',
+        })
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.endpoint.jobs.get().payload['mode'], 'uninstall')
 
     def test_partial_attempt_and_invalid_receipt_cannot_delete_retry_can_finish(self):
         job, token = self.enqueue_and_pull()
@@ -151,6 +168,9 @@ class VerifiedRemovalTests(TestCase):
         self.assertEqual(self.receipt(job, token).json()['error'], 'removal_dependencies_changed')
         campaign.state = 'completed'
         campaign.save(update_fields=['state'])
+        observed_at = self.now + timedelta(seconds=5)
+        InventorySnapshot.objects.create(machine=self.endpoint, hostname=self.endpoint.hostname,
+                                         collected_at=observed_at, logged_user='DOMAIN\\latest')
         self.assertTrue(self.receipt(job, token).json()['removed'])
         link.refresh_from_db()
         self.assertIsNone(link.endpoint_id)
@@ -162,9 +182,36 @@ class VerifiedRemovalTests(TestCase):
             campaign.targets.filter(endpoint=self.other).delete()
         self.assertFalse(InventorySnapshot.objects.filter(machine_id=self.endpoint.pk).exists())
         audit = AgentRemovalAudit.objects.get(job_id=job.pk)
-        self.assertEqual(audit.observed_user, 'DOMAIN\\observed')
-        self.assertEqual(audit.observed_user_at, self.now)
+        self.assertEqual(audit.observed_user, 'DOMAIN\\latest')
+        self.assertEqual(audit.observed_user_at, observed_at)
         self.assertEqual(audit.asset_id, asset.pk)
         self.assertEqual(audit.authorized_by, self.operator.username)
         self.assertEqual(self.client.get(reverse('api-endpoint-removal-status', args=[self.endpoint.pk])).json()['outcome'],
                          'removed')
+
+
+class ConcurrentVerifiedRemovalTests(TransactionTestCase):
+    setUp = VerifiedRemovalTests.setUp
+    heartbeat = VerifiedRemovalTests.heartbeat
+    enqueue_and_pull = VerifiedRemovalTests.enqueue_and_pull
+    receipt = VerifiedRemovalTests.receipt
+
+    @skipUnlessDBFeature('has_select_for_update')
+    def test_concurrent_receipts_delete_once_and_return_one_replay(self):
+        job, token = self.enqueue_and_pull()
+        barrier = Barrier(2)
+
+        def submit(_):
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                return self.receipt(job, token).json()
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(submit, range(2)))
+        self.assertTrue(all(result.get('removed') for result in results))
+        self.assertEqual(sum(bool(result.get('duplicate')) for result in results), 1)
+        self.assertFalse(AgentMachine.objects.filter(pk=self.endpoint.pk).exists())
+        self.assertEqual(AgentRemovalAudit.objects.filter(job_id=job.pk, outcome='removed').count(), 1)

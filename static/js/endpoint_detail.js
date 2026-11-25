@@ -1744,16 +1744,25 @@
     function openRemoveAgentModal() {
         const endpoint = endpointDetail.hostname || root.dataset.endpoint;
         const machineId = endpointDetail.agent.machineId;
+        const modes = endpointDetail.agentRemoval.modes || [];
+        if (!modes.length) return;
+        const labels = {
+            remove: "Limpeza verificada e exclusão do endpoint",
+            purge: "Limpeza local legada, mantendo o endpoint no histórico",
+            uninstall: "Desinstalação local, preservando dados e histórico"
+        };
         window.NightOwlInstallBatch.modal({
             title: "Remover agente",
-            description: endpoint + " será excluído após a confirmação de limpeza pelo desinstalador. O patrimônio e seu histórico serão preservados.",
+            description: endpoint + " · " + (modes.length === 1 ? labels[modes[0]] :
+                "Selecione a operação. Apenas a limpeza verificada remove o cadastro do endpoint."),
             submitLabel: "Autorizar remoção",
             usernameLabel: "Usuário administrativo NightOwl",
             usernamePlaceholder: "",
             confirmationText: endpoint,
+            operationChoices: modes.map(value => ({value, label: labels[value]})),
             progressLabel: "Autorizando a remoção...",
-            perform: (credentials, confirmation) => createUninstallRequest(credentials.username, credentials.password, {
-                mode: "remove", machineId: machineId, hostnameConfirmation: confirmation
+            perform: (credentials, confirmation, mode) => createUninstallRequest(credentials.username, credentials.password, {
+                mode, machineId: machineId, hostnameConfirmation: confirmation
             }),
             validate: result => result.status === "ok" && Boolean(result.uninstall_request?.id),
             resultValue: result => result,

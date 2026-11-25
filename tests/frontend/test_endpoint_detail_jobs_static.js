@@ -62,7 +62,8 @@ assert(!source.includes('actionButton("purge_agent"') && !source.includes('actio
 assert(source.includes("window.NightOwlInstallBatch.modal({") && template.includes('id="install-credential-host"'), "verified removal must reuse the installation credential dialog");
 assert(source.includes('body.set("mode", options.mode);'), "lifecycle modal must send the selected mode to the existing backend endpoint");
 assert(source.includes('body.set("hostname_confirmation", options.hostnameConfirmation);'), "purge must require hostname confirmation");
-assert(source.includes('mode: "remove", machineId: machineId, hostnameConfirmation: confirmation'), "removal must include target identity and hostname confirmation");
+assert(source.includes('mode, machineId: machineId, hostnameConfirmation: confirmation'), "removal must include target identity and hostname confirmation");
+assert(source.includes('operationChoices: modes.map') && source.includes('Limpeza local legada'), "old agents keep compatible actions inside the same dialog");
 assert(source.includes('return lifecycle === "uninstalled" || lifecycle === "purged";'), "uninstalled and purged endpoints must hide lifecycle actions");
 const lifecycleGuardStart = source.indexOf("function isEndpointUninstalled(detail)");
 const lifecycleGuardEnd = source.indexOf("function pendingUninstallRequest(detail)");

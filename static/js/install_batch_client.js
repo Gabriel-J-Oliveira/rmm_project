@@ -42,7 +42,7 @@
             window.clearTimeout(timer);
         }
     }
-    function modal({ title, description, submitLabel, perform, accepted, confirmationText,
+    function modal({ title, description, submitLabel, perform, accepted, confirmationText, operationChoices = [],
         usernameLabel = 'Usuário administrativo', usernamePlaceholder = 'DOMINIO\\usuario',
         progressLabel = 'Iniciando lote e validando os computadores...', validate = result => UUID.test(result.batch_id),
         resultValue = result => result.batch_id }) {
@@ -74,6 +74,16 @@
         const submit = el('button', 'install-button install-primary', submitLabel); submit.type = 'submit';
         actions.append(cancel, submit);
         form.append(userLabel, passwordLabel);
+        let operation = null;
+        if (operationChoices.length > 1) {
+            const label = el('label', '', 'Operação');
+            operation = el('select');
+            for (const item of operationChoices) {
+                const option = el('option', '', item.label);
+                option.value = item.value; operation.append(option);
+            }
+            label.append(operation); form.append(label);
+        }
         let confirmation = null;
         if (confirmationText) {
             const label = el('label', '', 'Digite ' + confirmationText + ' para confirmar');
@@ -93,7 +103,7 @@
         function keydown(event) {
             if (event.key === 'Escape' && !sending) { event.preventDefault(); event.stopImmediatePropagation(); close(); }
             if (event.key === 'Tab') {
-                const focusable = [...dialog.querySelectorAll('input,button')].filter(n => !n.disabled);
+                const focusable = [...dialog.querySelectorAll('input,select,button')].filter(n => !n.disabled);
                 const first = focusable[0], last = focusable[focusable.length - 1];
                 if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
                 else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -109,7 +119,7 @@
             let credentials = { username: user.value.trim(), password: password.value };
             password.value = ''; user.value = ''; user.disabled = password.disabled = true;
             try {
-                const pending = perform(credentials, confirmation?.value);
+                const pending = perform(credentials, confirmation?.value, operation?.value || operationChoices[0]?.value);
                 credentials = null;
                 const result = await pending;
                 if (!validate(result)) throw new Error();

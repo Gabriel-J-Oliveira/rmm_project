@@ -3690,7 +3690,18 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     latest_trust_bundle = _latest_published_trust_bundle() if can_view_technical else None
     uninstall_request = endpoint.uninstall_requests.order_by('-created_at').first()
     from agents.agent_removal import removal_block_reason
-    removal_reason = (removal_block_reason(endpoint) if request and can_purge_agent(request.user) else 'forbidden')
+    removal_modes = []
+    removal_reason = 'forbidden'
+    if request and (can_purge_agent(request.user) or can_uninstall_agent(request.user)
+                    or is_nightowl_technical_user(request.user)):
+        removal_reason = removal_block_reason(endpoint)
+        if not removal_reason and can_purge_agent(request.user):
+            removal_modes.append('remove')
+        # Keep administrative reauthentication and legacy capabilities available
+        # through this same panel until the corresponding agent is upgraded.
+        if removal_reason == 'verified_removal_unsupported':
+            removal_modes.append('purge')
+        removal_modes.append('uninstall')
 
     return {
         'data_source': 'real',
@@ -3732,7 +3743,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
         'live_monitoring_allowed': bool(can_view_technical and user and user.has_perm('agents.view_agentmachine') and user.has_perm('agents.view_endpointperformancesample')),
         'uninstall_request': serialize_uninstall_request(uninstall_request),
-        'agent_removal': {'allowed': not removal_reason, 'reason': removal_reason},
+        'agent_removal': {'allowed': bool(removal_modes), 'reason': removal_reason, 'modes': removal_modes},
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
         'agent_health': agent_health,
