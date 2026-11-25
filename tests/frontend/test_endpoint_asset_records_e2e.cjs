@@ -30,7 +30,7 @@ const {chromium} = require('playwright');
         await page.locator('[data-asset-create-form] input[name="identity_confirmed"]').check();
         await page.getByRole('button', {name: 'Criar e associar patrimônio'}).click();
         await page.getByRole('heading', {name: 'Registro patrimonial'}).waitFor();
-        await page.getByText(/PROV-[0-9A-F]{32}/).waitFor();
+        await assetContent.getByText(/PROV-[0-9A-F]{32}/).first().waitFor();
         await assetContent.getByText(endpointName).first().waitFor();
 
         const form = page.locator('[data-asset-record-form]');
