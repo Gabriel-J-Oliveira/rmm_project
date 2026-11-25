@@ -4211,6 +4211,9 @@ def endpoint_uninstall_request(request, pk):
     )
     uninstall_request.agent_job = job
     uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+    if mode == AgentUninstallRequest.MODE_PURGE:
+        from agents.agent_removal import record_purge_request
+        record_purge_request(endpoint, uninstall_request, job)
     create_audit_event(
         event_type='agent.purge.requested' if mode == AgentUninstallRequest.MODE_PURGE else 'agent.uninstall.requested',
         title='Purge de agente solicitado' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao de agente solicitada',

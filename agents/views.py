@@ -2142,6 +2142,9 @@ class AgentJobsResultView(APIView):
                     mode = str(job.result.get('mode') or '')
                 uninstall_request = getattr(job, 'uninstall_request', None)
                 if uninstall_request:
+                    if uninstall_request.mode == AgentUninstallRequest.MODE_PURGE:
+                        from .agent_removal import record_purge_result
+                        record_purge_result(job, result_id)
                     if job.status == AgentJob.STATUS_COMPLETED:
                         uninstall_request.mark_completed(AgentUninstallRequest.STATUS_COMPLETED)
                     else:
