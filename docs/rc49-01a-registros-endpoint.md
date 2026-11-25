@@ -112,3 +112,12 @@ Entregar branch com código, migrações geradas/testadas, testes passando, comm
 - NOC, software deployment, políticas, AD em grupos, impressoras, terminal, serviços Windows e Stable: frentes independentes documentadas no roadmap.
 
 **Próxima negociação:** após a demonstração funcional de RC49-01A, decidir a nomenclatura por empresa e os próximos recursos de Registros; não presumir os formatos oficiais.
+
+## Atualização aprovada em 25/11/2026 — RC49-01B
+
+A próxima fase passa a ser **identidade patrimonial automática e ciclo de vida dos endpoints**. A decisão vigente está em [RC49-01B — Identidade e ciclo de vida](rc49-01b-identidade-ciclo-de-vida.md) e prevalece sobre as restrições históricas de cadastro exclusivamente manual e remoção fora do escopo da 01A.
+
+- UUID SMBIOS como evidência principal, serial complementar e UUID patrimonial interno imutável; cadastro/vínculo automático de hardware físico confiável, conflitos tratados por exceção, botão Validar vínculo com coleta real, sem edição livre de identificadores.
+- Unificar uninstall e purge em Remover agente, com confirmação administrativa, limpeza confirmada, exclusão definitiva dos dados operacionais e preservação dos registros patrimoniais. Offline/falha permanece pendente até confirmação. Auditoria independente do endpoint registra administrador, horários, identidades, resultado e último usuário observado do computador removido, com origem/data quando disponíveis; sem tela nova.
+- Registros dentro de Endpoints; NOC continua no roadmap; revisão de Alertas, Atividades, Tarefas e Eventos fica para depois. Códigos oficiais por empresa, AD e integração de chamados postergados.
+- Codex 2 implementa em branch/PR própria, sem deploy, coordenando mudanças de agente/instalador com Codex 1. Critérios e salvaguardas detalhados no documento 01B.
