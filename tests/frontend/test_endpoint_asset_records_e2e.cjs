@@ -23,7 +23,7 @@ const {chromium} = require('playwright');
         await page.goto(`${server}/endpoints/${endpointId}/`, {waitUntil: 'domcontentloaded'});
         await page.getByRole('button', {name: /Registros/}).click();
         await page.getByRole('heading', {name: 'Sem associação patrimonial'}).waitFor();
-        await page.getByText('BROWSER-ASSET-01').waitFor();
+        await page.locator('[data-asset-records-content]').getByText('BROWSER-ASSET-01').first().waitFor();
         await page.getByText('Example Devices').waitFor();
 
         await page.locator('[data-asset-create-form] input[name="identity_confirmed"]').check();
