@@ -4,6 +4,12 @@ using System.Diagnostics;
 
 try
 {
+    TestVerifiedPayloadExcludesConfigurationAndOtherExecutables();
+    if (args.Contains("--verified-only", StringComparer.Ordinal))
+    {
+        Console.WriteLine("NightOwl verified-removal staging tests passed.");
+        return;
+    }
     TestIsolatedUninstallerRunnerRemovesBinariesAndPreservesPersistentData();
     TestBinaryRemoveRetriesAfterUnauthorizedAccess();
     TestBinaryRemoveRetriesAfterIOException();
@@ -31,6 +37,32 @@ catch (Exception ex)
 {
     Console.Error.WriteLine(ex);
     Environment.Exit(1);
+}
+
+static void TestVerifiedPayloadExcludesConfigurationAndOtherExecutables()
+{
+    using TempTree tree = TempTree.Create();
+    string source = tree.CreateDirectory("installed");
+    string runner = Path.Combine(tree.CreateDirectory("Updates"), "uninstall-synthetic");
+    string uninstaller = UninstallerRunnerPayload.UninstallerExecutableName;
+    File.WriteAllText(Path.Combine(source, uninstaller), "synthetic executable");
+    File.WriteAllText(Path.Combine(source, "NightOwl.Agent.Shared.dll"), "synthetic dependency");
+    File.WriteAllText(Path.Combine(source, "NightOwl.Agent.Uninstaller.deps.json"), "{}");
+    File.WriteAllText(Path.Combine(source, "agent.config.json"), "{\"agentToken\":\"synthetic\"}");
+    File.WriteAllText(Path.Combine(source, "NightOwl.Agent.Tray.exe"), "synthetic unrelated executable");
+    File.WriteAllText(Path.Combine(source, "NightOwl.Agent.Tray.dll"), "synthetic unrelated assembly");
+    Directory.CreateDirectory(Path.Combine(source, "Logs"));
+    File.WriteAllText(Path.Combine(source, "Logs", "agent.jsonl"), "synthetic log");
+    var result = UninstallerRunnerPayload.Prepare(source, runner, verifiedRemoval: true);
+    Require(result.FilesCopied == 3, "Only the uninstaller and dependencies should be staged.");
+    Require(!File.Exists(Path.Combine(runner, "agent.config.json")), "Agent credential leaked into the runner.");
+    Require(!File.Exists(Path.Combine(runner, "NightOwl.Agent.Tray.exe")), "Tray must not be copied into the runner.");
+    Require(!File.Exists(Path.Combine(runner, "NightOwl.Agent.Tray.dll")), "Tray assembly must not be copied into the runner.");
+    Require(!Directory.Exists(Path.Combine(runner, "Logs")), "Logs must not be copied into the runner.");
+    bool rejected = false;
+    try { UninstallerRunnerPayload.Prepare(source, runner, verifiedRemoval: true); }
+    catch (InvalidOperationException) { rejected = true; }
+    Require(rejected, "A retry must not overwrite an already staged removal handoff.");
 }
 
 static void TestIsolatedUninstallerRunnerRemovesBinariesAndPreservesPersistentData()

@@ -1286,6 +1286,8 @@ class AgentAdministrativeUninstallTests(TestCase):
         self.assertFalse(AgentUninstallRequest.objects.filter(endpoint=self.machine, mode=AgentUninstallRequest.MODE_PURGE).exists())
 
     def test_panel_purge_creates_safe_payload_and_preserves_canonical_relation(self):
+        from .models import AgentRemovalAudit
+
         self.portal.force_login(self.purge_operator)
         response = self.portal.post(
             reverse('api-endpoint-uninstall', kwargs={'pk': str(self.machine.id)}),
@@ -1306,8 +1308,16 @@ class AgentAdministrativeUninstallTests(TestCase):
         self.assertNotIn('uninstall_request_id', json.dumps(job.payload))
         self.assertEqual(AgentUninstallRequest.objects.get(agent_job=job).id, uninstall_request.id)
         self.assertFalse(AuditEvent.objects.filter(metadata__icontains='CorrectHorseBatteryStaple2!').exists())
+        audit = AgentRemovalAudit.objects.get(request_id=uninstall_request.pk)
+        self.assertEqual(audit.authorized_by, 'purge-admin')
+        self.assertEqual(audit.endpoint_id, self.machine.pk)
+        self.assertEqual(audit.machine_id, self.machine.machine_id)
+        self.assertEqual(audit.outcome, 'pending')
 
     def test_purge_completed_marks_lifecycle_without_deleting_endpoint_history(self):
+        from .agent_removal import record_purge_request
+        from .models import AgentRemovalAudit
+
         uninstall_request = AgentUninstallRequest.objects.create(
             endpoint=self.machine,
             mode=AgentUninstallRequest.MODE_PURGE,
@@ -1325,6 +1335,7 @@ class AgentAdministrativeUninstallTests(TestCase):
         )
         uninstall_request.agent_job = job
         uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+        audit = record_purge_request(self.machine, uninstall_request, job)
         result_id = str(uuid.uuid4())
 
         response = self.agent.post(
@@ -1355,6 +1366,13 @@ class AgentAdministrativeUninstallTests(TestCase):
         self.assertEqual(self.machine.last_installed_agent_version, '0.1.1.0-rc24')
         self.assertEqual(uninstall_request.status, AgentUninstallRequest.STATUS_COMPLETED)
         self.assertTrue(AgentJobResultReceipt.objects.filter(result_id=result_id, job=job).exists())
+        audit.refresh_from_db()
+        self.assertEqual(audit.outcome, 'cleanup_unverified')
+        self.assertTrue(audit.binary_removed)
+        self.assertFalse(audit.persistent_data_preserved)
+        self.assertEqual(audit.result_id, result_id)
+        self.machine.delete()
+        self.assertTrue(AgentRemovalAudit.objects.filter(request_id=audit.pk, outcome='cleanup_unverified').exists())
 
 
 class AgentOperationalJobProgressTests(TestCase):

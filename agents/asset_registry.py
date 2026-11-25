@@ -3,8 +3,8 @@
 from django.db import transaction
 from django.utils import timezone
 
-from .identity import meaningful_serial, normalized_machine_id
-from .models import AgentMachine, AssetAgentLink, AssetRecord, AuditEvent, InventorySnapshot, PhysicalAsset
+from .identity import lock_identity_registry, meaningful_serial, normalized_machine_id
+from .models import AgentMachine, AssetAgentLink, AssetHardwareObservation, AssetRecord, AuditEvent, InventorySnapshot, PhysicalAsset
 
 
 class AssetRegistryError(ValueError):
@@ -253,9 +253,15 @@ def create_asset_for_endpoint(endpoint_id, expected_machine_id, user, *, identit
     if not identity_confirmed:
         raise AssetRegistryError('explicit_confirmation_required', status=400)
     with transaction.atomic():
+        lock_identity_registry()
         endpoint = _lock_endpoint(endpoint_id, expected_machine_id)
         evidence = inventory_evidence(endpoint)
         warnings, reason = _identity_resolution_reason(endpoint, reason)
+        observation = AssetHardwareObservation.objects.filter(endpoint=endpoint).first()
+        if observation and observation.smbios_uuid and PhysicalAsset.objects.filter(
+            smbios_uuid=observation.smbios_uuid,
+        ).exists():
+            raise AssetRegistryError('asset_identity_conflict')
         if AssetAgentLink.objects.select_for_update().filter(endpoint=endpoint, ended_at__isnull=True).exists():
             raise AssetRegistryError('endpoint_already_linked')
         if evidence['serial_conflict']:
@@ -296,6 +302,7 @@ def link_asset_to_endpoint(endpoint_id, expected_machine_id, asset_id, user, *, 
         raise AssetRegistryError('explicit_confirmation_required', status=400)
     reason = str(reason or '').strip()
     with transaction.atomic():
+        lock_identity_registry()
         endpoint = _lock_endpoint(endpoint_id, expected_machine_id)
         try:
             asset = PhysicalAsset.objects.select_for_update().get(pk=asset_id, status=PhysicalAsset.STATUS_ACTIVE)
@@ -311,6 +318,11 @@ def link_asset_to_endpoint(endpoint_id, expected_machine_id, asset_id, user, *, 
                 'matching_endpoint_observations': observed_duplicates,
             })
         discrepancies = []
+        observed_uuid = AssetHardwareObservation.objects.filter(endpoint=endpoint).values_list('smbios_uuid', flat=True).first()
+        if observed_uuid and PhysicalAsset.objects.filter(smbios_uuid=observed_uuid).exclude(pk=asset.pk).exists():
+            raise AssetRegistryError('asset_identity_conflict')
+        if asset.smbios_uuid and observed_uuid != asset.smbios_uuid:
+            discrepancies.append('smbios_uuid_unconfirmed')
         if evidence['serial_conflict']:
             discrepancies.append('inventory_serial_conflict')
         if evidence['serial_normalized'] and asset.serial_normalized and evidence['serial_normalized'] != asset.serial_normalized:

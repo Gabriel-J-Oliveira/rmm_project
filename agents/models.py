@@ -1126,6 +1126,7 @@ class PhysicalAsset(models.Model):
     identity_status = models.CharField(max_length=16, choices=IDENTITY_CHOICES, default=IDENTITY_PROVISIONAL)
     serial_number = models.CharField(max_length=255, blank=True)
     serial_normalized = models.CharField(max_length=255, null=True, blank=True)
+    smbios_uuid = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     manufacturer = models.CharField(max_length=255, blank=True)
     model = models.CharField(max_length=255, blank=True)
     created_by = models.ForeignKey(
@@ -1165,9 +1166,11 @@ class AssetAgentLink(models.Model):
 
     ORIGIN_OPERATOR = 'operator'
     ORIGIN_SERIAL_SUGGESTION = 'serial_suggestion'
+    ORIGIN_SMBIOS = 'smbios'
     ORIGIN_CHOICES = [
         (ORIGIN_OPERATOR, 'Confirmação do operador'),
         (ORIGIN_SERIAL_SUGGESTION, 'Sugestão por serial confirmada'),
+        (ORIGIN_SMBIOS, 'Identidade SMBIOS'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -1201,6 +1204,16 @@ class AssetAgentLink(models.Model):
             ),
         ]
         indexes = [models.Index(fields=['asset', 'ended_at', '-linked_at'])]
+
+
+class AssetHardwareObservation(models.Model):
+    endpoint = models.OneToOneField(AgentMachine, primary_key=True, on_delete=models.CASCADE,
+                                    related_name='asset_hardware_observation')
+    smbios_uuid = models.UUIDField(null=True, db_index=True)
+    evidence = models.JSONField(default=dict)
+    snapshot_id = models.UUIDField()
+    observed_at = models.DateTimeField()
+    state = models.CharField(max_length=40)
 
 
 class AssetRecord(models.Model):
@@ -2010,6 +2023,32 @@ class AutomationSchedulerHealth(models.Model):
     recovered_at = models.DateTimeField(null=True, blank=True)
     recovered_by = models.CharField(max_length=150, blank=True)
     recovery_reason = models.CharField(max_length=500, blank=True)
+
+
+class AgentRemovalAudit(models.Model):
+    """Removal evidence deliberately independent from endpoint and job FKs."""
+
+    request_id = models.UUIDField(primary_key=True)
+    job_id = models.UUIDField(unique=True)
+    endpoint_id = models.UUIDField(db_index=True)
+    asset_id = models.UUIDField(null=True)
+    correlation_id = models.CharField(max_length=100, blank=True)
+    machine_id = models.CharField(max_length=255, blank=True)
+    hostname = models.CharField(max_length=255)
+    requested_by = models.CharField(max_length=150)
+    authorized_by = models.CharField(max_length=150)
+    requested_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True)
+    observed_user = models.CharField(max_length=255, null=True)
+    observed_user_at = models.DateTimeField(null=True)
+    observed_user_source = models.CharField(max_length=30, blank=True)
+    outcome = models.CharField(max_length=32, default='pending')
+    result_id = models.CharField(max_length=80, blank=True)
+    agent_error_code = models.CharField(max_length=80, blank=True)
+    binary_removed = models.BooleanField(null=True)
+    persistent_data_preserved = models.BooleanField(null=True)
+    receipt_digest = models.CharField(max_length=64, blank=True)
+    auth_identity_stamp = models.CharField(max_length=64, blank=True, editable=False)
 
 
 class AgentUninstallRequest(models.Model):

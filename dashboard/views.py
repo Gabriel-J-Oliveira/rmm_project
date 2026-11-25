@@ -3689,6 +3689,19 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     ).order_by('-created_at').first()
     latest_trust_bundle = _latest_published_trust_bundle() if can_view_technical else None
     uninstall_request = endpoint.uninstall_requests.order_by('-created_at').first()
+    from agents.agent_removal import removal_block_reason
+    removal_modes = []
+    removal_reason = 'forbidden'
+    if request and (can_purge_agent(request.user) or can_uninstall_agent(request.user)
+                    or is_nightowl_technical_user(request.user)):
+        removal_reason = removal_block_reason(endpoint)
+        if not removal_reason and can_purge_agent(request.user):
+            removal_modes.append('remove')
+        # Keep administrative reauthentication and legacy capabilities available
+        # through this same panel until the corresponding agent is upgraded.
+        if removal_reason == 'verified_removal_unsupported':
+            removal_modes.append('purge')
+        removal_modes.append('uninstall')
 
     return {
         'data_source': 'real',
@@ -3730,6 +3743,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
         'live_monitoring_allowed': bool(can_view_technical and user and user.has_perm('agents.view_agentmachine') and user.has_perm('agents.view_endpointperformancesample')),
         'uninstall_request': serialize_uninstall_request(uninstall_request),
+        'agent_removal': {'allowed': bool(removal_modes), 'reason': removal_reason, 'modes': removal_modes},
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
         'agent_health': agent_health,
@@ -4097,6 +4111,9 @@ def _active_lifecycle_job(endpoint):
             AgentJob.TYPE_UNINSTALL_AGENT,
         ],
         status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+    ).exclude(
+        job_type=AgentJob.TYPE_UNINSTALL_AGENT, payload__verified_removal=True,
+        status=AgentJob.STATUS_QUEUED, expires_at__lte=timezone.now(),
     ).order_by('-created_at').first()
 
 
@@ -4108,15 +4125,27 @@ def _active_uninstall_request(endpoint):
             AgentUninstallRequest.STATUS_DISPATCHED,
             AgentUninstallRequest.STATUS_RUNNING,
         ],
+    ).exclude(
+        agent_job__payload__verified_removal=True,
+        agent_job__status__in=('failed', 'timed_out', 'expired', 'cancelled'),
+    ).exclude(
+        agent_job__payload__verified_removal=True, agent_job__status='queued', expires_at__lte=timezone.now(),
     ).order_by('-created_at').first()
 
 
 def serialize_uninstall_request(uninstall_request):
     if uninstall_request is None:
         return None
+    state = uninstall_request.status
+    job = uninstall_request.agent_job if uninstall_request.agent_job_id else None
+    if job and job.payload.get('verified_removal') is True:
+        if job.status in ('failed', 'timed_out', 'expired', 'cancelled'):
+            state = job.status
+        elif job.status == 'queued' and uninstall_request.expires_at <= timezone.now():
+            state = 'expired'
     return {
         'id': str(uninstall_request.id),
-        'status': uninstall_request.status,
+        'status': state,
         'mode': uninstall_request.mode,
         'source': uninstall_request.source,
         'requested_by': uninstall_request.requested_by,
@@ -4140,6 +4169,13 @@ def endpoint_uninstall_request(request, pk):
         raise Http404
 
     mode = (request.POST.get('mode') or AgentUninstallRequest.MODE_UNINSTALL).strip().lower()
+    verified_removal = mode == 'remove'
+    if verified_removal:
+        if not can_purge_agent(request.user):
+            return JsonResponse({'error': 'forbidden'}, status=403)
+        if str(endpoint.pk) != str(pk):
+            return JsonResponse({'error': 'endpoint_uuid_required'}, status=400)
+        mode = AgentUninstallRequest.MODE_PURGE
     if mode not in {AgentUninstallRequest.MODE_UNINSTALL, AgentUninstallRequest.MODE_PURGE}:
         return JsonResponse({'error': 'invalid_uninstall_mode', 'detail': 'Modo de lifecycle invalido.'}, status=400)
 
@@ -4171,7 +4207,17 @@ def endpoint_uninstall_request(request, pk):
             return JsonResponse({'error': 'purge_confirmation_failed', 'detail': 'Digite exatamente o hostname do endpoint para confirmar o purge.'}, status=400)
 
     from agents.lifecycle_jobs import lock_lifecycle_endpoint
+    if verified_removal:
+        from agents.identity import lock_identity_registry
+        lock_identity_registry()
     endpoint = lock_lifecycle_endpoint(endpoint)
+    if verified_removal:
+        from agents.agent_removal import removal_block_reason
+        if request.POST.get('machine_id') != endpoint.machine_id:
+            return JsonResponse({'error': 'endpoint_identity_changed'}, status=409)
+        reason = removal_block_reason(endpoint)
+        if reason:
+            return JsonResponse({'error': reason}, status=409)
     active_request = _active_uninstall_request(endpoint)
     if active_request:
         return JsonResponse(
@@ -4212,6 +4258,8 @@ def endpoint_uninstall_request(request, pk):
     }
     if mode == AgentUninstallRequest.MODE_PURGE:
         job_payload['purge_authorized'] = True
+    if verified_removal:
+        job_payload['verified_removal'] = True
     job = AgentJob.objects.create(
         endpoint=endpoint,
         job_type=AgentJob.TYPE_UNINSTALL_AGENT,
@@ -4224,6 +4272,9 @@ def endpoint_uninstall_request(request, pk):
     )
     uninstall_request.agent_job = job
     uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+    if mode == AgentUninstallRequest.MODE_PURGE:
+        from agents.agent_removal import record_purge_request
+        record_purge_request(endpoint, uninstall_request, job)
     create_audit_event(
         event_type='agent.purge.requested' if mode == AgentUninstallRequest.MODE_PURGE else 'agent.uninstall.requested',
         title='Purge de agente solicitado' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao de agente solicitada',
@@ -4251,13 +4302,27 @@ def endpoint_uninstall_request(request, pk):
             'message': (
                 'Aguardando endpoint ficar online.'
                 if endpoint.status != AgentMachine.STATUS_ONLINE
-                else ('Purge enviado ao endpoint.' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao enviada ao endpoint.')
+                else ('Remoção em fila. Aguardando confirmação de limpeza.' if verified_removal
+                      else 'Purge enviado ao endpoint.' if mode == AgentUninstallRequest.MODE_PURGE
+                      else 'Desinstalacao enviada ao endpoint.')
             ),
             'uninstall_request': serialize_uninstall_request(uninstall_request),
             'job': serialize_agent_job(job),
         },
         status=201,
     )
+
+
+@login_required
+@require_GET
+def endpoint_removal_status(request, pk):
+    if not can_purge_agent(request.user):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    from agents.models import AgentRemovalAudit
+    attempt = AgentRemovalAudit.objects.filter(endpoint_id=pk).order_by('-requested_at').first()
+    if not attempt:
+        raise Http404
+    return JsonResponse({'outcome': attempt.outcome, 'job_id': str(attempt.job_id)})
 
 
 @require_POST
@@ -4274,17 +4339,20 @@ def endpoint_uninstall_cancel(request, pk, request_id):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para cancelar desinstalacao.'}, status=403)
     if uninstall_request.status == AgentUninstallRequest.STATUS_CANCELLED:
         return JsonResponse({'status': 'ok', 'uninstall_request': serialize_uninstall_request(uninstall_request)})
-    if uninstall_request.agent_job and uninstall_request.agent_job.status != AgentJob.STATUS_QUEUED:
+    job = AgentJob.objects.select_for_update().filter(pk=uninstall_request.agent_job_id, endpoint=endpoint).first()
+    if job and job.status != AgentJob.STATUS_QUEUED:
         return JsonResponse({'error': 'uninstall_already_dispatched', 'detail': 'A desinstalacao ja foi entregue ao agente e nao pode ser cancelada.'}, status=409)
     uninstall_request.status = AgentUninstallRequest.STATUS_CANCELLED
     uninstall_request.completed_at = timezone.now()
     uninstall_request.save(update_fields=['status', 'completed_at', 'updated_at'])
-    if uninstall_request.agent_job:
-        job = uninstall_request.agent_job
+    if job:
         job.status = AgentJob.STATUS_CANCELLED
         job.finished_at = timezone.now()
         job.error_message = 'Solicitacao de desinstalacao cancelada pelo painel.'
         job.save(update_fields=['status', 'finished_at', 'error_message', 'updated_at'])
+        if uninstall_request.mode == AgentUninstallRequest.MODE_PURGE:
+            from agents.agent_removal import record_purge_result
+            record_purge_result(job, '')
     create_audit_event(
         event_type='agent.uninstall.cancelled',
         title='Desinstalacao de agente cancelada',
