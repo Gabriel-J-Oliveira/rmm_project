@@ -258,7 +258,8 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             }
             string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
             string shell = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-            string profile = _identity!.Profile;
+            string? profile = _identity!.Profile;
+            string workingDirectory = profile ?? Path.Combine(windows, "System32");
             // Closed environment: do not inherit service tokens, DB secrets, PATH or PS profiles.
             SortedDictionary<string, string> variables = new(StringComparer.OrdinalIgnoreCase)
             {
@@ -266,11 +267,15 @@ public sealed class ConPtyTerminal : IAsyncDisposable
                 ["PATH"] = Path.Combine(windows, "System32") + ";" + windows + ";" + Path.GetDirectoryName(shell),
                 ["PATHEXT"] = ".COM;.EXE;.BAT;.CMD",
                 ["PSModulePath"] = Path.Combine(windows, "System32", "WindowsPowerShell", "v1.0", "Modules"),
-                ["USERPROFILE"] = profile, ["APPDATA"] = Path.Combine(profile, "AppData", "Roaming"),
-                ["LOCALAPPDATA"] = Path.Combine(profile, "AppData", "Local"),
-                ["TEMP"] = Path.Combine(profile, "AppData", "Local", "Temp"), ["TMP"] = Path.Combine(profile, "AppData", "Local", "Temp"),
                 ["COMSPEC"] = Path.Combine(windows, "System32", "cmd.exe")
             };
+            if (profile is not null)
+            {
+                variables["USERPROFILE"] = profile;
+                variables["APPDATA"] = Path.Combine(profile, "AppData", "Roaming");
+                variables["LOCALAPPDATA"] = Path.Combine(profile, "AppData", "Local");
+                variables["TEMP"] = variables["TMP"] = Path.Combine(profile, "AppData", "Local", "Temp");
+            }
             environment = Marshal.StringToHGlobalUni(string.Join('\0', variables.Select(p => p.Key + "=" + p.Value)) + "\0\0");
             StringBuilder command = new('"' + shell + "\" -NoLogo -NoProfile -NoExit -Command \"[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\"");
             watch.Restart();
@@ -278,15 +283,15 @@ public sealed class ConPtyTerminal : IAsyncDisposable
             const uint flags = 0x80000 | 0x400 | 0x4 | 0x4000; // Extended startup, Unicode environment, suspended, below-normal priority.
             bool created;
             if (_identity.IsAdministrative)
-                created = CreateProcessAsUser(_identity.Token, shell, command, 0, 0, false, flags, environment, profile, ref startup, out process);
+                created = CreateProcessAsUser(_identity.Token, shell, command, 0, 0, false, flags, environment, workingDirectory, ref startup, out process);
             else if (_identity.IsCaller)
-                created = CreateProcess(shell, command, 0, 0, false, flags, environment, profile, ref startup, out process);
+                created = CreateProcess(shell, command, 0, 0, false, flags, environment, workingDirectory, ref startup, out process);
             else
             {
                 // Restricted target token, never the service's primary token.
                 if (!CreateRestrictedToken(_identity.Token, 1, 0, 0, 0, 0, 0, 0, out var restricted))
                     throw new InvalidOperationException("terminal_restricted_identity_failed");
-                using (restricted) created = CreateProcessAsUser(restricted, shell, command, 0, 0, false, flags, environment, profile, ref startup, out process);
+                using (restricted) created = CreateProcessAsUser(restricted, shell, command, 0, 0, false, flags, environment, workingDirectory, ref startup, out process);
             }
             if (!created) throw new InvalidOperationException("terminal_process_creation_failed");
             _process = process.Process; _thread = process.Thread; ProcessId = process.ProcessId;

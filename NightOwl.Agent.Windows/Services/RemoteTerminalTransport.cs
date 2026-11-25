@@ -15,6 +15,8 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
     public Action<string>? ObserveFailure { get; set; }
     public const int MaxDataBytes = 16 * 1024;
     public const int MaxFrameBytes = MaxDataBytes + 9;
+    private const int MaxControlBytes = 1024;
+    private const int MaxWindowsAuthBytes = 6400;
 
     public async Task RunAsync(AgentConfig config, CancellationToken ct)
     {
@@ -118,6 +120,7 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
         bool administrativeAuthentication = session.GetProperty("mode").GetString() == "admin_auth";
         bool real = administrativeAuthentication || session.GetProperty("mode").GetString() == "conpty";
         bool authenticationAttempted = false;
+        bool awaitingWindowsAuthentication = false;
         socket.Options.AddSubProtocol("nightowl-terminal.v1");
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
         socket.Options.SetBuffer(MaxFrameBytes, MaxFrameBytes);
@@ -169,17 +172,25 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                 await Send(socket, buffer.AsMemory(0, size), WebSocketMessageType.Binary, lifetime.Token, sendGate);
                 continue;
             }
-            if (size > 1024) throw new InvalidDataException("terminal_control_limit");
+            if (size > (awaitingWindowsAuthentication ? MaxWindowsAuthBytes : MaxControlBytes))
+                throw new InvalidDataException("terminal_control_limit");
             using JsonDocument document = JsonDocument.Parse(buffer.AsMemory(0, size));
             JsonElement message = document.RootElement;
-            switch (message.GetProperty("type").GetString())
+            string? kind = message.GetProperty("type").GetString();
+            if (size > MaxControlBytes && kind != "windows_auth") throw new InvalidDataException("terminal_control_limit");
+            switch (kind)
             {
                 case "connected":
                     await LogConsentAsync("terminal.websocket.authenticated", correlationId, config, "connected", null, lifetime.Token);
                     break;
                 case "transport_ready":
                     await LogConsentAsync("terminal.websocket.transport_ready", correlationId, config, "ready", null, lifetime.Token);
-                    if (administrativeAuthentication && message.GetProperty("mode").GetString() == "admin_auth" && message.GetProperty("execution").GetBoolean()) break;
+                    if (administrativeAuthentication && !authenticationAttempted && !awaitingWindowsAuthentication &&
+                        message.GetProperty("mode").GetString() == "admin_auth" && message.GetProperty("execution").GetBoolean())
+                    {
+                        awaitingWindowsAuthentication = true;
+                        break;
+                    }
                     if (!real || terminal is not null || message.GetProperty("mode").GetString() != "conpty" || !message.GetProperty("execution").GetBoolean())
                         throw new InvalidDataException("terminal_mode_invalid");
                     try
@@ -207,7 +218,8 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                         sessionMatches, sidMatches);
                     break;
                 case "windows_auth":
-                    if (!administrativeAuthentication || authenticationAttempted) throw new InvalidDataException("terminal_auth_invalid");
+                    if (!awaitingWindowsAuthentication || authenticationAttempted) throw new InvalidDataException("terminal_auth_invalid");
+                    awaitingWindowsAuthentication = false;
                     authenticationAttempted = true;
                     string account = message.GetProperty("account").GetString() ?? "";
                     string domain = message.GetProperty("domain").GetString() ?? "";
@@ -225,11 +237,14 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                         break;
                     }
                     finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(password.AsSpan())); Array.Clear(buffer); }
-                    var adminAuthorization = new TerminalAuthorization(Guid.Parse(session.GetProperty("session_id").GetString()!), config.MachineId,
+                    var adminAuthorization = new TerminalAuthorization(correlationId, config.MachineId,
                         session.GetProperty("operator_id").GetString()!, expires);
                     try { terminal = await ConPtyTerminal.StartAdministrativeAsync(token, adminAuthorization, 80, 24, lifetime.Token); }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
+                        string failureCode = ex is InvalidOperationException && ex.Message.StartsWith("terminal_", StringComparison.Ordinal)
+                            ? ex.Message : ex.GetType().Name;
+                        await LogConsentAsync("terminal.admin.process_start_failed", correlationId, config, "failed", failureCode, lifetime.Token);
                         await SendControl(socket, new { type = "error", code = "admin_terminal_start_failed" }, lifetime.Token, sendGate);
                         return;
                     }
@@ -237,6 +252,7 @@ public sealed class RemoteTerminalTransport(AgentApiClient api, JsonlLogger logg
                         identity = new { sid = terminal.Identity.Sid, windows_session_id = terminal.Identity.SessionId,
                             integrity = terminal.Identity.Integrity, elevated = terminal.Identity.Elevated,
                             account_name = terminal.AccountName } }, lifetime.Token, sendGate);
+                    await LogConsentAsync("terminal.admin.process_ready", correlationId, config, "ready", null, lifetime.Token);
                     break;
                 case "ready":
                     if (ready || message.GetProperty("mode").GetString() != (administrativeAuthentication ? "admin_auth" : real ? "conpty" : "synthetic") ||

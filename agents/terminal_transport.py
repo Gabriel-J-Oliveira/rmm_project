@@ -16,6 +16,9 @@ from . import terminal_sessions as control
 OWNER = str(uuid.uuid4())
 MAX_DATA = 16 * 1024
 MAX_FRAME = MAX_DATA + 9
+MAX_CONTROL_BYTES = 1024
+# 1024 UTF-16 units at six JSON bytes each, plus object fields.
+MAX_WINDOWS_AUTH_BYTES = 6400
 MAX_BUFFER = 256 * 1024
 MAX_MESSAGES = 32
 MAX_RATE = 100
@@ -149,6 +152,22 @@ async def writer(peer, send):
             message = None  # Do not retain the previous outbound frame while idle.
 
 
+def valid_windows_auth(event):
+    if set(event) != {'type', 'account', 'domain', 'password'}:
+        return False
+    for field, minimum, maximum in (('account', 1, 256), ('domain', 0, 256), ('password', 1, 512)):
+        value = event[field]
+        if not isinstance(value, str) or '\x00' in value:
+            return False
+        try:
+            length = len(value.encode('utf-16-le')) // 2
+        except UnicodeEncodeError:
+            return False
+        if not minimum <= length <= maximum:
+            return False
+    return True
+
+
 async def reader(peer, link, receive, session_id=None):
     while True:
         message = await receive()
@@ -169,7 +188,10 @@ async def reader(peer, link, receive, session_id=None):
             other.enqueue(data=data)
             continue
         text = message.get('text', '')
-        if len(text.encode()) > 1024:
+        size = len(text.encode())
+        auth_pending = (peer.role == 'operator' and link.mode == 'admin_auth' and
+            link.transport_ready.is_set() and not link.auth_submitted)
+        if size > (MAX_WINDOWS_AUTH_BYTES if auth_pending else MAX_CONTROL_BYTES):
             raise ProtocolError('control_frame_limit')
         try:
             event = json.loads(text)
@@ -178,14 +200,14 @@ async def reader(peer, link, receive, session_id=None):
         if not isinstance(event, dict):
             raise ProtocolError('invalid_control')
         kind = event.get('type')
+        if size > MAX_CONTROL_BYTES and kind != 'windows_auth':
+            raise ProtocolError('control_frame_limit')
         if kind == 'pong' and set(event) == {'type', 'nonce'} and peer.ping and event['nonce'] == peer.ping:
             peer.ping = None
         elif kind == 'close' and set(event) == {'type'}:
             raise ProtocolError('peer_closed')
-        elif kind == 'windows_auth' and peer.role == 'operator' and link.mode == 'admin_auth' and link.transport_ready.is_set() and not link.auth_submitted:
-            if (set(event) != {'type', 'account', 'domain', 'password'} or
-                any(not isinstance(event[k], str) or '\x00' in event[k] for k in ('account', 'domain', 'password')) or
-                not 1 <= len(event['account']) <= 256 or len(event['domain']) > 256 or not 1 <= len(event['password']) <= 512):
+        elif kind == 'windows_auth' and auth_pending:
+            if not valid_windows_auth(event):
                 raise ProtocolError('invalid_windows_auth')
             link.auth_submitted = True
             other.enqueue(event=event)
