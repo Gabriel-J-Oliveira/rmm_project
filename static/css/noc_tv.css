@@ -1,0 +1,33 @@
+body.page-noc.noc-tv-mode .app-shell.has-sidebar {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+body.page-noc.noc-tv-mode .sidebar,
+body.page-noc.noc-tv-mode .topbar,
+body.page-noc.noc-tv-mode .breadcrumbs {
+    display: none;
+}
+
+body.page-noc.noc-tv-mode .content {
+    padding: clamp(12px, 1.8vw, 34px);
+}
+
+body.page-noc.noc-tv-mode .noc-actions [data-noc-sound] {
+    display: inline-flex;
+}
+
+body.page-noc.noc-tv-mode .noc-all-alerts .noc-list {
+    max-height: min(48vh, 720px);
+}
+
+body.page-noc.noc-tv-mode .noc-occurrence-body strong {
+    font-size: clamp(.95rem, 1.25vw, 1.3rem);
+}
+
+body.page-noc.noc-tv-mode .noc-thematic-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+}
+
+body.page-noc.noc-tv-mode .noc-thematic-grid .noc-panel {
+    min-height: clamp(200px, 32vh, 430px);
+}
