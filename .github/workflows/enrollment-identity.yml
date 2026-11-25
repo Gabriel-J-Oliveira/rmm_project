@@ -75,6 +75,7 @@ jobs:
       - name: Alert policy configuration
         run: |
           node --test tests/frontend/test_alert_policies.cjs
+          node --test tests/frontend/test_noc_refresh.cjs
           python manage.py test dashboard.test_alert_policies dashboard.test_execution_policies --noinput
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
