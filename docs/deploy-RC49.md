@@ -357,6 +357,20 @@ Essas são **frentes de planejamento**, não PRs já autorizadas, nem um comprom
 
 **Próximo passo:** continuar a discussão dos requisitos e fechá-los no documento antes de iniciar o recorte técnico em PRs. Nenhum deploy, release, migration ou atualização de frota é autorizado por este arquivo.
 
+## Estado de desenvolvimento RC49-01B — 25/11/2026
+
+RC49-01B integrada à `main` em dois merge commits normais, na ordem dependente:
+
+- PR #64, identidade patrimonial, merge `d70870990f26f02054b6c4d5d56eec1de1911223`.
+- PR #65, remoção verificada, merge `3264af7e5401489d134b9006a10fcdf90b07e0f9`.
+- `main` após a integração `3264af7e5401489d134b9006a10fcdf90b07e0f9`.
+
+Migrations da 01B: 0052 (identidade SMBIOS), 0053 (auditoria durável de remoção) e 0054 (digest do receipt e proteção das relações de rollout). Aplicação operacional continua sujeita ao plano normal de deploy e validação do banco. Nenhuma migration foi aplicada como parte desta integração.
+
+Os sete gates de cada PR passaram. A suíte Windows da #65 passou na segunda tentativa do mesmo SHA. Uma falha anterior `launch_failed` na sonda Chrome/CDP foi observada e não tem causa confirmada, portanto permanece como risco de estabilidade do CI. A homologação da limpeza real do agente requer VM Windows descartável autorizada e pacote compatível assinado.
+
+Pendências antes de declarar RC49 pronta para distribuição incluem ensaio do inventário SMBIOS em hardware físico, substituição de placa-mãe com evidência, ciclo completo de remoção e reinstalação, falhas parciais/offline e retomada, além da revisão do processo de prévia e eventual processamento inicial da população existente. Não iniciar alteração em massa na frota nesta etapa.
+
 ## Atualização aprovada em 25/11/2026 — RC49-01B
 
 A próxima fase passa a ser **identidade patrimonial automática e ciclo de vida dos endpoints**. A decisão vigente está em [RC49-01B — Identidade e ciclo de vida](rc49-01b-identidade-ciclo-de-vida.md) e prevalece sobre as restrições históricas de cadastro exclusivamente manual e remoção fora do escopo da 01A.
