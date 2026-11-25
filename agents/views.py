@@ -149,6 +149,12 @@ def _update_agent_dispatch_block_reason(job, endpoint, release, campaigns, waves
         target = targets.get(target_id)
         if not campaign or not wave or not target:
             return 'campaign_binding_missing'
+        if campaign.release_snapshot.get('stable_desktop_profile'):
+            from .stable_rollout import enabled as stable_enabled
+            if (campaign.state == 'paused' or wave.state == 'paused' or not stable_enabled(release.channel)
+                    or not settings.NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED or not settings.NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED):
+                if campaign.state != 'aborted' and wave.state != 'cancelled':
+                    return 'stable_campaign_waiting'
         if (campaign.state != 'running' or campaign.release_id != release.pk
                 or wave.campaign_id != campaign.pk or wave.state != 'running'
                 or campaign.current_wave_id != wave.pk
@@ -1526,6 +1532,8 @@ class AgentJobsPullView(APIView):
                 reason_code = _update_agent_dispatch_block_reason(
                     job, machine, release, locked_campaigns, locked_waves, locked_targets, now,
                 )
+                if reason_code == 'stable_campaign_waiting':
+                    continue
                 if reason_code:
                     job.status = AgentJob.STATUS_CANCELLED
                     job.finished_at = now
