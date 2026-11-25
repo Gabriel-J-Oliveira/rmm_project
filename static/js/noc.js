@@ -103,6 +103,7 @@
 
     function applyContent() {
         if (deferredContent === null || content.contains(document.activeElement)
+            || content.querySelector(".noc-card-actions:hover")
             || (drawer && drawer.classList.contains("is-open"))) return;
         content.innerHTML = deferredContent;
         deferredContent = null;
