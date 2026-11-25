@@ -3,13 +3,14 @@
     if (!root) return;
 
     var operational = window.NightOwlOperational;
-    root.__nightowlOperational = operational ? operational.buildNocContext(root) : { alerts: [], events: [] };
-    if (operational) {
-        operational.applyMockAlertState(root);
-        operational.initOperationalChrome(root, { countSelector: "[data-noc-open-drawer]", staleAfterSeconds: 90 });
-    }
-
-    var refreshEverySeconds = 30;
+    var refreshEverySeconds = 10;
+    var content = root.querySelector("[data-noc-content]");
+    var interval = root.querySelector("[data-noc-interval]");
+    var status = root.querySelector("[data-noc-refresh-status]");
+    var inFlight = false;
+    var deferredContent = null;
+    var readingAt = Date.now();
+    var refreshAt = readingAt;
     var remaining = refreshEverySeconds;
     var countdown = document.querySelector("[data-noc-countdown]");
     var refreshButton = document.querySelector("[data-noc-refresh]");
@@ -22,7 +23,6 @@
     var toast = document.querySelector("[data-noc-toast]");
     var autoRefreshEnabled = true;
     var soundEnabled = false;
-    var currentCard = null;
 
     function renderCountdown() {
         if (countdown) {
@@ -61,7 +61,6 @@
 
     function openDrawer(card) {
         if (!drawer) return;
-        currentCard = card;
         drawer.querySelector("[data-noc-drawer-kind]").textContent = card.dataset.drawerKind || "Contexto";
         drawer.querySelector("[data-noc-drawer-title]").textContent = card.dataset.title || "Item do NOC";
         drawer.querySelector("[data-noc-drawer-subtitle]").textContent = card.dataset.subtitle || "Monitoramento ao vivo";
@@ -102,11 +101,47 @@
         return lines.join("\n");
     }
 
-    if (refreshButton) {
-        refreshButton.addEventListener("click", function () {
-            window.location.reload();
-        });
+    function applyContent() {
+        if (deferredContent === null || content.contains(document.activeElement)
+            || (drawer && drawer.classList.contains("is-open"))) return;
+        content.innerHTML = deferredContent;
+        deferredContent = null;
+        if (window.lucide) window.lucide.createIcons();
     }
+
+    async function refresh() {
+        if (inFlight) return;
+        inFlight = true;
+        refreshButton.disabled = true;
+        var url = new URL(window.location.href);
+        url.searchParams.set("fragment", "1");
+        try {
+            var response = await fetch(url, { headers: { Accept: "application/json" } });
+            if (!response.ok || response.redirected) throw new Error("NOC read failed");
+            var payload = await response.json();
+            readingAt = Date.parse(payload.read_at);
+            if (typeof payload.html !== "string" || !Number.isFinite(readingAt)) {
+                throw new Error("Invalid NOC response");
+            }
+            status.textContent = "Última leitura " + new Date(readingAt).toLocaleTimeString();
+            deferredContent = payload.html;
+            applyContent();
+        } catch (error) {
+            status.textContent = "Falha na atualização. Dados anteriores mantidos.";
+        } finally {
+            refreshAt = Date.now();
+            refreshButton.disabled = false;
+            inFlight = false;
+        }
+    }
+
+    refreshButton.addEventListener("click", refresh);
+    interval.addEventListener("change", function () {
+        refreshEverySeconds = Number(interval.value);
+        refreshAt = Date.now();
+        remaining = refreshEverySeconds;
+        renderCountdown();
+    });
 
     document.querySelectorAll("[data-noc-copy-summary]").forEach(function (button) {
         button.addEventListener("click", function () {
@@ -156,71 +191,17 @@
         });
     }
 
-    document.querySelectorAll("[data-noc-open-drawer]").forEach(function (card) {
-        card.addEventListener("click", function (event) {
-            if (event.target.closest("a, button, form, input")) return;
-            openDrawer(card);
-        });
-        card.addEventListener("keydown", function (event) {
-            if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                openDrawer(card);
-            }
-        });
+    content.addEventListener("click", function (event) {
+        if (event.target.closest("a, button, form, input")) return;
+        var card = event.target.closest("[data-noc-open-drawer]");
+        if (card) openDrawer(card);
     });
-
-    document.querySelectorAll("[data-noc-feedback]").forEach(function (button) {
-        button.addEventListener("click", function (event) {
+    content.addEventListener("keydown", function (event) {
+        if (!event.target.matches("[data-noc-open-drawer]")) return;
+        if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            event.stopPropagation();
-            if (operational) {
-                var card = button.closest("[data-noc-open-drawer]") || currentCard;
-                operational.runAction(button.dataset.operationalAction || button.textContent || "execute_check", {
-                    toastOptions: { target: toast, timeout: 3200 },
-                    card: card,
-                    endpoint: card ? card.dataset.endpoint : "",
-                    description: button.dataset.nocFeedback || "Ação operacional mockada no NOC."
-                });
-            } else {
-                showToast(button.dataset.nocFeedback || "Ação registrada.");
-            }
-            beep();
-        });
-    });
-
-    document.querySelectorAll("[data-noc-root] form[action*='alert-acknowledge'], [data-noc-root] form[action*='alert-mute']").forEach(function (form) {
-        form.addEventListener("submit", function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            var card = form.closest("[data-noc-open-drawer]");
-            var action = form.action.indexOf("mute") >= 0 ? "mute_alert" : "acknowledge_alert";
-            if (operational) {
-                operational.runAction(action, {
-                    toastOptions: { target: toast, timeout: 3200 },
-                    card: card,
-                    endpoint: card ? card.dataset.endpoint : ""
-                });
-            } else {
-                showToast(action === "mute_alert" ? "Alerta silenciado." : "Alerta reconhecido.");
-            }
-        });
-    });
-
-    document.querySelectorAll("[data-noc-root] a[href*='tickets']").forEach(function (link) {
-        link.addEventListener("click", function (event) {
-            event.preventDefault();
-            event.stopPropagation();
-            var card = link.closest("[data-noc-open-drawer]");
-            if (operational) {
-                operational.runAction("create_ticket", {
-                    toastOptions: { target: toast, timeout: 3200 },
-                    card: card,
-                    endpoint: card ? card.dataset.endpoint : ""
-                });
-            } else {
-                showToast("Chamado mockado criado.");
-            }
-        });
+            openDrawer(event.target);
+        }
     });
 
     if (drawerClose) drawerClose.addEventListener("click", closeDrawer);
@@ -231,15 +212,18 @@
 
     renderCountdown();
     window.setInterval(function () {
-        if (!autoRefreshEnabled) {
-            renderCountdown();
-            return;
-        }
-        remaining -= 1;
-        if (remaining <= 0) {
-            window.location.reload();
-            return;
-        }
+        applyContent();
+        var age = root.querySelector("[data-operational-age]");
+        if (age) age.textContent = Math.max(0, Math.floor((Date.now() - readingAt) / 1000)) + "s";
+        root.querySelectorAll("[data-noc-start]").forEach(function (node) {
+            var seconds = Math.max(0, Math.floor((Date.now() - Date.parse(node.dateTime)) / 1000));
+            if (Number.isFinite(seconds)) {
+                var minutes = Math.floor(seconds / 60);
+                node.textContent = minutes + " min " + seconds % 60 + " s";
+            }
+        });
+        remaining = Math.max(0, refreshEverySeconds - Math.floor((Date.now() - refreshAt) / 1000));
+        if (autoRefreshEnabled && remaining === 0) refresh();
         renderCountdown();
     }, 1000);
 }());

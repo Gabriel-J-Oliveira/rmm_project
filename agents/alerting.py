@@ -309,7 +309,7 @@ def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False):
         endpoint=endpoint,
         status__in=[EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED],
         is_temporary=False,
-    ).exclude(source='continuous_telemetry')
+    ).exclude(source__in=('continuous_telemetry', 'alert_policy'))
 
     existing_by_key = {
         alert.metadata.get('dedupe_key'): alert
@@ -317,7 +317,7 @@ def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False):
         if alert.metadata.get('dedupe_key')
     }
     resolved_by_key = {}
-    for alert in EndpointAlert.objects.filter(endpoint=endpoint, status=EndpointAlert.STATUS_RESOLVED).order_by('-resolved_at', '-updated_at'):
+    for alert in EndpointAlert.objects.filter(endpoint=endpoint, status=EndpointAlert.STATUS_RESOLVED).exclude(source='alert_policy').order_by('-resolved_at', '-updated_at'):
         dedupe_key = alert.metadata.get('dedupe_key')
         if dedupe_key and dedupe_key not in resolved_by_key:
             resolved_by_key[dedupe_key] = alert
@@ -427,11 +427,21 @@ def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False):
 
 
 def evaluate_all_alerts(options, dry_run=False):
+    from .alert_policy_engine import evaluate_policies
+    from .models import AlertPolicy
+
     result = AlertEvaluationResult()
-    for endpoint in AgentMachine.objects.filter(is_active=True):
+    policies = list(AlertPolicy.objects.prefetch_related('endpoints'))
+    for endpoint in AgentMachine.objects.filter(is_active=True).iterator(chunk_size=100):
         result.endpoints_evaluated += 1
         desired = evaluate_endpoint(endpoint, options)
+        managed, counts, actions = evaluate_policies(endpoint, policies, dry_run=dry_run)
+        desired = [item for item in desired if item['dedupe_key'] not in managed]
         endpoint_result = apply_alerts_for_endpoint(endpoint, desired, dry_run=dry_run)
+        result.created += counts['created']
+        result.updated += counts['updated']
+        result.resolved += counts['resolved']
+        result.dry_run_actions.extend(actions)
         result.created += endpoint_result.created
         result.updated += endpoint_result.updated
         result.resolved += endpoint_result.resolved
