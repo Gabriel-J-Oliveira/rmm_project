@@ -30,8 +30,9 @@ nodes['[data-screen]'].hidden = true;
 nodes['[data-terminal-context-menu]'].hidden = true;
 panel.nodes = nodes; panel.dataset = {url: '/session', endpoint: 'CS-LAB-01'};
 const form = new Element(), submit = new Element();
-form.elements = {password: new Element(), account: new Element(), domain: new Element(), csrfmiddlewaretoken: {value: 'csrf'}};
-form.nodes = {'[type=submit]': submit}; form.reportValidity = () => true; nodes.form = form;
+form.elements = {password: new Element(), account: new Element(), csrfmiddlewaretoken: {value: 'csrf'}};
+form.nodes = {'[type=submit]': submit, '[data-windows-account]': form.elements.account, '[data-windows-password]': form.elements.password};
+form.reportValidity = () => true; nodes.form = form;
 const open = new Element(), storage = new Map([
     ['nightowl.terminal.accounts.operator-1.endpoint-1', JSON.stringify(['legacy-user'])],
     ['nightowl.preferences.theme', 'dark']
@@ -117,7 +118,7 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
         ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
         const identityMessage = JSON.parse(ws.sent.find(item => typeof item === 'string' && item.includes('windows_auth')));
         assert.deepEqual({account: identityMessage.account, domain: identityMessage.domain}, {account: expectedAccount, domain: expectedDomain});
-        nodes['[data-terminal-close]'].click();
+        nodes['[data-cancel]'].click();
         open.click();
     }
     const beforeInvalidFormat = calls.length;
@@ -129,8 +130,8 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     form.elements.account.value = 'LAB\\Admin';
     form.elements.password.value = 'synthetic-secret';
     await form.listeners.submit({preventDefault(){}});
-    assert.equal(nodes['[data-terminal-modal]'].hidden, false, 'connection modal is immediate');
-    assert.equal(nodes['[data-terminal-status]'].textContent, 'Solicitando conexão');
+    assert.equal(nodes['[data-terminal-modal]'].hidden, true, 'popup requires authenticated process identity');
+    assert.equal(nodes['[data-auth-status]'].textContent, 'Solicitando conexão');
     assert.equal(form.elements.account.value, '', 'account field cleared on submit');
     assert.equal(form.elements.password.value, '', 'password field cleared on submit');
     ws.onopen();
@@ -208,23 +209,24 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     await form.listeners.submit({preventDefault(){}}); ws.onopen();
     ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
     ws.onmessage({data: JSON.stringify({type: 'windows_auth_result', result: 'rejected'})});
-    assert.equal(nodes['[data-terminal-status]'].textContent, 'Falha de autenticação Windows');
+    assert.match(nodes['[data-auth-status]'].textContent, /Não foi possível autenticar/);
+    assert.equal(nodes['[data-terminal-modal]'].hidden, true);
+    assert.equal(nodes['[data-auth-modal]'].hidden, false);
     assert.equal(form.elements.password.value, '');
     assert.equal(form.elements.account.value, '');
     assert.equal(storage.size, 1);
     assert(!JSON.stringify(calls).includes('bad-secret'));
     assert(!JSON.stringify(events.map(event => event.detail)).includes('bad-secret'));
-    nodes['[data-terminal-close]'].click();
+    nodes['[data-cancel]'].click();
 
     open.click(); form.elements.account.value = 'valid-but-not-admin'; form.elements.password.value = 'not-admin-secret';
     await form.listeners.submit({preventDefault(){}}); ws.onopen();
     ws.onmessage({data: JSON.stringify({type: 'transport_ready', mode: 'admin_auth', execution: true})});
     ws.onmessage({data: JSON.stringify({type: 'windows_auth_result', result: 'rejected', reason: 'administrator_required'})});
-    assert.equal(nodes['[data-terminal-status]'].textContent, 'Autorização administrativa necessária');
-    assert.match(nodes['[data-terminal-notice]'].textContent, /não recebeu token administrativo elevado/);
+    assert.match(nodes['[data-auth-status]'].textContent, /não recebeu token administrativo elevado/);
     assert.equal(form.elements.password.value, '');
     assert(!JSON.stringify(calls).includes('not-admin-secret'));
-    nodes['[data-terminal-close]'].click();
+    nodes['[data-cancel]'].click();
 
     open.click(); form.elements.account.value = 'LAB\\Admin'; form.elements.password.value = 'system-token-secret';
     await form.listeners.submit({preventDefault(){}}); ws.onopen();
@@ -235,7 +237,8 @@ assert(!/localStorage\.setItem|sessionStorage|indexedDB/.test(source), 'terminal
     assert.equal(nodes['[data-identity]'].textContent, 'Usuário logado no terminal: identidade Windows não confirmada');
     assert.equal(nodes['[data-identity-technical]'].hidden, true);
     assert.equal(form.elements.password.value, '');
-    nodes['[data-terminal-close]'].click();
+    assert.equal(nodes['[data-terminal-modal]'].hidden, true);
+    nodes['[data-cancel]'].click();
 
     open.click(); form.elements.account.value = 'cancel-me'; form.elements.password.value = 'cancel-secret';
     nodes['[data-cancel]'].click();

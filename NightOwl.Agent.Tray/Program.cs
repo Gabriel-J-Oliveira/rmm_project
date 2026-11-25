@@ -1,8 +1,10 @@
+using System.Diagnostics;
+
 namespace NightOwl.Agent.Tray;
 
 internal static class Program
 {
-    private const string MutexName = "NightOwl.Agent.Tray.User";
+    private const string MutexName = "Local\\NightOwl.Agent.Tray.User";
 
     [STAThread]
     private static void Main()
@@ -12,7 +14,11 @@ internal static class Program
         using Mutex mutex = new(false, MutexName, out bool createdNew);
         if (!createdNew)
         {
-            TrayLog.Write("tray.mutex.exists", "Outra instancia do tray ja esta em execucao.");
+            TrayLog.Write("tray.mutex.exists", "Outra instancia do Tray ja esta em execucao nesta sessao.", new
+            {
+                process_id = Environment.ProcessId,
+                process_session_id = Process.GetCurrentProcess().SessionId
+            });
             return;
         }
 
@@ -23,7 +29,11 @@ internal static class Program
         }
 
         SetAppUserModelId();
-        TrayLog.Write("tray.start", "NightOwl Agent Tray iniciado.");
+        TrayLog.Write("tray.start", "NightOwl Agent Tray iniciado.", new
+        {
+            process_id = Environment.ProcessId,
+            process_session_id = Process.GetCurrentProcess().SessionId
+        });
         ApplicationConfiguration.Initialize();
         using TrayApplicationContext context = new();
         Application.Run(context);

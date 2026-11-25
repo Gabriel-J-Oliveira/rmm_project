@@ -14,10 +14,10 @@ public sealed class TerminalIdentity : IDisposable
     private readonly TerminalTokenFacts? _administrativeFacts;
     private readonly string? _administrativeProfile;
     private TerminalIdentity(TerminalUserIdentity identity) => _identity = identity;
-    private TerminalIdentity(SafeAccessTokenHandle token, TerminalTokenFacts facts, string profile) { _administrativeToken = token; _administrativeFacts = facts; _administrativeProfile = profile; }
+    private TerminalIdentity(SafeAccessTokenHandle token, TerminalTokenFacts facts, string? profile) { _administrativeToken = token; _administrativeFacts = facts; _administrativeProfile = profile; }
     public SafeAccessTokenHandle Token => _identity?.Token ?? _administrativeToken!;
     public TerminalTokenFacts Facts => _identity?.Facts ?? _administrativeFacts!;
-    public string Profile => _identity?.Profile ?? _administrativeProfile!;
+    public string? Profile => _identity?.Profile ?? _administrativeProfile;
     public bool IsCaller => _identity?.IsCaller ?? false;
     public bool IsAdministrative => _administrativeToken is not null;
     public static TerminalIdentity FromAdministrativeToken(SafeAccessTokenHandle token)
@@ -28,11 +28,14 @@ public sealed class TerminalIdentity : IDisposable
             TerminalAdministrativeAuthentication.Validate(facts);
             uint size = 0;
             GetUserProfileDirectory(token, null, ref size);
-            if (size is 0 or > 32768) throw new InvalidOperationException("terminal_profile_unavailable");
-            var path = new StringBuilder((int)size);
-            if (!GetUserProfileDirectory(token, path, ref size)) throw new InvalidOperationException("terminal_profile_unavailable");
-            string profile = Path.GetFullPath(path.ToString());
-            if (!Directory.Exists(profile)) throw new InvalidOperationException("terminal_profile_unavailable");
+            string? profile = null;
+            if (size is > 0 and <= 32768)
+            {
+                var path = new StringBuilder((int)size);
+                if (GetUserProfileDirectory(token, path, ref size) && Path.IsPathFullyQualified(path.ToString()) &&
+                    Directory.Exists(path.ToString()))
+                    profile = Path.GetFullPath(path.ToString());
+            }
             return new TerminalIdentity(token, facts, profile);
         }
         catch { token.Dispose(); throw; }

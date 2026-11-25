@@ -502,14 +502,14 @@
 {% block scripts %}
 {% if winrm_observability_available %}<script src="{% static 'js/endpoint_winrm_recovery.js' %}"></script>{% endif %}
 {% if winrm_observability_available %}<script src="{% static 'js/endpoint_winrm_check.js' %}"></script>{% endif %}
-{% if terminal_admin_auth_available %}
+{% if terminal_admin_auth_available or terminal_available %}
 <script src="{% static 'vendor/xterm/xterm.js' %}"></script>
 <script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
-<script src="{% static 'js/terminal_admin_auth.js' %}"></script>
+{% endif %}
+{% if terminal_admin_auth_available %}
+<script src="{% static 'js/terminal_admin_auth.js' %}?v=rc49-admin-terminal-1"></script>
 {% endif %}
 {% if terminal_available %}
-<script src="{% static 'vendor/xterm/xterm.js' %}"></script>
-<script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
 <script src="{% static 'js/endpoint_terminal.js' %}"></script>
 {% endif %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>

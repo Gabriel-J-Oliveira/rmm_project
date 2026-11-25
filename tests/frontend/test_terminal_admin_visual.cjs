@@ -39,8 +39,8 @@ let phase = 'initialization';
         await page.locator('[data-terminal-open]').click();
         const credentials = page.locator('[data-auth-modal]');
         await credentials.waitFor({state: 'visible'});
-        await page.locator('[name="account"]').fill('gabriel.oliveira');
-        assert.equal(await page.locator('[data-auth-principal]').innerText(), 'Será autenticado como: CONTROL\\gabriel.oliveira');
+        await page.locator('[data-windows-account]').fill('piloto.sintetico');
+        assert.equal(await page.locator('[data-auth-principal]').innerText(), 'Será autenticado como: CONTROL\\piloto.sintetico');
 
         phase = 'desktop_credentials';
         const artifacts = path.join(process.env.NIGHTOWL_E2E_ARTIFACT_DIR || require('node:os').tmpdir(), 'nightowl-terminal-admin');

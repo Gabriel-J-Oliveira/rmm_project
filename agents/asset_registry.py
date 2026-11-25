@@ -113,6 +113,16 @@ def link_matches_endpoint(link, endpoint):
                 and _machine_id_key(link.machine_id_snapshot) == _machine_id_key(endpoint.machine_id))
 
 
+def registered_responsible(endpoint):
+    links = list(AssetAgentLink.objects.filter(endpoint=endpoint, ended_at__isnull=True,
+        asset__status=PhysicalAsset.STATUS_ACTIVE, asset__identity_status=PhysicalAsset.IDENTITY_CONFIRMED)[:2])
+    if len(links) != 1 or not link_matches_endpoint(links[0], endpoint):
+        return ''
+    return (AssetRecord.objects.filter(asset_id=links[0].asset_id, occurred_at__lte=timezone.now(),
+        record_type=AssetRecord.TYPE_RESPONSIBILITY_CHANGE).order_by('-occurred_at', '-created_at', '-pk')
+        .values_list('new_responsible', flat=True).first() or '').strip()
+
+
 def link_endpoint_reference(link):
     if link is None:
         return None
