@@ -42,13 +42,14 @@ const {chromium} = require('playwright');
         await page.getByText('asset-records-browser').waitFor();
 
         await page.setViewportSize({width: 390, height: 844});
-        const mobile = await page.evaluate(() => ({
-            panel: document.querySelector('[data-asset-records]'),
-            content: document.querySelector('[data-asset-records-content]')
+        const mobile = await assetContent.evaluate(content => ({
+            panelWidth: content.closest('[data-asset-records]').getBoundingClientRect().width,
+            scrollWidth: content.scrollWidth,
+            clientWidth: content.clientWidth
         }));
-        assert(mobile.panel && mobile.panel.getBoundingClientRect().width > 0, 'records panel should remain rendered on mobile');
-        assert(mobile.content.scrollWidth <= mobile.content.clientWidth + 1,
-            `records panel should not overflow at mobile width: ${mobile.content.scrollWidth}/${mobile.content.clientWidth}`);
+        assert(mobile.panelWidth > 0 && mobile.clientWidth > 0, 'records panel should remain rendered on mobile');
+        assert(mobile.scrollWidth <= mobile.clientWidth + 1,
+            `records panel should not overflow at mobile width: ${mobile.scrollWidth}/${mobile.clientWidth}`);
         assert.deepEqual(pageErrors, [], 'page should not raise JavaScript errors');
         console.log(JSON.stringify({result: 'passed', endpoint: endpointName, recordType: 'observation', mobile}));
         await context.close();

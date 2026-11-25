@@ -2389,11 +2389,14 @@ def endpoint_list(request):
         recommended_version = latest_agent_version()
         asset_codes = {}
         if request.user.is_authenticated and request.user.has_perm('agents.view_physicalasset'):
+            from agents.asset_registry import link_matches_endpoint
+            endpoints_by_id = {endpoint.pk: endpoint for endpoint in endpoints}
             active_asset_links = AssetAgentLink.objects.filter(
-                endpoint_id__in=[endpoint.pk for endpoint in endpoints], ended_at__isnull=True,
+                endpoint_id__in=endpoints_by_id, ended_at__isnull=True,
             ).select_related('asset').order_by('linked_at', 'pk')
             for link in active_asset_links:
-                asset_codes.setdefault(link.endpoint_id, link.asset.asset_code)
+                if link_matches_endpoint(link, endpoints_by_id[link.endpoint_id]):
+                    asset_codes.setdefault(link.endpoint_id, link.asset.asset_code)
         rows = []
         option_rows = []
         for endpoint in endpoints:

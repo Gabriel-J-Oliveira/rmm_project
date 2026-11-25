@@ -78,3 +78,21 @@ class EndpointAssetCodeSearchTests(TestCase):
                 self.assertEqual(payload['result_count'], 1)
                 self.assertEqual(payload['endpoint_ids'], [str(target.pk)])
                 self.assertIn(asset.asset_code, payload['html'])
+
+    def test_stale_machine_snapshot_is_not_searchable_in_any_endpoint_view(self):
+        endpoint = self.endpoint(1)
+        asset = PhysicalAsset.objects.create()
+        link = AssetAgentLink.objects.create(
+            asset=asset, endpoint=endpoint, endpoint_uuid_snapshot=endpoint.pk,
+            machine_id_snapshot=str(uuid.uuid4()),
+        )
+        for view in ('table', 'cards', 'health'):
+            with self.subTest(view=view):
+                response = self.client.get(reverse('endpoint-list'), {'q': asset.asset_code, 'view': view},
+                                           HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+                self.assertEqual(response.json()['result_count'], 0)
+                self.assertNotIn(asset.asset_code, response.json()['html'])
+        link.machine_id_snapshot = f' {endpoint.machine_id.upper()} '
+        link.save(update_fields=['machine_id_snapshot'])
+        response = self.client.get(reverse('endpoint-list'), {'q': asset.asset_code})
+        self.assertEqual(response.context['result_count'], 1)

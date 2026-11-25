@@ -154,12 +154,18 @@
             }).join("") + '</ol></section>';
     }
 
+    function linkLabel(link) {
+        if (link.state === 'removed') return 'vínculo anterior com endpoint excluído';
+        if (link.state === 'identity_changed') return 'vínculo anterior com identidade divergente';
+        return 'vínculo atual';
+    }
+
     function renderSearchResults() {
         const rows = (state.asset_search_results || []).map(function (asset) {
             return '<article class="endpoint-asset-candidate"><div><strong class="endpoint-asset-code endpoint-asset-provisional">' + escapeHtml(asset.code) + '</strong>' +
                 '<div>' + escapeHtml([asset.manufacturer, asset.model].filter(Boolean).join(" · ") || "Fabricante/modelo não informados") + '</div>' +
                 '<small>Serial: ' + escapeHtml(asset.serial_number || "Não informado") +
-                (asset.active_endpoint ? ' · vínculo atual: ' + escapeHtml(asset.active_endpoint.hostname) + ' (' + escapeHtml(asset.active_endpoint.id) + ')' : ' · sem endpoint atual') +
+                (asset.active_endpoint ? ' · ' + linkLabel(asset.active_endpoint) + ': ' + escapeHtml(asset.active_endpoint.hostname) + ' (' + escapeHtml(asset.active_endpoint.id) + ')' : ' · sem endpoint atual') +
                 '</small></div><button type="button" class="endpoint-asset-button" data-asset-select="' + escapeHtml(asset.id) + '">Selecionar patrimônio</button></article>';
         }).join("");
         return '<div class="endpoint-asset-search-results" data-asset-search-results>' +
@@ -175,19 +181,20 @@
         });
         const suggestion = state.suggestion;
         return '<header><div><h2>Sem associação patrimonial</h2><p class="endpoint-asset-muted">O patrimônio só será criado ou vinculado após confirmação do operador.</p></div><button class="endpoint-asset-button" type="button" data-asset-refresh>Atualizar dados</button></header>' +
+            (state.link_identity_changed ? '<p class="endpoint-asset-alert endpoint-asset-error">A identidade atual do agente difere do vínculo patrimonial registrado. Confirme o vínculo novamente para acessar o histórico.</p>' : '') +
             warningsHtml() + factsHtml(inventory, false) +
             (suggestion ? '<section class="endpoint-asset-alert"><strong>Sugestão por serial válido:</strong> ' + escapeHtml(suggestion.code) +
-                (state.suggestion_active_link ? ' · já associado a ' + escapeHtml(state.suggestion_active_link.hostname) + ' (' + escapeHtml(state.suggestion_active_link.endpoint_id) + ')' : '') +
+                (state.suggestion_active_link ? ' · ' + linkLabel(state.suggestion_active_link) + ': ' + escapeHtml(state.suggestion_active_link.hostname) + ' (' + escapeHtml(state.suggestion_active_link.endpoint_id) + ')' : '') +
                 '<p>Confirme explicitamente o vínculo. O serial serve como evidência, não como chave patrimonial.</p>' +
                 (permissions.link_asset ? '<button type="button" class="endpoint-asset-button" data-asset-select-suggestion>Selecionar esta sugestão</button>' : '') + '</section>' : '') +
-            (permissions.create_asset ? '<section class="endpoint-asset-section"><h3>Criar patrimônio provisório</h3><p class="endpoint-asset-muted">Usa somente o inventário real recebido para este endpoint. Nenhum código será criado para outros equipamentos.</p>' +
+            (permissions.create_asset && !state.link_identity_changed ? '<section class="endpoint-asset-section"><h3>Criar patrimônio provisório</h3><p class="endpoint-asset-muted">Usa somente o inventário real recebido para este endpoint. Nenhum código será criado para outros equipamentos.</p>' +
                 '<form class="endpoint-asset-form" data-asset-create-form>' + confirmationFields(mustExplain) +
                 '<button class="endpoint-asset-button endpoint-asset-button--primary" type="submit">Criar e associar patrimônio</button><p class="endpoint-asset-inline-status" data-asset-form-status role="status" aria-live="polite"></p></form></section>' : '') +
             (permissions.link_asset ? '<section class="endpoint-asset-section"><h3>Vincular patrimônio existente</h3><form class="endpoint-asset-search-form" data-asset-search-form>' +
                 '<label>Pesquisar pelo código provisório ou serial<input type="search" name="asset_q" maxlength="100" value="' + escapeHtml(state.asset_query || "") + '"></label>' +
                 '<button class="endpoint-asset-button" type="submit">Pesquisar patrimônio</button></form>' + renderSearchResults() +
                 (selectedAsset ? '<form class="endpoint-asset-form" data-asset-link-form><h4>Confirmar vínculo com ' + escapeHtml(selectedAsset.code) + '</h4>' +
-                    confirmationFields(mustExplain || state.suggestion_evidence_mismatch || Boolean(selectedAsset.active_endpoint) || selectedAsset.identity_status === "review") +
+                    confirmationFields(mustExplain || state.link_identity_changed || state.suggestion_evidence_mismatch || Boolean(selectedAsset.active_endpoint) || selectedAsset.identity_status === "review") +
                     '<label class="endpoint-asset-checkbox"><input type="checkbox" name="transfer_confirmed"><span>Autorizo encerrar um vínculo ativo anterior, preservando o histórico.</span></label>' +
                     '<button class="endpoint-asset-button endpoint-asset-button--primary" type="submit">Confirmar vínculo neste endpoint</button><p class="endpoint-asset-inline-status" data-asset-form-status role="status" aria-live="polite"></p></form>' : '') +
                 '</section>' : '<p class="endpoint-asset-muted">Seu perfil pode consultar, mas não criar ou vincular patrimônios.</p>');
@@ -273,7 +280,9 @@
             selectedAsset = {
                 id: state.suggestion.id, code: state.suggestion.code, serial_number: state.suggestion.serial_number,
                 manufacturer: state.suggestion.manufacturer, model: state.suggestion.model,
-                active_endpoint: state.suggestion_active_link
+                active_endpoint: state.suggestion_active_link && {
+                    ...state.suggestion_active_link, id: state.suggestion_active_link.endpoint_id
+                }
             };
             render();
         }
@@ -307,7 +316,9 @@
             event.preventDefault();
             const form = new FormData(linkForm);
             const transfer = form.get("transfer_confirmed") === "on";
-            if (selectedAsset.active_endpoint && selectedAsset.active_endpoint.id !== panel.dataset.endpointUuid && !transfer) {
+            const previous = selectedAsset.active_endpoint;
+            if ((state.link_identity_changed || (previous && (previous.state !== "current" ||
+                previous.id !== panel.dataset.endpointUuid))) && !transfer) {
                 setFormStatus(linkForm, "Marque a confirmação para encerrar o vínculo ativo anterior.");
                 return;
             }

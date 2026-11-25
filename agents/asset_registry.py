@@ -27,21 +27,19 @@ def inventory_evidence(endpoint):
     if not hardware and isinstance(full.get('hardware'), dict):
         hardware = full['hardware']
     bios = hardware.get('bios') if isinstance(hardware.get('bios'), dict) else {}
-    serial_values = [endpoint.serial_number]
-    serial_values.extend([system.get('serial_number'), hardware.get('serial_number'), bios.get('serial_number'),
-                          full.get('serial_number')])
-    serial_normalized = {meaningful_serial(value) for value in serial_values if meaningful_serial(value)}
-    conflict = len(serial_normalized) > 1
-    normalized = next(iter(serial_normalized)) if len(serial_normalized) == 1 and not conflict else None
-    serial_display = (system.get('serial_number') or bios.get('serial_number') or
-                      hardware.get('serial_number') or (snapshot.serial_number if snapshot else '') or endpoint.serial_number)
+    serial_values = (bios.get('serial_number'), system.get('serial_number'), hardware.get('serial_number'),
+                     full.get('serial_number'), snapshot.serial_number if snapshot else '', endpoint.serial_number)
+    valid_serials = [(value, meaningful_serial(value)) for value in serial_values if isinstance(value, str)]
+    valid_serials = [(value, key) for value, key in valid_serials if key]
+    conflict = len({key for _, key in valid_serials}) > 1
+    serial_display, normalized = valid_serials[0] if valid_serials else ('', None)
     manufacturer = (system.get('manufacturer') or hardware.get('manufacturer') or
                     (snapshot.manufacturer if snapshot else '') or endpoint.manufacturer or '').strip()
     model = (system.get('model') or hardware.get('model') or
              (snapshot.model if snapshot else '') or endpoint.model or '').strip()
     return {
         'serial_number': str(serial_display or '').strip(),
-        'serial_normalized': normalized,
+        'serial_normalized': None if conflict else normalized,
         'serial_conflict': conflict,
         'manufacturer': manufacturer,
         'model': model,
@@ -106,6 +104,28 @@ def _asset_summary(asset):
     }
 
 
+def _machine_id_key(value):
+    return str(value or '').strip().casefold()
+
+
+def link_matches_endpoint(link, endpoint):
+    return bool(endpoint and link.endpoint_id == endpoint.pk and link.endpoint_uuid_snapshot == endpoint.pk
+                and _machine_id_key(link.machine_id_snapshot) == _machine_id_key(endpoint.machine_id))
+
+
+def link_endpoint_reference(link):
+    if link is None:
+        return None
+    if link.endpoint_id is None:
+        state = 'removed'
+    else:
+        state = 'current' if link_matches_endpoint(link, link.endpoint) else 'identity_changed'
+    return {
+        'endpoint_id': str(link.endpoint_uuid_snapshot), 'hostname': link.hostname_snapshot,
+        'machine_id': link.machine_id_snapshot, 'state': state,
+    }
+
+
 def endpoint_asset_payload(endpoint):
     evidence = inventory_evidence(endpoint)
     warnings = endpoint_identity_warnings(endpoint)
@@ -115,7 +135,8 @@ def endpoint_asset_payload(endpoint):
     if len(current) > 1:
         return {'state': 'identity_conflict', 'error': 'multiple_active_asset_links', 'inventory': evidence,
                 'identity_warnings': warnings, 'asset': None, 'records': []}
-    if current:
+    stale_link = bool(current and not link_matches_endpoint(current[0], endpoint))
+    if current and not stale_link:
         link = current[0]
         evidence_conflicts = []
         if evidence['serial_conflict']:
@@ -145,7 +166,7 @@ def endpoint_asset_payload(endpoint):
                 'endpoint_id': str(row.endpoint_uuid_snapshot), 'hostname': row.hostname_snapshot,
                 'machine_id': row.machine_id_snapshot, 'linked_at': row.linked_at.isoformat(),
                 'ended_at': row.ended_at.isoformat() if row.ended_at else None,
-                'reason': row.reason, 'current': row.ended_at is None and row.endpoint_id is not None,
+                'reason': row.reason, 'current': row.pk == link.pk,
             } for row in link.asset.agent_links.order_by('linked_at', 'pk')],
             'records': [{
                 'id': str(row.pk), 'type': row.record_type,
@@ -176,7 +197,8 @@ def endpoint_asset_payload(endpoint):
             _normalized_text(suggestion.model) != _normalized_text(evidence['model']))
     ))
     return {
-        'state': 'conflict' if serial_conflict or len(serial_matches) > 1 or mismatch else 'unlinked',
+        'state': 'conflict' if stale_link or serial_conflict or len(serial_matches) > 1 or mismatch else 'unlinked',
+        'link_identity_changed': stale_link,
         'asset': None,
         'inventory': evidence,
         'identity_warnings': warnings,
@@ -187,13 +209,9 @@ def endpoint_asset_payload(endpoint):
         # under the transaction and returns the conflicting observations.
         'matching_endpoint_observations': [],
         'suggestion': _asset_summary(suggestion) if suggestion else None,
-        'suggestion_active_link': ({
-            'endpoint_id': str(suggestion_link.endpoint_uuid_snapshot),
-            'hostname': suggestion_link.hostname_snapshot,
-            'machine_id': suggestion_link.machine_id_snapshot,
-        } if suggestion_link else None),
+        'suggestion_active_link': link_endpoint_reference(suggestion_link),
         'suggestion_evidence_mismatch': mismatch,
-        'suggestion_requires_transfer': bool(suggestion_link and suggestion_link.endpoint_id != endpoint.pk),
+        'suggestion_requires_transfer': bool(suggestion_link and not link_matches_endpoint(suggestion_link, endpoint)),
     }
 
 
@@ -206,8 +224,7 @@ def _lock_endpoint(endpoint_id, expected_machine_id=None):
         raise AssetRegistryError('endpoint_inactive')
     if expected_machine_id is None:
         raise AssetRegistryError('endpoint_identity_required', status=400)
-    expected = str(expected_machine_id or '').strip()
-    if expected.casefold() != str(endpoint.machine_id or '').strip().casefold():
+    if _machine_id_key(expected_machine_id) != _machine_id_key(endpoint.machine_id):
         raise AssetRegistryError('endpoint_identity_changed', status=409)
     return endpoint
 
@@ -298,13 +315,12 @@ def link_asset_to_endpoint(endpoint_id, expected_machine_id, asset_id, user, *, 
         endpoint_link = AssetAgentLink.objects.select_for_update().filter(
             endpoint=endpoint, ended_at__isnull=True,
         ).select_related('asset').first()
-        if endpoint_link and endpoint_link.asset_id == asset.pk:
+        if endpoint_link and endpoint_link.asset_id == asset.pk and link_matches_endpoint(endpoint_link, endpoint):
             return asset
         asset_link = AssetAgentLink.objects.select_for_update().filter(
             asset=asset, ended_at__isnull=True,
         ).first()
-        has_transfer = bool((endpoint_link and endpoint_link.asset_id != asset.pk)
-                            or (asset_link and asset_link.endpoint_uuid_snapshot != endpoint.pk))
+        has_transfer = bool(endpoint_link or asset_link)
         if has_transfer and (not transfer_confirmed or len(reason) < 8):
             raise AssetRegistryError('link_transfer_confirmation_required', details={
                 'current_asset_code': endpoint_link.asset.asset_code if endpoint_link else None,
@@ -315,7 +331,7 @@ def link_asset_to_endpoint(endpoint_id, expected_machine_id, asset_id, user, *, 
             endpoint_link.ended_at = now
             endpoint_link.reason = (endpoint_link.reason + '\n' if endpoint_link.reason else '') + f'Vínculo encerrado: {reason}'
             endpoint_link.save(update_fields=['ended_at', 'reason'])
-        if asset_link:
+        if asset_link and (not endpoint_link or asset_link.pk != endpoint_link.pk):
             asset_link.ended_at = now
             asset_link.reason = (asset_link.reason + '\n' if asset_link.reason else '') + f'Vínculo encerrado: {reason}'
             asset_link.save(update_fields=['ended_at', 'reason'])
@@ -330,7 +346,8 @@ def link_asset_to_endpoint(endpoint_id, expected_machine_id, asset_id, user, *, 
         link = AssetAgentLink.objects.create(
             asset=asset, endpoint=endpoint, endpoint_uuid_snapshot=endpoint.pk,
             machine_id_snapshot=endpoint.machine_id or '', hostname_snapshot=endpoint.hostname or '',
-            origin=AssetAgentLink.ORIGIN_SERIAL_SUGGESTION if evidence['serial_normalized'] == asset.serial_normalized
+            origin=AssetAgentLink.ORIGIN_SERIAL_SUGGESTION if evidence['serial_normalized']
+                  and evidence['serial_normalized'] == asset.serial_normalized
                   else AssetAgentLink.ORIGIN_OPERATOR,
             evidence={'serial_normalized': evidence['serial_normalized'], 'manufacturer': evidence['manufacturer'],
                       'model': evidence['model'], 'discrepancies': discrepancies,
@@ -355,7 +372,7 @@ def add_asset_record(endpoint_id, expected_machine_id, user, *, record_type, des
         ).select_related('asset').first()
         if not link:
             raise AssetRegistryError('asset_not_linked_to_endpoint')
-        if str(link.machine_id_snapshot or '').strip().casefold() != str(endpoint.machine_id or '').strip().casefold():
+        if not link_matches_endpoint(link, endpoint):
             raise AssetRegistryError('asset_link_identity_changed', details={
                 'asset_id': str(link.asset_id), 'asset_code': link.asset.asset_code,
             })

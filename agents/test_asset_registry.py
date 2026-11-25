@@ -63,6 +63,102 @@ class AssetRegistryModelAndServiceTests(TestCase):
         self.assertEqual(AssetAgentLink.objects.filter(endpoint=self.endpoint, ended_at__isnull=True).count(), 1)
         self.assertEqual(AuditEvent.objects.filter(event_type='asset.created', endpoint=self.endpoint).count(), 1)
 
+    def test_inventory_serial_used_for_display_and_uniqueness_is_the_same_evidence(self):
+        snapshot = self.endpoint.inventory_snapshots.get()
+        snapshot.serial_number = 'SN 001'
+        snapshot.raw_payload = {'collections': {'system': {'serial_number': 'Unknown'}}}
+        snapshot.save(update_fields=['serial_number', 'raw_payload'])
+        asset = create_asset_for_endpoint(self.endpoint.pk, self.endpoint.machine_id, self.operator,
+                                          identity_confirmed=True)
+        self.assertEqual(asset.serial_number, 'SN 001')
+        self.assertEqual(asset.serial_normalized, 'sn001')
+        self.assertEqual(asset.agent_links.get().evidence['serial_normalized'], asset.serial_normalized)
+        asset.serial_number = 'SN 002'
+        asset.save(update_fields=['serial_number'])
+        asset.refresh_from_db()
+        self.assertEqual(asset.serial_normalized, 'sn002')
+
+    def test_flat_snapshot_serial_participates_in_conflict_detection(self):
+        snapshot = self.endpoint.inventory_snapshots.get()
+        snapshot.serial_number = 'OTHER-SERIAL'
+        snapshot.save(update_fields=['serial_number'])
+        payload = endpoint_asset_payload(self.endpoint)
+        self.assertEqual(payload['state'], 'conflict')
+        self.assertIsNone(payload['inventory']['serial_normalized'])
+        with self.assertRaisesMessage(AssetRegistryError, 'inventory_serial_conflict'):
+            create_asset_for_endpoint(self.endpoint.pk, self.endpoint.machine_id, self.operator,
+                                      identity_confirmed=True)
+
+    def test_deleted_agent_link_is_preserved_and_requires_explicit_transfer(self):
+        asset = create_asset_for_endpoint(self.endpoint.pk, self.endpoint.machine_id, self.operator,
+                                          identity_confirmed=True)
+        previous_uuid = self.endpoint.pk
+        previous_machine_id = self.endpoint.machine_id
+        record = AssetRecord.objects.create(asset=asset, record_type=AssetRecord.TYPE_FORMATTED,
+            description='Formatação', occurred_at=timezone.now())
+        self.endpoint.delete()
+        orphan = asset.agent_links.get()
+        self.assertIsNone(orphan.endpoint_id)
+        self.assertEqual(orphan.endpoint_uuid_snapshot, previous_uuid)
+        self.assertEqual(orphan.machine_id_snapshot, previous_machine_id)
+        replacement, _ = AgentMachine.create_with_token(
+            hostname='ASSET-REPLACEMENT', machine_id=str(uuid.uuid4()), serial_number='SN-001',
+        )
+        suggestion = endpoint_asset_payload(replacement)
+        self.assertEqual(suggestion['suggestion_active_link']['state'], 'removed')
+        self.assertTrue(suggestion['suggestion_requires_transfer'])
+        self.client.force_login(self.operator)
+        search = self.client.get(reverse('api-endpoint-asset-records', args=[replacement.pk]),
+                                 {'asset_q': asset.asset_code}).json()
+        reference = search['asset_search_results'][0]['active_endpoint']
+        self.assertEqual((reference['id'], reference['state']), (str(previous_uuid), 'removed'))
+        with self.assertRaisesMessage(AssetRegistryError, 'link_transfer_confirmation_required'):
+            link_asset_to_endpoint(replacement.pk, replacement.machine_id, asset.pk, self.operator,
+                                   identity_confirmed=True, reason='Reinstalação conferida')
+        link_asset_to_endpoint(replacement.pk, replacement.machine_id, asset.pk, self.operator,
+                               identity_confirmed=True, transfer_confirmed=True, reason='Reinstalação conferida')
+        payload = endpoint_asset_payload(replacement)
+        self.assertEqual(payload['asset']['id'], str(asset.pk))
+        self.assertEqual(payload['records'][0]['id'], str(record.pk))
+        old, new = payload['links']
+        self.assertEqual(old['endpoint_id'], str(previous_uuid))
+        self.assertEqual(old['machine_id'], previous_machine_id)
+        self.assertIsNotNone(old['ended_at'])
+        self.assertFalse(old['current'])
+        self.assertTrue(new['current'])
+        self.assertEqual(new['machine_id'], replacement.machine_id)
+        event = AuditEvent.objects.get(event_type='asset.agent_linked', endpoint=replacement)
+        self.assertEqual(event.metadata['previous_endpoint_id'], str(previous_uuid))
+
+    def test_changed_machine_id_requires_explicit_relink_and_keeps_previous_snapshot(self):
+        asset = create_asset_for_endpoint(self.endpoint.pk, self.endpoint.machine_id, self.operator,
+                                          identity_confirmed=True)
+        old_link = asset.agent_links.get()
+        self.endpoint.machine_id = str(uuid.uuid4())
+        self.endpoint.save(update_fields=['machine_id'])
+        payload = endpoint_asset_payload(self.endpoint)
+        self.assertEqual(payload['state'], 'conflict')
+        self.assertTrue(payload['link_identity_changed'])
+        self.assertIsNone(payload['asset'])
+        self.assertNotIn('records', payload)
+        self.assertEqual(payload['suggestion_active_link']['state'], 'identity_changed')
+        self.assertTrue(payload['suggestion_requires_transfer'])
+        self.client.force_login(self.operator)
+        search = self.client.get(reverse('api-endpoint-asset-records', args=[self.endpoint.pk]),
+                                 {'asset_q': asset.asset_code}).json()
+        self.assertEqual(search['asset_search_results'][0]['active_endpoint']['state'], 'identity_changed')
+        with self.assertRaisesMessage(AssetRegistryError, 'link_transfer_confirmation_required'):
+            link_asset_to_endpoint(self.endpoint.pk, self.endpoint.machine_id, asset.pk, self.operator,
+                                   identity_confirmed=True, reason='Identidade conferida')
+        link_asset_to_endpoint(self.endpoint.pk, self.endpoint.machine_id, asset.pk, self.operator,
+                               identity_confirmed=True, transfer_confirmed=True, reason='Identidade conferida')
+        old_link.refresh_from_db()
+        self.assertIsNotNone(old_link.ended_at)
+        new_link = asset.agent_links.get(ended_at__isnull=True)
+        self.assertNotEqual(old_link.machine_id_snapshot, new_link.machine_id_snapshot)
+        self.assertEqual(new_link.machine_id_snapshot, self.endpoint.machine_id)
+        self.assertEqual(endpoint_asset_payload(self.endpoint)['state'], 'linked')
+
     def test_review_identity_requires_reason_before_link_and_audits_explicit_resolution(self):
         asset = PhysicalAsset.objects.create(
             serial_number='SN-001', identity_status=PhysicalAsset.IDENTITY_REVIEW,

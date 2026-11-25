@@ -16,6 +16,7 @@ from agents.asset_registry import (
     create_asset_for_endpoint,
     endpoint_asset_payload,
     link_asset_to_endpoint,
+    link_endpoint_reference,
 )
 from agents.models import AgentMachine, AssetAgentLink, PhysicalAsset
 
@@ -41,13 +42,14 @@ def _can_view_endpoint(user):
 
 
 def _serialize_asset_search(asset, link=None):
+    reference = link_endpoint_reference(link)
     return {
         'id': str(asset.pk), 'code': asset.asset_code, 'serial_number': asset.serial_number,
         'manufacturer': asset.manufacturer, 'model': asset.model,
         'identity_status': asset.identity_status,
         'active_endpoint': ({
-            'id': str(link.endpoint_uuid_snapshot), 'hostname': link.hostname_snapshot,
-        } if link else None),
+            'id': reference['endpoint_id'], 'hostname': reference['hostname'], 'state': reference['state'],
+        } if reference else None),
     }
 
 
@@ -77,7 +79,7 @@ def endpoint_asset_records(request, endpoint_id):
             assets = list(assets)
             active_links = AssetAgentLink.objects.filter(
                 asset_id__in=[asset.pk for asset in assets], ended_at__isnull=True,
-            ).only('asset_id', 'endpoint_uuid_snapshot', 'hostname_snapshot')
+            ).select_related('endpoint')
             links_by_asset = {link.asset_id: link for link in active_links}
             payload['asset_search_results'] = [
                 _serialize_asset_search(asset, links_by_asset.get(asset.pk)) for asset in assets
