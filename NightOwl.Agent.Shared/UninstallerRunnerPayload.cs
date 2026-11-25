@@ -55,11 +55,7 @@ public static class UninstallerRunnerPayload
         int filesCopied = 0;
         int reparsePointsSkipped = 0;
         IEnumerable<string> candidates = verifiedRemoval
-            ? Directory.EnumerateFiles(installPath).Where(path =>
-                Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(path).Equals(UninstallerExecutableName, StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(path).Equals("NightOwl.Agent.Uninstaller.deps.json", StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(path).Equals("NightOwl.Agent.Uninstaller.runtimeconfig.json", StringComparison.OrdinalIgnoreCase))
+            ? Directory.EnumerateFiles(installPath).Where(IsVerifiedRunnerFile)
             : Directory.EnumerateFileSystemEntries(installPath, "*", SearchOption.AllDirectories);
         foreach (string source in candidates)
         {
@@ -90,6 +86,18 @@ public static class UninstallerRunnerPayload
         }
 
         return new UninstallerRunnerPayloadResult(runnerExecutable, filesCopied, reparsePointsSkipped);
+    }
+
+    private static bool IsVerifiedRunnerFile(string path)
+    {
+        string name = Path.GetFileName(path);
+        if (name.StartsWith("NightOwl.", StringComparison.OrdinalIgnoreCase))
+            return name.Equals(UninstallerExecutableName, StringComparison.OrdinalIgnoreCase)
+                || name.Equals("NightOwl.Agent.Uninstaller.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("NightOwl.Agent.Shared.dll", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("NightOwl.Agent.Uninstaller.deps.json", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("NightOwl.Agent.Uninstaller.runtimeconfig.json", StringComparison.OrdinalIgnoreCase);
+        return Path.GetExtension(name).Equals(".dll", StringComparison.OrdinalIgnoreCase);
     }
 }
 

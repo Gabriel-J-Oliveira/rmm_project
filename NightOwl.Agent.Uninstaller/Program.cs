@@ -504,7 +504,7 @@ public static class Program
 
         using Process process = Process.Start(new ProcessStartInfo
         {
-            FileName = "sc.exe",
+            FileName = strict ? Path.Combine(Environment.SystemDirectory, "sc.exe") : "sc.exe",
             Arguments = $"delete \"{serviceName}\"",
             UseShellExecute = false,
             CreateNoWindow = true,
