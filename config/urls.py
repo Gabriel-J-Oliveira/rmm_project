@@ -19,6 +19,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
 from dashboard import automation_views
+from dashboard import alert_policy_views
 
 from dashboard import views as dashboard_views
 from dashboard import ad_install_views
@@ -116,6 +117,8 @@ urlpatterns = [
     path('agent-releases/<uuid:pk>/action/', dashboard_views.agent_release_action, name='agent-release-action'),
     path('agent-install/enrollment/<uuid:pk>/revoke/', dashboard_views.agent_enrollment_revoke, name='agent-enrollment-revoke'),
     path('software/', dashboard_views.software_inventory, name='software-inventory'),
+    path('policies/alerts/', alert_policy_views.alert_policies, name='alert-policies'),
+    path('policies/alerts/<slug:key>/', alert_policy_views.edit_alert_policy, name='alert-policy-edit'),
     path('software-policies/', dashboard_views.software_policies, name='software-policies'),
     path('software-policies/create/', dashboard_views.software_policy_create, name='software-policy-create'),
     path('software-policies/<uuid:pk>/update/', dashboard_views.software_policy_update, name='software-policy-update'),

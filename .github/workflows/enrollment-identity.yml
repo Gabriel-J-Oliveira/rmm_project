@@ -72,6 +72,10 @@ jobs:
           node tests/frontend/test_endpoint_update_channel.cjs
           node --check static/js/endpoint_terminal.js
           node tests/frontend/test_endpoint_terminal_clipboard.cjs
+      - name: Alert policy configuration
+        run: |
+          node --test tests/frontend/test_alert_policies.cjs
+          python manage.py test dashboard.test_alert_policies dashboard.test_execution_policies --noinput
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
