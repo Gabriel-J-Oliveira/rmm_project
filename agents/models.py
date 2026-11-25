@@ -1126,6 +1126,7 @@ class PhysicalAsset(models.Model):
     identity_status = models.CharField(max_length=16, choices=IDENTITY_CHOICES, default=IDENTITY_PROVISIONAL)
     serial_number = models.CharField(max_length=255, blank=True)
     serial_normalized = models.CharField(max_length=255, null=True, blank=True)
+    smbios_uuid = models.UUIDField(null=True, blank=True, unique=True, editable=False)
     manufacturer = models.CharField(max_length=255, blank=True)
     model = models.CharField(max_length=255, blank=True)
     created_by = models.ForeignKey(
@@ -1165,9 +1166,11 @@ class AssetAgentLink(models.Model):
 
     ORIGIN_OPERATOR = 'operator'
     ORIGIN_SERIAL_SUGGESTION = 'serial_suggestion'
+    ORIGIN_SMBIOS = 'smbios'
     ORIGIN_CHOICES = [
         (ORIGIN_OPERATOR, 'Confirmação do operador'),
         (ORIGIN_SERIAL_SUGGESTION, 'Sugestão por serial confirmada'),
+        (ORIGIN_SMBIOS, 'Identidade SMBIOS'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -1201,6 +1204,16 @@ class AssetAgentLink(models.Model):
             ),
         ]
         indexes = [models.Index(fields=['asset', 'ended_at', '-linked_at'])]
+
+
+class AssetHardwareObservation(models.Model):
+    endpoint = models.OneToOneField(AgentMachine, primary_key=True, on_delete=models.CASCADE,
+                                    related_name='asset_hardware_observation')
+    smbios_uuid = models.UUIDField(null=True, db_index=True)
+    evidence = models.JSONField(default=dict)
+    snapshot_id = models.UUIDField()
+    observed_at = models.DateTimeField()
+    state = models.CharField(max_length=40)
 
 
 class AssetRecord(models.Model):

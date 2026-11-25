@@ -2036,7 +2036,15 @@ class AgentJobsResultView(APIView):
                         )
                     else:
                         try:
-                            record_collection(machine=machine, collection_type=collection_type, payload=collection_payload)
+                            collected = record_collection(machine=machine, collection_type=collection_type,
+                                                          payload=collection_payload)
+                            if job.payload.get('asset_validation') is True:
+                                from .models import AssetHardwareObservation
+                                validation = AssetHardwareObservation.objects.filter(
+                                    endpoint=machine, snapshot_id=collected.pk,
+                                ).values_list('state', flat=True).first()
+                                job.result = {**job.result, 'asset_validation': validation or 'inventory_not_observed'}
+                                job.save(update_fields=['result'])
                         except Exception:
                             logger.exception('Failed to persist job result collection for job_id=%s', job.id)
             if job.job_type == AgentJob.TYPE_UPDATE_AGENT:
