@@ -53,6 +53,41 @@ internal static class JobRuntimeTests
         try { _ = WindowsServicesCollector.CollectPaged("missing", "0123456789abcdef0123456789abcdef", 20); }
         catch (InvalidOperationException ex) when (ex.Message == "SERVICE_SNAPSHOT_EXPIRED") { expired = true; }
         Check(expired, "Unknown service snapshot cursor was not rejected.");
+
+        foreach (int total in new[] { 0, 20, 100, 295, 800 })
+        {
+            WindowsServiceInfo[] inventory = Enumerable.Range(0, total)
+                .Select(i => new WindowsServiceInfo($"svc-{i:D3}", $"Service {i}", "Running", "Automatic"))
+                .ToArray();
+            int offset = 0, pageIndex = 1, pageCount = 0;
+            while (true)
+            {
+                WindowsServicePageV3 page = WindowsServicesCollector.BuildPageV3(inventory,
+                    "0123456789abcdef0123456789abcdef", capturedAt, offset, 100, 48 * 1024, pageIndex, offset);
+                Check(page.SchemaVersion == 3 && page.PageIndex == pageIndex && page.RowsCollected == offset + page.Services.Count,
+                    $"V3 page metadata is inconsistent for {total} services.");
+                Check(page.Services.Count <= 100 && page.HasMore == (page.RowsCollected < total),
+                    $"V3 continuation is inconsistent for {total} services.");
+                string pageJson = JsonSerializer.Serialize(page, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                Check(Encoding.UTF8.GetByteCount(pageJson) <= 48 * 1024, "V3 page exceeded the configured response budget.");
+                offset = page.RowsCollected;
+                pageCount++;
+                if (!page.HasMore) break;
+                pageIndex++;
+            }
+            Check(offset == total && pageCount == Math.Max(1, (int)Math.Ceiling(total / 100d)),
+                $"V3 paging lost rows for {total} services.");
+        }
+
+        WindowsServiceInfo[] unicodeRows = Enumerable.Range(0, 100)
+            .Select(i => new WindowsServiceInfo($"svc-{i:D3}-" + new string('界', 240), new string('界', 256), "Running", "Automatic"))
+            .ToArray();
+        WindowsServicePageV3 unicodePage = WindowsServicesCollector.BuildPageV3(unicodeRows,
+            "0123456789abcdef0123456789abcdef", capturedAt, 0, 100, 48 * 1024, 1, 0);
+        string unicodeJson = JsonSerializer.Serialize(unicodePage, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Check(unicodePage.Services.Count is > 0 and < 100 && unicodePage.HasMore &&
+              Encoding.UTF8.GetByteCount(unicodeJson) <= 48 * 1024,
+            "V3 did not shrink a long Unicode page to the safe response budget.");
     }
     private static AgentConfig Config(string root) => new() {MachineId=Guid.NewGuid().ToString("D"),AgentToken="synthetic-only",
         ServerBaseUrl="https://isolated.invalid",JobsPullUrl="https://isolated.invalid/pull",JobsResultUrl="https://isolated.invalid/result",
