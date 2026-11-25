@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Políticas de Alertas | Night Owl{% endblock %}
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+    <a href="{% url 'software-policies' %}">Políticas</a><i data-lucide="chevron-right"></i><strong>Alertas</strong>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="hero page-header">
+    <div>
+        <h1 class="page-title"><span class="page-header-icon"><i data-lucide="bell"></i></span>Políticas de Alertas</h1>
+        <p class="page-subtitle">A avaliação destas políticas será integrada na RC49-02B.</p>
+    </div>
+    <div class="page-actions">
+        <a class="refresh-button" href="{% url 'software-policies' %}">Políticas de Software</a>
+    </div>
+</section>
+
+{% for message in messages %}<p role="status">{{ message }}</p>{% endfor %}
+
+{% if form %}
+<section class="panel">
+    <header class="panel-header"><h2>{{ policy.name }}</h2></header>
+    <form method="post" class="policy-form" data-alert-policy-form>
+        {% csrf_token %}
+        {{ form.revision }}
+        {% if form.errors %}<div role="alert">{{ form.non_field_errors }}{{ form.revision.errors }}</div>{% endif %}
+        <div class="policy-form-row">
+            {% for field in form.visible_fields %}
+            <div class="{% if field.widget_type == 'checkbox' %}policy-checkbox-grid{% else %}form-field{% endif %}" data-policy-field="{{ field.name }}"{% if field.errors %} data-field-error{% endif %}>
+                {% if field.widget_type == 'checkbox' %}
+                <label>{{ field }} {{ field.label }}</label>
+                {% else %}
+                {{ field.label_tag }}
+                {{ field }}
+                {% endif %}
+                {% if field.name == 'threshold' or field.name == 'recovery_threshold' %}
+                <small data-policy-unit></small>
+                {% endif %}
+                {% if field.help_text %}<small id="{{ field.auto_id }}_helptext">{{ field.help_text }}</small>{% endif %}
+                {{ field.errors }}
+            </div>
+            {% endfor %}
+        </div>
+        <p data-policy-summary role="status"></p>
+        <div class="page-actions">
+            <button class="primary-action" type="submit">Salvar política</button>
+            <a class="refresh-button" href="{% url 'alert-policies' %}">Cancelar</a>
+        </div>
+    </form>
+</section>
+{{ metric_options|json_script:"alert-policy-metrics" }}
+{% else %}
+<div class="panel table-wrap">
+    <table class="data-table">
+        <thead><tr><th>Política</th><th>Métrica</th><th>Criticidade</th><th>Escopo</th><th>Estado</th>{% if can_edit %}<th>Ações</th>{% endif %}</tr></thead>
+        <tbody>
+        {% for policy in policies %}
+        <tr>
+            <th scope="row">{{ policy.name }}</th>
+            <td>{{ policy.get_metric_display }}</td>
+            <td><span class="severity-badge severity-{{ policy.severity }}">{{ policy.get_severity_display }}</span></td>
+            <td>{{ policy.get_scope_display }}{% if policy.scope == 'endpoints' %} ({{ policy.endpoints.all|length }}){% endif %}</td>
+            <td>{% if policy.enabled %}Ativa{% else %}Inativa{% endif %}</td>
+            {% if can_edit %}<td><a class="table-link" href="{% url 'alert-policy-edit' key=policy.key %}">Editar<span class="sr-only"> {{ policy.name }}</span></a></td>{% endif %}
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if form %}<script src="{% static 'js/alert_policies.js' %}"></script>{% endif %}
+{% endblock %}
