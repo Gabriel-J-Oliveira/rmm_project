@@ -4,6 +4,8 @@
 > **Status:** direção geral aceita, com ressalvas e detalhes que serão discutidos em cada frente. Não converter propostas em decisões fechadas sem validação.
 > **Base técnica observada:** `main` no commit `723c9c7bd7088b0ef04290403f701dc16056787f`. Revisar a matriz à medida que RC48 e RC49 evoluírem.
 > **Documento complementar:** [deploy-RC49.md](deploy-RC49.md), que contém as decisões anteriores sobre agente Windows, Stable, políticas, Windows Update, AD e reinicialização.
+
+> **Regra obrigatória de continuidade operacional:** releases, upgrades/downgrades e reinicializações devem preservar funcionalidades previamente homologadas e autorizadas. Consultar o gate e as exceções de segurança em [deploy-RC49.md](deploy-RC49.md); continuidade não renova grants nem habilita modos administrativos automaticamente.
 > **Regra de trabalho:** Codex 1 conclui ajustes da RC48; Codex 2 trabalha a RC49 em branch própria, sem deploy, merge ou alterações nos artefatos da RC48.
 
 ## 1. Missão do produto
