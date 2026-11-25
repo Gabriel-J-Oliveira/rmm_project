@@ -165,6 +165,26 @@ Asset / Equipamento físico (identidade patrimonial estável)
 - Não exigir uma nova instalação do agente para usar a ficha patrimonial.
 - Evitar coleta e armazenamento de dados pessoais excessivos: apenas identificação de responsável necessária à gestão; respeitar permissões do NightOwl.
 
+## Conclusão do desenvolvimento da RC49-01B — 25/11/2026
+
+RC49-01B foi integrada à main pelas PRs #64 e #65. A implementação contempla identidade patrimonial por UUID SMBIOS com serial complementar, associação automática de hardware elegível, revisão de inconsistências e remoção do agente condicionada a receipt verificável, com auditoria durável e preservação patrimonial. A cadeia de migrations é 0052 → 0053 → 0054.
+
+SQLite, PostgreSQL, concorrência PostgreSQL, contrato de deployment Windows, E2Es Windows/.NET e gates visuais passaram. O teste real de limpeza e reinstalação ainda requer homologação em VM descartável com pacote assinado compatível. A falha histórica da sonda Chrome/CDP permanece sem causa comprovada.
+
+### Próxima proposta funcional — RC49-02 NOC operacional
+
+Objetivo proposto: oferecer uma fila operacional priorizada para o operador identificar endpoints que requerem atenção, usando estado persistido e sinais existentes. A especificação deve impedir coleta paralela e evitar inferir recuperação a partir de dados ausentes.
+
+- Apresentar criticidade e motivo verificável, com idade do dado e distinção entre estado atual, desatualizado e desconhecido.
+- Priorizar sinais existentes de heartbeat, telemetria persistida, alertas e jobs/ACK, sem abrir coleta paralela nem inferir recuperação.
+- Mostrar pressão sustentada de CPU/memória, capacidade de disco e disponibilidade de telemetria somente quando cobertura e atualidade forem suficientes.
+- Expor operações pelos fluxos atuais de autorização, identidade, allowlist e confirmação. O NOC não deve se tornar um executor novo.
+- Permitir filtrar e abrir o endpoint preservando contexto da ocorrência e origem do sinal.
+
+Critérios de aceite a detalhar incluem regras determinísticas de prioridade, janela e validade de cada métrica, deduplicação de eventos, filtros por autorização, estados sem dados, volume de consultas e latência. Testes devem provar que dados antigos ou parciais não geram alertas críticos falsos, identidade ambígua permanece bloqueada e ações respeitam o RBAC existente. A homologação deve medir desempenho em volume representativo e revisar a interface antes de habilitar para operadores.
+
+Decisões para deliberação: perfis de operador e visibilidade por organização; critérios e limiares de criticidade; janela de sustentação e envelhecimento; formato da fila e painel; atualização automática e frequência; deduplicação e encerramento de incidentes; quais ações autorizadas podem ser iniciadas no contexto; e se a primeira entrega será somente leitura. A RC49 permanece em desenvolvimento até a revisão do escopo e dos critérios de aceite.
+
 ### Critérios de aceite RC49-01A
 
 - Um equipamento existe independentemente de haver agente.
