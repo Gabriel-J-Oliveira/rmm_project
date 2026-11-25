@@ -6,13 +6,13 @@ from unittest import skipUnless
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import LiveServerTestCase
+from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.utils import timezone
 
 from .models import AgentMachine, AssetAgentLink, AssetRecord, InventorySnapshot, PhysicalAsset
 
 
-class AssetRegistryBrowserTests(LiveServerTestCase):
+class AssetRegistryBrowserTests(StaticLiveServerTestCase):
     @skipUnless(os.environ.get('NIGHTOWL_TEST_BROWSER_E2E') == '1', 'Explicit isolated browser gate required')
     def test_endpoint_records_create_and_manual_history_in_real_browser(self):
         operator = get_user_model().objects.create_superuser('asset-records-browser', password='synthetic-only')
