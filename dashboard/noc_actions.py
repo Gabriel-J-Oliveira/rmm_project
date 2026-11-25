@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from agents.models import AgentJob, EndpointAlert
+from agents.models import AgentJob, AgentMachine, EndpointAlert
 from config.authz import is_nightowl_technical_user
 from tickets.models import Ticket
 from tickets.services.desk_mvp1 import create_audit_event
@@ -29,9 +29,16 @@ VERIFICATION_TYPES = {
 @require_POST
 @transaction.atomic
 def noc_alert_action(request, pk, action):
+    # Match the evaluator's lock order before changing a shared occurrence.
+    endpoint_id = get_object_or_404(
+        EndpointAlert.objects.only('endpoint_id'), pk=pk, endpoint__is_active=True,
+    ).endpoint_id
+    endpoint = get_object_or_404(
+        AgentMachine.objects.select_for_update(), pk=endpoint_id, is_active=True,
+    )
     alert = get_object_or_404(
         EndpointAlert.objects.select_for_update(),
-        pk=pk, endpoint__is_active=True,
+        pk=pk, endpoint=endpoint,
     )
     if action in ('acknowledge', 'mute'):
         if not request.user.has_perm('agents.change_endpointalert'):
@@ -63,7 +70,6 @@ def noc_alert_action(request, pk, action):
         return _ticket_response(ticket, created=False)
     if alert.status == EndpointAlert.STATUS_RESOLVED:
         return JsonResponse({'detail': 'O alerta já foi resolvido.'}, status=409)
-    endpoint = alert.endpoint
     ticket = Ticket.objects.create(
         title=alert.title[:200], description=alert.description, endpoint=endpoint,
         endpoint_name=endpoint.hostname[:150], priority=priority_for_alert(alert.severity),
