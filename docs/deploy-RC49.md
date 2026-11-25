@@ -18,6 +18,19 @@ Diretrizes acordadas:
 4. **Operação objetiva, com evidência real.** Defeitos reproduzidos são corrigidos; não multiplicar ambientes temporários e backups para cada mudança pequena. Backups adicionais são pertinentes para alterações relevantes de dados/schema.
 5. **Identidade e permissões permanecem reais.** A rapidez operacional não implica aceitar hostname como identidade, executar scripts arbitrários ou retirar autenticação/auditoria.
 
+## Regra obrigatória — continuidade operacional entre releases
+
+Upgrade, downgrade, atualização do backend, reinicialização ou reinstalação **não pode desabilitar uma funcionalidade que já foi homologada e autorizada**. Esta regra vale para RC49 e para os próximos ciclos.
+
+- Tratar `.env` e demais configurações persistentes como estado operacional: promoção de código não as substitui, normaliza nem redefine para defaults. Não copiar `.env` de um checkout/release, gerar configuração nova por default, nem habilitar permissões por fallback.
+- Antes/depois de cada promoção ou restart, comparar os valores efetivos do Django e o estado das unidades systemd com o inventário de capacidades aprovadas. Validar escopo por UUID, operador, ação e capability; não basta comparar variáveis textuais.
+- Preservar o estado de inicialização de serviços separadamente do estado de execução temporária. O relay assistido pode ser parado após uma sessão de homologação sem ser habilitado permanentemente; não converter isso em autorização para iniciar automaticamente um serviço que estava intencionalmente desabilitado.
+- Nunca transformar continuidade em ampliação de privilégios: `admin_auth`, grants, permissões RBAC, allowlists e scopes permanecem sujeitos às autorizações próprias. Um grant expirado/revogado não é renovado automaticamente. A feature continua instalada e configurada, mas indisponível até autorização válida.
+- Quando a compatibilidade do agente impedir uma função, reportar a capability/motivo exatos. Não declarar suporte no heartbeat, relaxar RBAC, criar grants, ativar flags administrativas ou alterar a política para ocultar incompatibilidade.
+- O checklist de deploy deve registrar o estado anterior e posterior sem segredos: flags aprovadas, escopos, grants (modo/expiração, não credenciais), capabilities recentes, unidades e estado enabled/active, além de uma comparação que falhe se houver regressão não explicada. Mudanças intencionais de segurança exigem aprovação e registro separados.
+
+**Gate de continuidade:** NO-GO se uma função homologada deixar de estar disponível por diferença de configuração, permissão, grant, serviço ou capability não explicada. Corrigir a causa persistente, adicionar um teste de regressão ao componente responsável e repetir o gate antes de promover. Não aceitar “reativar manualmente após cada RC” como procedimento operacional.
+
 ## 2. Decisões confirmadas pelo responsável
 
 | Tema | Decisão confirmada | Consequência técnica |
