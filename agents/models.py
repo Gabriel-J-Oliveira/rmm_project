@@ -5,6 +5,7 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -1659,6 +1660,56 @@ class SoftwarePolicyViolation(models.Model):
 
     def __str__(self) -> str:
         return f'{self.policy} - {self.endpoint} - {self.software_name or "software"}'
+
+
+class AlertPolicy(models.Model):
+    class Metric(models.TextChoices):
+        CPU = 'cpu', 'Uso de CPU'
+        RAM = 'ram', 'Uso de RAM'
+        DISK = 'disk', 'Ocupação de disco'
+        OFFLINE = 'offline', 'Tempo offline'
+        UPTIME = 'uptime', 'Uptime'
+        ANTIVIRUS = 'antivirus', 'Antivírus'
+        JOB_FAILURES = 'job_failures', 'Falhas de jobs'
+
+    class Severity(models.TextChoices):
+        INFO = 'info', 'Informativo'
+        WARNING = 'warning', 'Atenção'
+        CRITICAL = 'critical', 'Crítico'
+
+    class Scope(models.TextChoices):
+        ALL = 'all', 'Todos os endpoints'
+        SERVERS = 'servers', 'Servidores'
+        DESKTOPS = 'desktops', 'Desktops'
+        ENDPOINTS = 'endpoints', 'Endpoints selecionados'
+
+    class AntivirusCondition(models.TextChoices):
+        DISABLED = 'disabled', 'Proteção desativada'
+        MISSING = 'missing', 'Antivírus ausente'
+        EITHER = 'either', 'Proteção desativada ou antivírus ausente'
+
+    key = models.SlugField(primary_key=True, max_length=50)
+    name = models.CharField(max_length=100)
+    enabled = models.BooleanField(default=False)
+    metric = models.CharField(max_length=24, choices=Metric.choices)
+    severity = models.CharField(max_length=16, choices=Severity.choices)
+    threshold = models.PositiveIntegerField(null=True, blank=True)
+    duration_minutes = models.PositiveIntegerField()
+    recovery_threshold = models.PositiveIntegerField(null=True, blank=True)
+    antivirus_condition = models.CharField(max_length=16, blank=True, choices=AntivirusCondition.choices)
+    job_window_minutes = models.PositiveIntegerField(null=True, blank=True)
+    max_age_minutes = models.PositiveIntegerField(null=True, blank=True)
+    min_coverage_percent = models.PositiveSmallIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(100)],
+    )
+    scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.ALL)
+    endpoints = models.ManyToManyField(AgentMachine, blank=True, related_name='alert_policies')
+    notify_visual = models.BooleanField(default=True)
+    notify_sound = models.BooleanField(default=False)
+    revision = models.PositiveIntegerField(default=0, editable=False)
+
+    class Meta:
+        ordering = ['key']
 
 
 class EndpointAlert(models.Model):
