@@ -429,6 +429,7 @@
             activeJob: activeJob,
             activeUpdateJob: activeUpdateJob,
             uninstallRequest: maybeObject(payload.uninstall_request),
+            agentRemoval: maybeObject(payload.agent_removal),
             inventory: inventory,
             hardware: maybeObject(payload.hardware),
             network: maybeObject(payload.network) || { interfaces: [] },
@@ -533,7 +534,7 @@
 
     function cancelUninstallButton(uninstallRequest) {
         const mode = String(uninstallRequest.mode || "uninstall").toLowerCase();
-        const label = mode === "purge" ? "Cancelar purge" : "Cancelar desinstalacao";
+        const label = "Cancelar remoção";
         return '<button type="button" class="endpoint-quick-action-button" data-cancel-uninstall="' + escapeHtml(uninstallRequest.id) + '" data-cancel-uninstall-mode="' + escapeHtml(mode) + '">' + icon("ban") + '<span>' + escapeHtml(label) + "</span></button>";
     }
 
@@ -541,13 +542,20 @@
         if (isEndpointUninstalled(detail)) return [];
         const uninstallRequest = pendingUninstallRequest(detail);
         if (uninstallRequest) return [cancelUninstallButton(uninstallRequest)];
-        return [actionButton("uninstall_agent", "Desinstalar agente", "trash-2")];
-    }
-
-    function purgeActionButtons(detail) {
-        if (isEndpointUninstalled(detail)) return [];
-        if (pendingUninstallRequest(detail)) return [];
-        return [actionButton("purge_agent", "Purgar agente e dados locais", "trash")];
+        const availability = detail.agentRemoval || {};
+        if (availability.reason === "forbidden") return [];
+        if (!availability.allowed) {
+            const reason = availability.reason === "endpoint_in_live_rollout"
+                ? "Endpoint em campanha de atualização"
+                : availability.reason === "endpoint_identity_conflict"
+                    ? "Identidade do endpoint em revisão" : "Agente sem suporte à remoção verificada";
+            return ['<button type="button" class="endpoint-quick-action-button" disabled title="' +
+                escapeHtml(reason) + '"><span>Remover agente</span></button>'];
+        }
+        if (detail.uninstallRequest && ["requested", "dispatched", "running"].includes(detail.uninstallRequest.status)) {
+            return ['<button type="button" class="endpoint-quick-action-button" disabled><span>Remoção em andamento</span></button>'];
+        }
+        return [actionButton("remove_agent", "Remover agente", "trash-2")];
     }
 
     function agentManagementActionButtons(detail) {
@@ -879,6 +887,13 @@
         }
         if (job.type === "uninstall_agent") {
             const payload = job.payload && typeof job.payload === "object" ? job.payload : {};
+            if (payload.verified_removal) {
+                if (job.status === "failed") return "Limpeza não confirmada. O cadastro do endpoint foi preservado.";
+                if (job.status === "expired") return "O agente não recebeu a solicitação a tempo.";
+                if (job.status === "timed_out") return "Nenhum receipt de limpeza foi confirmado.";
+                if (job.status === "cancelled") return "Remoção cancelada";
+                return "Aguardando confirmação de limpeza";
+            }
             const mode = String(result.mode || payload.mode || "").toLowerCase();
             if (mode === "purge") {
                 if (job.status === "completed") return "Agente purgado";
@@ -1353,7 +1368,6 @@
 
     function renderTasks(detail) {
         const lifecycleButtons = agentLifecycleActionButtons(detail);
-        const purgeButtons = purgeActionButtons(detail);
         const agentManagementButtons = agentManagementActionButtons(detail);
         const diagnosticButtons = [
             actionButton("ping", "Ping", "activity"),
@@ -1372,7 +1386,7 @@
             core: renderTaskCategory("Diagnósticos", "stethoscope", diagnosticButtons, {id:"diagnostics",grid:"four"}) +
                 renderTaskCategory("Operações", "settings-2", operationalButtons, {id:"operations",grid:"three"}),
             maintenance: renderTaskCategory("Manutenção do agente", "wrench", agentManagementButtons, {id:"maintenance",grid:"four"}),
-            critical: renderTaskCategory("Ações críticas", "shield-alert", lifecycleButtons.concat(purgeButtons), {id:"critical",grid:"two",danger:true})
+            critical: renderTaskCategory("Ações críticas", "shield-alert", lifecycleButtons, {id:"critical",grid:"two",danger:true})
         };
     }
 
@@ -1527,6 +1541,18 @@
             cache: "no-store",
             credentials: "same-origin"
         }).then(function (response) {
+            if (response.status === 404 && endpointDetail && endpointDetail.uninstallRequest &&
+                    endpointDetail.uninstallRequest.mode === "purge") {
+                return fetch("/api/endpoints/" + encodeURIComponent(id) + "/remove-status/", {
+                    headers: {Accept: "application/json"}, cache: "no-store", credentials: "same-origin"
+                }).then(function (statusResponse) {
+                    if (!statusResponse.ok) throw new Error("endpoint_fetch_failed");
+                    return statusResponse.json();
+                }).then(function (result) {
+                    if (result.outcome === "removed") window.location.assign("/endpoints/");
+                    throw new Error("endpoint_fetch_failed");
+                });
+            }
             if (!response.ok) throw new Error("endpoint_fetch_failed");
             return response.json();
         }).then(function (payload) {
@@ -1675,6 +1701,7 @@
         body.set("username", username || "");
         body.set("password", password || "");
         if (options.mode) body.set("mode", options.mode);
+        if (options.machineId) body.set("machine_id", options.machineId);
         if (options.hostnameConfirmation) body.set("hostname_confirmation", options.hostnameConfirmation);
         return fetch("/api/endpoints/" + encodeURIComponent(id) + "/uninstall/", {
             method: "POST",
@@ -1714,118 +1741,28 @@
         });
     }
 
-    function openUninstallModal() {
-        const endpoint = endpointDetail && endpointDetail.hostname || root.dataset.endpoint || "Endpoint";
-        const backdrop = document.createElement("div");
-        backdrop.className = "endpoint-update-modal";
-        backdrop.innerHTML = '<div class="endpoint-update-modal__dialog" role="dialog" aria-modal="true">' +
-            '<header><h2>Desinstalar agente</h2><button type="button" data-uninstall-close>&times;</button></header>' +
-            '<div class="endpoint-update-modal__body">' +
-                '<p><strong>Endpoint:</strong> ' + escapeHtml(endpoint) + '</p>' +
-                '<p>Esta operacao removera o agente NightOwl deste dispositivo. O historico do endpoint sera preservado.</p>' +
-                '<label>Usuario NightOwl<input type="text" autocomplete="username" data-uninstall-username></label>' +
-                '<label>Senha NightOwl<input type="password" autocomplete="current-password" data-uninstall-password></label>' +
-                '<div class="endpoint-update-modal__error" data-uninstall-error hidden></div>' +
-            '</div>' +
-            '<footer><button type="button" data-uninstall-close>Cancelar</button><button type="button" class="danger" data-uninstall-submit>Autorizar e desinstalar</button></footer>' +
-        '</div>';
-        document.body.appendChild(backdrop);
-        const username = backdrop.querySelector("[data-uninstall-username]");
-        const password = backdrop.querySelector("[data-uninstall-password]");
-        const errorBox = backdrop.querySelector("[data-uninstall-error]");
-        const submit = backdrop.querySelector("[data-uninstall-submit]");
-        function close() {
-            if (password) password.value = "";
-            backdrop.remove();
-        }
-        function setError(message) {
-            errorBox.textContent = message || "";
-            errorBox.hidden = !message;
-        }
-        backdrop.querySelectorAll("[data-uninstall-close]").forEach(function (button) {
-            button.addEventListener("click", close);
-        });
-        submit.addEventListener("click", function () {
-            if (submit.disabled) return;
-            submit.disabled = true;
-            submit.textContent = "Autorizando...";
-            setError("");
-            createUninstallRequest(username.value, password.value, { mode: "uninstall" }).then(function (payload) {
-                password.value = "";
-                showToast(payload.message || "Desinstalacao solicitada.");
-                close();
+    function openRemoveAgentModal() {
+        const endpoint = endpointDetail.hostname || root.dataset.endpoint;
+        const machineId = endpointDetail.agent.machineId;
+        window.NightOwlInstallBatch.modal({
+            title: "Remover agente",
+            description: endpoint + " será excluído após a confirmação de limpeza pelo desinstalador. O patrimônio e seu histórico serão preservados.",
+            submitLabel: "Autorizar remoção",
+            usernameLabel: "Usuário administrativo NightOwl",
+            usernamePlaceholder: "",
+            confirmationText: endpoint,
+            progressLabel: "Autorizando a remoção...",
+            perform: (credentials, confirmation) => createUninstallRequest(credentials.username, credentials.password, {
+                mode: "remove", machineId: machineId, hostnameConfirmation: confirmation
+            }),
+            validate: result => result.status === "ok" && Boolean(result.uninstall_request?.id),
+            resultValue: result => result,
+            accepted: function (result) {
+                showToast(result.message || "Remoção solicitada.");
                 schedulePolling();
-                return reloadEndpoint(false);
-            }).catch(function (error) {
-                password.value = "";
-                submit.disabled = false;
-                submit.textContent = "Autorizar e desinstalar";
-                setError(error.message || "Nao foi possivel autorizar.");
-            });
+                reloadEndpoint(false);
+            }
         });
-        backdrop.addEventListener("keydown", function (event) {
-            if (event.key === "Escape") close();
-            if (event.key === "Enter") submit.click();
-        });
-        username.focus();
-    }
-
-    function openPurgeModal() {
-        const endpoint = endpointDetail && endpointDetail.hostname || root.dataset.endpoint || "Endpoint";
-        const backdrop = document.createElement("div");
-        backdrop.className = "endpoint-update-modal";
-        backdrop.innerHTML = '<div class="endpoint-update-modal__dialog" role="dialog" aria-modal="true">' +
-            '<header><h2>Purgar agente e dados locais</h2><button type="button" data-purge-close>&times;</button></header>' +
-            '<div class="endpoint-update-modal__body">' +
-                '<p><strong>Endpoint:</strong> ' + escapeHtml(endpoint) + '</p>' +
-                '<p>Esta operacao removera o agente e os dados locais persistentes do NightOwl neste dispositivo.</p>' +
-                '<label>Usuario NightOwl<input type="text" autocomplete="username" data-purge-username></label>' +
-                '<label>Senha NightOwl<input type="password" autocomplete="current-password" data-purge-password></label>' +
-                '<label>Digite ' + escapeHtml(endpoint) + ' para confirmar<input type="text" autocomplete="off" data-purge-confirmation></label>' +
-                '<div class="endpoint-update-modal__error" data-purge-error hidden></div>' +
-            '</div>' +
-            '<footer><button type="button" data-purge-close>Cancelar</button><button type="button" class="danger" data-purge-submit>Purgar agente e dados locais</button></footer>' +
-        '</div>';
-        document.body.appendChild(backdrop);
-        const username = backdrop.querySelector("[data-purge-username]");
-        const password = backdrop.querySelector("[data-purge-password]");
-        const confirmation = backdrop.querySelector("[data-purge-confirmation]");
-        const errorBox = backdrop.querySelector("[data-purge-error]");
-        const submit = backdrop.querySelector("[data-purge-submit]");
-        function close() {
-            if (password) password.value = "";
-            backdrop.remove();
-        }
-        function setError(message) {
-            errorBox.textContent = message || "";
-            errorBox.hidden = !message;
-        }
-        backdrop.querySelectorAll("[data-purge-close]").forEach(function (button) {
-            button.addEventListener("click", close);
-        });
-        submit.addEventListener("click", function () {
-            if (submit.disabled) return;
-            submit.disabled = true;
-            submit.textContent = "Autorizando...";
-            setError("");
-            createUninstallRequest(username.value, password.value, { mode: "purge", hostnameConfirmation: confirmation.value }).then(function (payload) {
-                password.value = "";
-                showToast(payload.message || "Purge solicitado.");
-                close();
-                schedulePolling();
-                return reloadEndpoint(false);
-            }).catch(function (error) {
-                password.value = "";
-                submit.disabled = false;
-                submit.textContent = "Purgar agente e dados locais";
-                setError(error.message || "Nao foi possivel autorizar.");
-            });
-        });
-        backdrop.addEventListener("keydown", function (event) {
-            if (event.key === "Escape") close();
-            if (event.key === "Enter") submit.click();
-        });
-        username.focus();
     }
 
     const updateModal = {
@@ -2557,37 +2494,23 @@
             showToast("Esta acao ainda esta bloqueada ate liberarmos scripts/limpeza remota com seguranca.");
             return;
         }
-        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "uninstall_agent", "purge_agent"];
+        const realActions = ["force_inventory", "check_defender", "check_disk", "collect_disks", "collect_logs", "ping", "collect_software", "windows_update_scan", "update_agent", "update_trusted_release_keys", "repair_agent", "restart_agent", "remove_agent"];
         if (endpointDetail.source !== "mock" && realActions.indexOf(action) >= 0) {
             let jobOptions = {};
-            if (isEndpointUninstalled(endpointDetail) && ["update_agent", "repair_agent", "uninstall_agent", "purge_agent"].indexOf(action) >= 0) {
+            if (isEndpointUninstalled(endpointDetail) && ["update_agent", "repair_agent", "remove_agent"].indexOf(action) >= 0) {
                 showToast("Endpoint ja esta marcado como desinstalado.");
                 return;
             }
             if (action === "update_agent") {
                 openUpdateModal(origin);
                 return;
-            } else if (action === "uninstall_agent") {
-                if (isEndpointUninstalled(endpointDetail)) {
-                    showToast("Endpoint ja esta marcado como desinstalado.");
+            } else if (action === "remove_agent") {
+                if (!endpointDetail.agentRemoval || !endpointDetail.agentRemoval.allowed ||
+                        pendingUninstallRequest(endpointDetail)) {
+                    showToast("A remoção não está disponível para este endpoint.");
                     return;
                 }
-                if (pendingUninstallRequest(endpointDetail)) {
-                    showToast("Ja existe uma desinstalacao aguardando o agente.");
-                    return;
-                }
-                openUninstallModal();
-                return;
-            } else if (action === "purge_agent") {
-                if (isEndpointUninstalled(endpointDetail)) {
-                    showToast("Endpoint ja esta marcado como desinstalado.");
-                    return;
-                }
-                if (pendingUninstallRequest(endpointDetail)) {
-                    showToast("Ja existe uma operacao de lifecycle aguardando o agente.");
-                    return;
-                }
-                openPurgeModal();
+                openRemoveAgentModal();
                 return;
             } else if (action === "update_trusted_release_keys") {
                 const bundle = endpointDetail.agent && endpointDetail.agent.trustBundle;

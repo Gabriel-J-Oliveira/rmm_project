@@ -2047,6 +2047,8 @@ class AgentRemovalAudit(models.Model):
     agent_error_code = models.CharField(max_length=80, blank=True)
     binary_removed = models.BooleanField(null=True)
     persistent_data_preserved = models.BooleanField(null=True)
+    receipt_digest = models.CharField(max_length=64, blank=True)
+    auth_identity_stamp = models.CharField(max_length=64, blank=True, editable=False)
 
 
 class AgentUninstallRequest(models.Model):

@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Net.Http.Headers;
 using System.ServiceProcess;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -17,6 +19,8 @@ public static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--resume-verified-removal")
+            return await RunVerifiedRemovalAsync(null);
         DateTimeOffset started = DateTimeOffset.UtcNow;
         UninstallOptions options;
         try
@@ -29,6 +33,8 @@ public static class Program
             Console.Error.WriteLine($"UNINSTALL_INVALID_PARAMETERS: {ex.Message}");
             return 2;
         }
+        if (options.VerifiedRemoval)
+            return await RunVerifiedRemovalAsync(options);
 
         AgentConfigFile config = AgentConfigFile.Load(options.ConfigPath);
         string rootPath = string.IsNullOrWhiteSpace(options.RootPath)
@@ -140,6 +146,254 @@ public static class Program
         {
             throw new InvalidOperationException("REMOTE_PURGE_AUTHORIZATION_REQUIRED");
         }
+        if (options.VerifiedRemoval && (!options.Mode.Equals("purge", StringComparison.OrdinalIgnoreCase)
+            || !options.ServiceName.Equals(NightOwlPaths.ServiceName, StringComparison.Ordinal)))
+            throw new InvalidOperationException("REMOVAL_SCOPE_INVALID");
+    }
+
+    private static async Task<int> RunVerifiedRemovalAsync(UninstallOptions? options)
+    {
+        string runner = Path.GetDirectoryName(Environment.ProcessPath)!;
+        string root = NightOwlPaths.Current.Root;
+        string runners = Path.Combine(root, "Updates", "Runner");
+        string handoffPath = Path.Combine(runner, "removal-handoff.json");
+        string receiptPath = Path.Combine(runner, "removal-result.json");
+        string lockPath = Path.Combine(runners, "verified-removal.lock");
+        RemovalHandoff handoff;
+        Uri target;
+        FileStream guard;
+        try
+        {
+            CheckNoReparse(root);
+            CheckNoReparse(Path.Combine(root, "Updates"));
+            CheckNoReparse(runners);
+            CheckNoReparse(runner);
+            CheckNoReparse(handoffPath);
+            CheckNoReparse(receiptPath);
+            CheckNoReparse(lockPath);
+            handoff = JsonSerializer.Deserialize<RemovalHandoff>(File.ReadAllText(handoffPath), JsonOptions)
+                ?? throw new InvalidOperationException("REMOVAL_HANDOFF_INVALID");
+            if (!Guid.TryParse(handoff.JobId, out Guid jobId) || handoff.JobId != jobId.ToString()
+                || !runner.Equals(Path.Combine(runners, "uninstall-" + handoff.JobId), StringComparison.OrdinalIgnoreCase)
+                || !IsPathUnder(handoff.InstallPath, root)
+                || IsPathUnder(runner, handoff.InstallPath)
+                || (options is not null && (options.JobId != handoff.JobId ||
+                    !Path.GetFullPath(options.InstallPath).Equals(Path.GetFullPath(handoff.InstallPath), StringComparison.OrdinalIgnoreCase)))
+                || !Uri.TryCreate(handoff.JobsResultUrl, UriKind.Absolute, out Uri? url) || url.Scheme != "https"
+                || handoff.ReceiptToken.Length != 64 || !handoff.ReceiptToken.All(Uri.IsHexDigit)
+                || string.IsNullOrWhiteSpace(handoff.MachineId))
+                throw new InvalidOperationException("REMOVAL_SCOPE_INVALID");
+            target = url;
+            guard = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None,
+                1, FileOptions.DeleteOnClose);
+        }
+        catch (Exception)
+        {
+            Console.Error.WriteLine("REMOVAL_HANDOFF_UNAVAILABLE");
+            return 1;
+        }
+        using var removalGuard = guard;
+        string install = Path.GetFullPath(handoff.InstallPath);
+        string config = Path.Combine(root, "Config", "agent.config.json");
+        UninstallReceipt receipt = new() { JobId = handoff.JobId, StartedAt = DateTimeOffset.UtcNow };
+        if (File.Exists(receiptPath))
+        {
+            if (PathExists(Path.Combine(root, "Config")) || StrictServiceExists(NightOwlPaths.ServiceName))
+            {
+                Console.Error.WriteLine("REMOVAL_RECHECK_REQUIRED");
+                return 1;
+            }
+            return await SendVerifiedReceiptAsync(target, handoff, File.ReadAllText(receiptPath), handoffPath, receiptPath, true);
+        }
+        bool verified = false;
+        try
+        {
+            CheckNoReparse(Path.GetDirectoryName(config)!);
+            CheckNoReparse(config);
+            if (PathExists(config))
+            {
+                string fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(config)));
+                if (fingerprint != handoff.ConfigFingerprint)
+                    throw new InvalidOperationException("REMOVAL_IDENTITY_CHANGED");
+            }
+            else if (StrictServiceExists(NightOwlPaths.ServiceName))
+            {
+                throw new InvalidOperationException("REMOVAL_IDENTITY_CHANGED");
+            }
+            EnsureNoActiveUpdate(root);
+
+            // Validate every directory before stopping the service. Each
+            // deletion verifies absence and refuses junctions or symlinks.
+            string[] directories = new[] { "Config", "Identity", "State", "Trust", "Packages", "Cache", "Logs", "Diagnostics", "Jobs" }
+                .Select(name => Path.Combine(root, name)).Append(install)
+                .Concat(Directory.EnumerateFileSystemEntries(Path.Combine(root, "Updates"))
+                    .Where(path => !path.Equals(runners, StringComparison.OrdinalIgnoreCase)))
+                .Concat(Directory.EnumerateFileSystemEntries(runners)
+                    .Where(path => !path.Equals(runner, StringComparison.OrdinalIgnoreCase)
+                        && !path.Equals(lockPath, StringComparison.OrdinalIgnoreCase))).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (string path in directories)
+                VerifyOwnedTree(path);
+            string shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),
+                "NightOwl", "NightOwl.lnk");
+            CheckNoReparse(Path.GetDirectoryName(shortcut)!);
+            CheckNoReparse(shortcut);
+
+            RemoveVerifiedTask("NightOwl Agent Tray");
+            if (StrictServiceExists(NightOwlPaths.ServiceName))
+            {
+                using (ServiceController service = new(NightOwlPaths.ServiceName))
+                {
+                    if (service.Status is not ServiceControllerStatus.Stopped and not ServiceControllerStatus.StopPending)
+                        service.Stop();
+                    service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
+                }
+                RemoveServiceRegistration(NightOwlPaths.ServiceName, strict: true);
+            }
+            StopOwnedProcesses(root);
+            if (PathExists(shortcut))
+                File.Delete(shortcut);
+            foreach (string path in directories)
+            {
+                VerifyOwnedTree(path);
+                if (File.Exists(path))
+                    File.Delete(path);
+                else if (Directory.Exists(path))
+                    Directory.Delete(path, recursive: true);
+                if (PathExists(path))
+                    throw new InvalidOperationException("REMOVAL_RESIDUE");
+            }
+            if (PathExists(shortcut) || StrictServiceExists(NightOwlPaths.ServiceName))
+                throw new InvalidOperationException("REMOVAL_RESIDUE");
+            verified = true;
+        }
+        catch (Exception)
+        {
+            receipt.Status = "failed";
+            receipt.ExitCode = 1;
+            receipt.ErrorMessage = "REMOVAL_CLEANUP_NOT_CONFIRMED";
+        }
+        receipt.FinishedAt = DateTimeOffset.UtcNow;
+        receipt.Result = new
+        {
+            type = "uninstall_agent", mode = "purge", machine_id = handoff.MachineId,
+            cleanup_version = 1, cleanup_verified = verified,
+            binary_removed = verified ? true : (bool?)null,
+            persistent_data_preserved = verified ? false : (bool?)null
+        };
+        string body = JsonSerializer.Serialize(receipt, JsonOptions);
+        if (verified)
+            NightOwlFileStore.WriteAllTextDurable(receiptPath, body);
+        return await SendVerifiedReceiptAsync(target, handoff, body, handoffPath, receiptPath, verified);
+    }
+
+    private static async Task<int> SendVerifiedReceiptAsync(Uri target, RemovalHandoff handoff, string body,
+        string handoffPath, string receiptPath, bool verified)
+    {
+        using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false })
+            { Timeout = TimeSpan.FromSeconds(30) };
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            try
+            {
+                using HttpRequestMessage request = new(HttpMethod.Post, target);
+                request.Headers.Add("X-NightOwl-Removal-Receipt", handoff.ReceiptToken);
+                request.Headers.Add("Idempotency-Key", "uninstall-" + handoff.JobId);
+                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+                using HttpResponseMessage response = await client.SendAsync(request);
+                if ((int)response.StatusCode < 500 && !response.IsSuccessStatusCode)
+                    return 1;
+                response.EnsureSuccessStatusCode();
+                using JsonDocument ack = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (!verified || !ack.RootElement.TryGetProperty("removed", out var removed)
+                    || removed.ValueKind != JsonValueKind.True
+                    || !ack.RootElement.TryGetProperty("job_id", out var job) || job.GetString() != handoff.JobId)
+                    return 1;
+                File.Delete(handoffPath);
+                File.Delete(receiptPath);
+                return 0;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                if (attempt != 3)
+                    await Task.Delay(TimeSpan.FromSeconds(2 << attempt));
+            }
+        }
+        return 1;
+    }
+
+    private sealed record RemovalHandoff(string JobId, string MachineId, string InstallPath, string JobsResultUrl,
+        string ConfigFingerprint, string ReceiptToken);
+
+    private static bool PathExists(string path)
+    {
+        try { _ = File.GetAttributes(path); return true; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+    }
+
+    private static void CheckNoReparse(string path)
+    {
+        try
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("REMOVAL_REPARSE_POINT");
+        }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
+    }
+
+    private static void VerifyOwnedTree(string path)
+    {
+        CheckNoReparse(path);
+        if (!Directory.Exists(path))
+            return;
+        foreach (string child in Directory.EnumerateFileSystemEntries(path))
+            VerifyOwnedTree(child);
+    }
+
+    private static bool StrictServiceExists(string name)
+    {
+        try
+        {
+            using ServiceController service = new(name);
+            _ = service.Status;
+            return true;
+        }
+        catch (InvalidOperationException ex) when (ex.InnerException is Win32Exception { NativeErrorCode: 1060 })
+        {
+            return false;
+        }
+    }
+
+    private static void RemoveVerifiedTask(string name)
+    {
+        Type type = Type.GetTypeFromProgID("Schedule.Service", throwOnError: true)!;
+        dynamic scheduler = Activator.CreateInstance(type)!;
+        scheduler.Connect();
+        dynamic folder = scheduler.GetFolder("\\");
+        try { folder.DeleteTask(name, 0); }
+        catch (COMException ex) when (ex.HResult == unchecked((int)0x80070002)) { }
+        try { _ = folder.GetTask(name); }
+        catch (COMException ex) when (ex.HResult == unchecked((int)0x80070002)) { return; }
+        throw new InvalidOperationException("REMOVAL_TASK_RESIDUE");
+    }
+
+    private static void StopOwnedProcesses(string root)
+    {
+        foreach (Process process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                if (process.Id == Environment.ProcessId || !process.ProcessName.StartsWith("NightOwl.Agent.", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!process.HasExited && IsPathUnder(process.MainModule?.FileName ?? "", root))
+                {
+                    process.Kill(entireProcessTree: false);
+                    if (!process.WaitForExit(15000))
+                        throw new InvalidOperationException("REMOVAL_PROCESS_RESIDUE");
+                }
+            }
+        }
     }
 
     private static void EnsureNoActiveUpdate(string rootPath)
@@ -241,9 +495,9 @@ public static class Program
         WaitForNightOwlProcessesToExit(installPath, logPath, AgentProcessStopTimeout);
     }
 
-    private static void RemoveServiceRegistration(string serviceName)
+    private static void RemoveServiceRegistration(string serviceName, bool strict = false)
     {
-        if (!ServiceExists(serviceName))
+        if (!(strict ? StrictServiceExists(serviceName) : ServiceExists(serviceName)))
         {
             return;
         }
@@ -267,7 +521,7 @@ public static class Program
         DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(30);
         while (DateTimeOffset.UtcNow < deadline)
         {
-            if (!ServiceExists(serviceName))
+            if (!(strict ? StrictServiceExists(serviceName) : ServiceExists(serviceName)))
             {
                 return;
             }
@@ -591,6 +845,7 @@ internal sealed class UninstallOptions
     public string InstallPath { get; set; } = NightOwlPaths.Current.InstallDir;
     public string ServiceName { get; set; } = NightOwlPaths.ServiceName;
     public bool PurgeAuthorized { get; set; }
+    public bool VerifiedRemoval { get; set; }
     public string AuthorizationFile { get; set; } = "";
 
     public static UninstallOptions Parse(string[] args)
@@ -624,6 +879,9 @@ internal sealed class UninstallOptions
                     break;
                 case "--purge-authorized":
                     options.PurgeAuthorized = true;
+                    break;
+                case "--verified-removal":
+                    options.VerifiedRemoval = true;
                     break;
                 case "--authorization-file":
                     options.AuthorizationFile = Next();
