@@ -69,6 +69,7 @@ from agents.audit import create_audit_event, get_client_ip
 from agents.telemetry_configuration import monitoring_summary
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
+    UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE,
     agent_release_artifact_channel,
     build_repair_agent_job_payload,
     build_update_agent_job_payload,
@@ -2884,6 +2885,12 @@ def _manual_update_release_options(endpoint):
     for release in releases:
         decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=release, record_evaluation=False)
         version_comparison = compare_versions(endpoint.agent_version or '', release.version)
+        requires_force = version_comparison is not None and version_comparison > 0
+        downgrade_decision = decision
+        if decision.reason_code == UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE:
+            downgrade_decision = evaluate_agent_update_policy(
+                endpoint, manual=True, explicit_release=release, allow_downgrade=True, record_evaluation=False,
+            )
         rows.append({
             'id': str(release.id),
             'version': release.version,
@@ -2906,7 +2913,10 @@ def _manual_update_release_options(endpoint):
             'eligible': decision.eligible,
             'reason_code': decision.reason_code,
             'eligibility_detail': _update_policy_message(decision.reason_code),
-            'requires_force': decision.reason_code == 'downgrade_requires_force' or (version_comparison is not None and version_comparison > 0),
+            'requires_force': requires_force,
+            'eligible_with_downgrade': requires_force and downgrade_decision.eligible,
+            'downgrade_reason_code': downgrade_decision.reason_code if requires_force else '',
+            'downgrade_eligibility_detail': _update_policy_message(downgrade_decision.reason_code) if requires_force else '',
             'same_version': version_comparison == 0,
             'metadata_complete': bool(release.package_url and release.sha256 and release.size),
             'package_url_present': bool(release.package_url),

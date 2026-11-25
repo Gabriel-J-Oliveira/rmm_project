@@ -43,12 +43,13 @@ assert(saveFlow.includes('"/update-policy/"'), "channel change must use the exis
 assert(saveFlow.includes('body.set("update_channel", selectedChannel)'), "channel change must submit the selected policy channel");
 assert(saveFlow.includes("reloadUpdateChannelReleases()"), "successful channel change must reload authoritative release options");
 assert(!saveFlow.includes("createRealJob("), "saving a channel must never create an update job");
-assert(source.includes('if (!release.eligible)'), "manual update submission must reject releases blocked by backend eligibility");
+contains(/if \(downgrade \? release\.eligible_with_downgrade !== true : !release\.eligible\)/, "each path must require its own backend eligibility");
+contains(/advanced\.addEventListener\("change", updateModalSubmitState\)/, "changing either downgrade confirmation must recalculate the submit button");
 assert(source.includes('Salve o canal selecionado para consultar as releases disponíveis.'), "pending channel changes must explain that saving is required");
 assert(source.includes("!updateChannelIsPending()") && source.includes("!selectionIsValid"), "update button must require a synchronized channel and valid selected release");
 assert(source.includes('if (release.revoked || release.status === "revoked")'), "revoked releases must remain visibly blocked in the selector details");
 assert(source.includes('release.source_channel || release.channel'), "release details must distinguish the signed artifact channel");
-assert(template.includes("endpoint_detail.js' %}?v=rc49-01b-removal-1"), "endpoint detail JavaScript cache version must be bumped");
+assert(template.includes("endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2-service-controls-1-rc49-downgrade-1-rc49-removal-2"), "endpoint detail JavaScript cache version must be bumped");
 assert(template.includes("endpoint_actions_jobs.css' %}?v=rc47-hotfix-47-1"), "endpoint detail stylesheet cache version must use the hotfix cache key");
 
 console.log("endpoint_detail update modal static checks passed");

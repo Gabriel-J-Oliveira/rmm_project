@@ -1,13 +1,14 @@
 """Reconcile fresh, authenticated inventory with permanent physical assets."""
 
 import re
+from datetime import timedelta
 from uuid import UUID
 
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .asset_registry import _normalized_text, link_matches_endpoint
+from .asset_registry import AssetRegistryError, _audit, _lock_endpoint, _normalized_text, link_matches_endpoint
 from .identity import lock_identity_registry, machine_id_matches, meaningful_serial, normalized_machine_id
 from .models import AgentMachine, AssetAgentLink, AssetHardwareObservation, AuditEvent, InventorySnapshot, PhysicalAsset
 
@@ -78,6 +79,10 @@ def _matches_evidence(asset, evidence):
     )
 
 
+def _replaced_uuid(key):
+    return AssetAgentLink.objects.filter(ended_at__isnull=False, evidence__replaced_smbios_uuid=str(key)).exists()
+
+
 def _reconcile(endpoint, key, evidence, snapshot):
     try:
         machine_id = normalized_machine_id(endpoint.machine_id)
@@ -92,13 +97,23 @@ def _reconcile(endpoint, key, evidence, snapshot):
         return 'agent_identity_conflict'
     assets = PhysicalAsset.objects.select_for_update()
     candidate = assets.filter(smbios_uuid=key).first()
+    if not candidate and _replaced_uuid(key):
+        return 'asset_identity_conflict'
     serial = meaningful_serial(evidence['serial_number'])
     by_serial = assets.filter(status=PhysicalAsset.STATUS_ACTIVE, serial_normalized=serial).first() if serial else None
     if candidate and (candidate.status != PhysicalAsset.STATUS_ACTIVE or (by_serial and by_serial.pk != candidate.pk)):
         return 'asset_identity_conflict'
+    if not candidate and current:
+        linked_asset = assets.get(pk=current.asset_id)
+        if (linked_asset.smbios_uuid or linked_asset.status != PhysicalAsset.STATUS_ACTIVE
+                or (by_serial and by_serial.pk != linked_asset.pk)):
+            return 'asset_identity_conflict'
+        candidate = linked_asset
     if not candidate and by_serial:
-        # A serial can adopt an SMBIOS UUID only through its already confirmed agent link.
-        if not current or current.asset_id != by_serial.pk or by_serial.smbios_uuid:
+        # Adopting a UUID for an older asset on a new installation needs more
+        # than a serial, plus a prior association of that same asset.
+        if (by_serial.smbios_uuid or not by_serial.manufacturer or not by_serial.model
+                or not by_serial.agent_links.exists()):
             return 'asset_identity_conflict'
         candidate = by_serial
     if current and (not candidate or candidate.pk != current.asset_id):
@@ -110,12 +125,17 @@ def _reconcile(endpoint, key, evidence, snapshot):
     if candidate:
         previous = AssetAgentLink.objects.filter(asset=candidate, ended_at__isnull=True).first()
         if previous and previous.endpoint_id and not current:
-            old = AgentMachine.objects.get(pk=previous.endpoint_id)
-            if old.is_active and not old.has_terminal_lifecycle:
+            old = AgentMachine.objects.filter(pk=previous.endpoint_id).first()
+            if old and old.is_active and not old.has_terminal_lifecycle:
                 return 'previous_agent_active'
         if candidate.smbios_uuid is None:
             candidate.smbios_uuid = key
             candidate.save(update_fields=['smbios_uuid', 'updated_at'])
+            AuditEvent.objects.create(
+                event_type='asset.smbios_adopted', actor_type=AuditEvent.ACTOR_SYSTEM, endpoint=endpoint,
+                title='UUID SMBIOS confirmado no patrimônio existente',
+                metadata={'asset_id': str(candidate.pk), 'snapshot_id': str(snapshot.pk), 'smbios_uuid': str(key)},
+            )
     else:
         candidate = PhysicalAsset.objects.create(
             smbios_uuid=key, serial_number=evidence['serial_number'], manufacturer=evidence['manufacturer'],
@@ -141,6 +161,63 @@ def _reconcile(endpoint, key, evidence, snapshot):
     return 'linked'
 
 
+def board_change_candidate(endpoint, observation):
+    if (not observation or observation.state != 'asset_identity_conflict'
+            or observation.observed_at < timezone.now() - timedelta(days=1)
+            or not normalized_smbios_uuid(str(observation.smbios_uuid or ''))
+            or live_claims(observation.smbios_uuid, endpoint.pk).exists()
+            or _replaced_uuid(observation.smbios_uuid)
+            or PhysicalAsset.objects.filter(smbios_uuid=observation.smbios_uuid).exists()):
+        return None
+    link = AssetAgentLink.objects.filter(endpoint=endpoint, ended_at__isnull=True,
+                                        asset__status=PhysicalAsset.STATUS_ACTIVE).select_related('asset').first()
+    if not link or not link_matches_endpoint(link, endpoint) or not link.asset.smbios_uuid:
+        return None
+    asset = link.asset
+    if (not asset.serial_normalized or meaningful_serial(observation.evidence.get('serial_number')) != asset.serial_normalized
+            or not asset.manufacturer or not asset.model or not _matches_evidence(asset, observation.evidence)):
+        return None
+    return link
+
+
+@transaction.atomic
+def confirm_board_change(endpoint_id, expected_machine_id, snapshot_id, user, *, reason):
+    reason = reason.strip() if isinstance(reason, str) else ''
+    if not 8 <= len(reason) <= 2000:
+        raise AssetRegistryError('identity_resolution_required')
+    lock_identity_registry()
+    endpoint = _lock_endpoint(endpoint_id, expected_machine_id)
+    try:
+        machine_id = normalized_machine_id(endpoint.machine_id)
+    except ValueError:
+        machine_id = ''
+    if (endpoint.has_terminal_lifecycle or not machine_id
+            or machine_id_matches(machine_id).exclude(pk=endpoint.pk).exists()):
+        raise AssetRegistryError('asset_validation_identity_conflict')
+    observation = AssetHardwareObservation.objects.filter(endpoint=endpoint, snapshot_id=snapshot_id).first()
+    link = board_change_candidate(endpoint, observation)
+    if not link:
+        raise AssetRegistryError('hardware_change_not_confirmable')
+    asset = PhysicalAsset.objects.select_for_update().get(pk=link.asset_id)
+    old_uuid = asset.smbios_uuid
+    now = timezone.now()
+    link.ended_at = now
+    link.evidence = {**link.evidence, 'replaced_smbios_uuid': str(old_uuid)}
+    link.save(update_fields=['ended_at', 'evidence'])
+    asset.smbios_uuid = observation.smbios_uuid
+    asset.save(update_fields=['smbios_uuid', 'updated_at'])
+    AssetAgentLink.objects.create(
+        asset=asset, endpoint=endpoint, endpoint_uuid_snapshot=endpoint.pk, machine_id_snapshot=endpoint.machine_id,
+        hostname_snapshot=endpoint.hostname, origin=AssetAgentLink.ORIGIN_SMBIOS,
+        evidence={**observation.evidence, 'snapshot_id': str(snapshot_id)}, linked_by=user, reason=reason,
+    )
+    observation.state = 'linked'
+    observation.save(update_fields=['state'])
+    _audit('asset.board_change_confirmed', 'Troca de placa confirmada', endpoint, user,
+           {'asset_id': str(asset.pk), 'previous_smbios_uuid': str(old_uuid),
+            'smbios_uuid': str(asset.smbios_uuid), 'snapshot_id': str(snapshot_id)}, reason)
+
+
 @transaction.atomic
 def observe_hardware(endpoint_id, snapshot, hardware, *, reconcile=True):
     lock_identity_registry()
@@ -149,13 +226,13 @@ def observe_hardware(endpoint_id, snapshot, hardware, *, reconcile=True):
         return None
     key, evidence, state = hardware_evidence(hardware)
     previous = AssetHardwareObservation.objects.filter(endpoint=endpoint).first()
-    if previous and (previous.observed_at, previous.snapshot_id) >= (snapshot.collected_at, snapshot.pk):
+    if previous and (previous.observed_at, previous.snapshot_id) >= (snapshot.received_at, snapshot.pk):
         return previous
     if state == 'eligible' and reconcile and settings.NIGHTOWL_AUTOMATIC_ASSETS_ENABLED:
         state = _reconcile(endpoint, key, evidence, snapshot)
     observation, _ = AssetHardwareObservation.objects.update_or_create(
         endpoint=endpoint, defaults={'smbios_uuid': key, 'evidence': evidence, 'snapshot_id': snapshot.pk,
-                                     'observed_at': snapshot.collected_at, 'state': state},
+                                     'observed_at': snapshot.received_at, 'state': state},
     )
     return observation
 
