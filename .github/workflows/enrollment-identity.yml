@@ -79,7 +79,7 @@ jobs:
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
-          dashboard.test_agent_install_workflow config.test_runtime_environment
+          dashboard.test_agent_install_workflow config.test_runtime_environment config.test_operational_continuity
           --exclude-tag windows_e2e --noinput --verbosity 1
       - name: PostgreSQL concurrency gate (no SQLite substitution)
         if: matrix.database == 'postgresql'
