@@ -9,7 +9,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .asset_hardware import observe_hardware
-from .models import AgentJob, AgentMachine, AssetRecord, InventorySnapshot, PhysicalAsset
+from .models import AgentJob, AgentMachine, AssetAgentLink, AssetRecord, AuditEvent, InventorySnapshot, PhysicalAsset
+from .lifecycle_jobs import agent_job_parameters
 
 
 @override_settings(NIGHTOWL_AUTOMATIC_ASSETS_ENABLED=True)
@@ -69,7 +70,41 @@ class HardwareIdentityTests(TestCase):
         self.assertEqual(first.status_code, 202)
         self.assertEqual(first.json(), second.json())
         self.assertEqual(AgentJob.objects.get().job_type, AgentJob.TYPE_FORCE_INVENTORY)
+        self.assertEqual(agent_job_parameters(AgentJob.objects.get()), {})
         self.assertFalse(PhysicalAsset.objects.exists())
+
+    def test_legacy_asset_adopts_uuid_without_replacing_code_or_history_after_reinstall(self):
+        asset = PhysicalAsset.objects.create(serial_number='ABC-123', manufacturer='Vendor', model='Model')
+        AssetAgentLink.objects.create(asset=asset, endpoint=self.endpoint, endpoint_uuid_snapshot=self.endpoint.pk,
+                                     machine_id_snapshot=self.endpoint.machine_id)
+        self.endpoint.delete()
+        self.assertEqual(self.observe(self.machine()).state, 'linked')
+        asset.refresh_from_db()
+        self.assertEqual(asset.smbios_uuid, self.key)
+        self.assertEqual(asset.agent_links.count(), 2)
+        self.assertEqual(PhysicalAsset.objects.count(), 1)
+
+    def test_board_replacement_uses_observed_uuid_and_preserves_history(self):
+        self.assertEqual(self.observe(self.endpoint).state, 'linked')
+        asset = PhysicalAsset.objects.get()
+        replacement_uuid = uuid.uuid4()
+        observation = self.observe(self.endpoint, key=replacement_uuid)
+        self.assertEqual(observation.state, 'asset_identity_conflict')
+        self.assertEqual(PhysicalAsset.objects.get().smbios_uuid, self.key)
+        self.client.force_login(get_user_model().objects.create_superuser('reviewer'))
+        url = reverse('api-endpoint-asset-records', args=[self.endpoint.pk])
+        self.assertEqual(self.client.get(url).json()['board_change']['snapshot_id'], str(observation.snapshot_id))
+        request = {'action': 'confirm_board_change', 'machine_id': self.endpoint.machine_id,
+                   'snapshot_id': str(observation.snapshot_id), 'identity_confirmed': True,
+                   'reason': 'Troca conferida em bancada', 'smbios_uuid': str(uuid.uuid4())}
+        self.assertEqual(self.client.post(url, {**request, 'snapshot_id': str(uuid.uuid4())},
+                                          content_type='application/json').status_code, 409)
+        self.assertEqual(self.client.post(url, request, content_type='application/json').status_code, 200)
+        asset.refresh_from_db()
+        self.assertEqual(asset.smbios_uuid, replacement_uuid)
+        self.assertEqual(asset.agent_links.count(), 2)
+        self.assertTrue(AuditEvent.objects.filter(event_type='asset.board_change_confirmed').exists())
+        self.assertEqual(self.observe(self.machine(), key=self.key, serial='').state, 'asset_identity_conflict')
 
     def test_validation_reports_evidence_from_the_authenticated_result(self):
         endpoint, token = AgentMachine.create_with_token(

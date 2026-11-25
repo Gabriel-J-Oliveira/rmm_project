@@ -34,6 +34,7 @@
         asset_identity_conflict: "A identidade patrimonial conflitou com um registro existente. Recarregue os dados e revise a associação.",
         asset_validation_offline: "Endpoint offline. A validação precisa de uma nova coleta.",
         asset_validation_identity_conflict: "A identidade do agente está ausente ou duplicada.",
+        hardware_change_not_confirmable: "A evidência não permite confirmar a troca. Colete e revise os dados novamente.",
         endpoint_job_queue_full: "A fila do endpoint está cheia. Tente novamente após a conclusão dos jobs.",
         forbidden: "Você não tem permissão para esta operação.",
         invalid_json: "A solicitação não pôde ser validada. Tente novamente."
@@ -236,11 +237,19 @@
             (hardware.smbios_uuid ? ' · <code>' + escapeHtml(hardware.smbios_uuid) + '</code>' : '') +
             (hardware.observed_at ? ' · ' + escapeHtml(formatDate(hardware.observed_at)) : '') + '</p>' +
             (validationText ? '<p role="status">' + escapeHtml(validationText) + '</p>' : '') +
-            ((state.permissions || {}).validate_link ? '<button type="button" class="endpoint-asset-button" data-asset-validate>Validar vínculo</button>' : '') + '</div>' +
+            ((state.permissions || {}).validate_link ? '<button type="button" class="endpoint-asset-button" data-asset-validate>Validar vínculo</button>' : '') +
+            (state.board_change ? '<form class="endpoint-asset-form" data-asset-board-form data-snapshot-id="' +
+                escapeHtml(state.board_change.snapshot_id) + '"><h3>Confirmar troca de placa</h3><p>UUID anterior: <code>' +
+                escapeHtml(state.board_change.previous_smbios_uuid) + '</code></p>' + confirmationFields(true) +
+                '<button type="submit" class="endpoint-asset-button">Confirmar troca de placa</button><p role="status" data-asset-form-status></p></form>' : '') + '</div>' +
             (state.state === "linked" ? renderLinked() :
              state.state === "identity_conflict" ? '<h2>Conflito de identidade</h2><p class="endpoint-asset-alert endpoint-asset-error">Há mais de um vínculo patrimonial ativo para este UUID. Nenhum histórico foi combinado.</p>' + warningsHtml() :
              state.state === "conflict" ? '<h2>Conflito de evidências patrimoniais</h2><p class="endpoint-asset-alert endpoint-asset-error">A associação automática está bloqueada. Revise os dados e resolva explicitamente qualquer divergência.</p>' + renderUnlinked() : renderUnlinked());
-        if (["queued", "sent", "running"].includes(validation.state)) {
+        scheduleValidationPoll();
+    }
+
+    function scheduleValidationPoll() {
+        if (["queued", "sent", "running"].includes((state.validation_job || {}).state)) {
             window.clearTimeout(validationPoll);
             validationPoll = window.setTimeout(function () {
                 if (!panel.closest("[data-endpoint-tab-panel]").hidden) load(state.asset_query, true);
@@ -260,6 +269,14 @@
             state.asset_query = assetQuery || "";
             loaded = true;
             if (!quiet || !content.querySelector("form :focus")) render();
+            else {
+                scheduleValidationPoll();
+                content.addEventListener("focusout", function () {
+                    window.setTimeout(function () {
+                        if (!content.querySelector("form :focus")) render();
+                    }, 0);
+                }, {once: true});
+            }
         } catch (error) {
             content.innerHTML = '<h2>Não foi possível carregar os registros</h2><p class="endpoint-asset-alert endpoint-asset-error" role="alert">' + escapeHtml(error.message) + '</p><button class="endpoint-asset-button" type="button" data-asset-refresh>Tentar novamente</button>';
         } finally {
@@ -335,6 +352,15 @@
     });
 
     root.addEventListener("submit", function (event) {
+        const boardForm = event.target.closest("[data-asset-board-form]");
+        if (boardForm && state.board_change) {
+            event.preventDefault();
+            const form = new FormData(boardForm);
+            submitMutation(boardForm, {action: "confirm_board_change", snapshot_id: boardForm.dataset.snapshotId,
+                machine_id: panel.dataset.machineId, identity_confirmed: form.get("identity_confirmed") === "on",
+                reason: form.get("reason")});
+            return;
+        }
         const searchForm = event.target.closest("[data-asset-search-form]");
         if (searchForm) {
             event.preventDefault();

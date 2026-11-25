@@ -19,7 +19,7 @@ from agents.asset_registry import (
     link_asset_to_endpoint,
     link_endpoint_reference,
 )
-from agents.asset_hardware import live_claims
+from agents.asset_hardware import board_change_candidate, confirm_board_change, live_claims
 from agents.asset_registry import _lock_endpoint
 from agents.identity import normalized_machine_id, machine_id_matches
 from agents.models import AgentJob, AgentMachine, AssetAgentLink, AssetHardwareObservation, AuditEvent, PhysicalAsset
@@ -113,6 +113,12 @@ def endpoint_asset_records(request, endpoint_id):
                 state = 'uuid_duplicate'
             payload['hardware_identity'] = {'state': state, 'observed_at': observation.observed_at,
                                             'smbios_uuid': str(observation.smbios_uuid or '')}
+            if (_has_perm(request.user, 'agents.change_physicalasset')
+                    and _has_perm(request.user, 'agents.add_assetagentlink')):
+                board = board_change_candidate(endpoint, observation)
+                if board:
+                    payload['board_change'] = {'snapshot_id': str(observation.snapshot_id),
+                                               'previous_smbios_uuid': str(board.asset.smbios_uuid)}
         job = _validation_jobs(endpoint).order_by('-created_at').first()
         if job:
             job_state = job.status
@@ -148,6 +154,18 @@ def endpoint_asset_records(request, endpoint_id):
         return JsonResponse({'error': 'invalid_json'}, status=400)
     action = data.get('action')
     try:
+        if action == 'confirm_board_change':
+            if not (_has_perm(request.user, 'agents.change_physicalasset')
+                    and _has_perm(request.user, 'agents.add_assetagentlink')):
+                return _permission_denied()
+            if data.get('identity_confirmed') is not True or not isinstance(data.get('machine_id'), str):
+                return JsonResponse({'error': 'explicit_confirmation_required'}, status=400)
+            try:
+                snapshot_id = uuid.UUID(str(data.get('snapshot_id') or ''))
+            except ValueError:
+                return JsonResponse({'error': 'hardware_change_not_confirmable'}, status=409)
+            confirm_board_change(endpoint.pk, data['machine_id'], snapshot_id, request.user, reason=data.get('reason'))
+            return JsonResponse({'ok': True})
         if action == 'validate_link':
             if not _can_validate(request.user):
                 return _permission_denied()
