@@ -1,0 +1,14 @@
+{% if alert.status != 'resolved' and perms.agents.change_endpointalert %}
+    {% if alert.status == 'open' %}
+        <form data-noc-action method="post" action="{% url 'noc-alert-action' alert.pk 'acknowledge' %}">
+            {% csrf_token %}<button type="submit">Reconhecer</button>
+        </form>
+    {% endif %}
+    <form data-noc-action method="post" action="{% url 'noc-alert-action' alert.pk 'mute' %}">
+        {% csrf_token %}
+        <select name="duration" aria-label="Prazo do silêncio">
+            {% for value, label in mute_durations %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+        <button type="submit">Silenciar</button>
+    </form>
+{% endif %}
