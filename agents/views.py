@@ -1433,6 +1433,11 @@ class AgentJobsPullView(APIView):
         # rollout/release rows before job rows. Every later lock is skip-locked:
         # campaign dispatch, release mutation, and result ingestion use some
         # inverse paths, so a contested update is retried on the next poll.
+        removal_in_flight = machine.jobs.filter(
+            job_type=AgentJob.TYPE_UNINSTALL_AGENT, payload__verified_removal=True, status__in=('sent', 'running'),
+        ).exists()
+        if removal_in_flight:
+            candidates = candidates.filter(job_type=AgentJob.TYPE_UNINSTALL_AGENT, payload__verified_removal=True)
         candidate_rows = list(candidates.order_by('queued_at').values(
             'pk', 'job_type', 'status', 'agent_release_id', 'payload')[:5])
         rollout_refs = {}
@@ -1488,6 +1493,15 @@ class AgentJobsPullView(APIView):
                     .select_for_update(skip_locked=True).order_by('queued_at'))
         response_jobs = []
         for job in jobs:
+            removal = None
+            if job.job_type == AgentJob.TYPE_UNINSTALL_AGENT and job.payload.get('verified_removal') is True:
+                from .agent_removal import removal_block_reason, removal_identity_matches
+                from .models import AgentRemovalAudit
+                removal = AgentRemovalAudit.objects.filter(job_id=job.pk, endpoint_id=machine.pk).first()
+                if (response_jobs or not protocol_v2 or not removal or not removal_identity_matches(removal, machine)
+                        or removal_block_reason(machine, fresh=True)
+                        or machine.jobs.exclude(pk=job.pk).filter(status__in=('sent', 'running')).exists()):
+                    continue
             if job.job_type == AgentJob.TYPE_UPDATE_AGENT and job.status == AgentJob.STATUS_QUEUED:
                 payload = job.payload if isinstance(job.payload, dict) else {}
                 metadata = rollout_refs.get(job.pk)
@@ -1656,13 +1670,17 @@ class AgentJobsPullView(APIView):
                         endpoint=machine,
                         metadata={'request_id': str(uninstall_request.id), 'job_id': str(job.id), 'source': uninstall_request.source},
                     )
+            parameters = agent_job_parameters(job)
+            if removal:
+                from .agent_removal import removal_receipt_token
+                parameters['removal_receipt_token'] = removal_receipt_token(removal)
             response_jobs.append({
                 'id': str(job.id),
                 'job_id': str(job.id),
                 'type': job.job_type,
                 'job_type': job.job_type,
-                'payload': agent_job_parameters(job),
-                'parameters': agent_job_parameters(job),
+                'payload': parameters,
+                'parameters': parameters,
                 'created_at': job.created_at.isoformat(),
                 'timeout_seconds': job.payload.get('timeout_seconds') or 300,
                 'attempt': job.attempt or 1,
@@ -1708,6 +1726,8 @@ class AgentJobsPullView(APIView):
                 job.job_type,
                 machine.hostname,
             )
+            if removal:
+                break
 
         create_audit_event(
             event_type='job.pull_requested',
@@ -1728,18 +1748,25 @@ class AgentJobsResultView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        machine = authenticate_agent_token(request)
         payload = request.data if isinstance(request.data, dict) else {}
         job_id = payload.get('job_id') or payload.get('id') or ''
         result_id = _result_id_from_request(request, payload)
         payload_hash = _payload_sha256(payload)
         job_status = _normalize_job_status(payload.get('status'))
+        removal_token = request.headers.get('X-NightOwl-Removal-Receipt', '')
+        if removal_token:
+            from .agent_removal import receive_removal_receipt
+            result, response_status = receive_removal_receipt(job_id, result_id, payload, payload_hash, removal_token)
+            return Response(result, status=response_status)
+        machine = authenticate_agent_token(request)
         lock_identity_registry()
         job = None
         if job_id:
             job = AgentJob.objects.select_for_update().filter(pk=job_id, endpoint=machine).first()
         # Timeout reconciliation locks job before endpoint; preserve that order.
-        machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+        machine = AgentMachine.objects.select_for_update().filter(pk=machine.pk).first()
+        if machine is None:
+            return Response({'error': 'endpoint_removed'}, status=status.HTTP_404_NOT_FOUND)
         try:
             validate_runtime_identity(machine, payload)
             if job is not None and job_status == AgentJob.STATUS_COMPLETED:
@@ -1758,6 +1785,9 @@ class AgentJobsResultView(APIView):
                     validate_runtime_identity(machine, collection)
         except IdentityConflict as exc:
             return _identity_conflict_response(machine, exc, 'job_result', request)
+        if (job and job.job_type == AgentJob.TYPE_UNINSTALL_AGENT and job.payload.get('verified_removal') is True
+                and job_status == AgentJob.STATUS_COMPLETED):
+            return Response({'error': 'verified_removal_receipt_required'}, status=status.HTTP_409_CONFLICT)
         if (
             job is not None
             and job.job_type == AgentJob.TYPE_UPDATE_AGENT
@@ -2142,6 +2172,9 @@ class AgentJobsResultView(APIView):
                     mode = str(job.result.get('mode') or '')
                 uninstall_request = getattr(job, 'uninstall_request', None)
                 if uninstall_request:
+                    if uninstall_request.mode == AgentUninstallRequest.MODE_PURGE:
+                        from .agent_removal import record_purge_result
+                        record_purge_result(job, result_id)
                     if job.status == AgentJob.STATUS_COMPLETED:
                         uninstall_request.mark_completed(AgentUninstallRequest.STATUS_COMPLETED)
                     else:

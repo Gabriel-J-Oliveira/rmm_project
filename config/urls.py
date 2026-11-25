@@ -56,6 +56,7 @@ urlpatterns = [
          name='api-endpoint-asset-records'),
     path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
     path('api/endpoints/<str:pk>/uninstall/', dashboard_views.endpoint_uninstall_request, name='api-endpoint-uninstall'),
+    path('api/endpoints/<uuid:pk>/remove-status/', dashboard_views.endpoint_removal_status, name='api-endpoint-removal-status'),
     path('api/endpoints/<str:pk>/uninstall/<uuid:request_id>/cancel/', dashboard_views.endpoint_uninstall_cancel, name='api-endpoint-uninstall-cancel'),
     path('api/endpoints/<str:pk>/update-policy/', dashboard_views.endpoint_update_policy_update, name='api-endpoint-update-policy'),
     path('api/access-inventory/', include('access_inventory.api_urls')),

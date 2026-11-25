@@ -354,7 +354,7 @@ public sealed class JobExecutionPolicy
             }
             case "uninstall_agent":
             {
-                EnsureAllowedFields(p, "mode", "purge_authorized", "source", "timeout_seconds");
+                EnsureAllowedFields(p, "mode", "purge_authorized", "source", "timeout_seconds", "verified_removal", "removal_receipt_token");
                 string mode = GetString(p, "mode", "");
                 if (!mode.Equals("uninstall", StringComparison.OrdinalIgnoreCase)
                     && !mode.Equals("purge", StringComparison.OrdinalIgnoreCase))
@@ -365,6 +365,11 @@ public sealed class JobExecutionPolicy
                 {
                     throw new InvalidOperationException("Remote purge requires explicit backend authorization.");
                 }
+                bool verifiedRemoval = GetBool(p, "verified_removal", false);
+                string receiptToken = GetString(p, "removal_receipt_token", "");
+                if (verifiedRemoval ? mode != "purge" || receiptToken.Length != 64 || !receiptToken.All(Uri.IsHexDigit)
+                    : receiptToken.Length != 0)
+                    throw new InvalidOperationException("Invalid verified removal parameters.");
                 break;
             }
             case "repair_agent":
