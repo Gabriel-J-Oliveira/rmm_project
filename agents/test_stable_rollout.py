@@ -7,14 +7,15 @@ from .models import AgentJob, AgentMachine, AgentRelease, AgentReleaseGroup, Age
 from .rollout_control import control_rollout_campaign
 from .rollout_dispatch import dispatch_rollout_campaign
 from .services import build_agent_rollout_preview, evaluate_agent_update_eligibility, publish_agent_release
-from .test_rollout_planning import DispatchPlanningTests as Fixtures
+from . import test_rollout_planning as fixtures
+from .views import _update_agent_dispatch_block_reason
 
 
 @override_settings(NIGHTOWL_STABLE_DESKTOP_ROLLOUT_ENABLED=True, NIGHTOWL_STABLE_DESKTOP_ROLLOUT_BATCH_SIZE=1,
                    NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED=True, NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED=True)
 class StableRolloutTests(TestCase):
     def setUp(self):
-        Fixtures.setUp(self)
+        fixtures.DispatchPlanningTests.setUp(self)
         self.group = AgentReleaseGroup.objects.create(name='Windows desktops', slug='stable-desktops')
         AgentRelease.objects.filter(pk=self.release.pk).update(channel='stable', source_channel='stable')
         self.release.refresh_from_db()
@@ -49,7 +50,22 @@ class StableRolloutTests(TestCase):
         self.assertEqual(campaign.targets.get(endpoint=offline).state, 'eligible')
         self.assertEqual(dispatch_rollout_campaign(campaign, now=self.now)['created_count'], 1)
         self.assertEqual(AgentJob.objects.get().endpoint_id, self.machine.pk)
+        job = AgentJob.objects.get()
+        target = campaign.targets.get(endpoint=self.machine)
+        wave = campaign.waves.get()
+        self.release.refresh_from_db()
+
+        def pull_gate():
+            return _update_agent_dispatch_block_reason(job, self.machine, self.release,
+                {campaign.pk: campaign}, {wave.pk: wave}, {target.pk: target}, self.now)
+
+        self.assertEqual(pull_gate(), '')
+        self.machine.model = 'Virtual Machine'
+        self.assertEqual(pull_gate(), 'stable_protected_device')
+        self.machine.model = 'OptiPlex'
         control_rollout_campaign(campaign, {'action': 'pause', 'reason': 'Test', 'expected_state': 'running'}, self.actor, now=self.now)
+        campaign.refresh_from_db()
+        self.assertEqual(pull_gate(), 'stable_campaign_waiting')
         control_rollout_campaign(campaign, {'action': 'resume', 'reason': 'Test', 'expected_state': 'paused'}, self.actor, now=self.now)
         AgentJob.objects.update(status='completed')
         AgentMachine.objects.filter(pk=offline.pk).update(status='online', last_seen_at=self.now)
