@@ -76,7 +76,13 @@ def _inventory_values(rule, snapshot):
     enabled, realtime = status.get('enabled'), status.get('real_time_protection_enabled')
     if raw.get('defender_present') is not False and enabled is True and realtime is True:
         return {'': 0}
-    if raw.get('state') == 'not_present':
+    from .alerting import alternative_antivirus
+
+    # Inventory proves another product is present. It does not establish that
+    # the product is active, so leave an existing alert awaiting fresh evidence.
+    if alternative_antivirus(snapshot):
+        return {}
+    if raw.get('state') == 'not_present' or raw.get('defender_present') is False:
         condition = 'missing'
     elif raw.get('defender_present') is True and (enabled is False or realtime is False):
         condition = 'disabled'
@@ -231,7 +237,7 @@ def _decisions(endpoint, policies, now):
                 continue
             key = f'{TYPES[rule.metric]}:{resource}' if resource else TYPES[rule.metric]
             current[key, rule.pk] = readings[0], recovery
-            if _breach(readings, threshold, rule.duration_minutes):
+            if rule.enabled and _breach(readings, threshold, rule.duration_minutes):
                 firing.setdefault(key, (rule, resource, readings[0]))
     return firing, current
 
@@ -256,7 +262,8 @@ def evaluate_policies(endpoint, policies, *, dry_run=False):
         if alert.source != SOURCE or key not in firing:
             continue
         next_rule = firing[key][0]
-        if SEVERITY.get(alert.severity, 3) < SEVERITY[next_rule.severity]:
+        owner = policy_index.get(alert.metadata.get('policy'))
+        if owner and owner.enabled and SEVERITY.get(alert.severity, 3) < SEVERITY[next_rule.severity]:
             observation = current.get((key, alert.metadata.get('policy')))
             if not observation or observation[0].high > observation[1]:
                 del firing[key]
@@ -305,9 +312,14 @@ def evaluate_policies(endpoint, policies, *, dry_run=False):
         if alert.source != SOURCE or key in firing:
             continue
         managed.add(key)
+        rule = policy_index.get(alert.metadata.get('policy'))
         observation = current.get((key, alert.metadata.get('policy')))
+        if not dry_run and (not rule or not rule.enabled) and (
+            alert.metadata.get('notify_visual') or alert.metadata.get('notify_sound')
+        ):
+            alert.metadata = {**alert.metadata, 'notify_visual': False, 'notify_sound': False}
+            alert.save(update_fields=['metadata', 'updated_at'])
         if not observation or observation[0].high > observation[1]:
-            rule = policy_index.get(alert.metadata.get('policy'))
             at = parse_datetime(alert.metadata.get('reading_at') or '')
             quality = 'current' if observation else 'unknown'
             if not observation and rule and rule.max_age_minutes and at and not _fresh(at, now, rule.max_age_minutes):

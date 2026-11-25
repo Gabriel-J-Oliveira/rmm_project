@@ -34,6 +34,8 @@ A 02B liga as políticas ao comando de avaliação já executado pela manutenç�
 
 O NOC usa leitura assíncrona autenticada, requer as permissões Django de frota e alertas e atualiza as seções do painel a cada dez segundos por padrão. Os dados apresentados vêm do banco e os contadores ativos incluem alertas reconhecidos. A atualização aguarda o fim da interação com o conteúdo em foco ou com o painel lateral aberto antes de substituir as seções.
 
+Desativar uma política interrompe novos disparos e suprime preferências de notificação nas ocorrências ainda sob sua responsabilidade. Uma ocorrência continua ativa até recuperação comprovada, resolução manual ou adoção por outra regra que disparar. A presença de um antivírus alternativo no conjunto de produtos registrados ou no inventário impede atribuir falta de proteção à ausência do Defender. Essa presença, sozinha, deixa o estado de proteção indeterminado.
+
 ## 02C — Refinamento visual e ações
 
 Manter cabeçalho/indicadores úteis e os quatro cards Críticos agora, Endpoints offline, Segurança, Disco e capacidade (lado a lado em desktop amplo). Substituir Atividade recente resumida por Todos os alertas acima desses cards, abaixo dos indicadores. Últimos 15 alertas/ocorrências por horário de abertura, com horário, criticidade, hostname, descrição, duração ativa (ou duração final), estado ativo/reconhecido/resolvido e ações rápidas; reconhecimento é independente do estado de recuperação. Preservar incidentes abertos nos cards temáticos mesmo se antigos. Remover hover do container/card, manter hover/foco acessível nos alertas clicáveis e ações individuais.

@@ -6,16 +6,18 @@ const vm = require('node:vm');
 
 test('NOC polls once, preserves focus, and keeps the panel on errors', async () => {
     const fields = new Map();
+    let hovered = false;
+    let drawerOpen = false;
     function field(selector) {
         if (!fields.has(selector)) {
             fields.set(selector, {
                 handlers: {},
                 textContent: '',
                 innerHTML: '',
-                classList: {contains: () => false},
+                classList: {contains: () => selector === '[data-noc-drawer]' && drawerOpen},
                 addEventListener(name, handler) { this.handlers[name] = handler; },
                 contains(node) { return Boolean(node); },
-                querySelector() { return null; },
+                querySelector() { return hovered ? {} : null; },
             });
         }
         return fields.get(selector);
@@ -57,6 +59,14 @@ test('NOC polls once, preserves focus, and keeps the panel on errors', async () 
     await pending;
     assert.equal(content.innerHTML, '');
     document.activeElement = null;
+    hovered = true;
+    tick();
+    assert.equal(content.innerHTML, '');
+    hovered = false;
+    drawerOpen = true;
+    tick();
+    assert.equal(content.innerHTML, '');
+    drawerOpen = false;
     tick();
     assert.equal(content.innerHTML, '<p>Atualizado</p>');
     const failed = refresh();

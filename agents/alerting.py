@@ -57,6 +57,20 @@ def detect_software(installed_software, terms):
     return matches
 
 
+def alternative_antivirus(snapshot):
+    collections = (snapshot.raw_payload or {}).get('collections') or {}
+    security = collections.get('security') or {}
+    for product in security.get('antivirus_products') or security.get('detected_antivirus_products') or []:
+        if not isinstance(product, dict):
+            continue
+        name = str(product.get('name') or '').strip()
+        normalized = name.casefold()
+        if name and not normalized.startswith(('microsoft defender', 'windows defender', 'microsoft security essentials')):
+            return name
+    installed = detect_software(snapshot.installed_software, ANTIVIRUS_SOFTWARE)
+    return (installed[0].get('name') or 'antivírus alternativo') if installed else None
+
+
 def gb(value):
     try:
         return round(int(value) / (1024 ** 3), 1)
@@ -211,10 +225,10 @@ def evaluate_endpoint(endpoint, options, *, unknown_keys=None):
     defender = snapshot.defender_status or {}
     installed = snapshot.installed_software or []
     defender_ok = defender.get('enabled') is True and defender.get('real_time_protection_enabled') is True
-    detected_av = detect_software(installed, ANTIVIRUS_SOFTWARE)
+    detected_av = alternative_antivirus(snapshot)
     if not defender_ok:
         if detected_av:
-            av_name = detected_av[0].get('name') or 'antivírus alternativo'
+            av_name = detected_av
             alerts.append(desired_alert(
                 'security_alternative_av',
                 'security_alternative_av',

@@ -139,6 +139,52 @@ class AlertPolicyEngineTests(TestCase):
         evaluate_all_alerts(options)
         self.assertEqual(self.endpoint.alerts.filter(alert_type='disk_low').count(), 1)
 
+    def test_disabled_policy_preserves_occurrence_until_evidence_recovers(self):
+        rule = AlertPolicy.objects.get(pk='disk-critical')
+        self.rules = [rule]
+        self.snapshot(free=1)
+        self.evaluate()
+        alert = self.endpoint.alerts.get()
+        rule.enabled = False
+        self.now += timedelta(minutes=1)
+        self.snapshot(free=1)
+        self.evaluate()
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EndpointAlert.STATUS_OPEN)
+        self.assertFalse(alert.metadata['notify_visual'])
+        self.now += timedelta(minutes=1)
+        self.snapshot(free=20)
+        self.evaluate()
+        alert.refresh_from_db()
+        self.assertEqual(alert.status, EndpointAlert.STATUS_RESOLVED)
+        self.now += timedelta(minutes=1)
+        self.snapshot(free=1)
+        self.evaluate()
+        self.assertEqual(self.endpoint.alerts.count(), 1)
+
+    def test_third_party_antivirus_blocks_false_missing_defender_policy(self):
+        rule = AlertPolicy.objects.get(pk='antivirus-critical')
+        rule.enabled = True
+        rule.antivirus_condition = 'either'
+        self.rules = [rule]
+        row = self.snapshot()
+        row.defender_status = {'raw': {'state': 'not_present'}}
+        row.raw_payload = {'collections': {'security': {
+            'antivirus_products': [{'name': 'Bitdefender Endpoint Security Tools'}],
+        }}}
+        row.save(update_fields=['defender_status', 'raw_payload'])
+        self.evaluate()
+        self.assertFalse(self.endpoint.alerts.exists())
+        row.raw_payload = {}
+        row.installed_software = [{'name': 'Bitdefender Endpoint Security Tools'}]
+        row.save(update_fields=['raw_payload', 'installed_software'])
+        self.evaluate()
+        self.assertFalse(self.endpoint.alerts.exists())
+        row.installed_software = []
+        row.save(update_fields=['installed_software'])
+        self.evaluate()
+        self.assertEqual(self.endpoint.alerts.get().severity, 'critical')
+
 
 class NocFragmentTests(TestCase):
     def test_fragment_shares_permissions_and_excludes_inactive_endpoints(self):
