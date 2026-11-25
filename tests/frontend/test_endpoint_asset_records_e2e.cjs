@@ -22,15 +22,16 @@ const {chromium} = require('playwright');
 
         await page.goto(`${server}/endpoints/${endpointId}/`, {waitUntil: 'domcontentloaded'});
         await page.getByRole('button', {name: /Registros/}).click();
-        await page.getByRole('heading', {name: 'Sem associação patrimonial'}).waitFor();
-        await page.locator('[data-asset-records-content]').getByText('BROWSER-ASSET-01').first().waitFor();
-        await page.getByText('Example Devices').waitFor();
+        const assetContent = page.locator('[data-asset-records-content]');
+        await assetContent.getByRole('heading', {name: 'Sem associação patrimonial'}).waitFor();
+        await assetContent.getByText('BROWSER-ASSET-01').first().waitFor();
+        await assetContent.getByText('Example Devices').first().waitFor();
 
         await page.locator('[data-asset-create-form] input[name="identity_confirmed"]').check();
         await page.getByRole('button', {name: 'Criar e associar patrimônio'}).click();
         await page.getByRole('heading', {name: 'Registro patrimonial'}).waitFor();
         await page.getByText(/PROV-[0-9A-F]{32}/).waitFor();
-        await page.getByText(endpointName).waitFor();
+        await assetContent.getByText(endpointName).first().waitFor();
 
         const form = page.locator('[data-asset-record-form]');
         await form.locator('[name="record_type"]').selectOption('observation');
