@@ -17,8 +17,10 @@
         <p class="page-subtitle">Defina regras para softwares permitidos, proibidos, obrigatórios ou restritos no parque.</p>
     </div>
     <div class="page-actions policy-header-actions">
+        {% if perms.agents.view_agentmachine %}
         {% if perms.agents.view_alertpolicy or perms.agents.change_alertpolicy %}
         <a class="refresh-button" href="{% url 'alert-policies' %}"><i data-lucide="bell"></i>Políticas de Alertas</a>
+        {% endif %}
         {% endif %}
         <a class="refresh-button" href="{% url 'software-policies' %}"><i data-lucide="refresh-cw"></i>Recarregar</a>
         <button class="primary-action" type="button" data-open-policy-create><i data-lucide="plus"></i>Nova política</button>

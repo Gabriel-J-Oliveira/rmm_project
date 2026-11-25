@@ -9,6 +9,7 @@ from agents.models import AgentMachine, AlertPolicy, AuditEvent, EndpointAlert
 class AlertPolicyTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user('noc-operator', is_staff=True)
+        self.grant('view_agentmachine')
         self.client.force_login(self.user)
         self.policies = reverse('alert-policies')
         self.edit = reverse('alert-policy-edit', args=['ram-warning'])
@@ -33,7 +34,8 @@ class AlertPolicyTests(TestCase):
         for metric, limits in presets.items():
             self.assertEqual(list(AlertPolicy.objects.filter(metric=metric).order_by('threshold')
                                   .values_list('threshold', 'duration_minutes')), limits)
-        self.assertFalse(AlertPolicy.objects.filter(enabled=True).exists())
+        self.assertEqual(AlertPolicy.objects.filter(enabled=True).count(), 10)
+        self.assertFalse(AlertPolicy.objects.filter(enabled=True, threshold=None).exists())
         self.assertEqual(self.client.get(self.policies).status_code, 403)
         self.grant('view_alertpolicy')
         self.assertContains(self.client.get(self.policies), 'Políticas de Alertas')

@@ -20,7 +20,7 @@ def seed_policies(apps, schema_editor):
                 key=f'{metric}-{severity}',
                 defaults={
                     'name': f'{label} — {level}', 'metric': metric, 'severity': severity,
-                    'threshold': threshold, 'duration_minutes': duration, 'recovery_threshold': recovery,
+                    'enabled': threshold is not None, 'threshold': threshold, 'duration_minutes': duration, 'recovery_threshold': recovery,
                     'max_age_minutes': age, 'min_coverage_percent': coverage,
                 },
             )

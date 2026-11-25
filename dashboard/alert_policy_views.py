@@ -20,6 +20,8 @@ def _audit_snapshot(policy):
 @login_required
 @require_http_methods(['GET'])
 def alert_policies(request):
+    if not request.user.has_perm('agents.view_agentmachine'):
+        raise PermissionDenied
     can_edit = request.user.has_perm('agents.change_alertpolicy')
     if not can_edit and not request.user.has_perm('agents.view_alertpolicy'):
         raise PermissionDenied
@@ -31,7 +33,7 @@ def alert_policies(request):
 
 
 @login_required
-@permission_required('agents.change_alertpolicy', raise_exception=True)
+@permission_required(('agents.change_alertpolicy', 'agents.view_agentmachine'), raise_exception=True)
 @require_http_methods(['GET', 'POST'])
 def edit_alert_policy(request, key):
     if request.method == 'POST':

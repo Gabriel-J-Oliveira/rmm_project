@@ -37,8 +37,7 @@ class AlertPolicyForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.initial['revision'] = self.instance.revision
         self.fields['enabled'].widget.attrs['role'] = 'switch'
-        # Retain existing explicit targets even when inactive so they remain visible in the editor.
-        self.fields['endpoints'].queryset = AgentMachine.objects.order_by('hostname', 'pk')
+        self.fields['endpoints'].queryset = AgentMachine.objects.filter(is_active=True).order_by('hostname', 'pk')
         self.fields['duration_minutes'].help_text = 'Use 0 para avaliar sem espera adicional.'
 
     def clean(self):
