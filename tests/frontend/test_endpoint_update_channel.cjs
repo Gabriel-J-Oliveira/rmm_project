@@ -13,7 +13,8 @@ function extractFunction(name) {
 }
 
 const functions = [
-  'getManualUpdateReleases', 'releaseStatusText', 'updateChannelIsPending',
+  'getManualUpdateReleases', 'releaseStatusText', 'updateChannelIsPending', 'findActiveUpdateJob',
+  'isDowngradeRelease', 'releaseEligibilityText', 'validateUpdateSelection',
   'updateModalSubmitState', 'updateChannelSaveState', 'selectedUpdateRelease',
   'populateUpdateReleaseOptions', 'handleUpdateChannelSelectionChange',
   'reloadUpdateChannelReleases', 'saveUpdateChannel'
@@ -52,7 +53,7 @@ const stableRelease = {
 };
 const developmentRelease = {
   id: 'rc47', version: '0.1.1.0-rc47', channel: 'development', source_channel: 'development',
-  status: 'paused', eligible: true, metadata_complete: true, size: 110,
+  status: 'published', eligible: true, metadata_complete: true, size: 110,
   minimum_updater_version: '0.1.1.0-rc6', revoked: false
 };
 
@@ -68,11 +69,13 @@ function makeContext({postFails = false, refreshFails = false} = {}) {
   const errorBox = makeNode();
   const summaryChannel = makeNode();
   const details = makeNode();
+  const forceDowngrade = makeNode();
+  const confirmDowngrade = makeNode();
   const calls = [];
   const endpointDetail = {
     hostname: 'PILOT-PC',
     agent: {
-      version: '0.1.1.0-rc46', updateChannel: 'stable', updatePolicy: 'manual',
+      version: '0.1.1.0-rc45', updateChannel: 'stable', updatePolicy: 'manual',
       canChangeChannel: true, updateReleases: [stableRelease, developmentRelease]
     },
     jobs: []
@@ -89,8 +92,8 @@ function makeContext({postFails = false, refreshFails = false} = {}) {
         '[data-update-modal-error]': errorBox,
         '[data-update-summary="channel"]': summaryChannel,
         '[data-update-release-details]': details,
-        '[data-force-downgrade]': null,
-        '[data-confirm-downgrade]': null
+        '[data-force-downgrade]': forceDowngrade,
+        '[data-confirm-downgrade]': confirmDowngrade
       })[selector] || null;
     }
   };
@@ -135,22 +138,17 @@ function makeContext({postFails = false, refreshFails = false} = {}) {
       return {
         hostname: 'PILOT-PC', jobs: [],
         agent: {
-          version: '0.1.1.0-rc46', updateChannel: payload.agent_update_policy.channel,
+          version: '0.1.1.0-rc45', updateChannel: payload.agent_update_policy.channel,
           updatePolicy: 'manual', canChangeChannel: true,
           updateReleases: payload.agent_update_releases
         }
       };
-    },
-    validateUpdateSelection() {
-      const release = ctx.selectedUpdateRelease();
-      if (!release || !release.eligible || release.revoked || !release.metadata_complete || !release.size || !release.minimum_updater_version) return null;
-      return {release, force: false};
     }
   };
   vm.runInNewContext(`${functions}\nthis.getManualUpdateReleases = getManualUpdateReleases;\nthis.releaseStatusText = releaseStatusText;\nthis.updateChannelIsPending = updateChannelIsPending;\nthis.updateModalSubmitState = updateModalSubmitState;\nthis.updateChannelSaveState = updateChannelSaveState;\nthis.selectedUpdateRelease = selectedUpdateRelease;\nthis.populateUpdateReleaseOptions = populateUpdateReleaseOptions;\nthis.handleUpdateChannelSelectionChange = handleUpdateChannelSelectionChange;\nthis.reloadUpdateChannelReleases = reloadUpdateChannelReleases;\nthis.saveUpdateChannel = saveUpdateChannel;`, ctx);
   ctx.populateUpdateReleaseOptions('');
   ctx.updateModalSubmitState();
-  return {ctx, channelSelect, channelSave, channelStatus, reloadButton, releaseSelect, submitButton, errorBox, summaryChannel, details, calls};
+  return {ctx, channelSelect, channelSave, channelStatus, reloadButton, releaseSelect, submitButton, errorBox, summaryChannel, details, calls, forceDowngrade, confirmDowngrade};
 }
 
 async function settle() {
@@ -243,7 +241,38 @@ async function settle() {
   failedRefresh.releaseSelect.value = 'rc47';
   failedRefresh.ctx.updateModalSubmitState();
   assert.equal(failedRefresh.submitButton.disabled, false);
-  console.log('endpoint update channel pending/save/reload/failure/no-job flows passed');
+
+  const downgrade = makeContext();
+  const release = {
+    ...stableRelease, version: '0.1.1.0-rc44', eligible: false, requires_force: true,
+    reason_code: 'downgrade_requires_force', eligible_with_downgrade: true
+  };
+  downgrade.ctx.endpointDetail.agent.updateReleases = [release];
+  downgrade.ctx.populateUpdateReleaseOptions(release.id);
+  assert.match(downgrade.releaseSelect.children[1].textContent, /exige confirmação/);
+  for (const [force, confirm] of [[false, false], [true, false], [false, true], [true, true], [false, true]]) {
+    downgrade.forceDowngrade.checked = force;
+    downgrade.confirmDowngrade.checked = confirm;
+    downgrade.ctx.updateModalSubmitState();
+    assert.equal(downgrade.submitButton.disabled, !(force && confirm));
+    assert.equal(downgrade.ctx.validateUpdateSelection(false)?.force ?? false, force && confirm);
+  }
+  downgrade.forceDowngrade.checked = true;
+  downgrade.ctx.endpointDetail.jobs = [{type: 'update_agent', status: 'running'}];
+  downgrade.ctx.updateModalSubmitState();
+  assert.equal(downgrade.submitButton.disabled, true, 'an active job still blocks confirmed downgrade');
+  downgrade.ctx.endpointDetail.jobs = [];
+  release.eligible_with_downgrade = false;
+  release.downgrade_reason_code = 'group_not_allowed';
+  downgrade.ctx.updateModalSubmitState();
+  assert.equal(downgrade.submitButton.disabled, true, 'server-side block cannot be overridden by the checkboxes');
+  assert.equal(downgrade.ctx.validateUpdateSelection(true), null);
+  assert.equal(downgrade.errorBox.textContent, 'group_not_allowed');
+  delete release.eligible_with_downgrade;
+  downgrade.ctx.updateModalSubmitState();
+  assert.equal(downgrade.submitButton.disabled, true, 'an older API response without explicit permission fails closed');
+  assert.equal(downgrade.calls.length, 0, 'selecting and confirming does not create jobs');
+  console.log('endpoint update channel and downgrade confirmation flows passed');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

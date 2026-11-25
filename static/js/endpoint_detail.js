@@ -1958,7 +1958,10 @@
         releases.forEach(function (release, index) {
             const option = document.createElement("option");
             option.value = release.id;
-            option.textContent = release.version + " / " + releaseStatusText(release) + (!release.eligible ? " / bloqueada" : "") + (index === 0 ? " / mais recente" : "");
+            const eligibility = isDowngradeRelease(release)
+                ? (release.eligible_with_downgrade === true ? " / exige confirmação de downgrade" : " / bloqueada")
+                : (release.eligible ? "" : " / bloqueada");
+            option.textContent = release.version + " / " + releaseStatusText(release) + eligibility + (index === 0 ? " / mais recente" : "");
             select.appendChild(option);
         });
         select.value = suggestedReleaseId || "";
@@ -1989,7 +1992,17 @@
     function isDowngradeRelease(release) {
         const installed = endpointDetail && endpointDetail.agent ? endpointDetail.agent.version : "";
         const comparison = compareVersions(installed, release && release.version);
-        return comparison != null && comparison > 0;
+        return !!release && (release.requires_force === true || (comparison != null && comparison > 0));
+    }
+
+    function releaseEligibilityText(release) {
+        if (isDowngradeRelease(release)) {
+            if (release.eligible_with_downgrade === true) return "Elegível após confirmação de downgrade";
+            return release.downgrade_eligibility_detail || release.downgrade_reason_code ||
+                release.eligibility_detail || release.reason_code || "Downgrade não autorizado.";
+        }
+        return release.eligible ? "Elegível para atualização manual" :
+            (release.eligibility_detail || release.reason_code || "Esta release não está elegível para este endpoint.");
     }
 
     function validateUpdateSelection(showMessage) {
@@ -2008,8 +2021,9 @@
             if (showMessage) setModalError("Esta release foi revogada e nao pode ser instalada.");
             return null;
         }
-        if (!release.eligible) {
-            if (showMessage) setModalError(release.eligibility_detail || (release.reason_code ? "Release bloqueada pela política: " + release.reason_code : "Esta release não está elegível para este endpoint."));
+        const downgrade = isDowngradeRelease(release);
+        if (downgrade ? release.eligible_with_downgrade !== true : !release.eligible) {
+            if (showMessage) setModalError(releaseEligibilityText(release));
             return null;
         }
         if (!release.metadata_complete || !release.size || !release.minimum_updater_version) {
@@ -2023,14 +2037,14 @@
         }
         const forceDowngrade = !!updateModal.dialog.querySelector("[data-force-downgrade]") && updateModal.dialog.querySelector("[data-force-downgrade]").checked;
         const confirmDowngrade = !!updateModal.dialog.querySelector("[data-confirm-downgrade]") && updateModal.dialog.querySelector("[data-confirm-downgrade]").checked;
-        if (comparison != null && comparison > 0 && (!forceDowngrade || !confirmDowngrade)) {
+        if (downgrade && (!forceDowngrade || !confirmDowngrade)) {
             if (showMessage) setModalError("Downgrade exige abrir Opcoes avancadas, marcar Forcar downgrade e confirmar a acao.");
             return null;
         }
         if (showMessage) setModalError("");
         return {
             release: release,
-            force: comparison != null && comparison > 0 && forceDowngrade && confirmDowngrade
+            force: downgrade
         };
     }
 
@@ -2058,7 +2072,7 @@
             ["Versao", release.version || "-"],
             ["Canal da politica", release.channel || "-"],
             ["Canal assinado do pacote", release.source_channel || release.channel || "-"],
-            ["Elegibilidade", release.eligible ? "Elegível para atualização manual" : (release.eligibility_detail || release.reason_code || "Bloqueada")],
+            ["Elegibilidade", releaseEligibilityText(release)],
             ["Publicada em", formatDate(release.released_at)],
             ["Tamanho", formatPackageSize(release.size)],
             ["Updater minimo", release.minimum_updater_version || "-"],
@@ -2080,7 +2094,7 @@
 
         const downgrade = isDowngradeRelease(release);
         if (advanced) {
-            advanced.hidden = !downgrade;
+            advanced.hidden = !downgrade || release.eligible_with_downgrade !== true;
             advanced.open = false;
             advanced.querySelectorAll("input").forEach(function (input) { input.checked = false; });
         }
@@ -2231,9 +2245,7 @@
         channelSelect.addEventListener("change", function () {
             handleUpdateChannelSelectionChange();
         });
-        advanced.addEventListener("change", function () {
-            validateUpdateSelection(false);
-        });
+        advanced.addEventListener("change", updateModalSubmitState);
         dialog.addEventListener("click", function (event) {
             if (event.target.closest("[data-update-close]")) {
                 closeUpdateModal();
