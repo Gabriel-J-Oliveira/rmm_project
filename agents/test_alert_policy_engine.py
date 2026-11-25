@@ -127,10 +127,14 @@ class AlertPolicyEngineTests(TestCase):
         self.assertEqual(alert.status, EndpointAlert.STATUS_RESOLVED)
 
     def test_scheduler_keeps_policy_and_legacy_from_creating_duplicate_disk_alerts(self):
-        self.snapshot(free=1)
         options = {'offline_warning_hours': 1, 'offline_critical_hours': 24, 'disk_critical_free_percent': 10,
                    'disk_warning_free_percent': 15, 'uptime_warning_days': 15, 'uptime_critical_days': 30,
                    'stale_inventory_hours': 24}
+        snapshot = self.snapshot(free=None)
+        evaluate_all_alerts(options)
+        self.assertFalse(self.endpoint.alerts.filter(alert_type__in=('disk_low', 'security_antivirus')).exists())
+        snapshot.disks[0]['free_bytes'] = 1
+        snapshot.save(update_fields=['disks'])
         evaluate_all_alerts(options)
         evaluate_all_alerts(options)
         self.assertEqual(self.endpoint.alerts.filter(alert_type='disk_low').count(), 1)

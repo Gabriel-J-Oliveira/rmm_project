@@ -106,10 +106,14 @@ def audit_alert(alert, event_type, title, description, severity=None, actor_type
     )
 
 
-def evaluate_endpoint(endpoint, options):
+def evaluate_endpoint(endpoint, options, *, unknown_keys=None):
     now = timezone.now()
     snapshot = endpoint.inventory_snapshots.order_by('-received_at').first()
     alerts = []
+    if unknown_keys is None:
+        unknown_keys = set()
+    if not endpoint.last_seen_at or endpoint.status not in (AgentMachine.STATUS_ONLINE, AgentMachine.STATUS_OFFLINE):
+        unknown_keys.add('endpoint_offline')
 
     if endpoint.status == AgentMachine.STATUS_OFFLINE and endpoint.last_seen_at:
         offline_for = now - endpoint.last_seen_at
@@ -156,6 +160,7 @@ def evaluate_endpoint(endpoint, options):
             ))
 
     if not snapshot:
+        unknown_keys.update(('disk_low', 'security_antivirus', 'high_uptime'))
         alerts.append(desired_alert(
             'stale_inventory',
             'stale_inventory',
@@ -166,10 +171,16 @@ def evaluate_endpoint(endpoint, options):
         ))
         return alerts
 
+    if not snapshot.disks:
+        unknown_keys.add('disk_low')
     for disk in snapshot.disks or []:
-        size = int(disk.get('size_bytes') or 0)
-        free = int(disk.get('free_bytes') or 0)
-        if size <= 0:
+        if not isinstance(disk, dict):
+            unknown_keys.add('disk_low')
+            continue
+        size, free = disk.get('size_bytes'), disk.get('free_bytes')
+        if type(size) is not int or type(free) is not int or not 0 <= free <= size or size == 0:
+            name = disk.get('name')
+            unknown_keys.add(f'disk_low:{name}' if name else 'disk_low')
             continue
         free_percent = round((free / size) * 100, 1)
         used_percent = round(100 - free_percent, 1)
@@ -212,6 +223,15 @@ def evaluate_endpoint(endpoint, options):
                 f'Defender não identificado, mas {av_name} foi detectado nos softwares instalados.',
                 {'defender_status': defender, 'detected_av': av_name, 'security_state': 'alternative_av'},
             ))
+        elif isinstance(defender.get('raw'), dict) and defender['raw'].get('state') == 'not_present':
+            alerts.append(desired_alert(
+                'security_antivirus',
+                'security_antivirus',
+                EndpointAlert.SEVERITY_CRITICAL,
+                'Proteção antivírus ausente',
+                'O Defender foi informado como ausente e nenhum antivírus alternativo foi identificado.',
+                {'defender_status': defender, 'detected_av': None, 'security_state': 'missing'},
+            ))
         elif defender:
             alerts.append(desired_alert(
                 'security_antivirus',
@@ -222,17 +242,12 @@ def evaluate_endpoint(endpoint, options):
                 {'defender_status': defender, 'detected_av': None, 'security_state': 'partial'},
             ))
         else:
-            alerts.append(desired_alert(
-                'security_antivirus',
-                'security_antivirus',
-                EndpointAlert.SEVERITY_CRITICAL,
-                'Nenhuma proteção antivírus identificada',
-                'Nenhum antivírus ou proteção de endpoint foi identificado.',
-                {'defender_status': defender, 'detected_av': None, 'security_state': 'missing'},
-            ))
+            unknown_keys.add('security_antivirus')
 
     uptime = snapshot.uptime_seconds
-    if uptime is not None:
+    if uptime is None:
+        unknown_keys.add('high_uptime')
+    else:
         days = round(int(uptime) / 86400, 1)
         if days >= options['uptime_critical_days']:
             severity = EndpointAlert.SEVERITY_CRITICAL
@@ -300,7 +315,7 @@ def evaluate_endpoint(endpoint, options):
     return alerts
 
 
-def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False):
+def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False, *, unknown_keys=()):
     result = AlertEvaluationResult()
     now = timezone.now()
     desired_keys = {item['dedupe_key'] for item in desired_alerts}
@@ -404,7 +419,8 @@ def apply_alerts_for_endpoint(endpoint, desired_alerts, dry_run=False):
 
     for alert in active_existing:
         dedupe_key = alert.metadata.get('dedupe_key')
-        if dedupe_key and dedupe_key not in desired_keys:
+        if (dedupe_key and dedupe_key not in desired_keys and dedupe_key not in unknown_keys
+                and alert.alert_type not in unknown_keys):
             result.resolved += 1
             if dry_run:
                 result.dry_run_actions.append(f'resolve {endpoint.hostname}: {dedupe_key}')
@@ -434,10 +450,11 @@ def evaluate_all_alerts(options, dry_run=False):
     policies = list(AlertPolicy.objects.prefetch_related('endpoints'))
     for endpoint in AgentMachine.objects.filter(is_active=True).iterator(chunk_size=100):
         result.endpoints_evaluated += 1
-        desired = evaluate_endpoint(endpoint, options)
+        unknown_keys = set()
+        desired = evaluate_endpoint(endpoint, options, unknown_keys=unknown_keys)
         managed, counts, actions = evaluate_policies(endpoint, policies, dry_run=dry_run)
         desired = [item for item in desired if item['dedupe_key'] not in managed]
-        endpoint_result = apply_alerts_for_endpoint(endpoint, desired, dry_run=dry_run)
+        endpoint_result = apply_alerts_for_endpoint(endpoint, desired, dry_run=dry_run, unknown_keys=unknown_keys)
         result.created += counts['created']
         result.updated += counts['updated']
         result.resolved += counts['resolved']
