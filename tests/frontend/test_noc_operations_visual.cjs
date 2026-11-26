@@ -26,6 +26,26 @@ const {chromium} = require('playwright');
         const cards = await page.locator('.noc-thematic-grid > .noc-panel').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().top));
         assert(cards.every((top) => top === cards[0]), 'Desktop displays four cards on the same row');
         await page.screenshot({path: path.join(out, 'noc-desktop.png'), fullPage: true});
+        const tv = page.locator('[data-noc-tv]');
+        await tv.click();
+        await page.waitForFunction(() => document.fullscreenElement === document.documentElement);
+        assert.equal(await page.locator('.sidebar').isVisible(), false);
+        assert.equal(await page.locator('.topbar').isVisible(), false);
+        assert.equal(await page.locator('[data-noc-sound]').isVisible(), true);
+        await page.evaluate(() => document.exitFullscreen());
+        await page.waitForFunction(() => !document.body.classList.contains('noc-tv-mode'));
+        assert.equal(await page.locator('.sidebar').isVisible(), true);
+        await page.evaluate(() => {
+            document.documentElement.requestFullscreen = () => Promise.reject(new Error('blocked'));
+        });
+        await tv.click();
+        await page.getByText('Apresentação na página. Use Esc para sair.').waitFor();
+        await page.locator('[data-noc-refresh]').click();
+        await page.waitForFunction(() => !document.querySelector('[data-noc-refresh]').disabled);
+        assert.equal(await page.locator('.sidebar').isVisible(), false);
+        await page.keyboard.press('Escape');
+        assert.equal(await tv.getAttribute('aria-pressed'), 'false');
+
         await page.setViewportSize({width: 390, height: 844});
         const grid = await page.locator('.noc-thematic-grid').evaluate((node) => ({width: node.clientWidth, scroll: node.scrollWidth}));
         assert(grid.scroll <= grid.width + 1, 'Mobile cards fit without horizontal scrolling');

@@ -15,7 +15,6 @@
     var countdown = document.querySelector("[data-noc-countdown]");
     var refreshButton = document.querySelector("[data-noc-refresh]");
     var autoButton = document.querySelector("[data-noc-auto]");
-    var tvButton = document.querySelector("[data-noc-tv]");
     var soundButton = document.querySelector("[data-noc-sound]");
     var drawer = document.querySelector("[data-noc-drawer]");
     var drawerBackdrop = document.querySelector("[data-noc-drawer-backdrop]");
@@ -169,16 +168,6 @@
             autoButton.setAttribute("aria-pressed", autoRefreshEnabled ? "true" : "false");
             renderCountdown();
             showToast(autoRefreshEnabled ? "Auto-refresh ligado." : "Auto-refresh pausado.");
-        });
-    }
-
-    if (tvButton) {
-        tvButton.addEventListener("click", function () {
-            document.body.classList.toggle("noc-tv-mode");
-            var active = document.body.classList.contains("noc-tv-mode");
-            tvButton.classList.toggle("is-active", active);
-            tvButton.setAttribute("aria-pressed", active ? "true" : "false");
-            showToast(active ? "Modo TV ativado." : "Modo TV desativado.");
         });
     }
 
