@@ -1,6 +1,6 @@
 # NightOwl RMM — Estado operacional, processos e handoff (17/11/2026)
 
-> **Documento de continuidade, não autorização de deploy.** Atualizado a partir do histórico operacional fornecido pelo responsável e do repositório GitHub consultado em 17/11/2026 (BRT). Estados voláteis precisam ser novamente verificados antes de qualquer operação.
+> **Snapshot histórico de 17/11/2026 — não é o estado operacional atual e não autoriza deploy.** Para decisões RC49, consulte `docs/deploy-RC49.md` e `docs/operational-homologation.md`; revalide diretamente qualquer SHA, flag ou condição volátil. Atualizado a partir do histórico operacional fornecido pelo responsável e do repositório GitHub consultado em 17/11/2026 (BRT). Estados voláteis precisam ser novamente verificados antes de qualquer operação.
 >
 > **Repositório:** https://github.com/Gabriel-J-Oliveira/rmm_project  
 > **Roadmap histórico:** [deploy-RC47.md](deploy-RC47.md)  

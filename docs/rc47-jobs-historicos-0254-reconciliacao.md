@@ -1,6 +1,6 @@
 # RC47 — Reconciliação de jobs históricos e bloqueio do deploy (17/11/2026)
 
-> **Estado:** diagnóstico somente leitura concluído. **Nenhum cancelamento, timeout, retry, polling artificial, alteração de produção ou deploy autorizado**. Registrar decisão individual antes de modificar os registros. Ver [handoff RC47](rc47-handoff-operacional-20261117.md).
+> **Snapshot histórico de 17/11/2026:** diagnóstico somente leitura concluído; todos os estados e recomendações abaixo exigem nova consulta antes de qualquer decisão. **Nenhum cancelamento, timeout, retry, polling artificial, alteração de produção ou deploy autorizado**. Registrar decisão individual antes de modificar os registros. Ver [handoff RC47](rc47-handoff-operacional-20261117.md).
 
 ## Contexto
 

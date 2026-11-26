@@ -1,6 +1,6 @@
 # Prompt de continuação do NightOwl — 17/11/2026
 
-Copie a seção **Prompt para colar no próximo chat** e adicione o retorno mais recente do Codex, se houver. Este arquivo não autoriza ações.
+**Arquivo histórico de 17/11/2026:** não copie nem use o prompt abaixo sem atualizá-lo. Ele contém SHAs e estado operacional antigos. Para uma nova conversa, consulte primeiro `docs/deploy-RC49.md` e `docs/operational-homologation.md`, confirme a main e obtenha evidências atuais. Este arquivo não autoriza ações.
 
 ## Prompt para colar no próximo chat
 
