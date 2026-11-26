@@ -12,10 +12,6 @@ body.page-noc.noc-tv-mode .content {
     padding: clamp(12px, 1.8vw, 34px);
 }
 
-body.page-noc.noc-tv-mode .noc-actions [data-noc-sound] {
-    display: inline-flex;
-}
-
 body.page-noc.noc-tv-mode .noc-all-alerts .noc-list {
     max-height: min(48vh, 720px);
 }

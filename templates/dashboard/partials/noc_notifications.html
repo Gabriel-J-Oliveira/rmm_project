@@ -1,0 +1,25 @@
+<details class="noc-notification-center" data-notification-center
+         data-url="{% url 'noc-notifications' %}" data-user="{{ request.user.pk }}">
+    <summary class="noc-notification-trigger" aria-label="Central de notificações" title="Central de notificações">
+        <i data-lucide="bell"></i>
+        <span class="noc-notification-count" data-notification-count hidden>0</span>
+    </summary>
+    <section class="noc-notification-panel" aria-label="Notificações">
+        <header class="noc-notification-header">
+            <div><strong>Notificações</strong><span data-notification-status role="status">Carregando…</span></div>
+            <button type="button" data-notification-read-all>Marcar todas como lidas</button>
+        </header>
+        <label class="noc-notification-preference">Som
+            <select data-notification-sound aria-label="Preferência de som">
+                <option value="off">Desligado</option>
+                <option value="critical">Somente críticos</option>
+                <option value="all">Todos habilitados pela política</option>
+            </select>
+        </label>
+        <button type="button" data-notification-audio hidden>Ativar áudio neste navegador</button>
+        <span data-notification-audio-status role="status" aria-live="polite"></span>
+        <ol class="noc-notification-list" data-notification-list aria-live="polite"></ol>
+        <span data-notification-empty hidden>Nenhuma notificação recente.</span>
+        {% csrf_token %}
+    </section>
+</details>

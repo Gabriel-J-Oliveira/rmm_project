@@ -81,7 +81,8 @@ jobs:
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
           dashboard.test_agent_install_workflow dashboard.test_noc_operations
-          config.test_runtime_environment config.test_operational_continuity
+          dashboard.test_noc_notifications config.test_runtime_environment
+          config.test_operational_continuity
           --exclude-tag windows_e2e --noinput --verbosity 1
       - name: PostgreSQL concurrency gate (no SQLite substitution)
         if: matrix.database == 'postgresql'
