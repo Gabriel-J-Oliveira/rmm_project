@@ -83,8 +83,23 @@ const {chromium} = require('playwright');
         const mobileGridColumns = await uploadGrid.evaluate(node => getComputedStyle(node).gridTemplateColumns.split(' ').length);
         assert.equal(mobileGridColumns, 1, 'Uploads must use one column on mobile');
         const mobileBounds = await page.locator('[data-software-root]').evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth}));
-        assert(mobileBounds.scroll <= mobileBounds.width + 1, 'Software page must not overflow horizontally on mobile');
         await page.screenshot({path: path.join(out, 'software-uploads-mobile.png'), fullPage: true});
+        if (mobileBounds.scroll > mobileBounds.width + 1) {
+            const overflow = await page.locator('[data-software-root]').evaluate(root => {
+                const bounds = root.getBoundingClientRect();
+                return Array.from(root.querySelectorAll('*')).filter(node => !node.closest('[hidden]')).map(node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = getComputedStyle(node);
+                    return {
+                        tag: node.tagName.toLowerCase(), className: typeof node.className === 'string' ? node.className : '',
+                        text: (node.textContent || '').trim().slice(0, 48), position: style.position,
+                        left: Math.round(rect.left), right: Math.round(rect.right),
+                        clientWidth: node.clientWidth, scrollWidth: node.scrollWidth
+                    };
+                }).filter(item => item.position !== 'fixed' && (item.right > bounds.right + 1 || item.left < bounds.left - 1 || item.scrollWidth > item.clientWidth + 1)).slice(0, 20);
+            });
+            assert.fail('Software page must not overflow horizontally on mobile: ' + JSON.stringify({mobileBounds, overflow}));
+        }
         await page.getByRole('tab', {name: 'Softwares coletados'}).click();
         await page.screenshot({path: path.join(out, 'software-inventory-mobile.png'), fullPage: true});
         assert.deepEqual(errors, []);
