@@ -15,13 +15,11 @@
     var countdown = document.querySelector("[data-noc-countdown]");
     var refreshButton = document.querySelector("[data-noc-refresh]");
     var autoButton = document.querySelector("[data-noc-auto]");
-    var soundButton = document.querySelector("[data-noc-sound]");
     var drawer = document.querySelector("[data-noc-drawer]");
     var drawerBackdrop = document.querySelector("[data-noc-drawer-backdrop]");
     var drawerClose = document.querySelector("[data-noc-drawer-close]");
     var toast = document.querySelector("[data-noc-toast]");
     var autoRefreshEnabled = true;
-    var soundEnabled = false;
 
     function renderCountdown() {
         if (countdown) {
@@ -41,21 +39,6 @@
         showToast.timer = setTimeout(function () {
             toast.hidden = true;
         }, 3200);
-    }
-
-    function beep() {
-        if (!soundEnabled || !window.AudioContext && !window.webkitAudioContext) return;
-        var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-        var context = new AudioContextCtor();
-        var oscillator = context.createOscillator();
-        var gain = context.createGain();
-        oscillator.type = "sine";
-        oscillator.frequency.value = 880;
-        gain.gain.value = 0.035;
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start();
-        oscillator.stop(context.currentTime + 0.12);
     }
 
     function openDrawer(card) {
@@ -168,20 +151,6 @@
             autoButton.setAttribute("aria-pressed", autoRefreshEnabled ? "true" : "false");
             renderCountdown();
             showToast(autoRefreshEnabled ? "Auto-refresh ligado." : "Auto-refresh pausado.");
-        });
-    }
-
-    if (soundButton) {
-        soundButton.addEventListener("click", function () {
-            soundEnabled = !soundEnabled;
-            soundButton.classList.toggle("is-active", soundEnabled);
-            soundButton.setAttribute("aria-pressed", soundEnabled ? "true" : "false");
-            soundButton.innerHTML = soundEnabled ? '<i data-lucide="volume-2"></i>Som ligado' : '<i data-lucide="volume-x"></i>Som desligado';
-            if (window.lucide && typeof window.lucide.createIcons === "function") {
-                window.lucide.createIcons();
-            }
-            showToast(soundEnabled ? "Som ligado para eventos críticos." : "Som desligado.");
-            beep();
         });
     }
 

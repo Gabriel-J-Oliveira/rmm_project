@@ -6,15 +6,28 @@
     const body = document.body;
     const label = button.querySelector('[data-noc-tv-label]');
     const status = document.querySelector('[data-noc-tv-status]');
+    const notificationBell = document.querySelector('[data-notification-center]');
+    const notificationHome = document.querySelector('[data-noc-notification-home]');
+    const notificationTvSlot = document.querySelector('[data-noc-tv-notifications]');
     let native = false;
     let pending = false;
 
     function render(active, message = '') {
         body.classList.toggle('noc-tv-mode', active);
+        if (notificationBell && (active ? notificationTvSlot : notificationHome)) {
+            (active ? notificationTvSlot : notificationHome).append(notificationBell);
+        }
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-pressed', String(active));
         label.textContent = active ? 'Sair do Modo TV' : 'Modo TV';
         status.textContent = message;
+    }
+
+    if (notificationBell && notificationHome && notificationTvSlot) {
+        new MutationObserver(() => {
+            const target = body.classList.contains('noc-tv-mode') ? notificationTvSlot : notificationHome;
+            if (notificationBell.parentElement !== target) target.append(notificationBell);
+        }).observe(body, {attributes: true, attributeFilter: ['class']});
     }
 
     function restore() {

@@ -242,3 +242,25 @@ class RemoteInstallBatchItem(models.Model):
             models.UniqueConstraint(fields=['batch', 'target_fqdn'], name='remote_batch_target_unique'),
             models.UniqueConstraint(fields=['batch', 'position'], name='remote_batch_position_unique'),
         ]
+
+
+class NocNotificationPreference(models.Model):
+    class Sound(models.TextChoices):
+        OFF = 'off', 'Desligado'
+        CRITICAL = 'critical', 'Somente críticos'
+        ALL = 'all', 'Todos habilitados pela política'
+
+    operator = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    sound = models.CharField(max_length=12, choices=Sound.choices, default=Sound.OFF)
+    read_all_at = models.DateTimeField(null=True, blank=True)
+
+
+class NocNotificationRead(models.Model):
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    event = models.ForeignKey('agents.AlertEvent', on_delete=models.CASCADE)
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=('operator', 'event'), name='noc_notification_read_once'),
+        ]

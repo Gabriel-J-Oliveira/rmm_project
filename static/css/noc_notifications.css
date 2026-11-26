@@ -1,0 +1,143 @@
+.noc-notification-center {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-primary);
+    z-index: 35;
+}
+
+.noc-notification-trigger {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    color: var(--text-secondary);
+    background: var(--card);
+    cursor: pointer;
+    list-style: none;
+}
+
+.noc-notification-trigger::-webkit-details-marker { display: none; }
+.noc-notification-trigger:hover,
+.noc-notification-trigger:focus-visible,
+.noc-notification-center[open] .noc-notification-trigger {
+    color: var(--text-primary);
+    border-color: var(--accent, #8b7cff);
+    outline: none;
+}
+
+.noc-notification-count {
+    position: absolute;
+    top: -6px;
+    right: -7px;
+    min-width: 17px;
+    padding: 1px 4px;
+    border: 1px solid var(--card);
+    border-radius: 99px;
+    color: #fff;
+    background: #d94d69;
+    font-size: .65rem;
+    line-height: 1.25;
+    text-align: center;
+}
+
+.noc-notification-panel {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    z-index: 80;
+    width: min(390px, calc(100vw - 24px));
+    max-height: min(72vh, 620px);
+    overflow: auto;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    color: var(--text-primary);
+    background: var(--card);
+    box-shadow: 0 18px 44px rgb(0 0 0 / 28%);
+}
+
+.noc-notification-panel [hidden] { display: none !important; }
+
+.noc-notification-header,
+.noc-notification-preference {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.noc-notification-header { margin-bottom: 12px; }
+.noc-notification-header > div { display: grid; gap: 3px; }
+.noc-notification-header [role=status],
+.noc-notification-read-label { color: var(--text-secondary); font-size: .74rem; }
+
+.noc-notification-panel button,
+.noc-notification-panel select {
+    max-width: 100%;
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    background: var(--surface, var(--card));
+    font: inherit;
+    font-size: .78rem;
+}
+
+.noc-notification-panel button { cursor: pointer; }
+.noc-notification-panel button:disabled { opacity: .6; cursor: wait; }
+.noc-notification-preference { margin: 8px 0; color: var(--text-secondary); font-size: .8rem; }
+.noc-notification-panel [data-notification-audio] { margin: 4px 0; }
+.noc-notification-panel [data-notification-audio-status] { display: block; color: var(--text-secondary); font-size: .72rem; }
+
+.noc-notification-list {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.noc-notification-entry {
+    display: grid;
+    gap: 5px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface, var(--card));
+}
+
+.noc-notification-entry.is-read { opacity: .75; }
+.noc-notification-entry a { color: var(--text-primary); font-size: .83rem; font-weight: 650; text-decoration: none; }
+.noc-notification-entry a:hover,
+.noc-notification-entry a:focus-visible { text-decoration: underline; }
+.noc-notification-entry > span { color: var(--text-secondary); font-size: .72rem; }
+.noc-notification-entry button { justify-self: start; }
+.noc-notification-panel [data-notification-empty] { display: block; margin-top: 14px; color: var(--text-secondary); font-size: .8rem; }
+
+.noc-notification-toasts {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 2000;
+    display: grid;
+    gap: 8px;
+    width: min(370px, calc(100vw - 36px));
+}
+
+.noc-notification-toasts .alert-toast { position: static; width: 100%; }
+.noc-notification-toasts a { color: inherit; text-decoration: none; }
+.noc-notification-toasts a:hover,
+.noc-notification-toasts a:focus-visible { text-decoration: underline; }
+
+body.page-noc .noc-actions [data-noc-tv-notifications] { display: inline-flex; align-items: center; }
+body.page-noc.noc-tv-mode .noc-actions .noc-notification-center { display: inline-flex; }
+
+@media (max-width: 640px) {
+    .noc-notification-panel { right: -8px; }
+    .noc-notification-toasts { right: 12px; bottom: 12px; width: calc(100vw - 24px); }
+    body.page-noc .noc-actions [data-noc-tv-notifications] { flex: 0 0 auto; }
+}

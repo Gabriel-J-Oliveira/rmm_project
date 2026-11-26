@@ -7,7 +7,7 @@ from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from agents.models import AgentJob, AgentMachine, AlertEvent, EndpointAlert
+from agents.models import AgentJob, AgentMachine, AlertEvent, AlertPolicy, EndpointAlert
 from tickets.models import Ticket, TicketAuditEvent
 
 
@@ -20,6 +20,13 @@ class NocOperationsTests(TestCase):
             status=AgentMachine.STATUS_ONLINE, last_seen_at=timezone.now(),
         )
         self.alert = self.create_alert('Disco cheio')
+        self.policy = AlertPolicy.objects.create(
+            key='noc-visual-notification', name='Notificação visual NOC', enabled=True,
+            metric=AlertPolicy.Metric.CPU, severity=AlertPolicy.Severity.CRITICAL,
+            threshold=95, duration_minutes=5, recovery_threshold=90,
+            notify_visual=True, notify_sound=False,
+        )
+        self.policy.endpoints.add(self.endpoint)
 
     def create_alert(self, title, **fields):
         data = dict(alert_type='disk_low', severity='critical', title=title, description='Capacidade de disco')
@@ -102,6 +109,12 @@ class NocVisualTests(StaticLiveServerTestCase):
         operator = get_user_model().objects.create_superuser('noc-browser-review')
         self.client.force_login(operator)
         now = timezone.now()
+        notification_policy = AlertPolicy.objects.create(
+            key='noc-browser-notification', name='Notificação visual NOC', enabled=True,
+            metric=AlertPolicy.Metric.CPU, severity=AlertPolicy.Severity.CRITICAL,
+            threshold=95, duration_minutes=5, recovery_threshold=90,
+            notify_visual=True, notify_sound=False,
+        )
         fixtures = (
             ('LAB-CAPACIDADE', 'disk_low', 'critical', 'Disco C: em 97%', AgentMachine.STATUS_ONLINE),
             ('LAB-OPERACAO', 'endpoint_offline', 'warning', 'Sem comunicação há 28 horas', AgentMachine.STATUS_OFFLINE),
@@ -113,11 +126,20 @@ class NocVisualTests(StaticLiveServerTestCase):
                 hostname=hostname, machine_id=str(uuid.uuid4()), agent_token_hash=str(index) * 64,
                 status=state, last_seen_at=now - timedelta(hours=28) if state == 'offline' else now,
             )
-            endpoint.alerts.create(
+            alert = endpoint.alerts.create(
                 alert_type=kind, severity=severity, title=title, description='Ocorrência sintética de homologação.',
                 first_seen_at=now - timedelta(minutes=10 + 28 * index),
                 metadata={'free_percent': 3, 'used_percent': 97, 'disk_name': 'C:'} if kind == 'disk_low' else {},
             )
+            if index == 0:
+                notification_policy.endpoints.add(endpoint)
+                alert.source = 'alert_policy'
+                alert.metadata = {'policy': notification_policy.key, 'notify_visual': True, 'notify_sound': False}
+                alert.save(update_fields=['source', 'metadata'])
+                AlertEvent.objects.create(
+                    alert=alert, event_type=AlertEvent.TYPE_CREATED,
+                    message='Ocorrência sintética de homologação.',
+                )
         result = subprocess.run(
             ['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_noc_operations_visual.cjs')],
             env={**environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
