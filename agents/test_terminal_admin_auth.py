@@ -6,6 +6,8 @@ import subprocess
 import uuid
 from pathlib import Path
 from datetime import timedelta
+from unittest.mock import patch
+from django.core.exceptions import PermissionDenied
 
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
@@ -18,13 +20,16 @@ from access_inventory.models import ADUser
 
 from . import terminal_sessions as sessions, terminal_transport as transport
 from .models import (AgentMachine, AssetAgentLink, AssetRecord, AuditEvent, InventorySnapshot,
-                     PhysicalAsset, TerminalAccessGrant, TerminalSession)
+                     PhysicalAsset, TerminalAccessGrant, AdminTerminalAccessGrant, TerminalSession)
 from .terminal_test_harness import LoopbackASGI, WSClient
 from .test_terminal_transport import fixture
+from .admin_terminal_grants import change_admin_terminal_grant
 
 
 def enable_admin(machine, operator):
-    TerminalAccessGrant.objects.filter(endpoint=machine, operator=operator).update(allow_admin_auth=True)
+    AdminTerminalAccessGrant.objects.update_or_create(operator=operator, endpoint=machine, defaults={
+        'enabled': True, 'expires_at': timezone.now() + timedelta(minutes=30), 'created_by': operator, 'machine_id': machine.machine_id,
+        'reason': 'Synthetic admin-auth test', 'approval_ref': 'TEST-ADMIN-AUTH'})
     operator.user_permissions.add(Permission.objects.get(
         content_type__app_label='agents', content_type__model='terminalsession',
         codename='open_admin_terminalsession'))
@@ -35,11 +40,93 @@ def enable_admin(machine, operator):
 
 @override_settings(NIGHTOWL_TERMINAL_ENABLED=True, NIGHTOWL_TERMINAL_SINGLE_PROCESS=True, NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED=True)
 class AdminAuthControlTests(TestCase):
+    @override_settings(NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY=False)
+    def test_persistent_grant_survives_session_close_without_pilot_fields(self):
+        machine, _, operator = fixture('persistent-admin-grant')
+        enable_admin(machine, operator)
+        AdminTerminalAccessGrant.objects.all().delete()
+        manager = get_user_model().objects.create_user('persistent-grant-manager', is_staff=True)
+        manager.user_permissions.add(Permission.objects.get(content_type__app_label='agents',
+            content_type__model='terminalsession', codename='manage_admin_terminal_grant'))
+        data = dict(actor=manager, endpoint_id=machine.pk, beneficiary=operator.username, reason='Test authorization')
+        grant = change_admin_terminal_grant(action='grant', **data)
+        self.assertIsNone(grant['expires_at'])
+        self.client.force_login(manager)
+        url = reverse('terminal-admin-grant', args=[machine.pk])
+        self.assertTrue(self.client.get(url, {'beneficiary': operator.username}).json()['grant_current'])
+        with override_settings(NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY=True):
+            with patch.multiple('agents.terminal_grants', PILOT_ENDPOINT_ID=machine.pk, PILOT_OPERATOR_USERNAME=operator.username):
+                self.assertFalse(self.client.get(url).json()['grant_current'])
+            with self.assertRaises(PermissionError):
+                sessions.create_session(operator, machine.pk, 'admin_auth')
+        for _ in range(2):
+            session = sessions.create_session(operator, machine.pk, 'admin_auth')
+            self.assertIsNotNone(TerminalSession.objects.get(pk=session['session_id']).expires_at)
+            sessions.close_session(session['session_id'], 'test_closed')
+        change_admin_terminal_grant(action='revoke', **data)
+        with self.assertRaises(PermissionError):
+            sessions.create_session(operator, machine.pk, 'admin_auth')
+
+    def test_admin_grant_lifecycle_is_audited_independent_and_closes_session(self):
+        machine, _, operator = fixture('admin-grant-lifecycle')
+        enable_admin(machine, operator)
+        AdminTerminalAccessGrant.objects.all().delete()
+        manager = get_user_model().objects.create_user('grant-manager', is_staff=True)
+        manager.user_permissions.add(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='manage_admin_terminal_grant'))
+        self.client.force_login(manager)
+        url = reverse('terminal-admin-grant', args=[machine.pk])
+        binding = dict(PILOT_ENDPOINT_ID=machine.pk, PILOT_MACHINE_ID=machine.machine_id.lower(),
+            PILOT_OPERATOR_USERNAME=operator.username.lower())
+        data = dict(machine_id=machine.machine_id, reason='Human pilot validation', approval_ref='TEST-RC49-1')
+        with patch.multiple('agents.terminal_grants', **binding):
+            self.assertContains(self.client.get(reverse('endpoint-detail', args=[machine.pk])), 'data-admin-grant')
+            csrf_client = Client(enforce_csrf_checks=True)
+            csrf_client.force_login(manager)
+            self.assertEqual(csrf_client.post(url, dict(data, action='grant', ttl_minutes=20),
+                content_type='application/json', secure=True).status_code, 403)
+            operator.user_permissions.add(Permission.objects.get(content_type__app_label='agents',
+                content_type__model='terminalsession', codename='manage_admin_terminal_grant'))
+            with self.assertRaises(PermissionDenied):
+                change_admin_terminal_grant(actor=operator, endpoint_id=machine.pk, action='grant',
+                    ttl_minutes=20, **data)
+            self.assertEqual(self.client.post(url, dict(data, action='grant', ttl_minutes=61), content_type='application/json', secure=True).status_code, 400)
+            response = self.client.post(url, dict(data, action='grant', ttl_minutes=20), content_type='application/json', secure=True)
+        self.assertEqual(response.status_code, 200)
+        info = response.json()
+        self.assertTrue(AdminTerminalAccessGrant.objects.get(pk=info['grant_id']).enabled)
+        conpty = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
+        conpty.enabled, conpty.allow_conpty = True, True
+        conpty.save(update_fields=['enabled', 'allow_conpty'])
+        session = sessions.create_session(operator, machine.pk, 'admin_auth')
+        with patch.multiple('agents.terminal_grants', **binding):
+            self.assertEqual(self.client.post(url, dict(data, action='revoke'), content_type='application/json', secure=True).status_code, 200)
+        self.assertFalse(AdminTerminalAccessGrant.objects.get(pk=info['grant_id']).enabled)
+        conpty.refresh_from_db()
+        self.assertTrue(conpty.allow_conpty, 'admin revoke must preserve the independent ConPTY grant')
+        self.assertEqual(TerminalSession.objects.get(pk=session['session_id']).status, 'cancelled')
+        audits = set(AuditEvent.objects.filter(endpoint=machine).values_list('event_type', flat=True))
+        self.assertTrue({'terminal.admin_grant_granted', 'terminal.admin_grant_revoked'} <= audits)
+
+    def test_admin_grant_requires_manager_and_bounded_ttl(self):
+        machine, _, operator = fixture('admin-grant-permission')
+        for ttl in (0, 61, True):
+            with self.assertRaises(PermissionDenied):
+                change_admin_terminal_grant(actor=operator, endpoint_id=machine.pk, machine_id=machine.machine_id,
+                    action='grant', ttl_minutes=ttl, reason='Test', approval_ref='TEST')
+        operator.user_permissions.add(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='manage_admin_terminal_grant'))
+        with self.assertRaises(PermissionDenied):
+            change_admin_terminal_grant(actor=operator, endpoint_id=machine.pk, machine_id='wrong',
+                action='grant', ttl_minutes=10, reason='Test', approval_ref='TEST')
+
     def test_conpty_grant_does_not_authorize_admin_auth_or_dashboard_gate(self):
         machine, _, operator = fixture('admin-auth-separated-grants')
         grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
-        grant.allow_conpty = True
-        grant.save(update_fields=['allow_conpty'])
+        grant.allow_conpty = grant.allow_admin_auth = True
+        grant.save(update_fields=['allow_conpty', 'allow_admin_auth'])
         snapshot = InventorySnapshot.objects.get(machine=machine)
         snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_admin_auth:1')
         snapshot.save(update_fields=['raw_payload'])
@@ -50,8 +137,7 @@ class AdminAuthControlTests(TestCase):
         with self.assertRaises(PermissionError):
             sessions.create_session(operator, machine.pk, 'admin_auth')
 
-        grant.allow_admin_auth = True
-        grant.save(update_fields=['allow_admin_auth'])
+        enable_admin(machine, operator)
         operator.user_permissions.add(Permission.objects.get(
             content_type__app_label='agents', content_type__model='terminalsession',
             codename='open_admin_terminalsession'))
@@ -64,41 +150,31 @@ class AdminAuthControlTests(TestCase):
     def test_admin_permission_is_explicit_and_scope_bound(self):
         machine, _, operator = fixture('admin-auth-permission-required')
         grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
-        grant.allow_admin_auth = True
-        grant.save(update_fields=['allow_admin_auth'])
+        enable_admin(machine, operator)
         snapshot = InventorySnapshot.objects.get(machine=machine)
         snapshot.raw_payload['agent']['capabilities'].append('remote_terminal_admin_auth:1')
         snapshot.save(update_fields=['raw_payload'])
+        operator.user_permissions.remove(Permission.objects.get(
+            content_type__app_label='agents', content_type__model='terminalsession',
+            codename='open_admin_terminalsession'))
 
         with self.assertRaises(PermissionError):
             sessions.create_session(operator, machine.pk, 'admin_auth')
 
         admin = get_user_model().objects.create_superuser('admin-no-explicit-permission', password='synthetic-only')
-        TerminalAccessGrant.objects.create(operator=admin, endpoint=machine, allow_admin_auth=True,
-            expires_at=timezone.now() + timedelta(hours=1))
+        AdminTerminalAccessGrant.objects.create(operator=admin, endpoint=machine, created_by=admin, machine_id=machine.machine_id,
+            reason='Synthetic', approval_ref='TEST', expires_at=timezone.now() + timedelta(minutes=30))
         with self.assertRaises(PermissionError):
             sessions.create_session(admin, machine.pk, 'admin_auth')
 
         operator.user_permissions.add(Permission.objects.get(
             content_type__app_label='agents', content_type__model='terminalsession',
             codename='open_admin_terminalsession'))
-        operator.user_permissions.remove(Permission.objects.get(
-            content_type__app_label='agents', content_type__model='terminalsession',
-            codename='open_terminalsession'))
-        operator = get_user_model().objects.get(pk=operator.pk)
-        with self.assertRaises(PermissionError):
-            sessions.create_session(operator, machine.pk, 'admin_auth')
-        operator.user_permissions.add(Permission.objects.get(
-            content_type__app_label='agents', content_type__model='terminalsession',
-            codename='open_terminalsession'))
-        operator = get_user_model().objects.get(pk=operator.pk)
         info = sessions.create_session(operator, machine.pk, 'admin_auth')
         sessions.close_session(info['session_id'], 'synthetic_test_closed')
 
         other_machine, _, other_operator = fixture('admin-auth-wrong-scope')
-        other_grant = TerminalAccessGrant.objects.get(endpoint=other_machine, operator=other_operator)
-        other_grant.allow_admin_auth = True
-        other_grant.save(update_fields=['allow_admin_auth'])
+        enable_admin(other_machine, other_operator)
         other_operator.user_permissions.add(Permission.objects.get(
             content_type__app_label='agents', content_type__model='terminalsession',
             codename='open_admin_terminalsession'))
@@ -136,23 +212,19 @@ class AdminAuthControlTests(TestCase):
         info = sessions.create_session(operator, machine.pk, 'admin_auth')
         grant = TerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
 
-        grant.allow_admin_auth = False
-        grant.save(update_fields=['allow_admin_auth'])
+        admin_grant = AdminTerminalAccessGrant.objects.get(endpoint=machine, operator=operator)
+        admin_grant.enabled = False
+        admin_grant.save(update_fields=['enabled'])
         with self.assertRaises(PermissionError):
             sessions.check_live(info['session_id'])
-        grant.allow_admin_auth = True
-        grant.enabled = False
-        grant.save(update_fields=['allow_admin_auth', 'enabled'])
-        with self.assertRaises(PermissionError):
-            sessions.check_live(info['session_id'])
-        grant.enabled = True
-        grant.expires_at = timezone.now() - timedelta(seconds=1)
-        grant.save(update_fields=['enabled', 'expires_at'])
+        admin_grant.enabled = True
+        admin_grant.expires_at = timezone.now() - timedelta(seconds=1)
+        admin_grant.save(update_fields=['enabled', 'expires_at'])
         with self.assertRaises(PermissionError):
             sessions.check_live(info['session_id'])
 
-        grant.expires_at = timezone.now() + timedelta(hours=1)
-        grant.save(update_fields=['expires_at'])
+        admin_grant.expires_at = timezone.now() + timedelta(minutes=30)
+        admin_grant.save(update_fields=['expires_at'])
         machine.machine_id = str(uuid.uuid4())
         machine.save(update_fields=['machine_id'])
         with self.assertRaises(PermissionError):
