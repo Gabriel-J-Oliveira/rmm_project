@@ -7,7 +7,7 @@ import django.db.models.deletion
 
 class Migration(migrations.Migration):
     dependencies = [
-        ('agents', '0057_admin_terminal_access_grant'),
+        ('agents', '0058_softwarepackagerecord'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
