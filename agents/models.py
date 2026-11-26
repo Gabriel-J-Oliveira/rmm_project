@@ -5,6 +5,7 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -20,6 +21,23 @@ class TerminalAccessGrant(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['operator', 'endpoint'], name='terminal_grant_operator_endpoint')]
+
+
+class AdminTerminalAccessGrant(models.Model):
+    """Independent, short-lived authorization for elevated Windows terminal sessions."""
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='admin_terminal_grants')
+    endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
+    machine_id = models.CharField(max_length=255)
+    enabled = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='admin_terminal_grants_created')
+    reason = models.CharField(max_length=500)
+    approval_ref = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['operator', 'endpoint'], name='admin_terminal_grant_operator_endpoint')]
 
 
 class TerminalSession(models.Model):
@@ -52,6 +70,7 @@ class TerminalSession(models.Model):
         permissions = [
             ('open_terminalsession', 'Open synthetic remote terminal transport'),
             ('open_admin_terminalsession', 'Open administrative remote terminal session'),
+            ('manage_admin_terminal_grant', 'Grant and revoke administrative remote terminal access'),
         ]
         constraints = [
             models.UniqueConstraint(fields=['endpoint'], condition=models.Q(status__in=('awaiting_consent', 'authorized', 'connecting', 'ready')), name='terminal_active_endpoint'),
@@ -1097,6 +1116,162 @@ class InventorySnapshot(models.Model):
         return f'{self.hostname} @ {self.received_at:%Y-%m-%d %H:%M:%S}'
 
 
+def generate_provisional_asset_code():
+    """Generate an opaque, temporary display code without a shared counter."""
+    return f'PROV-{uuid.uuid4().hex.upper()}'
+
+
+class PhysicalAsset(models.Model):
+    """Persistent physical equipment identity, separate from agent identity."""
+
+    STATUS_ACTIVE = 'active'
+    STATUS_RETIRED = 'retired'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Ativo'),
+        (STATUS_RETIRED, 'Baixado'),
+    ]
+    IDENTITY_PROVISIONAL = 'provisional'
+    IDENTITY_CONFIRMED = 'confirmed'
+    IDENTITY_REVIEW = 'review'
+    IDENTITY_CHOICES = [
+        (IDENTITY_PROVISIONAL, 'Provisória'),
+        (IDENTITY_CONFIRMED, 'Confirmada'),
+        (IDENTITY_REVIEW, 'Em revisão'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset_code = models.CharField(max_length=40, unique=True, default=generate_provisional_asset_code)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    identity_status = models.CharField(max_length=16, choices=IDENTITY_CHOICES, default=IDENTITY_PROVISIONAL)
+    serial_number = models.CharField(max_length=255, blank=True)
+    serial_normalized = models.CharField(max_length=255, null=True, blank=True)
+    smbios_uuid = models.UUIDField(null=True, blank=True, unique=True, editable=False)
+    manufacturer = models.CharField(max_length=255, blank=True)
+    model = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='physical_assets_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['asset_code']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['serial_normalized'],
+                condition=models.Q(status='active', serial_normalized__isnull=False),
+                name='physical_asset_active_serial_unique',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        from .identity import meaningful_serial
+
+        self.asset_code = str(self.asset_code or '').strip().upper()
+        self.serial_number = str(self.serial_number or '').strip()
+        self.serial_normalized = meaningful_serial(self.serial_number) or None
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'serial_number' in update_fields:
+            kwargs['update_fields'] = {*update_fields, 'serial_normalized'}
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.asset_code
+
+
+class AssetAgentLink(models.Model):
+    """Time-bounded association; snapshots survive endpoint deletion/purge."""
+
+    ORIGIN_OPERATOR = 'operator'
+    ORIGIN_SERIAL_SUGGESTION = 'serial_suggestion'
+    ORIGIN_SMBIOS = 'smbios'
+    ORIGIN_CHOICES = [
+        (ORIGIN_OPERATOR, 'Confirmação do operador'),
+        (ORIGIN_SERIAL_SUGGESTION, 'Sugestão por serial confirmada'),
+        (ORIGIN_SMBIOS, 'Identidade SMBIOS'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(PhysicalAsset, on_delete=models.PROTECT, related_name='agent_links')
+    endpoint = models.ForeignKey(
+        AgentMachine, null=True, blank=True, on_delete=models.SET_NULL, related_name='asset_links',
+    )
+    endpoint_uuid_snapshot = models.UUIDField(db_index=True)
+    machine_id_snapshot = models.CharField(max_length=255, blank=True)
+    hostname_snapshot = models.CharField(max_length=255, blank=True)
+    origin = models.CharField(max_length=24, choices=ORIGIN_CHOICES, default=ORIGIN_OPERATOR)
+    evidence = models.JSONField(default=dict, blank=True)
+    reason = models.TextField(blank=True)
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_agent_links_created',
+    )
+    linked_at = models.DateTimeField(default=timezone.now)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-linked_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['endpoint'], condition=models.Q(ended_at__isnull=True, endpoint__isnull=False),
+                name='asset_agent_one_active_endpoint',
+            ),
+            models.UniqueConstraint(
+                fields=['asset'], condition=models.Q(ended_at__isnull=True),
+                name='asset_agent_one_active_asset',
+            ),
+        ]
+        indexes = [models.Index(fields=['asset', 'ended_at', '-linked_at'])]
+
+
+class AssetHardwareObservation(models.Model):
+    endpoint = models.OneToOneField(AgentMachine, primary_key=True, on_delete=models.CASCADE,
+                                    related_name='asset_hardware_observation')
+    smbios_uuid = models.UUIDField(null=True, db_index=True)
+    evidence = models.JSONField(default=dict)
+    snapshot_id = models.UUIDField()
+    observed_at = models.DateTimeField()
+    state = models.CharField(max_length=40)
+
+
+class AssetRecord(models.Model):
+    TYPE_OBSERVATION = 'observation'
+    TYPE_ISSUE = 'issue'
+    TYPE_FORMATTED = 'formatted'
+    TYPE_MAINTENANCE = 'maintenance'
+    TYPE_UPGRADE = 'upgrade'
+    TYPE_TRANSFER = 'transfer'
+    TYPE_RESPONSIBILITY_CHANGE = 'responsibility_change'
+    TYPE_CHOICES = [
+        (TYPE_OBSERVATION, 'Observação'),
+        (TYPE_ISSUE, 'Problema'),
+        (TYPE_FORMATTED, 'Formatação'),
+        (TYPE_MAINTENANCE, 'Manutenção'),
+        (TYPE_UPGRADE, 'Upgrade'),
+        (TYPE_TRANSFER, 'Transferência'),
+        (TYPE_RESPONSIBILITY_CHANGE, 'Troca de responsável'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(PhysicalAsset, on_delete=models.PROTECT, related_name='records')
+    record_type = models.CharField(max_length=32, choices=TYPE_CHOICES, db_index=True)
+    description = models.TextField()
+    occurred_at = models.DateTimeField()
+    previous_responsible = models.CharField(max_length=255, blank=True)
+    new_responsible = models.CharField(max_length=255, blank=True)
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_records_authored',
+    )
+    author_label = models.CharField(max_length=150, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-occurred_at', '-created_at']
+        indexes = [models.Index(fields=['asset', '-occurred_at', '-created_at'])]
+
+
 class EndpointPerformanceSample(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     endpoint = models.ForeignKey(AgentMachine, on_delete=models.CASCADE, related_name='performance_samples')
@@ -1488,6 +1663,123 @@ class SoftwarePolicyViolation(models.Model):
         return f'{self.policy} - {self.endpoint} - {self.software_name or "software"}'
 
 
+class SoftwarePackageRecord(models.Model):
+    """Current package metadata; binary storage and deployment belong to later increments."""
+
+    TYPE_MSI = 'msi'
+    TYPE_EXE = 'exe'
+    TYPE_CHOICES = [(TYPE_MSI, 'MSI'), (TYPE_EXE, 'EXE')]
+    STATUS_DRAFT = 'draft'
+    STATUS_APPROVED = 'approved'
+    STATUS_REVOKED = 'revoked'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Rascunho'),
+        (STATUS_APPROVED, 'Aprovado'),
+        (STATUS_REVOKED, 'Revogado'),
+    ]
+    SIGNATURE_UNKNOWN = 'unknown'
+    SIGNATURE_VALID = 'valid'
+    SIGNATURE_INVALID = 'invalid'
+    SIGNATURE_CHOICES = [
+        (SIGNATURE_UNKNOWN, 'Não verificada'),
+        (SIGNATURE_VALID, 'Válida'),
+        (SIGNATURE_INVALID, 'Inválida'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    friendly_name = models.CharField(max_length=180)
+    original_filename = models.CharField(max_length=255, blank=True)
+    package_type = models.CharField(max_length=8, choices=TYPE_CHOICES)
+    version = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+    sha256 = models.CharField(max_length=64, blank=True)
+    signature_status = models.CharField(max_length=16, choices=SIGNATURE_CHOICES, default=SIGNATURE_UNKNOWN)
+    signer = models.CharField(max_length=255, blank=True)
+    approval_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_approved',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_revoked',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['friendly_name', 'created_at']
+        indexes = [
+            models.Index(fields=['approval_status', 'package_type']),
+            models.Index(fields=['friendly_name']),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(package_type__in=['msi', 'exe']), name='software_package_type_valid'),
+            models.CheckConstraint(condition=models.Q(approval_status__in=['draft', 'approved', 'revoked']), name='software_package_status_valid'),
+            models.CheckConstraint(condition=models.Q(signature_status__in=['unknown', 'valid', 'invalid']), name='software_package_signature_valid'),
+        ]
+
+    def __str__(self) -> str:
+        return self.friendly_name
+
+
+class AlertPolicy(models.Model):
+    class Metric(models.TextChoices):
+        CPU = 'cpu', 'Uso de CPU'
+        RAM = 'ram', 'Uso de RAM'
+        DISK = 'disk', 'Ocupação de disco'
+        OFFLINE = 'offline', 'Tempo offline'
+        UPTIME = 'uptime', 'Uptime'
+        ANTIVIRUS = 'antivirus', 'Antivírus'
+        JOB_FAILURES = 'job_failures', 'Falhas de jobs'
+
+    class Severity(models.TextChoices):
+        INFO = 'info', 'Informativo'
+        WARNING = 'warning', 'Atenção'
+        CRITICAL = 'critical', 'Crítico'
+
+    class Scope(models.TextChoices):
+        ALL = 'all', 'Todos os endpoints'
+        SERVERS = 'servers', 'Servidores'
+        DESKTOPS = 'desktops', 'Desktops'
+        ENDPOINTS = 'endpoints', 'Endpoints selecionados'
+
+    class AntivirusCondition(models.TextChoices):
+        DISABLED = 'disabled', 'Proteção desativada'
+        MISSING = 'missing', 'Antivírus ausente'
+        EITHER = 'either', 'Proteção desativada ou antivírus ausente'
+
+    key = models.SlugField(primary_key=True, max_length=50)
+    name = models.CharField(max_length=100)
+    enabled = models.BooleanField(default=False)
+    metric = models.CharField(max_length=24, choices=Metric.choices)
+    severity = models.CharField(max_length=16, choices=Severity.choices)
+    threshold = models.PositiveIntegerField(null=True, blank=True)
+    duration_minutes = models.PositiveIntegerField()
+    recovery_threshold = models.PositiveIntegerField(null=True, blank=True)
+    antivirus_condition = models.CharField(max_length=16, blank=True, choices=AntivirusCondition.choices)
+    job_window_minutes = models.PositiveIntegerField(null=True, blank=True)
+    max_age_minutes = models.PositiveIntegerField(null=True, blank=True)
+    min_coverage_percent = models.PositiveSmallIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(100)],
+    )
+    scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.ALL)
+    endpoints = models.ManyToManyField(AgentMachine, blank=True, related_name='alert_policies')
+    notify_visual = models.BooleanField(default=True)
+    notify_sound = models.BooleanField(default=False)
+    revision = models.PositiveIntegerField(default=0, editable=False)
+
+    class Meta:
+        ordering = ['key']
+
+
 class EndpointAlert(models.Model):
     SEVERITY_INFO = 'info'
     SEVERITY_WARNING = 'warning'
@@ -1867,6 +2159,32 @@ class AutomationSchedulerHealth(models.Model):
     recovered_at = models.DateTimeField(null=True, blank=True)
     recovered_by = models.CharField(max_length=150, blank=True)
     recovery_reason = models.CharField(max_length=500, blank=True)
+
+
+class AgentRemovalAudit(models.Model):
+    """Removal evidence deliberately independent from endpoint and job FKs."""
+
+    request_id = models.UUIDField(primary_key=True)
+    job_id = models.UUIDField(unique=True)
+    endpoint_id = models.UUIDField(db_index=True)
+    asset_id = models.UUIDField(null=True)
+    correlation_id = models.CharField(max_length=100, blank=True)
+    machine_id = models.CharField(max_length=255, blank=True)
+    hostname = models.CharField(max_length=255)
+    requested_by = models.CharField(max_length=150)
+    authorized_by = models.CharField(max_length=150)
+    requested_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True)
+    observed_user = models.CharField(max_length=255, null=True)
+    observed_user_at = models.DateTimeField(null=True)
+    observed_user_source = models.CharField(max_length=30, blank=True)
+    outcome = models.CharField(max_length=32, default='pending')
+    result_id = models.CharField(max_length=80, blank=True)
+    agent_error_code = models.CharField(max_length=80, blank=True)
+    binary_removed = models.BooleanField(null=True)
+    persistent_data_preserved = models.BooleanField(null=True)
+    receipt_digest = models.CharField(max_length=64, blank=True)
+    auth_identity_stamp = models.CharField(max_length=64, blank=True, editable=False)
 
 
 class AgentUninstallRequest(models.Model):

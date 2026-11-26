@@ -11,6 +11,7 @@ $work = [IO.Path]::GetFullPath((Join-Path $workspace '.windows-e2e'))
 if ([IO.Path]::GetDirectoryName($work) -ine $workspace) { throw 'Invalid test workspace path' }
 $created = $false
 $profileRoot = $null
+$env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'terminal-admin-artifacts'
 try {
     $account = New-LocalUser -Name $user -Password $password -AccountNeverExpires
     $created = $true
@@ -64,6 +65,40 @@ try {
     Get-Content $err
     $e2eExitCode = $process.ExitCode
     if ($BrowserOnly -and $e2eExitCode -eq 0) {
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'noc-artifacts'
+        $nocArguments = @('manage.py', 'test', 'dashboard.test_noc_operations.NocVisualTests',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $nocProcess = Start-Process -FilePath $python -ArgumentList $nocArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($nocProcess.ExitCode -ne 0) { throw 'NOC visual browser test failed' }
+        $nocImages = Join-Path $env:NIGHTOWL_E2E_ARTIFACT_DIR 'nightowl-noc'
+        $nocTarget = Join-Path $env:RUNNER_TEMP 'nightowl-noc'
+        New-Item -ItemType Directory -Path $nocTarget -Force | Out-Null
+        $nocScreenshots = @(Get-ChildItem -LiteralPath $nocImages -Filter '*.png' -File -ErrorAction Stop)
+        if ($nocScreenshots.Count -ne 2) { throw 'NOC desktop and mobile screenshots are required' }
+        Copy-Item -LiteralPath $nocScreenshots.FullName -Destination $nocTarget -Force
+
+        # The software-center visual contract uses a real Django test database,
+        # real inventory fixtures, and the pinned Chrome under the same isolated user.
+        $softwareCenterWork = Join-Path $work 'software-center-artifacts'
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = $softwareCenterWork
+        $softwareCenterArguments = @('manage.py', 'test',
+            'dashboard.test_software_center.SoftwareCenterVisualTests.test_software_center_real_data_drawer_responsive_layout_and_screenshots',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $softwareCenterProcess = Start-Process -FilePath $python -ArgumentList $softwareCenterArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($softwareCenterProcess.ExitCode -ne 0) { throw "Software center browser E2E failed with exit code $($softwareCenterProcess.ExitCode)" }
+        $softwareCenterImages = Join-Path $softwareCenterWork 'nightowl-software-center'
+        $softwareCenterTarget = Join-Path $env:RUNNER_TEMP 'nightowl-software-center'
+        New-Item -ItemType Directory -Path $softwareCenterTarget -Force | Out-Null
+        $screenshots = @(Get-ChildItem -LiteralPath $softwareCenterImages -Filter '*.png' -File -ErrorAction Stop)
+        if ($screenshots.Count -ne 4) { throw 'Software Center browser E2E did not produce all four viewport screenshots' }
+        Copy-Item -LiteralPath $screenshots.FullName -Destination $softwareCenterTarget -Force
+
         # Exercise the central execution-policy UI in its own isolated Django
         # test database and synthetic endpoint records, using the same pinned
         # Chrome and standard Windows test identity as the terminal smoke.
@@ -75,6 +110,23 @@ try {
         Get-Content $out
         Get-Content $err
         if ($automationProcess.ExitCode -ne 0) { throw "Execution policies browser E2E failed with exit code $($automationProcess.ExitCode)" }
+
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'terminal-admin-artifacts'
+        $terminalAdminArguments = @('manage.py', 'test',
+            'agents.test_terminal_admin_auth.AdminAuthVisualBrowserTests.test_admin_terminal_responsive_visual',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $terminalAdminProcess = Start-Process -FilePath $python -ArgumentList $terminalAdminArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($terminalAdminProcess.ExitCode -ne 0) { throw "Terminal admin visual browser test failed with exit code $($terminalAdminProcess.ExitCode)" }
+        $terminalAdminImages = Join-Path $env:NIGHTOWL_E2E_ARTIFACT_DIR 'nightowl-terminal-admin'
+        $terminalAdminTarget = Join-Path $env:RUNNER_TEMP 'nightowl-terminal-admin'
+        New-Item -ItemType Directory -Path $terminalAdminTarget -Force | Out-Null
+        $images = @(Get-ChildItem -LiteralPath $terminalAdminImages -Filter '*.png' -File -ErrorAction Stop)
+        if ($images.Count -ne 4) { throw 'Terminal admin browser test did not produce all four viewport screenshots' }
+        Copy-Item -LiteralPath $images.FullName -Destination $terminalAdminTarget -Force
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'service-manager-artifacts'
 
         # Endpoint policy actions run in a separate synthetic database and must
         # prove the browser submits a single-endpoint invocation, not a fleet run.
@@ -108,6 +160,17 @@ try {
         }
         Remove-Item Env:NIGHTOWL_E2E_ARTIFACT_DIR -ErrorAction SilentlyContinue
         if ($serviceManagerProcess.ExitCode -ne 0) { throw "Service manager browser E2E failed with exit code $($serviceManagerProcess.ExitCode)" }
+
+        # Asset records are exercised against a real Django live server and
+        # isolated synthetic database; no real endpoint or agent is contacted.
+        $assetRecordsArguments = @('manage.py', 'test',
+            'agents.test_asset_registry_browser.AssetRegistryBrowserTests.test_endpoint_records_create_and_manual_history_in_real_browser',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $assetRecordsProcess = Start-Process -FilePath $python -ArgumentList $assetRecordsArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($assetRecordsProcess.ExitCode -ne 0) { throw "Asset records browser E2E failed with exit code $($assetRecordsProcess.ExitCode)" }
     }
 
     # The independent probe runs AFTER the full E2E, even on failure: it cannot

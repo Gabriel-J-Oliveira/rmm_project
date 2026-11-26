@@ -1,5 +1,7 @@
 # Gerenciador de Serviços — allowlist do piloto
 
+> **Snapshot histórico de 17/11/2026 (não confirma estado atual):** PRs #46 e #48 MERGED, mas **backend ainda não publicado** (produção `8467cd9541d5ce93e731a19f1789486abe898402`). Flag global false e allowlist UUID vazia, release Windows paginada pendente. Não habilitar piloto durante o deploy. [Handoff e deploy](rc47-handoff-operacional-20261117.md).
+
 `NIGHTOWL_SERVICE_COLLECTION_ENABLED` é a autorização global do recurso. Ela não seleciona endpoints. A consulta só é autorizada quando o UUID do endpoint também consta em `NIGHTOWL_SERVICE_COLLECTION_ALLOWED_ENDPOINT_IDS`.
 
 ## Configuração

@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.contrib import messages
 from django.contrib.auth import authenticate
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, permission_required
+from django.core.exceptions import PermissionDenied
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -23,6 +24,7 @@ from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST, require_GET
 
@@ -41,6 +43,7 @@ from agents.models import (
     AgentReleaseAudit,
     AgentReleaseGroup,
     AgentReleaseTrustBundle,
+    AssetAgentLink,
     AlertEvent,
     AuditEvent,
     EndpointAlert,
@@ -68,6 +71,7 @@ from agents.audit import create_audit_event, get_client_ip
 from agents.telemetry_configuration import monitoring_summary
 from agents.services import (
     AGENT_RELEASE_AVAILABLE_STATUSES,
+    UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE,
     agent_release_artifact_channel,
     build_repair_agent_job_payload,
     build_update_agent_job_payload,
@@ -382,33 +386,6 @@ def mock_endpoint_rows(endpoints=None):
     return rows
 
 
-def mock_software_inventory_rows(endpoints=None):
-    endpoints = endpoints or mock_rmm_endpoints()
-    def example(*indexes):
-        return [{'endpoint': endpoints[index]} for index in indexes]
-    specs = [
-        {'name': 'Bitdefender Endpoint Security Tools', 'publisher': 'Bitdefender', 'category': 'security', 'category_label': 'Seguranca', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 6, 'versions': ['7.9.12'], 'versions_display': '7.9.12', 'latest_seen_at': timezone.now() - timedelta(minutes=8), 'example_endpoints': example(1, 2, 4), 'is_sensitive': False},
-        {'name': 'AnyDesk', 'publisher': 'AnyDesk Software GmbH', 'category': 'remote_access', 'category_label': 'Acesso remoto', 'risk_level': 'high', 'risk_label': 'Alto', 'endpoint_count': 1, 'versions': ['8.0.9'], 'versions_display': '8.0.9', 'latest_seen_at': timezone.now() - timedelta(minutes=27), 'example_endpoints': example(3), 'is_sensitive': True},
-        {'name': 'Microsoft 365 Apps', 'publisher': 'Microsoft Corporation', 'category': 'office', 'category_label': 'Produtividade', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 7, 'versions': ['2406', '2407'], 'versions_display': '2406, 2407', 'latest_seen_at': timezone.now() - timedelta(minutes=12), 'example_endpoints': example(0, 2, 7), 'is_sensitive': False},
-        {'name': 'Advanced IP Scanner', 'publisher': 'Famatech', 'category': 'admin_network', 'category_label': 'Admin/Rede', 'risk_level': 'medium', 'risk_label': 'Medio', 'endpoint_count': 2, 'versions': ['2.5.4594'], 'versions_display': '2.5.4594', 'latest_seen_at': timezone.now() - timedelta(hours=1), 'example_endpoints': example(7, 5), 'is_sensitive': True},
-        {'name': 'Google Chrome', 'publisher': 'Google LLC', 'category': 'browser', 'category_label': 'Navegador', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 8, 'versions': ['126.0.6478'], 'versions_display': '126.0.6478', 'latest_seen_at': timezone.now() - timedelta(minutes=6), 'example_endpoints': example(0, 3, 6), 'is_sensitive': False},
-        {'name': 'Python 3.12', 'publisher': 'Python Software Foundation', 'category': 'development', 'category_label': 'Desenvolvimento', 'risk_level': 'medium', 'risk_label': 'Medio', 'endpoint_count': 1, 'versions': ['3.12.4'], 'versions_display': '3.12.4', 'latest_seen_at': timezone.now() - timedelta(hours=3), 'example_endpoints': example(7), 'is_sensitive': False},
-    ]
-    rows = []
-    for row in specs:
-        row['endpoints'] = row['example_endpoints']
-        rows.append(row)
-    summary = {
-        'unique_count': len(rows),
-        'install_count': sum(row['endpoint_count'] for row in rows),
-        'remote_access_count': sum(row['category'] == 'remote_access' for row in rows),
-        'admin_network_count': sum(row['category'] == 'admin_network' for row in rows),
-        'security_count': sum(row['category'] == 'security' for row in rows),
-        'unknown_count': 2,
-    }
-    return rows, summary
-
-
 def mock_policy_context(endpoints=None):
     endpoints = endpoints or mock_rmm_endpoints()
     policies = [
@@ -674,22 +651,37 @@ def software_version_value(software):
     return str((software or {}).get('version') or '').strip()
 
 
-def latest_snapshot_rows():
-    rows = []
-    endpoints = AgentMachine.objects.prefetch_related('inventory_snapshots').order_by('hostname', 'domain')
-    for endpoint in endpoints:
-        snapshot = endpoint.inventory_snapshots.order_by('-received_at').first()
-        if snapshot:
-            rows.append((endpoint, snapshot))
-    return rows
+def latest_snapshot_rows(*, active_only=False):
+    from django.db.models import OuterRef, Subquery
+
+    latest_id = InventorySnapshot.objects.filter(machine_id=OuterRef('pk')).order_by(
+        '-received_at', '-id',
+    ).values('id')[:1]
+    endpoint_queryset = AgentMachine.objects.all()
+    if active_only:
+        endpoint_queryset = endpoint_queryset.filter(is_active=True)
+    endpoints = list(
+        endpoint_queryset.annotate(latest_inventory_id=Subquery(latest_id))
+        .exclude(latest_inventory_id__isnull=True)
+        .order_by('hostname', 'domain', 'id')
+    )
+    snapshot_by_id = {
+        snapshot.id: snapshot
+        for snapshot in InventorySnapshot.objects.filter(
+            id__in=[endpoint.latest_inventory_id for endpoint in endpoints],
+        )
+    }
+    return [(endpoint, snapshot_by_id[endpoint.latest_inventory_id]) for endpoint in endpoints]
 
 
-def build_software_inventory():
+def build_software_inventory(snapshot_rows=None):
     inventory = {}
     total_installs = 0
     endpoints_with_inventory = 0
 
-    for endpoint, snapshot in latest_snapshot_rows():
+    if snapshot_rows is None:
+        snapshot_rows = latest_snapshot_rows()
+    for endpoint, snapshot in snapshot_rows:
         endpoints_with_inventory += 1
         for software in snapshot.installed_software or []:
             name = software_display_name(software)
@@ -712,6 +704,7 @@ def build_software_inventory():
                 'endpoint_ids': set(),
                 'versions': set(),
                 'latest_seen_at': snapshot.received_at,
+                'latest_collected_at': snapshot.collected_at,
                 'endpoints': [],
             })
 
@@ -722,6 +715,8 @@ def build_software_inventory():
                 item['versions'].add(version)
             if snapshot.received_at > item['latest_seen_at']:
                 item['latest_seen_at'] = snapshot.received_at
+            if snapshot.collected_at > item['latest_collected_at']:
+                item['latest_collected_at'] = snapshot.collected_at
             item['endpoints'].append({
                 'endpoint': endpoint,
                 'version': version,
@@ -1163,6 +1158,7 @@ def row_matches_query(row, query):
         row.get('endpoint_type_label', ''),
         str(row['primary_ip']),
         row['os_name'],
+        row.get('asset_code', ''),
     ]).lower()
     return query.lower() in haystack
 
@@ -1822,42 +1818,18 @@ def alerts_list(request):
     return render(request, 'dashboard/alerts.html', context)
 
 
+@never_cache
+@login_required
+@permission_required(('agents.view_agentmachine', 'agents.view_endpointalert'), raise_exception=True)
+@require_GET
 def noc_view(request):
     now = timezone.now()
-    if request.GET.get('mock') == '1' or not AgentMachine.objects.exists():
-        endpoints = mock_rmm_endpoints()
-        alerts = mock_rmm_alerts(endpoints)
-        open_alerts = [alert for alert in alerts if alert.status == EndpointAlert.STATUS_OPEN]
-        online_count = sum(endpoint.status == AgentMachine.STATUS_ONLINE for endpoint in endpoints)
-        critical_count = sum(alert.severity == EndpointAlert.SEVERITY_CRITICAL for alert in open_alerts)
-        health_score = max(0, min(100, round((online_count / max(len(endpoints), 1)) * 100) - (critical_count * 8)))
-        context = {
-            'active_nav': 'noc',
-            'last_updated_at': now,
-            'last_alert_evaluation': now - timedelta(minutes=3),
-            'total_endpoints': len(endpoints),
-            'noc_health_score': health_score,
-            'online_count': online_count,
-            'offline_count': sum(endpoint.status == AgentMachine.STATUS_OFFLINE for endpoint in endpoints),
-            'unknown_count': sum(endpoint.status == AgentMachine.STATUS_UNKNOWN for endpoint in endpoints),
-            'open_critical_count': critical_count,
-            'open_warning_count': sum(alert.severity == EndpointAlert.SEVERITY_WARNING for alert in open_alerts),
-            'open_security_count': sum(alert.severity == EndpointAlert.SEVERITY_SECURITY for alert in open_alerts),
-            'affected_endpoints_count': len({alert.endpoint.id for alert in open_alerts}),
-            'critical_alerts': [alert for alert in open_alerts if alert.severity == EndpointAlert.SEVERITY_CRITICAL][:8],
-            'offline_endpoints': [endpoint for endpoint in endpoints if endpoint.status == AgentMachine.STATUS_OFFLINE][:8],
-            'security_alerts': [alert for alert in open_alerts if alert.severity == EndpointAlert.SEVERITY_SECURITY][:8],
-            'disk_alerts': [alert for alert in open_alerts if alert.alert_type == 'disk_low'][:8],
-            'recent_activity': mock_rmm_events(endpoints, alerts)[:10],
-            'using_mock_rmm_data': True,
-        }
-        return render(request, 'dashboard/noc.html', context)
-
+    endpoints = AgentMachine.objects.filter(is_active=True)
     status_counts = {
         item['status']: item['count']
-        for item in AgentMachine.objects.values('status').annotate(count=Count('id'))
+        for item in endpoints.values('status').order_by().annotate(count=Count('id'))
     }
-    open_alerts = EndpointAlert.objects.filter(status=EndpointAlert.STATUS_OPEN).filter(
+    open_alerts = EndpointAlert.objects.filter(endpoint__in=endpoints, status__in=(EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED)).filter(
         Q(muted_until__isnull=True) | Q(muted_until__lte=now),
     )
     severity_order = Case(
@@ -1871,56 +1843,65 @@ def noc_view(request):
 
     disk_alerts = open_alerts.filter(alert_type='disk_low').select_related('endpoint').alias(
         severity_rank=severity_order,
-    ).order_by('severity_rank', '-last_seen_at')[:8]
-    offline_endpoints = AgentMachine.objects.filter(
+    ).order_by('severity_rank', '-last_seen_at', 'pk')[:8]
+    offline_endpoints = endpoints.filter(
         status=AgentMachine.STATUS_OFFLINE,
-    ).order_by('last_seen_at')[:8]
-    relevant_event_types = [
-        'alert.created',
-        'alert.expired',
-        'alert.resolved_auto',
-        'endpoint.status_changed',
-        'alert.reopened',
-        'alert.resolved_manual',
-        'alert.acknowledged',
-        'security.defender_changed',
-        'disk.state_changed',
-        'os.build_changed',
-    ]
-    recent_activity = AuditEvent.objects.filter(
-        Q(event_type__in=relevant_event_types)
-        | Q(event_type='software.installed', severity=AuditEvent.SEVERITY_SECURITY)
-    ).select_related('endpoint', 'alert').order_by('-created_at')[:10]
-    last_alert_evaluation = EndpointAlert.objects.order_by('-updated_at').values_list('updated_at', flat=True).first()
+    ).order_by('last_seen_at', 'pk')[:8]
+    from .noc_actions import VERIFICATION_TYPES
+    from tickets.models import Ticket
 
-    total_endpoints = AgentMachine.objects.count()
+    recent_alerts = list(EndpointAlert.objects.filter(endpoint__in=endpoints)
+                         .select_related('endpoint').order_by('-first_seen_at', 'pk')[:15])
+    correlations = {f'noc-alert:{alert.pk}': alert for alert in recent_alerts}
+    seen_jobs = set()
+    for job in AgentJob.objects.filter(correlation_id__in=correlations).order_by('-queued_at', 'pk'):
+        alert = correlations[job.correlation_id]
+        if alert.endpoint_id == job.endpoint_id and job.correlation_id not in seen_jobs:
+            alert.noc_job = job
+            seen_jobs.add(job.correlation_id)
+    tickets_by_alert = {}
+    if request.user.has_perm('tickets.add_ticket'):
+        for key, number in Ticket.objects.filter(
+            related_alert_id__in=[str(alert.pk) for alert in recent_alerts],
+        ).order_by('pk').values_list('related_alert_id', 'number'):
+            tickets_by_alert.setdefault(key, number)
+    for alert in recent_alerts:
+        alert.noc_verify_supported = alert.alert_type in VERIFICATION_TYPES
+        alert.noc_ticket_number = tickets_by_alert.get(str(alert.pk))
+    last_alert_evaluation = EndpointAlert.objects.filter(endpoint__in=endpoints).order_by('-updated_at').values_list('updated_at', flat=True).first()
+
+    total_endpoints = sum(status_counts.values())
     online_count = status_counts.get(AgentMachine.STATUS_ONLINE, 0)
     critical_count = open_alerts.filter(severity=EndpointAlert.SEVERITY_CRITICAL).count()
-    health_score = max(0, min(100, round((online_count / max(total_endpoints, 1)) * 100) - (critical_count * 8)))
 
     context = {
         'active_nav': 'noc',
         'last_updated_at': now,
         'last_alert_evaluation': last_alert_evaluation,
         'total_endpoints': total_endpoints,
-        'noc_health_score': health_score,
         'online_count': online_count,
         'offline_count': status_counts.get(AgentMachine.STATUS_OFFLINE, 0),
         'unknown_count': status_counts.get(AgentMachine.STATUS_UNKNOWN, 0),
         'open_critical_count': critical_count,
         'open_warning_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_WARNING).count(),
         'open_security_count': open_alerts.filter(severity=EndpointAlert.SEVERITY_SECURITY).count(),
-        'affected_endpoints_count': open_alerts.values('endpoint_id').distinct().count(),
+        'affected_endpoints_count': open_alerts.order_by().values('endpoint_id').distinct().count(),
         'critical_alerts': open_alerts.filter(
             severity=EndpointAlert.SEVERITY_CRITICAL,
-        ).select_related('endpoint').order_by('-last_seen_at')[:8],
+        ).select_related('endpoint').order_by('-last_seen_at', 'pk')[:8],
         'offline_endpoints': offline_endpoints,
         'security_alerts': open_alerts.filter(
-            severity=EndpointAlert.SEVERITY_SECURITY,
-        ).select_related('endpoint').order_by('-last_seen_at')[:8],
+            Q(severity=EndpointAlert.SEVERITY_SECURITY) | Q(alert_type__startswith='security_'),
+        ).select_related('endpoint').order_by('-last_seen_at', 'pk')[:8],
         'disk_alerts': disk_alerts,
-        'recent_activity': recent_activity,
+        'recent_alerts': recent_alerts,
+        'mute_durations': [(key, label) for key, (label, _) in MUTE_DURATIONS.items()],
     }
+    if request.GET.get('fragment') == '1':
+        from django.template.loader import render_to_string
+
+        return JsonResponse({'html': render_to_string('dashboard/partials/noc_content.html', context, request=request),
+                             'read_at': now.isoformat()})
     return render(request, 'dashboard/noc.html', context)
 
 
@@ -2267,9 +2248,18 @@ def email_outbox_pending(request, pk):
     return redirect('email-outbox-list')
 
 
-@require_POST
-def alert_acknowledge(request, pk):
+def _alert_for_action(request, pk):
     alert = get_object_or_404(EndpointAlert, pk=pk)
+    if alert.source == 'alert_policy' and not request.user.has_perms(
+        ('agents.view_agentmachine', 'agents.view_endpointalert', 'agents.change_endpointalert')
+    ):
+        raise PermissionDenied
+    return alert
+
+
+@require_POST
+def alert_acknowledge(request, pk, *, noc=False):
+    alert = _alert_for_action(request, pk)
     if alert.status in (EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED):
         was_open = alert.status == EndpointAlert.STATUS_OPEN
         alert.status = EndpointAlert.STATUS_ACKNOWLEDGED
@@ -2279,6 +2269,8 @@ def alert_acknowledge(request, pk):
         if was_open:
             create_alert_event(alert, AlertEvent.TYPE_ACKNOWLEDGED, 'Alerta reconhecido.', request)
             audit_alert_action(request, alert, 'alert.acknowledged', 'Alerta reconhecido', alert.title)
+        if noc:
+            return JsonResponse({'detail': 'Alerta reconhecido.'})
         messages.info(request, 'Alerta reconhecido.')
     else:
         messages.warning(request, 'Alerta resolvido nao foi reaberto.')
@@ -2287,7 +2279,7 @@ def alert_acknowledge(request, pk):
 
 @require_POST
 def alert_resolve(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+    alert = _alert_for_action(request, pk)
     if alert.status != EndpointAlert.STATUS_RESOLVED:
         alert.status = EndpointAlert.STATUS_RESOLVED
         alert.resolved_at = timezone.now()
@@ -2315,12 +2307,14 @@ def alert_resolve(request, pk):
 
 
 @require_POST
-def alert_mute(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+def alert_mute(request, pk, *, noc=False):
+    alert = _alert_for_action(request, pk)
     duration = request.POST.get('duration', '').strip()
     reason = request.POST.get('reason', '').strip()
     label, delta = MUTE_DURATIONS.get(duration, (None, None))
     if not delta:
+        if noc:
+            return JsonResponse({'detail': 'Prazo de silêncio inválido.'}, status=400)
         messages.error(request, 'Duracao de silenciamento invalida.')
         return redirect_back(request)
 
@@ -2345,13 +2339,15 @@ def alert_mute(request, pk):
         severity=AuditEvent.SEVERITY_INFO,
         metadata={'duration': duration, 'muted_until': alert.muted_until.isoformat(), 'muted_reason': reason},
     )
+    if noc:
+        return JsonResponse({'detail': f'Alerta silenciado por {label}.'})
     messages.info(request, f'Alerta silenciado por {label}.')
     return redirect_back(request)
 
 
 @require_POST
 def alert_comment(request, pk):
-    alert = get_object_or_404(EndpointAlert, pk=pk)
+    alert = _alert_for_action(request, pk)
     message = request.POST.get('message', '').strip()
     if not message:
         messages.warning(request, 'Informe uma observacao antes de salvar.')
@@ -2385,6 +2381,16 @@ def endpoint_list(request):
         endpoints, snapshots = load_endpoint_list_data()
         filters = endpoint_filters_from_request(request)
         recommended_version = latest_agent_version()
+        asset_codes = {}
+        if request.user.is_authenticated and request.user.has_perm('agents.view_physicalasset'):
+            from agents.asset_registry import link_matches_endpoint
+            endpoints_by_id = {endpoint.pk: endpoint for endpoint in endpoints}
+            active_asset_links = AssetAgentLink.objects.filter(
+                endpoint_id__in=endpoints_by_id, ended_at__isnull=True,
+            ).select_related('asset').order_by('linked_at', 'pk')
+            for link in active_asset_links:
+                if link_matches_endpoint(link, endpoints_by_id[link.endpoint_id]):
+                    asset_codes.setdefault(link.endpoint_id, link.asset.asset_code)
         rows = []
         option_rows = []
         for endpoint in endpoints:
@@ -2400,9 +2406,11 @@ def endpoint_list(request):
                     or (filters['os'] and os_name != filters['os'])
                     or (filters['domain'] and domain != filters['domain'])):
                 continue
-            rows.append(build_endpoint_row(
+            row = build_endpoint_row(
                 endpoint, snapshot=snapshot, recommended_version=recommended_version,
-            ))
+            )
+            row['asset_code'] = asset_codes.get(endpoint.pk, '')
+            rows.append(row)
         filtered_rows = filter_endpoint_rows(rows, filters)
         mock_data = False
 
@@ -2870,6 +2878,12 @@ def _manual_update_release_options(endpoint):
     for release in releases:
         decision = evaluate_agent_update_policy(endpoint, manual=True, explicit_release=release, record_evaluation=False)
         version_comparison = compare_versions(endpoint.agent_version or '', release.version)
+        requires_force = version_comparison is not None and version_comparison > 0
+        downgrade_decision = decision
+        if decision.reason_code == UPDATE_POLICY_REASON_DOWNGRADE_REQUIRES_FORCE:
+            downgrade_decision = evaluate_agent_update_policy(
+                endpoint, manual=True, explicit_release=release, allow_downgrade=True, record_evaluation=False,
+            )
         rows.append({
             'id': str(release.id),
             'version': release.version,
@@ -2892,7 +2906,10 @@ def _manual_update_release_options(endpoint):
             'eligible': decision.eligible,
             'reason_code': decision.reason_code,
             'eligibility_detail': _update_policy_message(decision.reason_code),
-            'requires_force': decision.reason_code == 'downgrade_requires_force' or (version_comparison is not None and version_comparison > 0),
+            'requires_force': requires_force,
+            'eligible_with_downgrade': requires_force and downgrade_decision.eligible,
+            'downgrade_reason_code': downgrade_decision.reason_code if requires_force else '',
+            'downgrade_eligibility_detail': _update_policy_message(downgrade_decision.reason_code) if requires_force else '',
             'same_version': version_comparison == 0,
             'metadata_complete': bool(release.package_url and release.sha256 and release.size),
             'package_url_present': bool(release.package_url),
@@ -3351,7 +3368,7 @@ def operational_action_availability(endpoint, user):
     if not getattr(settings, 'NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED', False):
         for entry in result.values(): entry['reason'] = 'Ações operacionais desativadas no backend.'
         return result
-    if endpoint.status != AgentMachine.STATUS_ONLINE:
+    if not endpoint.is_active or endpoint.status != AgentMachine.STATUS_ONLINE or endpoint.has_terminal_lifecycle:
         for entry in result.values(): entry['reason'] = 'Agente não está online.'
         return result
     if not endpoint.machine_id or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1:
@@ -3370,6 +3387,9 @@ def operational_action_availability(endpoint, user):
             if name in admin.PERMISSIONS:
                 if not getattr(settings, 'NIGHTOWL_ADMIN_ACTIONS_ENABLED', False):
                     result[name]['reason'] = 'Ações administrativas desativadas no backend.'
+                    continue
+                if name in admin.SERVICES and not getattr(settings, 'NIGHTOWL_SERVICE_CONTROL_ENABLED', False):
+                    result[name]['reason'] = 'Controle de serviços desativado no backend.'
                     continue
                 if name == 'gpupdate':
                     if scope.get(name) is not True:
@@ -3662,6 +3682,19 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
     ).order_by('-created_at').first()
     latest_trust_bundle = _latest_published_trust_bundle() if can_view_technical else None
     uninstall_request = endpoint.uninstall_requests.order_by('-created_at').first()
+    from agents.agent_removal import removal_block_reason
+    removal_modes = []
+    removal_reason = 'forbidden'
+    if request and (can_purge_agent(request.user) or can_uninstall_agent(request.user)
+                    or is_nightowl_technical_user(request.user)):
+        removal_reason = removal_block_reason(endpoint)
+        if not removal_reason and can_purge_agent(request.user):
+            removal_modes.append('remove')
+        # Keep administrative reauthentication and legacy capabilities available
+        # through this same panel until the corresponding agent is upgraded.
+        if removal_reason == 'verified_removal_unsupported':
+            removal_modes.append('purge')
+        removal_modes.append('uninstall')
 
     return {
         'data_source': 'real',
@@ -3703,6 +3736,7 @@ def build_endpoint_detail_payload(endpoint, snapshot, health, endpoint_attention
         'monitoring': monitoring_summary(endpoint) if can_view_technical else None,
         'live_monitoring_allowed': bool(can_view_technical and user and user.has_perm('agents.view_agentmachine') and user.has_perm('agents.view_endpointperformancesample')),
         'uninstall_request': serialize_uninstall_request(uninstall_request),
+        'agent_removal': {'allowed': bool(removal_modes), 'reason': removal_reason, 'modes': removal_modes},
         'active_job': serialize_agent_job(active_job) if active_job else None,
         'active_update_job': serialize_agent_job(active_update_job) if active_update_job else None,
         'agent_health': agent_health,
@@ -3817,6 +3851,24 @@ def endpoint_detail(request, pk):
         request.is_secure() and request.user.is_authenticated and request.user.is_active
         and (request.user.is_staff or request.user.is_superuser) and endpoint.is_active
     )
+    context['can_view_physical_assets'] = bool(
+        request.user.is_authenticated and request.user.is_active
+        and request.user.has_perm('agents.view_agentmachine')
+        and request.user.has_perm('agents.view_physicalasset')
+    )
+    context['can_add_physical_assets'] = bool(
+        context['can_view_physical_assets']
+        and request.user.has_perm('agents.add_physicalasset')
+        and request.user.has_perm('agents.add_assetagentlink')
+    )
+    context['can_link_physical_assets'] = bool(
+        context['can_view_physical_assets']
+        and request.user.has_perm('agents.change_physicalasset')
+        and request.user.has_perm('agents.add_assetagentlink')
+    )
+    context['can_add_asset_records'] = bool(
+        context['can_view_physical_assets'] and request.user.has_perm('agents.add_assetrecord')
+    )
     if context['winrm_observability_available']:
         from dashboard.models import RemoteInstallJob
         raw = snapshot.raw_payload if snapshot and isinstance(snapshot.raw_payload, dict) else {}
@@ -3841,16 +3893,28 @@ def endpoint_detail(request, pk):
     from agents.internal_jobs import internal_capability
     context['terminal_available'] = False
     context['terminal_admin_auth_available'] = False
+    from agents.terminal_grants import PILOT_ENDPOINT_ID, PILOT_MACHINE_ID, PILOT_OPERATOR_USERNAME
+    from agents.terminal_sessions import has_explicit_admin_permission
+    pilot_terminal = settings.NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY
+    if ((not pilot_terminal or endpoint.pk == PILOT_ENDPOINT_ID) and is_nightowl_technical_user(request.user) and
+            has_explicit_admin_permission(request.user, 'manage_admin_terminal_grant')):
+        context['terminal_admin_grant_manage'] = True
+        if pilot_terminal:
+            context['terminal_admin_grant_machine_id'] = PILOT_MACHINE_ID
+            context['terminal_admin_grant_operator'] = PILOT_OPERATOR_USERNAME
     if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False):
         try:
-            authorize_terminal(request.user, endpoint)
+            authorize_terminal(request.user, endpoint, 'admin_auth')
             validate_terminal_mode(request.user, endpoint, 'admin_auth')
             if not internal_capability(endpoint, 'remote_terminal_transport:1'):
                 raise ValueError('transport_capability_unconfirmed')
             context['terminal_admin_auth_available'] = True
         except (ValueError, PermissionError):
             pass
-    if not context['terminal_admin_auth_available'] and terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
+    if context['terminal_admin_auth_available'] and context['can_view_physical_assets']:
+        from agents.asset_registry import registered_responsible
+        context['terminal_registered_user'] = registered_responsible(endpoint)
+    if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_BROWSER_ENABLED', False):
         try:
             authorize_terminal(request.user, endpoint)
             validate_terminal_mode(request.user, endpoint, 'conpty')
@@ -4049,6 +4113,9 @@ def _active_lifecycle_job(endpoint):
             AgentJob.TYPE_UNINSTALL_AGENT,
         ],
         status__in=[AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING],
+    ).exclude(
+        job_type=AgentJob.TYPE_UNINSTALL_AGENT, payload__verified_removal=True,
+        status=AgentJob.STATUS_QUEUED, expires_at__lte=timezone.now(),
     ).order_by('-created_at').first()
 
 
@@ -4060,15 +4127,27 @@ def _active_uninstall_request(endpoint):
             AgentUninstallRequest.STATUS_DISPATCHED,
             AgentUninstallRequest.STATUS_RUNNING,
         ],
+    ).exclude(
+        agent_job__payload__verified_removal=True,
+        agent_job__status__in=('failed', 'timed_out', 'expired', 'cancelled'),
+    ).exclude(
+        agent_job__payload__verified_removal=True, agent_job__status='queued', expires_at__lte=timezone.now(),
     ).order_by('-created_at').first()
 
 
 def serialize_uninstall_request(uninstall_request):
     if uninstall_request is None:
         return None
+    state = uninstall_request.status
+    job = uninstall_request.agent_job if uninstall_request.agent_job_id else None
+    if job and job.payload.get('verified_removal') is True:
+        if job.status in ('failed', 'timed_out', 'expired', 'cancelled'):
+            state = job.status
+        elif job.status == 'queued' and uninstall_request.expires_at <= timezone.now():
+            state = 'expired'
     return {
         'id': str(uninstall_request.id),
-        'status': uninstall_request.status,
+        'status': state,
         'mode': uninstall_request.mode,
         'source': uninstall_request.source,
         'requested_by': uninstall_request.requested_by,
@@ -4092,6 +4171,13 @@ def endpoint_uninstall_request(request, pk):
         raise Http404
 
     mode = (request.POST.get('mode') or AgentUninstallRequest.MODE_UNINSTALL).strip().lower()
+    verified_removal = mode == 'remove'
+    if verified_removal:
+        if not can_purge_agent(request.user):
+            return JsonResponse({'error': 'forbidden'}, status=403)
+        if str(endpoint.pk) != str(pk):
+            return JsonResponse({'error': 'endpoint_uuid_required'}, status=400)
+        mode = AgentUninstallRequest.MODE_PURGE
     if mode not in {AgentUninstallRequest.MODE_UNINSTALL, AgentUninstallRequest.MODE_PURGE}:
         return JsonResponse({'error': 'invalid_uninstall_mode', 'detail': 'Modo de lifecycle invalido.'}, status=400)
 
@@ -4123,7 +4209,17 @@ def endpoint_uninstall_request(request, pk):
             return JsonResponse({'error': 'purge_confirmation_failed', 'detail': 'Digite exatamente o hostname do endpoint para confirmar o purge.'}, status=400)
 
     from agents.lifecycle_jobs import lock_lifecycle_endpoint
+    if verified_removal:
+        from agents.identity import lock_identity_registry
+        lock_identity_registry()
     endpoint = lock_lifecycle_endpoint(endpoint)
+    if verified_removal:
+        from agents.agent_removal import removal_block_reason
+        if request.POST.get('machine_id') != endpoint.machine_id:
+            return JsonResponse({'error': 'endpoint_identity_changed'}, status=409)
+        reason = removal_block_reason(endpoint)
+        if reason:
+            return JsonResponse({'error': reason}, status=409)
     active_request = _active_uninstall_request(endpoint)
     if active_request:
         return JsonResponse(
@@ -4164,6 +4260,8 @@ def endpoint_uninstall_request(request, pk):
     }
     if mode == AgentUninstallRequest.MODE_PURGE:
         job_payload['purge_authorized'] = True
+    if verified_removal:
+        job_payload['verified_removal'] = True
     job = AgentJob.objects.create(
         endpoint=endpoint,
         job_type=AgentJob.TYPE_UNINSTALL_AGENT,
@@ -4176,6 +4274,9 @@ def endpoint_uninstall_request(request, pk):
     )
     uninstall_request.agent_job = job
     uninstall_request.save(update_fields=['agent_job', 'updated_at'])
+    if mode == AgentUninstallRequest.MODE_PURGE:
+        from agents.agent_removal import record_purge_request
+        record_purge_request(endpoint, uninstall_request, job)
     create_audit_event(
         event_type='agent.purge.requested' if mode == AgentUninstallRequest.MODE_PURGE else 'agent.uninstall.requested',
         title='Purge de agente solicitado' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao de agente solicitada',
@@ -4203,13 +4304,27 @@ def endpoint_uninstall_request(request, pk):
             'message': (
                 'Aguardando endpoint ficar online.'
                 if endpoint.status != AgentMachine.STATUS_ONLINE
-                else ('Purge enviado ao endpoint.' if mode == AgentUninstallRequest.MODE_PURGE else 'Desinstalacao enviada ao endpoint.')
+                else ('Remoção em fila. Aguardando confirmação de limpeza.' if verified_removal
+                      else 'Purge enviado ao endpoint.' if mode == AgentUninstallRequest.MODE_PURGE
+                      else 'Desinstalacao enviada ao endpoint.')
             ),
             'uninstall_request': serialize_uninstall_request(uninstall_request),
             'job': serialize_agent_job(job),
         },
         status=201,
     )
+
+
+@login_required
+@require_GET
+def endpoint_removal_status(request, pk):
+    if not can_purge_agent(request.user):
+        return JsonResponse({'error': 'forbidden'}, status=403)
+    from agents.models import AgentRemovalAudit
+    attempt = AgentRemovalAudit.objects.filter(endpoint_id=pk).order_by('-requested_at').first()
+    if not attempt:
+        raise Http404
+    return JsonResponse({'outcome': attempt.outcome, 'job_id': str(attempt.job_id)})
 
 
 @require_POST
@@ -4226,17 +4341,20 @@ def endpoint_uninstall_cancel(request, pk, request_id):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para cancelar desinstalacao.'}, status=403)
     if uninstall_request.status == AgentUninstallRequest.STATUS_CANCELLED:
         return JsonResponse({'status': 'ok', 'uninstall_request': serialize_uninstall_request(uninstall_request)})
-    if uninstall_request.agent_job and uninstall_request.agent_job.status != AgentJob.STATUS_QUEUED:
+    job = AgentJob.objects.select_for_update().filter(pk=uninstall_request.agent_job_id, endpoint=endpoint).first()
+    if job and job.status != AgentJob.STATUS_QUEUED:
         return JsonResponse({'error': 'uninstall_already_dispatched', 'detail': 'A desinstalacao ja foi entregue ao agente e nao pode ser cancelada.'}, status=409)
     uninstall_request.status = AgentUninstallRequest.STATUS_CANCELLED
     uninstall_request.completed_at = timezone.now()
     uninstall_request.save(update_fields=['status', 'completed_at', 'updated_at'])
-    if uninstall_request.agent_job:
-        job = uninstall_request.agent_job
+    if job:
         job.status = AgentJob.STATUS_CANCELLED
         job.finished_at = timezone.now()
         job.error_message = 'Solicitacao de desinstalacao cancelada pelo painel.'
         job.save(update_fields=['status', 'finished_at', 'error_message', 'updated_at'])
+        if uninstall_request.mode == AgentUninstallRequest.MODE_PURGE:
+            from agents.agent_removal import record_purge_result
+            record_purge_result(job, '')
     create_audit_event(
         event_type='agent.uninstall.cancelled',
         title='Desinstalacao de agente cancelada',
@@ -4253,7 +4371,7 @@ def endpoint_uninstall_cancel(request, pk, request_id):
 
 @require_POST
 @transaction.atomic
-def endpoint_job_create(request, pk):
+def endpoint_job_create(request, pk, *, noc_alert=None, noc_job_type=None):
     if not is_nightowl_technical_user(request.user):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para criar jobs tecnicos.'}, status=403)
 
@@ -4280,7 +4398,7 @@ def endpoint_job_create(request, pk):
         'restart_agent': AgentJob.TYPE_RESTART_AGENT,
         'configure_telemetry': AgentJob.TYPE_CONFIGURE_TELEMETRY,
     }
-    selected_type = action_map.get(action) or action_map.get(job_type) or job_type
+    selected_type = noc_job_type or action_map.get(action) or action_map.get(job_type) or job_type
     allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES} - {'collect_services', 'install_software', 'operational_action'}
     if selected_type not in allowed_types:
         return JsonResponse(
@@ -4292,6 +4410,25 @@ def endpoint_job_create(request, pk):
         )
 
     endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint.pk)
+    noc_correlation = ''
+    if noc_alert is not None:
+        from agents.identity import machine_id_matches, normalized_machine_id
+
+        if (not endpoint.is_active or endpoint.status != AgentMachine.STATUS_ONLINE
+                or endpoint.has_terminal_lifecycle):
+            return JsonResponse({'detail': 'O endpoint precisa estar online e disponível.'}, status=409)
+        try:
+            identity = normalized_machine_id(endpoint.machine_id)
+        except ValueError:
+            identity = ''
+        if not identity or machine_id_matches(identity).exclude(pk=endpoint.pk).exists():
+            return JsonResponse({'detail': 'O endpoint tem identidade ausente ou ambígua.'}, status=409)
+        noc_correlation = f'noc-alert:{noc_alert.pk}'
+        pending = endpoint.jobs.filter(correlation_id=noc_correlation, status__in=(
+            AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING,
+        )).first()
+        if pending:
+            return JsonResponse({'job': serialize_agent_job(pending), 'detail': 'Verificação já pendente.'})
     if endpoint.jobs.filter(status__in=('queued','sent','running')).count() >= 50:
         return JsonResponse({'error':'endpoint_job_queue_full','detail':'Limite de 50 jobs pendentes neste endpoint.'},status=409)
 
@@ -4330,7 +4467,7 @@ def endpoint_job_create(request, pk):
         except (ValueError, TypeError):
             return JsonResponse({'error': 'invalid_telemetry_configuration'}, status=400)
     elif selected_type == AgentJob.TYPE_PING:
-        payload['target'] = request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname)
+        payload['target'] = str(endpoint.last_ip or endpoint.hostname) if noc_alert else (request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname))
         payload['count'] = 2
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
         payload['max_lines'] = 120
@@ -4620,7 +4757,7 @@ def endpoint_job_create(request, pk):
         job_type=selected_type,
         created_by=request.user.get_username(),
         payload=payload,
-        correlation_id=str(uuid.uuid4()),
+        correlation_id=noc_correlation or str(uuid.uuid4()),
         attempt=1,
         timeout_seconds=payload.get('timeout_seconds') or 300,
         expires_at=timezone.now() + timedelta(minutes=30),
@@ -4662,6 +4799,8 @@ def endpoint_job_create(request, pk):
             payload.get('target_version', ''),
             request.user.get_username(),
         )
+    if noc_alert is not None:
+        return JsonResponse({'job': serialize_agent_job(job), 'detail': 'Verificação enfileirada.'}, status=201)
     return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job)}, status=201)
 
 
@@ -5247,37 +5386,6 @@ def agent_enrollment_revoke(request, pk):
         messages.info(request, 'Este enrollment token ja estava inativo.')
     return redirect('agent-install')
 
-
-def software_inventory(request):
-    rows, summary = build_software_inventory()
-    if request.GET.get('mock') == '1' or not rows:
-        rows, summary = mock_software_inventory_rows()
-    filters = {
-        'q': request.GET.get('q', '').strip(),
-        'category': request.GET.get('category', 'all').strip() or 'all',
-        'risk': request.GET.get('risk', 'all').strip() or 'all',
-        'publisher': request.GET.get('publisher', '').strip(),
-        'version': request.GET.get('version', '').strip(),
-        'endpoint': request.GET.get('endpoint', '').strip(),
-        'sensitive': request.GET.get('sensitive', 'all').strip() or 'all',
-    }
-    filtered_rows = [row for row in rows if software_row_matches(row, filters)]
-
-    context = {
-        'active_nav': 'software',
-        'rows': filtered_rows,
-        'summary': {
-            **summary,
-            'filtered_count': len(filtered_rows),
-        },
-        'filters': filters,
-        'category_options': SOFTWARE_CATEGORY_OPTIONS,
-        'risk_options': SOFTWARE_RISK_OPTIONS,
-        'publisher_options': sorted({row['publisher'] for row in rows if row['publisher']}),
-        'version_options': sorted({version for row in rows for version in row['versions']}),
-        'updated_at': timezone.now(),
-    }
-    return render(request, 'dashboard/software_inventory.html', context)
 
 
 def policy_status(policy):

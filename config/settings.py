@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import environ
 from django.core.exceptions import ImproperlyConfigured
 from agents.service_collection_policy import parse_endpoint_uuid_allowlist
+from config.runtime_environment import load_runtime_environment
 
 from pathlib import Path
 
@@ -25,14 +26,13 @@ env = environ.Env(
     DJANGO_CSRF_TRUSTED_ORIGINS=(list, []),
 )
 
-env_file = BASE_DIR / '.env'
-if env_file.exists():
-    environ.Env.read_env(env_file)
+load_runtime_environment(BASE_DIR, environ.Env.read_env)
 
 
 PUBLIC_NIGHTOWL_URL = 'https://nightowl.controlsul.com.br'
 PUBLIC_NIGHTOWL_HOST = 'nightowl.controlsul.com.br'
 NIGHTOWL_JOB_AUTOMATIONS_ENABLED = env.bool('NIGHTOWL_JOB_AUTOMATIONS_ENABLED', default=False)
+NIGHTOWL_AUTOMATIC_ASSETS_ENABLED = env.bool('NIGHTOWL_AUTOMATIC_ASSETS_ENABLED', default=True)
 NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_MANUAL_APPLY_ENABLED = env.bool(
     'NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_MANUAL_APPLY_ENABLED', default=False)
 NIGHTOWL_PERSISTED_TELEMETRY_ANALYSIS_SCHEDULER_ENABLED = env.bool(
@@ -88,6 +88,8 @@ SECURE_HSTS_PRELOAD = env.bool('DJANGO_SECURE_HSTS_PRELOAD', default=False)
 NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED = env.bool('NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED', default=False)
 NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED = env.bool('NIGHTOWL_ROLLOUT_GOVERNANCE_ENABLED', default=False)
 NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED = env.bool('NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED', default=False)
+NIGHTOWL_STABLE_DESKTOP_ROLLOUT_ENABLED = env.bool('NIGHTOWL_STABLE_DESKTOP_ROLLOUT_ENABLED', default=False)
+NIGHTOWL_STABLE_DESKTOP_ROLLOUT_BATCH_SIZE = env.int('NIGHTOWL_STABLE_DESKTOP_ROLLOUT_BATCH_SIZE', default=25)
 
 
 # Application definition
@@ -289,6 +291,7 @@ NIGHTOWL_TECHNICAL_USERNAMES = {
     for item in env.list('NIGHTOWL_TECHNICAL_USERNAMES', default=['gabriel.oliveira'])
     if item.strip()
 }
+NIGHTOWL_SOFTWARE_INVENTORY_STALE_HOURS = env.int('NIGHTOWL_SOFTWARE_INVENTORY_STALE_HOURS', default=24)
 ACCESS_INVENTORY_ALLOWED_OUS = {
     item.strip().casefold()
     for item in env.list('ACCESS_INVENTORY_ALLOWED_OUS', default=['OU=USUARIOS', 'OU=SOCIOS'])
@@ -414,5 +417,13 @@ NIGHTOWL_TERMINAL_TEST_LOOPBACK = False
 NIGHTOWL_TERMINAL_CONPTY_ENABLED = env.bool('NIGHTOWL_TERMINAL_CONPTY_ENABLED', default=False)
 NIGHTOWL_TERMINAL_BROWSER_ENABLED = env.bool('NIGHTOWL_TERMINAL_BROWSER_ENABLED', default=False)
 NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED = env.bool('NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', default=False)
+NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY = env.bool('NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY', default=True)
+# OS identities allowed to administer the narrowly scoped ConPTY grant command.
+NIGHTOWL_TERMINAL_GRANT_ADMIN_USERS = {
+    item.strip().casefold()
+    for item in env.list('NIGHTOWL_TERMINAL_GRANT_ADMIN_USERS', default=[])
+    if item.strip()
+}
 NIGHTOWL_ADMIN_ACTIONS_ENABLED = env.bool('NIGHTOWL_ADMIN_ACTIONS_ENABLED', default=False)
 NIGHTOWL_ADMIN_ACTION_SCOPES = env.json('NIGHTOWL_ADMIN_ACTION_SCOPES', default={})
+NIGHTOWL_SERVICE_CONTROL_ENABLED = env.bool('NIGHTOWL_SERVICE_CONTROL_ENABLED', default=False)

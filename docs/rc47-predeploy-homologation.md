@@ -1,5 +1,8 @@
 # RC47 — Auditoria de pré-deploy e plano de homologação
 
+> **REGISTRO HISTÓRICO — fotografia de 17/11/2026 (não usar como estado atual).** Os SHAs, flags, serviços, jobs e condições descritos abaixo foram informados ou observados naquela data e exigem nova confirmação antes de qualquer decisão. Para o planejamento RC49, consulte [deploy-RC49.md](deploy-RC49.md) e [operational-homologation.md](operational-homologation.md); nenhuma instrução deste snapshot autoriza operação.
+
+
 **Estado:** preparação para revisão; não autoriza deploy, migrations, mudança de flags, publicação Windows ou operação remota.
 
 **Main auditada:** `0e85825de2bf4910ab6f21055e3583348734ea3c`.

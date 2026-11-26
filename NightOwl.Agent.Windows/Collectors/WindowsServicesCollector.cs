@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace NightOwl.Agent.Windows.Collectors;
@@ -8,6 +10,9 @@ internal static class WindowsServicesCollector
 {
     private const int MaxServices = 800;
     private const int PageSize = 20;
+    private const int PageSizeV3 = 100;
+    private const int MinimumPageBytesV3 = 8192;
+    private const int MaximumPageBytesV3 = 60 * 1024;
     private const int MaxSnapshots = 4;
     private static readonly TimeSpan SnapshotLifetime = TimeSpan.FromMinutes(10);
     private static readonly object SnapshotLock = new();
@@ -102,7 +107,96 @@ internal static class WindowsServicesCollector
             hasMore ? page.LastOrDefault()?.Name : null, hasMore);
     }
 
-    private static IReadOnlyList<WindowsServiceInfo> CaptureSafeRows()
+    internal static WindowsServicePageV3 BuildPageV3(IReadOnlyList<WindowsServiceInfo> rows, string snapshotId,
+        DateTimeOffset collectedAt, int start, int requestedPageSize, int maxPageBytes, int pageIndex, int rowsCollected)
+    {
+        if (requestedPageSize != PageSizeV3 || maxPageBytes is < MinimumPageBytesV3 or > MaximumPageBytesV3 ||
+            start < 0 || start > rows.Count || rows.Count > MaxServices || pageIndex is < 1 or > MaxServices ||
+            rowsCollected != start || rowsCollected < 0 || rowsCollected > MaxServices)
+            throw new InvalidOperationException("SERVICE_PAGE_INVALID");
+
+        int count = Math.Min(requestedPageSize, rows.Count - start);
+        while (count >= 0)
+        {
+            WindowsServiceInfo[] page = rows.Skip(start).Take(count).ToArray();
+            bool hasMore = start + page.Length < rows.Count;
+            var result = new WindowsServicePageV3(3, true, snapshotId, collectedAt, rows.Count, page,
+                hasMore ? page[^1].Name : null, hasMore, pageIndex, rowsCollected + page.Length, requestedPageSize);
+            int serializedBytes = JsonSerializer.SerializeToUtf8Bytes(result,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)).Length;
+            if (serializedBytes <= maxPageBytes)
+            {
+                if (hasMore && page.Length == 0) throw new InvalidOperationException("SERVICE_PAGE_INVALID");
+                return result;
+            }
+            if (count <= 1) throw new InvalidOperationException("SERVICE_ROW_TOO_LARGE");
+            count--;
+        }
+        throw new InvalidOperationException("SERVICE_ROW_TOO_LARGE");
+    }
+
+    internal static WindowsServicePageV3 CollectPagedV3(string afterName, string expectedSnapshotId,
+        int pageSize, int maxPageBytes, int pageIndex, int rowsCollected, int expectedTotalServices,
+        string expectedCollectedAt)
+    {
+        if (pageSize != PageSizeV3 || maxPageBytes is < MinimumPageBytesV3 or > MaximumPageBytesV3 ||
+            afterName.Length > 256 || expectedSnapshotId.Length > 64 || expectedCollectedAt.Length > 40 ||
+            string.IsNullOrEmpty(afterName) != string.IsNullOrEmpty(expectedSnapshotId) ||
+            pageIndex is < 1 or > MaxServices || rowsCollected is < 0 or >= MaxServices ||
+            expectedTotalServices is < 0 or > MaxServices ||
+            (pageIndex == 1 && (rowsCollected != 0 || expectedTotalServices != 0 || expectedCollectedAt.Length != 0)) ||
+            (pageIndex > 1 && (expectedTotalServices < 1 || rowsCollected >= expectedTotalServices || expectedCollectedAt.Length == 0)))
+            throw new InvalidOperationException("SERVICE_PAGE_INVALID");
+
+        lock (SnapshotLock)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            foreach (string expired in Snapshots.Where(item => now - item.Value.CapturedAt > SnapshotLifetime).Select(item => item.Key).ToArray())
+                Snapshots.Remove(expired);
+
+            string activeSnapshotId = expectedSnapshotId;
+            if (string.IsNullOrEmpty(expectedSnapshotId))
+            {
+                IReadOnlyList<WindowsServiceInfo> captured = CaptureSafeRows(ordinalOrder: true);
+                if (captured.Count > MaxServices) throw new InvalidOperationException("SERVICE_LIMIT_EXCEEDED");
+                while (Snapshots.Count >= MaxSnapshots)
+                {
+                    string oldest = Snapshots.MinBy(item => item.Value.CapturedAt).Key;
+                    Snapshots.Remove(oldest);
+                }
+                activeSnapshotId = Guid.NewGuid().ToString("N");
+                Snapshots[activeSnapshotId] = new Snapshot(activeSnapshotId, now, captured);
+            }
+            if (!Snapshots.TryGetValue(activeSnapshotId, out Snapshot? snapshot))
+                throw new InvalidOperationException("SERVICE_SNAPSHOT_EXPIRED");
+
+            int start = 0;
+            if (!string.IsNullOrEmpty(afterName))
+            {
+                int previous = -1;
+                for (int index = 0; index < snapshot.Rows.Count; index++)
+                {
+                    if (string.Equals(snapshot.Rows[index].Name, afterName, StringComparison.Ordinal))
+                    {
+                        previous = index;
+                        break;
+                    }
+                }
+                if (previous < 0) throw new InvalidOperationException("SERVICE_SNAPSHOT_EXPIRED");
+                start = previous + 1;
+            }
+            if (rowsCollected != start || (expectedTotalServices != 0 && expectedTotalServices != snapshot.Rows.Count) ||
+                (expectedCollectedAt.Length > 0 && (!DateTimeOffset.TryParse(expectedCollectedAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind, out DateTimeOffset expectedAt) ||
+                    expectedAt != snapshot.CapturedAt)))
+                throw new InvalidOperationException("SERVICE_SNAPSHOT_EXPIRED");
+
+            return BuildPageV3(snapshot.Rows, snapshot.Id, snapshot.CapturedAt, start, pageSize, maxPageBytes,
+                pageIndex, rowsCollected);
+        }
+    }
+
+    private static IReadOnlyList<WindowsServiceInfo> CaptureSafeRows(bool ordinalOrder = false)
     {
         ServiceController[] services = ServiceController.GetServices();
         if (services.Length > MaxServices)
@@ -113,7 +207,10 @@ internal static class WindowsServicesCollector
         List<WindowsServiceInfo> rows = new(services.Length);
         try
         {
-            foreach (ServiceController service in services.OrderBy(item => item.ServiceName, StringComparer.OrdinalIgnoreCase))
+            IOrderedEnumerable<ServiceController> ordered = ordinalOrder
+                ? services.OrderBy(item => item.ServiceName, StringComparer.Ordinal)
+                : services.OrderBy(item => item.ServiceName, StringComparer.OrdinalIgnoreCase);
+            foreach (ServiceController service in ordered)
             {
                 string status = "unknown";
                 string startup = "unknown";
@@ -172,3 +269,15 @@ internal sealed record WindowsServicePage(
     [property: JsonPropertyName("services")] IReadOnlyList<WindowsServiceInfo> Services,
     [property: JsonPropertyName("next_after_name")] string? NextAfterName,
     [property: JsonPropertyName("has_more")] bool HasMore);
+internal sealed record WindowsServicePageV3(
+    [property: JsonPropertyName("schema_version")] int SchemaVersion,
+    [property: JsonPropertyName("read_only")] bool ReadOnly,
+    [property: JsonPropertyName("snapshot_id")] string SnapshotId,
+    [property: JsonPropertyName("collected_at")] DateTimeOffset CollectedAt,
+    [property: JsonPropertyName("total_services")] int TotalServices,
+    [property: JsonPropertyName("services")] IReadOnlyList<WindowsServiceInfo> Services,
+    [property: JsonPropertyName("next_after_name")] string? NextAfterName,
+    [property: JsonPropertyName("has_more")] bool HasMore,
+    [property: JsonPropertyName("page_index")] int PageIndex,
+    [property: JsonPropertyName("rows_collected")] int RowsCollected,
+    [property: JsonPropertyName("page_size")] int PageSize);

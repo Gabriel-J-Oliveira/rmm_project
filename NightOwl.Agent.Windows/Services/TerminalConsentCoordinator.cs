@@ -5,7 +5,7 @@ using NightOwl.Agent.Windows.Models;
 
 namespace NightOwl.Agent.Windows.Services;
 
-public sealed class TerminalConsentCoordinator(AgentApiClient api)
+public sealed class TerminalConsentCoordinator(AgentApiClient api, JsonlLogger logger)
 {
     public static TerminalConsentRequest Proposal(AgentConfig config, JsonElement value)
     {
@@ -21,8 +21,32 @@ public sealed class TerminalConsentCoordinator(AgentApiClient api)
 
     public async Task<bool> RequestAsync(AgentConfig config, JsonElement value, CancellationToken ct)
     {
-        var request = Proposal(config, value);
-        request.Write(NightOwlPaths.Current);
+        Guid? correlation = TrySessionId(value);
+        TerminalConsentRequest request;
+        try
+        {
+            request = Proposal(config, value);
+        }
+        catch (Exception ex)
+        {
+            await LogAsync("terminal.consent.proposal_rejected", correlation, config, "rejected",
+                ex.GetType().Name, ct);
+            throw;
+        }
+        await LogAsync("terminal.consent.proposal_validated", request.Authorization.SessionId, config,
+            "accepted", null, ct);
+        try
+        {
+            request.Write(NightOwlPaths.Current);
+            await LogAsync("terminal.consent.projection_written", request.Authorization.SessionId, config,
+                "written", null, ct);
+        }
+        catch (Exception ex)
+        {
+            await LogAsync("terminal.consent.projection_write_failed", request.Authorization.SessionId, config,
+                "failed", ex.GetType().Name, ct);
+            throw;
+        }
         bool approved = false;
         try
         {
@@ -31,12 +55,21 @@ public sealed class TerminalConsentCoordinator(AgentApiClient api)
             {
                 (string Decision, TerminalTokenFacts? Identity) decision;
                 try { decision = TerminalUserIdentity.ReadDecision(request.Policy, request.Authorization); }
-                catch (Exception) { decision = ("denied", null); }
+                catch (Exception ex)
+                {
+                    await LogAsync("terminal.consent.decision_read_failed", request.Authorization.SessionId, config,
+                        "fail_closed", ex.GetType().Name, ct);
+                    decision = ("denied", null);
+                }
                 if (decision.Decision != "pending")
                 {
+                    await LogAsync("terminal.consent.decision_observed", request.Authorization.SessionId, config,
+                        decision.Decision, null, ct);
                     using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     budget.CancelAfter(TimeSpan.FromSeconds(5));
                     await api.TerminalConsentAsync(config, request.Authorization.SessionId, decision.Decision, decision.Identity, budget.Token);
+                    await LogAsync("terminal.consent.decision_submitted", request.Authorization.SessionId, config,
+                        decision.Decision, null, ct);
                     approved = decision.Decision == "approved";
                     return approved;
                 }
@@ -47,20 +80,56 @@ public sealed class TerminalConsentCoordinator(AgentApiClient api)
                     budget.CancelAfter(TimeSpan.FromSeconds(5));
                     var state = await api.TerminalPollAsync(config, budget.Token);
                     if (!state.TryGetProperty("consent_request", out var pending) || pending.GetProperty("session_id").GetString() != request.Authorization.SessionId.ToString("D"))
+                    {
+                        await LogAsync("terminal.consent.poll_no_longer_pending", request.Authorization.SessionId, config,
+                            "closed_or_expired", null, ct);
                         return false;
+                    }
+                    await LogAsync("terminal.consent.poll_refreshed", request.Authorization.SessionId, config,
+                        "pending", null, ct);
                     checkedAt = Stopwatch.GetTimestamp();
                 }
                 await Task.Delay(250, ct);
             }
             if (!ct.IsCancellationRequested)
             {
+                await LogAsync("terminal.consent.deadline_reached", request.Authorization.SessionId, config,
+                    "expired", null, ct);
                 using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 await api.TerminalConsentAsync(config, request.Authorization.SessionId, "expired", null, budget.Token);
+                await LogAsync("terminal.consent.expiration_submitted", request.Authorization.SessionId, config,
+                    "expired", null, ct);
             }
             return false;
         }
-        finally { if (!approved) Clear(request.Authorization.SessionId); }
+        finally
+        {
+            if (!approved)
+            {
+                Clear(request.Authorization.SessionId);
+                await LogAsync("terminal.consent.projection_cleared", request.Authorization.SessionId, config,
+                    "cleared", null, CancellationToken.None);
+            }
+        }
     }
+
+    private Task LogAsync(string eventType, Guid? sessionId, AgentConfig config, string outcome,
+        string? failureCode, CancellationToken ct)
+    {
+        object context = TerminalConsentDiagnostics.SafeContext(sessionId,
+            config.TerminalWindowsSessionId, Process.GetCurrentProcess().SessionId,
+            null, null, outcome, failureCode);
+        return LogBestEffortAsync(eventType, context, ct, failureCode is null ? "info" : "warning");
+    }
+
+    private async Task LogBestEffortAsync(string eventType, object context, CancellationToken ct, string level)
+    {
+        try { await logger.LogAsync(eventType, "Terminal consent stage recorded.", context, ct, level); }
+        catch { /* Diagnostics must not change the fail-closed consent protocol. */ }
+    }
+
+    private static Guid? TrySessionId(JsonElement value) =>
+        value.TryGetProperty("session_id", out JsonElement id) && Guid.TryParse(id.GetString(), out Guid parsed) ? parsed : null;
 
     public static void Clear(Guid? id)
     {

@@ -19,12 +19,15 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
 from dashboard import automation_views
+from dashboard import alert_policy_views, noc_actions, noc_notifications
 
 from dashboard import views as dashboard_views
 from dashboard import ad_install_views
 from dashboard import agent_recovery_views
 from dashboard import remote_install_batch_views
+from dashboard import asset_record_views
 from dashboard import capacity_views
+from dashboard import software_center_views
 from dashboard import fleet_views
 from config import views as config_views
 from tickets import views as ticket_views
@@ -51,8 +54,11 @@ urlpatterns = [
     path('api/deployments/windows/batches/<uuid:pk>/revoke/', dashboard_views.deployment_batch_revoke, name='api-deployment-batch-revoke'),
     path('api/deployments/windows/<uuid:pk>/', dashboard_views.deployment_status, name='api-deployment-status'),
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
+    path('api/endpoints/<uuid:endpoint_id>/asset-records/', asset_record_views.endpoint_asset_records,
+         name='api-endpoint-asset-records'),
     path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
     path('api/endpoints/<str:pk>/uninstall/', dashboard_views.endpoint_uninstall_request, name='api-endpoint-uninstall'),
+    path('api/endpoints/<uuid:pk>/remove-status/', dashboard_views.endpoint_removal_status, name='api-endpoint-removal-status'),
     path('api/endpoints/<str:pk>/uninstall/<uuid:request_id>/cancel/', dashboard_views.endpoint_uninstall_cancel, name='api-endpoint-uninstall-cancel'),
     path('api/endpoints/<str:pk>/update-policy/', dashboard_views.endpoint_update_policy_update, name='api-endpoint-update-policy'),
     path('api/access-inventory/', include('access_inventory.api_urls')),
@@ -69,6 +75,8 @@ urlpatterns = [
     path('portal/chamados/<int:number>/comment/', ticket_views.ticket_portal_comment, name='ticket-portal-comment'),
     path('portal/chamados/<int:number>/reopen/', ticket_views.ticket_portal_reopen, name='ticket-portal-reopen'),
     path('noc/', dashboard_views.noc_view, name='noc'),
+    path('noc/notifications/', noc_notifications.noc_notifications, name='noc-notifications'),
+    path('noc/alerts/<uuid:pk>/<slug:action>/', noc_actions.noc_alert_action, name='noc-alert-action'),
     path('alerts/', dashboard_views.alerts_list, name='alerts-list'),
     path('capacity/', capacity_views.capacity_page, name='capacity-page'),
     path('hardware-inventory/', capacity_views.hardware_inventory_page, name='hardware-inventory'),
@@ -111,7 +119,11 @@ urlpatterns = [
     path('agent-releases/', dashboard_views.agent_releases, name='agent-releases'),
     path('agent-releases/<uuid:pk>/action/', dashboard_views.agent_release_action, name='agent-release-action'),
     path('agent-install/enrollment/<uuid:pk>/revoke/', dashboard_views.agent_enrollment_revoke, name='agent-enrollment-revoke'),
-    path('software/', dashboard_views.software_inventory, name='software-inventory'),
+    path('software/', software_center_views.software_center, name='software-inventory'),
+    path('software/data/inventory/', software_center_views.software_inventory_data, name='software-inventory-data'),
+    path('software/data/packages/', software_center_views.software_packages_data, name='software-packages-data'),
+    path('policies/alerts/', alert_policy_views.alert_policies, name='alert-policies'),
+    path('policies/alerts/<slug:key>/', alert_policy_views.edit_alert_policy, name='alert-policy-edit'),
     path('software-policies/', dashboard_views.software_policies, name='software-policies'),
     path('software-policies/create/', dashboard_views.software_policy_create, name='software-policy-create'),
     path('software-policies/<uuid:pk>/update/', dashboard_views.software_policy_update, name='software-policy-update'),

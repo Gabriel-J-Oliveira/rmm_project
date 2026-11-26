@@ -12,6 +12,7 @@ from .models import AgentMachine, AgentRelease, AgentReleaseGroup, AgentRolloutC
 from .services import build_agent_rollout_preview
 from .rollout_planning import campaign_release_snapshot
 from .rollout_governance import validate_auto_pause_policy
+from .stable_rollout import enabled as stable_enabled
 
 
 def authorize(actor, permission='agents.add_agentrolloutcampaign'):
@@ -103,6 +104,8 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
                 pk = str(row.pop('id'))
                 policies[pk] = {key: value.isoformat() if hasattr(value, 'isoformat') else value for key, value in row.items()}
             snapshot = campaign_release_snapshot(release)
+            if stable_enabled(release.channel):
+                snapshot['stable_desktop_profile'] = True
             campaign = AgentRolloutCampaign.objects.create(release=release, release_snapshot=snapshot,
                 channel_snapshot=release.channel, cohort_schema=preview['cohort_schema'], cohort_hash=preview['cohort_hash'],
                 preview_generated_at=now, freshness_seconds=freshness, target_group_ids_snapshot=groups,

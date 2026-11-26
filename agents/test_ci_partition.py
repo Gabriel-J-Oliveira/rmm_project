@@ -41,6 +41,8 @@ class WindowsE2EPartitionTests(SimpleTestCase):
         self.assertIn("tests/frontend/test_endpoint_policy_e2e.cjs", browser_test.read_text(encoding='utf-8'))
         service_test = script.parents[1] / 'agents' / 'test_service_manager.py'
         self.assertIn("tests/frontend/test_endpoint_service_manager_e2e.cjs", service_test.read_text(encoding='utf-8'))
+        self.assertIn("tests/frontend/test_terminal_admin_visual.cjs", (script.parents[1] / 'agents' / 'test_terminal_admin_auth.py').read_text(encoding='utf-8'))
+        self.assertIn('AdminAuthVisualBrowserTests.test_admin_terminal_responsive_visual', content)
         self.assertIn("$env:NIGHTOWL_TEST_BROWSER_E2E = '1'", content)
         self.assertIn("NIGHTOWL_TEST_CHROME", content)
         workflow = script.parents[1] / '.github' / 'workflows' / 'enrollment-identity.yml'
