@@ -107,7 +107,7 @@ Asset / Equipamento físico (identidade patrimonial estável)
 | Frente | Objetivo | Situação da decisão |
 | --- | --- | --- |
 | **RC49-01 Ativos e histórico** | Cadastro patrimonial, responsável, transferências, formatações, upgrades, reparos, manutenção e vínculo com agentes | **Primeira frente escolhida para iniciar com Codex 2** |
-| **RC49-02 NOC operacional** | Fila de atenção com criticidade, pressão sustentada CPU/RAM, disco, rede, ações verdadeiras e atualização incremental | Escopo aprovado em [RC49-02](rc49-02-noc-operacional.md) |
+| **RC49-02 NOC operacional** | Fila de atenção com criticidade, pressão sustentada CPU/RAM, disco, rede, ações verdadeiras e atualização incremental | **Desenvolvimento concluído e integrado**; homologação visual/operacional pendente |
 | **RC49-03 Central de software real** | Upload de pacote, aprovação, versão/hash, distribuição, install/update/uninstall e conferência | Direção proposta |
 | **RC49-04 Políticas inteligentes** | Windows Update, limpeza, métricas/condições, grupos AD/OU, agendas e reboot configurável por política | Conceito aprovado; opções finas abertas |
 | **RC49-05 Biblioteca de scripts** | Cadastro/upload versionado, aprovação, autorização, execução pontual/em grupo, logs e histórico | Direção proposta |
@@ -228,3 +228,19 @@ A próxima fase passa a ser **identidade patrimonial automática e ciclo de vida
 ## Atualização aprovada em 25/11/2026 — RC49-02 NOC operacional
 
 Escopo funcional aprovado pelo responsável em [RC49-02 — NOC operacional e políticas de alertas](rc49-02-noc-operacional.md). Codex 2 inicia 02A (Políticas de Alertas parametrizáveis), seguindo com 02B (motor e atualização assíncrona), 02C (últimos 15 alertas, cards e ações reais), 02D (modo TV) e 02E (central global com últimas 10 notificações e sons). Preservar visual existente, eliminar reload e hover do container, utilizar sinais/contratos existentes e respeitar continuidade operacional. Defaults editáveis, sem novas constantes de negócio. Desenvolvimento por PRs, sem deploy/publicação intermediária; RC49 permanece em desenvolvimento. A PR #67 registra o encerramento de desenvolvimento da 01B e deve ser conciliada sem substituir esta decisão aprovada por sua proposta anterior.
+
+## Conclusão do desenvolvimento RC49-02 — 26/11/2026
+
+Os cinco incrementos estão integrados à `main` em `db01bda5493d16631375126590a88459b66cecc9`, por merge commits normais e na sequência #73 → #74 → #76, após a integração anterior da #69 (02A) e #70 (02B):
+
+- 02A — Políticas de Alertas: PR #69, merge `e7f432ea0c8711e43be93fc868f60b453459c942`.
+- 02B — Motor de alertas e atualização assíncrona: PR #70, merge `bf7f7317bda151e4ead775c9248c44437760178b`.
+- 02C — Últimos 15 alertas, cards e ações reais: PR #73, merge `f945f8da7dab41fe27cbbd09ba1172b490729b60`.
+- 02D — Modo TV: PR #74, merge `5a08094d20241bbfdeb4761598f57f7bf7f05eb7`.
+- 02E — Central de Notificações: PR #76, merge `db01bda5493d16631375126590a88459b66cecc9`.
+
+Os cinco jobs obrigatórios passaram nos HEADs integrados das PRs #73, #74 e #76. Capturas visuais desktop/mobile foram publicadas nos artefatos dos respectivos runs e vinculadas às PRs. A 02E acrescenta a migration `dashboard.0006_noc_notification_preferences`, dependente de `agents.0056_rc49_seed_alert_policies` e `dashboard.0005_remoteinstallbatchitem_target_ad_sid`. Nenhuma migration operacional foi aplicada como parte da integração.
+
+Permanecem pendentes homologação visual e operacional do conjunto consolidado em ambiente autorizado e aplicação das migrations apenas em deploy aprovado. O E2E Windows de terminal teve ocorrência intermitente anterior (`fresh_session`/`browser_condition_timeout`, com `database is locked`) cuja causa não foi comprovada; execuções posteriores passaram, sem demonstrar que a intermitência foi eliminada. A RC49 continua em desenvolvimento até o fechamento do roadmap; integração de código não autoriza deploy ou publicação de agente.
+
+Próxima frente proposta para deliberação: RC49-03 — Central de Software real. A auditoria inicial encontrou inventário real misturado com fallback de dados simulados e uma UI baseada em `MockNightowlApi`; a distribuição exige contratos persistidos, confiança de pacotes, identidade/escopo, execução com confirmação e reconciliação de resultados. Nenhum escopo de implementação da RC49-03 está autorizado por este registro.

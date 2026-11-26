@@ -29,6 +29,26 @@ $existing = [pscustomobject]@{
     intervals=[pscustomobject]@{heartbeatSeconds=125;collectSeconds=7200;jobsSeconds=31}
 }
 $merged = Merge-AgentRuntimeConfig (New-GeneratedConfig) $existing
+$approved = [ordered]@{
+    operationalActionsEnabled=$true; administrativeActionsEnabled=$true
+    remoteTerminalTransportEnabled=$true; terminalConPtyEnabled=$true; terminalAdministrativeAuthenticationEnabled=$false
+    allowedOperationalActions=@('query_service'); allowedServiceOperations=@{start_service=@('Spooler')}
+}
+$persisted = $existing
+foreach ($key in $approved.Keys) {
+    $persisted | Add-Member -NotePropertyName $key -NotePropertyValue $approved[$key]
+}
+foreach ($version in @('upgrade', 'downgrade', 'reinstall')) {
+    $generated = New-GeneratedConfig
+    $generated.agentVersion = $version
+    $persisted = Merge-AgentRuntimeConfig $generated $persisted | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    if ($persisted.agentVersion -ne $version) { throw 'Lifecycle version did not change' }
+    foreach ($key in $approved.Keys) {
+        if (($persisted.$key | ConvertTo-Json -Depth 8 -Compress) -cne ($approved[$key] | ConvertTo-Json -Depth 8 -Compress)) {
+            throw "Operational continuity failed for ${version}: $key"
+        }
+    }
+}
 foreach ($key in @('telemetryMode','telemetryWindowMaxBytes','telemetryWindowMaxAgeHours','jobSignalSeconds','futureSetting','serverBaseUrl','heartbeatUrl','softwareCatalogSha256')) {
     if ($merged[$key] -ne $existing.$key) { throw "Explicit setting lost: $key" }
 }

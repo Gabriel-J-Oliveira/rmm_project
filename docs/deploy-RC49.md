@@ -383,3 +383,26 @@ A próxima fase passa a ser **identidade patrimonial automática e ciclo de vida
 ## Atualização aprovada em 25/11/2026 — RC49-02 NOC operacional
 
 Escopo funcional aprovado pelo responsável em [RC49-02 — NOC operacional e políticas de alertas](rc49-02-noc-operacional.md). Codex 2 inicia 02A (Políticas de Alertas parametrizáveis), seguindo com 02B (motor e atualização assíncrona), 02C (últimos 15 alertas, cards e ações reais), 02D (modo TV) e 02E (central global com últimas 10 notificações e sons). Preservar visual existente, eliminar reload e hover do container, utilizar sinais/contratos existentes e respeitar continuidade operacional. Defaults editáveis, sem novas constantes de negócio. Desenvolvimento por PRs, sem deploy/publicação intermediária; RC49 permanece em desenvolvimento. A PR #67 registra o encerramento de desenvolvimento da 01B e deve ser conciliada sem substituir esta decisão aprovada por sua proposta anterior.
+
+## Estado integrado da RC49-02 — 26/11/2026
+
+O desenvolvimento dos cinco incrementos 02A–02E foi integrado por merge commits normais. SHA consolidado da `main`: `db01bda5493d16631375126590a88459b66cecc9`.
+
+| Incremento | PR | Merge commit | CI do HEAD integrado |
+| --- | --- | --- | --- |
+| 02A — Políticas de Alertas | #69 | `e7f432ea0c8711e43be93fc868f60b453459c942` | Aprovado anteriormente |
+| 02B — Motor e atualização assíncrona | #70 | `bf7f7317bda151e4ead775c9248c44437760178b` | Aprovado anteriormente |
+| 02C — Refinamento visual e ações | #73 | `f945f8da7dab41fe27cbbd09ba1172b490729b60` | 5/5 jobs PASS, run 45831220501 |
+| 02D — Modo TV | #74 | `5a08094d20241bbfdeb4761598f57f7bf7f05eb7` | 5/5 jobs PASS, run 45831263988 |
+| 02E — Central de Notificações | #76 | `db01bda5493d16631375126590a88459b66cecc9` | 5/5 jobs PASS, run 45831339385 |
+
+Os gates finais de 02C–02E cobriram regressões SQLite/PostgreSQL, navegador isolado, contrato de deployment Windows e Windows .NET/terminal E2E. Capturas desktop/mobile foram anexadas como artefatos nas PRs. A migration introduzida pela 02E é `dashboard.0006_noc_notification_preferences`, dependente de `agents.0056_rc49_seed_alert_policies` e `dashboard.0005_remoteinstallbatchitem_target_ad_sid`. Nenhuma migration foi aplicada, e nenhum deploy ou publicação de agente ocorreu nesta integração.
+
+### Pendências antes da implantação
+
+- Homologar visual e operacionalmente o NOC consolidado em ambiente autorizado, incluindo atualização assíncrona, ações, sons, leitura de notificações e Modo TV em desktop/mobile.
+- Planejar e aplicar `dashboard.0006_noc_notification_preferences` somente durante deploy aprovado e conforme o procedimento normal de proteção do banco.
+- Preservar o estado operacional atual das flags e das políticas; integração não habilita nova coleta, altera rollout ou autoriza jobs.
+- A intermitência anterior de terminal no runner Windows permanece sem causa confirmada (`fresh_session`/`browser_condition_timeout`, com `database is locked`). Os gates posteriores passaram; não considerar isso prova de resolução.
+
+A RC49 permanece em desenvolvimento até o fechamento do roadmap. Este registro não autoriza deploy, migration operacional, alteração de flags, publicação ou atualização de endpoints.

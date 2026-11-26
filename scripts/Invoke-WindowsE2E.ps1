@@ -65,6 +65,21 @@ try {
     Get-Content $err
     $e2eExitCode = $process.ExitCode
     if ($BrowserOnly -and $e2eExitCode -eq 0) {
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = Join-Path $work 'noc-artifacts'
+        $nocArguments = @('manage.py', 'test', 'dashboard.test_noc_operations.NocVisualTests',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $nocProcess = Start-Process -FilePath $python -ArgumentList $nocArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($nocProcess.ExitCode -ne 0) { throw 'NOC visual browser test failed' }
+        $nocImages = Join-Path $env:NIGHTOWL_E2E_ARTIFACT_DIR 'nightowl-noc'
+        $nocTarget = Join-Path $env:RUNNER_TEMP 'nightowl-noc'
+        New-Item -ItemType Directory -Path $nocTarget -Force | Out-Null
+        $nocScreenshots = @(Get-ChildItem -LiteralPath $nocImages -Filter '*.png' -File -ErrorAction Stop)
+        if ($nocScreenshots.Count -ne 2) { throw 'NOC desktop and mobile screenshots are required' }
+        Copy-Item -LiteralPath $nocScreenshots.FullName -Destination $nocTarget -Force
+
         # Exercise the central execution-policy UI in its own isolated Django
         # test database and synthetic endpoint records, using the same pinned
         # Chrome and standard Windows test identity as the terminal smoke.

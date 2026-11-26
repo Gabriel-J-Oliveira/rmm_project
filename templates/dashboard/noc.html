@@ -3,6 +3,8 @@
 
 {% block title %}NightOwl NOC | Ao vivo{% endblock %}
 {% block body_class %}page-noc{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/noc_operations.css' %}">
+<link rel="stylesheet" href="{% static 'css/noc_tv.css' %}">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs noc-breadcrumbs" aria-label="Breadcrumb">
@@ -37,8 +39,9 @@
             <span data-noc-refresh-status role="status">Última leitura {{ last_updated_at|date:"H:i:s" }}</span>
             <button type="button" class="noc-control" data-noc-refresh><i data-lucide="refresh-cw"></i>Atualizar agora</button>
             <button type="button" class="noc-control" data-noc-copy-summary><i data-lucide="copy"></i>Copiar resumo</button>
-            <button type="button" class="noc-control" data-noc-tv aria-pressed="false"><i data-lucide="tv"></i>Modo TV</button>
-            <button type="button" class="noc-control" data-noc-sound aria-pressed="false"><i data-lucide="volume-x"></i>Som desligado</button>
+            <button type="button" class="noc-control" data-noc-tv aria-pressed="false"><i data-lucide="tv"></i><span data-noc-tv-label>Modo TV</span></button>
+            <span data-noc-tv-status role="status"></span>
+            <span data-noc-tv-notifications></span>
         </div>
     </header>
 
@@ -73,11 +76,12 @@
             </div>
         </div>
     </aside>
-    <div class="noc-toast" data-noc-toast hidden></div>
+    <div class="noc-toast" data-noc-toast role="status" hidden></div>
 </section>
 {% endblock %}
 
 {% block scripts %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
-<script src="{% static 'js/noc.js' %}"></script>
+<script src="{% static 'js/noc_tv.js' %}"></script>
+<script src="{% static 'js/noc.js' %}?v=rc49-02d"></script>
 {% endblock %}

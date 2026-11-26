@@ -10,6 +10,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link rel="stylesheet" href="{% static 'css/nightowl.css' %}?v=rc47-hotfix-47-1">
+    {% if request.user.is_authenticated and perms.agents.view_agentmachine and perms.agents.view_endpointalert %}
+    <link rel="stylesheet" href="{% static 'css/noc_notifications.css' %}?v=rc49-02e">
+    {% endif %}
     {% block styles %}{% endblock %}
     {% block icon_script %}<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>{% endblock %}
     <script>
@@ -80,6 +83,9 @@
                 <div class="topbar-status">
                     <i data-lucide="{% if active_nav == 'tickets' or active_nav == 'ticket_portal' %}inbox{% else %}moon{% endif %}"></i>
                     {% if active_nav == 'tickets' %}Preview do Desk{% elif active_nav == 'ticket_portal' %}Consulta de chamados{% else %}Piloto interno{% endif %}
+                    {% if request.user.is_authenticated and perms.agents.view_agentmachine and perms.agents.view_endpointalert %}
+                    <span data-noc-notification-home>{% include "dashboard/partials/noc_notifications.html" %}</span>
+                    {% endif %}
                 </div>
             </header>
             {% endif %}
@@ -111,6 +117,9 @@
     </div>
     {% endif %}
     {% block scripts %}{% endblock %}
+    {% if request.user.is_authenticated and perms.agents.view_agentmachine and perms.agents.view_endpointalert %}
+    <script src="{% static 'js/noc_notifications.js' %}?v=rc49-02e"></script>
+    {% endif %}
     <script>
         window.addEventListener("DOMContentLoaded", function () {
             if (window.lucide && typeof window.lucide.createIcons === "function") {

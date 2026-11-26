@@ -60,11 +60,9 @@
             <strong>{{ affected_endpoints_count }}</strong>
         </article>
     </section>
-    <div class="ops-skeleton-row" data-skeleton aria-hidden="true">
-        <span></span><span></span><span></span>
-    </div>
 
-    <section class="noc-grid">
+    {% include "dashboard/partials/noc_recent_alerts.html" %}
+    <section class="noc-grid noc-thematic-grid" aria-label="Alertas por tema">
         <article class="panel noc-panel noc-panel-critical">
             <div class="noc-panel-header">
                 <div>
@@ -90,16 +88,12 @@
                     <span class="noc-row-icon severity-critical"><i data-lucide="alert-triangle"></i></span>
                     <span class="noc-row-main">
                         <strong>{{ alert.title }}</strong>
-                        <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.last_seen_at|relative_time }}{% if alert.metadata.quality == 'stale' %} · Dado desatualizado{% elif alert.metadata.quality == 'unknown' %} · Sem evidência atual{% endif %} · Aberto há <time data-noc-start datetime="{{ alert.first_seen_at|date:"c" }}">{{ alert.first_seen_at|relative_time }}</time></small>
+                        <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.last_seen_at|relative_time }}{% if alert.metadata.quality == 'stale' %} · Dado desatualizado{% elif alert.metadata.quality == 'unknown' %} · Sem evidência atual{% endif %} · Duração <time data-noc-start datetime="{{ alert.first_seen_at|date:"c" }}">{{ alert.first_seen_at|relative_time }}</time></small>
                         <em>{{ alert.description|truncatechars:92 }}</em>
                     </span>
-                    <div class="noc-card-actions" aria-label="Ações rápidas">
-                        {% if alert.status == "open" and perms.agents.change_endpointalert %}
-                        <form method="post" action="{% url 'alert-acknowledge' alert.id %}">{% csrf_token %}<button type="submit"><i data-lucide="eye"></i>Reconhecer</button></form>
-                        {% endif %}
+                    <div class="noc-card-actions">
                         <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
-                        <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
-{% if perms.agents.change_endpointalert %}                        <form method="post" action="{% url 'alert-mute' alert.id %}">{% csrf_token %}<input type="hidden" name="duration" value="1h"><input type="hidden" name="reason" value="Silenciado pelo NOC"><button type="submit"><i data-lucide="bell-off"></i>Silenciar</button></form>{% endif %}
+                        {% include "dashboard/partials/noc_alert_treatment.html" %}
                     </div>
                 </article>
                 {% empty %}
@@ -138,9 +132,8 @@
                         <small>{{ endpoint.last_seen_at|relative_time }} · {{ endpoint.last_ip|default:"IP -" }}</small>
                     </span>
                     <span>{{ endpoint.last_logged_user|default:"Usuário -" }}</span>
-                    <div class="noc-card-actions" aria-label="Ações rápidas">
+                    <div class="noc-card-actions">
                         <a href="{% url 'endpoint-detail' endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
-                        <a href="{% url 'tickets:create' %}?endpoint={{ endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
                     </div>
                 </article>
                 {% empty %}
@@ -178,16 +171,12 @@
                     <span class="noc-row-icon severity-security"><i data-lucide="shield"></i></span>
                     <span class="noc-row-main">
                         <strong>{{ alert.title }}</strong>
-                        <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.last_seen_at|relative_time }}{% if alert.metadata.quality == 'stale' %} · Dado desatualizado{% elif alert.metadata.quality == 'unknown' %} · Sem evidência atual{% endif %} · Aberto há <time data-noc-start datetime="{{ alert.first_seen_at|date:"c" }}">{{ alert.first_seen_at|relative_time }}</time></small>
+                        <small>{{ alert.endpoint.hostname|default:"-" }} · {{ alert.last_seen_at|relative_time }}{% if alert.metadata.quality == 'stale' %} · Dado desatualizado{% elif alert.metadata.quality == 'unknown' %} · Sem evidência atual{% endif %} · Duração <time data-noc-start datetime="{{ alert.first_seen_at|date:"c" }}">{{ alert.first_seen_at|relative_time }}</time></small>
                         <em>{{ alert.description|truncatechars:96 }}</em>
                     </span>
-                    <div class="noc-card-actions" aria-label="Ações rápidas">
-                        {% if alert.status == "open" and perms.agents.change_endpointalert %}
-                        <form method="post" action="{% url 'alert-acknowledge' alert.id %}">{% csrf_token %}<button type="submit"><i data-lucide="eye"></i>Reconhecer</button></form>
-                        {% endif %}
+                    <div class="noc-card-actions">
                         <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
-                        <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
-{% if perms.agents.change_endpointalert %}                        <form method="post" action="{% url 'alert-mute' alert.id %}">{% csrf_token %}<input type="hidden" name="duration" value="1h"><input type="hidden" name="reason" value="Silenciado pelo NOC"><button type="submit"><i data-lucide="bell-off"></i>Silenciar</button></form>{% endif %}
+                        {% include "dashboard/partials/noc_alert_treatment.html" %}
                     </div>
                 </article>
                 {% empty %}
@@ -224,18 +213,14 @@
                     data-url="{% url 'endpoint-detail' alert.endpoint.id %}">
                     <span class="noc-disk-main">
                         <strong>{{ alert.metadata.disk_name|default:"Disco" }} em {{ alert.endpoint.hostname|default:"-" }}</strong>
-                        <small>{% if 'free_percent' in alert.metadata and alert.metadata.free_percent != None %}{{ alert.metadata.free_percent }}% livre{% else %}Espaço livre desconhecido{% endif %} · {{ alert.last_seen_at|relative_time }}{% if alert.metadata.quality == 'stale' %} · Dado desatualizado{% elif alert.metadata.quality == 'unknown' %} · Sem evidência atual{% endif %} · Aberto há <time data-noc-start datetime="{{ alert.first_seen_at|date:"c" }}">{{ alert.first_seen_at|relative_time }}</time></small>
+                        <small>{% if 'free_percent' in alert.metadata and alert.metadata.free_percent != None %}{{ alert.metadata.free_percent }}% livre{% else %}Espaço livre desconhecido{% endif %} · {{ alert.last_seen_at|relative_time }}{% if alert.metadata.quality == 'stale' %} · Dado desatualizado{% elif alert.metadata.quality == 'unknown' %} · Sem evidência atual{% endif %} · Duração <time data-noc-start datetime="{{ alert.first_seen_at|date:"c" }}">{{ alert.first_seen_at|relative_time }}</time></small>
                     </span>
                     {% if 'used_percent' in alert.metadata %}<span class="noc-mini-bar" aria-hidden="true">
                         <span class="disk-{{ alert.severity }}" style="width: {{ alert.metadata.used_percent|default:0 }}%"></span>
                     </span>{% endif %}
-                    <div class="noc-card-actions" aria-label="Ações rápidas">
-                        {% if alert.status == "open" and perms.agents.change_endpointalert %}
-                        <form method="post" action="{% url 'alert-acknowledge' alert.id %}">{% csrf_token %}<button type="submit"><i data-lucide="eye"></i>Reconhecer</button></form>
-                        {% endif %}
+                    <div class="noc-card-actions">
                         <a href="{% url 'endpoint-detail' alert.endpoint.id %}"><i data-lucide="external-link"></i>Abrir endpoint</a>
-                        <a href="{% url 'tickets:create' %}?alert={{ alert.id }}&endpoint={{ alert.endpoint.id }}"><i data-lucide="ticket"></i>Criar chamado</a>
-{% if perms.agents.change_endpointalert %}                        <form method="post" action="{% url 'alert-mute' alert.id %}">{% csrf_token %}<input type="hidden" name="duration" value="1h"><input type="hidden" name="reason" value="Silenciado pelo NOC"><button type="submit"><i data-lucide="bell-off"></i>Silenciar</button></form>{% endif %}
+                        {% include "dashboard/partials/noc_alert_treatment.html" %}
                     </div>
                 </article>
                 {% empty %}
@@ -248,43 +233,6 @@
             </div>
         </article>
 
-        <article class="panel noc-panel noc-panel-wide">
-            <div class="noc-panel-header">
-                <div>
-                    <h2><i data-lucide="activity"></i>Atividade recente resumida</h2>
-                    <p>Pulso curto do que mudou agora. A auditoria completa fica em Eventos.</p>
-                </div>
-            </div>
-            <ol class="noc-timeline">
-                {% for event in recent_activity %}
-                <li class="noc-card-actionable" tabindex="0"
-                    data-noc-open-drawer
-                    data-drawer-kind="Evento recente"
-                    data-title="{{ event.title|escape }}"
-                    data-subtitle="{{ event.endpoint.hostname|default:'Sistema'|escape }} · {{ event.created_at|relative_time }}"
-                    data-body="{{ event.description|default:event.event_type|escape }}"
-                    data-status="{{ event.get_severity_display }}"
-                    data-endpoint="{{ event.endpoint.hostname|default:'-'|escape }}"
-                    data-ip="{{ event.endpoint.last_ip|default:'IP -' }}"
-                    data-user="{{ event.actor_name|default:'NightOwl'|escape }}"
-                    {% if event.endpoint %}data-url="{% url 'endpoint-detail' event.endpoint.id %}"{% else %}data-url="{% url 'events-list' %}"{% endif %}>
-                    <span class="severity-dot severity-dot-{{ event.severity }}"></span>
-                    <div>
-                        <strong>{{ event.title }}</strong>
-                        <p>{{ event.endpoint.hostname|default:"Sistema" }} · {{ event.event_type }} · {{ event.created_at|relative_time }}</p>
-                    </div>
-                </li>
-                {% empty %}
-                <li>
-                    <span class="severity-dot"></span>
-                    <div>
-                        <strong>Nenhuma atividade recente</strong>
-                        <p>Os alertas aparecerão aqui após a próxima avaliação.</p>
-                    </div>
-                </li>
-                {% endfor %}
-            </ol>
-        </article>
     </section>
 
     <footer class="noc-footer">
