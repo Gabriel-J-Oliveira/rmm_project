@@ -88,3 +88,9 @@ body.page-software .software-drawer-backdrop[hidden] { display: none; }
     body.page-software .software-collected-facts > div:first-child { grid-column: 1 / -1; }
     body.page-software .software-detail-grid { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 980px) {
+    /* The global .app-shell.has-sidebar selector is more specific than its
+       responsive .app-shell rule; reset the column only for this page. */
+    body.page-software .app-shell.has-sidebar { grid-template-columns: minmax(0, 1fr); }
+}
