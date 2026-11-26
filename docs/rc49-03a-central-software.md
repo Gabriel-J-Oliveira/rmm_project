@@ -14,7 +14,7 @@ Esta etapa substitui a Central de Software demonstrativa por uma página com dua
 
 ### Uploads e persistência
 
-- A migration `agents.0057_softwarepackagerecord` cria `SoftwarePackageRecord`, identificado por UUID, com nome amigável, nome original, MSI/EXE, versão, tamanho, SHA-256, estado/signatário da assinatura, estado de aprovação/revogação, autores e horários.
+- A migration `agents.0058_softwarepackagerecord` (dependente de `0057_admin_terminal_access_grant`) cria `SoftwarePackageRecord`, identificado por UUID, com nome amigável, nome original, MSI/EXE, versão, tamanho, SHA-256, estado/signatário da assinatura, estado de aprovação/revogação, autores e horários.
 - O modelo guarda apenas os metadados atuais. Não contém campo de arquivo, armazenamento binário, versões obrigatórias do pacote nem endpoint de escrita.
 - A lista e o drawer são somente leitura. O botão **Adicionar arquivo de instalação** permanece desabilitado; não há upload ou confirmação simulada.
 - As evidências históricas de operações futuras devem usar `AuditEvent` com UUID do pacote e snapshot dos metadados relevantes, sem manter indefinidamente versões binárias substituídas. Esse fluxo pertence a incremento posterior.

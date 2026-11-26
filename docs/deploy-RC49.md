@@ -409,7 +409,7 @@ A RC49 permanece em desenvolvimento até o fechamento do roadmap. Este registro 
 
 # RC49-03A — Central de Software (desenvolvimento)
 
-A 03A substitui os dados simulados da Central de Software por inventário real de `InventorySnapshot.installed_software` e metadados de instaladores consultados por API somente leitura. Cria a migration aditiva `agents.0057_softwarepackagerecord`; não armazena binários, não cria jobs, não executa operações remotas e não habilita flags.
+A 03A substitui os dados simulados da Central de Software por inventário real de `InventorySnapshot.installed_software` e metadados de instaladores consultados por API somente leitura. Cria a migration aditiva `agents.0058_softwarepackagerecord`, após `0057_admin_terminal_access_grant`; não armazena binários, não cria jobs, não executa operações remotas e não habilita flags.
 
 Antes de qualquer publicação desta migration, revisar os testes SQLite/PostgreSQL e aplicar a cadeia pelo procedimento aprovado de deploy. O botão de upload continua desabilitado e não há API de upload. Nenhuma migration foi aplicada em produção nesta etapa.
 

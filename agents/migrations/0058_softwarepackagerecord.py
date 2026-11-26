@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('agents', '0056_rc49_seed_alert_policies'),
+        ('agents', '0057_admin_terminal_access_grant'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
