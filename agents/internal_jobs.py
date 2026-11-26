@@ -1,4 +1,5 @@
 """Typed internal preparation only. No new frontend dispatch entry point."""
+import json
 import re
 from datetime import timedelta
 from django.conf import settings
@@ -8,6 +9,10 @@ from config.authz import is_nightowl_technical_user
 from .models import AgentMachine, AgentJob, InventorySnapshot, AuditEvent
 from .services import create_audit_event
 from .service_collection_policy import service_collection_endpoint_allowed
+
+
+def _ordinal_sort_key(value):
+    return value.encode('utf-16-be', errors='surrogatepass')
 
 
 def validate_internal_payload(kind, value):
@@ -41,6 +46,36 @@ def validate_internal_payload(kind, value):
                     or len(value['endpoint_machine_id']) > 255):
                 raise ValueError('invalid_service_page')
             return dict(value)
+        if value.get('schema_version') == 3:
+            allowed = {'schema_version', 'page_size', 'max_page_bytes', 'after_name', 'expected_snapshot_id',
+                       'page_index', 'rows_collected', 'expected_total_services', 'expected_collected_at',
+                       'endpoint_machine_id'}
+            after_name = value.get('after_name')
+            snapshot_id = value.get('expected_snapshot_id')
+            page_index = value.get('page_index')
+            rows_collected = value.get('rows_collected')
+            expected_total = value.get('expected_total_services')
+            expected_at = value.get('expected_collected_at')
+            if (set(value) != allowed
+                    or type(value.get('schema_version')) is not int or value['schema_version'] != 3
+                    or type(value.get('page_size')) is not int or value['page_size'] != 100
+                    or type(value.get('max_page_bytes')) is not int or not 8192 <= value['max_page_bytes'] <= 60 * 1024
+                    or not isinstance(after_name, str) or len(after_name) > 256
+                    or not isinstance(snapshot_id, str) or (snapshot_id and not re.fullmatch(r'[0-9a-f]{32}', snapshot_id))
+                    or bool(after_name) != bool(snapshot_id)
+                    or type(page_index) is not int or not 1 <= page_index <= 800
+                    or type(rows_collected) is not int or not 0 <= rows_collected < 800
+                    or (page_index == 1 and rows_collected != 0)
+                    or (page_index > 1 and not page_index - 1 <= rows_collected <= (page_index - 1) * 100)
+                    or type(expected_total) is not int or not 0 <= expected_total <= 800
+                    or (page_index == 1 and (expected_total != 0 or expected_at != ''))
+                    or (page_index > 1 and (expected_total < 1 or rows_collected >= expected_total
+                                            or not isinstance(expected_at, str) or not expected_at))
+                    or not isinstance(expected_at, str) or len(expected_at) > 40
+                    or not isinstance(value.get('endpoint_machine_id'), str)
+                    or not 1 <= len(value['endpoint_machine_id']) <= 255):
+                raise ValueError('invalid_service_page')
+            return dict(value)
         if set(value) - {'names', 'limit', 'include_details'}:
             raise ValueError('invalid_fields')
         names = value.get('names', [])
@@ -61,6 +96,8 @@ def validate_internal_payload(kind, value):
 
 
 def required_internal_capability(kind, payload):
+    if kind == 'collect_services' and isinstance(payload, dict) and payload.get('schema_version') == 3:
+        return 'collect_services_paged:3'
     if kind == 'collect_services' and isinstance(payload, dict) and payload.get('schema_version') == 2:
         return 'collect_services_paged:2'
     return kind
@@ -125,6 +162,58 @@ def validate_internal_completion(job,result):
                     or (job.payload['expected_collected_at'] and job.payload['expected_collected_at'] != output['collected_at'])
                     or (job.payload['expected_snapshot_id'] and job.payload['expected_snapshot_id'] != output['snapshot_id'])):
                 raise ValueError('service_timestamp_invalid')
+        elif output.get('schema_version') == 3:
+            allowed_output = {'schema_version', 'read_only', 'snapshot_id', 'collected_at', 'total_services',
+                              'services', 'next_after_name', 'has_more', 'page_index', 'rows_collected', 'page_size'}
+            states = {'Running', 'Stopped', 'StartPending', 'StopPending', 'ContinuePending', 'PausePending', 'Paused', 'unknown'}
+            startup = {'Boot', 'System', 'Automatic', 'Manual', 'Disabled', 'unknown'}
+            payload = job.payload if isinstance(job.payload, dict) else {}
+            if (set(output) != allowed_output or type(output.get('schema_version')) is not int
+                    or output.get('schema_version') != 3 or output.get('read_only') is not True
+                    or not isinstance(output.get('snapshot_id'), str)
+                    or not re.fullmatch(r'[0-9a-f]{32}', output['snapshot_id'])
+                    or not isinstance(output.get('collected_at'), str) or len(output['collected_at']) > 40
+                    or type(output.get('total_services')) is not int or not 0 <= output['total_services'] <= 800
+                    or type(output.get('page_index')) is not int or output['page_index'] != payload.get('page_index')
+                    or type(output.get('page_size')) is not int or output['page_size'] != 100
+                    or not isinstance(rows, list) or len(rows) > payload.get('page_size', 0)
+                    or type(output.get('rows_collected')) is not int
+                    or output.get('has_more') is not (output.get('next_after_name') is not None)
+                    or (output.get('next_after_name') is not None and not isinstance(output.get('next_after_name'), str))):
+                raise ValueError('service_confirmation_invalid')
+            names = []
+            folded_names = []
+            for row in rows:
+                if (not isinstance(row, dict) or set(row) != {'name', 'display_name', 'status', 'startup_type'}
+                        or not isinstance(row.get('name'), str) or not row['name'] or len(row['name']) > 256
+                        or not isinstance(row.get('display_name'), str) or len(row['display_name']) > 256
+                        or row.get('status') not in states or row.get('startup_type') not in startup):
+                    raise ValueError('service_confirmation_invalid')
+                names.append(row['name'])
+                folded_names.append(row['name'].casefold())
+            if names != sorted(names, key=_ordinal_sort_key) or len(folded_names) != len(set(folded_names)):
+                raise ValueError('service_order_invalid')
+            if (output['has_more'] and (not rows or output['next_after_name'] != rows[-1]['name'])
+                    or not output['has_more'] and output['next_after_name'] is not None):
+                raise ValueError('service_cursor_invalid')
+            if payload.get('after_name') and rows and _ordinal_sort_key(names[0]) <= _ordinal_sort_key(payload['after_name']):
+                raise ValueError('service_cursor_invalid')
+            from django.utils.dateparse import parse_datetime
+            collected_at = parse_datetime(output['collected_at'])
+            cumulative = payload.get('rows_collected', -1) + len(rows)
+            if (collected_at is None or not timezone.is_aware(collected_at)
+                    or output['rows_collected'] != cumulative
+                    or output['has_more'] is not (cumulative < output['total_services'])
+                    or cumulative > output['total_services']
+                    or (output['has_more'] and not rows)
+                    or (not output['has_more'] and cumulative != output['total_services'])
+                    or (payload.get('expected_total_services') and payload['expected_total_services'] != output['total_services'])
+                    or (payload.get('expected_collected_at') and payload['expected_collected_at'] != output['collected_at'])
+                    or (payload.get('expected_snapshot_id') and payload['expected_snapshot_id'] != output['snapshot_id'])):
+                raise ValueError('service_snapshot_changed')
+            encoded_size = len(json.dumps(output, ensure_ascii=True, separators=(',', ':')).encode('utf-8'))
+            if encoded_size > payload.get('max_page_bytes', 0):
+                raise ValueError('service_page_too_large')
         elif (output.get('schema_version')!=1 or output.get('read_only') is not True or not isinstance(rows,list) or
               len(rows)>job.payload.get('limit',50) or any(not isinstance(row,dict) or not isinstance(row.get('name'),str) for row in rows)):
             raise ValueError('service_confirmation_invalid')
@@ -151,7 +240,7 @@ def create_internal_job(operator, endpoint_id, kind, payload, *, request_id=''):
         AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count()!=1):
         raise ValueError('identity_unavailable')
     payload = validate_internal_payload(kind, payload)
-    if kind == 'collect_services' and payload.get('schema_version') == 2 and payload['endpoint_machine_id'] != endpoint.machine_id:
+    if kind == 'collect_services' and payload.get('schema_version') in {2, 3} and payload['endpoint_machine_id'] != endpoint.machine_id:
         raise ValueError('identity_unavailable')
     if not internal_capability(endpoint,required_internal_capability(kind,payload)):
         raise ValueError('capability_unconfirmed')

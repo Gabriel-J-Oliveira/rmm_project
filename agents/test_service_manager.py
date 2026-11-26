@@ -13,7 +13,8 @@ from django.test import Client, LiveServerTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from .internal_jobs import create_internal_job, validate_internal_completion, validate_internal_payload
+from .internal_jobs import (create_internal_job, required_internal_capability,
+                            validate_internal_completion, validate_internal_payload)
 from .models import AgentJob, AgentMachine, AuditEvent, InventorySnapshot
 from .service_collection_policy import parse_endpoint_uuid_allowlist
 
@@ -25,6 +26,17 @@ def service_page(*, names=('EventLog', 'Spooler'), total=2, has_more=False, snap
     return {'schema_version': 2, 'read_only': True, 'snapshot_id': snapshot, 'collected_at': collected_at,
             'total_services': total, 'services': rows,
             'next_after_name': rows[-1]['name'] if has_more and rows else None, 'has_more': has_more}
+
+
+def service_page_v3(*, names, total, page_index, rows_collected, has_more,
+                    snapshot='0123456789abcdef0123456789abcdef', collected_at=None):
+    collected_at = collected_at or timezone.now().isoformat()
+    rows = [{'name': name, 'display_name': name + ' Display', 'status': 'Running', 'startup_type': 'Automatic'}
+            for name in names]
+    return {'schema_version': 3, 'read_only': True, 'snapshot_id': snapshot, 'collected_at': collected_at,
+            'total_services': total, 'services': rows,
+            'next_after_name': rows[-1]['name'] if has_more and rows else None, 'has_more': has_more,
+            'page_index': page_index, 'rows_collected': rows_collected, 'page_size': 100}
 
 
 @override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True)
@@ -210,6 +222,105 @@ class ServiceManagerApiTests(TestCase):
         tampered = cursor[:-1] + ('A' if cursor[-1] != 'A' else 'B')
         self.assertEqual(self.begin(cursor=tampered).status_code, 400)
 
+    def test_v3_is_selected_only_for_advertised_capability_and_keeps_actual_cursor_count(self):
+        self.heartbeat(['collect_services_paged:3'])
+        available = self.client.get(self.availability_url).json()
+        self.assertEqual((available['schema_version'], available['page_size']), (3, 100))
+        first = self.begin()
+        self.assertEqual(first.status_code, 202)
+        job = AgentJob.objects.get(pk=first.json()['job_id'])
+        self.assertEqual(job.payload['schema_version'], 3)
+        self.assertEqual(job.payload['page_size'], 100)
+        self.assertEqual(job.payload['max_page_bytes'], 48 * 1024)
+        self.assertEqual(required_internal_capability('collect_services', job.payload), 'collect_services_paged:3')
+
+        collected_at = timezone.now().isoformat()
+        names = tuple(f'Service{i:03}' for i in range(40))
+        output = service_page_v3(names=names, total=60, page_index=1, rows_collected=40,
+            has_more=True, collected_at=collected_at)
+        validate_internal_completion(job, {'machine_id': self.machine.machine_id, 'output': output})
+        job.status = AgentJob.STATUS_COMPLETED
+        job.result = {'machine_id': self.machine.machine_id, 'output': output}
+        job.save(update_fields=['status', 'result'])
+        status = self.client.get(reverse('service-manager-job', args=[self.machine.pk, job.pk]))
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()['page']['rows_collected'], 40)
+        cursor = status.json()['page']['cursor']
+
+        second = self.begin(cursor=cursor)
+        self.assertEqual(second.status_code, 202)
+        next_job = AgentJob.objects.get(pk=second.json()['job_id'])
+        self.assertEqual(next_job.payload['schema_version'], 3)
+        self.assertEqual(next_job.payload['page_index'], 2)
+        self.assertEqual(next_job.payload['rows_collected'], 40)
+        self.assertEqual(next_job.payload['after_name'], 'Service039')
+        final_names = tuple(f'Service{i:03}' for i in range(40, 60))
+        final = service_page_v3(names=final_names, total=60, page_index=2, rows_collected=60,
+            has_more=False, snapshot=output['snapshot_id'], collected_at=collected_at)
+        validate_internal_completion(next_job, {'machine_id': self.machine.machine_id, 'output': final})
+        next_job.status = AgentJob.STATUS_COMPLETED
+        next_job.result = {'machine_id': self.machine.machine_id, 'output': final}
+        next_job.save(update_fields=['status', 'result'])
+
+        self.heartbeat(['collect_services_paged:2'])
+        legacy = self.begin()
+        self.assertEqual(legacy.status_code, 202)
+        legacy_job = AgentJob.objects.get(pk=legacy.json()['job_id'])
+        self.assertEqual(legacy_job.payload['schema_version'], 2)
+        self.assertEqual(legacy_job.payload['page_size'], 20)
+        self.assertNotIn('max_page_bytes', legacy_job.payload)
+        self.assertEqual(required_internal_capability('collect_services', legacy_job.payload), 'collect_services_paged:2')
+
+    def test_v3_rejects_gaps_duplicates_wrong_snapshot_and_oversize_results(self):
+        self.heartbeat(['collect_services_paged:3'])
+        payload = {'schema_version': 3, 'page_size': 100, 'max_page_bytes': 48 * 1024,
+            'after_name': '', 'expected_snapshot_id': '', 'page_index': 1, 'rows_collected': 0,
+            'expected_total_services': 0, 'expected_collected_at': '', 'endpoint_machine_id': self.machine.machine_id}
+        job = create_internal_job(self.operator, self.machine.pk, 'collect_services', payload)
+        timestamp = timezone.now().isoformat()
+        valid_names = ('Service001', 'Service002')
+        valid = service_page_v3(names=valid_names, total=3, page_index=1, rows_collected=2,
+            has_more=True, collected_at=timestamp)
+        validate_internal_completion(job, {'machine_id': self.machine.machine_id, 'output': valid})
+        unicode_order = service_page_v3(names=('𐀀', '\ue000'), total=2, page_index=1,
+            rows_collected=2, has_more=False, collected_at=timestamp)
+        validate_internal_completion(job, {'machine_id': self.machine.machine_id, 'output': unicode_order})
+        with self.assertRaisesMessage(ValueError, 'service_order_invalid'):
+            validate_internal_completion(job, {'machine_id': self.machine.machine_id,
+                'output': {**unicode_order, 'services': list(reversed(unicode_order['services']))}})
+        invalid_outputs = (
+            {**valid, 'rows_collected': 1},
+            {**valid, 'services': [valid['services'][0], valid['services'][0]]},
+            {**valid, 'services': list(reversed(valid['services']))},
+            {**valid, 'output_truncated': True},
+        )
+        for output in invalid_outputs:
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                validate_internal_completion(job, {'machine_id': self.machine.machine_id, 'output': output})
+
+        job.status = AgentJob.STATUS_COMPLETED
+        job.result = {'machine_id': self.machine.machine_id, 'output': valid}
+        job.save(update_fields=['status', 'result'])
+        second_payload = {**payload, 'after_name': 'Service002', 'expected_snapshot_id': valid['snapshot_id'],
+            'page_index': 2, 'rows_collected': 2, 'expected_total_services': 3,
+            'expected_collected_at': timestamp}
+        second_job = create_internal_job(self.operator, self.machine.pk, 'collect_services', second_payload)
+        wrong_snapshot = service_page_v3(names=('Service003',), total=3, page_index=2, rows_collected=3,
+            has_more=False, snapshot='f' * 32, collected_at=timestamp)
+        with self.assertRaisesMessage(ValueError, 'service_snapshot_changed'):
+            validate_internal_completion(second_job, {'machine_id': self.machine.machine_id, 'output': wrong_snapshot})
+
+        second_job.status = AgentJob.STATUS_COMPLETED
+        second_job.save(update_fields=['status'])
+        oversized = service_page_v3(names=tuple(f'Service{i:03}' for i in range(10)), total=10,
+            page_index=1, rows_collected=10, has_more=False, collected_at=timestamp)
+        payload_small = {**payload, 'max_page_bytes': 8192}
+        small_job = create_internal_job(self.operator, self.machine.pk, 'collect_services', payload_small)
+        oversized['services'] = [{**row, 'display_name': '界' * 256} for row in oversized['services']]
+        with self.assertRaisesMessage(ValueError, 'service_page_too_large'):
+            validate_internal_completion(small_job, {'machine_id': self.machine.machine_id,
+                'output': oversized})
+
     def test_invalid_truncated_or_sensitive_service_results_are_rejected(self):
         job = create_internal_job(self.operator, self.machine.pk, 'collect_services', {
             'schema_version': 2, 'page_size': 20, 'after_name': '', 'expected_snapshot_id': '',
@@ -256,7 +367,8 @@ class ServiceManagerApiTests(TestCase):
         self.assertNotIn('stop_service', response.content.decode())
 
 
-@override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True, NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True)
+@override_settings(NIGHTOWL_SERVICE_COLLECTION_ENABLED=True, NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True,
+    NIGHTOWL_ADMIN_ACTIONS_ENABLED=True, NIGHTOWL_SERVICE_CONTROL_ENABLED=True)
 class ServiceManagerBrowserTests(LiveServerTestCase):
     @skipUnless(os.environ.get('NIGHTOWL_TEST_BROWSER_E2E') == '1', 'Explicit isolated browser gate required')
     def test_real_endpoint_service_manager_ui(self):
@@ -269,11 +381,14 @@ class ServiceManagerBrowserTests(LiveServerTestCase):
                 'agent': {'capabilities': ['operational_action:query_service:1', 'collect_services_paged:2']}})
         user = get_user_model().objects.create_superuser('synthetic-service-ui', password='synthetic-only')
         self.client.force_login(user)
-        result = subprocess.run(['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_endpoint_service_manager_e2e.cjs')],
-            env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
-                 'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
-                 'NIGHTOWL_E2E_ENDPOINT': str(endpoint.pk),
-                 'NIGHTOWL_E2E_ENDPOINT_NAME': endpoint.hostname}, capture_output=True, text=True, timeout=120)
+        scopes = {str(endpoint.pk): {'operator_ids': [str(user.pk)], 'start_service': ['AcmeAgent'], 'stop_service': ['Spooler'],
+            'restart_service': ['Spooler']}}
+        with override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=scopes):
+            result = subprocess.run(['node', str(Path(settings.BASE_DIR) / 'tests/frontend/test_endpoint_service_manager_e2e.cjs')],
+                env={**os.environ, 'NIGHTOWL_E2E_SERVER': self.live_server_url,
+                     'NIGHTOWL_E2E_SESSION': self.client.cookies['sessionid'].value,
+                     'NIGHTOWL_E2E_ENDPOINT': str(endpoint.pk),
+                     'NIGHTOWL_E2E_ENDPOINT_NAME': endpoint.hostname}, capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(AgentJob.objects.exists(), 'Browser UI fixture must not create remote jobs.')
+        self.assertFalse(AgentJob.objects.exists(), 'Browser UI fixture must not create real remote jobs.')
         print(result.stdout.strip())

@@ -16,13 +16,33 @@
         const requestedText = requested ? (requested.telemetryEnabled ? "Habilitada" : "Desabilitada") + " / " + requested.telemetrySampleSeconds + "s / " + requested.telemetryFlushSeconds + "s" : "-";
         const config = effective || requested || { telemetryEnabled: true, telemetrySampleSeconds: 300, telemetryFlushSeconds: 900 };
         const metrics = data.last_metrics || {};
+        const continuousMetrics = data.last_continuous_metrics;
         function number(value, unit) { return Number.isFinite(value) ? value.toFixed(1) + ' ' + unit : 'Nao informado'; }
         function row(label, value) { return "<div><dt>" + label + "</dt><dd>" + escape(value) + "</dd></div>"; }
+        function continuousDevices(group, metricNames) {
+            const devices = group && (group.instances || group.interfaces);
+            if (!devices || !Object.keys(devices).length) return 'Sem taxas validas nesta janela v2';
+            return Object.values(devices).map(device => {
+                const metadata = device.metadata || {};
+                const label = metadata.instance || metadata.name || device.identity || 'Dispositivo sem nome';
+                const values = metricNames.map(([name, short]) => {
+                    const value = device.metrics && device.metrics[name] && device.metrics[name].avg;
+                    return short + ': ' + number(value, 'B/s');
+                }).join(' / ');
+                return label + ' — média da janela: ' + values;
+            }).join('; ');
+        }
+        const diskSummary = continuousMetrics
+            ? continuousDevices(continuousMetrics.disk, [['read_bytes_per_sec', 'leitura'], ['write_bytes_per_sec', 'escrita']])
+            : number(metrics.disk_read_bytes_per_sec, 'B/s') + ' / ' + number(metrics.disk_write_bytes_per_sec, 'B/s');
+        const networkSummary = continuousMetrics
+            ? continuousDevices(continuousMetrics.network, [['received_bytes_per_sec', 'recebido'], ['sent_bytes_per_sec', 'enviado']])
+            : number(metrics.network_received_bytes, 'bytes') + ' / ' + number(metrics.network_sent_bytes, 'bytes');
         return '<div class="endpoint-monitoring"><div class="endpoint-monitoring-top-grid"><section class="panel endpoint-dense-card endpoint-monitoring-summary"><header><h2>Resumo da telemetria</h2></header><dl class="endpoint-fact-list endpoint-monitoring-facts">'
             + row("CPU", number(metrics.cpu_percent, '%'))
             + row("Memoria utilizada", number(metrics.memory_used_percent, '%'))
-            + row("Disco: leitura / escrita", number(metrics.disk_read_bytes_per_sec, 'B/s') + ' / ' + number(metrics.disk_write_bytes_per_sec, 'B/s'))
-            + row("Rede: recebido / enviado (contadores)", number(metrics.network_received_bytes, 'bytes') + ' / ' + number(metrics.network_sent_bytes, 'bytes'))
+            + row(continuousMetrics ? "Disco v2: taxas por dispositivo" : "Disco: leitura / escrita", diskSummary)
+            + row(continuousMetrics ? "Rede v2: taxas por interface" : "Rede: recebido / enviado (contadores)", networkSummary)
             + row("Medicao coletada em", data.last_sample_at)
             + row("Telemetria reportada", state)
             + row("Modo no ultimo heartbeat", data.reported_mode || "Nao reportado")

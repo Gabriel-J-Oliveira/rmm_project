@@ -6,13 +6,14 @@
 {% block icon_script %}<script src="{% static 'vendor/lucide/1.71.0/lucide.min.js' %}" defer></script>{% endblock %}
 {% block styles %}
 <link rel="stylesheet" href="{% static 'css/endpoint_actions_jobs.css' %}?v=rc47-hotfix-47-1">
-<link rel="stylesheet" href="{% static 'css/endpoint_services.css' %}?v=services-phase-a-1">
+<link rel="stylesheet" href="{% static 'css/endpoint_services.css' %}?v=services-v3-r48-1">
 {% if winrm_observability_available %}<link rel="stylesheet" href="{% static 'css/endpoint_winrm.css' %}">{% endif %}
 {% if terminal_available or terminal_admin_auth_available %}
 <link rel="stylesheet" href="{% static 'vendor/xterm/xterm.css' %}">
 <link rel="stylesheet" href="{% static 'css/endpoint_terminal.css' %}">
 {% endif %}
 <link rel="stylesheet" href="{% static 'css/endpoint_detail_refinement.css' %}?v=rc47-05-04b-2">
+{% if can_view_physical_assets %}<link rel="stylesheet" href="{% static 'css/endpoint_asset_records.css' %}?v=rc49-01a-1">{% endif %}
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -63,6 +64,7 @@
         <button type="button" data-endpoint-tab="security"><i data-lucide="shield"></i>Seguran&ccedil;a</button>
         <button type="button" data-endpoint-tab="patches"><i data-lucide="badge-check"></i>Patches</button>
         <button type="button" data-endpoint-tab="activity"><i data-lucide="history"></i>Atividade</button>
+        {% if can_view_physical_assets %}<button type="button" data-endpoint-tab="records"><i data-lucide="clipboard-list"></i>Registros</button>{% endif %}
         <button type="button" data-endpoint-tab="tasks"><i data-lucide="list-checks"></i>Ações e Jobs</button>
         <button type="button" data-endpoint-tab="diagnostics"><i data-lucide="stethoscope"></i>Diagn&oacute;stico</button>
     </nav>
@@ -324,6 +326,23 @@
         </section>
     </section>
 
+    {% if can_view_physical_assets %}
+    <section class="endpoint-tab-panel" data-endpoint-tab-panel="records" hidden>
+        <div class="endpoint-asset-records" data-asset-records
+             data-api-url="{% url 'api-endpoint-asset-records' endpoint.id %}"
+             data-endpoint-uuid="{{ endpoint.id }}"
+             data-machine-id="{{ endpoint.machine_id|default:''|escape }}"
+             data-create-allowed="{{ can_add_physical_assets|yesno:'yes,no' }}"
+             data-link-allowed="{{ can_link_physical_assets|yesno:'yes,no' }}"
+             data-record-allowed="{{ can_add_asset_records|yesno:'yes,no' }}"
+             data-csrf-token="{{ csrf_token }}">
+            <section class="panel endpoint-asset-card" data-asset-records-content aria-live="polite">
+                <p class="endpoint-asset-loading">Carregando registros patrimoniais…</p>
+            </section>
+        </div>
+    </section>
+    {% endif %}
+
     <section class="endpoint-tab-panel endpoint-actions-tab" data-endpoint-tab-panel="tasks" hidden>
         <div class="endpoint-actions-jobs-layout">
             <div class="endpoint-actions-column">
@@ -409,6 +428,7 @@
                 <div data-endpoint-actions-critical></div>
                 {% if terminal_available %}<details class="endpoint-terminal-disclosure" data-terminal-conpty-panel><summary>Terminal PowerShell assistido</summary>{% include 'dashboard/endpoint_terminal.html' %}</details>{% endif %}
                 {% if terminal_admin_auth_available %}{% include 'dashboard/terminal_admin_auth.html' %}{% endif %}
+                {% if terminal_admin_grant_manage %}{% include 'dashboard/terminal_admin_grant.html' %}{% endif %}
             </div>
             <aside class="panel endpoint-dense-card endpoint-jobs-panel" aria-labelledby="endpoint-jobs-title">
                 <header class="endpoint-jobs-header"><h2 id="endpoint-jobs-title"><i data-lucide="history"></i>&Uacute;ltimos jobs</h2><button type="button" data-refresh-endpoint aria-label="Atualizar jobs"><i data-lucide="refresh-ccw"></i></button></header>
@@ -439,8 +459,9 @@
     <div class="event-drawer-body" data-endpoint-drawer-body></div>
 </aside>
 <dialog class="endpoint-services-dialog" data-service-manager-dialog aria-labelledby="endpoint-services-title" aria-describedby="endpoint-services-status">
+  <div class="endpoint-services-frame">
     <header class="endpoint-services-header">
-        <div><span class="endpoint-services-kicker">Consulta somente leitura</span><h2 id="endpoint-services-title">Serviços Windows</h2><p data-service-endpoint-label>{{ endpoint.hostname|default:'Endpoint' }}</p></div>
+        <div><span class="endpoint-services-kicker">Consulta e controle autorizado</span><h2 id="endpoint-services-title">Serviços Windows</h2><p data-service-endpoint-label>{{ endpoint.hostname|default:'Endpoint' }}</p></div>
         <button type="button" class="endpoint-services-icon-button" data-service-close aria-label="Fechar gerenciador">&times;</button>
     </header>
     <p class="endpoint-services-status" id="endpoint-services-status" data-service-status role="status" aria-live="polite">Verificando autorização, identidade e capacidade do agente.</p>
@@ -452,14 +473,26 @@
     </div>
     <div class="endpoint-services-content">
         <section class="endpoint-services-list-wrap" aria-label="Lista de serviços">
-            <div class="endpoint-services-table-scroll"><table class="endpoint-services-table"><thead><tr><th scope="col">Nome interno</th><th scope="col">Nome de exibição</th><th scope="col">Estado</th><th scope="col">Inicialização</th></tr></thead><tbody data-service-rows></tbody></table></div>
+            <div class="endpoint-services-table-scroll"><table class="endpoint-services-table"><caption class="endpoint-services-sr-only">Serviços disponíveis. Use os controles de seleção por rádio para abrir os detalhes de um serviço.</caption><thead><tr><th scope="col"><span class="endpoint-services-sr-only">Selecionar</span></th><th scope="col">Nome interno</th><th scope="col">Nome de exibição</th><th scope="col">Estado</th><th scope="col">Inicialização</th><th scope="col">Ações autorizadas</th></tr></thead><tbody data-service-rows></tbody></table></div>
             <p class="endpoint-services-empty" data-service-empty hidden>Nenhum serviço corresponde à pesquisa e aos filtros.</p>
         </section>
-        <aside class="endpoint-services-properties" data-service-properties aria-label="Propriedades do serviço" aria-live="polite"><h3>Propriedades</h3><p>Selecione um serviço para ver seus dados coletados.</p></aside>
+        <aside class="endpoint-services-properties" data-service-properties aria-label="Detalhes do serviço" aria-live="polite" hidden>
+            <header class="endpoint-services-properties-header"><h3>Detalhes do serviço</h3><button type="button" class="endpoint-services-icon-button" data-service-properties-close aria-label="Fechar detalhes do serviço" title="Fechar detalhes">&times;</button></header>
+            <div data-service-properties-content></div>
+        </aside>
     </div>
+    <section class="endpoint-services-action-confirm" data-service-action-confirm hidden aria-labelledby="endpoint-service-action-title">
+        <h3 id="endpoint-service-action-title">Confirmar operação</h3>
+        <p data-service-action-description></p>
+        <div><button type="button" class="endpoint-services-button endpoint-services-button--secondary" data-service-action-cancel>Cancelar</button><button type="button" class="endpoint-services-button" data-service-action-submit>Confirmar ação</button></div>
+    </section>
+    <p class="endpoint-services-action-status" data-service-action-status role="status" aria-live="polite" hidden></p>
+    <button type="button" class="endpoint-services-button endpoint-services-action-check" data-service-action-check hidden>Consultar resultado</button>
     <footer class="endpoint-services-footer"><span data-service-collected-at>Coleta ainda não realizada.</span><div><button type="button" class="endpoint-services-button endpoint-services-button--secondary" data-service-refresh disabled>Atualizar dados</button><button type="button" class="endpoint-services-button" data-service-close>Fechar</button></div></footer>
-    <p class="endpoint-services-phase-note">Iniciar, parar, reiniciar e editar propriedades não estão disponíveis nesta fase.</p>
+    <p class="endpoint-services-phase-note">As operações administrativas dependem de autorização independente por endpoint, serviço, ação e operador. Alteração de inicialização e propriedades permanece indisponível.</p>
+  </div>
 </dialog>
+<div id="install-credential-host"></div>
 {% if endpoint_detail_payload %}
 {{ endpoint_detail_payload|json_script:"endpoint-detail-real-payload" }}
 {% endif %}
@@ -471,21 +504,24 @@
 {% block scripts %}
 {% if winrm_observability_available %}<script src="{% static 'js/endpoint_winrm_recovery.js' %}"></script>{% endif %}
 {% if winrm_observability_available %}<script src="{% static 'js/endpoint_winrm_check.js' %}"></script>{% endif %}
-{% if terminal_admin_auth_available %}
+{% if terminal_admin_auth_available or terminal_available %}
 <script src="{% static 'vendor/xterm/xterm.js' %}"></script>
 <script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
-<script src="{% static 'js/terminal_admin_auth.js' %}"></script>
+{% endif %}
+{% if terminal_admin_auth_available %}
+<script src="{% static 'js/terminal_admin_auth.js' %}?v=rc49-admin-terminal-1"></script>
 {% endif %}
 {% if terminal_available %}
-<script src="{% static 'vendor/xterm/xterm.js' %}"></script>
-<script src="{% static 'vendor/xterm/addon-fit.js' %}"></script>
 <script src="{% static 'js/endpoint_terminal.js' %}"></script>
 {% endif %}
+{% if terminal_admin_grant_manage %}<script src="{% static 'js/terminal_admin_grant.js' %}?v=rc49-grant-2"></script>{% endif %}
 <script src="{% static 'js/nightowl_operational.js' %}"></script>
-<script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-2"></script>
+<script src="{% static 'js/endpoint_monitoring.js' %}?v=telemetry-management-3"></script>
 <script src="{% static 'js/job_display.js' %}"></script>
-<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2"></script>
-<script src="{% static 'js/endpoint_services.js' %}?v=services-phase-a-1"></script>
+<script src="{% static 'js/install_batch_client.js' %}?v=rc49-01b-removal-2"></script>
+<script src="{% static 'js/endpoint_detail.js' %}?v=rc47-04b-endpoint-policies-2-service-controls-1-rc49-downgrade-1-rc49-removal-2"></script>
+<script src="{% static 'js/endpoint_services.js' %}?v=services-v3-r48-1"></script>
 <script src="{% static 'js/endpoint_approved_scripts.js' %}?v=pilot-scope-1"></script>
 <script src="{% static 'js/endpoint_live.js' %}?v=rc47-hotfix-47-1"></script>
+{% if can_view_physical_assets %}<script src="{% static 'js/endpoint_asset_records.js' %}?v=rc49-01b-2"></script>{% endif %}
 {% endblock %}

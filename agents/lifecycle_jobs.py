@@ -30,4 +30,6 @@ def agent_job_parameters(job):
     excluded = {'rollout_metadata', 'policy_channel'}
     if job.job_type == AgentJob.TYPE_REPAIR_AGENT:
         excluded.add('source_channel')
+    if job.job_type == AgentJob.TYPE_FORCE_INVENTORY:
+        excluded.add('asset_validation')
     return {key: value for key, value in job.payload.items() if key not in excluded}

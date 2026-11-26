@@ -106,20 +106,27 @@ def validate_dispatch(job, *, creating=False):
 
 
 @transaction.atomic
-def create_action_job(operator, endpoint_id, payload):
+def create_action_job(operator, endpoint_id, payload, *, request_id=''):
     payload = validate_payload(payload)
     authorize(operator, payload['action_id'])
     endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint_id)
+    if request_id:
+        existing = AgentJob.objects.filter(endpoint=endpoint, job_type='operational_action',
+            correlation_id=request_id, created_by=operator.get_username()).first()
+        if existing:
+            if existing.payload != payload:
+                raise ValueError('request_id_conflict')
+            return existing
     job = AgentJob(endpoint=endpoint, job_type='operational_action', payload=payload,
         created_by=operator.get_username(), timeout_seconds=TIMEOUT_SECONDS,
-        expires_at=timezone.now() + timedelta(minutes=15))
+        expires_at=timezone.now() + timedelta(minutes=15), correlation_id=request_id)
     validate_dispatch(job, creating=True)
     if endpoint.jobs.filter(status__in=('queued', 'sent', 'running')).exists():
         raise ValueError('job_conflict')
     job.save()
     create_audit_event(event_type='job.created', title='Acao operacional autorizada',
         description=payload['action_id'], endpoint=endpoint, actor_type=AuditEvent.ACTOR_USER,
-        actor_name=operator.get_username(), metadata={'job_id': str(job.pk), **payload,
+        actor_name=operator.get_username(), metadata={'job_id': str(job.pk), 'request_id': request_id, **payload,
             **({'authorization': admin.binding(job, operator)} if payload['action_id'] in admin.PERMISSIONS else {})})
     return job
 

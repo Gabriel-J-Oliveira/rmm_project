@@ -42,7 +42,10 @@
             window.clearTimeout(timer);
         }
     }
-    function modal({ title, description, submitLabel, perform, accepted }) {
+    function modal({ title, description, submitLabel, perform, accepted, confirmationText, operationChoices = [],
+        usernameLabel = 'Usuário administrativo', usernamePlaceholder = 'DOMINIO\\usuario',
+        progressLabel = 'Iniciando lote e validando os computadores...', validate = result => UUID.test(result.batch_id),
+        resultValue = result => result.batch_id }) {
         const host = document.getElementById('install-credential-host');
         if (!host || host.hasChildNodes()) return;
         const previous = document.activeElement;
@@ -59,9 +62,9 @@
         dialog.setAttribute('aria-labelledby', 'install-credential-title');
         const heading = el('h2', '', title); heading.id = 'install-credential-title';
         const form = el('form');
-        const userLabel = el('label', '', 'Usuário administrativo');
+        const userLabel = el('label', '', usernameLabel);
         const user = el('input'); user.type = 'text'; user.required = true; user.autocomplete = 'off'; user.maxLength = 256;
-        user.placeholder = 'DOMINIO\\usuario'; userLabel.append(user);
+        user.placeholder = usernamePlaceholder; userLabel.append(user);
         const passwordLabel = el('label', '', 'Senha');
         const password = el('input'); password.type = 'password'; password.required = true; password.autocomplete = 'off'; password.maxLength = 512;
         passwordLabel.append(password);
@@ -70,7 +73,24 @@
         const cancel = el('button', 'install-button', 'Cancelar'); cancel.type = 'button';
         const submit = el('button', 'install-button install-primary', submitLabel); submit.type = 'submit';
         actions.append(cancel, submit);
-        form.append(userLabel, passwordLabel, el('p', 'install-muted', 'A credencial será utilizada somente durante esta operação e não será armazenada pelo NightOwl.'), feedback, actions);
+        form.append(userLabel, passwordLabel);
+        let operation = null;
+        if (operationChoices.length > 1) {
+            const label = el('label', '', 'Operação');
+            operation = el('select');
+            for (const item of operationChoices) {
+                const option = el('option', '', item.label);
+                option.value = item.value; operation.append(option);
+            }
+            label.append(operation); form.append(label);
+        }
+        let confirmation = null;
+        if (confirmationText) {
+            const label = el('label', '', 'Digite ' + confirmationText + ' para confirmar');
+            confirmation = el('input'); confirmation.required = true; confirmation.autocomplete = 'off';
+            label.append(confirmation); form.append(label);
+        }
+        form.append(el('p', 'install-muted', 'A credencial será utilizada somente durante esta operação e não será armazenada pelo NightOwl.'), feedback, actions);
         dialog.append(heading, el('p', 'install-muted', description), form); overlay.append(dialog); host.append(overlay);
         document.body.classList.add('drawer-open');
         let sending = false;
@@ -83,7 +103,7 @@
         function keydown(event) {
             if (event.key === 'Escape' && !sending) { event.preventDefault(); event.stopImmediatePropagation(); close(); }
             if (event.key === 'Tab') {
-                const focusable = [...dialog.querySelectorAll('input,button')].filter(n => !n.disabled);
+                const focusable = [...dialog.querySelectorAll('input,select,button')].filter(n => !n.disabled);
                 const first = focusable[0], last = focusable[focusable.length - 1];
                 if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
                 else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -95,15 +115,15 @@
         form.addEventListener('submit', async event => {
             event.preventDefault(); if (sending) return;
             sending = true; submit.disabled = cancel.disabled = true;
-            feedback.textContent = 'Iniciando lote e validando os computadores...';
+            feedback.textContent = progressLabel;
             let credentials = { username: user.value.trim(), password: password.value };
             password.value = ''; user.value = ''; user.disabled = password.disabled = true;
             try {
-                const pending = perform(credentials);
+                const pending = perform(credentials, confirmation?.value, operation?.value || operationChoices[0]?.value);
                 credentials = null;
                 const result = await pending;
-                if (!UUID.test(result.batch_id)) throw new Error();
-                close(); accepted(result.batch_id);
+                if (!validate(result)) throw new Error();
+                close(); accepted(resultValue(result));
             } catch (error) {
                 feedback.textContent = error.message || 'Não foi possível confirmar a operação. Atualize o estado antes de tentar novamente.';
                 sending = false; submit.disabled = cancel.disabled = false;

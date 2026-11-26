@@ -14,10 +14,10 @@ public sealed class TerminalIdentity : IDisposable
     private readonly TerminalTokenFacts? _administrativeFacts;
     private readonly string? _administrativeProfile;
     private TerminalIdentity(TerminalUserIdentity identity) => _identity = identity;
-    private TerminalIdentity(SafeAccessTokenHandle token, TerminalTokenFacts facts, string profile) { _administrativeToken = token; _administrativeFacts = facts; _administrativeProfile = profile; }
+    private TerminalIdentity(SafeAccessTokenHandle token, TerminalTokenFacts facts, string? profile) { _administrativeToken = token; _administrativeFacts = facts; _administrativeProfile = profile; }
     public SafeAccessTokenHandle Token => _identity?.Token ?? _administrativeToken!;
     public TerminalTokenFacts Facts => _identity?.Facts ?? _administrativeFacts!;
-    public string Profile => _identity?.Profile ?? _administrativeProfile!;
+    public string? Profile => _identity?.Profile ?? _administrativeProfile;
     public bool IsCaller => _identity?.IsCaller ?? false;
     public bool IsAdministrative => _administrativeToken is not null;
     public static TerminalIdentity FromAdministrativeToken(SafeAccessTokenHandle token)
@@ -28,11 +28,14 @@ public sealed class TerminalIdentity : IDisposable
             TerminalAdministrativeAuthentication.Validate(facts);
             uint size = 0;
             GetUserProfileDirectory(token, null, ref size);
-            if (size is 0 or > 32768) throw new InvalidOperationException("terminal_profile_unavailable");
-            var path = new StringBuilder((int)size);
-            if (!GetUserProfileDirectory(token, path, ref size)) throw new InvalidOperationException("terminal_profile_unavailable");
-            string profile = Path.GetFullPath(path.ToString());
-            if (!Directory.Exists(profile)) throw new InvalidOperationException("terminal_profile_unavailable");
+            string? profile = null;
+            if (size is > 0 and <= 32768)
+            {
+                var path = new StringBuilder((int)size);
+                if (GetUserProfileDirectory(token, path, ref size) && Path.IsPathFullyQualified(path.ToString()) &&
+                    Directory.Exists(path.ToString()))
+                    profile = Path.GetFullPath(path.ToString());
+            }
             return new TerminalIdentity(token, facts, profile);
         }
         catch { token.Dispose(); throw; }
@@ -54,6 +57,16 @@ public sealed class TerminalIdentity : IDisposable
     public static void ValidateFacts(TerminalTokenFacts f, AgentConfig c) => TerminalUserIdentity.ValidateFacts(f, Policy(c));
     public static TerminalTokenFacts CurrentFacts() => TerminalUserIdentity.CurrentFacts();
     public static TerminalTokenFacts Inspect(SafeAccessTokenHandle t) => TerminalUserIdentity.Inspect(t);
+    public static string TokenAccountName(SafeAccessTokenHandle token, string expectedSid)
+    {
+        return System.Security.Principal.WindowsIdentity.RunImpersonated(token, () =>
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            if (!string.Equals(identity.User?.Value, expectedSid, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+            try { return identity.Name ?? string.Empty; }
+            catch (System.Security.Principal.IdentityNotMappedException) { return string.Empty; }
+        });
+    }
     public static string ApproveCurrentUser(AgentConfig c, TerminalAuthorization a, bool confirmed) => TerminalUserIdentity.ApproveCurrentUser(Policy(c), a, confirmed);
     public bool ConsentStillValid() => _identity?.ConsentStillValid() ?? true;
     internal static bool OpenProcessToken(nint p, uint access, out SafeAccessTokenHandle token) => TerminalUserIdentity.OpenProcessToken(p, access, out token);

@@ -18,15 +18,17 @@ def payload(action='start_service', params=None):
         {'service_name': 'AcmePilotService'} if action.endswith('_service') else {}}
 
 
-@override_settings(NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True, NIGHTOWL_ADMIN_ACTIONS_ENABLED=True)
+@override_settings(NIGHTOWL_OPERATIONAL_ACTIONS_ENABLED=True, NIGHTOWL_ADMIN_ACTIONS_ENABLED=True,
+    NIGHTOWL_SERVICE_CONTROL_ENABLED=True)
 class AdministrativeActionTests(TestCase):
     def setUp(self):
-        self.machine, token = AgentMachine.create_with_token(hostname='SYNTHETIC-ADMIN', machine_id=str(uuid.uuid4()))
+        self.machine, token = AgentMachine.create_with_token(hostname='SYNTHETIC-ADMIN', machine_id=str(uuid.uuid4()),
+            status=AgentMachine.STATUS_ONLINE, last_seen_at=timezone.now())
         self.operator = get_user_model().objects.create_superuser('synthetic-admin-actions', password='synthetic-only')
         self.client.force_login(self.operator)
         self.agent = Client(HTTP_AUTHORIZATION='Bearer ' + token)
         self.url = reverse('operational-action-create', args=[self.machine.pk])
-        self.scope = {str(self.machine.pk): {**{action: ['AcmePilotService'] for action in
+        self.scope = {str(self.machine.pk): {'operator_ids': [str(self.operator.pk)], **{action: ['AcmePilotService'] for action in
             ('start_service', 'stop_service', 'restart_service')}, 'gpupdate': True}}
         self.settings_override = override_settings(NIGHTOWL_ADMIN_ACTION_SCOPES=self.scope)
         self.settings_override.enable()
@@ -48,6 +50,7 @@ class AdministrativeActionTests(TestCase):
         self.client.force_login(user)
         self.assertEqual(self.create().status_code, 403)
         user.user_permissions.add(Permission.objects.get(content_type__app_label='agents', codename='start_windows_service'))
+        self.scope[str(self.machine.pk)]['operator_ids'].append(str(user.pk))
         self.assertEqual(self.create().status_code, 201)
         self.assertEqual(self.create(payload('stop_service')).status_code, 403)
         self.assertEqual(self.create(payload('gpupdate')).status_code, 403)
@@ -60,11 +63,15 @@ class AdministrativeActionTests(TestCase):
         csrf = Client(enforce_csrf_checks=True)
         csrf.force_login(self.operator)
         self.assertEqual(csrf.post(self.url, payload(), content_type='application/json').status_code, 403)
-        for overrides in ({'NIGHTOWL_ADMIN_ACTIONS_ENABLED': False}, {'NIGHTOWL_ADMIN_ACTION_SCOPES': {}},
+        for overrides in ({'NIGHTOWL_ADMIN_ACTIONS_ENABLED': False}, {'NIGHTOWL_SERVICE_CONTROL_ENABLED': False},
+                          {'NIGHTOWL_ADMIN_ACTION_SCOPES': {}},
                           {'NIGHTOWL_ADMIN_ACTION_SCOPES': []},
                           {'NIGHTOWL_ADMIN_ACTION_SCOPES': {str(self.machine.pk): {'start_service': ['*']}}}):
             with override_settings(**overrides):
-                self.assertEqual(self.create().status_code, 400)
+                self.assertIn(self.create().status_code, (400, 403))
+        with override_settings(NIGHTOWL_SERVICE_CONTROL_ENABLED=False):
+            self.assertEqual(self.create(payload('gpupdate')).status_code, 201)
+        AgentJob.objects.all().delete()
         self.heartbeat.raw_payload['agent']['capabilities'] = ['unknown_capability']
         self.heartbeat.save()
         self.assertEqual(self.create().status_code, 400)
@@ -174,6 +181,7 @@ class AdministrativeActionTests(TestCase):
         user = get_user_model().objects.create_user('specific-operator', is_staff=True)
         permissions = Permission.objects.filter(content_type__app_label='agents', codename__in=['add_agentjob', 'start_windows_service'])
         user.user_permissions.add(*permissions)
+        self.scope[str(self.machine.pk)]['operator_ids'].append(str(user.pk))
         job = create_action_job(user, self.machine.pk, payload())
         self.pull()
         user.user_permissions.clear()

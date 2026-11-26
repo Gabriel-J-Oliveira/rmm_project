@@ -17,12 +17,13 @@ from .views import (
 from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, EndpointTelemetryView
 from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
 from .job_control import AgentJobSignalView, AgentJobStartedView
-from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView, TerminalOperatorStatusView, TerminalOperatorConnectView, TerminalAgentConsentView
+from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView, TerminalOperatorStatusView, TerminalOperatorConnectView, TerminalAgentConsentView, AdminTerminalGrantView
 from .operational_actions import OperationalActionView
 from .script_library import ApprovedScriptCatalogView
-from .service_manager import ServiceManagerAvailabilityView, ServiceManagerJobView
+from .service_manager import ServiceManagerAvailabilityView, ServiceManagerJobView, ServiceManagerActionView
 
 urlpatterns = [
+    path('terminal/admin-grants/<uuid:endpoint_id>/', AdminTerminalGrantView.as_view(), name='terminal-admin-grant'),
     path('terminal/status/<uuid:session_id>/', TerminalOperatorStatusView.as_view(), name='terminal-session-status'),
     path('terminal/connect/<uuid:session_id>/', TerminalOperatorConnectView.as_view(), name='terminal-session-connect'),
     path('terminal/consent/<uuid:session_id>/', TerminalAgentConsentView.as_view(), name='terminal-agent-consent'),
@@ -33,6 +34,8 @@ urlpatterns = [
     path('service-manager/<uuid:endpoint_id>/availability/', ServiceManagerAvailabilityView.as_view(), name='service-manager-availability'),
     path('service-manager/<uuid:endpoint_id>/', ServiceManagerJobView.as_view(), name='service-manager-create'),
     path('service-manager/<uuid:endpoint_id>/jobs/<uuid:job_id>/', ServiceManagerJobView.as_view(), name='service-manager-job'),
+    path('service-manager/<uuid:endpoint_id>/actions/', ServiceManagerActionView.as_view(), name='service-manager-action-create'),
+    path('service-manager/<uuid:endpoint_id>/actions/<uuid:job_id>/', ServiceManagerActionView.as_view(), name='service-manager-action-status'),
     path('operational-actions/<uuid:endpoint_id>/', OperationalActionView.as_view(), name='operational-action-create'),
     path('jobs/signal/', AgentJobSignalView.as_view(), name='agent-jobs-signal'),
     path('jobs/<uuid:job_id>/started/', AgentJobStartedView.as_view(), name='agent-jobs-started'),

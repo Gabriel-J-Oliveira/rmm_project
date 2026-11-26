@@ -455,6 +455,8 @@ try { foreach ($path in @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\WinRM\Servi
               oem_product = if ($product) { [pscustomobject]@{
                 name=$product.Name; version=$product.Version; vendor=$product.Vendor
                 sku=$product.SKUNumber; identifying_number=$product.IdentifyingNumber
+                smbios_uuid=$product.UUID
+                hypervisor_present=$cs.HypervisorPresent
               } } else { $null }
               board_manufacturer = $board.Manufacturer; board_product = $board.Product
               board_version = $board.Version; board_serial_number = $board.SerialNumber

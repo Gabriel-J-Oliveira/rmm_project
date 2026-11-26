@@ -121,7 +121,17 @@ public sealed class JobExecutor
                 "collect_logs" => CollectLogs(config, job),
                 "ping" => await RunPingAsync(config, job, jobToken),
                 "collect_services" => await RunCollectionAsync("services", () =>
-                    GetPayloadInt(job, "schema_version", 1) == 2
+                    GetPayloadInt(job, "schema_version", 1) == 3
+                        ? WindowsServicesCollector.CollectPagedV3(
+                            GetPayloadString(job, "after_name", ""),
+                            GetPayloadString(job, "expected_snapshot_id", ""),
+                            GetPayloadInt(job, "page_size", 0),
+                            GetPayloadInt(job, "max_page_bytes", 0),
+                            GetPayloadInt(job, "page_index", 0),
+                            GetPayloadInt(job, "rows_collected", 0),
+                            GetPayloadInt(job, "expected_total_services", 0),
+                            GetPayloadString(job, "expected_collected_at", ""))
+                        : GetPayloadInt(job, "schema_version", 1) == 2
                         ? WindowsServicesCollector.CollectPaged(
                             GetPayloadString(job, "after_name", ""),
                             GetPayloadString(job, "expected_snapshot_id", ""),
@@ -600,7 +610,16 @@ public sealed class JobExecutor
         }
 
         string runnerDir = Path.Combine(NightOwlPaths.Current.UpdatesRunnerDir, "uninstall-" + job.Id);
-        UninstallerRunnerPayloadResult runnerPayload = UninstallerRunnerPayload.Prepare(config.InstallPath, runnerDir);
+        bool verifiedRemoval = mode == "purge" && GetPayloadBool(job, "verified_removal", false);
+        if (verifiedRemoval)
+        {
+            if (!UninstallerRunnerPayload.SupportsVerifiedRemoval(config.InstallPath)
+                || !Guid.TryParse(job.Id, out Guid jobId) || job.Id != jobId.ToString()
+                || !Uri.TryCreate(config.JobsResultUrl, UriKind.Absolute, out Uri? resultUri) || resultUri.Scheme != "https")
+                throw new InvalidOperationException("REMOVAL_SCOPE_INVALID");
+            NightOwlPaths.Current.ProtectAdminOnlyTree(NightOwlPaths.Current.UpdatesRunnerDir, "uninstaller", "removal-runner");
+        }
+        UninstallerRunnerPayloadResult runnerPayload = UninstallerRunnerPayload.Prepare(config.InstallPath, runnerDir, verifiedRemoval);
 
         string runner = runnerPayload.RunnerExecutable;
         List<string> args = new()
@@ -618,6 +637,19 @@ public sealed class JobExecutor
         if (purgeAuthorized)
         {
             args.Add("--purge-authorized");
+        }
+        if (verifiedRemoval)
+        {
+            NightOwlPaths.Current.ProtectAdminOnlyTree(runnerDir, "uninstaller", "verified-removal");
+            string configPath = Path.Combine(NightOwlPaths.Current.ConfigDir, "agent.config.json");
+            string configFingerprint = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(configPath)));
+            NightOwlFileStore.WriteAllTextDurable(Path.Combine(runnerDir, "removal-handoff.json"), JsonSerializer.Serialize(new
+            {
+                jobId = job.Id, config.MachineId, config.InstallPath, config.JobsResultUrl,
+                configFingerprint, receiptToken = GetPayloadString(job, "removal_receipt_token", "")
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            args.Add("--verified-removal");
         }
 
         await _logger.LogAsync("job.uninstall_agent.started", "Starting uninstaller runner for uninstall_agent job.", new

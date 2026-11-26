@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -106,6 +107,40 @@ class TelemetryConfigurationTests(TestCase):
         self.assertEqual(metrics['memory_used_percent'], 42)
         self.assertEqual(metrics['disk_read_bytes_per_sec'], 0)
         self.assertIsNone(metrics['network_received_bytes'])
+
+    def test_monitoring_summary_projects_continuous_disk_and_interface_rates(self):
+        at = timezone.now()
+        metric = lambda value: {'count': 6, 'sum': value * 6, 'min': value, 'max': value,
+                                'weight': 60, 'weighted_sum': value * 60, 'distribution': {}}
+        EndpointPerformanceSample.objects.create(
+            endpoint=self.machine, sample_id=uuid.uuid4(), schema_version=2,
+            resolution_seconds=60, collected_at=at, window_end_at=at + timedelta(seconds=60),
+            metric_summaries={
+                'metrics': {
+                    'disk.disk-a.read_bytes_per_sec': metric(128),
+                    'disk.disk-a.write_bytes_per_sec': metric(0),
+                    'network.nic-a.received_bytes_per_sec': metric(256),
+                    'network.nic-a.sent_bytes_per_sec': metric(64),
+                },
+                'quality': {
+                    'disk_instances': {'disk-a': {'instance': '0 C:', 'association_confidence': 'unverified'}},
+                    'interfaces': {'nic-a': {'name': 'Ethernet 1'}},
+                },
+            },
+            disk_read_bytes_per_sec=None, network_received_bytes=None, collection_duration_ms=1,
+        )
+
+        summary = monitoring_summary(self.machine)
+
+        self.assertIsNone(summary['last_metrics']['disk_read_bytes_per_sec'])
+        self.assertIsNone(summary['last_metrics']['network_received_bytes'])
+        disk = summary['last_continuous_metrics']['disk']['instances']['disk-a']
+        network = summary['last_continuous_metrics']['network']['interfaces']['nic-a']
+        self.assertEqual(disk['metadata']['association_confidence'], 'unverified')
+        self.assertEqual(disk['metrics']['read_bytes_per_sec']['avg'], 128)
+        self.assertEqual(disk['metrics']['write_bytes_per_sec']['avg'], 0)
+        self.assertEqual(network['metadata']['name'], 'Ethernet 1')
+        self.assertEqual(network['metrics']['received_bytes_per_sec']['avg'], 256)
 
     def test_compatible_job_is_bounded_and_audited(self):
         job = self.job()

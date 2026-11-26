@@ -8,19 +8,19 @@ namespace NightOwl.Agent.Windows.Services;
 // Isolated foundation only: no transport, persistence, token elevation or process creation.
 public static class TerminalAdministrativeAuthentication
 {
-    public static SafeAccessTokenHandle Authenticate(string account, string domain, char[] password)
+    public static SafeAccessTokenHandle Authenticate(string account, string? domain, char[] password)
     {
         ArgumentNullException.ThrowIfNull(password);
         nint nativePassword = 0;
         try
         {
-            if (string.IsNullOrWhiteSpace(account) || account.Length > 256 || domain.Length > 256 ||
-                account.Contains('\0') || domain.Contains('\0') || password.Length is < 1 or > 512 || Array.IndexOf(password, '\0') >= 0)
+            if (string.IsNullOrWhiteSpace(account) || account.Length > 256 || domain?.Length > 256 ||
+                account.Contains('\0') || domain?.Contains('\0') == true || password.Length is < 1 or > 512 || Array.IndexOf(password, '\0') >= 0)
                 throw new InvalidOperationException("terminal_auth_invalid");
             nativePassword = Marshal.AllocHGlobal(checked((password.Length + 1) * sizeof(char)));
             Marshal.Copy(password, 0, nativePassword, password.Length);
             Marshal.WriteInt16(nativePassword, password.Length * sizeof(char), 0);
-            if (!LogonUser(account, string.IsNullOrWhiteSpace(domain) ? "." : domain, nativePassword, 2, 0, out var token))
+            if (!LogonUser(account, NormalizeDomain(domain), nativePassword, 2, 0, out var token))
                 throw new InvalidOperationException("terminal_auth_failed");
             try
             {
@@ -40,6 +40,15 @@ public static class TerminalAdministrativeAuthentication
         }
     }
 
+    public static string? NormalizeDomain(string? domain) => string.IsNullOrWhiteSpace(domain) ? null : domain;
+
+    public static string? RejectionReason(string errorCode) => errorCode switch
+    {
+        "terminal_auth_failed" => "credentials_rejected",
+        "terminal_auth_not_administrator" => "administrator_required",
+        _ => null
+    };
+
     public static void Validate(TerminalTokenFacts facts)
     {
         if (facts.Sid is "S-1-5-18" or "S-1-5-19" or "S-1-5-20" ||
@@ -49,5 +58,5 @@ public static class TerminalAdministrativeAuthentication
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "LogonUserW")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool LogonUser(string user, string domain, nint password, int logonType, int provider, out SafeAccessTokenHandle token);
+    private static extern bool LogonUser(string user, string? domain, nint password, int logonType, int provider, out SafeAccessTokenHandle token);
 }
