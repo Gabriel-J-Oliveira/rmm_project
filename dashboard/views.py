@@ -3902,9 +3902,18 @@ def endpoint_detail(request, pk):
     from agents.internal_jobs import internal_capability
     context['terminal_available'] = False
     context['terminal_admin_auth_available'] = False
+    from agents.terminal_grants import PILOT_ENDPOINT_ID, PILOT_MACHINE_ID, PILOT_OPERATOR_USERNAME
+    from agents.terminal_sessions import has_explicit_admin_permission
+    pilot_terminal = settings.NIGHTOWL_TERMINAL_ADMIN_PILOT_ONLY
+    if ((not pilot_terminal or endpoint.pk == PILOT_ENDPOINT_ID) and is_nightowl_technical_user(request.user) and
+            has_explicit_admin_permission(request.user, 'manage_admin_terminal_grant')):
+        context['terminal_admin_grant_manage'] = True
+        if pilot_terminal:
+            context['terminal_admin_grant_machine_id'] = PILOT_MACHINE_ID
+            context['terminal_admin_grant_operator'] = PILOT_OPERATOR_USERNAME
     if terminal_enabled() and getattr(settings, 'NIGHTOWL_TERMINAL_ADMIN_AUTH_ENABLED', False):
         try:
-            authorize_terminal(request.user, endpoint)
+            authorize_terminal(request.user, endpoint, 'admin_auth')
             validate_terminal_mode(request.user, endpoint, 'admin_auth')
             if not internal_capability(endpoint, 'remote_terminal_transport:1'):
                 raise ValueError('transport_capability_unconfirmed')

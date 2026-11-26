@@ -17,12 +17,13 @@ from .views import (
 from .telemetry_views import AgentTelemetryView, EndpointTelemetrySummaryView, EndpointTelemetryView
 from .telemetry_live import LiveOperatorView, LiveAgentControlView, LiveAgentPointsView
 from .job_control import AgentJobSignalView, AgentJobStartedView
-from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView, TerminalOperatorStatusView, TerminalOperatorConnectView, TerminalAgentConsentView
+from .terminal_sessions import TerminalOperatorView, TerminalCancelView, TerminalAgentPollView, TerminalOperatorStatusView, TerminalOperatorConnectView, TerminalAgentConsentView, AdminTerminalGrantView
 from .operational_actions import OperationalActionView
 from .script_library import ApprovedScriptCatalogView
 from .service_manager import ServiceManagerAvailabilityView, ServiceManagerJobView, ServiceManagerActionView
 
 urlpatterns = [
+    path('terminal/admin-grants/<uuid:endpoint_id>/', AdminTerminalGrantView.as_view(), name='terminal-admin-grant'),
     path('terminal/status/<uuid:session_id>/', TerminalOperatorStatusView.as_view(), name='terminal-session-status'),
     path('terminal/connect/<uuid:session_id>/', TerminalOperatorConnectView.as_view(), name='terminal-session-connect'),
     path('terminal/consent/<uuid:session_id>/', TerminalAgentConsentView.as_view(), name='terminal-agent-consent'),
