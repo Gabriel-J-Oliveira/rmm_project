@@ -1,5 +1,8 @@
 # RC47 — Prontidão para deploy do backend
 
+> **REGISTRO HISTÓRICO — fotografia de 17/11/2026 (não usar como estado atual).** Os SHAs, flags, serviços, jobs e condições descritos abaixo foram informados ou observados naquela data e exigem nova confirmação antes de qualquer decisão. Para o planejamento RC49, consulte [deploy-RC49.md](deploy-RC49.md) e [operational-homologation.md](operational-homologation.md); nenhuma instrução deste snapshot autoriza operação.
+
+
 **Estado:** plano de publicação para revisão; não autoriza execução. Nenhum acesso, alteração ou teste foi feito no servidor.
 
 **Baseline indicada para produção:** `6090228aed49c08ded2ecd8d4ca24658df9eb3b0`
