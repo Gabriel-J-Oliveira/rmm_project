@@ -291,6 +291,7 @@ NIGHTOWL_TECHNICAL_USERNAMES = {
     for item in env.list('NIGHTOWL_TECHNICAL_USERNAMES', default=['gabriel.oliveira'])
     if item.strip()
 }
+NIGHTOWL_SOFTWARE_INVENTORY_STALE_HOURS = env.int('NIGHTOWL_SOFTWARE_INVENTORY_STALE_HOURS', default=24)
 ACCESS_INVENTORY_ALLOWED_OUS = {
     item.strip().casefold()
     for item in env.list('ACCESS_INVENTORY_ALLOWED_OUS', default=['OU=USUARIOS', 'OU=SOCIOS'])
