@@ -23,6 +23,23 @@ class TerminalAccessGrant(models.Model):
         constraints = [models.UniqueConstraint(fields=['operator', 'endpoint'], name='terminal_grant_operator_endpoint')]
 
 
+class AdminTerminalAccessGrant(models.Model):
+    """Independent, short-lived authorization for elevated Windows terminal sessions."""
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='admin_terminal_grants')
+    endpoint = models.ForeignKey('AgentMachine', on_delete=models.CASCADE)
+    machine_id = models.CharField(max_length=255)
+    enabled = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='admin_terminal_grants_created')
+    reason = models.CharField(max_length=500)
+    approval_ref = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['operator', 'endpoint'], name='admin_terminal_grant_operator_endpoint')]
+
+
 class TerminalSession(models.Model):
     ACTIVE = ('awaiting_consent', 'authorized', 'connecting', 'ready')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -53,6 +70,7 @@ class TerminalSession(models.Model):
         permissions = [
             ('open_terminalsession', 'Open synthetic remote terminal transport'),
             ('open_admin_terminalsession', 'Open administrative remote terminal session'),
+            ('manage_admin_terminal_grant', 'Grant and revoke administrative remote terminal access'),
         ]
         constraints = [
             models.UniqueConstraint(fields=['endpoint'], condition=models.Q(status__in=('awaiting_consent', 'authorized', 'connecting', 'ready')), name='terminal_active_endpoint'),
