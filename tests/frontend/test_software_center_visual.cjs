@@ -54,7 +54,8 @@ const {chromium} = require('playwright');
         await page.getByRole('heading', {name: 'Instaladores cadastrados'}).waitFor();
         await page.getByRole('tab', {name: 'Softwares coletados'}).click();
 
-        await page.getByRole('button', {name: /Ver endpoints/}).click();
+        const visualAppCard = page.locator('[data-software-inventory] .software-collected-card').filter({hasText: 'Visual App'});
+        await visualAppCard.getByRole('button', {name: /Ver endpoints/}).click();
         await page.locator('[data-software-drawer]').getByRole('link', {name: 'LAB-SOFTWARE-BROWSER'}).waitFor();
         await page.locator('[data-software-drawer]').getByText(/1\.4, 1\.5/).waitFor();
         await page.locator('[data-software-drawer]').getByRole('link', {name: 'LAB-SOFTWARE-STALE'}).waitFor();
