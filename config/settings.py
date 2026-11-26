@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import environ
 from django.core.exceptions import ImproperlyConfigured
 from agents.service_collection_policy import parse_endpoint_uuid_allowlist
+from config.runtime_environment import load_runtime_environment
 
 from pathlib import Path
 
@@ -25,9 +26,7 @@ env = environ.Env(
     DJANGO_CSRF_TRUSTED_ORIGINS=(list, []),
 )
 
-env_file = BASE_DIR / '.env'
-if env_file.exists():
-    environ.Env.read_env(env_file)
+load_runtime_environment(BASE_DIR, environ.Env.read_env)
 
 
 PUBLIC_NIGHTOWL_URL = 'https://nightowl.controlsul.com.br'
