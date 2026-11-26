@@ -21,6 +21,7 @@ from .models import AgentJob
 from .models import AgentOperationalStatus
 from .models import AgentRelease
 from .models import AgentReleaseSigningKey
+from .models import AgentRolloutCampaign
 from .models import InventorySnapshot
 from .versioning import compare_versions, normalize_agent_version, parse_semver, sort_releases_by_version
 
@@ -681,6 +682,8 @@ def publish_agent_release(release, actor, reason='', *, rollout_percentage=None,
         rollout_before=rollout_before,
         metadata={'signature_key_id': release.signature_key_id, 'sha256': release.sha256},
     )
+    from .stable_rollout import start_on_publication
+    start_on_publication(release, actor, reason)
     return release
 
 
@@ -748,6 +751,8 @@ def promote_agent_release(
         metadata={'target_channel': target_channel, 'actor': _actor_name(actor), 'sha256': release.sha256,
                   'source_channel': release.source_channel},
     )
+    from .stable_rollout import start_on_publication
+    start_on_publication(release, actor, approval_reason)
     return release
 
 
@@ -862,6 +867,9 @@ def change_agent_release_rollout(release, actor, rollout_percentage, paused=None
         channel_before=channel_before,
         rollout_before=rollout_before,
     )
+    if action == 'resumed':
+        from .stable_rollout import start_on_publication
+        start_on_publication(release, actor, reason)
     return release
 
 
@@ -947,6 +955,12 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
             rollout_bucket=bucket,
         )
 
+    from .stable_rollout import classification_reason, enabled as stable_enabled
+    stable = bool(release and stable_enabled(release.channel))
+    if release and release.channel == 'stable' and not manual and not automatic_rollout:
+        if stable or AgentRolloutCampaign.objects.filter(
+                release=release, release_snapshot__stable_desktop_profile=True).exists():
+            return decision(False, 'stable_campaign_required')
     if automatic_rollout:
         if not current_version:
             return decision(False, 'agent_version_unknown')
@@ -956,9 +970,9 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
             return decision(False, 'endpoint_lifecycle_terminal')
         if endpoint.agent_lifecycle_status != 'installed':
             return decision(False, 'endpoint_lifecycle_unknown')
-        if endpoint.status != AgentMachine.STATUS_ONLINE:
+        if not (stable and campaign_selection) and endpoint.status != AgentMachine.STATUS_ONLINE:
             return decision(False, 'endpoint_offline')
-        if not endpoint.last_seen_at or not timedelta(0) <= now - endpoint.last_seen_at <= timedelta(seconds=freshness_seconds):
+        if not (stable and campaign_selection) and (not endpoint.last_seen_at or not timedelta(0) <= now - endpoint.last_seen_at <= timedelta(seconds=freshness_seconds)):
             return decision(False, 'endpoint_stale')
         try:
             identity = uuid.UUID(endpoint.machine_id)
@@ -970,6 +984,8 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
         if ambiguous:
             return decision(False, 'machine_identity_ambiguous')
         slugs = context['slugs'][endpoint.pk] if context is not None else set(endpoint.rollout_groups.values_list('slug', flat=True))
+        if stable and (blocked := classification_reason(endpoint, slugs)):
+            return decision(False, blocked)
         if slugs & {'critical', 'servers'}:
             return decision(False, 'protected_endpoint_group')
         if context is not None:
@@ -1080,7 +1096,7 @@ def evaluate_agent_update_eligibility(endpoint, *, now=None, manual=False, for_a
             ZoneInfo(endpoint.maintenance_window_timezone or settings.TIME_ZONE)
         except (ZoneInfoNotFoundError, ValueError):
             return decision(False, 'maintenance_timezone_invalid', release, bucket)
-        if not _is_now_inside_window(endpoint.maintenance_window_start, endpoint.maintenance_window_end, now, endpoint.maintenance_window_timezone):
+        if not (stable and campaign_selection) and not _is_now_inside_window(endpoint.maintenance_window_start, endpoint.maintenance_window_end, now, endpoint.maintenance_window_timezone):
             return decision(False, UPDATE_POLICY_REASON_OUTSIDE_MAINTENANCE_WINDOW, release, bucket)
     if policy == AgentMachine.UPDATE_POLICY_AUTOMATIC and not endpoint.auto_update_enabled and (automatic_rollout or not release.mandatory) and not manual:
         return decision(False, UPDATE_POLICY_REASON_MANUAL_POLICY, release, bucket)
