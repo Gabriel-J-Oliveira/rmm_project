@@ -42,6 +42,8 @@ Manter cabeçalho/indicadores úteis e os quatro cards Críticos agora, Endpoint
 
 Ações reais: Reconhecer (auditar ciência), Abrir endpoint (contexto), Criar chamado (usar Ticket existente quando autorizado/disponível, sem duplicar chamados), Silenciar (prazo, escopo da ocorrência; não resolver), Verificar (job existente adequado à evidência, mostrar resultado real/pendência, respeitar offline). Não simular sucesso; caso não haja contrato disponível, manter indicação explícita de indisponibilidade com motivo, sem desabilitar ações já homologadas. Não ampliar integração patrimonial com chamados nem criar novo executor.
 
+A lista Todos os alertas mostra ocorrências ordenadas pela abertura e mantém o histórico recente de resoluções. Os cards temáticos consultam separadamente os incidentes ativos. O NOC usa rotas POST com CSRF e permissões para reconhecer, silenciar, vincular chamados e pedir verificações. Chamados e jobs são gravados pelas estruturas existentes e a interface mostra o estado persistido do job. Disco, segurança, inventário e comunicação usam os tipos de job já disponíveis quando aplicáveis. A interface indica os sinais sem uma verificação remota correspondente.
+
 ## 02D — Modo TV
 
 Fullscreen API iniciada pelo operador, ocultar sidebar/navbar convencional, layout responsivo 16:9 e outras resoluções, texto legível, usar espaço disponível, manter atualização e som. ESC/botão restauram layout, tratar fullscreen indisponível com modo de apresentação na página. Preservar estado e não recarregar página.

@@ -80,7 +80,8 @@ jobs:
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
-          dashboard.test_agent_install_workflow config.test_runtime_environment config.test_operational_continuity
+          dashboard.test_agent_install_workflow dashboard.test_noc_operations
+          config.test_runtime_environment config.test_operational_continuity
           --exclude-tag windows_e2e --noinput --verbosity 1
       - name: PostgreSQL concurrency gate (no SQLite substitution)
         if: matrix.database == 'postgresql'
@@ -183,6 +184,13 @@ jobs:
         run: ./scripts/Install-TestChrome.ps1
       - name: Run real browser and ConPTY on a clean runner
         run: ./scripts/Invoke-WindowsE2E.ps1 -BrowserOnly
+      - name: Upload NOC desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noc-browser-screenshots
+          path: ${{ runner.temp }}/nightowl-noc/*.png
+          if-no-files-found: warn
       - name: Upload service manager desktop and mobile screenshots
         if: always()
         uses: actions/upload-artifact@v4

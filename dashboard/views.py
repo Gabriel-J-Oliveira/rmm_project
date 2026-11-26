@@ -1856,22 +1856,27 @@ def noc_view(request):
     offline_endpoints = endpoints.filter(
         status=AgentMachine.STATUS_OFFLINE,
     ).order_by('last_seen_at', 'pk')[:8]
-    relevant_event_types = [
-        'alert.created',
-        'alert.expired',
-        'alert.resolved_auto',
-        'endpoint.status_changed',
-        'alert.reopened',
-        'alert.resolved_manual',
-        'alert.acknowledged',
-        'security.defender_changed',
-        'disk.state_changed',
-        'os.build_changed',
-    ]
-    recent_activity = AuditEvent.objects.filter(
-        Q(event_type__in=relevant_event_types)
-        | Q(event_type='software.installed', severity=AuditEvent.SEVERITY_SECURITY)
-    ).filter(endpoint__in=endpoints).select_related('endpoint', 'alert').order_by('-created_at', 'pk')[:10]
+    from .noc_actions import VERIFICATION_TYPES
+    from tickets.models import Ticket
+
+    recent_alerts = list(EndpointAlert.objects.filter(endpoint__in=endpoints)
+                         .select_related('endpoint').order_by('-first_seen_at', 'pk')[:15])
+    correlations = {f'noc-alert:{alert.pk}': alert for alert in recent_alerts}
+    seen_jobs = set()
+    for job in AgentJob.objects.filter(correlation_id__in=correlations).order_by('-queued_at', 'pk'):
+        alert = correlations[job.correlation_id]
+        if alert.endpoint_id == job.endpoint_id and job.correlation_id not in seen_jobs:
+            alert.noc_job = job
+            seen_jobs.add(job.correlation_id)
+    tickets_by_alert = {}
+    if request.user.has_perm('tickets.add_ticket'):
+        for key, number in Ticket.objects.filter(
+            related_alert_id__in=[str(alert.pk) for alert in recent_alerts],
+        ).order_by('pk').values_list('related_alert_id', 'number'):
+            tickets_by_alert.setdefault(key, number)
+    for alert in recent_alerts:
+        alert.noc_verify_supported = alert.alert_type in VERIFICATION_TYPES
+        alert.noc_ticket_number = tickets_by_alert.get(str(alert.pk))
     last_alert_evaluation = EndpointAlert.objects.filter(endpoint__in=endpoints).order_by('-updated_at').values_list('updated_at', flat=True).first()
 
     total_endpoints = sum(status_counts.values())
@@ -1898,7 +1903,8 @@ def noc_view(request):
             Q(severity=EndpointAlert.SEVERITY_SECURITY) | Q(alert_type__startswith='security_'),
         ).select_related('endpoint').order_by('-last_seen_at', 'pk')[:8],
         'disk_alerts': disk_alerts,
-        'recent_activity': recent_activity,
+        'recent_alerts': recent_alerts,
+        'mute_durations': [(key, label) for key, (label, _) in MUTE_DURATIONS.items()],
     }
     if request.GET.get('fragment') == '1':
         from django.template.loader import render_to_string
@@ -2261,7 +2267,7 @@ def _alert_for_action(request, pk):
 
 
 @require_POST
-def alert_acknowledge(request, pk):
+def alert_acknowledge(request, pk, *, noc=False):
     alert = _alert_for_action(request, pk)
     if alert.status in (EndpointAlert.STATUS_OPEN, EndpointAlert.STATUS_ACKNOWLEDGED):
         was_open = alert.status == EndpointAlert.STATUS_OPEN
@@ -2272,6 +2278,8 @@ def alert_acknowledge(request, pk):
         if was_open:
             create_alert_event(alert, AlertEvent.TYPE_ACKNOWLEDGED, 'Alerta reconhecido.', request)
             audit_alert_action(request, alert, 'alert.acknowledged', 'Alerta reconhecido', alert.title)
+        if noc:
+            return JsonResponse({'detail': 'Alerta reconhecido.'})
         messages.info(request, 'Alerta reconhecido.')
     else:
         messages.warning(request, 'Alerta resolvido nao foi reaberto.')
@@ -2308,12 +2316,14 @@ def alert_resolve(request, pk):
 
 
 @require_POST
-def alert_mute(request, pk):
+def alert_mute(request, pk, *, noc=False):
     alert = _alert_for_action(request, pk)
     duration = request.POST.get('duration', '').strip()
     reason = request.POST.get('reason', '').strip()
     label, delta = MUTE_DURATIONS.get(duration, (None, None))
     if not delta:
+        if noc:
+            return JsonResponse({'detail': 'Prazo de silêncio inválido.'}, status=400)
         messages.error(request, 'Duracao de silenciamento invalida.')
         return redirect_back(request)
 
@@ -2338,6 +2348,8 @@ def alert_mute(request, pk):
         severity=AuditEvent.SEVERITY_INFO,
         metadata={'duration': duration, 'muted_until': alert.muted_until.isoformat(), 'muted_reason': reason},
     )
+    if noc:
+        return JsonResponse({'detail': f'Alerta silenciado por {label}.'})
     messages.info(request, f'Alerta silenciado por {label}.')
     return redirect_back(request)
 
@@ -4359,7 +4371,7 @@ def endpoint_uninstall_cancel(request, pk, request_id):
 
 @require_POST
 @transaction.atomic
-def endpoint_job_create(request, pk):
+def endpoint_job_create(request, pk, *, noc_alert=None, noc_job_type=None):
     if not is_nightowl_technical_user(request.user):
         return JsonResponse({'error': 'forbidden', 'detail': 'Sem permissao para criar jobs tecnicos.'}, status=403)
 
@@ -4386,7 +4398,7 @@ def endpoint_job_create(request, pk):
         'restart_agent': AgentJob.TYPE_RESTART_AGENT,
         'configure_telemetry': AgentJob.TYPE_CONFIGURE_TELEMETRY,
     }
-    selected_type = action_map.get(action) or action_map.get(job_type) or job_type
+    selected_type = noc_job_type or action_map.get(action) or action_map.get(job_type) or job_type
     allowed_types = {choice[0] for choice in AgentJob.TYPE_CHOICES} - {'collect_services', 'install_software', 'operational_action'}
     if selected_type not in allowed_types:
         return JsonResponse(
@@ -4398,6 +4410,25 @@ def endpoint_job_create(request, pk):
         )
 
     endpoint = AgentMachine.objects.select_for_update().get(pk=endpoint.pk)
+    noc_correlation = ''
+    if noc_alert is not None:
+        from agents.identity import machine_id_matches, normalized_machine_id
+
+        if (not endpoint.is_active or endpoint.status != AgentMachine.STATUS_ONLINE
+                or endpoint.has_terminal_lifecycle):
+            return JsonResponse({'detail': 'O endpoint precisa estar online e disponível.'}, status=409)
+        try:
+            identity = normalized_machine_id(endpoint.machine_id)
+        except ValueError:
+            identity = ''
+        if not identity or machine_id_matches(identity).exclude(pk=endpoint.pk).exists():
+            return JsonResponse({'detail': 'O endpoint tem identidade ausente ou ambígua.'}, status=409)
+        noc_correlation = f'noc-alert:{noc_alert.pk}'
+        pending = endpoint.jobs.filter(correlation_id=noc_correlation, status__in=(
+            AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING,
+        )).first()
+        if pending:
+            return JsonResponse({'job': serialize_agent_job(pending), 'detail': 'Verificação já pendente.'})
     if endpoint.jobs.filter(status__in=('queued','sent','running')).count() >= 50:
         return JsonResponse({'error':'endpoint_job_queue_full','detail':'Limite de 50 jobs pendentes neste endpoint.'},status=409)
 
@@ -4436,7 +4467,7 @@ def endpoint_job_create(request, pk):
         except (ValueError, TypeError):
             return JsonResponse({'error': 'invalid_telemetry_configuration'}, status=400)
     elif selected_type == AgentJob.TYPE_PING:
-        payload['target'] = request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname)
+        payload['target'] = str(endpoint.last_ip or endpoint.hostname) if noc_alert else (request.POST.get('target') or str(endpoint.last_ip or endpoint.hostname))
         payload['count'] = 2
     elif selected_type == AgentJob.TYPE_COLLECT_LOGS:
         payload['max_lines'] = 120
@@ -4726,7 +4757,7 @@ def endpoint_job_create(request, pk):
         job_type=selected_type,
         created_by=request.user.get_username(),
         payload=payload,
-        correlation_id=str(uuid.uuid4()),
+        correlation_id=noc_correlation or str(uuid.uuid4()),
         attempt=1,
         timeout_seconds=payload.get('timeout_seconds') or 300,
         expires_at=timezone.now() + timedelta(minutes=30),
@@ -4768,6 +4799,8 @@ def endpoint_job_create(request, pk):
             payload.get('target_version', ''),
             request.user.get_username(),
         )
+    if noc_alert is not None:
+        return JsonResponse({'job': serialize_agent_job(job), 'detail': 'Verificação enfileirada.'}, status=201)
     return JsonResponse({'status': 'ok', 'job': serialize_agent_job(job)}, status=201)
 
 

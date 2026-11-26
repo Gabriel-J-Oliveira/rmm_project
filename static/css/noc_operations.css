@@ -1,0 +1,143 @@
+body.page-noc .noc-kpi:hover {
+    background: var(--card);
+    border-color: var(--border);
+    box-shadow: none;
+    transform: none;
+}
+
+.noc-all-alerts {
+    margin-bottom: 16px;
+}
+
+body.page-noc .noc-all-alerts .noc-list {
+    max-height: 520px;
+    overflow: auto;
+}
+
+body.page-noc .noc-occurrence {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: start;
+    justify-content: space-between;
+}
+
+.noc-occurrence-body {
+    flex: 1 1 320px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+body.page-noc .noc-occurrence-body strong {
+    white-space: normal;
+}
+
+.noc-occurrence-body p {
+    margin: 4px 0;
+    color: var(--text-secondary);
+}
+
+.noc-occurrence-meta,
+.noc-occurrence-actions,
+.noc-occurrence-actions form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+}
+
+.noc-occurrence-meta {
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: .78rem;
+}
+
+.noc-occurrence-actions button,
+.noc-occurrence-actions select,
+body.page-noc .noc-card-actions select {
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--card);
+    color: var(--text-primary);
+    padding: 5px 8px;
+    font: inherit;
+    font-size: .75rem;
+}
+
+.noc-occurrence-actions button:hover,
+.noc-occurrence-actions button:focus-visible {
+    border-color: currentColor;
+    cursor: pointer;
+}
+
+body.page-noc .noc-thematic-grid > .noc-panel {
+    min-width: 0;
+}
+
+@media (min-width: 1500px) {
+    body.page-noc .noc-thematic-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+body.page-noc .noc-drawer[aria-hidden="true"] {
+    visibility: hidden;
+}
+
+body.page-noc .noc-all-alerts {
+    min-height: 0;
+}
+
+@media (max-width: 640px) {
+    body.page-noc .app-shell.has-sidebar {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-noc .sidebar {
+        position: static;
+        height: auto;
+        min-width: 0;
+        padding: 6px 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+    }
+
+    body.page-noc .brand,
+    body.page-noc .nav-group-label {
+        display: none;
+    }
+
+    body.page-noc .nav-menu,
+    body.page-noc .nav-group {
+        display: flex;
+        gap: 6px;
+    }
+
+    body.page-noc .nav-menu {
+        overflow-x: auto;
+    }
+
+    body.page-noc .nav-menu .nav-group {
+        flex: none;
+        width: max-content;
+    }
+
+    body.page-noc .nav-item {
+        flex: 0 0 auto;
+        width: auto;
+        white-space: nowrap;
+    }
+
+    body.page-noc .noc-summary-strip,
+    body.page-noc .noc-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+
+    body.page-noc .noc-thematic-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.page-noc .noc-thematic-grid > .noc-panel {
+        min-height: 0;
+    }
+}

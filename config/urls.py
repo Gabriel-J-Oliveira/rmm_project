@@ -19,7 +19,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
 from dashboard import automation_views
-from dashboard import alert_policy_views
+from dashboard import alert_policy_views, noc_actions
 
 from dashboard import views as dashboard_views
 from dashboard import ad_install_views
@@ -74,6 +74,7 @@ urlpatterns = [
     path('portal/chamados/<int:number>/comment/', ticket_views.ticket_portal_comment, name='ticket-portal-comment'),
     path('portal/chamados/<int:number>/reopen/', ticket_views.ticket_portal_reopen, name='ticket-portal-reopen'),
     path('noc/', dashboard_views.noc_view, name='noc'),
+    path('noc/alerts/<uuid:pk>/<slug:action>/', noc_actions.noc_alert_action, name='noc-alert-action'),
     path('alerts/', dashboard_views.alerts_list, name='alerts-list'),
     path('capacity/', capacity_views.capacity_page, name='capacity-page'),
     path('hardware-inventory/', capacity_views.hardware_inventory_page, name='hardware-inventory'),

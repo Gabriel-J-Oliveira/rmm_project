@@ -105,7 +105,11 @@
         if (deferredContent === null || content.contains(document.activeElement)
             || content.querySelector("[data-noc-open-drawer]:hover, .noc-card-actions:hover")
             || (drawer && drawer.classList.contains("is-open"))) return;
+        var alertsList = content.querySelector(".noc-all-alerts .noc-list");
+        var scrollTop = alertsList ? alertsList.scrollTop : 0;
         content.innerHTML = deferredContent;
+        alertsList = content.querySelector(".noc-all-alerts .noc-list");
+        if (alertsList) alertsList.scrollTop = scrollTop;
         deferredContent = null;
         if (window.lucide) window.lucide.createIcons();
     }
@@ -192,6 +196,29 @@
         });
     }
 
+    content.addEventListener("submit", async function (event) {
+        var form = event.target;
+        if (!form.matches("[data-noc-action]")) return;
+        event.preventDefault();
+        var button = form.querySelector("button[type=submit]");
+        if (!button || button.disabled) return;
+        button.disabled = true;
+        try {
+            var response = await fetch(form.action, {method: "POST", body: new FormData(form), headers: {Accept: "application/json"}});
+            var payload = await response.json();
+            if (response.redirected || !response.ok) {
+                showToast(payload.detail || "A ação foi recusada.");
+                return;
+            }
+            showToast(payload.detail || "Ação registrada.");
+            await refresh();
+        } catch (error) {
+            showToast("Não foi possível confirmar o resultado da ação.");
+        } finally {
+            button.disabled = false;
+        }
+    });
+
     content.addEventListener("click", function (event) {
         if (event.target.closest("a, button, form, input")) return;
         var card = event.target.closest("[data-noc-open-drawer]");
@@ -217,7 +244,7 @@
         var age = root.querySelector("[data-operational-age]");
         if (age) age.textContent = Math.max(0, Math.floor((Date.now() - readingAt) / 1000)) + "s";
         root.querySelectorAll("[data-noc-start]").forEach(function (node) {
-            var seconds = Math.max(0, Math.floor((Date.now() - Date.parse(node.dateTime)) / 1000));
+            var seconds = Math.max(0, Math.floor(((node.dataset.nocEnd ? Date.parse(node.dataset.nocEnd) : Date.now()) - Date.parse(node.dateTime)) / 1000));
             if (Number.isFinite(seconds)) {
                 var minutes = Math.floor(seconds / 60);
                 node.textContent = minutes + " min " + seconds % 60 + " s";
