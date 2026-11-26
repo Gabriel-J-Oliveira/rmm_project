@@ -55,3 +55,26 @@ Sino global na navbar, últimas 10 notificações autorizadas, contador de não 
 ## Execução e aceite
 
 Cinco incrementos/PRs 02A → 02B → 02C → 02D → 02E, dependências explícitas, branch atualizada, testes focados Django/JS/PostgreSQL conforme necessário e revisão humana da interface. Começar por 02A e apresentar PR para revisão; não publicar ou implantar intermediários. Preservar funcionalidades autorizadas após upgrade/downgrade/reboot; sem reintroduzir gates redundantes; manter RBAC/autenticação/auditoria. Validar persistência e edição de parâmetros, precedência e histerese, amostras ausentes/antigas, deduplicação, escopo, desempenho em volume representativo, ações reais, atualização sem reload, modo TV, notificações/sons sem repetição. Sem mudanças nas telas Alertas/Atividades/Tarefas/Eventos além das integrações indispensáveis; revisão dessas telas postergada. Manter pendências de homologação da 01B. Não aplicar migrations em produção nem alterar frota durante desenvolvimento.
+
+## Conclusão do desenvolvimento — 26/11/2026
+
+Os cinco incrementos funcionais foram integrados à `main` `db01bda5493d16631375126590a88459b66cecc9`:
+
+| Incremento | PR | Merge commit | Resultado |
+| --- | --- | --- | --- |
+| 02A — Políticas de Alertas | #69 | `e7f432ea0c8711e43be93fc868f60b453459c942` | Integrado |
+| 02B — Motor e atualização assíncrona | #70 | `bf7f7317bda151e4ead775c9248c44437760178b` | Integrado |
+| 02C — Refinamento visual e ações | #73 | `f945f8da7dab41fe27cbbd09ba1172b490729b60` | Integrado |
+| 02D — Modo TV | #74 | `5a08094d20241bbfdeb4761598f57f7bf7f05eb7` | Integrado |
+| 02E — Central de Notificações | #76 | `db01bda5493d16631375126590a88459b66cecc9` | Integrado |
+
+Os cinco jobs obrigatórios passaram nos HEADs finais das PRs #73, #74 e #76, incluindo SQLite, PostgreSQL, contrato de deployment Windows, navegador isolado e Windows .NET/terminal E2E. Os testes visuais em Chrome real geraram capturas desktop e mobile, publicadas como artefatos do GitHub Actions e vinculadas às PRs.
+
+A 02E adicionou apenas a migration aditiva `dashboard.0006_noc_notification_preferences`, dependente de `agents.0056_rc49_seed_alert_policies` e `dashboard.0005_remoteinstallbatchitem_target_ad_sid`. A integração não aplicou migrations nem alterou configurações operacionais.
+
+### Pendências de homologação e risco de CI
+
+- Confirmar a interface e os fluxos com operadores em ambiente autorizado, incluindo preferências de som, leitura e Modo TV em desktop/mobile.
+- Homologar a atualização e o recebimento de alertas com dados operacionais reais, mantendo as configurações existentes.
+- A ocorrência intermitente no smoke Windows de terminal (`fresh_session`, `browser_condition_timeout`, com log `database is locked`) permanece sem causa comprovada. Execuções posteriores, inclusive os gates dos HEADs integrados, passaram; isso não demonstra que a intermitência foi eliminada.
+- A migration `dashboard.0006_noc_notification_preferences` só deve ser aplicada em implantação aprovada, após revisão do plano de banco. Não há autorização de deploy ou publicação de agente decorrente da conclusão do desenvolvimento.
