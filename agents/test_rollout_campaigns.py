@@ -11,7 +11,7 @@ from django.urls import reverse
 
 from . import test_rollout_preview as fixtures
 from .fleet_policy import PolicyContractError
-from .models import AgentJob, AgentMachine, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
+from .models import AgentJob, AgentMachine, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutCoverageRound, AgentRolloutTarget, AgentRolloutWave, AuditEvent
 from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .services import build_agent_rollout_preview
 
@@ -93,6 +93,39 @@ class CampaignTests(TestCase):
         c.refresh_from_db()
         self.assertFalse(c.release_snapshot['revoked'])
         self.assertEqual(c.state, 'ready')
+
+    def test_coverage_round_preserves_original_campaign_snapshot_and_state(self):
+        campaign = self.create()
+        original = (campaign.cohort_hash, campaign.total_candidates, campaign.eligible_count,
+                    campaign.excluded_count, campaign.state, campaign.completed_at)
+
+        round_one = AgentRolloutCoverageRound.objects.create(
+            campaign=campaign, sequence=1, cohort_schema=1, cohort_hash='a' * 64,
+            evaluated_at=self.now, created_by=self.actor, reason='Synthetic catch-up review',
+            target_snapshot=[{'endpoint_id': str(self.machine.pk), 'outcome': 'already_current'}],
+            total_candidates=3, eligible_count=1,
+            excluded_count=1, already_current_count=1,
+            reason_summary={'stable_protected_device': 1},
+        )
+
+        campaign.refresh_from_db()
+        self.assertEqual((campaign.cohort_hash, campaign.total_candidates, campaign.eligible_count,
+                          campaign.excluded_count, campaign.state, campaign.completed_at), original)
+        self.assertEqual(campaign.coverage_rounds.get(pk=round_one.pk).already_current_count, 1)
+        self.assertFalse(AgentJob.objects.exists())
+
+    def test_coverage_round_sequence_is_unique_and_counts_are_constrained(self):
+        campaign = self.create()
+        values = dict(campaign=campaign, sequence=1, cohort_schema=1, cohort_hash='b' * 64,
+                      evaluated_at=self.now, created_by=self.actor, reason='Synthetic catch-up review',
+                      target_snapshot=[], total_candidates=2, eligible_count=1,
+                      excluded_count=0, already_current_count=1)
+        AgentRolloutCoverageRound.objects.create(**values)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            AgentRolloutCoverageRound.objects.create(**values)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            AgentRolloutCoverageRound.objects.create(
+                **{**values, 'sequence': 2, 'total_candidates': 1})
 
     def test_promoted_release_snapshot_freezes_both_channels(self):
         self.machine.update_channel = 'pilot'

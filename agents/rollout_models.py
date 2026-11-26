@@ -57,6 +57,45 @@ class AgentRolloutCampaign(models.Model):
         ]
 
 
+class AgentRolloutCoverageRound(models.Model):
+    """Immutable audit record for a future catch-up cohort on a release campaign.
+
+    The campaign remains the original frozen cohort. Complementary rounds are
+    separate records so a completed/aborted campaign is never reopened.
+    """
+    PURPOSE_CATCH_UP = 'catch_up'
+    PURPOSE_CHOICES = ((PURPOSE_CATCH_UP, 'Catch-up'),)
+    STATE_RECORDED = 'recorded'
+    STATE_CHOICES = ((STATE_RECORDED, 'Recorded'),)
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign = models.ForeignKey(AgentRolloutCampaign, on_delete=models.PROTECT, related_name='coverage_rounds')
+    sequence = models.PositiveIntegerField()
+    purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default=PURPOSE_CATCH_UP)
+    state = models.CharField(max_length=20, choices=STATE_CHOICES, default=STATE_RECORDED)
+    cohort_schema = models.PositiveIntegerField()
+    cohort_hash = models.CharField(max_length=64)
+    evaluated_at = models.DateTimeField()
+    target_snapshot = models.JSONField(default=list)
+    reason = models.CharField(max_length=1000)
+    total_candidates = models.PositiveIntegerField()
+    eligible_count = models.PositiveIntegerField()
+    excluded_count = models.PositiveIntegerField()
+    already_current_count = models.PositiveIntegerField(default=0)
+    reason_summary = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='stable_coverage_rounds_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = 'agents'
+        ordering = ['campaign_id', 'sequence']
+        constraints = [
+            models.UniqueConstraint(fields=['campaign', 'sequence'], name='rollout_coverage_round_sequence'),
+            models.CheckConstraint(condition=models.Q(sequence__gte=1), name='rollout_coverage_round_positive'),
+            models.CheckConstraint(condition=models.Q(total_candidates=models.F('eligible_count') + models.F('excluded_count') + models.F('already_current_count')), name='rollout_coverage_round_counts'),
+        ]
+
+
 class AgentRolloutWave(models.Model):
     STATES = ('pending', 'ready', 'running', 'observing', 'completed', 'paused', 'cancelled')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
