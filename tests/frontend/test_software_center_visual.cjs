@@ -32,7 +32,7 @@ const {chromium} = require('playwright');
         assert.equal(await page.getByRole('heading', {name: 'Central de Softwares'}).count(), 1);
         assert.equal(await page.getByRole('tab').count(), 2);
         await page.getByText('Visual App', {exact: true}).waitFor();
-        assert.equal(await page.locator('[data-software-inventory] .software-collected-card').count(), 1);
+        assert.equal(await page.locator('[data-software-inventory] .software-collected-card').count(), 2);
         assert.equal(await page.getByText('Visual Vendor', {exact: true}).count(), 1);
         assert.equal(await page.locator('[data-software-inventory] .freshness-pill.current').innerText(), '1 atual(is)');
         assert.equal(await page.locator('[data-software-inventory] .freshness-pill.stale').innerText(), '1 antigo(s)');
