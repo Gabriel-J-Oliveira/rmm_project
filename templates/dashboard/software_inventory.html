@@ -3,135 +3,57 @@
 
 {% block title %}Central de Softwares | Night Owl{% endblock %}
 {% block body_class %}page-software{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/software_center.css' %}?v=rc49-03a-1">{% endblock %}
 
 {% block breadcrumbs %}
-<nav class="breadcrumbs" aria-label="Breadcrumb">
-    <span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Softwares</strong>
-</nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Central de Softwares</strong></nav>
 {% endblock %}
 
 {% block content %}
-<section class="software-center" data-software-root>
-    <section class="software-command-header page-header">
+<main class="software-center" data-software-root data-inventory-url="{{ inventory_api_url }}" data-packages-url="{{ packages_api_url }}">
+    <header class="page-header software-header">
         <div class="alerts-command-title">
             <span class="command-icon page-header-icon"><i data-lucide="package"></i></span>
-            <div>
-                <h1 class="page-title">Central de Softwares</h1>
-                <p class="page-subtitle">Invent&aacute;rio, cat&aacute;logo e implanta&ccedil;&atilde;o remota de aplica&ccedil;&otilde;es.</p>
-            </div>
+            <div><h1 class="page-title">Central de Softwares</h1><p class="page-subtitle">Inventário coletado e cadastro de instaladores.</p></div>
         </div>
-        <div class="alerts-header-actions page-actions">
-            <button type="button" class="refresh-button" data-software-action="upload"><i data-lucide="upload-cloud"></i>Upload pacote</button>
-            <button type="button" class="refresh-button" data-software-action="new-software"><i data-lucide="package-plus"></i>Novo software</button>
-            <button type="button" class="refresh-button" data-software-action="new-deployment"><i data-lucide="rocket"></i>Nova implanta&ccedil;&atilde;o</button>
-            <button type="button" class="refresh-button" data-software-refresh><i data-lucide="refresh-cw"></i>Atualizar invent&aacute;rio</button>
+        <div class="software-header-actions">
+            <button class="refresh-button" type="button" data-software-refresh><i data-lucide="refresh-cw"></i>Atualizar dados</button>
+            <button class="refresh-button software-add-upload" type="button" disabled title="O cadastro e upload serão habilitados no incremento RC49-03B" aria-describedby="software-upload-note">
+                <i data-lucide="upload-cloud"></i>Adicionar arquivo de instalação
+            </button>
         </div>
-    </section>
+    </header>
 
-    <section class="metric-grid software-command-metrics" data-software-metrics></section>
+    <div class="software-summary" data-software-summary aria-live="polite"></div>
+    <p class="software-upload-note" id="software-upload-note">O botão será habilitado quando o fluxo de upload for implementado. Nenhum arquivo é enviado nesta etapa.</p>
 
-    <nav class="software-module-tabs" aria-label="M&oacute;dulos de software">
-        <button class="is-active" type="button" data-software-tab="inventory"><i data-lucide="boxes"></i>Invent&aacute;rio</button>
-        <button type="button" data-software-tab="catalog"><i data-lucide="library"></i>Cat&aacute;logo</button>
-        <button type="button" data-software-tab="deployments"><i data-lucide="rocket"></i>Implanta&ccedil;&otilde;es</button>
-        <button type="button" data-software-tab="updates"><i data-lucide="download"></i>Atualiza&ccedil;&otilde;es</button>
-        <button type="button" data-software-tab="rules"><i data-lucide="shield-check"></i>Regras</button>
-        <button type="button" data-software-tab="packages"><i data-lucide="package-open"></i>Pacotes</button>
+    <nav class="software-module-tabs" aria-label="Seções da Central de Softwares" role="tablist">
+        <button class="is-active" type="button" role="tab" aria-selected="true" data-software-tab="inventory"><i data-lucide="boxes"></i>Softwares coletados</button>
+        <button type="button" role="tab" aria-selected="false" data-software-tab="uploads"><i data-lucide="package-open"></i>Uploads</button>
     </nav>
 
-    <section class="panel software-command-panel">
-        <form class="endpoint-filters software-command-filters" data-software-filters>
-            <label class="filter-field software-search-field">
-                <span><i data-lucide="search"></i>Busca</span>
-                <input type="search" data-software-filter="q" placeholder="Software, fabricante, vers&atilde;o, endpoint ou pacote">
-            </label>
-            <label class="filter-field">
-                <span>Categoria</span>
-                <select data-software-filter="category">
-                    <option value="all">Todas</option>
-                    <option value="microsoft">Microsoft</option>
-                    <option value="security">Seguran&ccedil;a</option>
-                    <option value="remote">Acesso remoto</option>
-                    <option value="admin">Admin/Rede</option>
-                    <option value="browser">Navegador</option>
-                    <option value="office">Produtividade</option>
-                    <option value="other">Outros</option>
-                </select>
-            </label>
-            <label class="filter-field">
-                <span>Risco</span>
-                <select data-software-filter="risk">
-                    <option value="all">Todos</option>
-                    <option value="low">Baixo</option>
-                    <option value="medium">M&eacute;dio</option>
-                    <option value="high">Alto</option>
-                    <option value="critical">Cr&iacute;tico</option>
-                </select>
-            </label>
-            <label class="filter-field">
-                <span>Status</span>
-                <select data-software-filter="status">
-                    <option value="all">Todos</option>
-                    <option value="approved">Aprovado</option>
-                    <option value="sensitive">Sens&iacute;vel</option>
-                    <option value="forbidden">Proibido</option>
-                    <option value="unknown">Desconhecido</option>
-                    <option value="evaluating">Em avalia&ccedil;&atilde;o</option>
-                    <option value="required">Obrigat&oacute;rio</option>
-                    <option value="draft">Rascunho</option>
-                    <option value="testing">Teste</option>
-                    <option value="retired">Inativo</option>
-                    <option value="queued">Em fila</option>
-                    <option value="running">Em execu&ccedil;&atilde;o</option>
-                    <option value="completed">Conclu&iacute;do</option>
-                    <option value="failed">Falha</option>
-                </select>
-            </label>
-            <label class="filter-field">
-                <span>Endpoint</span>
-                <select data-software-filter="endpointId"><option value="">Todos</option></select>
-            </label>
-            <div class="filter-actions">
-                <button type="submit"><i data-lucide="filter"></i>Filtrar</button>
-                <button type="button" data-software-clear><i data-lucide="x-circle"></i>Limpar</button>
-                <button type="button" data-software-export><i data-lucide="download"></i>Exportar CSV</button>
-                <div class="software-view-toggle">
-                    <button class="is-active" type="button" data-software-view="cards"><i data-lucide="layout-grid"></i>Cards</button>
-                    <button type="button" data-software-view="table"><i data-lucide="table-2"></i>Tabela</button>
-                </div>
-            </div>
-        </form>
+    <section class="software-tab-panel is-active" role="tabpanel" data-software-panel="inventory">
+        <div class="panel software-filter-panel">
+            <label class="software-search"><span><i data-lucide="search"></i>Pesquisar softwares ou endpoints</span><input type="search" data-software-search placeholder="Nome, fabricante, versão ou computador" autocomplete="off"></label>
+            <label class="software-freshness"><span>Atualidade do inventário</span><select data-software-freshness><option value="all">Todos os dados</option><option value="current">Atuais</option><option value="stale">Antigos</option><option value="unknown">Desconhecidos</option></select></label>
+            <button type="button" class="refresh-button" data-software-search-clear><i data-lucide="x-circle"></i>Limpar</button>
+        </div>
+        <div class="software-data-state" data-software-inventory-state role="status">Carregando inventário real…</div>
+        <div class="software-inventory-list" data-software-inventory></div>
     </section>
 
-    <section class="software-tab-panel is-active" data-software-panel="inventory">
-        <section class="software-view software-card-grid" data-software-inventory-cards></section>
-        <section class="panel software-table-panel" data-software-inventory-table hidden></section>
+    <section class="software-tab-panel" role="tabpanel" data-software-panel="uploads" hidden>
+        <div class="software-uploads-heading"><div><h2>Instaladores cadastrados</h2><p>Metadados de pacotes registrados no NightOwl.</p></div><span class="software-count" data-software-package-count>0 pacotes</span></div>
+        <div class="software-data-state" data-software-packages-state role="status">Carregando cadastros…</div>
+        <div class="software-upload-grid" data-software-packages></div>
     </section>
-
-    <section class="software-tab-panel" data-software-panel="catalog" hidden></section>
-    <section class="software-tab-panel" data-software-panel="deployments" hidden></section>
-    <section class="software-tab-panel" data-software-panel="updates" hidden></section>
-    <section class="software-tab-panel" data-software-panel="rules" hidden></section>
-    <section class="software-tab-panel" data-software-panel="packages" hidden></section>
 
     <div class="event-drawer-backdrop software-drawer-backdrop" data-software-drawer-backdrop hidden></div>
-    <aside class="event-drawer software-drawer" data-software-drawer aria-hidden="true">
-        <header>
-            <div>
-                <span data-software-drawer-kicker>Software</span>
-                <h2 data-software-drawer-title>Selecione um item</h2>
-                <p data-software-drawer-subtitle>Detalhes operacionais</p>
-            </div>
-            <button type="button" data-software-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button>
-        </header>
+    <aside class="event-drawer software-drawer" data-software-drawer aria-hidden="true" aria-label="Detalhes">
+        <header><div><span data-software-drawer-kicker>Detalhes</span><h2 data-software-drawer-title></h2><p data-software-drawer-subtitle></p></div><button type="button" data-software-drawer-close aria-label="Fechar"><i data-lucide="x"></i></button></header>
         <div class="event-drawer-body" data-software-drawer-body></div>
     </aside>
-
-    <div class="jobs-toast operational-toast" data-software-toast hidden></div>
-</section>
+</main>
 {% endblock %}
 
-{% block scripts %}
-<script src="{% static 'js/nightowl_operational.js' %}"></script>
-<script src="{% static 'js/software_center.js' %}"></script>
-{% endblock %}
+{% block scripts %}<script src="{% static 'js/software_center.js' %}?v=rc49-03a-1"></script>{% endblock %}

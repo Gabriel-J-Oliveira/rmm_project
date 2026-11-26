@@ -406,3 +406,11 @@ Os gates finais de 02C–02E cobriram regressões SQLite/PostgreSQL, navegador i
 - A intermitência anterior de terminal no runner Windows permanece sem causa confirmada (`fresh_session`/`browser_condition_timeout`, com `database is locked`). Os gates posteriores passaram; não considerar isso prova de resolução.
 
 A RC49 permanece em desenvolvimento até o fechamento do roadmap. Este registro não autoriza deploy, migration operacional, alteração de flags, publicação ou atualização de endpoints.
+
+# RC49-03A — Central de Software (desenvolvimento)
+
+A 03A substitui os dados simulados da Central de Software por inventário real de `InventorySnapshot.installed_software` e metadados de instaladores consultados por API somente leitura. Cria a migration aditiva `agents.0057_softwarepackagerecord`; não armazena binários, não cria jobs, não executa operações remotas e não habilita flags.
+
+Antes de qualquer publicação desta migration, revisar os testes SQLite/PostgreSQL e aplicar a cadeia pelo procedimento aprovado de deploy. O botão de upload continua desabilitado e não há API de upload. Nenhuma migration foi aplicada em produção nesta etapa.
+
+Referência funcional: [RC49-03A — Central de Software](rc49-03a-central-software.md). A homologação visual de desktop/mobile utilizará somente fixtures em banco isolado; a publicação do artefato de capturas pelo CI não representa homologação operacional.

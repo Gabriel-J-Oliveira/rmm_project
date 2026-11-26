@@ -80,6 +80,25 @@ try {
         if ($nocScreenshots.Count -ne 2) { throw 'NOC desktop and mobile screenshots are required' }
         Copy-Item -LiteralPath $nocScreenshots.FullName -Destination $nocTarget -Force
 
+        # The software-center visual contract uses a real Django test database,
+        # real inventory fixtures, and the pinned Chrome under the same isolated user.
+        $softwareCenterWork = Join-Path $work 'software-center-artifacts'
+        $env:NIGHTOWL_E2E_ARTIFACT_DIR = $softwareCenterWork
+        $softwareCenterArguments = @('manage.py', 'test',
+            'dashboard.test_software_center.SoftwareCenterVisualTests.test_software_center_real_data_drawer_responsive_layout_and_screenshots',
+            '--testrunner', 'agents.ci_runner.WindowsBrowserE2ERunner', '--noinput', '--verbosity', '2')
+        $softwareCenterProcess = Start-Process -FilePath $python -ArgumentList $softwareCenterArguments -Credential $credential -LoadUserProfile `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+        Get-Content $out
+        Get-Content $err
+        if ($softwareCenterProcess.ExitCode -ne 0) { throw "Software center browser E2E failed with exit code $($softwareCenterProcess.ExitCode)" }
+        $softwareCenterImages = Join-Path $softwareCenterWork 'nightowl-software-center'
+        $softwareCenterTarget = Join-Path $env:RUNNER_TEMP 'nightowl-software-center'
+        New-Item -ItemType Directory -Path $softwareCenterTarget -Force | Out-Null
+        $screenshots = @(Get-ChildItem -LiteralPath $softwareCenterImages -Filter '*.png' -File -ErrorAction Stop)
+        if ($screenshots.Count -ne 4) { throw 'Software Center browser E2E did not produce all four viewport screenshots' }
+        Copy-Item -LiteralPath $screenshots.FullName -Destination $softwareCenterTarget -Force
+
         # Exercise the central execution-policy UI in its own isolated Django
         # test database and synthetic endpoint records, using the same pinned
         # Chrome and standard Windows test identity as the terminal smoke.

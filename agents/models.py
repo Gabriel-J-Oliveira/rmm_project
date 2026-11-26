@@ -1645,6 +1645,73 @@ class SoftwarePolicyViolation(models.Model):
         return f'{self.policy} - {self.endpoint} - {self.software_name or "software"}'
 
 
+class SoftwarePackageRecord(models.Model):
+    """Current package metadata; binary storage and deployment belong to later increments."""
+
+    TYPE_MSI = 'msi'
+    TYPE_EXE = 'exe'
+    TYPE_CHOICES = [(TYPE_MSI, 'MSI'), (TYPE_EXE, 'EXE')]
+    STATUS_DRAFT = 'draft'
+    STATUS_APPROVED = 'approved'
+    STATUS_REVOKED = 'revoked'
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Rascunho'),
+        (STATUS_APPROVED, 'Aprovado'),
+        (STATUS_REVOKED, 'Revogado'),
+    ]
+    SIGNATURE_UNKNOWN = 'unknown'
+    SIGNATURE_VALID = 'valid'
+    SIGNATURE_INVALID = 'invalid'
+    SIGNATURE_CHOICES = [
+        (SIGNATURE_UNKNOWN, 'Não verificada'),
+        (SIGNATURE_VALID, 'Válida'),
+        (SIGNATURE_INVALID, 'Inválida'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    friendly_name = models.CharField(max_length=180)
+    original_filename = models.CharField(max_length=255, blank=True)
+    package_type = models.CharField(max_length=8, choices=TYPE_CHOICES)
+    version = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+    sha256 = models.CharField(max_length=64, blank=True)
+    signature_status = models.CharField(max_length=16, choices=SIGNATURE_CHOICES, default=SIGNATURE_UNKNOWN)
+    signer = models.CharField(max_length=255, blank=True)
+    approval_status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_approved',
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_revoked',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['friendly_name', 'created_at']
+        indexes = [
+            models.Index(fields=['approval_status', 'package_type']),
+            models.Index(fields=['friendly_name']),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=models.Q(package_type__in=['msi', 'exe']), name='software_package_type_valid'),
+            models.CheckConstraint(condition=models.Q(approval_status__in=['draft', 'approved', 'revoked']), name='software_package_status_valid'),
+            models.CheckConstraint(condition=models.Q(signature_status__in=['unknown', 'valid', 'invalid']), name='software_package_signature_valid'),
+        ]
+
+    def __str__(self) -> str:
+        return self.friendly_name
+
+
 class AlertPolicy(models.Model):
     class Metric(models.TextChoices):
         CPU = 'cpu', 'Uso de CPU'

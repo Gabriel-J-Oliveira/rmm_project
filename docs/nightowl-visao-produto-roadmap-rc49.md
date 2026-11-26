@@ -119,6 +119,10 @@ Asset / Equipamento físico (identidade patrimonial estável)
 
 **Planejamento amplo não significa que todas as dez frentes caibam numa única publicação final.** Dividir por incrementos verificáveis, mantendo as restantes visíveis, sem trocar a visão do produto.
 
+### Atualização de desenvolvimento — RC49-03A
+
+A RC49-03A conecta a Central de Software a snapshots reais, apresenta somente as abas **Softwares coletados** e **Uploads**, e cria cadastro UUID de metadados MSI/EXE sem armazenar binários. Upload, aprovação interativa e distribuição permanecem para 03B; nenhum job ou agente é acionado pela 03A. O diff, os resultados de CI e as capturas automatizadas desktop/mobile ficam registrados na PR e no documento [RC49-03A](rc49-03a-central-software.md); as capturas usam fixtures isoladas e não substituem homologação operacional.
+
 ### Diretrizes preservadas de discussões anteriores
 
 - Canal `development`: VMs/laboratório e homologação individual.

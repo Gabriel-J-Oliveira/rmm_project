@@ -81,7 +81,8 @@ jobs:
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
           dashboard.test_agent_install_workflow dashboard.test_noc_operations
-          dashboard.test_noc_notifications config.test_runtime_environment
+          dashboard.test_noc_notifications dashboard.test_software_center
+          config.test_runtime_environment
           config.test_operational_continuity
           --exclude-tag windows_e2e --noinput --verbosity 1
       - name: PostgreSQL concurrency gate (no SQLite substitution)
@@ -205,6 +206,13 @@ jobs:
         with:
           name: terminal-admin-browser-screenshots
           path: ${{ runner.temp }}/nightowl-terminal-admin/*.png
+          if-no-files-found: warn
+      - name: Upload software center desktop and mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: software-center-browser-screenshots
+          path: ${{ runner.temp }}/nightowl-software-center/*.png
           if-no-files-found: warn
 
   windows-bootstrap:

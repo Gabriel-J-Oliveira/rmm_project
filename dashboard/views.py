@@ -386,33 +386,6 @@ def mock_endpoint_rows(endpoints=None):
     return rows
 
 
-def mock_software_inventory_rows(endpoints=None):
-    endpoints = endpoints or mock_rmm_endpoints()
-    def example(*indexes):
-        return [{'endpoint': endpoints[index]} for index in indexes]
-    specs = [
-        {'name': 'Bitdefender Endpoint Security Tools', 'publisher': 'Bitdefender', 'category': 'security', 'category_label': 'Seguranca', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 6, 'versions': ['7.9.12'], 'versions_display': '7.9.12', 'latest_seen_at': timezone.now() - timedelta(minutes=8), 'example_endpoints': example(1, 2, 4), 'is_sensitive': False},
-        {'name': 'AnyDesk', 'publisher': 'AnyDesk Software GmbH', 'category': 'remote_access', 'category_label': 'Acesso remoto', 'risk_level': 'high', 'risk_label': 'Alto', 'endpoint_count': 1, 'versions': ['8.0.9'], 'versions_display': '8.0.9', 'latest_seen_at': timezone.now() - timedelta(minutes=27), 'example_endpoints': example(3), 'is_sensitive': True},
-        {'name': 'Microsoft 365 Apps', 'publisher': 'Microsoft Corporation', 'category': 'office', 'category_label': 'Produtividade', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 7, 'versions': ['2406', '2407'], 'versions_display': '2406, 2407', 'latest_seen_at': timezone.now() - timedelta(minutes=12), 'example_endpoints': example(0, 2, 7), 'is_sensitive': False},
-        {'name': 'Advanced IP Scanner', 'publisher': 'Famatech', 'category': 'admin_network', 'category_label': 'Admin/Rede', 'risk_level': 'medium', 'risk_label': 'Medio', 'endpoint_count': 2, 'versions': ['2.5.4594'], 'versions_display': '2.5.4594', 'latest_seen_at': timezone.now() - timedelta(hours=1), 'example_endpoints': example(7, 5), 'is_sensitive': True},
-        {'name': 'Google Chrome', 'publisher': 'Google LLC', 'category': 'browser', 'category_label': 'Navegador', 'risk_level': 'low', 'risk_label': 'Baixo', 'endpoint_count': 8, 'versions': ['126.0.6478'], 'versions_display': '126.0.6478', 'latest_seen_at': timezone.now() - timedelta(minutes=6), 'example_endpoints': example(0, 3, 6), 'is_sensitive': False},
-        {'name': 'Python 3.12', 'publisher': 'Python Software Foundation', 'category': 'development', 'category_label': 'Desenvolvimento', 'risk_level': 'medium', 'risk_label': 'Medio', 'endpoint_count': 1, 'versions': ['3.12.4'], 'versions_display': '3.12.4', 'latest_seen_at': timezone.now() - timedelta(hours=3), 'example_endpoints': example(7), 'is_sensitive': False},
-    ]
-    rows = []
-    for row in specs:
-        row['endpoints'] = row['example_endpoints']
-        rows.append(row)
-    summary = {
-        'unique_count': len(rows),
-        'install_count': sum(row['endpoint_count'] for row in rows),
-        'remote_access_count': sum(row['category'] == 'remote_access' for row in rows),
-        'admin_network_count': sum(row['category'] == 'admin_network' for row in rows),
-        'security_count': sum(row['category'] == 'security' for row in rows),
-        'unknown_count': 2,
-    }
-    return rows, summary
-
-
 def mock_policy_context(endpoints=None):
     endpoints = endpoints or mock_rmm_endpoints()
     policies = [
@@ -678,22 +651,37 @@ def software_version_value(software):
     return str((software or {}).get('version') or '').strip()
 
 
-def latest_snapshot_rows():
-    rows = []
-    endpoints = AgentMachine.objects.prefetch_related('inventory_snapshots').order_by('hostname', 'domain')
-    for endpoint in endpoints:
-        snapshot = endpoint.inventory_snapshots.order_by('-received_at').first()
-        if snapshot:
-            rows.append((endpoint, snapshot))
-    return rows
+def latest_snapshot_rows(*, active_only=False):
+    from django.db.models import OuterRef, Subquery
+
+    latest_id = InventorySnapshot.objects.filter(machine_id=OuterRef('pk')).order_by(
+        '-received_at', '-id',
+    ).values('id')[:1]
+    endpoint_queryset = AgentMachine.objects.all()
+    if active_only:
+        endpoint_queryset = endpoint_queryset.filter(is_active=True)
+    endpoints = list(
+        endpoint_queryset.annotate(latest_inventory_id=Subquery(latest_id))
+        .exclude(latest_inventory_id__isnull=True)
+        .order_by('hostname', 'domain', 'id')
+    )
+    snapshot_by_id = {
+        snapshot.id: snapshot
+        for snapshot in InventorySnapshot.objects.filter(
+            id__in=[endpoint.latest_inventory_id for endpoint in endpoints],
+        )
+    }
+    return [(endpoint, snapshot_by_id[endpoint.latest_inventory_id]) for endpoint in endpoints]
 
 
-def build_software_inventory():
+def build_software_inventory(snapshot_rows=None):
     inventory = {}
     total_installs = 0
     endpoints_with_inventory = 0
 
-    for endpoint, snapshot in latest_snapshot_rows():
+    if snapshot_rows is None:
+        snapshot_rows = latest_snapshot_rows()
+    for endpoint, snapshot in snapshot_rows:
         endpoints_with_inventory += 1
         for software in snapshot.installed_software or []:
             name = software_display_name(software)
@@ -716,6 +704,7 @@ def build_software_inventory():
                 'endpoint_ids': set(),
                 'versions': set(),
                 'latest_seen_at': snapshot.received_at,
+                'latest_collected_at': snapshot.collected_at,
                 'endpoints': [],
             })
 
@@ -726,6 +715,8 @@ def build_software_inventory():
                 item['versions'].add(version)
             if snapshot.received_at > item['latest_seen_at']:
                 item['latest_seen_at'] = snapshot.received_at
+            if snapshot.collected_at > item['latest_collected_at']:
+                item['latest_collected_at'] = snapshot.collected_at
             item['endpoints'].append({
                 'endpoint': endpoint,
                 'version': version,
@@ -5386,37 +5377,6 @@ def agent_enrollment_revoke(request, pk):
         messages.info(request, 'Este enrollment token ja estava inativo.')
     return redirect('agent-install')
 
-
-def software_inventory(request):
-    rows, summary = build_software_inventory()
-    if request.GET.get('mock') == '1' or not rows:
-        rows, summary = mock_software_inventory_rows()
-    filters = {
-        'q': request.GET.get('q', '').strip(),
-        'category': request.GET.get('category', 'all').strip() or 'all',
-        'risk': request.GET.get('risk', 'all').strip() or 'all',
-        'publisher': request.GET.get('publisher', '').strip(),
-        'version': request.GET.get('version', '').strip(),
-        'endpoint': request.GET.get('endpoint', '').strip(),
-        'sensitive': request.GET.get('sensitive', 'all').strip() or 'all',
-    }
-    filtered_rows = [row for row in rows if software_row_matches(row, filters)]
-
-    context = {
-        'active_nav': 'software',
-        'rows': filtered_rows,
-        'summary': {
-            **summary,
-            'filtered_count': len(filtered_rows),
-        },
-        'filters': filters,
-        'category_options': SOFTWARE_CATEGORY_OPTIONS,
-        'risk_options': SOFTWARE_RISK_OPTIONS,
-        'publisher_options': sorted({row['publisher'] for row in rows if row['publisher']}),
-        'version_options': sorted({version for row in rows for version in row['versions']}),
-        'updated_at': timezone.now(),
-    }
-    return render(request, 'dashboard/software_inventory.html', context)
 
 
 def policy_status(policy):
