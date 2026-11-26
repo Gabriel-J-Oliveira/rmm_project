@@ -2450,4 +2450,4 @@ class MaintenanceTaskResult(models.Model):
         return f'{self.task_name} - {self.status}'
 
 
-from .rollout_models import AgentRolloutCampaign, AgentRolloutWave, AgentRolloutTarget
+from .rollout_models import AgentRolloutCampaign, AgentRolloutCoverageRound, AgentRolloutWave, AgentRolloutTarget
