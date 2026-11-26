@@ -72,7 +72,7 @@ const {chromium} = require('playwright');
         assert.equal(await page.locator('[data-software-drawer]').getAttribute('aria-hidden'), 'true', 'The whole upload card must not open the drawer');
         await uploadGrid.getByRole('link', {name: 'Visual Installer'}).click();
         const drawer = page.locator('[data-software-drawer]');
-        await drawer.getByText('visual-installer.exe').waitFor();
+        await drawer.locator('dd').filter({hasText: 'visual-installer.exe'}).waitFor();
         await drawer.getByText('SHA-256').waitFor();
         await drawer.getByText('Válida', {exact: true}).waitFor();
         assert.equal(await drawer.getByText('Visual Vendor', {exact: true}).count(), 1);
