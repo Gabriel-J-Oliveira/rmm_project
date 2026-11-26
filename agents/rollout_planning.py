@@ -15,6 +15,7 @@ from django.utils import timezone
 from .models import AgentJob, AgentMachine, AgentReleaseSigningKey, AgentRolloutCampaign, AgentRolloutTarget
 from .services import _is_now_inside_window, _release_domain_allowed, update_agent_requires_bootstrap
 from .versioning import compare_versions
+from .stable_rollout import classification_reason, enabled as stable_enabled
 
 
 MATERIAL_RELEASE_FIELDS = ('version', 'channel', 'source_channel', 'sha256', 'size', 'manifest_sha256',
@@ -165,6 +166,13 @@ def evaluate_rollout_target_dispatch_safety(campaign, target, *, now, context=No
     if endpoint.update_paused:
         return blocked('endpoint_paused')
     groups = list(endpoint.rollout_groups.all())
+    if campaign.release_snapshot.get('stable_desktop_profile') and not stable_enabled(release.channel):
+        return blocked('stable_desktop_rollout_disabled')
+    if stable_enabled(release.channel):
+        if release.rollout_percentage != 100:
+            return blocked('stable_requires_full_rollout')
+        if reason := classification_reason(endpoint, {g.slug for g in groups}):
+            return blocked(reason)
     if {g.slug for g in groups} & {'critical', 'servers'}:
         return blocked('protected_endpoint_group')
     if endpoint.update_channel != target.update_channel_snapshot:
