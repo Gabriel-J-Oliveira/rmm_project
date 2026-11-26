@@ -27,6 +27,7 @@ from dashboard import agent_recovery_views
 from dashboard import remote_install_batch_views
 from dashboard import asset_record_views
 from dashboard import capacity_views
+from dashboard import software_center_views
 from dashboard import fleet_views
 from config import views as config_views
 from tickets import views as ticket_views
@@ -118,7 +119,9 @@ urlpatterns = [
     path('agent-releases/', dashboard_views.agent_releases, name='agent-releases'),
     path('agent-releases/<uuid:pk>/action/', dashboard_views.agent_release_action, name='agent-release-action'),
     path('agent-install/enrollment/<uuid:pk>/revoke/', dashboard_views.agent_enrollment_revoke, name='agent-enrollment-revoke'),
-    path('software/', dashboard_views.software_inventory, name='software-inventory'),
+    path('software/', software_center_views.software_center, name='software-inventory'),
+    path('software/data/inventory/', software_center_views.software_inventory_data, name='software-inventory-data'),
+    path('software/data/packages/', software_center_views.software_packages_data, name='software-packages-data'),
     path('policies/alerts/', alert_policy_views.alert_policies, name='alert-policies'),
     path('policies/alerts/<slug:key>/', alert_policy_views.edit_alert_policy, name='alert-policy-edit'),
     path('software-policies/', dashboard_views.software_policies, name='software-policies'),

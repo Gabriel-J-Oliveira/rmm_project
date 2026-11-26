@@ -1,5 +1,8 @@
 # RC47 — Homologacao isolada de PostgreSQL e migrations
 
+> **REGISTRO HISTÓRICO — fotografia de 17/11/2026 (não usar como estado atual).** Os SHAs, flags, serviços, jobs e condições descritos abaixo foram informados ou observados naquela data e exigem nova confirmação antes de qualquer decisão. Para o planejamento RC49, consulte [deploy-RC49.md](deploy-RC49.md) e [operational-homologation.md](operational-homologation.md); nenhuma instrução deste snapshot autoriza operação.
+
+
 ## Escopo e estado das evidencias
 
 Este documento prepara uma restauracao e ensaio isolados. Nao autoriza acesso ou mudanca em producao, aplicacao de migrations, criacao de infraestrutura, ativacao de flags, jobs ou servicos.
