@@ -1,0 +1,13 @@
+# RC49-10: continuidade operacional
+
+Use um arquivo de ambiente protegido fora da árvore do checkout. Configure `NIGHTOWL_RUNTIME_ENV_FILE` com seu caminho absoluto para WSGI, ASGI e comandos de manutenção. O conteúdo mantém o formato Django-environ; não copie arquivos de exemplo nem sobrescreva o ambiente explícito do processo. Ausência do arquivo configurado impede o startup. Sem essa variável, permanece o contrato legado de `.env` no checkout.
+
+Antes de usar esse caminho, teste também a versão de rollback. Para versões que só conhecem `.env`, mantenha um link `.env` no diretório de cada release para o mesmo arquivo protegido, nunca uma cópia divergente. Reapontar o checkout não deve reverter banco, ambiente ou permissões. Um rollback para código que não implementa um recurso preserva a política, mas não torna o binário compatível.
+
+Em um ambiente cujo relay persistente já foi aprovado, o drop-in `deploy/systemd/nightowl-terminal-recovery.conf` pode ser instalado em `/etc/systemd/system/nightowl-terminal.service.d/`. Ele define recuperação em caso de falha, não altera o estado de habilitação no boot nem as flags. Registre o estado enabled/active aprovado e confira-o depois da troca de release; não habilite um relay temporário automaticamente.
+
+No Windows, preserve o diretório canônico de Config, a identidade e o servidor na reinstalação da mesma máquina. O contrato do instalador é testado com as transições upgrade/downgrade/reinstalação sobre a configuração existente; não recria política após uma desinstalação que remova esses dados. As capabilities anunciadas continuam dependentes do binário efetivamente instalado.
+
+Com a aplicação saudável, rode `manage.py check_operational_continuity > baseline.json` antes do corte, usando a mesma configuração efetiva dos serviços. Após a promoção e o retorno dos serviços ao estado operacional, rode `manage.py check_operational_continuity --compare baseline.json`. O comando falha se flags, escopos ou estados das unidades divergirem e não escreve configuração. Guarde a baseline fora do checkout, com acesso restrito. `--settings-only` serve para ambientes sem systemd, não substitui o gate completo. Para a primeira adoção com código antigo, execute a ferramenta a partir de um checkout de auditoria com o ambiente do backend antigo e confirme os valores efetivos antes de iniciar o corte.
+
+No pré/pós-deploy, compare as flags efetivas, allowlists por UUID, scopes, RBAC, expiração de grants e o estado dos serviços sem registrar segredos. Em staging, confirme reinício e recuperação do relay, manutenção da configuração após reinstalação e bloqueios esperados para funções que não estão autorizadas. Não teste esses cenários alterando a produção.

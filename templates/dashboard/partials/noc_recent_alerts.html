@@ -1,0 +1,54 @@
+{% load nightowl_time %}
+<section class="panel noc-panel noc-all-alerts" aria-labelledby="noc-all-alerts">
+    <div class="noc-panel-header">
+        <div><h2 id="noc-all-alerts"><i data-lucide="bell"></i>Todos os alertas</h2><p>Últimas 15 ocorrências por horário de abertura.</p></div>
+        <a class="table-link" href="{% url 'alerts-list' %}">Ver histórico</a>
+    </div>
+    <div class="noc-list">
+        {% for alert in recent_alerts %}
+        <article class="noc-alert-row noc-card-actionable noc-occurrence" tabindex="0" data-noc-open-drawer
+            data-drawer-kind="Ocorrência" data-title="{{ alert.title }}" data-subtitle="{{ alert.endpoint.hostname }}"
+            data-body="{{ alert.description }}" data-status="{{ alert.get_status_display }}" data-endpoint="{{ alert.endpoint.hostname }}"
+            data-url="{% url 'endpoint-detail' alert.endpoint_id %}">
+            <div class="noc-occurrence-body">
+                <div class="noc-occurrence-meta">
+                    <span class="severity-badge severity-{{ alert.severity }}">
+                        {% if alert.severity == 'critical' %}Crítico{% elif alert.severity == 'warning' %}Atenção{% elif alert.severity == 'security' %}Segurança{% else %}Informativo{% endif %}
+                    </span>
+                    <time datetime="{{ alert.first_seen_at|date:'c' }}">{{ alert.first_seen_at|date:"d/m H:i:s" }}</time>
+                    <span>{% if alert.status == 'resolved' %}Resolvido{% elif alert.status == 'acknowledged' %}Ativo · Reconhecido{% else %}Ativo{% endif %}</span>
+                    {% if alert.is_muted %}<span>Silenciado até {{ alert.muted_until|date:"d/m H:i" }}</span>{% endif %}
+                </div>
+                <strong>{{ alert.title }} · {{ alert.endpoint.hostname }}</strong>
+                <p>{{ alert.description }}</p>
+                <small>Duração <time data-noc-start datetime="{{ alert.first_seen_at|date:'c' }}"{% if alert.resolved_at %} data-noc-end="{{ alert.resolved_at|date:'c' }}"{% endif %}>{{ alert.first_seen_at|relative_time }}</time>
+                {% if alert.noc_job %} · Verificação: {{ alert.noc_job.get_status_display }}{% endif %}</small>
+            </div>
+            <div class="noc-occurrence-actions" aria-label="Ações rápidas">
+                <a class="table-link" href="{% url 'endpoint-detail' alert.endpoint_id %}">Abrir endpoint</a>
+                {% if alert.noc_ticket_number %}
+                    <a class="table-link" href="{% url 'tickets:detail' alert.noc_ticket_number %}">Chamado #{{ alert.noc_ticket_number }}</a>
+                {% elif alert.status != 'resolved' and perms.tickets.add_ticket %}
+                    <form data-noc-action method="post" action="{% url 'noc-alert-action' alert.pk 'ticket' %}">
+                        {% csrf_token %}<button type="submit">Criar chamado</button>
+                    </form>
+                {% endif %}
+                {% include "dashboard/partials/noc_alert_treatment.html" %}
+                {% if alert.status != 'resolved' and perms.agents.add_agentjob %}
+                    {% if alert.noc_verify_supported and alert.endpoint.status == 'online' %}
+                        <form data-noc-action method="post" action="{% url 'noc-alert-action' alert.pk 'verify' %}">
+                            {% csrf_token %}<button type="submit">Verificar</button>
+                        </form>
+                    {% elif not alert.noc_verify_supported %}
+                        <small>Sem verificação remota compatível</small>
+                    {% else %}
+                        <small>Verificação requer endpoint online</small>
+                    {% endif %}
+                {% endif %}
+            </div>
+        </article>
+        {% empty %}
+        <p class="noc-positive">Nenhuma ocorrência registrada.</p>
+        {% endfor %}
+    </div>
+</section>

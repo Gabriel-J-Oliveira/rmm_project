@@ -15,14 +15,11 @@
     var countdown = document.querySelector("[data-noc-countdown]");
     var refreshButton = document.querySelector("[data-noc-refresh]");
     var autoButton = document.querySelector("[data-noc-auto]");
-    var tvButton = document.querySelector("[data-noc-tv]");
-    var soundButton = document.querySelector("[data-noc-sound]");
     var drawer = document.querySelector("[data-noc-drawer]");
     var drawerBackdrop = document.querySelector("[data-noc-drawer-backdrop]");
     var drawerClose = document.querySelector("[data-noc-drawer-close]");
     var toast = document.querySelector("[data-noc-toast]");
     var autoRefreshEnabled = true;
-    var soundEnabled = false;
 
     function renderCountdown() {
         if (countdown) {
@@ -42,21 +39,6 @@
         showToast.timer = setTimeout(function () {
             toast.hidden = true;
         }, 3200);
-    }
-
-    function beep() {
-        if (!soundEnabled || !window.AudioContext && !window.webkitAudioContext) return;
-        var AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-        var context = new AudioContextCtor();
-        var oscillator = context.createOscillator();
-        var gain = context.createGain();
-        oscillator.type = "sine";
-        oscillator.frequency.value = 880;
-        gain.gain.value = 0.035;
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start();
-        oscillator.stop(context.currentTime + 0.12);
     }
 
     function openDrawer(card) {
@@ -105,7 +87,11 @@
         if (deferredContent === null || content.contains(document.activeElement)
             || content.querySelector("[data-noc-open-drawer]:hover, .noc-card-actions:hover")
             || (drawer && drawer.classList.contains("is-open"))) return;
+        var alertsList = content.querySelector(".noc-all-alerts .noc-list");
+        var scrollTop = alertsList ? alertsList.scrollTop : 0;
         content.innerHTML = deferredContent;
+        alertsList = content.querySelector(".noc-all-alerts .noc-list");
+        if (alertsList) alertsList.scrollTop = scrollTop;
         deferredContent = null;
         if (window.lucide) window.lucide.createIcons();
     }
@@ -168,29 +154,28 @@
         });
     }
 
-    if (tvButton) {
-        tvButton.addEventListener("click", function () {
-            document.body.classList.toggle("noc-tv-mode");
-            var active = document.body.classList.contains("noc-tv-mode");
-            tvButton.classList.toggle("is-active", active);
-            tvButton.setAttribute("aria-pressed", active ? "true" : "false");
-            showToast(active ? "Modo TV ativado." : "Modo TV desativado.");
-        });
-    }
-
-    if (soundButton) {
-        soundButton.addEventListener("click", function () {
-            soundEnabled = !soundEnabled;
-            soundButton.classList.toggle("is-active", soundEnabled);
-            soundButton.setAttribute("aria-pressed", soundEnabled ? "true" : "false");
-            soundButton.innerHTML = soundEnabled ? '<i data-lucide="volume-2"></i>Som ligado' : '<i data-lucide="volume-x"></i>Som desligado';
-            if (window.lucide && typeof window.lucide.createIcons === "function") {
-                window.lucide.createIcons();
+    content.addEventListener("submit", async function (event) {
+        var form = event.target;
+        if (!form.matches("[data-noc-action]")) return;
+        event.preventDefault();
+        var button = form.querySelector("button[type=submit]");
+        if (!button || button.disabled) return;
+        button.disabled = true;
+        try {
+            var response = await fetch(form.action, {method: "POST", body: new FormData(form), headers: {Accept: "application/json"}});
+            var payload = await response.json();
+            if (response.redirected || !response.ok) {
+                showToast(payload.detail || "A ação foi recusada.");
+                return;
             }
-            showToast(soundEnabled ? "Som ligado para eventos críticos." : "Som desligado.");
-            beep();
-        });
-    }
+            showToast(payload.detail || "Ação registrada.");
+            await refresh();
+        } catch (error) {
+            showToast("Não foi possível confirmar o resultado da ação.");
+        } finally {
+            button.disabled = false;
+        }
+    });
 
     content.addEventListener("click", function (event) {
         if (event.target.closest("a, button, form, input")) return;
@@ -217,7 +202,7 @@
         var age = root.querySelector("[data-operational-age]");
         if (age) age.textContent = Math.max(0, Math.floor((Date.now() - readingAt) / 1000)) + "s";
         root.querySelectorAll("[data-noc-start]").forEach(function (node) {
-            var seconds = Math.max(0, Math.floor((Date.now() - Date.parse(node.dateTime)) / 1000));
+            var seconds = Math.max(0, Math.floor(((node.dataset.nocEnd ? Date.parse(node.dataset.nocEnd) : Date.now()) - Date.parse(node.dateTime)) / 1000));
             if (Number.isFinite(seconds)) {
                 var minutes = Math.floor(seconds / 60);
                 node.textContent = minutes + " min " + seconds % 60 + " s";
