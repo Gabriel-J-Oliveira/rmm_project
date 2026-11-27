@@ -30,6 +30,8 @@ The agent downloads to a per-job directory below its protected ProgramData State
 
 The server uses an 1800-second upper bound for the v2 MSI job timeout; the agent clamps the received value to the same maximum. Server job expiry still limits dispatch/profile authorization. Package transfer is streamed in 64 KiB chunks; staging consumes disk space up to the configured artifact maximum.
 
+The agent's HTTP client timeout is disabled only for the per-request profile/artifact calls; the job cancellation token remains the authoritative bounded timeout. This avoids the framework's shorter default HTTP timeout prematurely ending large artifact transfers.
+
 ## Compatibility and rollout boundary
 
 - No Django migration is introduced. B1 operation rows created before this increment, which have no `size_bytes` in their immutable JSON snapshot, remain readable using the current package size only after the existing server checks confirm the same artifact hash and revision. New rows snapshot the size.
@@ -41,3 +43,11 @@ The server uses an 1800-second upper bound for the v2 MSI job timeout; the agent
 ## Tests added
 
 The Windows tests cover authenticated job-scoped profile/artifact HTTP requests, bounded streaming and digest checks, backend-compatible profile hashing, install/update/uninstall argument construction, signature and local-policy failure, installed-state proof, reboot-pending handling, timeout/shutdown classification, safe staging cleanup, and refusal to replay a job with an unresolved prior staging directory. Django tests cover profile scoping, private response headers, queue-state rejection, redaction, and strict v1/v2 internal payload compatibility.
+
+## CI incident record
+
+The earlier Windows CI run `46019901096` had one Repair Runner test timeout during runner startup (`runner_start`, about 20.9 seconds; the installer itself exited 0 and the external runner was still active). A targeted rerun of that job on the same SHA passed in about 6.9 seconds, and the subsequent full required-check run passed, including the terminal/browser gates. No cause was established, no test or timeout was changed to obtain the pass, and this rerun does not prove the intermittent behavior is resolved.
+
+## Remaining scope limits
+
+This increment handles MSI only and updates only when the configured ProductCode remains stable. EXE installers, MSI upgrades that change ProductCode, bulk rollout, and generalized installed-software reconciliation require later, separately reviewed increments. No real MSI installation has been performed; signed-release and VM homologation remain required.

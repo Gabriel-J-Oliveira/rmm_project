@@ -347,15 +347,45 @@ internal sealed class SoftwareInstallation
 
     private static (bool? Installed,string Version) DetectInstalled(string product)
     {
-        int state = MsiQueryProductState(product);
-        if (state is -1 or 2) return (false, "");
-        if (state is not (3 or 5)) return (null, "");
+        // This executor installs with ALLUSERS=1 and runs as the service
+        // identity. Query only the machine context so a per-user registration
+        // in the service account's profile cannot be mistaken for machine state.
         uint length = 0;
-        if (MsiGetProductInfo(product, "VersionString", null, ref length) != 0 || length is 0 or > 121) return (null, "");
-        System.Text.StringBuilder value = new((int)length + 1);
-        length++;
-        return MsiGetProductInfo(product, "VersionString", value, ref length) == 0 ? (true, value.ToString()) : (null, "");
+        uint initial = MsiGetProductInfoEx(product, null, MsiInstallContextMachine,
+            "VersionString", null, ref length);
+        if (initial == ErrorUnknownProduct) return (false, "");
+        if (!TryGetMachineProductInfoCapacity(initial, length, out uint capacity)) return (null, "");
+        System.Text.StringBuilder value = new((int)capacity);
+        length = capacity;
+        uint queried = MsiGetProductInfoEx(product, null, MsiInstallContextMachine,
+            "VersionString", value, ref length);
+        return InterpretMachineProductInfo(queried, value.ToString());
     }
+
+    internal static bool TryGetMachineProductInfoCapacity(uint error, uint valueLength, out uint capacity)
+    {
+        // MsiGetProductInfoExW returns ERROR_SUCCESS (not ERROR_MORE_DATA)
+        // when szValue is NULL and pcchValue is valid, while still reporting
+        // the required character count. The second call needs room for NUL.
+        if (error == 0 && valueLength is > 0 and <= 120)
+        {
+            capacity = valueLength + 1;
+            return true;
+        }
+        capacity = 0;
+        return false;
+    }
+
+    internal static (bool? Installed, string Version) InterpretMachineProductInfo(uint error, string version) =>
+        error switch
+        {
+            0 when !string.IsNullOrWhiteSpace(version) && version.Length <= 120 => (true, version),
+            ErrorUnknownProduct => (false, ""),
+            _ => (null, "")
+        };
+
+    private const uint MsiInstallContextMachine = 4;
+    private const uint ErrorUnknownProduct = 1605;
 
     private sealed class SoftwareOperationException(string code) : Exception(code) { internal string Code { get; } = code; }
     internal async Task<object> InstallAsync(AgentConfig config,string packageId,CancellationToken ct)
@@ -441,4 +471,7 @@ internal sealed class SoftwareInstallation
     [DllImport("wintrust.dll",ExactSpelling=true)] private static extern int WinVerifyTrust(nint window,ref Guid action,ref TrustData data);
     [DllImport("msi.dll",CharSet=CharSet.Unicode,EntryPoint="MsiQueryProductStateW")] private static extern int MsiQueryProductState(string product);
     [DllImport("msi.dll",CharSet=CharSet.Unicode,EntryPoint="MsiGetProductInfoW")] private static extern uint MsiGetProductInfo(string product,string property,System.Text.StringBuilder? value,ref uint length);
+    [DllImport("msi.dll", CharSet=CharSet.Unicode, EntryPoint="MsiGetProductInfoExW")]
+    private static extern uint MsiGetProductInfoEx(string productCode, string? userSid, uint context,
+        string property, System.Text.StringBuilder? value, ref uint length);
 }

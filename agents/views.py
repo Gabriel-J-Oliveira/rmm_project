@@ -1859,17 +1859,6 @@ class AgentJobsResultView(APIView):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if (job is not None and job.job_type == AgentJob.TYPE_INSTALL_SOFTWARE
-                and isinstance(job.payload, dict) and job.payload.get('schema_version') == 2):
-            freeform = ('stdout', 'stderr', 'error_message')
-            error_code = payload.get('error_code')
-            result = _payload_result(payload)
-            result_error_code = result.get('error_code') if isinstance(result, dict) else None
-            if (any(payload.get(field) not in (None, '') for field in freeform)
-                    or (error_code not in (None, '') and not re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', str(error_code), re.ASCII))
-                    or (result_error_code not in (None, '') and not re.fullmatch(
-                        r'[A-Z][A-Z0-9_]{0,79}', str(result_error_code), re.ASCII))):
-                return Response({'error': 'software_operation_result_invalid'}, status=400)
         expected_update_restart = _is_expected_update_restart_interruption(job, job_status, payload)
         if expected_update_restart:
             payload = _coerce_expected_update_restart_payload(payload)
@@ -1976,6 +1965,23 @@ class AgentJobsResultView(APIView):
                           'job_status': job.status, 'reason': 'software_operation_not_dispatched'},
             )
             return Response({'error': 'software_operation_not_dispatched'}, status=status.HTTP_409_CONFLICT)
+        software_operation_error_code = ''
+        if (job is not None and job.job_type == AgentJob.TYPE_INSTALL_SOFTWARE
+                and isinstance(job.payload, dict) and job.payload.get('schema_version') == 2):
+            freeform = ('stdout', 'stderr', 'error_message')
+            result = _payload_result(payload)
+            if any(payload.get(field) not in (None, '') for field in freeform):
+                return Response({'error': 'software_operation_result_invalid'}, status=400)
+            if job_status in {
+                AgentJob.STATUS_FAILED, AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_INTERRUPTED,
+                AgentJob.STATUS_UNSUPPORTED, AgentJob.STATUS_INVALID_PARAMETERS,
+                AgentJob.STATUS_EXPIRED, AgentJob.STATUS_CANCELLED,
+            }:
+                from .software_operation_contract import validate_software_operation_failure
+                try:
+                    software_operation_error_code = validate_software_operation_failure(job, result)
+                except ValueError:
+                    return Response({'error': 'software_operation_result_invalid'}, status=400)
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             if job.job_type == 'operational_action' and incoming_status == AgentJob.STATUS_COMPLETED:
@@ -1984,7 +1990,7 @@ class AgentJobsResultView(APIView):
                     validate_completion(job, _payload_result(payload))
                 except ValueError:
                     return Response({'error': 'action_confirmation_invalid'}, status=400)
-            if job.job_type in ('collect_services','install_software') and incoming_status==AgentJob.STATUS_COMPLETED:
+            if job.job_type in ('collect_services', 'install_software') and incoming_status == AgentJob.STATUS_COMPLETED:
                 from .internal_jobs import validate_internal_completion
                 try:
                     validate_internal_completion(job,_payload_result(payload))
@@ -2094,7 +2100,14 @@ class AgentJobsResultView(APIView):
             job.correlation_id = payload.get('correlation_id') or job.correlation_id
             job.attempt = payload.get('attempt') or job.attempt or 1
             job.timeout_seconds = payload.get('timeout_seconds') or job.timeout_seconds
-            job.error_code = payload.get('error_code') or (job.result.get('error_code') if isinstance(job.result, dict) else '') or ''
+            nested_output = job.result.get('output') if isinstance(job.result, dict) else None
+            job.error_code = (
+                payload.get('error_code')
+                or (job.result.get('error_code') if isinstance(job.result, dict) else '')
+                or (nested_output.get('error_code') if isinstance(nested_output, dict) else '')
+                or software_operation_error_code
+                or ''
+            )
             job.output_truncated = bool(payload.get('output_truncated') or (job.result.get('output_truncated') if isinstance(job.result, dict) else False))
             job.result_received_at = timezone.now()
             job.save(update_fields=[

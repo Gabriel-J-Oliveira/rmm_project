@@ -125,6 +125,8 @@ public sealed class AgentApiClient : ISoftwareOperationTransport
         using HttpRequestMessage request = new(HttpMethod.Get, url);
         AddAuth(config, request);
         using HttpClient client = _httpClientFactory.CreateClient("jobs-v2");
+        // Bound this request by the caller's job cancellation token.
+        client.Timeout = Timeout.InfiniteTimeSpan;
         using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
             EnsureSuccess(response, "", url, HttpMethod.Get, "software.profile");
@@ -157,6 +159,10 @@ public sealed class AgentApiClient : ISoftwareOperationTransport
         using HttpRequestMessage request = new(HttpMethod.Get, url);
         AddAuth(config, request);
         using HttpClient client = _httpClientFactory.CreateClient("jobs-v2");
+        // The caller's job cancellation token is the authoritative 30-minute
+        // budget. HttpClient's default 100-second timeout would truncate large
+        // private artifacts independently of the bounded job timeout.
+        client.Timeout = Timeout.InfiniteTimeSpan;
         using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode) EnsureSuccess(response, "", url, HttpMethod.Get, "software.artifact");
         string headerHash = response.Headers.TryGetValues("X-Software-Artifact-SHA256", out IEnumerable<string>? hashes) ? hashes.SingleOrDefault() ?? "" : "";

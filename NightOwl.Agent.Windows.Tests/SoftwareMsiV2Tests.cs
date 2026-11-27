@@ -19,6 +19,8 @@ internal static class SoftwareMsiV2Tests
         await FailClosedAndRecovery();
         await RejectsProfileForDifferentMachine();
         await AuthenticatedStreamingTransport();
+        await ArtifactTransferUsesJobTimeout();
+        MachineContextDetectionFailsClosed();
         JsonElement digestFixture = JsonSerializer.SerializeToElement(new
         {
             schema_version = 1,
@@ -265,6 +267,47 @@ internal static class SoftwareMsiV2Tests
         finally { Directory.Delete(root, true); }
     }
 
+    private static async Task ArtifactTransferUsesJobTimeout()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "nightowl-msi-slow-http-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            byte[] artifact = "synthetic MSI after a slow response"u8.ToArray();
+            string hash = Convert.ToHexString(SHA256.HashData(artifact)).ToLowerInvariant();
+            Guid jobId = Guid.NewGuid();
+            AgentConfig config = new() { AgentToken = "synthetic-bearer", ServerBaseUrl = "https://nightowl.invalid" };
+            var factory = new SlowHttpFactory(TimeSpan.FromMilliseconds(150), artifact, hash);
+            string path = Path.Combine(root, "slow.msi");
+            using CancellationTokenSource jobBudget = new(TimeSpan.FromSeconds(3));
+            (long size, string digest) = await new AgentApiClient(factory).DownloadSoftwareArtifactAsync(
+                config, jobId.ToString("D"), hash, 1, artifact.LongLength, artifact.LongLength, path, jobBudget.Token);
+            Check(size == artifact.LongLength && digest == hash && File.ReadAllBytes(path).SequenceEqual(artifact),
+                "Artifact transfer used HttpClient's short default timeout instead of the bounded job token.");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void MachineContextDetectionFailsClosed()
+    {
+        Check(SoftwareInstallation.TryGetMachineProductInfoCapacity(0, 5, out uint capacity) && capacity == 6,
+            "A successful size query did not reserve space for the terminating NUL.");
+        Check(!SoftwareInstallation.TryGetMachineProductInfoCapacity(234, 5, out _),
+            "An unexpected ERROR_MORE_DATA response from a null-buffer size query was accepted.");
+        Check(!SoftwareInstallation.TryGetMachineProductInfoCapacity(0, 0, out _),
+            "An empty MSI version was treated as a usable size query.");
+        Check(!SoftwareInstallation.TryGetMachineProductInfoCapacity(0, 121, out _),
+            "An excessive MSI version size was accepted.");
+        Check(SoftwareInstallation.InterpretMachineProductInfo(0, "4.2.1") == (true, "4.2.1"),
+            "Machine-context MSI version was not recognized as installed.");
+        Check(SoftwareInstallation.InterpretMachineProductInfo(1605, "") == (false, ""),
+            "A product absent from machine context was not recognized as absent.");
+        Check(SoftwareInstallation.InterpretMachineProductInfo(5, "") == (null, ""),
+            "An indeterminate Windows Installer error was mistaken for absence.");
+        Check(SoftwareInstallation.InterpretMachineProductInfo(0, "") == (null, ""),
+            "An installed product with missing version evidence was accepted.");
+    }
+
     private static async Task RejectsProfileForDifferentMachine()
     {
         string root = Path.Combine(Path.GetTempPath(), "nightowl-msi-identity-" + Guid.NewGuid().ToString("N"));
@@ -370,5 +413,23 @@ internal static class SoftwareMsiV2Tests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(respond(request));
+    }
+
+    private sealed class SlowHttpFactory(TimeSpan delay, byte[] bytes, string hash) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new SlowHandler(delay, bytes, hash))
+        { Timeout = TimeSpan.FromMilliseconds(25) };
+    }
+
+    private sealed class SlowHandler(TimeSpan delay, byte[] bytes, string hash) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            HttpResponseMessage response = new(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
+            response.Headers.Add("X-Software-Artifact-SHA256", hash);
+            response.Headers.Add("X-Software-Artifact-Revision", "1");
+            return response;
+        }
     }
 }
