@@ -24,7 +24,7 @@ def prepare_due_stable_retries(campaign_id, *, now=None):
         target.pk: target for target in AgentRolloutTarget.objects.select_for_update(of=('self',))
         .filter(pk__in=target_ids).order_by('endpoint_id', 'pk')
     }
-    attempts = list(AgentRolloutAttempt.objects.select_for_update().filter(
+    attempts = list(AgentRolloutAttempt.objects.select_for_update(of=('self',)).filter(
         pk__in=candidate_attempts.values('pk'), target_id__in=locked_targets,
     ).select_related('job').order_by('target__endpoint_id', 'ordinal'))
     for attempt in attempts:

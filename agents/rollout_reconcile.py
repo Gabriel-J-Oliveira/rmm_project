@@ -274,7 +274,9 @@ def reconcile_rollout_campaign(campaign, *, now=None):
         pairs = _load_campaign_evaluations(campaign, now=now, lock=True)
         changed, transitions, issues = [], [], []
         for target, evaluation in pairs:
-            attempt = AgentRolloutAttempt.objects.select_for_update().filter(target=target).order_by('-ordinal').first()
+            attempt = AgentRolloutAttempt.objects.select_for_update(of=('self',)).filter(
+                target=target,
+            ).order_by('-ordinal').first()
             inconclusive_still_unresolved = bool(
                 attempt and attempt.outcome == 'inconclusive' and attempt.job
                 and (attempt.job.status in {AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_INTERRUPTED}
