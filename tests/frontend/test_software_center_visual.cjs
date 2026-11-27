@@ -110,7 +110,7 @@ const {chromium} = require('playwright');
         await drawer.locator('[data-package-action="revoke"]').click();
         await drawer.locator('.software-detail-grid').getByText('Revogado', {exact: true}).waitFor();
         await drawer.locator('[data-software-drawer-close]').click();
-        await uploadGrid.locator('.software-upload-card').click({position: {x: 20, y: 15}});
+        await uploadGrid.locator('.software-upload-card').filter({hasText: 'Visual Installer'}).click({position: {x: 20, y: 15}});
         assert.equal(await page.locator('[data-software-drawer]').getAttribute('aria-hidden'), 'true', 'The whole upload card must not open the drawer');
         await uploadGrid.getByRole('link', {name: 'E2E Package MSI'}).click();
         await drawer.locator('dd').filter({hasText: 'e2e-package.exe'}).waitFor();
