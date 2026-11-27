@@ -1598,8 +1598,37 @@ class AgentJobsPullView(APIView):
                     description='Identidade, permissao ou capacidade deixou de ser valida.',endpoint=machine,
                     actor_type=AuditEvent.ACTOR_SYSTEM,actor_name='Sistema',metadata={'job_id':str(job.pk)})
                 continue
-            if job.job_type in ('collect_services','install_software'):
-                from django.conf import settings
+            if (job.job_type == AgentJob.TYPE_INSTALL_SOFTWARE
+                    and isinstance(job.payload, dict) and job.payload.get('schema_version') == 2):
+                if not protocol_v2:
+                    # Do not expose the versioned envelope to a legacy pull client.
+                    continue
+                if not getattr(settings, 'NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED', False):
+                    # B1 may persist an authorized, expiring operation while dispatch
+                    # remains disabled. Keep it queued; do not leak or cancel it.
+                    continue
+                from .internal_jobs import validate_internal_payload
+                from .software_operation_contract import validate_software_operation_dispatch
+                try:
+                    validate_internal_payload(job.job_type, job.payload)
+                    validate_software_operation_dispatch(job, endpoint=machine)
+                except (PermissionError, ValueError):
+                    job.status = AgentJob.STATUS_CANCELLED
+                    job.error_code = 'SOFTWARE_OPERATION_AUTHORIZATION_REVOKED'
+                    job.finished_at = now
+                    job.save(update_fields=['status', 'error_code', 'finished_at', 'updated_at'])
+                    create_audit_event(
+                        event_type='software_package.operation_dispatch_blocked',
+                        title='Operação de software bloqueada antes do despacho',
+                        description='Identidade, aprovação, integridade, capacidade ou autorização deixou de ser válida.',
+                        severity=AuditEvent.SEVERITY_WARNING,
+                        actor_type=AuditEvent.ACTOR_SYSTEM,
+                        actor_name='Sistema', endpoint=machine,
+                        metadata={'job_id': str(job.pk),
+                                  'operation_id': str(job.payload.get('operation_id', ''))},
+                    )
+                    continue
+            elif job.job_type in ('collect_services','install_software'):
                 from .internal_jobs import validate_internal_payload, internal_capability, required_internal_capability
                 flag = 'NIGHTOWL_SERVICE_COLLECTION_ENABLED' if job.job_type=='collect_services' else 'NIGHTOWL_SOFTWARE_INSTALL_ENABLED'
                 if job.job_type == 'collect_services':
@@ -1826,6 +1855,17 @@ class AgentJobsResultView(APIView):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
+        if (job is not None and job.job_type == AgentJob.TYPE_INSTALL_SOFTWARE
+                and isinstance(job.payload, dict) and job.payload.get('schema_version') == 2):
+            freeform = ('stdout', 'stderr', 'error_message')
+            error_code = payload.get('error_code')
+            result = _payload_result(payload)
+            result_error_code = result.get('error_code') if isinstance(result, dict) else None
+            if (any(payload.get(field) not in (None, '') for field in freeform)
+                    or (error_code not in (None, '') and not re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', str(error_code), re.ASCII))
+                    or (result_error_code not in (None, '') and not re.fullmatch(
+                        r'[A-Z][A-Z0-9_]{0,79}', str(result_error_code), re.ASCII))):
+                return Response({'error': 'software_operation_result_invalid'}, status=400)
         expected_update_restart = _is_expected_update_restart_interruption(job, job_status, payload)
         if expected_update_restart:
             payload = _coerce_expected_update_restart_payload(payload)

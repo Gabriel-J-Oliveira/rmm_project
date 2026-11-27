@@ -29,6 +29,7 @@ from dashboard import asset_record_views
 from dashboard import capacity_views
 from dashboard import software_center_views
 from dashboard import software_package_views
+from agents import software_operation_views
 from dashboard import fleet_views
 from config import views as config_views
 from tickets import views as ticket_views
@@ -57,6 +58,8 @@ urlpatterns = [
     path('api/endpoints/<str:pk>/jobs/', dashboard_views.endpoint_job_create, name='api-endpoint-job-create'),
     path('api/endpoints/<uuid:endpoint_id>/asset-records/', asset_record_views.endpoint_asset_records,
          name='api-endpoint-asset-records'),
+    path('api/software/packages/<uuid:package_id>/operations/<uuid:endpoint_id>/',
+         software_operation_views.software_operation_create, name='api-software-operation-create'),
     path('api/endpoints/<str:pk>/jobs/<uuid:job_id>/mark-failed/', dashboard_views.endpoint_job_mark_failed, name='api-endpoint-job-mark-failed'),
     path('api/endpoints/<str:pk>/uninstall/', dashboard_views.endpoint_uninstall_request, name='api-endpoint-uninstall'),
     path('api/endpoints/<uuid:pk>/remove-status/', dashboard_views.endpoint_removal_status, name='api-endpoint-removal-status'),

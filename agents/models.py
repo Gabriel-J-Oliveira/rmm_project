@@ -1770,6 +1770,73 @@ class SoftwarePackageRecord(models.Model):
         return self.friendly_name
 
 
+class SoftwarePackageOperation(models.Model):
+    """Immutable authorization snapshot for a future software AgentJob."""
+
+    OPERATION_CHOICES = [('install', 'Install'), ('update', 'Update'), ('uninstall', 'Uninstall')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    request_id = models.UUIDField(unique=True)
+    job = models.OneToOneField(
+        'AgentJob', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_operation',
+    )
+    endpoint = models.ForeignKey(
+        AgentMachine, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_operations',
+    )
+    endpoint_uuid_snapshot = models.UUIDField()
+    machine_id_snapshot = models.CharField(max_length=255)
+    package = models.ForeignKey(
+        SoftwarePackageRecord, on_delete=models.PROTECT, related_name='operations',
+    )
+    operation = models.CharField(max_length=16, choices=OPERATION_CHOICES)
+    artifact_sha256 = models.CharField(max_length=64)
+    artifact_revision = models.PositiveIntegerField()
+    profile_revision = models.PositiveIntegerField()
+    profile_sha256 = models.CharField(max_length=64)
+    operator = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_package_operations',
+    )
+    authorization = models.CharField(max_length=100)
+    snapshot = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['endpoint_uuid_snapshot', '-created_at']),
+            models.Index(fields=['package', '-created_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(operation__in=['install', 'update', 'uninstall']),
+                name='software_package_operation_valid',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            previous = type(self).objects.get(pk=self.pk)
+            immutable = (
+                'request_id', 'endpoint_uuid_snapshot', 'machine_id_snapshot', 'package_id',
+                'operation', 'artifact_sha256', 'artifact_revision', 'profile_revision',
+                'profile_sha256', 'operator_id', 'authorization', 'snapshot',
+            )
+            def comparable(value):
+                return str(value) if isinstance(value, uuid.UUID) else value
+            if any(comparable(getattr(previous, field)) != comparable(getattr(self, field))
+                   for field in immutable):
+                raise ValueError('software_operation_snapshot_immutable')
+            if previous.job_id is not None and previous.job_id != self.job_id:
+                raise ValueError('software_operation_job_link_immutable')
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f'{self.operation} - {self.request_id}'
+
+
 class AlertPolicy(models.Model):
     class Metric(models.TextChoices):
         CPU = 'cpu', 'Uso de CPU'

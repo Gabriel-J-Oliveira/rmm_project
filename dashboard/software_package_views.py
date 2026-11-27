@@ -11,7 +11,7 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods
 
-from agents.models import AgentJob, AuditEvent, AutomationDefinition, SoftwarePackageRecord
+from agents.models import AgentJob, AuditEvent, AutomationDefinition, SoftwarePackageOperation, SoftwarePackageRecord
 from agents.software_package_storage import (
     PackageUploadError, configured_upload_limit, open_private, promote_staged,
     private_root, stage_upload, unlink_private,
@@ -122,17 +122,21 @@ def _job_package_query(package):
     identity = str(package.pk)
     return AgentJob.objects.filter(job_type__in=PACKAGE_JOB_TYPES).filter(
         Q(payload__software_package_id=identity) | Q(payload__package_id=identity)
+        | Q(payload__package_uuid=identity)
     )
 
 
 def _has_active_operation(package):
-    return _job_package_query(package).filter(status__in=ACTIVE_JOB_STATES).exists()
+    return (_job_package_query(package).filter(status__in=ACTIVE_JOB_STATES).exists()
+            or SoftwarePackageOperation.objects.filter(package=package, job__status__in=ACTIVE_JOB_STATES).exists())
 
 
 def _has_been_used(package):
     from django.db.models import Q
     identity = str(package.pk)
     if _job_package_query(package).exists():
+        return True
+    if SoftwarePackageOperation.objects.filter(package=package).exists():
         return True
     if AutomationDefinition.objects.filter(job_type=AgentJob.TYPE_INSTALL_SOFTWARE).filter(
         Q(payload__software_package_id=identity) | Q(payload__package_id=identity)
@@ -165,7 +169,7 @@ def _package_data(package, request=None):
             operation: package_operation_is_ready(package, operation)
             for operation in ('install', 'update', 'uninstall')
         },
-        # RC49-03C-A prepares the contract but has no operation dispatch action.
+        # The server route exists in B1, but endpoint dispatch is not exposed by this UI.
         'dispatch_available': False,
     }
 
