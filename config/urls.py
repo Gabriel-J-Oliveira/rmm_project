@@ -28,6 +28,7 @@ from dashboard import remote_install_batch_views
 from dashboard import asset_record_views
 from dashboard import capacity_views
 from dashboard import software_center_views
+from dashboard import software_package_views
 from dashboard import fleet_views
 from config import views as config_views
 from tickets import views as ticket_views
@@ -122,6 +123,14 @@ urlpatterns = [
     path('software/', software_center_views.software_center, name='software-inventory'),
     path('software/data/inventory/', software_center_views.software_inventory_data, name='software-inventory-data'),
     path('software/data/packages/', software_center_views.software_packages_data, name='software-packages-data'),
+    path('software/packages/create/', software_package_views.software_package_create, name='software-package-create'),
+    path('software/packages/<uuid:pk>/', software_package_views.software_package_detail, name='software-package-detail'),
+    path('software/packages/<uuid:pk>/update/', software_package_views.software_package_update, name='software-package-update'),
+    path('software/packages/<uuid:pk>/replace/', software_package_views.software_package_replace, name='software-package-replace'),
+    path('software/packages/<uuid:pk>/approve/', software_package_views.software_package_approve, name='software-package-approve'),
+    path('software/packages/<uuid:pk>/revoke/', software_package_views.software_package_revoke, name='software-package-revoke'),
+    path('software/packages/<uuid:pk>/delete/', software_package_views.software_package_delete, name='software-package-delete'),
+    path('software/packages/<uuid:pk>/download/', software_package_views.software_package_download, name='software-package-download'),
     path('policies/alerts/', alert_policy_views.alert_policies, name='alert-policies'),
     path('policies/alerts/<slug:key>/', alert_policy_views.edit_alert_policy, name='alert-policy-edit'),
     path('software-policies/', dashboard_views.software_policies, name='software-policies'),

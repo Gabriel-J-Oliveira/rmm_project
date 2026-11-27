@@ -3,14 +3,20 @@
 
 {% block title %}Central de Softwares | Night Owl{% endblock %}
 {% block body_class %}page-software{% endblock %}
-{% block styles %}<link rel="stylesheet" href="{% static 'css/software_center.css' %}?v=rc49-03a-2">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/software_center.css' %}?v=rc49-03b-1">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb"><span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Central de Softwares</strong></nav>
 {% endblock %}
 
 {% block content %}
-<main class="software-center" data-software-root data-inventory-url="{{ inventory_api_url }}" data-packages-url="{{ packages_api_url }}">
+<main class="software-center" data-software-root data-inventory-url="{{ inventory_api_url }}" data-packages-url="{{ packages_api_url }}"
+      data-package-create-url="{{ package_create_url }}" data-package-detail-base="{% url 'software-package-detail' pk='00000000-0000-0000-0000-000000000000' %}"
+      data-package-max-upload-bytes="{{ package_max_upload_bytes }}" data-can-upload="{{ can_upload_packages|yesno:'true,false' }}"
+      data-can-edit="{{ can_edit_packages|yesno:'true,false' }}" data-can-approve="{{ can_approve_packages|yesno:'true,false' }}"
+      data-can-revoke="{{ can_revoke_packages|yesno:'true,false' }}" data-can-delete="{{ can_delete_packages|yesno:'true,false' }}"
+      data-can-download="{{ can_download_packages|yesno:'true,false' }}">
+    <form hidden aria-hidden="true">{% csrf_token %}</form>
     <header class="page-header software-header">
         <div class="alerts-command-title">
             <span class="command-icon page-header-icon"><i data-lucide="package"></i></span>
@@ -18,14 +24,14 @@
         </div>
         <div class="software-header-actions">
             <button class="refresh-button" type="button" data-software-refresh><i data-lucide="refresh-cw"></i>Atualizar dados</button>
-            <button class="refresh-button software-add-upload" type="button" disabled title="O cadastro e upload serão habilitados no incremento RC49-03B" aria-describedby="software-upload-note">
+            <button class="refresh-button software-add-upload" type="button" data-software-add-upload {% if not can_upload_packages %}disabled title="Seu usuário não tem permissão para cadastrar instaladores"{% endif %} aria-describedby="software-upload-note">
                 <i data-lucide="upload-cloud"></i>Adicionar arquivo de instalação
             </button>
         </div>
     </header>
 
     <div class="software-summary" data-software-summary aria-live="polite"></div>
-    <p class="software-upload-note" id="software-upload-note">O botão será habilitado quando o fluxo de upload for implementado. Nenhum arquivo é enviado nesta etapa.</p>
+    <p class="software-upload-note" id="software-upload-note">Os arquivos ficam em armazenamento privado; aprovação manual não substitui análise antimalware.</p>
 
     <nav class="software-module-tabs" aria-label="Seções da Central de Softwares" role="tablist">
         <button class="is-active" type="button" role="tab" aria-selected="true" data-software-tab="inventory"><i data-lucide="boxes"></i>Softwares coletados</button>
@@ -56,4 +62,4 @@
 </main>
 {% endblock %}
 
-{% block scripts %}<script src="{% static 'js/software_center.js' %}?v=rc49-03a-2"></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/software_center.js' %}?v=rc49-03b-1"></script>{% endblock %}

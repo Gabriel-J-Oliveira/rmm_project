@@ -1664,7 +1664,7 @@ class SoftwarePolicyViolation(models.Model):
 
 
 class SoftwarePackageRecord(models.Model):
-    """Current package metadata; binary storage and deployment belong to later increments."""
+    """Current package metadata and private artifact pointer; deployment belongs to a later increment."""
 
     TYPE_MSI = 'msi'
     TYPE_EXE = 'exe'
@@ -1689,8 +1689,21 @@ class SoftwarePackageRecord(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     friendly_name = models.CharField(max_length=180)
     original_filename = models.CharField(max_length=255, blank=True)
+    description = models.TextField(blank=True)
     package_type = models.CharField(max_length=8, choices=TYPE_CHOICES)
     version = models.CharField(max_length=120, blank=True)
+    # A relative key inside the private package store. Never a URL or user supplied path.
+    artifact_key = models.CharField(max_length=500, blank=True)
+    artifact_uploaded_at = models.DateTimeField(null=True, blank=True)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_uploaded',
+    )
+    last_modified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_packages_modified',
+    )
+    revision = models.PositiveIntegerField(default=1)
     size_bytes = models.PositiveBigIntegerField(null=True, blank=True)
     sha256 = models.CharField(max_length=64, blank=True)
     signature_status = models.CharField(max_length=16, choices=SIGNATURE_CHOICES, default=SIGNATURE_UNKNOWN)
@@ -1716,6 +1729,11 @@ class SoftwarePackageRecord(models.Model):
 
     class Meta:
         ordering = ['friendly_name', 'created_at']
+        permissions = [
+            ('download_softwarepackage', 'Download a private software installer'),
+            ('approve_softwarepackage', 'Approve a software installer'),
+            ('revoke_softwarepackage', 'Revoke a software installer'),
+        ]
         indexes = [
             models.Index(fields=['approval_status', 'package_type']),
             models.Index(fields=['friendly_name']),

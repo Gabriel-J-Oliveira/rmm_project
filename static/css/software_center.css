@@ -74,6 +74,29 @@ body.page-software .software-endpoint-list li { align-items: center; border: 1px
 body.page-software .software-endpoint-list a { color: var(--soft-purple); font-size: 13px; font-weight: 700; }
 body.page-software .software-endpoint-list span:not(.freshness-pill) { color: var(--text-muted); font-size: 11px; }
 body.page-software .software-readonly-note { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+body.page-software .software-editor-form { display: grid; gap: 13px; }
+body.page-software .software-form-field { display: grid; gap: 7px; min-width: 0; }
+body.page-software .software-form-field > span { color: var(--text-muted); font-size: 12px; font-weight: 750; }
+body.page-software .software-form-field > span b { color: var(--critical); }
+body.page-software .software-form-field input,
+body.page-software .software-form-field textarea { background: var(--card); border: 1px solid var(--border); border-radius: 7px; color: var(--text-primary); font: inherit; min-height: 40px; padding: 9px 11px; width: 100%; }
+body.page-software .software-form-field textarea { min-height: 92px; resize: vertical; }
+body.page-software .software-form-field input[type="file"] { min-height: 48px; padding: 8px; }
+body.page-software .software-form-field small { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+body.page-software .software-form-actions,
+body.page-software .software-governance-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 9px; }
+body.page-software .software-danger-button { background: transparent; border: 1px solid var(--critical); border-radius: 7px; color: var(--critical); cursor: pointer; font: inherit; font-size: 12px; font-weight: 750; min-height: 38px; padding: 0 12px; }
+body.page-software .software-package-warning { background: color-mix(in srgb, var(--critical) 9%, var(--card)); border: 1px solid color-mix(in srgb, var(--critical) 30%, var(--border)); border-radius: 7px; color: var(--text-secondary); font-size: 12px; line-height: 1.45; padding: 10px; }
+body.page-software .software-form-message { color: var(--text-secondary); font-size: 12px; min-height: 0; }
+body.page-software .software-form-message[data-state="error"],
+body.page-software [data-package-action-message][data-state="error"] { color: var(--critical); }
+body.page-software .software-download-link { color: var(--soft-purple); display: inline-block; font-size: 13px; font-weight: 700; margin-top: 13px; }
+body.page-software .software-audit-list { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+body.page-software .software-audit-list li { border: 1px solid var(--border); border-radius: 7px; display: grid; gap: 5px; min-width: 0; padding: 10px; }
+body.page-software .software-audit-list strong { color: var(--text-primary); font-size: 12px; }
+body.page-software .software-audit-list span,
+body.page-software .software-audit-list small,
+body.page-software .software-audit-list p { color: var(--text-muted); font-size: 11px; margin: 0; overflow-wrap: anywhere; }
 body.page-software .software-drawer[hidden] { display: none; }
 body.page-software .software-drawer-backdrop[hidden] { display: none; }
 
