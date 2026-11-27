@@ -16,6 +16,10 @@ from agents.software_package_storage import (
     PackageUploadError, configured_upload_limit, open_private, promote_staged,
     private_root, stage_upload, unlink_private,
 )
+from agents.software_execution_profiles import (
+    ExecutionProfileError, execution_profile_digest, normalize_execution_profile,
+    package_profile_binding_matches, package_operation_is_ready,
+)
 from config.authz import is_nightowl_technical_user
 
 
@@ -87,6 +91,15 @@ def _snapshot(package):
         'size_bytes': package.size_bytes, 'sha256': package.sha256,
         'signature_status': package.signature_status, 'signer': package.signer,
         'approval_status': package.approval_status, 'revision': package.revision,
+        'artifact_revision': package.artifact_revision,
+        'execution_profile': package.execution_profile or {},
+        'execution_profile_revision': package.execution_profile_revision,
+        'execution_profile_sha256': package.execution_profile_sha256 or None,
+        'execution_profile_artifact_sha256': package.execution_profile_artifact_sha256 or None,
+        'execution_profile_artifact_revision': package.execution_profile_artifact_revision,
+        'execution_profile_status': package.execution_profile_status,
+        'execution_profile_approved_at': package.execution_profile_approved_at.isoformat() if package.execution_profile_approved_at else None,
+        'execution_profile_approved_by': package.execution_profile_approved_by.get_username() if package.execution_profile_approved_by else None,
         'artifact_uploaded_at': package.artifact_uploaded_at.isoformat() if package.artifact_uploaded_at else None,
     }
 
@@ -147,6 +160,13 @@ def _package_data(package, request=None):
         'download_url': f'/software/packages/{package.pk}/download/',
         'active_operations': _has_active_operation(package),
         'used': _has_been_used(package),
+        'profile_binding_current': package_profile_binding_matches(package),
+        'operation_readiness': {
+            operation: package_operation_is_ready(package, operation)
+            for operation in ('install', 'update', 'uninstall')
+        },
+        # RC49-03C-A prepares the contract but has no operation dispatch action.
+        'dispatch_available': False,
     }
 
 
@@ -202,10 +222,13 @@ def _verify_storage_artifact(package):
     import hashlib
     digest = hashlib.sha256()
     size = 0
-    with handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-            size += len(chunk)
-            digest.update(chunk)
+    try:
+        with handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                size += len(chunk)
+                digest.update(chunk)
+    except (OSError, ValueError):
+        return False
     return size == package.size_bytes and digest.hexdigest() == package.sha256
 
 
@@ -287,7 +310,8 @@ def software_package_detail(request, pk):
     if denied:
         return denied
     package = get_object_or_404(SoftwarePackageRecord.objects.select_related(
-        'created_by', 'uploaded_by', 'last_modified_by', 'approved_by', 'revoked_by'), pk=pk)
+        'created_by', 'uploaded_by', 'last_modified_by', 'approved_by', 'revoked_by',
+        'execution_profile_approved_by'), pk=pk)
     events = AuditEvent.objects.filter(metadata__software_package_id=str(package.pk),
         event_type__startswith='software_package.').order_by('-created_at')[:100]
     return JsonResponse({'item': _package_data(package, request), 'audit': [{
@@ -339,6 +363,104 @@ def software_package_update(request, pk):
 @login_required
 @require_http_methods(['POST'])
 @never_cache
+def software_package_profile(request, pk):
+    denied = _check_permission(request, 'agents.configure_softwarepackageprofile')
+    if denied:
+        return denied
+    try:
+        payload = _body(request)
+        if set(payload) != {'revision', 'reason', 'execution_profile'}:
+            raise PackageActionError('invalid_fields')
+        reason = _reason(payload.get('reason'))
+        with transaction.atomic():
+            package = get_object_or_404(SoftwarePackageRecord.objects.select_for_update(), pk=pk)
+            _revision(payload, package)
+            if not package.artifact_key or not package.sha256:
+                raise PackageActionError('file_required', 409)
+            try:
+                profile = normalize_execution_profile(payload['execution_profile'], package.package_type)
+            except ExecutionProfileError as exc:
+                raise PackageActionError(exc.code) from None
+            before = _snapshot(package)
+            package.execution_profile = profile
+            package.execution_profile_revision += 1
+            package.execution_profile_sha256 = execution_profile_digest(profile)
+            package.execution_profile_artifact_sha256 = package.sha256
+            package.execution_profile_artifact_revision = package.artifact_revision
+            package.execution_profile_status = 'draft'
+            package.execution_profile_approved_at = None
+            package.execution_profile_approved_by = None
+            package.revision += 1
+            package.last_modified_by = request.user
+            package.save(update_fields=[
+                'execution_profile', 'execution_profile_revision', 'execution_profile_sha256',
+                'execution_profile_artifact_sha256', 'execution_profile_artifact_revision',
+                'execution_profile_status', 'execution_profile_approved_at',
+                'execution_profile_approved_by', 'revision', 'last_modified_by', 'updated_at',
+            ])
+            _audit(request, 'software_package.profile_updated', 'Perfil técnico atualizado; aprovação operacional pendente',
+                   package_id=package.pk, before=before, after=_snapshot(package), reason=reason)
+            item = _package_data(package, request)
+        return JsonResponse({'item': item})
+    except PackageActionError as exc:
+        return _response_error(exc)
+
+
+@login_required
+@require_http_methods(['POST'])
+@never_cache
+def software_package_profile_approve(request, pk):
+    denied = _check_permission(request, 'agents.approve_softwarepackageprofile')
+    if denied:
+        return denied
+    try:
+        payload = _body(request)
+        if set(payload) != {'revision', 'reason'}:
+            raise PackageActionError('invalid_fields')
+        reason = _reason(payload.get('reason'))
+        with transaction.atomic():
+            package = get_object_or_404(SoftwarePackageRecord.objects.select_for_update(), pk=pk)
+            _revision(payload, package)
+            if package.approval_status != SoftwarePackageRecord.STATUS_APPROVED:
+                raise PackageActionError('artifact_approval_required', 409)
+            if not (package.execution_profile_sha256
+                    and package.execution_profile_artifact_sha256 == package.sha256
+                    and package.execution_profile_artifact_revision == package.artifact_revision):
+                raise PackageActionError('profile_binding_stale', 409)
+            try:
+                normalized = normalize_execution_profile(package.execution_profile, package.package_type)
+            except ExecutionProfileError:
+                artifact_valid = False
+                normalized = None
+            else:
+                try:
+                    artifact_valid = _verify_storage_artifact(package)
+                except ImproperlyConfigured:
+                    return JsonResponse({'error': 'storage_unconfigured'}, status=503)
+            if (not artifact_valid or normalized != package.execution_profile
+                    or execution_profile_digest(normalized or {}) != package.execution_profile_sha256):
+                raise PackageActionError('profile_or_artifact_integrity_failed', 409)
+            before = _snapshot(package)
+            package.execution_profile_status = 'approved'
+            package.execution_profile_approved_at = timezone.now()
+            package.execution_profile_approved_by = request.user
+            package.revision += 1
+            package.last_modified_by = request.user
+            package.save(update_fields=[
+                'execution_profile_status', 'execution_profile_approved_at',
+                'execution_profile_approved_by', 'revision', 'last_modified_by', 'updated_at',
+            ])
+            _audit(request, 'software_package.profile_approved', 'Perfil técnico aprovado',
+                   package_id=package.pk, before=before, after=_snapshot(package), reason=reason)
+            item = _package_data(package, request)
+        return JsonResponse({'item': item})
+    except PackageActionError as exc:
+        return _response_error(exc)
+
+
+@login_required
+@require_http_methods(['POST'])
+@never_cache
 def software_package_replace(request, pk):
     denied = _check_permission(request, 'agents.change_softwarepackagerecord')
     if denied:
@@ -375,6 +497,7 @@ def software_package_replace(request, pk):
             package.size_bytes = staged.size_bytes
             package.sha256 = staged.sha256
             package.artifact_key = final_key
+            package.artifact_revision += 1
             package.artifact_uploaded_at = now
             package.uploaded_by = request.user
             package.signature_status = SoftwarePackageRecord.SIGNATURE_UNKNOWN
@@ -384,6 +507,9 @@ def software_package_replace(request, pk):
             package.approved_by = None
             package.revoked_at = None
             package.revoked_by = None
+            package.execution_profile_status = 'draft' if package.execution_profile else 'unconfigured'
+            package.execution_profile_approved_at = None
+            package.execution_profile_approved_by = None
             package.last_modified_by = request.user
             package.revision += 1
             package.metadata = {**(package.metadata or {}), 'detected_format': staged.detected_format,
@@ -446,6 +572,9 @@ def _status_action(request, pk, action):
                 package.approval_status = SoftwarePackageRecord.STATUS_REVOKED
                 package.revoked_at = timezone.now()
                 package.revoked_by = request.user
+                package.execution_profile_status = 'draft' if package.execution_profile else 'unconfigured'
+                package.execution_profile_approved_at = None
+                package.execution_profile_approved_by = None
             package.revision += 1
             package.last_modified_by = request.user
             package.save()

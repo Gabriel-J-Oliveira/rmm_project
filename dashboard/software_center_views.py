@@ -9,6 +9,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
 
 from agents.models import AgentMachine, SoftwarePackageRecord
+from agents.software_execution_profiles import package_profile_binding_matches, package_operation_is_ready
 from config.authz import is_nightowl_technical_user
 
 
@@ -32,6 +33,9 @@ def software_center(request):
         'can_revoke_packages': request.user.is_superuser or request.user.has_perm('agents.revoke_softwarepackage'),
         'can_delete_packages': request.user.is_superuser or request.user.has_perm('agents.delete_softwarepackagerecord'),
         'can_download_packages': request.user.is_superuser or request.user.has_perm('agents.download_softwarepackage'),
+        'can_configure_software_profiles': request.user.is_superuser or request.user.has_perm('agents.configure_softwarepackageprofile'),
+        'can_approve_software_profiles': request.user.is_superuser or request.user.has_perm('agents.approve_softwarepackageprofile'),
+        'can_execute_software_operations': request.user.is_superuser or request.user.has_perm('agents.execute_softwarepackageoperation'),
     })
 
 
@@ -150,6 +154,17 @@ def software_packages_data(request):
         'signature_status': package.signature_status,
         'signer': package.signer or None,
         'approval_status': package.approval_status,
+        'artifact_revision': package.artifact_revision,
+        'execution_profile_status': package.execution_profile_status,
+        'execution_profile_revision': package.execution_profile_revision,
+        'execution_profile_approved_at': package.execution_profile_approved_at.isoformat() if package.execution_profile_approved_at else None,
+        'execution_profile_approved_by': package.execution_profile_approved_by.get_username() if package.execution_profile_approved_by else None,
+        'profile_binding_current': package_profile_binding_matches(package),
+        'operation_readiness': {
+            operation: package_operation_is_ready(package, operation)
+            for operation in ('install', 'update', 'uninstall')
+        },
+        'dispatch_available': False,
         'approved_at': package.approved_at.isoformat() if package.approved_at else None,
         'approved_by': package.approved_by.get_username() if package.approved_by else None,
         'revoked_at': package.revoked_at.isoformat() if package.revoked_at else None,
@@ -160,4 +175,5 @@ def software_packages_data(request):
         'download_url': reverse('software-package-download', kwargs={'pk': package.pk}),
     } for package in packages.select_related(
         'approved_by', 'revoked_by', 'created_by', 'uploaded_by', 'last_modified_by',
+        'execution_profile_approved_by',
     )]})

@@ -108,6 +108,11 @@
         var marker = "00000000-0000-0000-0000-000000000000";
         return root.dataset.packageDetailBase.replace(marker, encodeURIComponent(id)) + (suffix || "");
     }
+    function packageProfileUrl(id, approve) {
+        var marker = "00000000-0000-0000-0000-000000000000";
+        var base = approve ? root.dataset.packageProfileApproveBase : root.dataset.packageProfileBase;
+        return base.replace(marker, encodeURIComponent(id));
+    }
     var apiErrors = {
         forbidden: "Seu usuário não tem permissão para esta operação.", file_required: "Selecione um instalador MSI ou EXE.",
         friendly_name_required: "Informe o nome amigável.", upload_too_large: "O arquivo excede o limite configurado.",
@@ -119,6 +124,13 @@
         package_in_use_by_active_operation: "O instalador está referenciado por uma operação ativa e não pode ser substituído ou removido.",
         package_has_operational_history: "O cadastro já foi utilizado. Ele não pode ser excluído; revogue-o para retirá-lo de uso.",
         artifact_missing_or_integrity_failed: "O arquivo armazenado está ausente ou não corresponde ao hash registrado.",
+        artifact_approval_required: "Aprove primeiro o arquivo do pacote.", profile_binding_stale: "O perfil pertence a outro hash ou revisão do instalador; salve novamente antes de aprovar.",
+        profile_or_artifact_integrity_failed: "O perfil ou o arquivo não passou na validação de integridade.",
+        expected_version_required_or_invalid: "Informe uma versão esperada válida.", msi_arguments_not_supported: "MSI usa parâmetros fixos do Windows Installer neste incremento; argumentos arbitrários não são aceitos.",
+        detection_product_code_mismatch: "A detecção MSI deve usar o ProductCode configurado na instalação.", registry_detection_invalid: "Informe a chave e o nome exato do aplicativo no registro de desinstalação.",
+        detection_path_invalid: "O caminho de detecção deve estar sob uma pasta Windows permitida, sem traversal.", uninstall_path_invalid: "O caminho do desinstalador EXE deve usar uma raiz Windows permitida, sem traversal.",
+        agent_capability_unconfirmed: "O agente ainda não anuncia a capability versionada necessária; nenhum job foi criado.",
+        software_dispatch_not_enabled: "Despacho de software permanece desabilitado neste incremento.",
         storage_unconfigured: "O armazenamento privado de instaladores ainda não foi configurado neste ambiente.", upload_limit_invalid: "O limite de upload não está configurado corretamente.",
         package_storage_failed: "Não foi possível armazenar o instalador. Tente novamente ou contate um administrador."
     };
@@ -152,10 +164,11 @@
         setState(packagesState, "", "");
         packageList.innerHTML = packages.map(function (pkg) {
             var label = pkg.approval_status === "approved" ? "Aprovado" : pkg.approval_status === "revoked" ? "Revogado" : "Rascunho";
+            var profileLabel = { unconfigured: 'Perfil não configurado', draft: 'Perfil pendente de aprovação', approved: 'Perfil aprovado' }[pkg.execution_profile_status] || 'Perfil desconhecido';
             return '<article class="software-upload-card"><div class="software-upload-card-top">' + icon(pkg.package_type === "msi" ? "package-check" : "package") + '<span class="software-package-type">' + esc(String(pkg.package_type || "").toUpperCase()) + '</span><span class="software-approval ' + esc(pkg.approval_status) + '">' + esc(label) + '</span></div>' +
                 '<h3><a href="#" data-package-details="' + esc(pkg.id) + '">' + esc(pkg.friendly_name) + '</a></h3>' +
                 '<p class="software-original-name" title="' + esc(pkg.original_filename) + '">' + esc(pkg.original_filename || "Nome original não informado") + '</p>' +
-                '<div class="software-upload-card-meta"><span>Versão: ' + esc(pkg.version || "Não informada") + '</span><span>Tamanho: ' + esc(size(pkg.size_bytes)) + '</span></div>' +
+                '<div class="software-upload-card-meta"><span>Versão: ' + esc(pkg.version || "Não informada") + '</span><span>Tamanho: ' + esc(size(pkg.size_bytes)) + '</span><span>' + esc(profileLabel) + '</span></div>' +
                 (!pkg.has_file ? '<p class="software-package-warning">Cadastro antigo sem arquivo associado; substitua/anexe um arquivo antes de aprovar.</p>' : '') + '</article>';
         }).join("");
         icons();
@@ -231,6 +244,68 @@
             (hint ? '<small>' + esc(hint) + '</small>' : '') + '</label>';
     }
 
+    function selectField(label, name, value, choices, hint) {
+        return '<label class="software-form-field"><span>' + esc(label) + '</span><select name="' + esc(name) + '">' + choices.map(function (choice) {
+            return '<option value="' + esc(choice[0]) + '"' + (choice[0] === value ? ' selected' : '') + '>' + esc(choice[1]) + '</option>';
+        }).join('') + '</select>' + (hint ? '<small>' + esc(hint) + '</small>' : '') + '</label>';
+    }
+
+    function profileArray(profile, section, field) {
+        var value = profile && profile[section] && profile[section][field];
+        return JSON.stringify(Array.isArray(value) ? value : [], null, 2);
+    }
+
+    function executionProfileSection(pkg) {
+        var profile = pkg.execution_profile || {};
+        var msi = pkg.package_type === 'msi';
+        var state = pkg.execution_profile_status || 'unconfigured';
+        var stateText = { unconfigured: 'Não configurado', draft: 'Rascunho — requer aprovação do perfil', approved: 'Aprovado' }[state] || 'Desconhecido';
+        var readiness = pkg.operation_readiness || {};
+        var operations = [['install', 'Instalação'], ['update', 'Atualização'], ['uninstall', 'Desinstalação']].map(function (item) {
+            var configured = !!readiness[item[0]];
+            return '<li><strong>' + item[1] + ':</strong> ' + (configured ? 'Perfil aprovado' : 'Não configurada ou requer aprovação') + '</li>';
+        }).join('');
+        var body = '<section class="software-detail-section software-execution-profile"><h3>Configuração de execução</h3>' +
+            '<p class="software-profile-state" data-profile-state="' + esc(state) + '">' + esc(stateText) +
+            (pkg.profile_binding_current === false && pkg.execution_profile_sha256 ? ' · Perfil vinculado a outro arquivo/revisão' : '') + '</p>' +
+            '<dl class="software-profile-operations"><div><dt>Operações preparadas</dt><dd><ul>' + operations + '</ul></dd></div></dl>' +
+            '<p class="software-package-warning">Nenhuma operação pode ser despachada nesta etapa. Mesmo um perfil aprovado não instala software. A instalação exige capability compatível do agente, autorização e uma etapa posterior.</p>';
+        if (!pkg.has_file) {
+            body += '<p class="software-readonly-note">Anexe primeiro um instalador válido. O perfil deve ser vinculado ao hash e à revisão do binário atual.</p>';
+        } else if (can('ConfigureProfile')) {
+            body += '<form class="software-editor-form" data-package-form="profile">' +
+                '<input type="hidden" name="revision" value="' + esc(pkg.revision) + '">' +
+                selectField('Método de instalação', 'install_method', msi ? 'msi' : 'exe', [[msi ? 'msi' : 'exe', msi ? 'Windows Installer (MSI)' : 'Executável EXE do fornecedor']], 'O método é fixo pelo tipo do arquivo.') +
+                (msi ? formField('ProductCode MSI', 'product_code', (profile.install || {}).product_code || '', 'text', true, 'GUID do produto; os parâmetros do msiexec serão controlados pelo agente.') :
+                    formField('Argumentos silenciosos EXE (JSON array)', 'install_arguments', profileArray(profile, 'install', 'arguments'), 'textarea', true, 'Use somente argumentos documentados pelo fornecedor. Exemplo: ["/quiet"]. Cada item é um argumento, não uma linha de shell.')) +
+                (msi ? '<input type="hidden" name="install_arguments" value="[]">' : '') +
+                '<label class="software-profile-toggle"><input type="checkbox" name="update_enabled"' + (profile.update ? ' checked' : '') + '> Configurar método de atualização</label>' +
+                (msi ? selectField('Método de atualização', 'update_method', (profile.update || {}).method || 'msi_upgrade', [['msi_upgrade', 'MSI upgrade controlado']], '') :
+                    selectField('Método de atualização', 'update_method', (profile.update || {}).method || 'vendor_exe', [['vendor_exe', 'Executável e argumentos do fornecedor']], 'Não há parâmetros universais para EXE.')) +
+                (msi ? '<input type="hidden" name="update_arguments" value="[]">' : formField('Argumentos de atualização EXE (JSON array)', 'update_arguments', profileArray(profile, 'update', 'arguments'), 'textarea', false, 'Cada item será passado como argumento separado; sem shell.')) +
+                '<label class="software-profile-toggle"><input type="checkbox" name="uninstall_enabled"' + (profile.uninstall ? ' checked' : '') + '> Configurar método de desinstalação</label>' +
+                (msi ? formField('ProductCode MSI para remover', 'uninstall_product_code', (profile.uninstall || {}).product_code || (profile.install || {}).product_code || '', 'text', false, 'Não serão executadas strings UninstallString do inventário.') :
+                    formField('Executável do fornecedor (raiz permitida)', 'uninstall_executable_path', (profile.uninstall || {}).executable_path || '', 'text', false, 'Exemplo: %ProgramFiles%\\Vendor\\App\\uninstall.exe. A execução futura exigirá resolver e validar o caminho localmente.')) +
+                (!msi ? formField('Argumentos de desinstalação EXE (JSON array)', 'uninstall_arguments', profileArray(profile, 'uninstall', 'arguments'), 'textarea', false, 'Documentados pelo fornecedor; não execute strings coletadas do inventário.') : '<input type="hidden" name="uninstall_arguments" value="[]">') +
+                selectField('Regra de detecção', 'detection_method', (profile.detection || {}).method || (msi ? 'msi_product_code' : 'registry_uninstall'), msi ? [['msi_product_code', 'ProductCode MSI e versão']] : [['registry_uninstall', 'Chave exata de desinstalação e nome'], ['file_version', 'Versão de arquivo sob pasta Windows']], '') +
+                (msi ? '<input type="hidden" name="detection_product_code" value="' + esc((profile.detection || {}).product_code || (profile.install || {}).product_code || '') + '">' :
+                    formField('Chave do registro de desinstalação', 'detection_registry_key', (profile.detection || {}).registry_key || '', 'text', false, 'Subchave específica em SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall.') +
+                    formField('Nome exato no registro', 'detection_display_name', (profile.detection || {}).display_name || '', 'text', false, '') +
+                    formField('Caminho para detecção de versão de arquivo', 'detection_path', (profile.detection || {}).path || '', 'text', false, 'Use %ProgramFiles%, %ProgramFiles(x86)%, %ProgramData% ou %LOCALAPPDATA%.')) +
+                formField('Versão esperada', 'expected_version', profile.expected_version || pkg.version || '', 'text', true, 'A conclusão futura dependerá da detecção real, não apenas do exit code.') +
+                selectField('Comportamento se exigir reinicialização', 'reboot_behavior', profile.reboot_behavior || 'defer_to_policy', [['report_only', 'Registrar como pendente; não reiniciar'], ['defer_to_policy', 'Delegar a futura política de reboot'], ['require_operator', 'Aguardar decisão do operador']], 'Esta configuração não executa reboot nesta etapa.') +
+                formField('Motivo da alteração', 'reason', '', 'text', true, 'Obrigatório para auditoria.') +
+                '<div class="software-form-message" data-form-message role="status"></div><button class="refresh-button" type="submit">Salvar perfil como rascunho</button></form>';
+        } else {
+            body += '<p class="software-readonly-note">Seu usuário pode consultar o perfil, mas não configurá-lo.</p>';
+        }
+        if (pkg.has_file && can('ApproveProfile') && state !== 'approved' && pkg.execution_profile_sha256) {
+            body += '<button type="button" class="refresh-button" data-package-action="approve-profile">Aprovar perfil operacional</button>';
+        }
+        body += '<p class="software-readonly-note">Aprovação do arquivo e aprovação do perfil são independentes. Alterar perfil ou substituir o binário invalida a aprovação operacional.</p></section>';
+        return body;
+    }
+
     function openCreateDrawer() {
         var max = Number(root.dataset.packageMaxUploadBytes || 0);
         var body = '<form class="software-editor-form" data-package-form="create" enctype="multipart/form-data">' +
@@ -267,6 +342,7 @@
                 formField('Motivo da substituição', 'reason', '', 'text', true, 'Obrigatório para auditoria.') +
                 '<div class="software-form-message" data-form-message role="status"></div><button class="refresh-button" type="submit"' + (pkg.active_operations ? ' disabled title="Há operação ativa usando este pacote"' : '') + '>Substituir arquivo</button></form></section>';
         }
+        body += executionProfileSection(pkg);
         body += '<section class="software-detail-section"><h3>Governança</h3><div class="software-governance-actions">';
         if (can('Approve') && pkg.approval_status !== 'approved') body += '<button type="button" class="refresh-button" data-package-action="approve">Aprovar</button>';
         if (can('Revoke') && pkg.approval_status !== 'revoked') body += '<button type="button" class="refresh-button" data-package-action="revoke">Revogar</button>';
@@ -298,6 +374,52 @@
         if (node) { node.textContent = message; node.dataset.state = kind || 'info'; }
     }
 
+    function parseArguments(form, name, optional) {
+        var raw = (new FormData(form).get(name) || '').trim();
+        if (!raw && optional) return [];
+        try {
+            var parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed) || parsed.some(function (value) { return typeof value !== 'string'; })) throw new Error('invalid');
+            return parsed;
+        } catch (_) {
+            throw new Error('Informe os argumentos como um array JSON de strings, por exemplo ["/quiet"].');
+        }
+    }
+
+    function executionProfilePayload(form, pkg) {
+        var data = new FormData(form);
+        var msi = pkg.package_type === 'msi';
+        var product = String(data.get('product_code') || '').trim();
+        var install = msi ? { method: 'msi', arguments: [], product_code: product } :
+            { method: 'exe', arguments: parseArguments(form, 'install_arguments', false) };
+        var update = data.get('update_enabled') ? {
+            method: msi ? 'msi_upgrade' : 'vendor_exe',
+            arguments: msi ? [] : parseArguments(form, 'update_arguments', true)
+        } : null;
+        var uninstall = null;
+        if (data.get('uninstall_enabled')) {
+            uninstall = msi ? { method: 'msi_product_code', product_code: String(data.get('uninstall_product_code') || '').trim() } : {
+                method: 'vendor_exe', executable_path: String(data.get('uninstall_executable_path') || '').trim(),
+                arguments: parseArguments(form, 'uninstall_arguments', true)
+            };
+        }
+        var detectionMethod = String(data.get('detection_method') || '');
+        var detection = msi ? { method: 'msi_product_code', product_code: String(data.get('detection_product_code') || product).trim() } :
+            detectionMethod === 'registry_uninstall' ? {
+                method: detectionMethod, registry_key: String(data.get('detection_registry_key') || '').trim(),
+                display_name: String(data.get('detection_display_name') || '').trim()
+            } : { method: 'file_version', path: String(data.get('detection_path') || '').trim() };
+        return {
+            revision: Number(data.get('revision')),
+            reason: String(data.get('reason') || '').trim(),
+            execution_profile: {
+                schema_version: 1, install: install, update: update, uninstall: uninstall,
+                detection: detection, expected_version: String(data.get('expected_version') || '').trim(),
+                reboot_behavior: String(data.get('reboot_behavior') || 'defer_to_policy')
+            }
+        };
+    }
+
     function reloadPackageDrawer(id) {
         return loadPackages().then(function () { showPackageDetails(id); });
     }
@@ -321,6 +443,16 @@
             operation = requestJson(root.dataset.packageCreateUrl, { method: 'POST', body: new FormData(form) });
         } else if (kind === 'replace') {
             operation = requestJson(packageUrl(id, 'replace/'), { method: 'POST', body: new FormData(form) });
+        } else if (kind === 'profile') {
+            var pkg = packages.find(function (item) { return item.id === id; });
+            try {
+                if (!pkg) throw new Error('Recarregue o cadastro antes de configurar o perfil.');
+                operation = requestJson(packageProfileUrl(id, false), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(executionProfilePayload(form, pkg)) });
+            } catch (error) {
+                setFormMessage(form, error.message, 'error');
+                if (submit) submit.disabled = false;
+                return;
+            }
         } else {
             var payload = Object.fromEntries(new FormData(form).entries());
             payload.revision = Number(payload.revision);
@@ -349,7 +481,7 @@
         if (!reason.trim()) { if (message) { message.textContent = 'Informe o motivo antes de continuar.'; message.dataset.state = 'error'; } return; }
         button.disabled = true;
         var payload = { revision: pkg.revision, reason: reason.trim() };
-        var url = packageUrl(id, action === 'delete' ? 'delete/' : action + '/');
+        var url = action === 'approve-profile' ? packageProfileUrl(id, true) : packageUrl(id, action === 'delete' ? 'delete/' : action + '/');
         requestJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(function () {
             if (action === 'delete') { closeDrawer(); return loadPackages(); }
             return reloadPackageDrawer(id);

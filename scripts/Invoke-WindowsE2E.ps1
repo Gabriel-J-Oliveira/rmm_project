@@ -96,7 +96,7 @@ try {
         $softwareCenterTarget = Join-Path $env:RUNNER_TEMP 'nightowl-software-center'
         New-Item -ItemType Directory -Path $softwareCenterTarget -Force | Out-Null
         $screenshots = @(Get-ChildItem -LiteralPath $softwareCenterImages -Filter '*.png' -File -ErrorAction Stop)
-        if ($screenshots.Count -ne 4) { throw 'Software Center browser E2E did not produce all four viewport screenshots' }
+        if ($screenshots.Count -ne 6) { throw 'Software Center browser E2E did not produce all six desktop/mobile screenshots' }
         Copy-Item -LiteralPath $screenshots.FullName -Destination $softwareCenterTarget -Force
 
         # Exercise the central execution-policy UI in its own isolated Django
