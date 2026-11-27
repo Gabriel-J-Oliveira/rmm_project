@@ -1,5 +1,8 @@
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Diagnostics;
 
@@ -97,7 +100,10 @@ internal static class OwnedProcess
     }
 
     // Suspended creation closes the race between child creation and job assignment.
-    internal static async Task<int> RunAsync(string executable, string arguments, CancellationToken ct)
+    internal static Task<int> RunAsync(string executable, string arguments, CancellationToken ct) =>
+        RunCoreAsync(executable, arguments, environment: 0, ct);
+
+    private static async Task<int> RunCoreAsync(string executable, string arguments, nint environment, CancellationToken ct)
     {
         nint job=CreateJobObject(0,null);
         if(job==0) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -107,7 +113,8 @@ internal static class OwnedProcess
             ExtendedLimits limits=new() { Basic=new BasicLimits { LimitFlags=0x2000 } };
             if(!SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf<ExtendedLimits>())) throw new Win32Exception();
             Startup startup=new() { Size=Marshal.SizeOf<Startup>() };
-            if(!CreateProcess(executable,new StringBuilder('"'+executable+'"'+' '+arguments),0,0,false,0x08000004,0,null,ref startup,out process))
+            uint creationFlags = 0x08000004 | (environment != 0 ? 0x00000400u : 0u); // suspended + Unicode environment
+            if(!CreateProcess(executable,new StringBuilder('"'+executable+'"'+' '+arguments),0,0,false,creationFlags,environment,null,ref startup,out process))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             if(!AssignProcessToJobObject(job,process.Process)) { TerminateProcess(process.Process,1); throw new Win32Exception(); }
             if(ResumeThread(process.Thread)==uint.MaxValue) throw new Win32Exception();
@@ -136,6 +143,126 @@ internal static class OwnedProcess
             if(process.Process!=0) { WaitForSingleObject(process.Process,5000); CloseHandle(process.Process); }
             CloseHandle(job);
         }
+    }
+
+    internal static async Task<int> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken ct)
+    {
+        (string Block, string TempDirectory) isolated = CreateIsolatedEnvironment();
+        nint environment = Marshal.StringToHGlobalUni(isolated.Block);
+        try { return await RunCoreAsync(executable, JoinWindowsArguments(arguments), environment, ct); }
+        finally
+        {
+            Marshal.FreeHGlobal(environment);
+            try
+            {
+                if (Directory.Exists(isolated.TempDirectory)
+                    && (File.GetAttributes(isolated.TempDirectory) & FileAttributes.ReparsePoint) == 0)
+                    Directory.Delete(isolated.TempDirectory, recursive: true);
+            }
+            catch (Exception) { /* The next agent maintenance pass may remove only owned empty temp folders. */ }
+        }
+    }
+
+    internal static string BuildIsolatedEnvironmentBlock(string stateTemp)
+    {
+        string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        string systemRoot = Path.GetFullPath(windows);
+        string systemDrive = Path.GetPathRoot(systemRoot)!.TrimEnd('\\');
+        string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string stateTempRoot = Path.Combine(localAppData, "NightOwl", "Temp");
+        if (!Path.GetFullPath(stateTemp).StartsWith(Path.GetFullPath(stateTempRoot) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase))
+            throw new IOException("EXE temporary directory is outside its protected root.");
+        Directory.CreateDirectory(stateTempRoot);
+        Directory.CreateDirectory(stateTemp);
+        string current = Path.GetFullPath(stateTemp);
+        while (!string.IsNullOrEmpty(current))
+        {
+            if ((Directory.Exists(current) || File.Exists(current))
+                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("EXE temporary path contains a reparse point.");
+            string? parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || parent == current) break;
+            current = parent;
+        }
+        string system32 = Path.Combine(systemRoot, "System32");
+        Dictionary<string, string> values = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SystemRoot"] = systemRoot,
+            ["WINDIR"] = systemRoot,
+            ["SystemDrive"] = systemDrive,
+            ["ProgramData"] = programData,
+            ["ProgramFiles"] = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            ["ProgramFiles(x86)"] = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            ["TEMP"] = stateTemp,
+            ["TMP"] = stateTemp,
+            ["PATH"] = system32 + ";" + Path.Combine(systemRoot, "System32", "Wbem") + ";" + systemRoot,
+            ["PSModulePath"] = Path.Combine(system32, "WindowsPowerShell", "v1.0", "Modules"),
+        };
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(profile)) values["USERPROFILE"] = profile;
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (!string.IsNullOrWhiteSpace(appData)) values["APPDATA"] = appData;
+        if (!string.IsNullOrWhiteSpace(localAppData)) values["LOCALAPPDATA"] = localAppData;
+        // A Windows environment block is sorted by variable name and ends in two NULs.
+        return string.Join('\0', values.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => pair.Key + "=" + pair.Value)) + "\0\0";
+    }
+
+    private static (string Block, string TempDirectory) CreateIsolatedEnvironment()
+    {
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string root = Path.Combine(localAppData, "NightOwl", "Temp");
+        Directory.CreateDirectory(root);
+        string current = Path.GetFullPath(root);
+        while (!string.IsNullOrEmpty(current))
+        {
+            if ((Directory.Exists(current) || File.Exists(current))
+                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("EXE temporary path contains a reparse point.");
+            string? parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || parent == current) break;
+            current = parent;
+        }
+        DirectorySecurity privateAcl = new();
+        privateAcl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        InheritanceFlags inheritance = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        privateAcl.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User
+            ?? throw new UnauthorizedAccessException(), FileSystemRights.FullControl, inheritance,
+            PropagationFlags.None, AccessControlType.Allow));
+        privateAcl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
+        privateAcl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(root).SetAccessControl(privateAcl);
+        string temp = Path.Combine(root, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        return (BuildIsolatedEnvironmentBlock(temp), temp);
+    }
+
+    internal static string JoinWindowsArguments(IReadOnlyList<string> arguments) =>
+        string.Join(" ", arguments.Select(QuoteWindowsArgument));
+
+    internal static string QuoteWindowsArgument(string argument)
+    {
+        if (argument.Length > 0 && !argument.Any(char.IsWhiteSpace) && !argument.Contains('"')) return argument;
+        StringBuilder quoted = new("\"");
+        int slashes = 0;
+        foreach (char character in argument)
+        {
+            if (character == '\\') { slashes++; continue; }
+            if (character == '"')
+            {
+                quoted.Append('\\', slashes * 2 + 1).Append('"');
+                slashes = 0;
+                continue;
+            }
+            quoted.Append('\\', slashes).Append(character);
+            slashes = 0;
+        }
+        quoted.Append('\\', slashes * 2).Append('"');
+        return quoted.ToString();
     }
     [StructLayout(LayoutKind.Sequential)] private struct Startup
     { public int Size; public nint Reserved,Desktop,Title; public uint X,Y,XSize,YSize,XChars,YChars,Fill,Flags; public ushort Show,ReservedBytes; public nint ReservedPointer,Input,Output,Error; }

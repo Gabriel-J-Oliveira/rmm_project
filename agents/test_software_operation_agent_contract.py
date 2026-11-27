@@ -46,7 +46,7 @@ class SoftwareOperationAgentProfileTests(TestCase):
             endpoint_uuid_snapshot=self.machine.pk, machine_id_snapshot=self.machine.machine_id,
             package=self.package, operation='install', artifact_sha256='a' * 64, artifact_revision=1,
             profile_revision=1, profile_sha256='b' * 64, authorization='agents.execute_softwarepackageoperation',
-            snapshot={'package': {'profile': self.profile, 'size_bytes': 42}},
+            snapshot={'package': {'package_type': 'msi', 'profile': self.profile, 'size_bytes': 42}},
         )
 
     def test_profile_is_authenticated_exact_job_scoped_and_redacted(self):
@@ -223,3 +223,102 @@ class SoftwareOperationSerializedAgentAckTests(TestCase):
         self.assertTrue(replay.json().get('duplicate'))
         job.refresh_from_db()
         self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+
+    def _configure_exe_package(self):
+        from .software_execution_profiles import normalize_execution_profile
+        profile = normalize_execution_profile({
+            'schema_version': 2,
+            'install': {
+                'method': 'exe', 'arguments': ['/quiet'], 'timeout_seconds': 1800,
+                'accepted_exit_codes': [0, 3010], 'reboot_exit_codes': [3010],
+            },
+            'update': {
+                'method': 'vendor_exe', 'arguments': ['/update'], 'timeout_seconds': 120,
+                'accepted_exit_codes': [0], 'reboot_exit_codes': [],
+            },
+            'uninstall': {
+                'method': 'vendor_exe', 'arguments': ['/remove'], 'timeout_seconds': 120,
+                'accepted_exit_codes': [0], 'reboot_exit_codes': [],
+                'executable_path': r'%ProgramFiles%\Vendor\App\uninstall.exe',
+            },
+            'detection': {
+                'method': 'registry_value', 'hive': 'HKLM', 'view': 'registry64',
+                'key': r'SOFTWARE\Vendor\Product', 'value_name': 'DisplayVersion',
+            },
+            'expected_version': '2.3.4', 'reboot_behavior': 'report_only',
+        }, 'exe')
+        self.package.package_type = SoftwarePackageRecord.TYPE_EXE
+        self.package.execution_profile = profile
+        self.package.execution_profile_revision = 2
+        self.package.execution_profile_sha256 = execution_profile_digest(profile)
+        self.package.execution_profile_artifact_sha256 = self.package.sha256
+        self.package.execution_profile_artifact_revision = self.package.artifact_revision
+        self.package.execution_profile_status = 'approved'
+        self.package.execution_profile_approved_at = timezone.now()
+        self.package.execution_profile_approved_by = self.operator
+        self.package.save(update_fields=[
+            'package_type', 'execution_profile', 'execution_profile_revision', 'execution_profile_sha256',
+            'execution_profile_artifact_sha256', 'execution_profile_artifact_revision', 'execution_profile_status',
+            'execution_profile_approved_at', 'execution_profile_approved_by',
+        ])
+
+    def _serialized_exe_result(self, job, status, *, exit_code=0, reboot_pending=False, error_code=''):
+        snapshot = job.payload
+        evidence = {
+            'method': 'registry_value',
+            'identity': r'HKLM/registry64/SOFTWARE\Vendor\Product/DisplayVersion',
+            'state': 'absent' if snapshot['operation'] == 'uninstall' else 'present',
+            'version': '' if snapshot['operation'] == 'uninstall' else '2.3.4',
+            'installed': snapshot['operation'] != 'uninstall',
+        }
+        completed = status == AgentJob.STATUS_COMPLETED
+        output = {
+            'schema_version': 2, 'operation_id': snapshot['operation_id'],
+            'operation': snapshot['operation'], 'request_id': snapshot['request_id'],
+            'package_uuid': snapshot['package_uuid'], 'artifact_sha256': snapshot['artifact_sha256'],
+            'artifact_revision': snapshot['artifact_revision'], 'profile_revision': snapshot['profile_revision'],
+            'profile_sha256': snapshot['profile_sha256'], 'phase': 'verified' if completed else 'exe',
+            'verified': completed, 'success': completed,
+            'exit_code': exit_code if completed else 1, 'reboot_pending': reboot_pending if completed else False,
+            'evidence': evidence if completed else {
+                'method': 'exe', 'identity': '', 'state': 'unknown', 'version': '', 'installed': False,
+            },
+        }
+        if not completed:
+            output['error_code'] = error_code
+        return {
+            'job_id': str(job.pk), 'status': status,
+            'started_at': timezone.now().isoformat(), 'finished_at': timezone.now().isoformat(),
+            'duration_seconds': 1.25, 'exit_code': exit_code if completed else 1,
+            'stdout': '', 'stderr': '', 'error_message': '',
+            'result': {'output': output, 'output_truncated': False,
+                       'agent_version': '0.1.1.0-rc49-test', 'machine_id': self.machine.machine_id},
+        }
+
+    def test_exe_serialized_agent_envelope_accepts_operations_reboot_failure_and_replay(self):
+        self._configure_exe_package()
+        for operation, exit_code, reboot in (
+            ('install', 3010, True), ('update', 0, False), ('uninstall', 0, False),
+        ):
+            with self.subTest(operation=operation):
+                job = self._create_dispatched_job(operation)
+                body = self._serialized_exe_result(job, AgentJob.STATUS_COMPLETED,
+                                                   exit_code=exit_code, reboot_pending=reboot)
+                result_id = f'exe-{job.pk}-completed'
+                response = self._post_result(body, result_id)
+                self.assertEqual(response.status_code, 200, response.content)
+                replay = self._post_result(body, result_id)
+                self.assertEqual(replay.status_code, 200, replay.content)
+                self.assertTrue(replay.json().get('duplicate'))
+                job.refresh_from_db()
+                self.assertEqual(job.status, AgentJob.STATUS_COMPLETED)
+                self.assertEqual(job.timeout_seconds, 1800 if operation == 'install' else 120)
+
+        failure_job = self._create_dispatched_job('update')
+        failure = self._post_result(self._serialized_exe_result(
+            failure_job, AgentJob.STATUS_FAILED, exit_code=1603, error_code='SOFTWARE_EXE_EXIT_NOT_ACCEPTED',
+        ), f'exe-{failure_job.pk}-failed')
+        self.assertEqual(failure.status_code, 200, failure.content)
+        failure_job.refresh_from_db()
+        self.assertEqual(failure_job.status, AgentJob.STATUS_FAILED)
+        self.assertEqual(failure_job.error_code, 'SOFTWARE_EXE_EXIT_NOT_ACCEPTED')

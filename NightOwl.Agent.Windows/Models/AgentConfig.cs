@@ -25,6 +25,10 @@ public sealed class AgentConfig
     [JsonPropertyName("softwareMsiMaxArtifactBytes")]
     public long SoftwareMsiMaxArtifactBytes { get; set; } = 1024L * 1024 * 1024;
 
+    // EXE execution is separately opt-in; publisher pins are shared with MSI policy.
+    [JsonPropertyName("softwareExeOperationsEnabled")]
+    public bool SoftwareExeOperationsEnabled { get; set; }
+
     [JsonPropertyName("machineId")]
     public string MachineId { get; set; } = "";
 

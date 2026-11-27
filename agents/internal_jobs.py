@@ -6,7 +6,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from config.authz import is_nightowl_technical_user
-from .models import AgentMachine, AgentJob, InventorySnapshot, AuditEvent
+from .models import AgentMachine, AgentJob, InventorySnapshot, AuditEvent, SoftwarePackageOperation
 from .services import create_audit_event
 from .service_collection_policy import service_collection_endpoint_allowed
 
@@ -14,6 +14,11 @@ SOFTWARE_OPERATION_CAPABILITIES = {
     'install': 'software_msi_install:1',
     'update': 'software_msi_update:1',
     'uninstall': 'software_msi_uninstall:1',
+}
+SOFTWARE_EXE_OPERATION_CAPABILITIES = {
+    'install': 'software_exe_install:1',
+    'update': 'software_exe_update:1',
+    'uninstall': 'software_exe_uninstall:1',
 }
 
 
@@ -124,7 +129,20 @@ def validate_internal_payload(kind, value):
 
 def required_internal_capability(kind, payload):
     if kind == 'install_software' and isinstance(payload, dict) and payload.get('schema_version') == 2:
-        return SOFTWARE_OPERATION_CAPABILITIES.get(payload.get('operation'), 'software_operation_invalid')
+        operation = payload.get('operation')
+        try:
+            from .models import SoftwarePackageOperation
+            record = SoftwarePackageOperation.objects.select_related('package').get(pk=payload.get('operation_id'))
+        except (SoftwarePackageOperation.DoesNotExist, ValueError, TypeError, AttributeError):
+            # Retain the B1/MSI default for non-materialized contract fixtures.
+            # Dispatch still requires the matching immutable operation record and
+            # revalidates it before pull, profile, or artifact access.
+            return SOFTWARE_OPERATION_CAPABILITIES.get(operation, 'software_operation_invalid')
+        if record.operation != operation:
+            return 'software_operation_invalid'
+        mapping = SOFTWARE_OPERATION_CAPABILITIES if record.package.package_type == 'msi' else (
+            SOFTWARE_EXE_OPERATION_CAPABILITIES if record.package.package_type == 'exe' else {})
+        return mapping.get(operation, 'software_operation_invalid')
     if kind == 'collect_services' and isinstance(payload, dict) and payload.get('schema_version') == 3:
         return 'collect_services_paged:3'
     if kind == 'collect_services' and isinstance(payload, dict) and payload.get('schema_version') == 2:

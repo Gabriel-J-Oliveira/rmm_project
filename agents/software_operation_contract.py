@@ -19,6 +19,17 @@ from .software_package_storage import open_private
 
 
 OPERATION_CAPABILITIES = SOFTWARE_OPERATION_CAPABILITIES
+EXE_OPERATION_CAPABILITIES = {
+    'install': 'software_exe_install:1',
+    'update': 'software_exe_update:1',
+    'uninstall': 'software_exe_uninstall:1',
+}
+
+
+def operation_capability(package_type, operation):
+    mapping = SOFTWARE_OPERATION_CAPABILITIES if package_type == SoftwarePackageRecord.TYPE_MSI else (
+        EXE_OPERATION_CAPABILITIES if package_type == SoftwarePackageRecord.TYPE_EXE else {})
+    return mapping.get(operation)
 ACTIVE_STATES = (AgentJob.STATUS_QUEUED, AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING)
 SOFTWARE_JOB_SCHEMA_VERSION = 2
 
@@ -73,8 +84,14 @@ def prepare_software_operation_snapshot(operator, endpoint_id, package_id, opera
     package = SoftwarePackageRecord.objects.select_for_update().filter(pk=package_id).first()
     if endpoint is None or package is None:
         raise SoftwareOperationBlocked('target_not_found')
-    if package.package_type != SoftwarePackageRecord.TYPE_MSI:
+    if package.package_type not in {SoftwarePackageRecord.TYPE_MSI, SoftwarePackageRecord.TYPE_EXE}:
         raise SoftwareOperationBlocked('agent_executor_not_supported')
+    if (package.package_type == SoftwarePackageRecord.TYPE_EXE
+            and (not isinstance(package.execution_profile, dict)
+                 or package.execution_profile.get('schema_version') != 2)):
+        # Existing schema-1 EXE profiles remain readable and retain their audit
+        # record, but require explicit reconfiguration/reapproval for the v2 executor.
+        raise SoftwareOperationBlocked('exe_profile_reapproval_required')
     now = timezone.now()
     if (not endpoint.is_active or endpoint.has_terminal_lifecycle or not endpoint.machine_id
             or AgentMachine.objects.filter(machine_id__iexact=endpoint.machine_id).count() != 1):
@@ -96,7 +113,9 @@ def prepare_software_operation_snapshot(operator, endpoint_id, package_id, opera
         raise SoftwareOperationBlocked('artifact_integrity_failed')
     if AgentJob.objects.filter(endpoint=endpoint, status__in=ACTIVE_STATES).exists():
         raise SoftwareOperationBlocked('endpoint_job_conflict')
-    capability = OPERATION_CAPABILITIES[operation]
+    capability = operation_capability(package.package_type, operation)
+    if not capability:
+        raise SoftwareOperationBlocked('agent_executor_not_supported')
     if not internal_capability(endpoint, capability):
         raise SoftwareOperationBlocked('agent_capability_unconfirmed')
 
@@ -198,13 +217,18 @@ def create_software_operation_job(operator, endpoint_id, package_id, operation, 
     )
     payload = software_operation_payload(operation_record)
     now = timezone.now()
+    operation_timeout = None
+    if package.package_type == SoftwarePackageRecord.TYPE_EXE:
+        operation_timeout = package.execution_profile[operation]['timeout_seconds']
+    lifetime = timedelta(minutes=15) if operation_timeout is None else timedelta(seconds=max(15 * 60, operation_timeout + 5 * 60))
     job = AgentJob.objects.create(
         endpoint=endpoint,
         job_type=AgentJob.TYPE_INSTALL_SOFTWARE,
         payload=payload,
         created_by=operator.get_username(),
         correlation_id=normalized_request_id,
-        expires_at=now + timedelta(minutes=15),
+        expires_at=now + lifetime,
+        timeout_seconds=operation_timeout,
     )
     operation_record.job = job
     operation_record.save(update_fields=['job'])
@@ -292,7 +316,10 @@ def validate_software_operation_dispatch(job, *, endpoint=None):
             or package.execution_profile_revision != record.profile_revision
             or package.execution_profile_sha256 != record.profile_sha256
             or package.execution_profile != record.snapshot.get('package', {}).get('profile')
-            or package.package_type != SoftwarePackageRecord.TYPE_MSI
+            or package.package_type not in {SoftwarePackageRecord.TYPE_MSI, SoftwarePackageRecord.TYPE_EXE}
+            or (package.package_type == SoftwarePackageRecord.TYPE_EXE
+                and (not isinstance(package.execution_profile, dict)
+                     or package.execution_profile.get('schema_version') != 2))
             or not operation_is_configured(package.execution_profile, record.operation)):
         raise SoftwareOperationBlocked('software_package_authorization_changed')
     if not getattr(settings, 'NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED', False):
@@ -304,8 +331,13 @@ def validate_software_operation_dispatch(job, *, endpoint=None):
     if not (operator and operator.is_active and is_nightowl_technical_user(operator)
             and (operator.is_superuser or operator.has_perm(record.authorization))):
         raise SoftwareOperationBlocked('software_operation_authorization_revoked')
-    if not internal_capability(target, OPERATION_CAPABILITIES[record.operation]):
+    capability = operation_capability(package.package_type, record.operation)
+    if not capability or not internal_capability(target, capability):
         raise SoftwareOperationBlocked('agent_capability_unconfirmed')
+    if package.package_type == SoftwarePackageRecord.TYPE_EXE:
+        configured_timeout = package.execution_profile[record.operation]['timeout_seconds']
+        if job.timeout_seconds != configured_timeout:
+            raise SoftwareOperationBlocked('software_operation_timeout_mismatch')
     return record
 
 
@@ -365,13 +397,23 @@ def validate_software_operation_profile(machine, job_id):
     profile = package_snapshot.get('profile')
     if not isinstance(profile, dict):
         raise SoftwareOperationBlocked('software_operation_profile_missing')
+    package_type = package_snapshot.get('package_type')
     detection = profile.get('detection', {})
-    product_code = detection.get('product_code')
     expected_version = profile.get('expected_version')
-    if (detection.get('method') != 'msi_product_code'
-            or not isinstance(product_code, str) or not isinstance(expected_version, str)
-            or (package_snapshot.get('size_bytes', record.package.size_bytes) is None)):
+    if (package_type not in {SoftwarePackageRecord.TYPE_MSI, SoftwarePackageRecord.TYPE_EXE}
+            or not isinstance(expected_version, str)
+            or (package_snapshot.get('size_bytes', record.package.size_bytes) is None)
+            or not operation_is_configured(profile, record.operation)):
         raise SoftwareOperationBlocked('software_operation_profile_invalid')
+    if package_type == SoftwarePackageRecord.TYPE_MSI:
+        product_code = detection.get('product_code')
+        if detection.get('method') != 'msi_product_code' or not isinstance(product_code, str):
+            raise SoftwareOperationBlocked('software_operation_profile_invalid')
+    else:
+        if profile.get('schema_version') != 2 or detection.get('method') not in {
+                'registry_value', 'file_version', 'windows_service'}:
+            raise SoftwareOperationBlocked('software_operation_profile_invalid')
+        product_code = ''
     return job, record, {
         'schema_version': SOFTWARE_JOB_SCHEMA_VERSION,
         'operation_id': str(record.pk), 'operation': record.operation,
@@ -379,7 +421,8 @@ def validate_software_operation_profile(machine, job_id):
         'artifact_sha256': record.artifact_sha256,
         'artifact_revision': record.artifact_revision,
         'profile_revision': record.profile_revision, 'profile_sha256': record.profile_sha256,
-        'size_bytes': package_snapshot.get('size_bytes', record.package.size_bytes), 'product_code': product_code,
+        'size_bytes': package_snapshot.get('size_bytes', record.package.size_bytes),
+        'package_type': package_type, 'product_code': product_code,
         'expected_version': expected_version, 'profile': profile,
         'machine_id': record.machine_id_snapshot,
     }
@@ -415,15 +458,10 @@ def validate_software_operation_completion(job, result):
     if (type(output.get('schema_version')) is not int or output['schema_version'] != SOFTWARE_JOB_SCHEMA_VERSION
             or output.get('phase') != 'verified' or output.get('verified') is not True
             or output.get('success') is not True or type(output.get('exit_code')) is not int
-            or output['exit_code'] not in (0, 3010) or type(output.get('reboot_pending')) is not bool
-            or output['reboot_pending'] != (output['exit_code'] == 3010)):
+            or not 0 <= output['exit_code'] <= 65535 or type(output.get('reboot_pending')) is not bool):
         raise ValueError('software_operation_confirmation_invalid')
     evidence = output.get('evidence')
-    if (not isinstance(evidence, dict) or set(evidence) != {'method', 'product_code', 'version', 'installed'}
-            or evidence.get('method') != 'msi_product_code'
-            or type(evidence.get('installed')) is not bool
-            or not isinstance(evidence.get('product_code'), str)
-            or not isinstance(evidence.get('version'), str) or len(evidence['version']) > 120):
+    if not isinstance(evidence, dict):
         raise ValueError('software_operation_evidence_invalid')
     try:
         operation_record = job.software_operation
@@ -434,18 +472,81 @@ def validate_software_operation_completion(job, result):
             or operation_record.machine_id_snapshot != job.endpoint.machine_id):
         raise ValueError('software_operation_snapshot_mismatch')
     profile = operation_record.snapshot.get('package', {}).get('profile', {})
-    if profile.get('detection', {}).get('method') != 'msi_product_code':
+    if operation_record.package.package_type == SoftwarePackageRecord.TYPE_MSI:
+        if (set(evidence) != {'method', 'product_code', 'version', 'installed'}
+                or evidence.get('method') != 'msi_product_code'
+                or type(evidence.get('installed')) is not bool
+                or not isinstance(evidence.get('product_code'), str)
+                or not isinstance(evidence.get('version'), str) or len(evidence['version']) > 120
+                or output['exit_code'] not in (0, 3010)
+                or output['reboot_pending'] != (output['exit_code'] == 3010)):
+            raise ValueError('software_operation_evidence_invalid')
+        expected_product_code = profile.get('detection', {}).get('product_code')
+        if evidence.get('product_code', '').casefold() != str(expected_product_code or '').casefold():
+            raise ValueError('software_operation_evidence_mismatch')
+        valid_state = (evidence['installed'] is False and evidence['version'] == '') if operation_record.operation == 'uninstall' else (
+            evidence['installed'] is True and evidence['version'] == profile.get('expected_version'))
+        if not valid_state:
+            raise ValueError('software_operation_evidence_mismatch')
+        return
+    if operation_record.package.package_type != SoftwarePackageRecord.TYPE_EXE or profile.get('schema_version') != 2:
+        raise ValueError('software_operation_snapshot_invalid')
+    if (set(evidence) != {'method', 'identity', 'state', 'version', 'installed'}
+            or type(evidence.get('installed')) is not bool
+            or not all(isinstance(evidence.get(key), str) for key in ('method', 'identity', 'state', 'version'))
+            or len(evidence['identity']) > 512 or len(evidence['state']) > 32 or len(evidence['version']) > 120):
         raise ValueError('software_operation_evidence_invalid')
-    expected_product_code = profile['detection'].get('product_code')
-    if evidence.get('product_code', '').casefold() != str(expected_product_code or '').casefold():
+    detection = profile.get('detection', {})
+    operation_profile = profile.get(operation_record.operation, {})
+    accepted = operation_profile.get('accepted_exit_codes', [])
+    reboot_codes = operation_profile.get('reboot_exit_codes', [])
+    if (evidence['method'] != detection.get('method')
+            or evidence['identity'] != _exe_detection_identity(detection)
+            or output['exit_code'] not in accepted
+            or output['reboot_pending'] != (output['exit_code'] in reboot_codes)):
         raise ValueError('software_operation_evidence_mismatch')
     if operation_record.operation == 'uninstall':
-        valid_state = evidence['installed'] is False and evidence['version'] == ''
+        valid_state = evidence['installed'] is False and evidence['state'] == 'absent' and evidence['version'] == ''
+    elif detection.get('method') == 'windows_service':
+        expected_status = detection.get('expected_status', 'any')
+        valid_state = (evidence['installed'] is True and evidence['state'] in {'running', 'stopped'}
+                       and (expected_status == 'any' or evidence['state'] == expected_status))
     else:
-        expected_version = profile.get('expected_version')
-        valid_state = evidence['installed'] is True and evidence['version'] == expected_version
+        valid_state = (evidence['installed'] is True and evidence['state'] == 'present'
+                       and evidence['version'] == profile.get('expected_version'))
     if not valid_state:
         raise ValueError('software_operation_evidence_mismatch')
+
+
+def _exe_detection_identity(detection):
+    if not isinstance(detection, dict):
+        return ''
+    method = detection.get('method')
+    if method == 'registry_value':
+        return '/'.join((detection.get('hive', ''), detection.get('view', ''),
+                         detection.get('key', ''), detection.get('value_name', '')))
+    if method == 'file_version':
+        return detection.get('path', '')
+    if method == 'windows_service':
+        return detection.get('service_name', '')
+    return ''
+
+
+def _failure_evidence_valid(job, evidence):
+    if not isinstance(evidence, dict):
+        return False
+    try:
+        operation = job.software_operation
+    except (AttributeError, SoftwarePackageOperation.DoesNotExist):
+        return set(evidence) == {'method', 'product_code', 'version', 'installed'} and evidence == {
+            'method': 'msi_product_code', 'product_code': '', 'version': '', 'installed': False}
+    if operation.package.package_type == SoftwarePackageRecord.TYPE_MSI:
+        return set(evidence) == {'method', 'product_code', 'version', 'installed'} and evidence == {
+            'method': 'msi_product_code', 'product_code': '', 'version': '', 'installed': False}
+    return (set(evidence) == {'method', 'identity', 'state', 'version', 'installed'} and evidence == {
+        'method': 'exe', 'identity': '', 'state': 'unknown', 'version': '', 'installed': False}
+        or set(evidence) == {'method', 'product_code', 'version', 'installed'} and evidence == {
+            'method': 'msi_product_code', 'product_code': '', 'version': '', 'installed': False})
 
 
 def validate_software_operation_failure(job, result):
@@ -472,15 +573,12 @@ def validate_software_operation_failure(job, result):
             if (type(output.get('schema_version')) is not int or output['schema_version'] != SOFTWARE_JOB_SCHEMA_VERSION
                     or output.get('verified') is not False or output.get('success') is not False
                     or not isinstance(output.get('phase'), str) or output['phase'] not in {
-                        'profile', 'download', 'signature', 'precondition', 'msiexec', 'verification'
+                        'profile', 'download', 'signature', 'precondition', 'msiexec', 'exe',
+                        'uninstall_signature', 'verification'
                     }
                     or type(output.get('exit_code')) is not int or output['exit_code'] < 0
                     or type(output.get('reboot_pending')) is not bool
-                    or not isinstance(output.get('evidence'), dict)
-                    or set(output['evidence']) != {'method', 'product_code', 'version', 'installed'}
-                    or output['evidence'].get('method') != 'msi_product_code'
-                    or output['evidence'].get('installed') is not False
-                    or output['evidence'].get('product_code') != '' or output['evidence'].get('version') != ''):
+                    or not _failure_evidence_valid(job, output.get('evidence'))):
                 raise ValueError('software_operation_failure_invalid')
             error_code = output.get('error_code')
         elif set(output) in (

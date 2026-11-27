@@ -257,7 +257,7 @@ Próxima frente proposta para deliberação: RC49-03 — Central de Software rea
 | --- | --- |
 | RC49-01 Patrimônio/Registros | Integrada, com histórico na aba do Endpoint, identidade física estável; códigos oficiais das duas empresas, troca real de hardware, lifecycle e integração futura com chamados pendentes |
 | RC49-02 NOC | PRs #69/#70/#73/#74/#76 integradas (alertas reais, ações, modo TV, notificações); aguardam homologação visual/operacional |
-| RC49-03 Central de Software | 03A #78 inventário real + UI; 03B #80 upload MSI/EXE privado, substituição e aprovações; 03C-A #81 perfis MSI/EXE; 03C-B1 #82 API operações/ACK/download **integradas**. 03C-B2 #84 executor MSI Windows está em **PR aberta**, testes sintéticos verdes, sem agent release ou instalação real. EXE e distribuição geral pendentes |
+| RC49-03 Central de Software | 03A #78 inventário real + UI; 03B #80 upload MSI/EXE privado, substituição e aprovações; 03C-A #81 perfis MSI/EXE; 03C-B1 #82 API operações/ACK/download e 03C-B2 #84 executor MSI Windows **integrados**. 03C-C executor EXE está em branch própria, ainda sem PR/merge; sem release de agente ou operação real. Distribuição geral pendente |
 | RC49-04 Políticas | Contrato e intenção aceitos; Windows Update instalado, limpeza automática, escolha de reinício e escopo AD computador ainda por implementar/negociar |
 | RC49-05 Scripts | Base pré-aprovada limitada; catálogo/execução em escala ainda pendentes |
 | RC49-06 Serviços/Terminal | RC48 serviços paginados e terminal; #72 grants administrativos integrados; homologação operacional e ajustes UI/política pendentes |
