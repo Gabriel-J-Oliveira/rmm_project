@@ -129,3 +129,8 @@ body.page-software .software-profile-toggle input { accent-color: var(--soft-pur
        responsive .app-shell rule; reset the column only for this page. */
     body.page-software .app-shell.has-sidebar { grid-template-columns: minmax(0, 1fr); }
 }
+.software-exe-operation{min-width:0;margin:14px 0;padding:14px;border:1px solid var(--border-color,#dce3ec);border-radius:12px;background:var(--surface-muted,#f8fafc)}
+.software-exe-operation legend{padding:0 6px;color:var(--text-primary,#172334);font-weight:650}
+.software-exe-operation .software-profile-toggle{display:flex;align-items:center;gap:8px}
+.software-exe-operation textarea{min-height:74px}
+@media(max-width:640px){.software-exe-operation{margin:10px 0;padding:10px}}

@@ -207,6 +207,7 @@ internal static class JobRuntimeTests
             await executor.InstallAsync(config,"synthetic",CancellationToken.None);
             Check(calls==1,"Already installed package executed twice.");
             await SoftwareMsiV2Tests.RunAsync();
+            await SoftwareExeV2Tests.RunAsync();
         }
         finally{Directory.Delete(root,true);}
     }
@@ -218,6 +219,16 @@ internal static class JobRuntimeTests
         catch(OperationCanceledException){}
         Check(clock.Elapsed<TimeSpan.FromSeconds(5),"Owned tree did not terminate promptly.");
         Check(await OwnedProcess.RunAsync(Path.Combine(Environment.SystemDirectory,"cmd.exe"),"/d /c exit 0",CancellationToken.None)==0,"Owned process exit code lost.");
+        const string secretName = "NIGHTOWL_EXE_PARENT_SECRET";
+        string? prior = Environment.GetEnvironmentVariable(secretName);
+        try
+        {
+            Environment.SetEnvironmentVariable(secretName, "must-not-be-inherited");
+            Check(await OwnedProcess.RunAsync(Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    new[] { "/d", "/c", $"if defined {secretName} exit 71" }, CancellationToken.None) == 0,
+                "The EXE argument-vector launcher inherited a sensitive parent-process variable.");
+        }
+        finally { Environment.SetEnvironmentVariable(secretName, prior); }
     }
     private static async Task Recovery()
     {

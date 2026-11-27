@@ -129,6 +129,11 @@
         expected_version_required_or_invalid: "Informe uma versão esperada válida.", msi_arguments_not_supported: "MSI usa parâmetros fixos do Windows Installer neste incremento; argumentos arbitrários não são aceitos.",
         detection_product_code_mismatch: "A detecção MSI deve usar o ProductCode configurado na instalação.", registry_detection_invalid: "Informe a chave e o nome exato do aplicativo no registro de desinstalação.",
         detection_path_invalid: "O caminho de detecção deve estar sob uma pasta Windows permitida, sem traversal.", uninstall_path_invalid: "O caminho do desinstalador EXE deve usar uma raiz Windows permitida, sem traversal.",
+        exe_profile_reapproval_required: "Atualize o perfil EXE para o contrato atual e aprove novamente antes de habilitar operações.",
+        operation_profile_empty: "Configure pelo menos uma operação independente para salvar o perfil.",
+        update_version_unverifiable: "A detecção por serviço não informa versão. Use Registro ou versão de arquivo para configurar atualização.",
+        install_timeout_invalid: "O timeout de instalação deve estar entre 30 e 1800 segundos.", update_timeout_invalid: "O timeout de atualização deve estar entre 30 e 1800 segundos.", uninstall_timeout_invalid: "O timeout de desinstalação deve estar entre 30 e 1800 segundos.",
+        service_detection_invalid: "Informe o nome interno do serviço e o estado esperado.", registry_detection_invalid: "Informe a chave exata HKLM, a visão e o nome do valor de versão.",
         agent_capability_unconfirmed: "O agente ainda não anuncia a capability versionada necessária; nenhum job foi criado.",
         software_dispatch_not_enabled: "Despacho de software permanece desabilitado neste incremento.",
         storage_unconfigured: "O armazenamento privado de instaladores ainda não foi configurado neste ambiente.", upload_limit_invalid: "O limite de upload não está configurado corretamente.",
@@ -255,6 +260,50 @@
         return JSON.stringify(Array.isArray(value) ? value : [], null, 2);
     }
 
+    function exeOperationFields(label, name, profile, uninstall) {
+        profile = profile || {};
+        var prefix = name + '_';
+        var path = uninstall ? formField('Executável de desinstalação (raiz de máquina)', prefix + 'executable_path', profile.executable_path || '', 'text', false,
+            'Caminho explícito sob ProgramFiles, ProgramFiles(x86) ou ProgramData; nunca usa UninstallString do inventário.') : '';
+        return '<fieldset class="software-exe-operation"><legend><label class="software-profile-toggle"><input type="checkbox" name="' + name + '_enabled"' + (profile.method ? ' checked' : '') + '> Configurar ' + esc(label) + '</label></legend>' +
+            path + formField('Argumentos documentados pelo fabricante (array JSON)', prefix + 'arguments', JSON.stringify(profile.arguments || [], null, 2), 'textarea', false,
+                'Cada elemento é passado como argumento separado; não existe flag silenciosa universal.') +
+            formField('Timeout (segundos)', prefix + 'timeout_seconds', profile.timeout_seconds || 600, 'number', false, 'Limite validado: 30 a 1800 segundos.') +
+            formField('Códigos de saída aceitos (array JSON)', prefix + 'accepted_exit_codes', JSON.stringify(profile.accepted_exit_codes || [0], null, 2), 'textarea', false,
+                'O código não comprova sucesso; a detecção pós-execução também precisa confirmar o estado.') +
+            formField('Códigos que indicam reboot pendente (array JSON)', prefix + 'reboot_exit_codes', JSON.stringify(profile.reboot_exit_codes || [], null, 2), 'textarea', false,
+                'Devem ser subconjunto dos códigos aceitos. O agente nunca reinicia automaticamente.') + '</fieldset>';
+    }
+
+    function exeProfileForm(pkg, profile) {
+        profile = profile && profile.schema_version === 2 ? profile : {};
+        var detection = profile.detection || {};
+        var install = profile.install || {};
+        var update = profile.update || {};
+        var uninstall = profile.uninstall || {};
+        return '<form class="software-editor-form" data-package-form="profile">' +
+            '<input type="hidden" name="revision" value="' + esc(pkg.revision) + '">' +
+            exeOperationFields('instalação', 'install', install, false) +
+            exeOperationFields('atualização', 'update', update, false) +
+            exeOperationFields('desinstalação', 'uninstall', uninstall, true) +
+            selectField('Método de detecção', 'detection_method', detection.method || 'registry_value', [
+                ['registry_value', 'Valor exato no Registro HKLM'], ['file_version', 'Versão de arquivo'], ['windows_service', 'Serviço Windows']
+            ], 'A regra é declarativa. Scripts e UninstallString não são executados.') +
+            selectField('Visão do Registro', 'detection_view', detection.view || 'registry64', [['registry64', '64 bits'], ['registry32', '32 bits']], '') +
+            formField('Chave exata HKLM', 'detection_registry_key', detection.key || '', 'text', false, 'Exemplo: SOFTWARE\\Vendor\\Product. Sem curingas.') +
+            formField('Nome exato do valor de versão', 'detection_registry_value_name', detection.value_name || '', 'text', false, 'O valor precisa ser string e corresponder à versão esperada.') +
+            formField('Caminho do arquivo de detecção', 'detection_path', detection.path || '', 'text', false, 'Use %ProgramFiles%, %ProgramFiles(x86)% ou %ProgramData%; sem traversal.') +
+            selectField('Versão do arquivo', 'detection_version_field', detection.version_field || 'product_version', [['product_version', 'ProductVersion'], ['file_version', 'FileVersion']], '') +
+            formField('Nome interno do serviço', 'detection_service_name', detection.service_name || '', 'text', false, 'Nome SCM exato; não use nome de exibição.') +
+            selectField('Estado esperado do serviço', 'detection_service_status', detection.expected_status || 'any', [['any', 'Presente em estado estável'], ['running', 'Em execução'], ['stopped', 'Parado']], '') +
+            formField('Versão esperada', 'expected_version', profile.expected_version || pkg.version || '', 'text', false,
+                'Obrigatória para Registro/arquivo em instalação ou atualização; opcional para presença de serviço.') +
+            selectField('Comportamento se exigir reinicialização', 'reboot_behavior', profile.reboot_behavior || 'defer_to_policy', [['report_only', 'Registrar como pendente; não reiniciar'], ['defer_to_policy', 'Delegar à futura política de reboot'], ['require_operator', 'Aguardar decisão do operador']], '') +
+            formField('Motivo da alteração', 'reason', '', 'text', true, 'Obrigatório para auditoria e nova aprovação.') +
+            '<p class="software-package-warning">Salvar cria um novo rascunho e invalida a aprovação atual. Aprove o perfil revisado antes de qualquer operação futura.</p>' +
+            '<div class="software-form-message" data-form-message role="status"></div><button class="refresh-button" type="submit">Salvar perfil como rascunho</button></form>';
+    }
+
     function executionProfileSection(pkg) {
         var profile = pkg.execution_profile || {};
         var msi = pkg.package_type === 'msi';
@@ -273,6 +322,9 @@
         if (!pkg.has_file) {
             body += '<p class="software-readonly-note">Anexe primeiro um instalador válido. O perfil deve ser vinculado ao hash e à revisão do binário atual.</p>';
         } else if (can('ConfigureProfile')) {
+            if (!msi) {
+                body += exeProfileForm(pkg, profile);
+            } else {
             body += '<form class="software-editor-form" data-package-form="profile">' +
                 '<input type="hidden" name="revision" value="' + esc(pkg.revision) + '">' +
                 selectField('Método de instalação', 'install_method', msi ? 'msi' : 'exe', [[msi ? 'msi' : 'exe', msi ? 'Windows Installer (MSI)' : 'Executável EXE do fornecedor']], 'O método é fixo pelo tipo do arquivo.') +
@@ -296,6 +348,7 @@
                 selectField('Comportamento se exigir reinicialização', 'reboot_behavior', profile.reboot_behavior || 'defer_to_policy', [['report_only', 'Registrar como pendente; não reiniciar'], ['defer_to_policy', 'Delegar a futura política de reboot'], ['require_operator', 'Aguardar decisão do operador']], 'Esta configuração não executa reboot nesta etapa.') +
                 formField('Motivo da alteração', 'reason', '', 'text', true, 'Obrigatório para auditoria.') +
                 '<div class="software-form-message" data-form-message role="status"></div><button class="refresh-button" type="submit">Salvar perfil como rascunho</button></form>';
+            }
         } else {
             body += '<p class="software-readonly-note">Seu usuário pode consultar o perfil, mas não configurá-lo.</p>';
         }
@@ -386,9 +439,64 @@
         }
     }
 
+    function parseNumberArray(form, name, required) {
+        var raw = (new FormData(form).get(name) || '').trim();
+        if (!raw && !required) return [];
+        try {
+            var values = JSON.parse(raw);
+            if (!Array.isArray(values) || values.some(function (value) { return !Number.isInteger(value) || value < 0 || value > 65535; })) throw new Error('invalid');
+            return values;
+        } catch (_) {
+            throw new Error('Informe códigos de saída como array JSON de inteiros.');
+        }
+    }
+
     function executionProfilePayload(form, pkg) {
         var data = new FormData(form);
         var msi = pkg.package_type === 'msi';
+        if (!msi) {
+            function exeOperation(name, method, uninstall) {
+                if (!data.get(name + '_enabled')) return null;
+                var timeout = Number(data.get(name + '_timeout_seconds'));
+                if (!Number.isInteger(timeout) || timeout < 30 || timeout > 1800) throw new Error('O timeout de cada operação deve estar entre 30 e 1800 segundos.');
+                var result = {
+                    method: method,
+                    arguments: parseArguments(form, name + '_arguments', true),
+                    timeout_seconds: timeout,
+                    accepted_exit_codes: parseNumberArray(form, name + '_accepted_exit_codes', true),
+                    reboot_exit_codes: parseNumberArray(form, name + '_reboot_exit_codes', false)
+                };
+                if (uninstall) result.executable_path = String(data.get('uninstall_executable_path') || '').trim();
+                return result;
+            }
+            var detectionMethod = String(data.get('detection_method') || '');
+            if (data.get('update_enabled') && detectionMethod === 'windows_service') {
+                throw new Error('A detecção por serviço confirma presença/estado, mas não comprova a versão de uma atualização.');
+            }
+            var detection = detectionMethod === 'registry_value' ? {
+                method: detectionMethod, hive: 'HKLM', view: String(data.get('detection_view') || ''),
+                key: String(data.get('detection_registry_key') || '').trim(),
+                value_name: String(data.get('detection_registry_value_name') || '').trim()
+            } : detectionMethod === 'file_version' ? {
+                method: detectionMethod, path: String(data.get('detection_path') || '').trim(),
+                version_field: String(data.get('detection_version_field') || '')
+            } : {
+                method: 'windows_service', service_name: String(data.get('detection_service_name') || '').trim(),
+                expected_status: String(data.get('detection_service_status') || 'any')
+            };
+            return {
+                revision: Number(data.get('revision')), reason: String(data.get('reason') || '').trim(),
+                execution_profile: {
+                    schema_version: 2,
+                    install: exeOperation('install', 'exe', false),
+                    update: exeOperation('update', 'vendor_exe', false),
+                    uninstall: exeOperation('uninstall', 'vendor_exe', true),
+                    detection: detection,
+                    expected_version: String(data.get('expected_version') || '').trim(),
+                    reboot_behavior: String(data.get('reboot_behavior') || 'defer_to_policy')
+                }
+            };
+        }
         var product = String(data.get('product_code') || '').trim();
         var install = msi ? { method: 'msi', arguments: [], product_code: product } :
             { method: 'exe', arguments: parseArguments(form, 'install_arguments', false) };

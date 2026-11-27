@@ -2,7 +2,7 @@
 
 ## Scope
 
-This increment executes only authenticated, typed MSI operations received as the existing `install_software` AgentJob. Schema v2 is handled by the new executor; the legacy v1 `{package_id}` catalog path and its `softwareInstallEnabled` gate remain unchanged. EXE execution is not supported.
+This increment introduced authenticated, typed MSI operations received as the existing `install_software` AgentJob. Schema v2 is handled by the executor; the legacy v1 `{package_id}` catalog path and its `softwareInstallEnabled` gate remain unchanged. EXE execution was outside the 03C-B2 scope and is implemented separately in [RC49-03C-C](rc49-03c-c-exe-executor.md).
 
 The backend dispatch gate `NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED` remains `False` by default. No package was installed during implementation or automated tests.
 
@@ -50,4 +50,4 @@ The earlier Windows CI run `46019901096` had one Repair Runner test timeout duri
 
 ## Remaining scope limits
 
-This increment handles MSI only and updates only when the configured ProductCode remains stable. EXE installers, MSI upgrades that change ProductCode, bulk rollout, and generalized installed-software reconciliation require later, separately reviewed increments. No real MSI installation has been performed; signed-release and VM homologation remain required.
+This increment handles MSI only and updates only when the configured ProductCode remains stable. MSI upgrades that change ProductCode, bulk rollout, and generalized installed-software reconciliation require later, separately reviewed increments. No real MSI installation has been performed; signed-release and VM homologation remain required. EXE operation contracts are documented separately and still require a compatible signed agent and operational homologation.

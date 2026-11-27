@@ -1107,6 +1107,86 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         self.assertEqual(SoftwarePackageOperation.objects.filter(request_id=request_id).count(), 1)
         self.assertEqual(AgentJob.objects.filter(endpoint=endpoint, job_type=AgentJob.TYPE_INSTALL_SOFTWARE).count(), 1)
 
+    def test_concurrent_exe_materialization_uses_exe_capability_and_operation_timeout(self):
+        from uuid import uuid4
+        package = SoftwarePackageRecord.objects.get(pk=self.package_id)
+        # The endpoint consumes multipart uploads; use a fresh request with the replacement artifact.
+        client = Client()
+        client.force_login(self.operator)
+        response = client.post(reverse('software-package-replace', kwargs={'pk': package.pk}), {
+            'revision': package.revision, 'reason': 'Replace MSI fixture with synthetic EXE',
+            'file': SimpleUploadedFile('synthetic.exe', exe_bytes()),
+        })
+        self.assertEqual(response.status_code, 200, response.content)
+        package.refresh_from_db()
+        self.assertEqual(package.package_type, SoftwarePackageRecord.TYPE_EXE)
+        self.assertEqual(self._client_post_package_action('software-package-approve', package, {
+            'revision': package.revision, 'reason': 'Approve synthetic EXE fixture',
+        }).status_code, 200)
+        package.refresh_from_db()
+        profile = {
+            'schema_version': 2,
+            'install': {
+                'method': 'exe', 'arguments': ['/quiet'], 'timeout_seconds': 90,
+                'accepted_exit_codes': [0], 'reboot_exit_codes': [],
+            },
+            'update': None, 'uninstall': None,
+            'detection': {
+                'method': 'registry_value', 'hive': 'HKLM', 'view': 'registry64',
+                'key': r'SOFTWARE\Vendor\Concurrent', 'value_name': 'DisplayVersion',
+            },
+            'expected_version': '2.0.0', 'reboot_behavior': 'report_only',
+        }
+        self.assertEqual(self._client_post_package_action('software-package-profile', package, {
+            'revision': package.revision, 'reason': 'Configure install-only EXE operation',
+            'execution_profile': profile,
+        }).status_code, 200)
+        package.refresh_from_db()
+        self.assertEqual(self._client_post_package_action('software-package-profile-approve', package, {
+            'revision': package.revision, 'reason': 'Approve install-only EXE operation',
+        }).status_code, 200)
+
+        token = 'synthetic-exe-concurrency-token'
+        endpoint = AgentMachine.objects.create(
+            hostname='SOFTWARE-EXE-CONCURRENT', machine_id='software-exe-concurrent-machine',
+            agent_token_hash=hash_agent_token(token), status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now(), agent_version='03c-c-test',
+        )
+        InventorySnapshot.objects.create(
+            machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            received_at=timezone.now(), raw_payload={
+                'snapshot_source': 'heartbeat', 'machine_id': endpoint.machine_id,
+                'agent_version': endpoint.agent_version,
+                'agent': {'capabilities': ['software_exe_install:1']},
+            },
+        )
+        request_id = str(uuid4())
+        barrier = Barrier(2)
+
+        def materialize():
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                operator = get_user_model().objects.get(pk=self.operator.pk)
+                operation, created = create_software_operation_job(
+                    operator, endpoint.pk, package.pk, 'install', request_id,
+                )
+                return str(operation.pk), operation.job_id, created
+            finally:
+                close_old_connections()
+
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = [future.result(timeout=45) for future in [
+                    pool.submit(materialize), pool.submit(materialize),
+                ]]
+        self.assertEqual(results[0][:2], results[1][:2])
+        self.assertEqual(sorted(item[2] for item in results), [False, True])
+        self.assertEqual(SoftwarePackageOperation.objects.filter(request_id=request_id).count(), 1)
+        job = AgentJob.objects.get(pk=results[0][1])
+        self.assertEqual(job.timeout_seconds, 90)
+        self.assertEqual(job.payload['operation'], 'install')
+
     def _client_post_package_action(self, name, package, body):
         client = Client()
         client.force_login(self.operator)

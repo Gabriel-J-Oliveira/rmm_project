@@ -127,6 +127,24 @@ const {chromium} = require('playwright');
         assert.equal((await replaceResponse).status(), 200);
         await drawer.locator('dd').filter({hasText: 'e2e-package.exe'}).waitFor();
         await drawer.locator('.software-detail-grid').getByText('Rascunho', {exact: true}).waitFor();
+        const exeProfileForm = drawer.locator('[data-package-form="profile"]');
+        await exeProfileForm.locator('input[name="install_enabled"]').check();
+        await exeProfileForm.locator('textarea[name="install_arguments"]').fill('["/vendor-silent", "install"]');
+        await exeProfileForm.locator('input[name="install_timeout_seconds"]').fill('180');
+        await exeProfileForm.locator('textarea[name="install_accepted_exit_codes"]').fill('[0, 3010]');
+        await exeProfileForm.locator('textarea[name="install_reboot_exit_codes"]').fill('[3010]');
+        await exeProfileForm.locator('input[name="detection_registry_key"]').fill('SOFTWARE\\Vendor\\App');
+        await exeProfileForm.locator('input[name="detection_registry_value_name"]').fill('DisplayVersion');
+        await exeProfileForm.locator('input[name="expected_version"]').fill('2.0.0');
+        await exeProfileForm.locator('input[name="reason"]').fill('Perfil EXE específico do fornecedor para fixture visual');
+        const exeProfileResponse = page.waitForResponse(response => response.url().endsWith('/profile/') && response.request().method() === 'POST');
+        await exeProfileForm.getByRole('button', {name: 'Salvar perfil como rascunho'}).click();
+        assert.equal((await exeProfileResponse).status(), 200);
+        await drawer.locator('[data-profile-state="draft"]').waitFor();
+        assert.equal(await exeProfileForm.locator('input[name="update_enabled"]').isChecked(), false,
+            'The EXE profile allows install without requiring update configuration');
+        assert.equal(await exeProfileForm.locator('input[name="uninstall_enabled"]').isChecked(), false,
+            'The EXE profile allows install without requiring uninstall configuration');
         const replacementHash = await drawer.locator('.software-mono').textContent();
         assert.notEqual(replacementHash, firstHash, 'Replacement must receive a new server-computed hash');
         await drawer.locator('[data-package-reason]').fill('Teste de revogação');
