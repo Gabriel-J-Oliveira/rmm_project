@@ -136,6 +136,7 @@ class SoftwareCenterDataTests(TestCase):
         self.assertEqual(item['package_type'], 'msi')
         self.assertEqual(item['sha256'], 'a' * 64)
         self.assertEqual(item['approved_by'], self.operator.get_username())
+        self.assertEqual(item['operation_readiness'], {'install': False, 'update': False, 'uninstall': False})
         self.assertGreaterEqual(SoftwarePackageRecord.objects.count(), before)
         self.assertFalse(hasattr(record, 'binary_file'))
         self.assertEqual(self.client.post(reverse('software-packages-data')).status_code, 405)

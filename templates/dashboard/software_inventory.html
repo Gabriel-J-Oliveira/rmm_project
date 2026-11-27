@@ -3,7 +3,7 @@
 
 {% block title %}Central de Softwares | Night Owl{% endblock %}
 {% block body_class %}page-software{% endblock %}
-{% block styles %}<link rel="stylesheet" href="{% static 'css/software_center.css' %}?v=rc49-03b-1">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{% static 'css/software_center.css' %}?v=rc49-03c-a-1">{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb"><span>Night Owl</span><i data-lucide="chevron-right"></i><strong>Central de Softwares</strong></nav>
@@ -12,9 +12,14 @@
 {% block content %}
 <main class="software-center" data-software-root data-inventory-url="{{ inventory_api_url }}" data-packages-url="{{ packages_api_url }}"
       data-package-create-url="{{ package_create_url }}" data-package-detail-base="{% url 'software-package-detail' pk='00000000-0000-0000-0000-000000000000' %}"
+      data-package-profile-base="{% url 'software-package-profile' pk='00000000-0000-0000-0000-000000000000' %}"
+      data-package-profile-approve-base="{% url 'software-package-profile-approve' pk='00000000-0000-0000-0000-000000000000' %}"
       data-package-max-upload-bytes="{{ package_max_upload_bytes }}" data-can-upload="{{ can_upload_packages|yesno:'true,false' }}"
       data-can-edit="{{ can_edit_packages|yesno:'true,false' }}" data-can-approve="{{ can_approve_packages|yesno:'true,false' }}"
       data-can-revoke="{{ can_revoke_packages|yesno:'true,false' }}" data-can-delete="{{ can_delete_packages|yesno:'true,false' }}"
+      data-can-configure-profile="{{ can_configure_software_profiles|yesno:'true,false' }}"
+      data-can-approve-profile="{{ can_approve_software_profiles|yesno:'true,false' }}"
+      data-can-execute-operations="{{ can_execute_software_operations|yesno:'true,false' }}"
       data-can-download="{{ can_download_packages|yesno:'true,false' }}">
     <form hidden aria-hidden="true">{% csrf_token %}</form>
     <header class="page-header software-header">
@@ -62,4 +67,4 @@
 </main>
 {% endblock %}
 
-{% block scripts %}<script src="{% static 'js/software_center.js' %}?v=rc49-03b-1"></script>{% endblock %}
+{% block scripts %}<script src="{% static 'js/software_center.js' %}?v=rc49-03c-a-1"></script>{% endblock %}

@@ -82,6 +82,7 @@ jobs:
           python manage.py test agents dashboard.test_remote_install_enrollment
           dashboard.test_agent_install_workflow dashboard.test_noc_operations
           dashboard.test_noc_notifications dashboard.test_software_center
+          dashboard.test_software_package_api
           config.test_runtime_environment
           config.test_operational_continuity
           --exclude-tag windows_e2e --noinput --verbosity 1

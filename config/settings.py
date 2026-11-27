@@ -236,6 +236,11 @@ NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT = Path(env(
 NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES = env.int(
     'NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES', default=1024 * 1024 * 1024,
 )
+# RC49-03C-A only prepares profiles. There is no software-operation dispatch
+# endpoint until an agent with the versioned profile capability is available.
+NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED = env.bool(
+    'NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED', default=False,
+)
 # Keep small multipart uploads bounded in memory; larger files are handled by
 # Django's temporary-file upload handler and copied to private staging by chunks.
 FILE_UPLOAD_MAX_MEMORY_SIZE = env.int('FILE_UPLOAD_MAX_MEMORY_SIZE', default=1024 * 1024)

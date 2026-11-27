@@ -79,7 +79,9 @@ body.page-software .software-form-field { display: grid; gap: 7px; min-width: 0;
 body.page-software .software-form-field > span { color: var(--text-muted); font-size: 12px; font-weight: 750; }
 body.page-software .software-form-field > span b { color: var(--critical); }
 body.page-software .software-form-field input,
-body.page-software .software-form-field textarea { background: var(--card); border: 1px solid var(--border); border-radius: 7px; color: var(--text-primary); font: inherit; min-height: 40px; padding: 9px 11px; width: 100%; }
+body.page-software .software-form-field input,
+body.page-software .software-form-field textarea,
+body.page-software .software-form-field select { background: var(--card); border: 1px solid var(--border); border-radius: 7px; color: var(--text-primary); font: inherit; min-height: 40px; padding: 9px 11px; width: 100%; }
 body.page-software .software-form-field textarea { min-height: 92px; resize: vertical; }
 body.page-software .software-form-field input[type="file"] { min-height: 48px; padding: 8px; }
 body.page-software .software-form-field small { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
@@ -99,6 +101,16 @@ body.page-software .software-audit-list small,
 body.page-software .software-audit-list p { color: var(--text-muted); font-size: 11px; margin: 0; overflow-wrap: anywhere; }
 body.page-software .software-drawer[hidden] { display: none; }
 body.page-software .software-drawer-backdrop[hidden] { display: none; }
+body.page-software .software-execution-profile { border-top: 1px solid var(--border); padding-top: 14px; }
+body.page-software .software-profile-state { color: var(--text-primary); font-size: 13px; font-weight: 750; }
+body.page-software .software-profile-operations { margin: 0 0 12px; }
+body.page-software .software-profile-operations > div { min-width: 0; }
+body.page-software .software-profile-operations dt { color: var(--text-muted); font-size: 11px; font-weight: 750; }
+body.page-software .software-profile-operations dd { margin: 4px 0 0; }
+body.page-software .software-profile-operations ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
+body.page-software .software-profile-operations li { color: var(--text-secondary); font-size: 12px; }
+body.page-software .software-profile-toggle { align-items: center; color: var(--text-secondary); display: flex; font-size: 12px; gap: 8px; }
+body.page-software .software-profile-toggle input { accent-color: var(--soft-purple); }
 
 @media (max-width: 760px) {
     body.page-software .software-header { align-items: flex-start; }

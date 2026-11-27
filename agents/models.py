@@ -1704,6 +1704,24 @@ class SoftwarePackageRecord(models.Model):
         related_name='software_packages_modified',
     )
     revision = models.PositiveIntegerField(default=1)
+    # Artifact identity is independent of metadata edits; execution profiles bind
+    # to this revision and the exact SHA-256 of the current private binary.
+    artifact_revision = models.PositiveIntegerField(default=1)
+    execution_profile = models.JSONField(default=dict, blank=True)
+    execution_profile_revision = models.PositiveIntegerField(default=0)
+    execution_profile_sha256 = models.CharField(max_length=64, blank=True)
+    execution_profile_artifact_sha256 = models.CharField(max_length=64, blank=True)
+    execution_profile_artifact_revision = models.PositiveIntegerField(null=True, blank=True)
+    execution_profile_status = models.CharField(
+        max_length=16,
+        choices=[('unconfigured', 'Não configurado'), ('draft', 'Rascunho'), ('approved', 'Aprovado')],
+        default='unconfigured',
+    )
+    execution_profile_approved_at = models.DateTimeField(null=True, blank=True)
+    execution_profile_approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='software_execution_profiles_approved',
+    )
     size_bytes = models.PositiveBigIntegerField(null=True, blank=True)
     sha256 = models.CharField(max_length=64, blank=True)
     signature_status = models.CharField(max_length=16, choices=SIGNATURE_CHOICES, default=SIGNATURE_UNKNOWN)
@@ -1733,6 +1751,9 @@ class SoftwarePackageRecord(models.Model):
             ('download_softwarepackage', 'Download a private software installer'),
             ('approve_softwarepackage', 'Approve a software installer'),
             ('revoke_softwarepackage', 'Revoke a software installer'),
+            ('configure_softwarepackageprofile', 'Configure a software execution profile'),
+            ('approve_softwarepackageprofile', 'Approve a software execution profile'),
+            ('execute_softwarepackageoperation', 'Authorize software operations on endpoints'),
         ]
         indexes = [
             models.Index(fields=['approval_status', 'package_type']),
@@ -1742,6 +1763,7 @@ class SoftwarePackageRecord(models.Model):
             models.CheckConstraint(condition=models.Q(package_type__in=['msi', 'exe']), name='software_package_type_valid'),
             models.CheckConstraint(condition=models.Q(approval_status__in=['draft', 'approved', 'revoked']), name='software_package_status_valid'),
             models.CheckConstraint(condition=models.Q(signature_status__in=['unknown', 'valid', 'invalid']), name='software_package_signature_valid'),
+            models.CheckConstraint(condition=models.Q(execution_profile_status__in=['unconfigured', 'draft', 'approved']), name='software_execution_profile_status_valid'),
         ]
 
     def __str__(self) -> str:
