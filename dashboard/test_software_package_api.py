@@ -13,7 +13,7 @@ from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
-from django.test import Client, TestCase, TransactionTestCase, override_settings
+from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
 
 from agents.models import AgentJob, AgentMachine, AuditEvent, InventorySnapshot, SoftwarePackageRecord
@@ -59,7 +59,7 @@ def valid_msi_profile():
     }
 
 
-class SoftwarePackageApiTests(TestCase):
+class SoftwarePackageApiTests(TransactionTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='nightowl-private-packages-')
         self.settings_override = override_settings(
@@ -299,11 +299,10 @@ class SoftwarePackageApiTests(TestCase):
             data=json.dumps({'revision': 1, 'reason': 'Aprovado para catálogo'}), content_type='application/json')
         self.assertEqual(approve.status_code, 200)
         old_key, old_hash = package.artifact_key, package.sha256
-        with self.captureOnCommitCallbacks(execute=True):
-            replaced = self.client.post(reverse('software-package-replace', kwargs={'pk': package.pk}), {
-                'revision': 2, 'reason': 'Nova compilação validada',
-                'file': SimpleUploadedFile('setup-v2.exe', exe_bytes(), content_type='application/octet-stream'),
-            })
+        replaced = self.client.post(reverse('software-package-replace', kwargs={'pk': package.pk}), {
+            'revision': 2, 'reason': 'Nova compilação validada',
+            'file': SimpleUploadedFile('setup-v2.exe', exe_bytes(), content_type='application/octet-stream'),
+        })
         self.assertEqual(replaced.status_code, 200, replaced.content)
         package.refresh_from_db()
         self.assertEqual(package.pk, UUID(replaced.json()['item']['id']))
@@ -607,9 +606,8 @@ class SoftwarePackageApiTests(TestCase):
     def test_unused_record_can_be_deleted_but_immutable_audit_snapshot_remains(self):
         package, _ = self.create_package()
         package_id, artifact_key, old_hash = str(package.pk), package.artifact_key, package.sha256
-        with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.post(reverse('software-package-delete', kwargs={'pk': package.pk}),
-                data=json.dumps({'revision': 1, 'reason': 'Cadastro criado por engano'}), content_type='application/json')
+        response = self.client.post(reverse('software-package-delete', kwargs={'pk': package.pk}),
+            data=json.dumps({'revision': 1, 'reason': 'Cadastro criado por engano'}), content_type='application/json')
         self.assertEqual(response.status_code, 200, response.content)
         self.assertFalse(SoftwarePackageRecord.objects.filter(pk=package.pk).exists())
         self.assertFalse((Path(self.temp.name) / 'private-store' / artifact_key).exists())

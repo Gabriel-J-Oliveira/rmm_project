@@ -81,7 +81,7 @@ jobs:
         run: >-
           python manage.py test
           dashboard.test_software_package_api.SoftwarePackageApiTests
-          --noinput --verbosity 1
+          --noinput --verbosity 2
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
