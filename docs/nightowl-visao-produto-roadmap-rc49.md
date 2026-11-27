@@ -248,3 +248,26 @@ Os cinco jobs obrigatórios passaram nos HEADs integrados das PRs #73, #74 e #76
 Permanecem pendentes homologação visual e operacional do conjunto consolidado em ambiente autorizado e aplicação das migrations apenas em deploy aprovado. O E2E Windows de terminal teve ocorrência intermitente anterior (`fresh_session`/`browser_condition_timeout`, com `database is locked`) cuja causa não foi comprovada; execuções posteriores passaram, sem demonstrar que a intermitência foi eliminada. A RC49 continua em desenvolvimento até o fechamento do roadmap; integração de código não autoriza deploy ou publicação de agente.
 
 Próxima frente proposta para deliberação: RC49-03 — Central de Software real. A auditoria inicial encontrou inventário real misturado com fallback de dados simulados e uma UI baseada em `MockNightowlApi`; a distribuição exige contratos persistidos, confiança de pacotes, identidade/escopo, execução com confirmação e reconciliação de resultados. Nenhum escopo de implementação da RC49-03 está autorizado por este registro.
+
+## Estado vigente do produto e entregas — 27/11/2026
+
+**Esta seção prevalece sobre a fotografia técnica de 24/11** nas classificações de andamento; preservar as seções anteriores como histórico de decisões. [Handoff completo](rc49-handoff-contexto-20261127.md) | [Codex 1](rc49-codex1-handoff-20261127.md) | [Codex 2](rc49-codex2-handoff-20261127.md).
+
+| Área | Estado revisado |
+| --- | --- |
+| RC49-01 Patrimônio/Registros | Integrada, com histórico na aba do Endpoint, identidade física estável; códigos oficiais das duas empresas, troca real de hardware, lifecycle e integração futura com chamados pendentes |
+| RC49-02 NOC | PRs #69/#70/#73/#74/#76 integradas (alertas reais, ações, modo TV, notificações); aguardam homologação visual/operacional |
+| RC49-03 Central de Software | 03A #78 inventário real + UI; 03B #80 upload MSI/EXE privado, substituição e aprovações; 03C-A #81 perfis MSI/EXE; 03C-B1 #82 API operações/ACK/download **integradas**. 03C-B2 #84 executor MSI Windows está em **PR aberta**, testes sintéticos verdes, sem agent release ou instalação real. EXE e distribuição geral pendentes |
+| RC49-04 Políticas | Contrato e intenção aceitos; Windows Update instalado, limpeza automática, escolha de reinício e escopo AD computador ainda por implementar/negociar |
+| RC49-05 Scripts | Base pré-aprovada limitada; catálogo/execução em escala ainda pendentes |
+| RC49-06 Serviços/Terminal | RC48 serviços paginados e terminal; #72 grants administrativos integrados; homologação operacional e ajustes UI/política pendentes |
+| RC49-07 Stable | #75 snapshot inicial e #79 fundação de rodadas integradas; **#83 07B-2 catch-up aberta**, sem merge; retries, já-atualizados e cobertura operacional 07B-3/4 pendentes |
+| RC49-08 Impressoras | Ideia alinhada à Central de Software e FollowMe; contrato executável futuro |
+| RC49-09 Proteção | Bitdefender como ferramenta especializada, futura evidência/antimalware, sem substituir por simples validação de hash |
+| RC49-10 Confiabilidade | #71 continuidade runtime integrada; preservação de configurações operacionalmente aprovadas; riscos históricos Chrome/CDP, Repair Runner, ConPTY Get-Date requerem observação/homologação |
+
+**Situação GitHub conferida:** `main 54bda321be6a91d5369d134d841c24130a644947`; #82 (B1) integrada com 5/5 CI. #83 HEAD `175acca...` e #84 HEAD `8f5fc0d...` abertas, ambas com 5/5 nos HEADs **antes de qualquer sincronização nova**. As duas tocam `agents/views.py`; a #83 possui `agents.0062_stable_coverage_execution_campaign`, conflitante com `agents.0062_rc49_software_package_operations` já integrada; corrigir o grafo antes do merge da #83. Consulte o [handoff](rc49-handoff-contexto-20261127.md) para instrução completa.
+
+**Divisão atual:** Codex 1 fecha a PR #83 (sincronização/migration, testes e revisão), depois negocia 07B-3/4 e políticas Windows; Codex 2 fecha/revisa a PR #84 e avança para 03C-C/03C-D depois de cada aprovação. Não confundir PR integrada com produção atualizada, nem código em branch com recurso homologado. **Testes reais de software ficam para fechamento do desenvolvimento RC49**, conforme decisão do responsável.
+
+**Diretrizes visuais e do produto mantidas:** não criar tela Ativos, usar aba Registros no Endpoint; em Software, manter abas `Softwares coletados` / `Uploads`, cards de arquivo em duas colunas no desktop e nome amigável abrindo drawer; código patrimonial amigável/único provisório, baseado em identidade estável do equipamento, prefixos das duas empresas a decidir; nenhum catálogo binário versionado indefinidamente; FollowMe em distribuição de software/impressora; política de reboot explícita `Se necessário reiniciar, como será feito?`.
