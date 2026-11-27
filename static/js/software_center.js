@@ -417,6 +417,7 @@
             var pkg = payload.item;
             showDrawer('Cadastro de instalador', pkg.friendly_name, pkg.original_filename || String(pkg.package_type).toUpperCase(), packageEditor(pkg, payload.audit));
             drawer.dataset.packageId = pkg.id;
+            drawer.dataset.packageRevision = String(pkg.revision);
         }).catch(function (error) {
             showDrawer('Cadastro de instalador', 'Não foi possível abrir', '', '<p class="software-data-state" data-state="error">' + esc(error.message) + '</p>');
         });
@@ -581,14 +582,17 @@
         if (!button) return;
         var action = button.dataset.packageAction;
         var id = drawer.dataset.packageId;
-        var pkg = packages.find(function (item) { return item.id === id; });
+        var revision = Number(drawer.dataset.packageRevision);
         var message = root.querySelector('[data-package-action-message]');
-        if (!pkg) return;
+        if (!id || !Number.isInteger(revision) || revision < 1) {
+            if (message) { message.textContent = 'Não foi possível confirmar a revisão atual do cadastro. Reabra o drawer antes de tentar novamente.'; message.dataset.state = 'error'; }
+            return;
+        }
         if (action === 'delete' && !window.confirm('Excluir definitivamente este cadastro não utilizado e seu arquivo privado? O evento de auditoria será preservado.')) return;
         var reason = (root.querySelector('[data-package-reason]') || {}).value || '';
         if (!reason.trim()) { if (message) { message.textContent = 'Informe o motivo antes de continuar.'; message.dataset.state = 'error'; } return; }
         button.disabled = true;
-        var payload = { revision: pkg.revision, reason: reason.trim() };
+        var payload = { revision: revision, reason: reason.trim() };
         var url = action === 'approve-profile' ? packageProfileUrl(id, true) : packageUrl(id, action === 'delete' ? 'delete/' : action + '/');
         requestJson(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(function () {
             if (action === 'delete') { closeDrawer(); return loadPackages(); }
