@@ -151,7 +151,7 @@ def _update_agent_dispatch_block_reason(job, endpoint, release, campaigns, waves
             return 'campaign_binding_missing'
         if campaign.release_snapshot.get('stable_desktop_profile'):
             from .stable_rollout import enabled as stable_enabled
-            if hasattr(campaign, 'source_coverage_round'):
+            if campaign.release_snapshot.get('stable_coverage_origin_id'):
                 from .stable_coverage import latest_stable_release_id
                 if latest_stable_release_id() != release.pk:
                     return 'stable_catch_up_release_no_longer_applicable'

@@ -79,6 +79,7 @@ class StableCoverageTests(CoverageFixture, TestCase):
         record = AgentRolloutCoverageRound.objects.get(pk=self.discover())
         self.assertEqual(record.campaign_id, self.original.pk)
         self.assertEqual(record.execution_campaign.release_id, self.release.pk)
+        self.assertEqual(record.execution_campaign.release_snapshot['stable_coverage_origin_id'], str(self.original.pk))
         self.assertEqual(record.execution_campaign.state, 'running')
         self.assertEqual(list(record.execution_campaign.targets.values_list('endpoint_id', flat=True)), [first.pk])
         outcomes = {entry['endpoint_id']: entry['reason'] for entry in record.target_snapshot}

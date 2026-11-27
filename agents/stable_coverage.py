@@ -124,7 +124,7 @@ def discover_stable_coverage(*, now):
             'concurrency_limit': settings.NIGHTOWL_STABLE_DESKTOP_ROLLOUT_BATCH_SIZE,
             'minimum_observation_seconds': original.minimum_observation_seconds,
             'auto_pause_policy': original.auto_pause_policy,
-        }, actor, now=now, endpoints=endpoints)
+        }, actor, now=now, endpoints=endpoints, coverage_origin=original)
         control_rollout_campaign(executor, {'action': 'start', 'reason': reason, 'expected_state': 'ready'},
                                  actor, now=now)
         wave = transition_wave(executor.waves.get(), 'ready', actor, reason, now=now)

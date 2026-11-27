@@ -58,7 +58,8 @@ def wave_contract(plan, eligible, minimum):
     return result, used
 
 
-def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None, endpoints=None):
+def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None, endpoints=None,
+                                              coverage_origin=None):
     authorize(actor)
     if not isinstance(data, dict):
         raise PolicyContractError('invalid_contract')
@@ -107,6 +108,11 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
             snapshot = campaign_release_snapshot(release)
             if stable_enabled(release.channel):
                 snapshot['stable_desktop_profile'] = True
+            if coverage_origin is not None:
+                if (coverage_origin.release_id != release.pk or coverage_origin.state != 'completed'
+                        or not snapshot.get('stable_desktop_profile')):
+                    raise PolicyContractError('stable_catch_up_origin_invalid', status=409)
+                snapshot['stable_coverage_origin_id'] = str(coverage_origin.pk)
             campaign = AgentRolloutCampaign.objects.create(release=release, release_snapshot=snapshot,
                 channel_snapshot=release.channel, cohort_schema=preview['cohort_schema'], cohort_hash=preview['cohort_hash'],
                 preview_generated_at=now, freshness_seconds=freshness, target_group_ids_snapshot=groups,
