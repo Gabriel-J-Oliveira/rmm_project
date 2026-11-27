@@ -25,12 +25,41 @@ sujeitos à reconciliação normal, sem cancelamento retroativo.
 Os alvos anteriormente aprovados não voltam a entrar em campanhas complementares,
 e jobs ativos impedem seleção pelo avaliador existente. Um alvo offline já
 incluído na campanha original continua sob despacho normal; novos alvos offline
-aguardam heartbeat antes da seleção complementar. Nenhum retry automático é
-introduzido. Se a publicação não abriu campanha original, não há aprovação de
-campanha a reutilizar: o operador precisa aprovar uma primeira campanha pelo fluxo
-existente. O aprovador deve continuar autorizado a criar e alterar campanhas.
+aguardam heartbeat antes da seleção complementar. No 07B-2 não havia retry
+automático. Se a publicação não teve desktops elegíveis, a campanha-âncora vazia
+é criada e aprovada/auditada no mesmo fluxo de publicação Stable, desde que o
+publicador também esteja autorizado a gerir campanhas. O aprovador deve continuar
+autorizado a criar e alterar campanhas.
 Quando a campanha original foi aprovada para grupos específicos, as rodadas
 herdam esse mesmo recorte.
+
+## RC49-07B-3 — retries e reconciliação
+
+Execução Stable registra cada AgentJob como uma tentativa imutável no ledger
+`AgentRolloutAttempt`; o vínculo histórico `AgentRolloutTarget.agent_job` não é
+reescrito. A evidência retryável atual é o erro explícito do updater
+`UPDATE_DOWNLOAD_FAILED` em resultado final recebido; falhas genéricas de rede
+não provam que a execução não começou e não são reenviadas automaticamente.
+O limite é uma tentativa inicial e três adicionais, com delays configuráveis em
+`NIGHTOWL_STABLE_ROLLOUT_RETRY_DELAYS_SECONDS` (padrão 900, 3600 e 14400
+segundos). Timeout, ACK perdido, binding/identidade inválida, conflito de
+recibo, assinatura inválida e estado incerto não recebem retry cego e ficam
+aguardando reconciliação. Rollback exige intervenção; falha permanente e
+esgotamento permanecem falhas terminais sujeitas à política existente de
+auto-pause.
+
+Enquanto aguarda backoff ou recuperação comprovada de espaço, o target permanece
+não terminal, a wave não pode concluir, e métricas expõem separadamente o histórico
+das tentativas e a falha terminal. O runner só reabilita retry de campanha Stable
+que continua `running`; pausas manuais/segurança e abortos bloqueiam o despacho.
+Cada retry cria outro job/ledger attempt sob os locks do runner/campanha/target;
+revalidação normal de release, endpoint, política e lote continua obrigatória.
+
+Se uma release Stable for publicada sem desktops elegíveis, `start_on_publication`
+cria uma campanha-âncora vazia, completed e aprovada/auditada pelo publicador com
+permissão de campanhas. Não há wave nem despacho; endpoints elegíveis posteriores
+entram por rodadas complementares sob essa autorização. Abortos nunca são
+recriados; campanhas não concluídas bloqueiam rodadas complementares.
 **Escopo desta entrega:** campanhas com conjunto fixo de alvos. A cobertura contínua dos desktops cadastrados ou tornados elegíveis após a publicação é um incremento complementar. O retorno de um alvo offline já incluído na campanha não depende desse incremento.
 
 ## Atualização de desenvolvimento 07B — 27/11/2026
@@ -38,8 +67,9 @@ herdam esse mesmo recorte.
 A seção inicial acima documenta a **PR #75 (07A)** com alvos fixos. Não interpretar a afirmação histórica de ausência de catch-up como situação geral do código em desenvolvimento.
 
 - **07B-1 integrada, PR #79:** `AgentRolloutCoverageRound` e migration `agents.0059_stable_coverage_round` preservam o cohort/snapshot original, sem reabrir campanhas concluídas ou abortadas.
-- **07B-2 em PR #83, sincronizada em desenvolvimento:** implementa detecção recorrente de desktops novos/recém-elegíveis e campanhas executoras complementares; sem retries generalizados. A migration foi renumerada para `0063_stable_coverage_execution_campaign`, dependente da migration de operações de software integrada pela #82. O CI deve ser reexecutado no HEAD sincronizado.
-- **07B-3/4 futuros, negociados por incremento:** classificar erros transitórios, retries limitados/backoff, `already_current` comprovado, reconciliação com recibo+versão+saúde, operação e observabilidade de cobertura por campanha/rodada; sem reativar campanha abortada ou duplicar job.
+- **07B-2 integrada, PR #83:** merge `97a5f61518edf9d686f21dc84a23488f7dcb4770`, migration 0063.
+- **07B-3 em desenvolvimento:** ledger imutável de jobs/tentativas, retry conservador 15m/1h/4h, limite de três retries; ambiguidades não são reenviadas e a governança continua aplicada. Requer CI final antes de revisão.
+- **07B-4 futura:** interface/observabilidade agregada das rodadas, tentativas e exclusões.
 - Stable continua opt-in com `NIGHTOWL_STABLE_DESKTOP_ROLLOUT_ENABLED=False` por padrão, restrito a desktops físicos Windows elegíveis no `stable-desktops`. 100% significa cobertura ao longo do tempo dos **elegíveis**, não instalação simultânea nem inclusão de VMs/servidores. Despacho, publicação em massa e mudanças em endpoints ainda não autorizados por este documento.
 
 [Handoff central](rc49-handoff-contexto-20261127.md) | [Codex 1](rc49-codex1-handoff-20261127.md).

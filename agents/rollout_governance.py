@@ -12,7 +12,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .fleet_policy import PolicyContractError
-from .models import AgentOperationalStatus, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
+from .models import AgentOperationalStatus, AgentRolloutAttempt, AgentRolloutCampaign, AgentRolloutTarget, AgentRolloutWave, AuditEvent
 from .rollout_models import default_auto_pause_policy
 from .rollout_planning import (
     build_rollout_planning_context,
@@ -65,11 +65,19 @@ def observation_elapsed_seconds(wave, *, now):
 def build_wave_observation_summary(campaign, wave, *, now):
     targets = list(AgentRolloutTarget.objects.filter(campaign=campaign, wave=wave, state='succeeded')
                    .select_related('endpoint', 'agent_job').order_by('endpoint_id', 'pk'))
+    attempts = {}
+    if campaign.release_snapshot.get('stable_desktop_profile'):
+        for attempt in AgentRolloutAttempt.objects.filter(
+            target_id__in=[target.pk for target in targets]
+        ).select_related('job').order_by('ordinal'):
+            attempts[attempt.target_id] = attempt
     statuses = {item.endpoint_id: item for item in AgentOperationalStatus.objects.filter(
         endpoint_id__in=[target.endpoint_id for target in targets])}
     risks = []
     for target in targets:
         endpoint = target.endpoint
+        attempt = attempts.get(target.pk)
+        successful_job_id = attempt.job_id if attempt else target.agent_job_id
         reason = ''
         if not endpoint.is_active:
             reason = 'observation_endpoint_inactive'
@@ -89,7 +97,7 @@ def build_wave_observation_summary(campaign, wave, *, now):
                 reason = 'observation_health_critical'
             elif status and status.installed_version and compare_versions(status.installed_version, campaign.release.version) != 0:
                 reason = 'observation_version_drift'
-            elif status and status.update_job_id and str(status.update_job_id) != str(target.agent_job_id):
+            elif status and status.update_job_id and str(status.update_job_id) != str(successful_job_id):
                 reason = 'observation_operational_job_mismatch'
         if reason:
             risks.append({'target_id': str(target.pk), 'endpoint_id': str(endpoint.pk), 'reason_code': reason})

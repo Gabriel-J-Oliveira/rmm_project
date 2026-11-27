@@ -9,6 +9,7 @@ from .models import AgentRolloutCampaign
 from .rollout_dispatch import dispatch_rollout_campaign
 from .rollout_planning import rollout_orchestration_enabled
 from .stable_coverage import discover_stable_coverage
+from .rollout_retry import prepare_due_stable_retries
 
 RUNNER_LOCK_ID = 564987321
 
@@ -53,8 +54,10 @@ def run_rollout_round(*, now=None):
         summaries = []
         for pk in ids:
             try:
+                retry_ready = prepare_due_stable_retries(pk, now=now)
                 result = dispatch_rollout_campaign(pk, now=now)
-                summaries.append({key: result[key] for key in ('campaign_id', 'wave_id', 'created_count', 'job_ids')})
+                summaries.append({key: result[key] for key in ('campaign_id', 'wave_id', 'created_count', 'job_ids')}
+                                 | {'retry_ready_count': retry_ready})
             except PolicyContractError as exc:
                 summaries.append({'campaign_id': str(pk), 'status': 'blocked', 'reason_code': str(exc)})
         result = {'status': 'completed', 'campaigns': summaries}

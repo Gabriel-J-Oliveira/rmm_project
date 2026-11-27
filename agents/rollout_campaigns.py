@@ -154,7 +154,7 @@ def transition_campaign(campaign, state, actor, reason, *, now=None, permission=
     reason = reason_text(reason)
     now = now or timezone.now()
     campaign = AgentRolloutCampaign.objects.select_for_update().get(pk=campaign.pk)
-    transitions = {'draft': {'ready', 'aborted'}, 'ready': {'running', 'aborted'},
+    transitions = {'draft': {'ready', 'aborted', 'completed'}, 'ready': {'running', 'aborted'},
                    'running': {'paused', 'completed', 'aborted'}, 'paused': {'running', 'aborted'}}
     if state not in transitions.get(campaign.state, set()):
         raise PolicyContractError('invalid_campaign_transition', status=409)
@@ -165,8 +165,14 @@ def transition_campaign(campaign, state, actor, reason, *, now=None, permission=
         actual_plan = [{'count': w.target_count, 'observation_seconds': w.minimum_observation_seconds} for w in waves]
         if actual_plan != campaign.wave_plan or sum(w.target_count for w in waves) != campaign.eligible_count or any(w.targets.filter(state='eligible').count() != w.target_count for w in waves):
             raise PolicyContractError('snapshot_count_mismatch', status=409)
-    if state == 'completed' and campaign.waves.exclude(state='completed').exists():
+    empty_stable_anchor = bool(state == 'completed' and campaign.state == 'draft'
+                               and campaign.release_snapshot.get('stable_desktop_profile')
+                               and campaign.eligible_count == 0 and campaign.total_candidates == campaign.excluded_count
+                               and not campaign.waves.exists() and not campaign.targets.filter(eligibility_at_selection=True).exists())
+    if state == 'completed' and not empty_stable_anchor and campaign.waves.exclude(state='completed').exists():
         raise PolicyContractError('waves_not_completed', status=409)
+    if state == 'completed' and campaign.state == 'draft' and not empty_stable_anchor:
+        raise PolicyContractError('invalid_empty_campaign_completion', status=409)
     if state == 'aborted':
         for wave in campaign.waves.exclude(state__in=['completed', 'cancelled']):
             wave.state = 'cancelled'
@@ -174,7 +180,7 @@ def transition_campaign(campaign, state, actor, reason, *, now=None, permission=
             audit('wave.state_changed', campaign, actor, reason, wave_id=str(wave.pk), state='cancelled')
         campaign.current_wave = None
     campaign.state = state
-    if state == 'ready':
+    if state == 'ready' or empty_stable_anchor:
         campaign.approved_by = actor
     if state == 'running' and campaign.started_at is None:
         campaign.started_at = now

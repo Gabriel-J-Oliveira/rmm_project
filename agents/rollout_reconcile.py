@@ -14,11 +14,13 @@ from .models import (
     AgentJob,
     AgentJobResultReceipt,
     AgentOperationalStatus,
+    AgentRolloutAttempt,
     AgentRolloutCampaign,
     AgentRolloutTarget,
     AuditEvent,
 )
 from .versioning import compare_versions
+from .stable_retry import classify_retry_evidence, retry_delay
 
 
 TERMINAL_TARGET_STATES = {'succeeded', 'failed', 'rolled_back', 'cancelled'}
@@ -71,10 +73,10 @@ def _binding_valid(target, job):
     )
 
 
-def evaluate_rollout_target(target, *, receipt=None, operational_status=None, now=None):
+def evaluate_rollout_target(target, *, receipt=None, operational_status=None, attempt=None, now=None):
     """Purely classify already-loaded evidence for one frozen rollout target."""
     now = now or timezone.now()
-    job = target.agent_job
+    job = attempt.job if attempt and attempt.job_id else target.agent_job
     target_version = job_target_version(job) if job else target.campaign.release.version
     installed_version = job_installed_version(job) if job else ''
     health_confirmed, health_source = _health_confirmed(job, operational_status) if job else (False, '')
@@ -132,6 +134,24 @@ def evaluate_rollout_target(target, *, receipt=None, operational_status=None, no
         else:
             desired_state, classification, reason = 'running', 'running', f'job_{job.status}'
 
+    inconclusive_unresolved = bool(
+        attempt and attempt.outcome == 'inconclusive' and job
+        and (job.status in {AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_INTERRUPTED}
+             or not job.result_received_at)
+    )
+    keep_target_open = bool(attempt and (
+        attempt.outcome in {'retry_scheduled', 'retry_ready', 'awaiting_condition'}
+        or inconclusive_unresolved
+    ))
+    if keep_target_open and target.state not in TERMINAL_TARGET_STATES:
+        classification = {
+            'retry_scheduled': 'retry_waiting',
+            'retry_ready': 'retry_ready',
+            'awaiting_condition': 'waiting_condition',
+            'inconclusive': 'awaiting_reconciliation',
+        }.get(attempt.outcome, 'awaiting_reconciliation')
+        desired_state, reason, terminal = 'running', attempt.reason_code or 'recoverable_failure_backoff', False
+
     evidence_conflict = target.state in TERMINAL_TARGET_STATES and desired_state != target.state
     if target.state in TERMINAL_TARGET_STATES:
         terminal = True
@@ -142,7 +162,9 @@ def evaluate_rollout_target(target, *, receipt=None, operational_status=None, no
     return {
         'campaign_id': str(target.campaign_id), 'wave_id': str(target.wave_id) if target.wave_id else None,
         'target_id': str(target.pk), 'endpoint_id': str(target.endpoint_id),
-        'job_id': str(target.agent_job_id) if target.agent_job_id else None,
+        # The target keeps its first-job FK immutable; expose the latest
+        # attempt's job for reconciliation evidence and operator diagnostics.
+        'job_id': str(job.pk) if job else None,
         'current_state': target.state, 'job_status': job.status if job else None,
         'job_stage': job_stage(job) if job else None, 'classification': classification,
         'terminal': terminal, 'desired_state': desired_state,
@@ -155,13 +177,22 @@ def evaluate_rollout_target(target, *, receipt=None, operational_status=None, no
     }
 
 
-def _load_campaign_evaluations(campaign, *, now=None, lock=False):
+def _load_campaign_evaluations(campaign, *, now=None, lock=False, include_attempts=False):
     targets = campaign.targets.select_related('campaign__release', 'wave', 'endpoint', 'agent_job__agent_release')
     if lock:
         # PostgreSQL cannot lock nullable joined rows; Campaign is locked separately.
         targets = targets.select_for_update(of=('self',))
     targets = list(targets.order_by('endpoint_id', 'pk'))
-    job_ids = [target.agent_job_id for target in targets if target.agent_job_id]
+    attempt_rows = []
+    if campaign.release_snapshot.get('stable_desktop_profile'):
+        attempt_rows = list(AgentRolloutAttempt.objects.filter(
+            target_id__in=[target.pk for target in targets]
+        ).select_related('job').order_by('target_id', 'ordinal'))
+    attempts = {}
+    for attempt in attempt_rows:
+        attempts[attempt.target_id] = attempt
+    job_ids = [attempt.job_id for attempt in attempts.values() if attempt.job_id]
+    job_ids.extend(target.agent_job_id for target in targets if target.agent_job_id and target.agent_job_id not in job_ids)
     endpoint_ids = [target.endpoint_id for target in targets]
     receipts = defaultdict(list)
     for receipt in AgentJobResultReceipt.objects.filter(job_id__in=job_ids).order_by('received_at'):
@@ -169,9 +200,12 @@ def _load_campaign_evaluations(campaign, *, now=None, lock=False):
     statuses = {status.endpoint_id: status for status in AgentOperationalStatus.objects.filter(endpoint_id__in=endpoint_ids)}
     evaluations = []
     for target in targets:
-        receipt = next((item for item in receipts.get(target.agent_job_id, ()) if item.result_id == target.agent_job.result_id), None) if target.agent_job_id else None
-        evaluations.append((target, evaluate_rollout_target(target, receipt=receipt, operational_status=statuses.get(target.endpoint_id), now=now)))
-    return evaluations
+        attempt = attempts.get(target.pk)
+        job = attempt.job if attempt and attempt.job_id else target.agent_job
+        receipt = next((item for item in receipts.get(job.pk, ()) if item.result_id == job.result_id), None) if job else None
+        evaluations.append((target, evaluate_rollout_target(target, receipt=receipt, operational_status=statuses.get(target.endpoint_id),
+                                                              attempt=attempt, now=now)))
+    return (evaluations, attempt_rows) if include_attempts else evaluations
 
 
 def _rate(numerator, denominator):
@@ -208,15 +242,27 @@ def _metrics(items, *, excluded=0):
 def summarize_rollout_campaign(campaign, *, now=None):
     """Read-only campaign/wave metrics with bounded query count."""
     campaign = AgentRolloutCampaign.objects.select_related('release').get(pk=getattr(campaign, 'pk', campaign))
-    pairs = _load_campaign_evaluations(campaign, now=now)
+    pairs, attempt_rows = _load_campaign_evaluations(campaign, now=now, include_attempts=True)
     active = [evaluation for target, evaluation in pairs if target.eligibility_at_selection]
     excluded = sum(not target.eligibility_at_selection for target, _ in pairs)
     by_wave = defaultdict(list)
     for target, evaluation in pairs:
         if target.wave_id:
             by_wave[target.wave_id].append(evaluation)
+    metrics = _metrics(active, excluded=excluded)
+    attempt_counts = Counter(attempt.outcome for attempt in attempt_rows)
+    metrics.update({
+        'attempts_total': len(attempt_rows),
+        'attempts_retry_scheduled': attempt_counts['retry_scheduled'],
+        'attempts_waiting_condition': attempt_counts['awaiting_condition'],
+        'attempts_inconclusive': attempt_counts['inconclusive'],
+        'attempts_permanent_failure': attempt_counts['permanent_failure'],
+        'attempts_exhausted': attempt_counts['exhausted'],
+        'attempts_retry_ready': attempt_counts['retry_ready'],
+        'attempts_retry_consumed': attempt_counts['retry_consumed'],
+    })
     return {
-        'campaign_id': str(campaign.pk), 'metrics': _metrics(active, excluded=excluded),
+        'campaign_id': str(campaign.pk), 'metrics': metrics,
         'waves': {str(wave.pk): _metrics(by_wave.get(wave.pk, [])) for wave in campaign.waves.order_by('sequence')},
         'targets': [evaluation for _, evaluation in pairs],
     }
@@ -230,8 +276,75 @@ def reconcile_rollout_campaign(campaign, *, now=None):
         pairs = _load_campaign_evaluations(campaign, now=now, lock=True)
         changed, transitions, issues = [], [], []
         for target, evaluation in pairs:
+            attempt = None
+            if campaign.release_snapshot.get('stable_desktop_profile'):
+                attempt = AgentRolloutAttempt.objects.select_for_update(of=('self',)).filter(
+                    target=target,
+                ).order_by('-ordinal').first()
+            inconclusive_still_unresolved = bool(
+                attempt and attempt.outcome == 'inconclusive' and attempt.job
+                and (attempt.job.status in {AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_INTERRUPTED}
+                     or not attempt.job.result_received_at)
+            )
+            can_reconcile_attempt = bool(
+                attempt and (attempt.outcome == 'dispatched'
+                             or attempt.outcome == 'inconclusive' and not inconclusive_still_unresolved)
+            )
+            if can_reconcile_attempt and evaluation['terminal']:
+                if evaluation['desired_state'] == 'succeeded':
+                    attempt.outcome, attempt.failure_class, attempt.reason_code = 'succeeded', '', 'healthy_install_confirmed'
+                elif evaluation['desired_state'] == 'rolled_back':
+                    attempt.outcome, attempt.failure_class, attempt.reason_code = 'rolled_back', 'operator_intervention_required', 'rollback_detected'
+                elif attempt.job:
+                    failure_class, reason_code = classify_retry_evidence(attempt.job)
+                    attempt.failure_class, attempt.reason_code = failure_class, reason_code
+                    if failure_class == 'retryable' and attempt.ordinal < 4:
+                        attempt.outcome = 'retry_scheduled'
+                        attempt.retry_after = now + retry_delay(attempt.ordinal + 1)
+                    elif failure_class == 'retryable':
+                        attempt.outcome = 'exhausted'
+                    else:
+                        attempt.outcome = failure_class
+                attempt.reconciled_at = now
+                attempt.evidence = {
+                    'job_status': attempt.job.status if attempt.job else '',
+                    'result_received': bool(attempt.job and attempt.job.result_received_at),
+                    'receipt_present': bool(evaluation['receipt_present']),
+                    'receipt_conflicts': evaluation['receipt_conflict_count'],
+                    'version_confirmed': bool(evaluation['desired_state'] == 'succeeded'),
+                    'health_confirmed': bool(evaluation['health_confirmed']),
+                }
+                attempt.save(update_fields=['outcome', 'failure_class', 'reason_code', 'retry_after', 'reconciled_at', 'evidence'])
+                if attempt.outcome in {'retry_scheduled', 'retry_ready', 'awaiting_condition'} or (
+                    attempt.outcome == 'inconclusive' and attempt.job and
+                    (attempt.job.status in {AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_INTERRUPTED}
+                     or not attempt.job.result_received_at)
+                ):
+                    evaluation['desired_state'] = 'running'
+                    evaluation['terminal'] = False
+                    evaluation['classification'] = {
+                        'retry_scheduled': 'retry_waiting',
+                        'retry_ready': 'retry_ready',
+                        'awaiting_condition': 'waiting_condition',
+                        'inconclusive': 'awaiting_reconciliation',
+                    }[attempt.outcome]
+                    evaluation['reason_code'] = attempt.reason_code or 'recoverable_failure_backoff'
+                AuditEvent.objects.create(event_type='rollout.attempt_reconciled', title='Stable rollout attempt reconciled',
+                    actor_type=AuditEvent.ACTOR_SCHEDULER, actor_name='RolloutReconciler',
+                    metadata={'campaign_id': str(campaign.pk), 'target_id': str(target.pk),
+                              'attempt_id': str(attempt.pk), 'ordinal': attempt.ordinal,
+                              'outcome': attempt.outcome, 'failure_class': attempt.failure_class,
+                              'reason_code': attempt.reason_code,
+                              'retry_after': attempt.retry_after.isoformat() if attempt.retry_after else None})
             if evaluation['evidence_conflict'] or evaluation['classification'] == 'binding_invalid':
                 issues.append({'target_id': str(target.pk), 'classification': evaluation['classification'], 'job_id': evaluation['job_id']})
+            if attempt and (
+                attempt.outcome in {'retry_scheduled', 'retry_ready', 'awaiting_condition'}
+                or attempt.outcome == 'inconclusive' and attempt.job and
+                (attempt.job.status in {AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_INTERRUPTED}
+                 or not attempt.job.result_received_at)
+            ) and evaluation['desired_state'] == 'running':
+                evaluation['terminal'] = False
             if target.state in TERMINAL_TARGET_STATES or target.state == evaluation['desired_state']:
                 continue
             target.state = evaluation['desired_state']

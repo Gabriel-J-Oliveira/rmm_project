@@ -48,13 +48,18 @@ def start_on_publication(release, actor, reason):
     if blocker:
         raise ValidationError(blocker)
     preview = build_agent_rollout_preview(release, now=now)
-    if not preview['eligible_count']:
-        return
     try:
+        has_targets = bool(preview['eligible_count'])
         campaign = create_agent_rollout_campaign_from_preview(release, {
             'reason': reason, 'expected_cohort_hash': preview['cohort_hash'], 'cohort_schema': preview['cohort_schema'],
-            'wave_plan': [{'remaining': True}], 'concurrency_limit': batch,
+            'wave_plan': [{'remaining': True}] if has_targets else [], 'concurrency_limit': batch,
+            'ready': has_targets,
         }, actor, now=now)
+        if not has_targets:
+            from .rollout_campaigns import transition_campaign
+            transition_campaign(campaign, 'completed', actor,
+                                f'{reason}; approved Stable coverage anchor with zero eligible endpoints', now=now)
+            return
         control_rollout_campaign(campaign, {'action': 'start', 'reason': reason, 'expected_state': 'ready'}, actor, now=now)
         wave = transition_wave(campaign.waves.get(), 'ready', actor, reason, now=now)
         transition_wave(wave, 'running', actor, reason, now=now)

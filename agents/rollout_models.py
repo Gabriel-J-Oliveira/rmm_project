@@ -180,3 +180,37 @@ class AgentRolloutTarget(models.Model):
                       | models.Q(state__in=['succeeded', 'failed', 'rolled_back', 'cancelled'], completed_at__isnull=False)))
             ), name='rollout_target_runtime'),
         ]
+
+
+class AgentRolloutAttempt(models.Model):
+    """Immutable linkage between a rollout target, one dispatched job and its evidence."""
+    OUTCOMES = (
+        'dispatched', 'succeeded', 'already_current', 'retry_scheduled', 'retry_ready', 'retry_consumed',
+        'awaiting_condition', 'inconclusive', 'permanent_failure', 'exhausted',
+        'rolled_back',
+    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    target = models.ForeignKey(AgentRolloutTarget, on_delete=models.PROTECT, related_name='attempts')
+    ordinal = models.PositiveSmallIntegerField()
+    job = models.OneToOneField('AgentJob', null=True, blank=True, on_delete=models.PROTECT,
+                               related_name='rollout_attempt')
+    outcome = models.CharField(max_length=32, choices=[(value, value) for value in OUTCOMES], default='dispatched')
+    failure_class = models.CharField(max_length=32, blank=True)
+    reason_code = models.CharField(max_length=80, blank=True)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+    retry_after = models.DateTimeField(null=True, blank=True)
+    evidence = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = 'agents'
+        ordering = ['target_id', 'ordinal']
+        constraints = [
+            models.UniqueConstraint(fields=['target', 'ordinal'], name='rollout_attempt_target_ordinal'),
+            models.CheckConstraint(condition=models.Q(ordinal__gte=1, ordinal__lte=4), name='rollout_attempt_ordinal_limit'),
+            models.CheckConstraint(condition=models.Q(outcome__in=[
+                'dispatched', 'succeeded', 'already_current', 'retry_scheduled', 'retry_ready', 'retry_consumed',
+                'awaiting_condition', 'inconclusive', 'permanent_failure', 'exhausted', 'rolled_back',
+            ]), name='rollout_attempt_outcome'),
+        ]

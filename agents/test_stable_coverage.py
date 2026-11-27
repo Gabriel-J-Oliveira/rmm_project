@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from datetime import timedelta
 from threading import Event
 from unittest import skipUnless
 from unittest.mock import patch
@@ -10,9 +11,11 @@ from django.test import TestCase, TransactionTestCase, override_settings
 
 from . import test_stable_rollout as fixtures
 from .fleet_policy import PolicyContractError
-from .models import AgentJob, AgentRelease, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutCoverageRound, AuditEvent
+from .models import AgentJob, AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseGroup, AgentRolloutAttempt, AgentRolloutCampaign, AgentRolloutCoverageRound, AuditEvent
 from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .rollout_dispatch import dispatch_rollout_campaign
+from .rollout_reconcile import reconcile_rollout_campaign, summarize_rollout_campaign
+from .rollout_retry import prepare_due_stable_retries
 from .rollout_runner import run_rollout_round
 from .services import build_agent_rollout_preview, publish_agent_release
 from .stable_coverage import discover_stable_coverage
@@ -70,11 +73,91 @@ class CoverageFixture:
 
 @settings
 class StableCoverageTests(CoverageFixture, TestCase):
+    def test_zero_initial_eligible_publishes_approved_anchor_for_later_desktop(self):
+        # A superseded campaign must first reach a governed terminal state;
+        # its active endpoint reservation must not be bypassed by catch-up.
+        self.complete(self.original)
+        release = self.newer(status='draft')
+        AgentMachine.objects.filter(pk=self.machine.pk).update(update_channel='development')
+        release = publish_agent_release(release, self.actor, 'Synthetic Stable approval',
+                                         rollout_percentage=100, rollout_paused=False)
+        anchor = AgentRolloutCampaign.objects.get(release=release)
+        self.assertEqual(anchor.state, 'completed')
+        self.assertEqual(anchor.eligible_count, 0)
+        self.assertEqual(anchor.approved_by_id, self.actor.pk)
+        self.assertFalse(anchor.waves.exists())
+
+        AgentMachine.objects.filter(pk=self.machine.pk).update(update_channel='stable')
+        later = self.machine
+        record = AgentRolloutCoverageRound.objects.get(pk=discover_stable_coverage(now=self.now))
+        self.assertEqual(record.campaign_id, anchor.pk)
+        self.assertEqual(list(record.execution_campaign.targets.values_list('endpoint_id', flat=True)), [later.pk])
+
+    def test_proven_download_failure_waits_backoff_then_reuses_target_with_history(self):
+        result = dispatch_rollout_campaign(self.original, now=self.now)
+        target = self.original.targets.get()
+        first_job = target.agent_job
+        first_job.status = AgentJob.STATUS_FAILED
+        first_job.error_code = 'UPDATE_DOWNLOAD_FAILED'
+        first_job.result_received_at = self.now
+        first_job.save(update_fields=['status', 'error_code', 'result_received_at'])
+
+        summary = reconcile_rollout_campaign(self.original, now=self.now)
+        target.refresh_from_db()
+        first_attempt = target.attempts.get()
+        self.assertEqual(target.state, 'running')
+        self.assertEqual(first_attempt.outcome, 'retry_scheduled')
+        self.assertEqual(summary['metrics']['attempts_retry_scheduled'], 1)
+        self.assertEqual(prepare_due_stable_retries(self.original.pk, now=self.now + timedelta(minutes=14)), 0)
+        self.assertEqual(prepare_due_stable_retries(self.original.pk, now=self.now + timedelta(minutes=15)), 1)
+        ready_summary = reconcile_rollout_campaign(self.original, now=self.now + timedelta(minutes=15))
+        target.refresh_from_db()
+        self.assertEqual(target.agent_job_id, first_job.pk)
+        self.assertEqual(target.state, 'running')
+        self.assertEqual(ready_summary['metrics']['attempts_retry_ready'], 1)
+        second = dispatch_rollout_campaign(self.original, now=self.now + timedelta(minutes=15))
+        target.refresh_from_db()
+        self.assertEqual(second['created_count'], 1)
+        self.assertEqual(target.attempts.count(), 2)
+        self.assertNotEqual(target.attempts.order_by('-ordinal').first().job_id, first_job.pk)
+        self.assertTrue(AgentJob.objects.filter(pk=first_job.pk, status=AgentJob.STATUS_FAILED).exists())
+        second_job = target.attempts.order_by('-ordinal').first().job
+        second_job.status = AgentJob.STATUS_FAILED
+        second_job.error_code = 'UPDATE_DOWNLOAD_FAILED'
+        second_job.result_received_at = self.now + timedelta(minutes=15)
+        second_job.save(update_fields=['status', 'error_code', 'result_received_at'])
+        reconcile_rollout_campaign(self.original, now=self.now + timedelta(minutes=15))
+        second_attempt = target.attempts.order_by('-ordinal').first()
+        self.assertEqual(second_attempt.outcome, 'retry_scheduled')
+        self.assertEqual(second_attempt.retry_after, self.now + timedelta(minutes=75))
+
+    def test_timeout_is_inconclusive_and_never_rearmed_blindly(self):
+        dispatch_rollout_campaign(self.original, now=self.now)
+        target = self.original.targets.get()
+        job = target.agent_job
+        job.status = AgentJob.STATUS_TIMED_OUT
+        job.error_code = 'JOB_TIMEOUT'
+        job.result_received_at = None
+        job.save(update_fields=['status', 'error_code', 'result_received_at'])
+
+        summary = reconcile_rollout_campaign(self.original, now=self.now)
+        target.refresh_from_db()
+        attempt = target.attempts.get()
+        self.assertEqual(target.state, 'running')
+        self.assertEqual(attempt.outcome, 'inconclusive')
+        self.assertEqual(summary['metrics']['attempts_inconclusive'], 1)
+        audit_count = AuditEvent.objects.filter(event_type='rollout.attempt_reconciled').count()
+        reconcile_rollout_campaign(self.original, now=self.now + timedelta(minutes=1))
+        self.assertEqual(AuditEvent.objects.filter(event_type='rollout.attempt_reconciled').count(), audit_count)
+        self.assertEqual(prepare_due_stable_retries(self.original.pk, now=self.now + timedelta(days=1)), 0)
+        self.assertEqual(dispatch_rollout_campaign(self.original, now=self.now + timedelta(days=1))['created_count'], 0)
+
     def test_completed_original_new_endpoint_and_successive_rounds(self):
         self.complete(self.original)
         frozen = AgentRolloutCampaign.objects.values().get(pk=self.original.pk)
         first = self.clone()
         current = self.clone(agent_version=self.release.version)
+        AgentOperationalStatus.objects.create(endpoint=current, health_indicator=AgentOperationalStatus.HEALTH_HEALTHY)
         protected = self.clone(model='Virtual Machine')
         record = AgentRolloutCoverageRound.objects.get(pk=self.discover())
         self.assertEqual(record.campaign_id, self.original.pk)
@@ -217,6 +300,29 @@ class StableCoverageScopedTests(CoverageFixture, TestCase):
 @settings
 @skipUnless(connection.vendor == 'postgresql', 'Requires PostgreSQL advisory and row locks')
 class StableCoverageConcurrencyTests(CoverageFixture, TransactionTestCase):
+    def test_concurrent_retry_scheduler_rearms_target_only_once(self):
+        dispatch_rollout_campaign(self.original, now=self.now)
+        target = self.original.targets.get()
+        job = target.agent_job
+        job.status = AgentJob.STATUS_FAILED
+        job.error_code = 'UPDATE_DOWNLOAD_FAILED'
+        job.result_received_at = self.now
+        job.save(update_fields=['status', 'error_code', 'result_received_at'])
+        reconcile_rollout_campaign(self.original, now=self.now)
+        due = self.now + timedelta(minutes=15)
+
+        def prepare():
+            try:
+                return prepare_due_stable_retries(self.original.pk, now=due)
+            finally:
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = pool.submit(prepare), pool.submit(prepare)
+            results = sorted((first.result(timeout=30), second.result(timeout=30)))
+        self.assertEqual(results, [0, 1])
+        self.assertEqual(AgentRolloutAttempt.objects.filter(target=target, outcome='retry_ready').count(), 1)
+
     def test_discovery_transactions_serialize_even_without_runner_lock(self):
         self.complete(self.original)
         self.clone()
