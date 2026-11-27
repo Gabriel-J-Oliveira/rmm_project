@@ -41,3 +41,7 @@ Esta etapa substitui a Central de Software demonstrativa por uma página com dua
 - Definir storage privado, limites de arquivo, autenticação do agente para download, política de malware, extensões permitidas e RBAC de aprovação/distribuição.
 
 Nenhuma migration operacional, deploy ou operação de software em endpoint foi realizada nesta etapa.
+
+## Nota de continuidade — 27/11/2026
+
+Este documento descreve **apenas o escopo histórico da 03A**, quando o botão de upload ainda estava desabilitado. **Não representa o estado atual da Central de Software.** A 03B (PR #80) já integrou upload privado MSI/EXE, aprovação/revogação, substituição e auditoria; a 03C-A (PR #81) integrou perfis; a B1 (PR #82) integrou operações e download autenticado; a B2 está em PR #84 sem merge. Consultar [handoff central](rc49-handoff-contexto-20261127.md) e [documento 03B](rc49-03b-upload-gerenciamento-instaladores.md) antes de inferir que a UI ainda é mock/readonly.

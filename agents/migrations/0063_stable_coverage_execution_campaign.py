@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('agents', '0061_rc49_software_execution_profiles'),
+        ('agents', '0062_rc49_software_package_operations'),
     ]
 
     operations = [

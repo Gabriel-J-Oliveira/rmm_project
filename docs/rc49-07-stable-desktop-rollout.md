@@ -31,3 +31,15 @@ campanha a reutilizar: o operador precisa aprovar uma primeira campanha pelo flu
 existente. O aprovador deve continuar autorizado a criar e alterar campanhas.
 Quando a campanha original foi aprovada para grupos específicos, as rodadas
 herdam esse mesmo recorte.
+**Escopo desta entrega:** campanhas com conjunto fixo de alvos. A cobertura contínua dos desktops cadastrados ou tornados elegíveis após a publicação é um incremento complementar. O retorno de um alvo offline já incluído na campanha não depende desse incremento.
+
+## Atualização de desenvolvimento 07B — 27/11/2026
+
+A seção inicial acima documenta a **PR #75 (07A)** com alvos fixos. Não interpretar a afirmação histórica de ausência de catch-up como situação geral do código em desenvolvimento.
+
+- **07B-1 integrada, PR #79:** `AgentRolloutCoverageRound` e migration `agents.0059_stable_coverage_round` preservam o cohort/snapshot original, sem reabrir campanhas concluídas ou abortadas.
+- **07B-2 em PR #83, sincronizada em desenvolvimento:** implementa detecção recorrente de desktops novos/recém-elegíveis e campanhas executoras complementares; sem retries generalizados. A migration foi renumerada para `0063_stable_coverage_execution_campaign`, dependente da migration de operações de software integrada pela #82. O CI deve ser reexecutado no HEAD sincronizado.
+- **07B-3/4 futuros, negociados por incremento:** classificar erros transitórios, retries limitados/backoff, `already_current` comprovado, reconciliação com recibo+versão+saúde, operação e observabilidade de cobertura por campanha/rodada; sem reativar campanha abortada ou duplicar job.
+- Stable continua opt-in com `NIGHTOWL_STABLE_DESKTOP_ROLLOUT_ENABLED=False` por padrão, restrito a desktops físicos Windows elegíveis no `stable-desktops`. 100% significa cobertura ao longo do tempo dos **elegíveis**, não instalação simultânea nem inclusão de VMs/servidores. Despacho, publicação em massa e mudanças em endpoints ainda não autorizados por este documento.
+
+[Handoff central](rc49-handoff-contexto-20261127.md) | [Codex 1](rc49-codex1-handoff-20261127.md).

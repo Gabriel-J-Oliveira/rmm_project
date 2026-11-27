@@ -1,4 +1,4 @@
-"""Typed internal preparation only. No new frontend dispatch entry point."""
+"""Validation and capability contracts for typed internal AgentJobs."""
 import json
 import re
 from datetime import timedelta
@@ -9,6 +9,12 @@ from config.authz import is_nightowl_technical_user
 from .models import AgentMachine, AgentJob, InventorySnapshot, AuditEvent
 from .services import create_audit_event
 from .service_collection_policy import service_collection_endpoint_allowed
+
+SOFTWARE_OPERATION_CAPABILITIES = {
+    'install': 'software_msi_install:1',
+    'update': 'software_msi_update:1',
+    'uninstall': 'software_msi_uninstall:1',
+}
 
 
 def _ordinal_sort_key(value):
@@ -87,6 +93,27 @@ def validate_internal_payload(kind, value):
             raise ValueError('invalid_service_query')
         return {'names':names,'limit':limit,'include_details':details}
     if kind == 'install_software':
+        if value.get('schema_version') == 2:
+            allowed = {
+                'schema_version', 'operation_id', 'operation', 'request_id', 'package_uuid',
+                'artifact_sha256', 'artifact_revision', 'profile_revision', 'profile_sha256',
+            }
+            if set(value) != allowed:
+                raise ValueError('invalid_fields')
+            try:
+                import uuid
+                parsed_ids = {key: str(uuid.UUID(value[key])) for key in ('operation_id', 'request_id', 'package_uuid')}
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError('invalid_operation_identity') from None
+            if (type(value.get('schema_version')) is not int or value['schema_version'] != 2
+                    or value.get('operation') not in {'install', 'update', 'uninstall'}
+                    or any(parsed_ids[key] != value[key] for key in parsed_ids)
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(value.get('artifact_sha256', '')))
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(value.get('profile_sha256', '')))
+                    or type(value.get('artifact_revision')) is not int or value['artifact_revision'] < 1
+                    or type(value.get('profile_revision')) is not int or value['profile_revision'] < 1):
+                raise ValueError('invalid_software_operation')
+            return dict(value)
         if set(value) != {'package_id'} or not isinstance(value['package_id'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}',value['package_id']):
             raise ValueError('invalid_package_identity')
         if value['package_id'] not in getattr(settings,'NIGHTOWL_APPROVED_SOFTWARE_IDS',()):
@@ -96,6 +123,8 @@ def validate_internal_payload(kind, value):
 
 
 def required_internal_capability(kind, payload):
+    if kind == 'install_software' and isinstance(payload, dict) and payload.get('schema_version') == 2:
+        return SOFTWARE_OPERATION_CAPABILITIES.get(payload.get('operation'), 'software_operation_invalid')
     if kind == 'collect_services' and isinstance(payload, dict) and payload.get('schema_version') == 3:
         return 'collect_services_paged:3'
     if kind == 'collect_services' and isinstance(payload, dict) and payload.get('schema_version') == 2:
@@ -218,6 +247,10 @@ def validate_internal_completion(job,result):
               len(rows)>job.payload.get('limit',50) or any(not isinstance(row,dict) or not isinstance(row.get('name'),str) for row in rows)):
             raise ValueError('service_confirmation_invalid')
     elif job.job_type=='install_software':
+        if isinstance(job.payload, dict) and job.payload.get('schema_version') == 2:
+            from .software_operation_contract import validate_software_operation_completion
+            validate_software_operation_completion(job, result)
+            return
         if (output.get('package_id')!=job.payload.get('package_id') or output.get('verified') is not True or
             output.get('installed') is not True or output.get('scope')!='machine'):
             raise ValueError('software_confirmation_invalid')
