@@ -1,5 +1,7 @@
 import os
+import shutil
 import subprocess
+import tempfile
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -9,7 +11,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -110,7 +112,8 @@ class SoftwareCenterDataTests(TestCase):
         self.assertContains(response, 'Softwares coletados')
         self.assertContains(response, 'Uploads')
         self.assertContains(response, 'Adicionar arquivo de instalação')
-        self.assertContains(response, 'disabled')
+        self.assertContains(response, 'data-can-upload="true"')
+        self.assertNotContains(response, 'data-software-add-upload disabled')
         self.assertNotContains(response, 'MockNightowlApi')
         self.assertNotContains(response, 'Nova implantação')
         self.assertNotContains(response, 'Criar pacote mockado')
@@ -155,7 +158,18 @@ class SoftwareCenterDataTests(TestCase):
 
 
 @skipUnless(os.environ.get('NIGHTOWL_TEST_BROWSER_E2E') == '1', 'Explicit isolated browser gate required')
+@override_settings(
+    NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT=Path(tempfile.gettempdir()) / ('nightowl-software-center-' + uuid.uuid4().hex),
+    NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_CONFIGURED=True,
+    NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES=1024 * 1024,
+)
 class SoftwareCenterVisualTests(StaticLiveServerTestCase):
+    @classmethod
+    def tearDownClass(cls):
+        root = Path(settings.NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT)
+        super().tearDownClass()
+        shutil.rmtree(root, ignore_errors=True)
+
     def test_software_center_real_data_drawer_responsive_layout_and_screenshots(self):
         operator = get_user_model().objects.create_superuser('software-center-browser')
         self.client.force_login(operator)

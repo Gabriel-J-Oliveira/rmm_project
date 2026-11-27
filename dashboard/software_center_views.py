@@ -24,6 +24,14 @@ def software_center(request):
         'active_nav': 'software',
         'inventory_api_url': reverse('software-inventory-data'),
         'packages_api_url': reverse('software-packages-data'),
+        'package_create_url': reverse('software-package-create'),
+        'package_max_upload_bytes': getattr(settings, 'NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES', 1024 * 1024 * 1024),
+        'can_upload_packages': request.user.is_superuser or request.user.has_perm('agents.add_softwarepackagerecord'),
+        'can_edit_packages': request.user.is_superuser or request.user.has_perm('agents.change_softwarepackagerecord'),
+        'can_approve_packages': request.user.is_superuser or request.user.has_perm('agents.approve_softwarepackage'),
+        'can_revoke_packages': request.user.is_superuser or request.user.has_perm('agents.revoke_softwarepackage'),
+        'can_delete_packages': request.user.is_superuser or request.user.has_perm('agents.delete_softwarepackagerecord'),
+        'can_download_packages': request.user.is_superuser or request.user.has_perm('agents.download_softwarepackage'),
     })
 
 
@@ -118,7 +126,7 @@ def software_inventory_data(request):
 @require_GET
 @never_cache
 def software_packages_data(request):
-    if not _authorized(request):
+    if not _authorized(request) or not (request.user.is_superuser or request.user.has_perm('agents.view_softwarepackagerecord')):
         return JsonResponse({'error': 'forbidden'}, status=403)
     query = str(request.GET.get('q', '')).strip()
     packages = SoftwarePackageRecord.objects.all()
@@ -129,8 +137,14 @@ def software_packages_data(request):
         'id': str(package.id),
         'friendly_name': package.friendly_name,
         'original_filename': package.original_filename,
+        'description': package.description,
         'package_type': package.package_type,
         'version': package.version or None,
+        'revision': package.revision,
+        'has_file': bool(package.artifact_key),
+        'artifact_uploaded_at': package.artifact_uploaded_at.isoformat() if package.artifact_uploaded_at else None,
+        'uploaded_by': package.uploaded_by.get_username() if package.uploaded_by else None,
+        'last_modified_by': package.last_modified_by.get_username() if package.last_modified_by else None,
         'size_bytes': package.size_bytes,
         'sha256': package.sha256 or None,
         'signature_status': package.signature_status,
@@ -143,4 +157,7 @@ def software_packages_data(request):
         'created_at': package.created_at.isoformat(),
         'created_by': package.created_by.get_username() if package.created_by else None,
         'updated_at': package.updated_at.isoformat(),
-    } for package in packages.select_related('approved_by', 'revoked_by', 'created_by')]})
+        'download_url': reverse('software-package-download', kwargs={'pk': package.pk}),
+    } for package in packages.select_related(
+        'approved_by', 'revoked_by', 'created_by', 'uploaded_by', 'last_modified_by',
+    )]})

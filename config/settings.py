@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import environ
+import os
 from django.core.exceptions import ImproperlyConfigured
 from agents.service_collection_policy import parse_endpoint_uuid_allowlist
 from config.runtime_environment import load_runtime_environment
@@ -222,6 +223,22 @@ STORAGES = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Installer binaries are deliberately outside MEDIA_ROOT/staticfiles. Production
+# must provide a private volume explicitly; DEBUG environments use a local default.
+NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_CONFIGURED = bool(
+    os.environ.get('NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT', '').strip()
+)
+NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT = Path(env(
+    'NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT',
+    default=str(BASE_DIR / '.private' / 'software-packages'),
+))
+NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES = env.int(
+    'NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES', default=1024 * 1024 * 1024,
+)
+# Keep small multipart uploads bounded in memory; larger files are handled by
+# Django's temporary-file upload handler and copied to private staging by chunks.
+FILE_UPLOAD_MAX_MEMORY_SIZE = env.int('FILE_UPLOAD_MAX_MEMORY_SIZE', default=1024 * 1024)
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
