@@ -1,6 +1,6 @@
 # NightOwl — Handoff Codex 2 (27/11/2026)
 
-> Fonte central: [rc49-handoff-contexto-20261127.md](rc49-handoff-contexto-20261127.md). Consulte [deploy-RC49](deploy-RC49.md), [visão do produto](nightowl-visao-produto-roadmap-rc49.md) e os documentos [03A](rc49-03a-central-software.md), [03B](rc49-03b-upload-gerenciamento-instaladores.md), [03C-A](rc49-03c-a-perfis-execucao.md) e [03C-B1](rc49-03c-b1-software-operations.md). A referência inicial de código é `main 54bda321be6a91d5369d134d841c24130a644947`.
+> Fonte central: [rc49-handoff-contexto-20261127.md](rc49-handoff-contexto-20261127.md). Consulte [deploy-RC49](deploy-RC49.md), [visão do produto](nightowl-visao-produto-roadmap-rc49.md) e os documentos [03A](rc49-03a-central-software.md), [03B](rc49-03b-upload-gerenciamento-instaladores.md), [03C-A](rc49-03c-a-perfis-execucao.md) e [03C-B1](rc49-03c-b1-software-operations.md). A referência de código é main `97a5f61518edf9d686f21dc84a23488f7dcb4770`.
 
 ## 1. Responsabilidade atual
 
@@ -14,7 +14,7 @@
 | 03B — armazenamento privado MSI/EXE, streaming, substituição sem guardar binários antigos indefinidamente, aprovação/auditoria, download operador | #80 | Integrada; `agents.0060_rc49_software_package_uploads` |
 | 03C-A — perfis, ProductCode, revisões/hash, aprovação do perfil vinculada ao artefato | #81 | Integrada; `agents.0061_rc49_software_execution_profiles` |
 | 03C-B1 — API de operações tipadas, materialização `AgentJob`, download privado agente, ACK v2 | #82 | **Integrada na main `54bda321...`**, `agents.0062_rc49_software_package_operations`; CI [46012576544](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/46012576544), 5/5 |
-| 03C-B2 — executor MSI Windows v2 | **#84** | **PR ABERTA, SEM MERGE**, HEAD `8f5fc0d25f4e3acd7b349950fd1585522555651d`; CI [46019901096](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/46019901096) 5/5 |
+| 03C-B2 — executor MSI Windows v2 | #84 | PR aberta, sem merge, HEAD `75777e6be7033a3a79718fe7a082f695cc00fb94`; CI 46045236911 5/5 |
 
 **Layout aprovado:** na Central existem duas abas, `Softwares coletados` e `Uploads`. Uploads: cards em **duas colunas desktop/uma mobile**, nome amigável é o link que abre drawer. MSI/EXE são cadastráveis, nome editável, substituição de arquivo no mesmo UUID, exclusão definitiva só se nunca utilizado e sem jobs/refs; trocas invalidam aprovação operacional. Sem arquivos de demonstração na lista real.
 
@@ -28,11 +28,12 @@
 
 ## 3. PR #84 — trabalho atual e revisão de merge
 
-- Branch `codex/rc49-03c-b2-msi-executor`, HEAD observado `8f5fc0d25f4e3acd7b349950fd1585522555651d`; base `54bda321...`. PR aberta, CI 5/5 aprovado **no HEAD** (não prova merge nem instalação real).
+- Main de código `97a5f61518edf9d686f21dc84a23488f7dcb4770`. [#83](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/83) integrada por merge normal, HEAD `d7a9b6f52d7dffee83048e5d35e777acab283656`, CI [46042230821](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/46042230821) 5/5. Migration agents.0063_stable_coverage_execution_campaign depende de 0062_rc49_software_package_operations; colisão resolvida. [#84](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/84) aberta, HEAD `75777e6be7033a3a79718fe7a082f695cc00fb94`, CI [46045236911](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/46045236911) 5/5 no HEAD, base incorporada `11b3ba1001486c026586571a9c393ef417820590`, sem migration. Mergeable na consulta, mas falta incorporar #83, preservar ambos os contratos em agents/views.py, repetir CI e obter autorização de merge. #86 é documental. **Sem evidência de deploy RC49, migrations operacionais, release Windows assinada RC49, ativação Stable, despacho de software ou instalação real.** Último ambiente relatado RC48/48.1; confirmar produção separadamente.
 - Implementa MSI v2 install/update/uninstall: perfil imutável/autenticado por job, download streaming para staging protegido por job; tamanho, SHA-256, revisão, cadeia Authenticode e **publisher certificate pin local explícito**; invocação fixa `msiexec` sem shell nem MSI properties arbitrárias; detecção ProductCode/versão/ausência, journal idempotente e retomada após interrupção; timeout/OwnedProcess; 3010 apenas reboot pendente, sem reiniciar. A versão/capability/flag local devem ser compatíveis e opt-in.
 - Tests: .NET Windows com bytes MSI sintéticos/doubles, Django software operation/ACK/profile, updater assinatura, lock/retenção e uninstaller. **Não houve instalação MSI real**, publicação Windows, mudança de flag, migração ou deploy.
-- **Próximos passos:** revisar contrato de perfil/executor, política real de assinatura (qual CA/publisher e pin aceito), privilégio/identidade do serviço Windows, armazenamento temporário e limpeza, permissões NTFS, behavior interrupção e replays; validar qualidade do CI. Sincronizar com `main` atual após qualquer merge; conferir cuidadosamente `agents/views.py`, compartilhado com #83. Não integrar automaticamente sem autorização do responsável.
-- **Não é necessário criar migration na #84** segundo diff reportado; não tocar numeração 0063 usada futuramente pela #83 sem necessidade comprovada.
+- Revisão B2: corrigido ACK com agent_version (validação estrita), falhas v2 e propagação de error_code; novos ACKs queued rejeitados, v1 e replay preservados. Detecção MSI MsiGetProductInfoExW em contexto de máquina, consulta inicial de tamanho ERROR_SUCCESS; timeout HTTP de perfil/artefato subordinado ao token do job, até 1800 s. Testes sintéticos/doubles, sem instalação real. Repair Runner: timeout histórico ~20,9 s, rerun ~6,9 s, causa não comprovada. Major upgrades com mudança de ProductCode, EXE, reconciliação geral e escala pendentes. Confiança publisher por pin local opt-in; gerenciamento centralizado é proposta futura.
+- Codex 2: fechar sincronização/CI da #84 e obter autorização de merge normal; depois negociar 03C-C executor EXE (argumentos estruturados por fabricante, detecção explícita antes/depois, sem flags silenciosas universais, sem executar UninstallString coletado, preservar aprovação/hash/revisão, transporte v2, verificação e compatibilidade MSI/v1). Gerenciamento centralizado de confiança proposto a encaixar; depois 03C-D escala, UI/progresso, atualização/desinstalação e reconciliação; 03E/08 FollowMe, Bitdefender futuro. Testes reais de software somente no fechamento do desenvolvimento RC49.
+- #84 sem migration; 0063 já integrada pela #83.
 
 ## 4. Próximas negociações após B2
 
@@ -44,7 +45,7 @@
 
 ## 5. Dependências e estado de produção
 
-- A migration `agents.0062_rc49_software_package_operations` já entrou na `main` pelo #82. Codex 1 ainda tem `0062_stable_coverage_execution_campaign` na PR #83, que precisa ser renumerada para **0063** e depender da 0062 integrada **se ainda não aplicada em DB persistente**. Caso contrário, reconciliar sem reescrever migração aplicada.
+- #82 e #83 integradas; 0063 Stable depende de 0062 operações. #84 sem migration. Coordenar futuras migrations.
 - Backend RC49 e migrations operacionais: **não afirmar deployment**. O histórico do chat confirma backend e agente RC48/RC48.1 em homologação; verificar versão real de produção antes de qualquer publicação.
 - O próximo agente precisa ser assinado no SHA final, e capacidades somente anunciadas se executor/política local realmente suportam. `NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED` permanece off por default.
 - Reutilizar `AgentJob`, pull/ACK v2, `AuditEvent`, auth do agente e o worker .NET; não criar novos scheduler/job engine/transport.
