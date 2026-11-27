@@ -39,8 +39,10 @@ def dispatch_rollout_campaign(campaign, *, now):
         release = AgentRelease.objects.get(pk=campaign.release_id)
         jobs, changed = [], []
         previous_attempts = {}
-        for attempt in AgentRolloutAttempt.objects.filter(target_id__in=selected).order_by('ordinal'):
-            previous_attempts[attempt.target_id] = attempt
+        stable_profile = bool(campaign.release_snapshot.get('stable_desktop_profile'))
+        if stable_profile:
+            for attempt in AgentRolloutAttempt.objects.filter(target_id__in=selected).order_by('ordinal'):
+                previous_attempts[attempt.target_id] = attempt
         for target_id in selected:
             target = targets[target_id]
             decision = AgentUpdateDecision(True, 'eligible_for_dispatch', target.endpoint, release=release,
@@ -64,7 +66,7 @@ def dispatch_rollout_campaign(campaign, *, now):
                 changed.append(target)
         AgentJob.objects.bulk_create(jobs)
         AgentRolloutTarget.objects.bulk_update(changed, ['agent_job', 'state', 'started_at', 'updated_at'])
-        if campaign.release_snapshot.get('stable_desktop_profile'):
+        if stable_profile:
             prior_counts = {target_id: count for target_id, count in AgentRolloutAttempt.objects.filter(
                 target_id__in=selected,
                 target__campaign__release_id=campaign.release_id,

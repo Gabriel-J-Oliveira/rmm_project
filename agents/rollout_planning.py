@@ -94,8 +94,11 @@ def build_rollout_planning_context(campaign, *, wave_id=None):
     targets = list(AgentRolloutTarget.objects.filter(campaign=campaign, wave=wave).select_related('endpoint')
                    .defer('endpoint__agent_token_hash').prefetch_related('endpoint__rollout_groups')) if wave else []
     attempts = {}
-    for attempt in AgentRolloutAttempt.objects.filter(target_id__in=[target.pk for target in targets]).select_related('job').order_by('ordinal'):
-        attempts[attempt.target_id] = attempt
+    if campaign.release_snapshot.get('stable_desktop_profile'):
+        for attempt in AgentRolloutAttempt.objects.filter(
+            target_id__in=[target.pk for target in targets]
+        ).select_related('job').order_by('ordinal'):
+            attempts[attempt.target_id] = attempt
     jobs = list(AgentJob.objects.filter(endpoint_id__in=campaign.targets.filter(eligibility_at_selection=True).values('endpoint_id'),
                    job_type__in=LIFECYCLE_JOB_TYPES, status__in=['queued', 'sent', 'running'])
                    .only('id', 'endpoint_id', 'created_at', 'expires_at'))

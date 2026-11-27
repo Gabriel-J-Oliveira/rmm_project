@@ -66,8 +66,11 @@ def build_wave_observation_summary(campaign, wave, *, now):
     targets = list(AgentRolloutTarget.objects.filter(campaign=campaign, wave=wave, state='succeeded')
                    .select_related('endpoint', 'agent_job').order_by('endpoint_id', 'pk'))
     attempts = {}
-    for attempt in AgentRolloutAttempt.objects.filter(target_id__in=[target.pk for target in targets]).select_related('job').order_by('ordinal'):
-        attempts[attempt.target_id] = attempt
+    if campaign.release_snapshot.get('stable_desktop_profile'):
+        for attempt in AgentRolloutAttempt.objects.filter(
+            target_id__in=[target.pk for target in targets]
+        ).select_related('job').order_by('ordinal'):
+            attempts[attempt.target_id] = attempt
     statuses = {item.endpoint_id: item for item in AgentOperationalStatus.objects.filter(
         endpoint_id__in=[target.endpoint_id for target in targets])}
     risks = []

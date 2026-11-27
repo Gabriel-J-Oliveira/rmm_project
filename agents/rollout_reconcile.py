@@ -183,9 +183,11 @@ def _load_campaign_evaluations(campaign, *, now=None, lock=False, include_attemp
         # PostgreSQL cannot lock nullable joined rows; Campaign is locked separately.
         targets = targets.select_for_update(of=('self',))
     targets = list(targets.order_by('endpoint_id', 'pk'))
-    attempt_rows = list(AgentRolloutAttempt.objects.filter(
-        target_id__in=[target.pk for target in targets]
-    ).select_related('job').order_by('target_id', 'ordinal'))
+    attempt_rows = []
+    if campaign.release_snapshot.get('stable_desktop_profile'):
+        attempt_rows = list(AgentRolloutAttempt.objects.filter(
+            target_id__in=[target.pk for target in targets]
+        ).select_related('job').order_by('target_id', 'ordinal'))
     attempts = {}
     for attempt in attempt_rows:
         attempts[attempt.target_id] = attempt
@@ -274,9 +276,11 @@ def reconcile_rollout_campaign(campaign, *, now=None):
         pairs = _load_campaign_evaluations(campaign, now=now, lock=True)
         changed, transitions, issues = [], [], []
         for target, evaluation in pairs:
-            attempt = AgentRolloutAttempt.objects.select_for_update(of=('self',)).filter(
-                target=target,
-            ).order_by('-ordinal').first()
+            attempt = None
+            if campaign.release_snapshot.get('stable_desktop_profile'):
+                attempt = AgentRolloutAttempt.objects.select_for_update(of=('self',)).filter(
+                    target=target,
+                ).order_by('-ordinal').first()
             inconclusive_still_unresolved = bool(
                 attempt and attempt.outcome == 'inconclusive' and attempt.job
                 and (attempt.job.status in {AgentJob.STATUS_TIMED_OUT, AgentJob.STATUS_EXPIRED, AgentJob.STATUS_INTERRUPTED}
