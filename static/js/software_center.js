@@ -413,7 +413,7 @@
 
     function showPackageDetails(id) {
         setState(packagesState, '', '');
-        requestJson(packageUrl(id)).then(function (payload) {
+        return requestJson(packageUrl(id)).then(function (payload) {
             var pkg = payload.item;
             showDrawer('Cadastro de instalador', pkg.friendly_name, pkg.original_filename || String(pkg.package_type).toUpperCase(), packageEditor(pkg, payload.audit));
             drawer.dataset.packageId = pkg.id;
@@ -529,7 +529,7 @@
     }
 
     function reloadPackageDrawer(id) {
-        return loadPackages().then(function () { showPackageDetails(id); });
+        return loadPackages().then(function () { return showPackageDetails(id); });
     }
 
     function handlePackageForm(event) {
@@ -569,7 +569,7 @@
         operation.then(function (payload) {
             var saved = kind === 'create' ? payload.item : payload.item;
             return loadPackages().then(function () {
-                showPackageDetails(saved.id);
+                return showPackageDetails(saved.id);
             });
         }).catch(function (error) {
             setFormMessage(form, error.message, 'error');
