@@ -11,7 +11,7 @@ from django.db.models import Max
 
 from .fleet_policy import PolicyContractError
 from .models import (
-    AgentMachine, AgentRelease, AgentReleaseSigningKey, AgentRolloutCampaign,
+    AgentMachine, AgentOperationalStatus, AgentRelease, AgentReleaseSigningKey, AgentRolloutCampaign,
     AgentRolloutCoverageRound, AgentRolloutTarget, AuditEvent,
 )
 from .rollout_campaigns import authorize, create_agent_rollout_campaign_from_preview, transition_wave
@@ -71,6 +71,8 @@ def discover_stable_coverage(*, now):
                                           target_group_ids=groups)
     last_seen = dict(candidates.values_list('pk', 'last_seen_at'))
     online = set(candidates.filter(status=AgentMachine.STATUS_ONLINE).values_list('pk', flat=True))
+    operational = {row.endpoint_id: row for row in AgentOperationalStatus.objects.filter(
+        endpoint_id__in=candidates.values('pk'))}
     allowed = {str(pk) for pk in release.allowed_groups.values_list('pk', flat=True)}
     previous = {}
     for snapshot in original.coverage_rounds.order_by('sequence').values_list('target_snapshot', flat=True):
@@ -80,6 +82,10 @@ def discover_stable_coverage(*, now):
     for entry in preview['targets']:
         pk = UUID(entry['endpoint_id'])
         reason = entry['reason_code']
+        if reason == 'already_current':
+            status = operational.get(pk)
+            if not status or status.health_indicator not in {'healthy', 'attention'}:
+                reason = 'already_current_health_unconfirmed'
         if reason == 'already_current' and allowed and not allowed.intersection(entry['groups']):
             reason = 'group_not_allowed'
         if entry['eligible'] or reason == 'already_current':

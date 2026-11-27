@@ -12,7 +12,7 @@ from django.db.models import Count
 from django.db.models.functions import Lower
 from django.utils import timezone
 
-from .models import AgentJob, AgentMachine, AgentReleaseSigningKey, AgentRolloutCampaign, AgentRolloutTarget
+from .models import AgentJob, AgentMachine, AgentReleaseSigningKey, AgentRolloutAttempt, AgentRolloutCampaign, AgentRolloutTarget
 from .services import _is_now_inside_window, _release_domain_allowed, update_agent_requires_bootstrap
 from .versioning import compare_versions
 from .stable_rollout import classification_reason, enabled as stable_enabled
@@ -93,6 +93,9 @@ def build_rollout_planning_context(campaign, *, wave_id=None):
                       and (wave.state != 'running' or campaign.current_wave_id == wave.pk))
     targets = list(AgentRolloutTarget.objects.filter(campaign=campaign, wave=wave).select_related('endpoint')
                    .defer('endpoint__agent_token_hash').prefetch_related('endpoint__rollout_groups')) if wave else []
+    attempts = {}
+    for attempt in AgentRolloutAttempt.objects.filter(target_id__in=[target.pk for target in targets]).select_related('job').order_by('ordinal'):
+        attempts[attempt.target_id] = attempt
     jobs = list(AgentJob.objects.filter(endpoint_id__in=campaign.targets.filter(eligibility_at_selection=True).values('endpoint_id'),
                    job_type__in=LIFECYCLE_JOB_TYPES, status__in=['queued', 'sent', 'running'])
                    .only('id', 'endpoint_id', 'created_at', 'expires_at'))
@@ -106,7 +109,7 @@ def build_rollout_planning_context(campaign, *, wave_id=None):
     allowed = list(release.allowed_groups.values_list('pk', flat=True))
     return {'campaign': campaign, 'wave': wave, 'wave_valid': wave_valid, 'targets': targets,
             'jobs': by_endpoint, 'occupied_endpoints': len(by_endpoint), 'duplicates': duplicates,
-            'key': key, 'allowed_groups': allowed}
+            'key': key, 'allowed_groups': allowed, 'attempts': attempts}
 
 
 def evaluate_rollout_target_dispatch_safety(campaign, target, *, now, context=None):
@@ -117,6 +120,7 @@ def evaluate_rollout_target_dispatch_safety(campaign, target, *, now, context=No
         target = next((t for t in context['targets'] if t.pk == target.pk), target)
     campaign, wave = context['campaign'], context['wave']
     endpoint, release = target.endpoint, campaign.release
+    latest_attempt = context.get('attempts', {}).get(target.pk)
     result = {'dispatchable': False, 'reason_code': '', 'campaign_id': str(campaign.pk),
               'wave_id': str(target.wave_id) if target.wave_id else None, 'target_id': str(target.pk),
               'endpoint_id': str(target.endpoint_id), 'release_id': str(release.pk),
@@ -136,9 +140,12 @@ def evaluate_rollout_target_dispatch_safety(campaign, target, *, now, context=No
         return blocked('wave_not_dispatchable')
     if target.state in {'succeeded', 'failed', 'rolled_back', 'cancelled'}:
         return blocked('target_runtime_terminal')
-    if target.agent_job_id or target.state in {'queued', 'running'}:
+    retry_ready = bool(latest_attempt and latest_attempt.outcome == 'retry_ready'
+                       and latest_attempt.retry_after and latest_attempt.retry_after <= now
+                       and latest_attempt.ordinal < 4)
+    if (target.agent_job_id and not retry_ready) or (target.state in {'queued', 'running'} and not retry_ready):
         return blocked('target_already_dispatched')
-    if target.state != 'eligible' or not target.eligibility_at_selection:
+    if (target.state != 'eligible' and not retry_ready) or not target.eligibility_at_selection:
         return blocked('target_not_approved')
     safety = release_safety(release, context['key'], now)
     if safety:

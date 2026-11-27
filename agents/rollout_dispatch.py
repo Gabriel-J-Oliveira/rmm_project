@@ -2,11 +2,12 @@
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 
 from .fleet_policy import PolicyContractError
 from .lifecycle_jobs import lock_lifecycle_endpoints
-from .models import AgentJob, AgentRelease, AgentReleaseSigningKey, AgentRolloutCampaign, AgentRolloutTarget, AuditEvent
+from .models import AgentJob, AgentRelease, AgentReleaseSigningKey, AgentRolloutAttempt, AgentRolloutCampaign, AgentRolloutTarget, AuditEvent
 from .rollout_planning import build_rollout_dispatch_plan, rollout_orchestration_enabled
 from .services import AgentUpdateDecision, build_update_agent_job_payload
 
@@ -37,6 +38,9 @@ def dispatch_rollout_campaign(campaign, *, now):
         targets = {str(t.pk): t for t in campaign.targets.filter(pk__in=selected).select_related('endpoint')}
         release = AgentRelease.objects.get(pk=campaign.release_id)
         jobs, changed = [], []
+        previous_attempts = {}
+        for attempt in AgentRolloutAttempt.objects.filter(target_id__in=selected).order_by('ordinal'):
+            previous_attempts[attempt.target_id] = attempt
         for target_id in selected:
             target = targets[target_id]
             decision = AgentUpdateDecision(True, 'eligible_for_dispatch', target.endpoint, release=release,
@@ -50,13 +54,34 @@ def dispatch_rollout_campaign(campaign, *, now):
                 created_by='rollout_orchestrator', payload=payload, correlation_id=target_id, attempt=1,
                 timeout_seconds=900, expires_at=now + timedelta(minutes=30))
             jobs.append(job)
-            target.agent_job = job
-            target.state = 'queued'
-            target.started_at = now
-            target.updated_at = now
-            changed.append(target)
+            retrying = bool(previous_attempts.get(target.pk)
+                            and previous_attempts[target.pk].outcome == 'retry_ready')
+            if not retrying:
+                target.agent_job = job
+                target.state = 'queued'
+                target.started_at = now
+                target.updated_at = now
+                changed.append(target)
         AgentJob.objects.bulk_create(jobs)
         AgentRolloutTarget.objects.bulk_update(changed, ['agent_job', 'state', 'started_at', 'updated_at'])
+        if campaign.release_snapshot.get('stable_desktop_profile'):
+            prior_counts = {target_id: count for target_id, count in AgentRolloutAttempt.objects.filter(
+                target_id__in=selected,
+                target__campaign__release_id=campaign.release_id,
+            ).values_list('target_id').annotate(count=Count('pk'))}
+            if any(prior_counts.get(targets[target_id].pk, 0) >= 4 for target_id in selected):
+                raise PolicyContractError('rollout_attempts_exhausted', status=409)
+            for target_id in selected:
+                previous = previous_attempts.get(targets[target_id].pk)
+                if previous and previous.outcome == 'retry_ready':
+                    previous.outcome = 'retry_consumed'
+                    previous.reason_code = 'retry_dispatched'
+                    previous.save(update_fields=['outcome', 'reason_code'])
+            AgentRolloutAttempt.objects.bulk_create([
+                AgentRolloutAttempt(target=targets[target_id], ordinal=prior_counts.get(targets[target_id].pk, 0) + 1,
+                                    job=job, outcome='dispatched', dispatched_at=now)
+                for target_id, job in zip(selected, jobs)
+            ])
         if jobs:
             AuditEvent.objects.create(event_type='rollout.dispatch_created', title='Rollout dispatch created',
                 actor_type=AuditEvent.ACTOR_SCHEDULER, actor_name='RolloutOrchestrator',
