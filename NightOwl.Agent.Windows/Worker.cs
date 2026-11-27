@@ -586,6 +586,7 @@ public sealed class Worker : BackgroundService
         // Keep the historical spelling for mixed-version capability consumers.
         payload.Agent["capabilities"] = config.AllowedJobTypes
             .Where(type => type is "configure_telemetry" or "collect_services" || type == "install_software" && config.SoftwareInstallEnabled)
+            .Concat(SoftwareInstallation.Capabilities(config))
             .Concat(OperationalActions.Capabilities(config))
             .Concat(config.AllowedJobTypes.Contains("uninstall_agent", StringComparer.Ordinal)
                 && UninstallerRunnerPayload.SupportsVerifiedRemoval(config.InstallPath)

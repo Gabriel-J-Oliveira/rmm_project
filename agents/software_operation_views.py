@@ -23,6 +23,7 @@ from .software_operation_contract import (
     SoftwareOperationBlocked,
     create_software_operation_job,
     validate_software_operation_download,
+    validate_software_operation_profile,
 )
 
 
@@ -126,3 +127,21 @@ class AgentSoftwareOperationArtifactView(APIView):
         response['X-Software-Artifact-SHA256'] = operation.artifact_sha256
         response['X-Software-Artifact-Revision'] = str(operation.artifact_revision)
         return _no_store(response)
+
+
+class AgentSoftwareOperationProfileView(APIView):
+    """Bearer-authenticated immutable job profile, reauthorized at read time."""
+
+    authentication_classes = []
+    permission_classes = []
+
+    @transaction.atomic
+    def get(self, request, job_id):
+        machine = authenticate_agent_token(request)
+        if request.GET:
+            return _no_store(Response({'error': 'invalid_request'}, status=400))
+        try:
+            _job, _operation, profile = validate_software_operation_profile(machine, job_id)
+        except (SoftwareOperationBlocked, ValueError):
+            return _no_store(Response({'error': 'operation_profile_not_found'}, status=404))
+        return _no_store(Response(profile, status=200))

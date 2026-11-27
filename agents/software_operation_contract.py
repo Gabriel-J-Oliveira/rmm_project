@@ -113,6 +113,7 @@ def prepare_software_operation_snapshot(operator, endpoint_id, package_id, opera
             'artifact_approved_at': package.approved_at.isoformat(),
             'artifact_approved_by': str(package.approved_by_id),
             'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+            'size_bytes': package.size_bytes,
             'profile_revision': package.execution_profile_revision,
             'profile_sha256': package.execution_profile_sha256,
             'profile_status': package.execution_profile_status,
@@ -285,6 +286,8 @@ def validate_software_operation_dispatch(job, *, endpoint=None):
             or str(package.execution_profile_approved_by_id) != record.snapshot.get('package', {}).get('profile_approved_by')
             or not package_profile_binding_matches(package)
             or package.sha256 != record.artifact_sha256
+            or ('size_bytes' in record.snapshot.get('package', {})
+                and package.size_bytes != record.snapshot['package'].get('size_bytes'))
             or package.artifact_revision != record.artifact_revision
             or package.execution_profile_revision != record.profile_revision
             or package.execution_profile_sha256 != record.profile_sha256
@@ -338,6 +341,48 @@ def validate_software_operation_download(machine, job_id):
         if handle is not None and not handle.closed:
             handle.close()
         raise
+
+
+@transaction.atomic
+def validate_software_operation_profile(machine, job_id):
+    """Resolve an immutable execution profile only for its dispatched endpoint job."""
+    from .internal_jobs import validate_internal_payload
+
+    job = AgentJob.objects.select_for_update().select_related('endpoint').filter(
+        pk=job_id, endpoint=machine, job_type=AgentJob.TYPE_INSTALL_SOFTWARE,
+        status__in=(AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING),
+    ).first()
+    if job is None:
+        raise SoftwareOperationBlocked('software_operation_not_found')
+    machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+    record = SoftwarePackageOperation.objects.select_for_update().select_related('package').filter(job=job).first()
+    if record is None:
+        raise SoftwareOperationBlocked('software_operation_not_found')
+    record = validate_software_operation_dispatch(job, endpoint=machine)
+    if not isinstance(job.payload, dict) or validate_internal_payload(job.job_type, job.payload) != job.payload:
+        raise SoftwareOperationBlocked('software_operation_payload_invalid')
+    package_snapshot = record.snapshot.get('package', {}) if isinstance(record.snapshot, dict) else {}
+    profile = package_snapshot.get('profile')
+    if not isinstance(profile, dict):
+        raise SoftwareOperationBlocked('software_operation_profile_missing')
+    detection = profile.get('detection', {})
+    product_code = detection.get('product_code')
+    expected_version = profile.get('expected_version')
+    if (detection.get('method') != 'msi_product_code'
+            or not isinstance(product_code, str) or not isinstance(expected_version, str)
+            or (package_snapshot.get('size_bytes', record.package.size_bytes) is None)):
+        raise SoftwareOperationBlocked('software_operation_profile_invalid')
+    return job, record, {
+        'schema_version': SOFTWARE_JOB_SCHEMA_VERSION,
+        'operation_id': str(record.pk), 'operation': record.operation,
+        'request_id': str(record.request_id), 'package_uuid': str(record.package_id),
+        'artifact_sha256': record.artifact_sha256,
+        'artifact_revision': record.artifact_revision,
+        'profile_revision': record.profile_revision, 'profile_sha256': record.profile_sha256,
+        'size_bytes': package_snapshot.get('size_bytes', record.package.size_bytes), 'product_code': product_code,
+        'expected_version': expected_version, 'profile': profile,
+        'machine_id': record.machine_id_snapshot,
+    }
 
 
 def validate_software_operation_completion(job, result):

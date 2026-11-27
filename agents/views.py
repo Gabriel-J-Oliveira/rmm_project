@@ -1721,7 +1721,10 @@ class AgentJobsPullView(APIView):
                 'payload': parameters,
                 'parameters': parameters,
                 'created_at': job.created_at.isoformat(),
-                'timeout_seconds': job.payload.get('timeout_seconds') or 300,
+                'timeout_seconds': job.payload.get('timeout_seconds') or (
+                    1800 if job.job_type == AgentJob.TYPE_INSTALL_SOFTWARE
+                    and isinstance(job.payload, dict) and job.payload.get('schema_version') == 2 else 300
+                ),
                 'attempt': job.attempt or 1,
                 'max_attempts': job.payload.get('max_attempts') or 1,
                 'priority': job.payload.get('priority') or 0,
