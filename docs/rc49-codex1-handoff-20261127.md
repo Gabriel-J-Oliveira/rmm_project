@@ -41,3 +41,12 @@ Ao retomar:
 - Não declarar implantação por merge: diferenciar código integrado, release assinada e homologação real.
 - A PR #84 é do Codex 2: executor MSI Windows, HEAD `8f5fc0d...`, CI 5/5, sem migration e ainda sem merge. O arquivo `agents/views.py` é tocado em ambas as frentes; coordenar a sequência de integração.
 - Não mesclar trabalhos com outros projetos ou chats. Este handoff é exclusivo do NightOwl.
+
+## 5. Atualização após integração da PR #83 (27/11/2026)
+
+- Main: `97a5f61518edf9d686f21dc84a23488f7dcb4770`.
+- PR #83 integrada por merge commit `97a5f61518edf9d686f21dc84a23488f7dcb4770`; parents: `11b3ba1001486c026586571a9c393ef417820590` e `d7a9b6f52d7dffee83048e5d35e777acab283656`.
+- CI run `46042230821`: PostgreSQL, SQLite, Windows deployment contract, Windows isolated browser comparison e Windows .NET/terminal E2E, todos PASS.
+- Migration da cobertura Stable: `agents.0063_stable_coverage_execution_campaign`, dependente de `agents.0062_rc49_software_package_operations`. A #83 não foi aplicada em banco persistente antes do merge; CI usou bancos efêmeros.
+- A conciliação de `agents/views.py` preservou os contratos v2 e ACK da #82. PR #84 segue separada.
+- 07B-3 (retries e reconciliação pós-execução) não iniciada; definir requisitos antes de implementar. Sem deploy, ativação Stable ou jobs de frota decorrentes desta integração.

@@ -37,6 +37,10 @@ O NightOwl é um RMM para **monitorar, proteger, inventariar, administrar, autom
 
 **Regra:** “PR aberta com CI verde” **não é** “integrada”, “implantada”, “release assinada” nem “homologada em Windows real”. A `main` de código mais recente observada é `54bda321...`. Nenhuma das PRs #83/#84 foi integrada, e não há evidência neste handoff de aplicação operacional das migrations RC49, deploy RC49, ativação do Stable ou instalações reais de software. **Conferir produção separadamente** antes de falar em ambiente atualizado.
 
+### Atualização após PR #83 — 27/11/2026
+
+Main: `97a5f61518edf9d686f21dc84a23488f7dcb4770`. PR #83 foi integrada por merge commit normal; CI run `46042230821` passou 5/5. A migration Stable está como `agents.0063_stable_coverage_execution_campaign`, dependente de `agents.0062_rc49_software_package_operations`; cadeia consolidada: `0057_admin_terminal_access_grant` → `0058_softwarepackagerecord` → `0059_stable_coverage_round` → `0060_rc49_software_package_uploads` → `0061_rc49_software_execution_profiles` → `0062_rc49_software_package_operations` → `0063_stable_coverage_execution_campaign`. A PR #84 não foi incorporada. 07B-3 permanece pendente de definição e não foi iniciada. Esta integração não implica deploy, aplicação operacional de migrations, ativação do Stable ou jobs reais.
+
 ## 3. Dependências e colisão de migrations — ação prioritária
 
 Na `main` já existe a cadeia de `agents`:
