@@ -167,6 +167,8 @@ const {chromium} = require('playwright');
             });
             assert.fail('Software page must not overflow horizontally on mobile: ' + JSON.stringify({mobileBounds, overflow}));
         }
+        await drawer.locator('[data-software-drawer-close]').click();
+        assert.equal(await drawer.getAttribute('aria-hidden'), 'true', 'The mobile profile drawer closes before switching tabs');
         await inventoryTab.click();
         assert.match(await inventoryTab.innerText(), /Softwares coletados/, 'The inventory tab remains labeled on mobile');
         await page.screenshot({path: path.join(out, 'software-inventory-mobile.png'), fullPage: true});
