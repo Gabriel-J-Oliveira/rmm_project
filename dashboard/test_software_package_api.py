@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import connection
+from django.db import close_old_connections, connection
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -912,13 +912,17 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         gate = Barrier(2)
 
         def replace(name, content):
-            client = Client()
-            client.force_login(self.operator)
-            gate.wait(timeout=10)
-            return client.post(reverse('software-package-replace', kwargs={'pk': self.package_id}), {
-                'revision': 1, 'reason': 'Concurrent replacement test',
-                'file': SimpleUploadedFile(name, content),
-            }).status_code
+            close_old_connections()
+            try:
+                client = Client()
+                client.force_login(self.operator)
+                gate.wait(timeout=10)
+                return client.post(reverse('software-package-replace', kwargs={'pk': self.package_id}), {
+                    'revision': 1, 'reason': 'Concurrent replacement test',
+                    'file': SimpleUploadedFile(name, content),
+                }).status_code
+            finally:
+                close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(replace, 'a.exe', exe_bytes()), pool.submit(replace, 'b.msi', msi_bytes())]
@@ -936,13 +940,17 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         gate = Barrier(2)
 
         def save_profile():
-            client = Client()
-            client.force_login(self.operator)
-            gate.wait(timeout=10)
-            return client.post(reverse('software-package-profile', kwargs={'pk': self.package_id}),
-                data=json.dumps({'revision': 1, 'reason': 'Concurrent profile review',
-                                 'execution_profile': valid_msi_profile()}),
-                content_type='application/json').status_code
+            close_old_connections()
+            try:
+                client = Client()
+                client.force_login(self.operator)
+                gate.wait(timeout=10)
+                return client.post(reverse('software-package-profile', kwargs={'pk': self.package_id}),
+                    data=json.dumps({'revision': 1, 'reason': 'Concurrent profile review',
+                                     'execution_profile': valid_msi_profile()}),
+                    content_type='application/json').status_code
+            finally:
+                close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             statuses = sorted(future.result(timeout=40) for future in [pool.submit(save_profile), pool.submit(save_profile)])
@@ -988,11 +996,16 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         barrier = Barrier(2)
 
         def materialize():
-            barrier.wait(timeout=10)
-            operation, created = create_software_operation_job(
-                self.operator, endpoint.pk, package.pk, 'install', request_id,
-            )
-            return str(operation.pk), operation.job_id, created
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                operator = get_user_model().objects.get(pk=self.operator.pk)
+                operation, created = create_software_operation_job(
+                    operator, endpoint.pk, package.pk, 'install', request_id,
+                )
+                return str(operation.pk), operation.job_id, created
+            finally:
+                close_old_connections()
 
         with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
             with ThreadPoolExecutor(max_workers=2) as pool:
